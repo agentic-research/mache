@@ -221,10 +221,11 @@ func TestMacheFS_Read(t *testing.T) {
 	}
 }
 
-func TestMacheFS_ErrorCodesAreNegative(t *testing.T) {
-	// Verify that cgofuse error constants are already negative
-	// This test ensures we don't accidentally negate them again
-	if fuse.ENOENT >= 0 {
-		t.Errorf("fuse.ENOENT = %v, expected negative value", fuse.ENOENT)
+func TestMacheFS_ErrorCodesArePositive(t *testing.T) {
+	// Verify that cgofuse error constants are positive
+	// cgofuse returns positive errno values (unlike some other FUSE libraries)
+	// These should be returned directly without negation
+	if fuse.ENOENT <= 0 {
+		t.Errorf("fuse.ENOENT = %v, expected positive value", fuse.ENOENT)
 	}
 }
