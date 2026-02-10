@@ -1,6 +1,8 @@
 package fs
 
 import (
+	"time"
+
 	"github.com/agentic-research/mache/api"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -8,12 +10,14 @@ import (
 // MacheFS implements the FUSE interface from cgofuse
 type MacheFS struct {
 	fuse.FileSystemBase
-	Schema *api.Topology
+	Schema    *api.Topology
+	mountTime fuse.Timespec
 }
 
 func NewMacheFS(schema *api.Topology) *MacheFS {
 	return &MacheFS{
-		Schema: schema,
+		Schema:    schema,
+		mountTime: fuse.NewTimespec(time.Now()),
 	}
 }
 
@@ -28,16 +32,27 @@ func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 
 // Getattr (Stat)
 func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
-	if path == "/" {
-		stat.Mode = fuse.S_IFDIR | 0555
+	switch path {
+	case "/":
+		stat.Mode = fuse.S_IFDIR | 0o555
+		stat.Nlink = 2
+		stat.Atim = fs.mountTime
+		stat.Mtim = fs.mountTime
+		stat.Ctim = fs.mountTime
+		stat.Birthtim = fs.mountTime
 		return 0
-	}
-	if path == "/hello" {
-		stat.Mode = fuse.S_IFREG | 0444
+	case "/hello":
+		stat.Mode = fuse.S_IFREG | 0o444
+		stat.Nlink = 1
 		stat.Size = int64(len("Hello, World!\n"))
+		stat.Atim = fs.mountTime
+		stat.Mtim = fs.mountTime
+		stat.Ctim = fs.mountTime
+		stat.Birthtim = fs.mountTime
 		return 0
+	default:
+		return -fuse.ENOENT
 	}
-	return -fuse.ENOENT
 }
 
 // Readdir (List directory)
