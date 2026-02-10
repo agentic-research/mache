@@ -27,7 +27,7 @@ func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 	if path == "/hello" {
 		return 0, 0 // Success (0)
 	}
-	return -fuse.ENOENT, 0
+	return fuse.ENOENT, 0
 }
 
 // Getattr (Stat)
@@ -51,7 +51,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		stat.Birthtim = fs.mountTime
 		return 0
 	default:
-		return -fuse.ENOENT
+		return fuse.ENOENT
 	}
 }
 
@@ -63,7 +63,7 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		fill("hello", nil, 0)
 		return 0
 	}
-	return -fuse.ENOENT
+	return fuse.ENOENT
 }
 
 // Read (Cat file)
@@ -80,5 +80,5 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 		n := copy(buff, content[ofst:end])
 		return n
 	}
-	return -fuse.ENOENT
+	return fuse.ENOENT
 }
