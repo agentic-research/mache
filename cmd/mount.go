@@ -2,18 +2,13 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
-	"time"
 
 	"github.com/agentic-research/mache/api"
 	machefs "github.com/agentic-research/mache/internal/fs"
-	"github.com/hanwen/go-fuse/v2/fs"
-	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/spf13/cobra"
+	"github.com/winfsp/cgofuse/fuse"
 )
 
 var (
@@ -48,28 +43,12 @@ var rootCmd = &cobra.Command{
 		}
 
 		// 2. Load Data & Schema
-		var source []byte
+		// Mocked for now to match the "Hello World" requirement
 		var schema *api.Topology
-
-		// Try loading real data
-		if d, err := os.ReadFile(dataPath); err == nil {
-			fmt.Printf("Loaded data from %s\n", dataPath)
-			source = d
-		} else {
-			if cmd.Flags().Changed("data") {
-				// User explicitly provided a flag that failed
-				return fmt.Errorf("failed to read data file: %w", err)
-			}
-			// Fallback
-			fmt.Println("No data found, using mock source.")
-			source = []byte(`{"message": "hello"}`)
-		}
-
+		
 		// Try loading real schema (mock decoding for now as we just need the struct)
 		if s, err := os.ReadFile(schemaPath); err == nil {
 			fmt.Printf("Loaded schema from %s\n", schemaPath)
-			// TODO: Actual JSON unmarshaling when we implement the full engine.
-			// For now, we just acknowledge the file exists.
 			schema = &api.Topology{Version: "loaded-from-file"}
 			_ = s // unused until unmarshal implemented
 		} else {
@@ -80,52 +59,27 @@ var rootCmd = &cobra.Command{
 			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
-		// 3. Create the Root Inode
-		root := machefs.NewMacheRoot(source, schema)
-
-		// 4. Configure FUSE Options
-		// We prioritize performance and correct behavior on macOS/FUSE-T.
-		opts := &fs.Options{
-			MountOptions: fuse.MountOptions{
-				// ReadOnly: Mache is strictly a projection engine. Writing is not supported.
-				// This also allows the kernel to aggressively cache reads.
-				Options: []string{"ro"},
-				
-				// Set the filesystem name for display in `df` or Finder.
-				FsName: "mache",
-				
-				// SyncRead: standard for read-only.
-				// Debug: enable via flag if needed, kept off for performance.
-			},
-			// CacheDuration: Aggressively cache attributes for performance since content is immutable during mount.
-			// 1 second is a safe default; can be increased for static datasets.
-			EntryTimeout: &[]time.Duration{time.Second}[0],
-			AttrTimeout:  &[]time.Duration{time.Second}[0],
+		// 3. Create the FS
+		macheFs := machefs.NewMacheFS(schema)
+		
+		// 4. Host it
+		host := fuse.NewFileSystemHost(macheFs)
+		
+		fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
+		
+		// 5. Mount passes control to the library.
+		// Use -o ro (Read Only)
+		// Use -o uid=N,gid=N to ensure we own the mount (critical for fuse-t/NFS)
+		opts := []string{
+			"-o", "ro",
+			"-o", fmt.Sprintf("uid=%d", os.Getuid()),
+			"-o", fmt.Sprintf("gid=%d", os.Getgid()),
 		}
 
-		// 4. Mount
-		// We use fs.Mount which sets up the Node API server.
-		fmt.Printf("Mounting mache at %s...\n", mountPoint)
-		server, err := fs.Mount(mountPoint, root, opts)
-		if err != nil {
-			return fmt.Errorf("mount failed: %w", err)
+		if !host.Mount(mountPoint, opts) {
+			return fmt.Errorf("mount failed")
 		}
-
-		// 5. Handle Signals (Graceful Unmount)
-		// Crucial for FUSE to avoid "endpoint not connected" or phantom mounts on macOS.
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		go func() {
-			<-c
-			fmt.Println("\nReceived signal, unmounting...")
-			if err := server.Unmount(); err != nil {
-				log.Printf("Unmount failed: %v", err)
-			}
-		}()
-
-		// 6. Block until unmount
-		server.Wait()
-		fmt.Println("Unmounted successfully.")
+		
 		return nil
 	},
 }

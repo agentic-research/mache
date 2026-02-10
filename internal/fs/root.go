@@ -1,71 +1,69 @@
 package fs
 
 import (
-	"context"
-	"syscall"
-
 	"github.com/agentic-research/mache/api"
-	"github.com/hanwen/go-fuse/v2/fs"
-	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/winfsp/cgofuse/fuse"
 )
 
-// MacheRoot is the root node of the Mache filesystem.
-// It embeds fs.Inode to inherit standard FUSE node behavior (Lookup, Readdir, etc.).
-type MacheRoot struct {
-	fs.Inode
-
-	// Source is the raw input data (e.g., JSON) that populates the FS.
-	Source []byte
-	// Schema defines the topology of the FS.
+// MacheFS implements the FUSE interface from cgofuse
+type MacheFS struct {
+	fuse.FileSystemBase
 	Schema *api.Topology
 }
 
-var _ = (fs.NodeOnAdder)(nil)
-
-// NewMacheRoot creates a new root node.
-func NewMacheRoot(source []byte, schema *api.Topology) *MacheRoot {
-	return &MacheRoot{
-		Source: source,
+func NewMacheFS(schema *api.Topology) *MacheFS {
+	return &MacheFS{
 		Schema: schema,
 	}
 }
 
-// OnAdd is called when the node is added to the tree.
-// We use this to populate the static topology or setup dynamic lookup.
-// For now, we hardcode a "hello" file as requested.
-func (r *MacheRoot) OnAdd(ctx context.Context) {
-	// Constraint: "Just hardcode a 'Hello World' node to prove the mount works."
-	
-	// Define the child node (HelloFile)
-	child := &HelloFile{
-		Content: []byte("Hello, World!\n"),
+// Open (Lookup + Open combined in simplistic FS)
+// For a Hello World, we just check the path.
+func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
+	if path == "/hello" {
+		return 0, 0 // Success (0)
 	}
-
-	// Add the child to the root Inode.
-	// This automatically enables Lookup("hello") and Readdir() showing "hello".
-	// The fs.Inode logic handles the syscalls.
-	// mode is 0444 (read-only)
-	r.AddChild("hello", r.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG | 0444}), true)
+	return -fuse.ENOENT, 0
 }
 
-// HelloFile is a simple static file node.
-type HelloFile struct {
-	fs.Inode
-	Content []byte
+// Getattr (Stat)
+func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
+	if path == "/" {
+		stat.Mode = fuse.S_IFDIR | 0555
+		return 0
+	}
+	if path == "/hello" {
+		stat.Mode = fuse.S_IFREG | 0444
+		stat.Size = int64(len("Hello, World!\n"))
+		return 0
+	}
+	return -fuse.ENOENT
 }
 
-var _ = (fs.NodeReader)(nil)
+// Readdir (List directory)
+func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
+	if path == "/" {
+		fill(".", nil, 0)
+		fill("..", nil, 0)
+		fill("hello", nil, 0)
+		return 0
+	}
+	return -fuse.ENOENT
+}
 
-// Read implements the fs.NodeReader interface.
-// This allows cat/grep to read the file content.
-func (f *HelloFile) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	end := int(off) + len(dest)
-	if end > len(f.Content) {
-		end = len(f.Content)
+// Read (Cat file)
+func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
+	if path == "/hello" {
+		content := []byte("Hello, World!\n")
+		if ofst >= int64(len(content)) {
+			return 0
+		}
+		end := ofst + int64(len(buff))
+		if end > int64(len(content)) {
+			end = int64(len(content))
+		}
+		n := copy(buff, content[ofst:end])
+		return n
 	}
-	if int(off) < len(f.Content) {
-		n := copy(dest, f.Content[off:end])
-		return fuse.ReadResultData(dest[:n]), 0
-	}
-	return fuse.ReadResultData(nil), 0
+	return -fuse.ENOENT
 }
