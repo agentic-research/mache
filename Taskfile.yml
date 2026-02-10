@@ -2,6 +2,14 @@ version: '3'
 
 vars:
   BINARY_NAME: mache
+  # fuse-t configuration for macOS
+  FUSE_T_HEADERS: /Library/Frameworks/fuse_t.framework/Versions/Current/Headers
+  FUSE_T_FRAMEWORK: /Library/Frameworks
+
+env:
+  # Set CGO flags for fuse-t on macOS (no-op on other platforms)
+  CGO_CFLAGS: -I{{.FUSE_T_HEADERS}}
+  CGO_LDFLAGS: -F{{.FUSE_T_FRAMEWORK}} -framework fuse_t -Wl,-rpath,{{.FUSE_T_FRAMEWORK}}
 
 tasks:
   default:
@@ -9,8 +17,25 @@ tasks:
     cmds:
       - task --list
 
+  check-fuse-t:
+    desc: Check if fuse-t is installed (macOS only)
+    silent: true
+    cmds:
+      - |
+        if [ "$(uname)" = "Darwin" ]; then
+          if [ ! -d "{{.FUSE_T_HEADERS}}" ]; then
+            echo "❌ fuse-t not found. Install with: brew install --cask fuse-t"
+            exit 1
+          else
+            echo "✅ fuse-t found at {{.FUSE_T_HEADERS}}"
+          fi
+        else
+          echo "ℹ️  fuse-t check skipped (not macOS)"
+        fi
+
   build:
     desc: Build and codesign mache (with FUSE-T network entitlements)
+    deps: [check-fuse-t]
     cmds:
       - go build -o {{.BINARY_NAME}} .
       - codesign -s - --force --deep --entitlements entitlements.plist ./{{.BINARY_NAME}}
@@ -24,6 +49,7 @@ tasks:
 
   test:
     desc: Run all tests
+    deps: [check-fuse-t]
     cmds:
       - go test -v ./...
 
