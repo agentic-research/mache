@@ -1,0 +1,69 @@
+version: '3'
+
+vars:
+  BINARY_NAME: mache
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build and codesign mache (with FUSE-T network entitlements)
+    cmds:
+      - go build -o {{.BINARY_NAME}} .
+      - codesign -s - --force --deep --entitlements entitlements.plist ./{{.BINARY_NAME}}
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - entitlements.plist
+    generates:
+      - "{{.BINARY_NAME}}"
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test -v ./...
+
+  test-coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report generated at coverage.html"
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  fmt:
+    desc: Format code with gofumpt
+    cmds:
+      - gofumpt -w -extra .
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+      - rm -f coverage.out coverage.html
+
+  check:
+    desc: Run all checks (fmt, vet, lint, test)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test

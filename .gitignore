@@ -25,7 +25,7 @@ go.work
 go.work.sum
 
 # env file
-.env
+.env*
 
 # Editor/IDE
 # .idea/
@@ -33,3 +33,16 @@ go.work.sum
 
 # CRUMB - personal memory (not tracked)
 .crumb/
+
+# Claude Code CLI
+.claude/
+
+# Built binary (root level only)
+/mache
+
+# Agent communication and logs
+_agent_logs/
+SESSION_SUMMARY.md
+
+# Taskfile artifacts
+.task/
