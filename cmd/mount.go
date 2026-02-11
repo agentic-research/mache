@@ -1,14 +1,15 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/agentic-research/mache/api"
 	machefs "github.com/agentic-research/mache/internal/fs"
 	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/spf13/cobra"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -44,78 +45,49 @@ var rootCmd = &cobra.Command{
 			dataPath = filepath.Join(defaultDir, "data.json")
 		}
 
-		// 2. Load Data & Schema
+		// 2. Load Schema
 		var schema *api.Topology
-
 		if s, err := os.ReadFile(schemaPath); err == nil {
 			fmt.Printf("Loaded schema from %s\n", schemaPath)
-			schema = &api.Topology{Version: "loaded-from-file"}
-			_ = s // unused until unmarshal implemented
+			schema = &api.Topology{}
+			if err := json.Unmarshal(s, schema); err != nil {
+				return fmt.Errorf("failed to parse schema: %w", err)
+			}
 		} else {
 			if cmd.Flags().Changed("schema") {
 				return fmt.Errorf("failed to read schema file: %w", err)
 			}
-			fmt.Println("No schema found, using mock topology.")
+			fmt.Println("No schema found, using default empty schema.")
 			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
 		// 3. Create the Data Store (Phase 0)
 		store := graph.NewMemoryStore()
 
-		// --- MOCK INGESTION START ---
-		store.AddRoot(&graph.Node{
-			ID:   "vulns",
-			Mode: fs.ModeDir,
-			Children: []string{
-				"vulns/CVE-2024-1234",
-				"vulns/CVE-2024-5678",
-			},
-		})
-		store.AddNode(&graph.Node{
-			ID:   "vulns/CVE-2024-1234",
-			Mode: fs.ModeDir,
-			Children: []string{
-				"vulns/CVE-2024-1234/description",
-				"vulns/CVE-2024-1234/severity",
-			},
-		})
-		store.AddNode(&graph.Node{
-			ID:   "vulns/CVE-2024-1234/description",
-			Data: []byte("Buffer overflow in example.c\n"),
-		})
-		store.AddNode(&graph.Node{
-			ID:   "vulns/CVE-2024-1234/severity",
-			Data: []byte("CRITICAL\n"),
-		})
-		store.AddNode(&graph.Node{
-			ID:   "vulns/CVE-2024-5678",
-			Mode: fs.ModeDir,
-			Children: []string{
-				"vulns/CVE-2024-5678/description",
-				"vulns/CVE-2024-5678/severity",
-			},
-		})
-		store.AddNode(&graph.Node{
-			ID:   "vulns/CVE-2024-5678/description",
-			Data: []byte("Null pointer dereference\n"),
-		})
-		store.AddNode(&graph.Node{
-			ID:   "vulns/CVE-2024-5678/severity",
-			Data: []byte("LOW\n"),
-		})
-		// --- MOCK INGESTION END ---
+		// 4. Ingest Data
+		// If data path exists, ingest it.
+		if _, err := os.Stat(dataPath); err == nil {
+			fmt.Printf("Ingesting data from %s...\n", dataPath)
+			engine := ingest.NewEngine(schema, store)
+			if err := engine.Ingest(dataPath); err != nil {
+				return fmt.Errorf("ingestion failed: %w", err)
+			}
+		} else {
+			if cmd.Flags().Changed("data") {
+				return fmt.Errorf("data path not found: %s", dataPath)
+			}
+			fmt.Printf("No data found at %s, starting empty.\n", dataPath)
+		}
 
-		// 4. Create the FS, injecting the Store
+		// 5. Create the FS, injecting the Store
 		macheFs := machefs.NewMacheFS(schema, store)
 
-		// 5. Host it
+		// 6. Host it
 		host := fuse.NewFileSystemHost(macheFs)
 
 		fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
 
-		// 6. Mount passes control to the library.
-		// Use -o ro (Read Only)
-		// Use -o uid=N,gid=N to ensure we own the mount (critical for fuse-t/NFS)
+		// 7. Mount passes control to the library.
 		opts := []string{
 			"-o", "ro",
 			"-o", fmt.Sprintf("uid=%d", os.Getuid()),
