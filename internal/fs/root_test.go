@@ -1,31 +1,92 @@
 package fs
 
 import (
+	"io/fs"
 	"testing"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/graph"
 	"github.com/winfsp/cgofuse/fuse"
 )
 
-func TestMacheFS_Open(t *testing.T) {
+// newTestFS creates a MacheFS with a pre-populated MemoryStore for testing.
+// Every node has an explicit Mode — no heuristics.
+func newTestFS() *MacheFS {
 	schema := &api.Topology{Version: "v1alpha1"}
-	fs := NewMacheFS(schema)
+	store := graph.NewMemoryStore()
+
+	store.AddRoot(&graph.Node{
+		ID:   "vulns",
+		Mode: fs.ModeDir,
+		Children: []string{
+			"vulns/CVE-2024-1234",
+			"vulns/CVE-2024-5678",
+		},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-1234",
+		Mode: fs.ModeDir,
+		Children: []string{
+			"vulns/CVE-2024-1234/description",
+			"vulns/CVE-2024-1234/severity",
+		},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-1234/description",
+		Mode: 0, // regular file
+		Data: []byte("Buffer overflow in example.c\n"),
+	})
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-1234/severity",
+		Mode: 0, // regular file
+		Data: []byte("CRITICAL\n"),
+	})
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-5678",
+		Mode: fs.ModeDir,
+		Children: []string{
+			"vulns/CVE-2024-5678/description",
+			"vulns/CVE-2024-5678/severity",
+		},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-5678/description",
+		Mode: 0,
+		Data: []byte("Null pointer dereference\n"),
+	})
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-5678/severity",
+		Mode: 0,
+		Data: []byte("LOW\n"),
+	})
+
+	return NewMacheFS(schema, store)
+}
+
+func TestMacheFS_Open(t *testing.T) {
+	mfs := newTestFS()
 
 	tests := []struct {
-		name     string
-		path     string
-		wantErr  int
-		wantFh   uint64
+		name    string
+		path    string
+		wantErr int
+		wantFh  uint64
 	}{
 		{
-			name:    "open existing file",
-			path:    "/hello",
+			name:    "open existing file node",
+			path:    "/vulns/CVE-2024-1234/severity",
 			wantErr: 0,
 			wantFh:  0,
 		},
 		{
-			name:    "open non-existent file",
+			name:    "open non-existent path",
 			path:    "/does-not-exist",
+			wantErr: fuse.ENOENT,
+			wantFh:  0,
+		},
+		{
+			name:    "open directory returns ENOENT",
+			path:    "/vulns",
 			wantErr: fuse.ENOENT,
 			wantFh:  0,
 		},
@@ -33,7 +94,7 @@ func TestMacheFS_Open(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errCode, fh := fs.Open(tt.path, 0)
+			errCode, fh := mfs.Open(tt.path, 0)
 			if errCode != tt.wantErr {
 				t.Errorf("Open() errCode = %v, want %v", errCode, tt.wantErr)
 			}
@@ -45,13 +106,12 @@ func TestMacheFS_Open(t *testing.T) {
 }
 
 func TestMacheFS_Getattr(t *testing.T) {
-	schema := &api.Topology{Version: "v1alpha1"}
-	fs := NewMacheFS(schema)
+	mfs := newTestFS()
 
 	tests := []struct {
-		name     string
-		path     string
-		wantErr  int
+		name      string
+		path      string
+		wantErr   int
 		checkStat func(*testing.T, *fuse.Stat_t)
 	}{
 		{
@@ -68,16 +128,36 @@ func TestMacheFS_Getattr(t *testing.T) {
 			},
 		},
 		{
-			name:    "stat hello file",
-			path:    "/hello",
+			name:    "stat directory node",
+			path:    "/vulns",
+			wantErr: 0,
+			checkStat: func(t *testing.T, stat *fuse.Stat_t) {
+				if stat.Mode&fuse.S_IFDIR == 0 {
+					t.Error("vulns should be a directory")
+				}
+			},
+		},
+		{
+			name:    "stat nested directory node",
+			path:    "/vulns/CVE-2024-1234",
+			wantErr: 0,
+			checkStat: func(t *testing.T, stat *fuse.Stat_t) {
+				if stat.Mode&fuse.S_IFDIR == 0 {
+					t.Error("CVE node should be a directory")
+				}
+			},
+		},
+		{
+			name:    "stat file node",
+			path:    "/vulns/CVE-2024-1234/severity",
 			wantErr: 0,
 			checkStat: func(t *testing.T, stat *fuse.Stat_t) {
 				if stat.Mode&fuse.S_IFREG == 0 {
-					t.Error("Hello should be a regular file")
+					t.Error("severity should be a regular file")
 				}
-				expectedSize := int64(len("Hello, World!\n"))
+				expectedSize := int64(len("CRITICAL\n"))
 				if stat.Size != expectedSize {
-					t.Errorf("Hello size = %v, want %v", stat.Size, expectedSize)
+					t.Errorf("severity size = %v, want %v", stat.Size, expectedSize)
 				}
 			},
 		},
@@ -94,7 +174,7 @@ func TestMacheFS_Getattr(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stat fuse.Stat_t
-			errCode := fs.Getattr(tt.path, &stat, 0)
+			errCode := mfs.Getattr(tt.path, &stat, 0)
 			if errCode != tt.wantErr {
 				t.Errorf("Getattr() errCode = %v, want %v", errCode, tt.wantErr)
 			}
@@ -106,26 +186,41 @@ func TestMacheFS_Getattr(t *testing.T) {
 }
 
 func TestMacheFS_Readdir(t *testing.T) {
-	schema := &api.Topology{Version: "v1alpha1"}
-	fs := NewMacheFS(schema)
+	mfs := newTestFS()
 
 	tests := []struct {
-		name    string
-		path    string
-		wantErr int
+		name        string
+		path        string
+		wantErr     int
 		wantEntries []string
 	}{
 		{
-			name:    "readdir root",
-			path:    "/",
-			wantErr: 0,
-			wantEntries: []string{".", "..", "hello"},
+			name:        "readdir root lists graph roots",
+			path:        "/",
+			wantErr:     0,
+			wantEntries: []string{".", "..", "vulns"},
 		},
 		{
-			name:    "readdir non-existent directory",
+			name:        "readdir vulns lists CVEs",
+			path:        "/vulns",
+			wantErr:     0,
+			wantEntries: []string{".", "..", "CVE-2024-1234", "CVE-2024-5678"},
+		},
+		{
+			name:        "readdir CVE lists file children",
+			path:        "/vulns/CVE-2024-1234",
+			wantErr:     0,
+			wantEntries: []string{".", "..", "description", "severity"},
+		},
+		{
+			name:    "readdir non-existent path",
 			path:    "/does-not-exist",
 			wantErr: fuse.ENOENT,
-			wantEntries: nil,
+		},
+		{
+			name:    "readdir on a file node returns ENOENT",
+			path:    "/vulns/CVE-2024-1234/severity",
+			wantErr: fuse.ENOENT,
 		},
 	}
 
@@ -137,14 +232,14 @@ func TestMacheFS_Readdir(t *testing.T) {
 				return true
 			}
 
-			errCode := fs.Readdir(tt.path, fill, 0, 0)
+			errCode := mfs.Readdir(tt.path, fill, 0, 0)
 			if errCode != tt.wantErr {
 				t.Errorf("Readdir() errCode = %v, want %v", errCode, tt.wantErr)
 			}
 
-			if errCode == 0 {
+			if errCode == 0 && tt.wantEntries != nil {
 				if len(entries) != len(tt.wantEntries) {
-					t.Errorf("Readdir() got %v entries, want %v", len(entries), len(tt.wantEntries))
+					t.Errorf("Readdir() got %v entries %v, want %v entries %v", len(entries), entries, len(tt.wantEntries), tt.wantEntries)
 				}
 				for i, want := range tt.wantEntries {
 					if i >= len(entries) || entries[i] != want {
@@ -157,8 +252,7 @@ func TestMacheFS_Readdir(t *testing.T) {
 }
 
 func TestMacheFS_Read(t *testing.T) {
-	schema := &api.Topology{Version: "v1alpha1"}
-	fs := NewMacheFS(schema)
+	mfs := newTestFS()
 
 	tests := []struct {
 		name     string
@@ -169,32 +263,48 @@ func TestMacheFS_Read(t *testing.T) {
 		wantData string
 	}{
 		{
-			name:     "read hello file from start",
-			path:     "/hello",
+			name:     "read file node from start",
+			path:     "/vulns/CVE-2024-1234/severity",
 			offset:   0,
 			buffSize: 100,
-			wantN:    14,
-			wantData: "Hello, World!\n",
+			wantN:    len("CRITICAL\n"),
+			wantData: "CRITICAL\n",
 		},
 		{
-			name:     "read hello file with offset",
-			path:     "/hello",
-			offset:   7,
+			name:     "read another file node",
+			path:     "/vulns/CVE-2024-1234/description",
+			offset:   0,
 			buffSize: 100,
-			wantN:    7,
-			wantData: "World!\n",
+			wantN:    len("Buffer overflow in example.c\n"),
+			wantData: "Buffer overflow in example.c\n",
+		},
+		{
+			name:     "read with offset",
+			path:     "/vulns/CVE-2024-1234/severity",
+			offset:   4,
+			buffSize: 100,
+			wantN:    len("ICAL\n"),
+			wantData: "ICAL\n",
 		},
 		{
 			name:     "read past end of file",
-			path:     "/hello",
+			path:     "/vulns/CVE-2024-1234/severity",
 			offset:   100,
 			buffSize: 100,
 			wantN:    0,
 			wantData: "",
 		},
 		{
-			name:     "read non-existent file",
+			name:     "read non-existent path",
 			path:     "/does-not-exist",
+			offset:   0,
+			buffSize: 100,
+			wantN:    fuse.ENOENT,
+			wantData: "",
+		},
+		{
+			name:     "read a directory returns ENOENT",
+			path:     "/vulns/CVE-2024-1234",
 			offset:   0,
 			buffSize: 100,
 			wantN:    fuse.ENOENT,
@@ -205,7 +315,7 @@ func TestMacheFS_Read(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buff := make([]byte, tt.buffSize)
-			n := fs.Read(tt.path, buff, tt.offset, 0)
+			n := mfs.Read(tt.path, buff, tt.offset, 0)
 
 			if n != tt.wantN {
 				t.Errorf("Read() n = %v, want %v", n, tt.wantN)
@@ -222,9 +332,6 @@ func TestMacheFS_Read(t *testing.T) {
 }
 
 func TestMacheFS_ErrorCodesArePositive(t *testing.T) {
-	// Verify that cgofuse error constants are positive
-	// cgofuse returns positive errno values (unlike some other FUSE libraries)
-	// These should be returned directly without negation
 	if fuse.ENOENT <= 0 {
 		t.Errorf("fuse.ENOENT = %v, expected positive value", fuse.ENOENT)
 	}

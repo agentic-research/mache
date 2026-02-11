@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/agentic-research/mache/api"
 	machefs "github.com/agentic-research/mache/internal/fs"
+	"github.com/agentic-research/mache/internal/graph"
 	"github.com/spf13/cobra"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -43,10 +45,8 @@ var rootCmd = &cobra.Command{
 		}
 
 		// 2. Load Data & Schema
-		// Mocked for now to match the "Hello World" requirement
 		var schema *api.Topology
-		
-		// Try loading real schema (mock decoding for now as we just need the struct)
+
 		if s, err := os.ReadFile(schemaPath); err == nil {
 			fmt.Printf("Loaded schema from %s\n", schemaPath)
 			schema = &api.Topology{Version: "loaded-from-file"}
@@ -59,15 +59,61 @@ var rootCmd = &cobra.Command{
 			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
-		// 3. Create the FS
-		macheFs := machefs.NewMacheFS(schema)
-		
-		// 4. Host it
+		// 3. Create the Data Store (Phase 0)
+		store := graph.NewMemoryStore()
+
+		// --- MOCK INGESTION START ---
+		store.AddRoot(&graph.Node{
+			ID:   "vulns",
+			Mode: fs.ModeDir,
+			Children: []string{
+				"vulns/CVE-2024-1234",
+				"vulns/CVE-2024-5678",
+			},
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-1234",
+			Mode: fs.ModeDir,
+			Children: []string{
+				"vulns/CVE-2024-1234/description",
+				"vulns/CVE-2024-1234/severity",
+			},
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-1234/description",
+			Data: []byte("Buffer overflow in example.c\n"),
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-1234/severity",
+			Data: []byte("CRITICAL\n"),
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-5678",
+			Mode: fs.ModeDir,
+			Children: []string{
+				"vulns/CVE-2024-5678/description",
+				"vulns/CVE-2024-5678/severity",
+			},
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-5678/description",
+			Data: []byte("Null pointer dereference\n"),
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-5678/severity",
+			Data: []byte("LOW\n"),
+		})
+		// --- MOCK INGESTION END ---
+
+		// 4. Create the FS, injecting the Store
+		macheFs := machefs.NewMacheFS(schema, store)
+
+		// 5. Host it
 		host := fuse.NewFileSystemHost(macheFs)
-		
+
 		fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
-		
-		// 5. Mount passes control to the library.
+
+		// 6. Mount passes control to the library.
 		// Use -o ro (Read Only)
 		// Use -o uid=N,gid=N to ensure we own the mount (critical for fuse-t/NFS)
 		opts := []string{
@@ -79,7 +125,7 @@ var rootCmd = &cobra.Command{
 		if !host.Mount(mountPoint, opts) {
 			return fmt.Errorf("mount failed")
 		}
-		
+
 		return nil
 	},
 }
