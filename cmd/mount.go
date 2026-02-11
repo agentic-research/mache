@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -62,33 +63,45 @@ var rootCmd = &cobra.Command{
 		store := graph.NewMemoryStore()
 
 		// --- MOCK INGESTION START ---
-		// We manually build the graph that the Schema *would* have produced.
-
-		// Root node "vulns"
 		store.AddRoot(&graph.Node{
-			ID: "vulns",
+			ID:   "vulns",
+			Mode: fs.ModeDir,
 			Children: []string{
 				"vulns/CVE-2024-1234",
 				"vulns/CVE-2024-5678",
 			},
 		})
-
-		// Leaf Node 1
 		store.AddNode(&graph.Node{
-			ID: "vulns/CVE-2024-1234",
-			Properties: map[string][]byte{
-				"description": []byte("Buffer overflow in example.c\n"),
-				"severity":    []byte("CRITICAL\n"),
+			ID:   "vulns/CVE-2024-1234",
+			Mode: fs.ModeDir,
+			Children: []string{
+				"vulns/CVE-2024-1234/description",
+				"vulns/CVE-2024-1234/severity",
 			},
 		})
-
-		// Leaf Node 2
 		store.AddNode(&graph.Node{
-			ID: "vulns/CVE-2024-5678",
-			Properties: map[string][]byte{
-				"description": []byte("Null pointer dereference\n"),
-				"severity":    []byte("LOW\n"),
+			ID:   "vulns/CVE-2024-1234/description",
+			Data: []byte("Buffer overflow in example.c\n"),
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-1234/severity",
+			Data: []byte("CRITICAL\n"),
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-5678",
+			Mode: fs.ModeDir,
+			Children: []string{
+				"vulns/CVE-2024-5678/description",
+				"vulns/CVE-2024-5678/severity",
 			},
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-5678/description",
+			Data: []byte("Null pointer dereference\n"),
+		})
+		store.AddNode(&graph.Node{
+			ID:   "vulns/CVE-2024-5678/severity",
+			Data: []byte("LOW\n"),
 		})
 		// --- MOCK INGESTION END ---
 

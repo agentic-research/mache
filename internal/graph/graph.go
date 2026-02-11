@@ -2,17 +2,20 @@ package graph
 
 import (
 	"errors"
+	"io/fs"
 	"sync"
 )
 
 var ErrNotFound = errors.New("node not found")
 
 // Node is the universal primitive.
-// It can be a Directory (if Children is non-empty) or a File (if Properties has "content").
+// The Mode field explicitly declares whether this is a file or directory.
 type Node struct {
 	ID         string
-	Properties map[string][]byte
-	Children   []string // IDs of child nodes
+	Mode       fs.FileMode       // fs.ModeDir for directories, 0 for regular files
+	Data       []byte            // Content (files only)
+	Properties map[string][]byte // Metadata / extended attributes
+	Children   []string          // Child node IDs (directories only)
 }
 
 // Graph is the Read-Only interface for the FUSE layer.
