@@ -127,16 +127,20 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		currentPath := filepath.Join(parentPath, name)
 		id := filepath.ToSlash(currentPath)
 		if strings.HasPrefix(id, "/") {
-		    id = id[1:] // Remove leading slash for consistency with MemoryStore
+			id = id[1:] // Remove leading slash for consistency with MemoryStore
 		}
 
-		// Create/Update Node
-		// Check if it already exists (could be merged from multiple files?)
-		// For now, assume fresh or overwrite.
+		// Create/Update Node — preserve existing children when merging
+		// multiple files into the same node (e.g. multiple .go files in one package).
+		var existingChildren []string
+		if existing, err := e.Store.GetNode(id); err == nil {
+			existingChildren = existing.Children
+		}
+
 		node := &graph.Node{
 			ID:       id,
 			Mode:     os.ModeDir | 0555, // Read-only dir
-			Children: []string{},
+			Children: existingChildren,
 		}
 		e.Store.AddNode(node)
 
@@ -145,9 +149,9 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			e.Store.AddRoot(node)
 		} else {
 			parentId := filepath.ToSlash(parentPath)
-            if strings.HasPrefix(parentId, "/") {
-                parentId = parentId[1:]
-            }
+			if strings.HasPrefix(parentId, "/") {
+				parentId = parentId[1:]
+			}
 			parent, err := e.Store.GetNode(parentId)
 			if err == nil {
 				// Check if already child
@@ -183,10 +187,10 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
-            fileId := filepath.ToSlash(filePath)
-            if strings.HasPrefix(fileId, "/") {
-                fileId = fileId[1:]
-            }
+			fileId := filepath.ToSlash(filePath)
+			if strings.HasPrefix(fileId, "/") {
+				fileId = fileId[1:]
+			}
 
 			// Render content
 			content, err := renderTemplate(fileSchema.ContentTemplate, match.Values())
