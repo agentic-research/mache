@@ -13,7 +13,7 @@ func newTestFS() *MacheFS {
 	schema := &api.Topology{Version: "v1alpha1"}
 	store := graph.NewMemoryStore()
 
-	store.AddNode(&graph.Node{
+	store.AddRoot(&graph.Node{
 		ID: "vulns",
 		Children: []string{
 			"vulns/CVE-2024-1234",

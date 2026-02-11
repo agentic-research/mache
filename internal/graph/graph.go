@@ -39,22 +39,25 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-// AddNode is our internal "Ingestion" method for Phase 0.
+// AddRoot registers a node as a top-level root and adds it to the store.
+// Callers must explicitly declare roots — there is no heuristic.
+func (s *MemoryStore) AddRoot(n *Node) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodes[n.ID] = n
+	for _, r := range s.roots {
+		if r == n.ID {
+			return
+		}
+	}
+	s.roots = append(s.roots, n.ID)
+}
+
+// AddNode adds a non-root node to the store.
 func (s *MemoryStore) AddNode(n *Node) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nodes[n.ID] = n
-
-	// Heuristic: If ID has no slashes, it's a root.
-	// In a real graph, we'd have explicit parent pointers.
-	if len(n.ID) > 0 && n.ID[0] != '/' && len(n.Children) > 0 {
-		for _, r := range s.roots {
-			if r == n.ID {
-				return
-			}
-		}
-		s.roots = append(s.roots, n.ID)
-	}
 }
 
 // GetNode implements Graph.

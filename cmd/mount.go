@@ -65,7 +65,7 @@ var rootCmd = &cobra.Command{
 		// We manually build the graph that the Schema *would* have produced.
 
 		// Root node "vulns"
-		store.AddNode(&graph.Node{
+		store.AddRoot(&graph.Node{
 			ID: "vulns",
 			Children: []string{
 				"vulns/CVE-2024-1234",
