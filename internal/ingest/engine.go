@@ -63,6 +63,18 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 	}
 }
 
+// schemaUsesTreeSitter returns true if the schema's selectors are tree-sitter
+// S-expressions rather than JSONPath. S-expressions always start with '('.
+func schemaUsesTreeSitter(schema *api.Topology) bool {
+	for _, n := range schema.Nodes {
+		sel := strings.TrimSpace(n.Selector)
+		if len(sel) > 0 && sel[0] == '(' {
+			return true
+		}
+	}
+	return false
+}
+
 // Ingest processes a file or directory.
 func (e *Engine) Ingest(path string) error {
 	info, err := os.Stat(path)
@@ -71,14 +83,37 @@ func (e *Engine) Ingest(path string) error {
 	}
 
 	if info.IsDir() {
+		// Determine which file types this schema can process.
+		// Tree-sitter schemas operate on source code (.go, .py);
+		// JSONPath schemas operate on data files (.json, .db).
+		// Ingesting the wrong type is harmless but wastes time and
+		// can produce confusing errors (e.g. S-expression as JSONPath).
+		treeSitter := schemaUsesTreeSitter(e.Schema)
+
 		return filepath.Walk(path, func(p string, d os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			if !d.IsDir() {
-				return e.ingestFile(p)
+			if d.IsDir() {
+				// Skip hidden directories (.git, .mache, etc.)
+				base := filepath.Base(p)
+				if p != path && len(base) > 0 && base[0] == '.' {
+					return filepath.SkipDir
+				}
+				return nil
 			}
-			return nil
+			// Filter by schema type: tree-sitter schemas skip data files,
+			// JSONPath schemas skip source files.
+			ext := filepath.Ext(p)
+			if treeSitter {
+				switch ext {
+				case ".go", ".py":
+					return e.ingestFile(p)
+				default:
+					return nil
+				}
+			}
+			return e.ingestFile(p)
 		})
 	}
 	return e.ingestFile(path)
