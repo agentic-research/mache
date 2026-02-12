@@ -86,10 +86,16 @@ tasks:
       - rm -f {{.BINARY_NAME}}
       - rm -f coverage.out coverage.html
 
+  validate:
+    desc: Validate example schemas against synthetic SQLite fixtures (no FUSE required)
+    cmds:
+      - go test -v -run 'TestEngine_IngestSQLite' ./internal/ingest/
+
   check:
-    desc: Run all checks (fmt, vet, lint, test)
+    desc: Run all checks (fmt, vet, lint, test, validate)
     cmds:
       - task: fmt
       - task: vet
       - task: lint
       - task: test
+      - task: validate

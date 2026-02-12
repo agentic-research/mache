@@ -45,10 +45,10 @@ def add(a, b):
 	require.NoError(t, err)
 
 	assert.Len(t, matches, 2)
-	
+
 	// Verify captures
-	assert.Equal(t, map[string]string{"name": "hello"}, matches[0].Values())
-	assert.Equal(t, map[string]string{"name": "add"}, matches[1].Values())
+	assert.Equal(t, map[string]any{"name": "hello"}, matches[0].Values())
+	assert.Equal(t, map[string]any{"name": "add"}, matches[1].Values())
 }
 
 func TestSitterWalkerGo(t *testing.T) {
@@ -64,7 +64,7 @@ func helper() {}
 	lang := golang.GetLanguage()
 	parser := sitter.NewParser()
 	parser.SetLanguage(lang)
-	
+
 	tree, err := parser.ParseCtx(context.Background(), nil, code)
 	require.NoError(t, err)
 
@@ -83,6 +83,6 @@ func helper() {}
 	require.NoError(t, err)
 
 	assert.Len(t, matches, 2)
-	assert.Equal(t, map[string]string{"name": "main"}, matches[0].Values())
-	assert.Equal(t, map[string]string{"name": "helper"}, matches[1].Values())
+	assert.Equal(t, map[string]any{"name": "main"}, matches[0].Values())
+	assert.Equal(t, map[string]any{"name": "helper"}, matches[1].Values())
 }

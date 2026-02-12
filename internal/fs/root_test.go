@@ -81,13 +81,13 @@ func TestMacheFS_Open(t *testing.T) {
 		{
 			name:    "open non-existent path",
 			path:    "/does-not-exist",
-			wantErr: fuse.ENOENT,
+			wantErr: -fuse.ENOENT,
 			wantFh:  0,
 		},
 		{
-			name:    "open directory returns ENOENT",
+			name:    "open directory returns EISDIR",
 			path:    "/vulns",
-			wantErr: fuse.ENOENT,
+			wantErr: -fuse.EISDIR,
 			wantFh:  0,
 		},
 	}
@@ -164,7 +164,7 @@ func TestMacheFS_Getattr(t *testing.T) {
 		{
 			name:    "stat non-existent path",
 			path:    "/does-not-exist",
-			wantErr: fuse.ENOENT,
+			wantErr: -fuse.ENOENT,
 			checkStat: func(t *testing.T, stat *fuse.Stat_t) {
 				// No stat to check on error
 			},
@@ -215,12 +215,12 @@ func TestMacheFS_Readdir(t *testing.T) {
 		{
 			name:    "readdir non-existent path",
 			path:    "/does-not-exist",
-			wantErr: fuse.ENOENT,
+			wantErr: -fuse.ENOENT,
 		},
 		{
-			name:    "readdir on a file node returns ENOENT",
+			name:    "readdir on a file node returns ENOTDIR",
 			path:    "/vulns/CVE-2024-1234/severity",
-			wantErr: fuse.ENOENT,
+			wantErr: -fuse.ENOTDIR,
 		},
 	}
 
@@ -299,15 +299,15 @@ func TestMacheFS_Read(t *testing.T) {
 			path:     "/does-not-exist",
 			offset:   0,
 			buffSize: 100,
-			wantN:    fuse.ENOENT,
+			wantN:    -fuse.ENOENT,
 			wantData: "",
 		},
 		{
-			name:     "read a directory returns ENOENT",
+			name:     "read a directory returns EISDIR",
 			path:     "/vulns/CVE-2024-1234",
 			offset:   0,
 			buffSize: 100,
-			wantN:    fuse.ENOENT,
+			wantN:    -fuse.EISDIR,
 			wantData: "",
 		},
 	}

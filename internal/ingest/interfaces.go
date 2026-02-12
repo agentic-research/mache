@@ -15,7 +15,7 @@ type Match interface {
 	// For Tree-sitter, these are the named captures from the query (e.g., "res.type" -> "aws_s3_bucket").
 	// For JSONPath, if the match is an object, its fields are returned as values.
 	// If the match is a primitive, it might be returned under a default key (e.g., "value").
-	Values() map[string]string
+	Values() map[string]any
 
 	// Context returns the underlying object/node to be used as the root for child queries.
 	// For JSONPath, this is the matched object.

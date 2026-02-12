@@ -38,19 +38,13 @@ type jsonMatch struct {
 }
 
 // Values implements Match.
-func (m *jsonMatch) Values() map[string]string {
-	res := make(map[string]string)
-
+func (m *jsonMatch) Values() map[string]any {
 	switch v := m.value.(type) {
 	case map[string]any:
-		for k, val := range v {
-			res[k] = fmt.Sprintf("%v", val)
-		}
+		return v // preserve nesting
 	default:
-		// For primitives, return as "value"
-		res["value"] = fmt.Sprintf("%v", v)
+		return map[string]any{"value": v}
 	}
-	return res
 }
 
 // Context implements Match.

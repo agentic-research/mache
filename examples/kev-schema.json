@@ -1,0 +1,41 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "vulns",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.item.cveID}}",
+          "selector": "$[*]",
+          "files": [
+            {
+              "name": "vendor",
+              "content_template": "{{.item.vendorProject}}"
+            },
+            {
+              "name": "product",
+              "content_template": "{{.item.product}}"
+            },
+            {
+              "name": "description",
+              "content_template": "{{.item.shortDescription}}"
+            },
+            {
+              "name": "date-added",
+              "content_template": "{{.item.dateAdded}}"
+            },
+            {
+              "name": "due-date",
+              "content_template": "{{.item.dueDate}}"
+            },
+            {
+              "name": "raw.json",
+              "content_template": "{{. | json}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

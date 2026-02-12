@@ -60,23 +60,34 @@ func (e *Engine) Ingest(path string) error {
 
 func (e *Engine) ingestFile(path string) error {
 	ext := filepath.Ext(path)
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
 
 	var walker Walker
 	var root any
 
 	switch ext {
 	case ".json":
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
 		var data any
 		if err := json.Unmarshal(content, &data); err != nil {
 			return fmt.Errorf("failed to parse json %s: %w", path, err)
 		}
 		walker = NewJsonWalker()
 		root = data
+	case ".db":
+		records, err := LoadSQLite(path)
+		if err != nil {
+			return fmt.Errorf("failed to load sqlite %s: %w", path, err)
+		}
+		walker = NewJsonWalker()
+		root = records
 	case ".py":
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
 		lang := python.GetLanguage()
 		parser := sitter.NewParser()
 		parser.SetLanguage(lang)
@@ -87,6 +98,10 @@ func (e *Engine) ingestFile(path string) error {
 		walker = NewSitterWalker()
 		root = SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
 	case ".go":
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
 		lang := golang.GetLanguage()
 		parser := sitter.NewParser()
 		parser.SetLanguage(lang)
@@ -125,10 +140,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Normalize path
 		currentPath := filepath.Join(parentPath, name)
-		id := filepath.ToSlash(currentPath)
-		if strings.HasPrefix(id, "/") {
-			id = id[1:] // Remove leading slash for consistency with MemoryStore
-		}
+		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
 
 		// Create/Update Node — preserve existing children when merging
 		// multiple files into the same node (e.g. multiple .go files in one package).
@@ -139,7 +151,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		node := &graph.Node{
 			ID:       id,
-			Mode:     os.ModeDir | 0555, // Read-only dir
+			Mode:     os.ModeDir | 0o555, // Read-only dir
 			Children: existingChildren,
 		}
 		e.Store.AddNode(node)
@@ -148,10 +160,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		if parentPath == "" {
 			e.Store.AddRoot(node)
 		} else {
-			parentId := filepath.ToSlash(parentPath)
-			if strings.HasPrefix(parentId, "/") {
-				parentId = parentId[1:]
-			}
+			parentId := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
 			parent, err := e.Store.GetNode(parentId)
 			if err == nil {
 				// Check if already child
@@ -187,10 +196,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
-			fileId := filepath.ToSlash(filePath)
-			if strings.HasPrefix(fileId, "/") {
-				fileId = fileId[1:]
-			}
+			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
 
 			// Render content
 			content, err := renderTemplate(fileSchema.ContentTemplate, match.Values())
@@ -200,7 +206,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 			fileNode := &graph.Node{
 				ID:   fileId,
-				Mode: 0444, // Read-only file
+				Mode: 0o444, // Read-only file
 				Data: []byte(content),
 			}
 			e.Store.AddNode(fileNode)
@@ -213,8 +219,27 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	return nil
 }
 
-func renderTemplate(tmpl string, values map[string]string) (string, error) {
-	t, err := template.New("").Parse(tmpl)
+var tmplFuncs = template.FuncMap{
+	"json": func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("<json error: %v>", err)
+		}
+		return string(b)
+	},
+	"first": func(v any) any {
+		switch s := v.(type) {
+		case []any:
+			if len(s) > 0 {
+				return s[0]
+			}
+		}
+		return nil
+	},
+}
+
+func renderTemplate(tmpl string, values map[string]any) (string, error) {
+	t, err := template.New("").Funcs(tmplFuncs).Parse(tmpl)
 	if err != nil {
 		return "", err
 	}

@@ -30,10 +30,10 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
-		return fuse.ENOENT, 0
+		return -fuse.ENOENT, 0
 	}
 	if node.Mode.IsDir() {
-		return fuse.ENOENT, 0
+		return -fuse.EISDIR, 0
 	}
 	return 0, 0
 }
@@ -53,7 +53,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
-		return fuse.ENOENT
+		return -fuse.ENOENT
 	}
 
 	if node.Mode.IsDir() {
@@ -73,10 +73,10 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 	if path != "/" {
 		node, err := fs.Graph.GetNode(path)
 		if err != nil {
-			return fuse.ENOENT
+			return -fuse.ENOENT
 		}
 		if !node.Mode.IsDir() {
-			return fuse.ENOENT
+			return -fuse.ENOTDIR
 		}
 	}
 
@@ -85,7 +85,7 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 
 	children, err := fs.Graph.ListChildren(path)
 	if err != nil {
-		return 0
+		return -fuse.ENOENT
 	}
 	for _, childID := range children {
 		name := filepath.Base(childID)
@@ -99,10 +99,10 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
-		return fuse.ENOENT
+		return -fuse.ENOENT
 	}
 	if node.Mode.IsDir() {
-		return fuse.ENOENT
+		return -fuse.EISDIR
 	}
 
 	if ofst >= int64(len(node.Data)) {

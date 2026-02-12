@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "functions",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(function_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

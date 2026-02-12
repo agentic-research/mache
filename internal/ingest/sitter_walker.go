@@ -64,11 +64,11 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 			if name == "scope" {
 				scope = c.Node
 			}
-			
+
 			// Extract content from source
 			start := c.Node.StartByte()
 			end := c.Node.EndByte()
-			
+
 			// Safety check
 			if start < uint32(len(sr.Source)) && end <= uint32(len(sr.Source)) {
 				vals[name] = string(sr.Source[start:end])
@@ -93,8 +93,12 @@ type sitterMatch struct {
 }
 
 // Values implements Match.
-func (m *sitterMatch) Values() map[string]string {
-	return m.values
+func (m *sitterMatch) Values() map[string]any {
+	result := make(map[string]any, len(m.values))
+	for k, v := range m.values {
+		result[k] = v
+	}
+	return result
 }
 
 // Context implements Match.
