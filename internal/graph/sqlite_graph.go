@@ -2,10 +2,12 @@ package graph
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"regexp"
 	"sort"
@@ -591,9 +593,22 @@ func setNestedField(m map[string]any, dottedPath, value string) {
 
 // --- Scan implementation ---
 
+// flushBatchSize is the number of records between batch flushes to sync.Map.
+// Keeps transient working-map memory bounded for large cross-reference scans.
+const flushBatchSize = 50000
+
 // scanRoot performs a single-pass streaming scan of all DB records to build the
 // directory tree for one root node. Uses json_extract to push field extraction
 // into SQLite, avoiding Go-side JSON parsing of the full record blob.
+//
+// Safety properties:
+//   - Read-only transaction: snapshot isolation prevents partial results if the
+//     source DB is being written to concurrently.
+//   - Batch flush: every flushBatchSize records, accumulated slices are sorted,
+//     deduped, and merged into sync.Map, then the working map is cleared. This
+//     bounds transient memory for 10M+ node cross-reference scans.
+//   - Error counting: scan/render failures are counted and logged rather than
+//     silently swallowed, so data drops are visible.
 //
 // Why single-threaded: The previous worker-pool implementation (NumCPU goroutines +
 // channels) was designed for CPU-bound template rendering, but profiling showed the
@@ -601,10 +616,6 @@ func setNestedField(m map[string]any, dottedPath, value string) {
 // (e.g. "{{.item.cve.id}}") that render in <1μs. The channel/goroutine overhead
 // actually hurt throughput and introduced deadlock risk. If a future schema uses
 // expensive template functions (regex, crypto), re-add parallelism — but measure first.
-//
-// Memory: accumulates into []string slices (not map[string]bool sets), then
-// deduplicates in-place via sort+compact. Transient overhead ≈ O(unique_paths) strings,
-// which is the same as the final cached state (we need all paths in memory for FUSE).
 func (g *SQLiteGraph) scanRoot(rootName string) error {
 	level := g.findRootLevel(rootName)
 	if level == nil {
@@ -615,14 +626,22 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	fieldPaths := extractFieldPaths(collectNameTemplates(level))
 	query := buildScanQuery(fieldPaths)
 
-	rows, err := g.db.Query(query)
+	// Read-only transaction for snapshot consistency — if the source DB is
+	// being written to during scan, we get a consistent point-in-time view.
+	tx, err := g.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin scan tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(query)
 	if err != nil {
 		return fmt.Errorf("scan query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	// Accumulate children as slices directly (no intermediate bool sets).
-	// Duplicates are removed after the scan via sort + compact.
+	// Flushed to sync.Map every flushBatchSize records to bound memory.
 	childSlices := make(map[string][]string)
 	recIDs := make(map[string]string)
 	childSlices[rootName] = nil // ensure root exists even if DB is empty
@@ -640,8 +659,11 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	var result scanResult
 
 	count := 0
+	scanErrs := 0
+	nullSkips := 0
 	for rows.Next() {
 		if err := rows.Scan(scanPtrs...); err != nil {
+			scanErrs++
 			continue
 		}
 
@@ -655,6 +677,7 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 			fields[i] = scanVals[i+1].String
 		}
 		if skip {
+			nullSkips++
 			continue
 		}
 
@@ -679,6 +702,18 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 		if count%100000 == 0 {
 			fmt.Printf("\rScanning %d records...", count)
 		}
+
+		// Batch flush: merge accumulated data into sync.Map to bound memory
+		if count%flushBatchSize == 0 {
+			flushChildSlices(childSlices, &g.dirChildren)
+			for path, id := range recIDs {
+				g.recordIDs.Store(path, id)
+			}
+			// Clear working maps but keep root entry
+			childSlices = make(map[string][]string)
+			childSlices[rootName] = nil
+			recIDs = make(map[string]string)
+		}
 	}
 	if count >= 100000 {
 		fmt.Printf("\rScanned %d records.\n", count)
@@ -688,10 +723,28 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 		return fmt.Errorf("scan rows: %w", err)
 	}
 
-	// Sort and deduplicate children in-place, then store
-	for parent, children := range childSlices {
+	// Log skipped rows so data drops are visible
+	if scanErrs > 0 || nullSkips > 0 {
+		log.Printf("scan %q: %d records processed, %d scan errors, %d null-skipped",
+			rootName, count, scanErrs, nullSkips)
+	}
+
+	// Final flush of remaining data
+	flushChildSlices(childSlices, &g.dirChildren)
+	for path, id := range recIDs {
+		g.recordIDs.Store(path, id)
+	}
+
+	return nil
+}
+
+// flushChildSlices sorts, deduplicates, and merges accumulated child slices
+// into the sync.Map. For keys already in the map (from a previous batch),
+// the new children are merged and re-deduped.
+func flushChildSlices(slices map[string][]string, target *sync.Map) {
+	for parent, children := range slices {
+		// Sort and compact this batch
 		sort.Strings(children)
-		// Compact: remove adjacent duplicates
 		j := 0
 		for i, c := range children {
 			if i == 0 || c != children[i-1] {
@@ -699,13 +752,27 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 				j++
 			}
 		}
-		g.dirChildren.Store(parent, children[:j])
-	}
-	for path, id := range recIDs {
-		g.recordIDs.Store(path, id)
-	}
+		deduped := children[:j]
 
-	return nil
+		// Merge with any existing entries from prior batches
+		if existing, ok := target.Load(parent); ok {
+			prev := existing.([]string)
+			merged := make([]string, 0, len(prev)+len(deduped))
+			merged = append(merged, prev...)
+			merged = append(merged, deduped...)
+			sort.Strings(merged)
+			k := 0
+			for i, c := range merged {
+				if i == 0 || c != merged[i-1] {
+					merged[k] = c
+					k++
+				}
+			}
+			deduped = merged[:k]
+		}
+
+		target.Store(parent, deduped)
+	}
 }
 
 // collectPathEntries walks the schema children for one record, producing
