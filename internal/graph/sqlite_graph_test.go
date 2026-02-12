@@ -476,9 +476,12 @@ func TestSQLiteGraph_EmptyDB(t *testing.T) {
 }
 
 func TestSQLiteGraph_Integration_KEV(t *testing.T) {
-	kevDB := os.ExpandEnv("$HOME/.agentic-research/venturi/kev/results/results.db")
+	kevDB := os.Getenv("MACHE_TEST_KEV_DB")
+	if kevDB == "" {
+		t.Skip("MACHE_TEST_KEV_DB not set")
+	}
 	if _, err := os.Stat(kevDB); os.IsNotExist(err) {
-		t.Skip("venturi KEV database not found")
+		t.Skip("KEV database not found at " + kevDB)
 	}
 
 	schemaJSON, err := os.ReadFile("../../examples/kev-schema.json")
@@ -519,9 +522,12 @@ func TestSQLiteGraph_Integration_KEV(t *testing.T) {
 }
 
 func TestSQLiteGraph_Integration_NVD(t *testing.T) {
-	nvdDB := os.ExpandEnv("$HOME/.agentic-research/venturi/nvd/results/results.db")
+	nvdDB := os.Getenv("MACHE_TEST_NVD_DB")
+	if nvdDB == "" {
+		t.Skip("MACHE_TEST_NVD_DB not set")
+	}
 	if _, err := os.Stat(nvdDB); os.IsNotExist(err) {
-		t.Skip("venturi NVD database not found")
+		t.Skip("NVD database not found at " + nvdDB)
 	}
 
 	schemaJSON, err := os.ReadFile("../../examples/nvd-schema.json")

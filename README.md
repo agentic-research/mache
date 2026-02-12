@@ -137,8 +137,8 @@ go test ./...
 ./mache --schema schema.json --data data.json /tmp/mount
 
 # Flags:
-#   -s, --schema   Path to topology schema (default: ~/.agentic-research/mache/mache.json)
-#   -d, --data     Path to data source file or directory (default: ~/.agentic-research/mache/data.json)
+#   -s, --schema   Path to topology schema (default: ~/.mache/mache.json)
+#   -d, --data     Path to data source file or directory (default: ~/.mache/data.json)
 ```
 
 ### Example: NVD Vulnerability Database
@@ -147,7 +147,7 @@ Mount 323K NVD CVE records as a browsable filesystem, sharded by year and month:
 
 ```bash
 ./mache --schema examples/nvd-schema.json \
-        --data ~/.agentic-research/venturi/nvd/results/results.db \
+        --data /path/to/nvd/results.db \
         /tmp/nvd
 ```
 
@@ -301,7 +301,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 
 ## Contributing
 
-This is an early-stage research project. Contributions welcome, but expect rapid API changes.
+This is an early-stage research project. Contributions welcome, but expect rapid API changes. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Related Work
 

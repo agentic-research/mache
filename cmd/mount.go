@@ -37,7 +37,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to get home dir: %w", err)
 		}
-		defaultDir := filepath.Join(home, ".agentic-research", "mache")
+		defaultDir := filepath.Join(home, ".mache")
 
 		if schemaPath == "" {
 			schemaPath = filepath.Join(defaultDir, "mache.json")
