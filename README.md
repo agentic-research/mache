@@ -6,7 +6,7 @@ Mache projects structured data and source code into navigable, read-only filesys
 
 ## Status
 
-Mache is in **Phase 0** — a working proof-of-concept. The core pipeline (schema + ingestion + FUSE mount) works end-to-end. See the [Feature Matrix](#feature-matrix) below for what's implemented, stubbed, and on the roadmap.
+Mache is in **early development**. The core pipeline (schema + ingestion + FUSE mount) works end-to-end across multiple data sources. See the [Feature Matrix](#feature-matrix) below for current status.
 
 ## Feature Matrix
 
