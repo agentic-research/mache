@@ -123,9 +123,9 @@ var rootCmd = &cobra.Command{
 			"-o", "fsname=mache",
 			"-o", "subtype=mache",
 			"-o", "nobrowse",
-			"-o", "entry_timeout=60.0",
-			"-o", "attr_timeout=60.0",
-			"-o", "negative_timeout=60.0",
+			"-o", "entry_timeout=300.0",
+			"-o", "attr_timeout=300.0",
+			"-o", "negative_timeout=300.0",
 		}
 
 		if !host.Mount(mountPoint, opts) {

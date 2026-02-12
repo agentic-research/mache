@@ -133,10 +133,10 @@ func (fs *MacheFS) Releasedir(path string, fh uint64) int {
 	return 0
 }
 
-// Readdir serves entries from the cached handle using offset-based pagination.
-// Each NFS READDIR RPC page resumes from where the last left off — no repeated work.
+// Readdir serves entries from the cached handle.
+// Auto-mode (offset=0 to fill): fuse-t requires all results in the first pass.
+// The NFS translation layer handles pagination to the macOS NFS client.
 // cgofuse fill() convention: true = accepted, false = buffer full.
-// Offset convention: fill(name, stat, nextOffset) — kernel passes nextOffset back on resume.
 func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
 	fs.handleMu.Lock()
 	entries, ok := fs.handles[fh]
@@ -155,11 +155,11 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		}
 	}
 
-	// Offset-based: ofst=0 means start, ofst=N means resume from entry N
-	start := int(ofst)
-	for i := start; i < len(entries); i++ {
-		if !fill(entries[i], nil, int64(i+1)) {
-			break // buffer full — kernel will call again with ofst=i+1
+	// Auto-mode: pass offset=0 to fill(). FUSE handles pagination internally.
+	// fuse-t translates to NFS READDIR and manages cookie-based continuation.
+	for _, name := range entries {
+		if !fill(name, nil, 0) {
+			break // buffer full
 		}
 	}
 

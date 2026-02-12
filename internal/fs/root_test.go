@@ -348,41 +348,24 @@ func TestMacheFS_Opendir_Readdir_Releasedir(t *testing.T) {
 		t.Fatalf("Opendir errCode = %v, want 0", errCode)
 	}
 
-	// First Readdir page: accept 2 entries then signal buffer full
-	var page1 []string
-	count := 0
-	fill1 := func(name string, stat *fuse.Stat_t, ofst int64) bool {
-		page1 = append(page1, name)
-		count++
-		return count < 2 // accept first 2, then buffer full
-	}
-
-	errCode = mfs.Readdir("/vulns", fill1, 0, fh)
-	if errCode != 0 {
-		t.Fatalf("Readdir page1 errCode = %v, want 0", errCode)
-	}
-	if len(page1) != 2 || page1[0] != "." || page1[1] != ".." {
-		t.Fatalf("page1 = %v, want [. ..]", page1)
-	}
-
-	// Second Readdir page: resume from offset 2, accept all remaining
-	var page2 []string
-	fill2 := func(name string, stat *fuse.Stat_t, ofst int64) bool {
-		page2 = append(page2, name)
+	// Readdir returns all entries via auto-mode (offset=0 to fill)
+	var entries []string
+	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
 		return true
 	}
 
-	errCode = mfs.Readdir("/vulns", fill2, 2, fh)
+	errCode = mfs.Readdir("/vulns", fill, 0, fh)
 	if errCode != 0 {
-		t.Fatalf("Readdir page2 errCode = %v, want 0", errCode)
+		t.Fatalf("Readdir errCode = %v, want 0", errCode)
 	}
-	want2 := []string{"CVE-2024-1234", "CVE-2024-5678"}
-	if len(page2) != len(want2) {
-		t.Fatalf("page2 = %v, want %v", page2, want2)
+	want := []string{".", "..", "CVE-2024-1234", "CVE-2024-5678"}
+	if len(entries) != len(want) {
+		t.Fatalf("entries = %v, want %v", entries, want)
 	}
-	for i, w := range want2 {
-		if page2[i] != w {
-			t.Errorf("page2[%d] = %q, want %q", i, page2[i], w)
+	for i, w := range want {
+		if entries[i] != w {
+			t.Errorf("entry[%d] = %q, want %q", i, entries[i], w)
 		}
 	}
 
@@ -390,6 +373,20 @@ func TestMacheFS_Opendir_Readdir_Releasedir(t *testing.T) {
 	errCode = mfs.Releasedir("/vulns", fh)
 	if errCode != 0 {
 		t.Fatalf("Releasedir errCode = %v, want 0", errCode)
+	}
+
+	// Verify handle is released — subsequent Readdir falls back to graph
+	var fallback []string
+	fill2 := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		fallback = append(fallback, name)
+		return true
+	}
+	errCode = mfs.Readdir("/vulns", fill2, 0, fh)
+	if errCode != 0 {
+		t.Fatalf("Readdir after release errCode = %v, want 0", errCode)
+	}
+	if len(fallback) != len(want) {
+		t.Fatalf("fallback entries = %v, want %v", fallback, want)
 	}
 }
 
