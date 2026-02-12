@@ -217,11 +217,8 @@ func TestMacheFS_Readdir(t *testing.T) {
 			path:    "/does-not-exist",
 			wantErr: -fuse.ENOENT,
 		},
-		{
-			name:    "readdir on a file node returns ENOTDIR",
-			path:    "/vulns/CVE-2024-1234/severity",
-			wantErr: -fuse.ENOTDIR,
-		},
+		// Note: "readdir on a file" is now caught by Opendir (ENOTDIR).
+		// See TestMacheFS_Opendir_Errors.
 	}
 
 	for _, tt := range tests {
@@ -275,17 +272,13 @@ func TestMacheFS_Readdir_AllEntriesReturned(t *testing.T) {
 	}
 }
 
-func TestMacheFS_Readdir_AutoMode_BufferFull(t *testing.T) {
+func TestMacheFS_Readdir_BufferFull(t *testing.T) {
 	mfs := newTestFS()
 
-	// In auto-mode (offset=0), fill returning false means buffer full — we stop early.
-	// Verify we get only the first entry when buffer is immediately full.
+	// fill returning false means buffer full — we stop after the first entry.
 	var entries []string
 	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
 		entries = append(entries, name)
-		if ofst != 0 {
-			t.Errorf("auto-mode should pass offset 0, got %d", ofst)
-		}
 		return false // false = buffer full, stop sending
 	}
 
@@ -293,16 +286,9 @@ func TestMacheFS_Readdir_AutoMode_BufferFull(t *testing.T) {
 	if errCode != 0 {
 		t.Fatalf("Readdir errCode = %v, want 0", errCode)
 	}
-	// "." and ".." are always emitted (return value unchecked, matching cgofuse memfs).
-	// Buffer full kicks in on the first real child, so we get 3 entries.
-	want := []string{".", "..", "CVE-2024-1234"}
-	if len(entries) != len(want) {
-		t.Fatalf("entries = %v, want %v", entries, want)
-	}
-	for i, w := range want {
-		if entries[i] != w {
-			t.Errorf("entry[%d] = %q, want %q", i, entries[i], w)
-		}
+	// Buffer full on first fill → only "." is returned
+	if len(entries) != 1 || entries[0] != "." {
+		t.Fatalf("entries = %v, want [\".\"]", entries)
 	}
 }
 
@@ -336,6 +322,74 @@ func TestMacheFS_Readdir_FillConventionRegression(t *testing.T) {
 		if !found[want] {
 			t.Errorf("missing child %q in entries %v", want, entries)
 		}
+	}
+}
+
+func TestMacheFS_Opendir_Errors(t *testing.T) {
+	mfs := newTestFS()
+
+	errCode, _ := mfs.Opendir("/does-not-exist")
+	if errCode != -fuse.ENOENT {
+		t.Errorf("Opendir(nonexistent) = %v, want ENOENT", errCode)
+	}
+
+	errCode, _ = mfs.Opendir("/vulns/CVE-2024-1234/severity")
+	if errCode != -fuse.ENOTDIR {
+		t.Errorf("Opendir(file) = %v, want ENOTDIR", errCode)
+	}
+}
+
+func TestMacheFS_Opendir_Readdir_Releasedir(t *testing.T) {
+	mfs := newTestFS()
+
+	// Opendir caches the entry list
+	errCode, fh := mfs.Opendir("/vulns")
+	if errCode != 0 {
+		t.Fatalf("Opendir errCode = %v, want 0", errCode)
+	}
+
+	// First Readdir page: accept 2 entries then signal buffer full
+	var page1 []string
+	count := 0
+	fill1 := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		page1 = append(page1, name)
+		count++
+		return count < 2 // accept first 2, then buffer full
+	}
+
+	errCode = mfs.Readdir("/vulns", fill1, 0, fh)
+	if errCode != 0 {
+		t.Fatalf("Readdir page1 errCode = %v, want 0", errCode)
+	}
+	if len(page1) != 2 || page1[0] != "." || page1[1] != ".." {
+		t.Fatalf("page1 = %v, want [. ..]", page1)
+	}
+
+	// Second Readdir page: resume from offset 2, accept all remaining
+	var page2 []string
+	fill2 := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		page2 = append(page2, name)
+		return true
+	}
+
+	errCode = mfs.Readdir("/vulns", fill2, 2, fh)
+	if errCode != 0 {
+		t.Fatalf("Readdir page2 errCode = %v, want 0", errCode)
+	}
+	want2 := []string{"CVE-2024-1234", "CVE-2024-5678"}
+	if len(page2) != len(want2) {
+		t.Fatalf("page2 = %v, want %v", page2, want2)
+	}
+	for i, w := range want2 {
+		if page2[i] != w {
+			t.Errorf("page2[%d] = %q, want %q", i, page2[i], w)
+		}
+	}
+
+	// Releasedir frees the handle
+	errCode = mfs.Releasedir("/vulns", fh)
+	if errCode != 0 {
+		t.Fatalf("Releasedir errCode = %v, want 0", errCode)
 	}
 }
 

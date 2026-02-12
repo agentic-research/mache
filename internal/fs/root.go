@@ -3,6 +3,7 @@ package fs
 import (
 	"hash/fnv"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/agentic-research/mache/api"
@@ -32,6 +33,12 @@ type MacheFS struct {
 	Schema    *api.Topology
 	Graph     graph.Graph
 	mountTime fuse.Timespec
+
+	// Directory handle cache: Opendir builds the entry list once,
+	// Readdir slices from it, Releasedir frees it.
+	handleMu   sync.Mutex
+	handles    map[uint64][]string // fh → [".", "..", "child1", ...]
+	nextHandle uint64
 }
 
 func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
@@ -39,6 +46,7 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 		Schema:    schema,
 		Graph:     g,
 		mountTime: fuse.NewTimespec(time.Now()),
+		handles:   make(map[uint64][]string),
 	}
 }
 
@@ -85,32 +93,73 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	return 0
 }
 
-// Readdir lists children of a directory node.
-// Uses auto-mode (offset=0) — all entries returned in a single pass.
-// cgofuse fill() convention: returns true = accepted, false = buffer full.
-func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
-	// For non-root paths, verify this is actually a directory
+// Opendir fetches the directory listing once and caches it by handle.
+func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	if path != "/" {
 		node, err := fs.Graph.GetNode(path)
 		if err != nil {
-			return -fuse.ENOENT
+			return -fuse.ENOENT, 0
 		}
 		if !node.Mode.IsDir() {
-			return -fuse.ENOTDIR
+			return -fuse.ENOTDIR, 0
 		}
 	}
 
 	children, err := fs.Graph.ListChildren(path)
 	if err != nil {
-		return -fuse.ENOENT
+		return -fuse.ENOENT, 0
 	}
 
-	// Auto-mode: offset=0, fill returns true=accepted, false=buffer full
-	fill(".", nil, 0)
-	fill("..", nil, 0)
+	entries := make([]string, 0, len(children)+2)
+	entries = append(entries, ".", "..")
 	for _, c := range children {
-		if !fill(filepath.Base(c), nil, 0) {
-			break
+		entries = append(entries, filepath.Base(c))
+	}
+
+	fs.handleMu.Lock()
+	fh := fs.nextHandle
+	fs.nextHandle++
+	fs.handles[fh] = entries
+	fs.handleMu.Unlock()
+
+	return 0, fh
+}
+
+// Releasedir frees the cached directory listing.
+func (fs *MacheFS) Releasedir(path string, fh uint64) int {
+	fs.handleMu.Lock()
+	delete(fs.handles, fh)
+	fs.handleMu.Unlock()
+	return 0
+}
+
+// Readdir serves entries from the cached handle using offset-based pagination.
+// Each NFS READDIR RPC page resumes from where the last left off — no repeated work.
+// cgofuse fill() convention: true = accepted, false = buffer full.
+// Offset convention: fill(name, stat, nextOffset) — kernel passes nextOffset back on resume.
+func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
+	fs.handleMu.Lock()
+	entries, ok := fs.handles[fh]
+	fs.handleMu.Unlock()
+
+	if !ok {
+		// Fallback: no handle (shouldn't happen, but be safe)
+		children, err := fs.Graph.ListChildren(path)
+		if err != nil {
+			return -fuse.ENOENT
+		}
+		entries = make([]string, 0, len(children)+2)
+		entries = append(entries, ".", "..")
+		for _, c := range children {
+			entries = append(entries, filepath.Base(c))
+		}
+	}
+
+	// Offset-based: ofst=0 means start, ofst=N means resume from entry N
+	start := int(ofst)
+	for i := start; i < len(entries); i++ {
+		if !fill(entries[i], nil, int64(i+1)) {
+			break // buffer full — kernel will call again with ofst=i+1
 		}
 	}
 
