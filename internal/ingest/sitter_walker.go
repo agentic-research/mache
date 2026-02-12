@@ -2,12 +2,28 @@ package ingest
 
 import (
 	"fmt"
+	"sync"
+	"unsafe"
 
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
+// callQueryStr is the tree-sitter query pattern for extracting function calls.
+// Extracted to a package-level const so it is defined once and reusable.
+const callQueryStr = `
+	(call_expression function: (identifier) @call)
+	(call_expression function: (selector_expression field: (field_identifier) @call))
+`
+
 // SitterWalker implements Walker for Tree-sitter parsed code.
-type SitterWalker struct{}
+type SitterWalker struct {
+	// callQueryCache caches compiled call-extraction queries keyed by *sitter.Language.
+	// Assumption: sitter.Query objects are read-only during QueryCursor.Exec();
+	// the cursor maintains its own iteration state, so sharing a compiled query
+	// across sequential calls is safe. If tree-sitter's Go bindings ever mutate
+	// the query during execution, this cache must be replaced with per-call compilation.
+	callQueryCache sync.Map // *sitter.Language -> *sitter.Query
+}
 
 func NewSitterWalker() *SitterWalker {
 	return &SitterWalker{}
@@ -138,19 +154,35 @@ func (m *sitterMatch) Context() any {
 	return nil
 }
 
-// ExtractCalls finds all function calls in the given node using a predefined query.
-func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitter.Language) ([]string, error) {
-	// Query pattern from requirements
-	const queryStr = `
-		(call_expression function: (identifier) @call)
-		(call_expression function: (selector_expression field: (field_identifier) @call))
-	`
+// getCallQuery returns a cached compiled query for call extraction, compiling
+// it on first use for the given language. The compiled query is reused across
+// all subsequent calls for the same language.
+func (w *SitterWalker) getCallQuery(lang *sitter.Language) (*sitter.Query, error) {
+	if cached, ok := w.callQueryCache.Load(lang); ok {
+		return cached.(*sitter.Query), nil
+	}
+	q, err := sitter.NewQuery([]byte(callQueryStr), lang)
+	if err != nil {
+		return nil, err
+	}
+	// Store-or-load to handle concurrent first calls for the same language.
+	// If another goroutine stored first, use theirs and close ours.
+	actual, loaded := w.callQueryCache.LoadOrStore(lang, q)
+	if loaded {
+		q.Close()
+		return actual.(*sitter.Query), nil
+	}
+	return q, nil
+}
 
-	q, err := sitter.NewQuery([]byte(queryStr), lang)
+// ExtractCalls finds all function calls in the given node using a predefined query.
+// The compiled query is cached per language to avoid recompilation on every call.
+func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitter.Language) ([]string, error) {
+	q, err := w.getCallQuery(lang)
 	if err != nil {
 		return nil, fmt.Errorf("invalid call query: %w", err)
 	}
-	defer q.Close()
+	// Do NOT close q here — it is owned by the cache.
 
 	qc := sitter.NewQueryCursor()
 	defer qc.Close()
@@ -171,8 +203,13 @@ func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitt
 			start := c.Node.StartByte()
 			end := c.Node.EndByte()
 			if start < uint32(len(source)) && end <= uint32(len(source)) {
-				token := string(source[start:end])
-				if !seen[token] {
+				// Use unsafe.String to check the seen map without allocating.
+				// This avoids a heap allocation for tokens already encountered
+				// (e.g., "Println" appearing hundreds of times). Only new,
+				// unique tokens get a real string allocation via string().
+				key := unsafe.String(&source[start], int(end-start))
+				if !seen[key] {
+					token := string(source[start:end])
 					seen[token] = true
 					calls = append(calls, token)
 				}

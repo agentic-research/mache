@@ -110,10 +110,11 @@ func (s *MemoryStore) AddNode(n *Node) {
 }
 
 // AddRef records a reference from a file (nodeID) to a token.
-func (s *MemoryStore) AddRef(token, nodeID string) {
+func (s *MemoryStore) AddRef(token, nodeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refs[token] = append(s.refs[token], nodeID)
+	return nil
 }
 
 // GetCallers implements Graph.

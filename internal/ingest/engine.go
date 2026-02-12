@@ -26,7 +26,7 @@ type IngestionTarget interface {
 	graph.Graph
 	AddNode(n *graph.Node)
 	AddRoot(n *graph.Node)
-	AddRef(token, nodeID string)
+	AddRef(token, nodeID string) error
 }
 
 // Engine drives the ingestion process.
@@ -475,7 +475,9 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 			// Update Index
 			for _, token := range calls {
-				e.Store.AddRef(token, fileId)
+				if err := e.Store.AddRef(token, fileId); err != nil {
+					return fmt.Errorf("add ref %s -> %s: %w", token, fileId, err)
+				}
 			}
 		}
 	}
