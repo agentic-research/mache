@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/agentic-research/mache/api"
 	_ "modernc.org/sqlite"
 )
@@ -56,6 +58,9 @@ type SQLiteGraph struct {
 	// Used by resolveContent to fetch the JSON blob on demand.
 	recordIDs sync.Map // dir path (string) → string (record ID)
 
+	// File ID mapping for references: file path (string) → integer ID (uint32)
+	fileIdCache sync.Map
+
 	// Rendered content cache (FIFO-bounded, protects against hot-file storms)
 	contentMu    sync.Mutex
 	contentCache map[string][]byte
@@ -87,9 +92,10 @@ func (g *SQLiteGraph) EagerScan() error {
 	return nil
 }
 
-// OpenSQLiteGraph opens a read-only connection to the source DB and compiles the schema.
+// OpenSQLiteGraph opens a connection to the source DB and compiles the schema.
 func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	// Removed ?mode=ro to allow writing the index
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
@@ -98,6 +104,22 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
+	}
+
+	// Create tables for the inverted index
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS node_refs (
+			token TEXT PRIMARY KEY,
+			bitmap BLOB
+		);
+		CREATE TABLE IF NOT EXISTS file_ids (
+			path TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT
+		);
+	`)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("create index tables: %w", err)
 	}
 
 	return &SQLiteGraph{
@@ -236,6 +258,143 @@ func (g *SQLiteGraph) ReadContent(id string, buf []byte, offset int64) (int, err
 		end = int64(len(content))
 	}
 	return copy(buf, content[offset:end]), nil
+}
+
+// AddRef adds a reference to the index.
+func (g *SQLiteGraph) AddRef(token, nodeID string) error {
+	fid, err := g.getOrCreateFileID(nodeID)
+	if err != nil {
+		return err
+	}
+
+	// Optimize: this transaction is per-add. Ideally we should batch this.
+	// But sticking to "Go Fast" philosophy for now.
+	tx, err := g.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var blob []byte
+	err = tx.QueryRow("SELECT bitmap FROM node_refs WHERE token = ?", token).Scan(&blob)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	rb := roaring.New()
+	if len(blob) > 0 {
+		if err := rb.UnmarshalBinary(blob); err != nil {
+			return fmt.Errorf("unmarshal bitmap for %s: %w", token, err)
+		}
+	}
+
+	rb.Add(fid)
+
+	// Serialize
+	buf := new(bytes.Buffer)
+	if _, err := rb.WriteTo(buf); err != nil {
+		return fmt.Errorf("serialize bitmap: %w", err)
+	}
+
+	_, err = tx.Exec("INSERT OR REPLACE INTO node_refs (token, bitmap) VALUES (?, ?)", token, buf.Bytes())
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// GetCallers returns the list of files (nodes) that reference the given token.
+func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
+	var blob []byte
+	err := g.db.QueryRow("SELECT bitmap FROM node_refs WHERE token = ?", token).Scan(&blob)
+	if err == sql.ErrNoRows {
+		return nil, nil // No references found
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rb := roaring.New()
+	if err := rb.UnmarshalBinary(blob); err != nil {
+		return nil, fmt.Errorf("unmarshal bitmap: %w", err)
+	}
+
+	// Map IDs back to paths
+	// We need to query file_ids table.
+	// Optimize: cache reverse mapping too? Or just query DB.
+	// Since we likely return a small list, DB query is fine.
+
+	// Collect all IDs
+	var fileIDs []uint32
+	it := rb.Iterator()
+	for it.HasNext() {
+		fileIDs = append(fileIDs, it.Next())
+	}
+
+	if len(fileIDs) == 0 {
+		return nil, nil
+	}
+
+	// Query paths
+	// SELECT path FROM file_ids WHERE id IN (...)
+	// SQLite has limits on IN clause, but expected usage is finding < 1000 callers.
+
+	args := make([]any, len(fileIDs))
+	placeholders := make([]string, len(fileIDs))
+	for i, id := range fileIDs {
+		args[i] = id
+		placeholders[i] = "?"
+	}
+
+	query := fmt.Sprintf("SELECT path FROM file_ids WHERE id IN (%s)", strings.Join(placeholders, ","))
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query file paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var nodes []*Node
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			continue
+		}
+		// Resolve the node
+		node, err := g.GetNode(path)
+		if err == nil {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes, nil
+}
+
+func (g *SQLiteGraph) getOrCreateFileID(path string) (uint32, error) {
+	if v, ok := g.fileIdCache.Load(path); ok {
+		return v.(uint32), nil
+	}
+
+	// Check DB
+	var id uint32
+	err := g.db.QueryRow("SELECT id FROM file_ids WHERE path = ?", path).Scan(&id)
+	if err == sql.ErrNoRows {
+		// Insert
+		res, err := g.db.Exec("INSERT INTO file_ids (path) VALUES (?)", path)
+		if err != nil {
+			// Race condition check: unique constraint failed?
+			if strings.Contains(err.Error(), "UNIQUE constraint") {
+				return g.getOrCreateFileID(path) // Retry
+			}
+			return 0, fmt.Errorf("insert file_id: %w", err)
+		}
+		lid, _ := res.LastInsertId()
+		id = uint32(lid)
+	} else if err != nil {
+		return 0, fmt.Errorf("query file_id: %w", err)
+	}
+
+	g.fileIdCache.Store(path, id)
+	return id, nil
 }
 
 // Close closes the underlying database connection.

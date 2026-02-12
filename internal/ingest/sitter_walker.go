@@ -137,3 +137,47 @@ func (m *sitterMatch) Context() any {
 	}
 	return nil
 }
+
+// ExtractCalls finds all function calls in the given node using a predefined query.
+func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitter.Language) ([]string, error) {
+	// Query pattern from requirements
+	const queryStr = `
+		(call_expression function: (identifier) @call)
+		(call_expression function: (selector_expression field: (field_identifier) @call))
+	`
+
+	q, err := sitter.NewQuery([]byte(queryStr), lang)
+	if err != nil {
+		return nil, fmt.Errorf("invalid call query: %w", err)
+	}
+	defer q.Close()
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+
+	qc.Exec(q, root)
+
+	seen := make(map[string]bool)
+	var calls []string
+
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+
+		for _, c := range m.Captures {
+			// Extract content
+			start := c.Node.StartByte()
+			end := c.Node.EndByte()
+			if start < uint32(len(source)) && end <= uint32(len(source)) {
+				token := string(source[start:end])
+				if !seen[token] {
+					seen[token] = true
+					calls = append(calls, token)
+				}
+			}
+		}
+	}
+	return calls, nil
+}

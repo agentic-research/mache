@@ -26,6 +26,7 @@ type IngestionTarget interface {
 	graph.Graph
 	AddNode(n *graph.Node)
 	AddRoot(n *graph.Node)
+	AddRef(token, nodeID string)
 }
 
 // Engine drives the ingestion process.
@@ -426,6 +427,17 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			}
 		}
 
+		// Optimization: extract calls once per match if we are in Sitter mode
+		var calls []string
+		if sw, ok := walker.(*SitterWalker); ok {
+			if root, ok := match.Context().(SitterRoot); ok {
+				c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang)
+				if err == nil {
+					calls = c
+				}
+			}
+		}
+
 		// Process files (JSON/tree-sitter paths — always inline content)
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
@@ -460,6 +472,11 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			e.Store.AddNode(fileNode)
 			node.Children = append(node.Children, fileId)
 			e.Store.AddNode(node)
+
+			// Update Index
+			for _, token := range calls {
+				e.Store.AddRef(token, fileId)
+			}
 		}
 	}
 	return nil
