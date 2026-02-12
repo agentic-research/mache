@@ -1,12 +1,26 @@
-# Mache
+# 🗂️ Mache
 
 **The Universal Semantic Overlay Engine**
 
 Mache projects structured data and source code into navigable, read-only filesystems using declarative schemas. Point it at a JSON feed or a codebase, define a topology, and mount a FUSE filesystem you can explore with `ls`, `cat`, `grep`, and friends.
 
+## Table of Contents
+
+- [Status](#status)
+- [Feature Matrix](#feature-matrix)
+- [How It Works](#how-it-works)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Architecture](#architecture)
+- [Roadmap](#roadmap)
+- [Development](#development)
+- [License](#license)
+- [Contributing](#contributing)
+- [Related Work](#related-work)
+
 ## Status
 
-Mache is in **Phase 0** — a working proof-of-concept. The core pipeline (schema + ingestion + FUSE mount) works end-to-end. See the [Feature Matrix](#feature-matrix) below for what's implemented, stubbed, and on the roadmap.
+Mache is in **early development**. The core pipeline (schema + ingestion + FUSE mount) works end-to-end across multiple data sources. See the [Feature Matrix](#feature-matrix) below for current status.
 
 ## Feature Matrix
 
@@ -19,6 +33,9 @@ Mache is in **Phase 0** — a working proof-of-concept. The core pipeline (schem
 | SQLite Ingestion (MemoryStore) | **Implemented** | Bulk-loads `.db` records into in-memory graph for smaller datasets |
 | Tree-sitter Code Parsing | **Implemented** | Go and Python source files |
 | In-Memory Graph Store | **Implemented** | `sync.RWMutex`-backed map, suitable for small datasets |
+| NVD Schema (`examples/nvd-schema.json`) | **Included** | 323K CVE records sharded by year/month over the SQLite direct backend |
+| KEV Schema (`examples/kev-schema.json`) | **Included** | CISA Known Exploited Vulnerabilities catalog |
+| Go Source Schema (`examples/go-schema.json`) | **Included** | Tree-sitter function extraction from Go source files |
 | Content-Addressed Storage (CAS) | **Ideated** | Described in ADR-0003; no code exists |
 | Layered Overlays (Docker-style) | **Ideated** | Composable data views; no code exists |
 | SQLite Virtual Tables | **Ideated** | Complex queries beyond fs navigation; described in ADR-0004 |
@@ -28,6 +45,7 @@ Mache is in **Phase 0** — a working proof-of-concept. The core pipeline (schem
 ### Legend
 
 - **Implemented** — Working code with tests
+- **Included** — Ready-to-use example schema in `examples/`
 - **Stubbed** — Interface/types exist but implementation is partial or placeholder
 - **Ideated** — Described in an ADR or design doc; no code yet
 
@@ -137,8 +155,8 @@ go test ./...
 ./mache --schema schema.json --data data.json /tmp/mount
 
 # Flags:
-#   -s, --schema   Path to topology schema (default: ~/.agentic-research/mache/mache.json)
-#   -d, --data     Path to data source file or directory (default: ~/.agentic-research/mache/data.json)
+#   -s, --schema   Path to topology schema (default: ~/.mache/mache.json)
+#   -d, --data     Path to data source file or directory (default: ~/.mache/data.json)
 ```
 
 ### Example: NVD Vulnerability Database
@@ -147,7 +165,7 @@ Mount 323K NVD CVE records as a browsable filesystem, sharded by year and month:
 
 ```bash
 ./mache --schema examples/nvd-schema.json \
-        --data ~/.agentic-research/venturi/nvd/results/results.db \
+        --data /path/to/nvd/results.db \
         /tmp/nvd
 ```
 
@@ -301,7 +319,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 
 ## Contributing
 
-This is an early-stage research project. Contributions welcome, but expect rapid API changes.
+This is an early-stage research project. Contributions welcome, but expect rapid API changes. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Related Work
 

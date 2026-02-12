@@ -85,10 +85,12 @@ func TestLoadSQLite(t *testing.T) {
 }
 
 func TestLoadSQLite_Integration(t *testing.T) {
-	// Integration test: only runs if real venturi KEV data is available
-	kevDB := os.ExpandEnv("$HOME/.agentic-research/venturi/kev/results/results.db")
+	kevDB := os.Getenv("MACHE_TEST_KEV_DB")
+	if kevDB == "" {
+		t.Skip("MACHE_TEST_KEV_DB not set")
+	}
 	if _, err := os.Stat(kevDB); os.IsNotExist(err) {
-		t.Skip("venturi KEV database not found, skipping integration test")
+		t.Skip("KEV database not found at " + kevDB)
 	}
 
 	records, err := LoadSQLite(kevDB)
