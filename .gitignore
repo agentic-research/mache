@@ -41,8 +41,13 @@ go.work.sum
 /mache
 
 # Agent communication and logs
+_agent_log/
 _agent_logs/
 SESSION_SUMMARY.md
+HANDOFF.md
+
+# Experiment tracking (local)
+experiments/
 
 # Taskfile artifacts
 .task/

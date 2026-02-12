@@ -6,6 +6,22 @@
       "selector": "(source_file (package_clause (package_identifier) @pkg)) @scope",
       "children": [
         {
+          "name": "imports",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.path}}",
+              "selector": "(import_spec path: (interpreted_string_literal) @path) @scope",
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "functions",
           "selector": "$",
           "children": [

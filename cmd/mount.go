@@ -18,11 +18,13 @@ import (
 var (
 	schemaPath string
 	dataPath   string
+	writable   bool
 )
 
 func init() {
 	rootCmd.Flags().StringVarP(&schemaPath, "schema", "s", "", "Path to topology schema")
 	rootCmd.Flags().StringVarP(&dataPath, "data", "d", "", "Path to data source")
+	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back (splice edits into source files)")
 }
 
 var rootCmd = &cobra.Command{
@@ -64,6 +66,7 @@ var rootCmd = &cobra.Command{
 
 		// 3. Create the Graph backend
 		var g graph.Graph
+		var engine *ingest.Engine // non-nil for MemoryStore paths (needed for write-back)
 
 		if _, err := os.Stat(dataPath); err == nil {
 			if filepath.Ext(dataPath) == ".db" {
@@ -90,7 +93,7 @@ var rootCmd = &cobra.Command{
 
 				fmt.Printf("Ingesting data from %s...\n", dataPath)
 				start := time.Now()
-				engine := ingest.NewEngine(schema, store)
+				engine = ingest.NewEngine(schema, store)
 				if err := engine.Ingest(dataPath); err != nil {
 					return fmt.Errorf("ingestion failed: %w", err)
 				}
@@ -108,6 +111,15 @@ var rootCmd = &cobra.Command{
 		// 4. Create the FS, injecting the Graph backend
 		macheFs := machefs.NewMacheFS(schema, g)
 
+		// Wire up write-back if requested (only for MemoryStore + tree-sitter sources)
+		if writable && engine != nil {
+			macheFs.Writable = true
+			macheFs.Engine = engine
+			fmt.Println("Write-back enabled: edits will splice into source files.")
+		} else if writable {
+			fmt.Println("Warning: --writable ignored (only supported for non-.db sources)")
+		}
+
 		// 5. Host it
 		host := fuse.NewFileSystemHost(macheFs)
 		host.SetCapReaddirPlus(true)
@@ -117,7 +129,6 @@ var rootCmd = &cobra.Command{
 		// 6. Mount passes control to the library.
 		// nobrowse: hide from Finder sidebar & prevent Spotlight auto-indexing
 		opts := []string{
-			"-o", "ro",
 			"-o", fmt.Sprintf("uid=%d", os.Getuid()),
 			"-o", fmt.Sprintf("gid=%d", os.Getgid()),
 			"-o", "fsname=mache",
@@ -126,6 +137,9 @@ var rootCmd = &cobra.Command{
 			"-o", "entry_timeout=300.0",
 			"-o", "attr_timeout=300.0",
 			"-o", "negative_timeout=300.0",
+		}
+		if !macheFs.Writable {
+			opts = append([]string{"-o", "ro"}, opts...)
 		}
 
 		if !host.Mount(mountPoint, opts) {

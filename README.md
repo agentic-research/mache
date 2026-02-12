@@ -11,7 +11,9 @@ Mache projects structured data and source code into navigable, read-only filesys
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
+  - [Write-Back Mode](#write-back-mode)
 - [Architecture](#architecture)
+  - [Write-Commit-Reparse Pipeline](#write-commit-reparse-pipeline)
 - [Roadmap](#roadmap)
 - [Development](#development)
 - [License](#license)
@@ -31,11 +33,12 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | JSON Ingestion (JSONPath) | **Implemented** | Powered by [ojg/jp](https://github.com/ohler55/ojg) |
 | SQLite Direct Backend | **Implemented** | Zero-copy: mounts `.db` files instantly, reads records on demand via primary key lookup |
 | SQLite Ingestion (MemoryStore) | **Implemented** | Bulk-loads `.db` records into in-memory graph for smaller datasets |
-| Tree-sitter Code Parsing | **Implemented** | Go and Python source files |
+| Tree-sitter Code Parsing | **Implemented** | Go and Python source files; captures functions, methods, types, constants, variables, imports |
 | In-Memory Graph Store | **Implemented** | `sync.RWMutex`-backed map, suitable for small datasets |
 | NVD Schema (`examples/nvd-schema.json`) | **Included** | 323K CVE records sharded by year/month over the SQLite direct backend |
 | KEV Schema (`examples/kev-schema.json`) | **Included** | CISA Known Exploited Vulnerabilities catalog |
-| Go Source Schema (`examples/go-schema.json`) | **Included** | Tree-sitter function extraction from Go source files |
+| Go Source Schema (`examples/go-schema.json`) | **Included** | Functions, methods, types, constants, variables, imports; same-name dedup (e.g. multiple `init()`) |
+| Write-Back (FUSE writes) | **Implemented** | `--writable` flag; splice edits into source, run goimports, re-ingest. Tree-sitter sources only |
 | Content-Addressed Storage (CAS) | **Ideated** | Described in ADR-0003; no code exists |
 | Layered Overlays (Docker-style) | **Ideated** | Composable data views; no code exists |
 | SQLite Virtual Tables | **Ideated** | Complex queries beyond fs navigation; described in ADR-0004 |
@@ -155,9 +158,36 @@ go test ./...
 ./mache --schema schema.json --data data.json /tmp/mount
 
 # Flags:
-#   -s, --schema   Path to topology schema (default: ~/.mache/mache.json)
-#   -d, --data     Path to data source file or directory (default: ~/.mache/data.json)
+#   -s, --schema     Path to topology schema (default: ~/.mache/mache.json)
+#   -d, --data       Path to data source file or directory (default: ~/.mache/data.json)
+#   -w, --writable   Enable write-back (splice edits into source files)
 ```
+
+### Write-Back Mode
+
+With `--writable`, file nodes backed by tree-sitter source code become editable. When you write to a file and close it, mache:
+
+1. **Splices** the new content into the original source file at the exact byte range
+2. **Runs `goimports`** to fix imports and formatting (failure-tolerant)
+3. **Re-ingests** the source file so all graph nodes get fresh byte ranges
+
+```bash
+# Mount Go source with write-back enabled
+./mache -w -s examples/go-schema.json -d . /tmp/mache-src
+
+# Read a function
+cat /tmp/mache-src/ingest/functions/NewEngine/source
+
+# Edit it (via echo, editor, or AI agent)
+echo 'func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
+    return &Engine{Schema: schema, Store: store}
+}' > /tmp/mache-src/ingest/functions/NewEngine/source
+
+# The source file is now updated
+grep -A3 'func NewEngine' internal/ingest/engine.go
+```
+
+Only tree-sitter-backed nodes (`.go`, `.py`) support writes. JSON and SQLite nodes remain read-only. Nodes without write support report `0444` permissions; writable nodes report `0644`.
 
 ### Example: NVD Vulnerability Database
 
@@ -277,8 +307,25 @@ Captures named `@scope` define the recursion context for child nodes.
 - **`Graph` interface** — Read-only access to the node store (`GetNode`, `ListChildren`, `ReadContent`). Two implementations:
   - **`MemoryStore`** — In-memory map for small datasets (JSON files, source code).
   - **`SQLiteGraph`** — Direct SQL backend for `.db` sources. One-pass parallel scan builds the directory tree; content resolved on demand via primary key lookup and template rendering. No data copied.
-- **`Engine`** — Drives ingestion: walks files, dispatches to walkers, renders templates, builds the graph.
-- **`MacheFS`** — FUSE implementation via cgofuse. Handle-based readdir with auto-mode for fuse-t compatibility. Extended cache timeouts (300s) for NFS performance. Translates `Open`/`Getattr`/`Readdir`/`Read` to graph lookups.
+- **`Engine`** — Drives ingestion: walks files, dispatches to walkers, renders templates, builds the graph. Tracks source file paths for origin-aware nodes. Deduplicates same-name constructs (e.g. multiple `init()`) by appending `.from_<filename>` suffixes.
+- **`MacheFS`** — FUSE implementation via cgofuse. Handle-based readdir with auto-mode for fuse-t compatibility. Extended cache timeouts (300s) for NFS performance. Supports both read-only and writable mounts.
+
+### Write-Commit-Reparse Pipeline
+
+When `--writable` is enabled, the FUSE layer supports writing to tree-sitter-backed file nodes:
+
+```
+Agent opens file → FUSE writeHandle buffers → Agent closes file →
+  Splice into source → goimports → Re-ingest file → Graph updated
+```
+
+Key types:
+- **`SourceOrigin`** (`graph.go`) — Tracks `FilePath`, `StartByte`, `EndByte` for each file node's position in its source.
+- **`OriginProvider`** (`interfaces.go`) — Optional interface on `Match` to expose byte ranges from tree-sitter captures.
+- **`Splice`** (`writeback/splice.go`) — Pure function: atomically replaces a byte range in a source file (temp file + rename).
+- **`writeHandle`** (`fs/root.go`) — Per-open-file buffer. Dirty handles trigger splice → goimports → re-ingest on `Release`.
+
+Re-ingestion after each write ensures all byte offsets stay correct — tree-sitter recalculates everything, so no manual offset math is needed.
 
 ### ADRs
 
@@ -296,7 +343,7 @@ These are directional goals, not commitments:
 - **Content-addressed storage** — Store data by hash, reference via hard links for deduplication
 - **Layered overlays** — Docker-style composable layers for versioned data views
 - **Additional walkers** — YAML, TOML, HCL, more tree-sitter grammars
-- **Write support** — Bidirectional sync between filesystem mutations and source data
+- **Write support** — ~~Bidirectional sync~~ Basic write-back landed for tree-sitter sources; next: create/delete constructs, rename/move, multi-file batch
 - **SQLite virtual tables** — SQL queries over the projected filesystem
 - **Go NFS server** — Replace fuse-t's NFS translation layer for full control over caching behavior
 

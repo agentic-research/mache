@@ -172,6 +172,54 @@ func (g Greeter) String() string {
 	assert.Contains(t, string(varSource.Data), "DefaultName")
 }
 
+func TestEngine_IngestTreeSitter_Imports(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "imports.go")
+	err := os.WriteFile(goFile, []byte(`package demo
+
+import "fmt"
+
+import (
+	"os"
+	"strings"
+)
+
+func main() {
+	fmt.Println(os.Args, strings.ToUpper("hi"))
+}
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(goFile))
+
+	// imports grouping directory exists
+	importsNode, err := store.GetNode("demo/imports")
+	require.NoError(t, err)
+	assert.True(t, importsNode.Mode.IsDir())
+
+	// Single import: "fmt"
+	fmtSource, err := store.GetNode(`demo/imports/"fmt"/source`)
+	require.NoError(t, err)
+	assert.Contains(t, string(fmtSource.Data), `"fmt"`)
+
+	// Grouped import: "os"
+	osSource, err := store.GetNode(`demo/imports/"os"/source`)
+	require.NoError(t, err)
+	assert.Contains(t, string(osSource.Data), `"os"`)
+
+	// Grouped import: "strings"
+	stringsSource, err := store.GetNode(`demo/imports/"strings"/source`)
+	require.NoError(t, err)
+	assert.Contains(t, string(stringsSource.Data), `"strings"`)
+
+	// Verify imports dir has all three children
+	assert.Len(t, importsNode.Children, 3)
+}
+
 func TestEngine_IngestTreeSitter_MultiFileMerge(t *testing.T) {
 	schema := loadGoSchema(t)
 
@@ -278,4 +326,55 @@ var (
 	require.NoError(t, err)
 	assert.Contains(t, string(vaSource.Data), "VarA")
 	assert.NotContains(t, string(vaSource.Data), "VarB")
+}
+
+func TestEngine_IngestTreeSitter_InitFunctionDedup(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+
+	// Two files in the same package, both defining init()
+	err := os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte(`package mypkg
+
+func init() {
+	// setup from a.go
+}
+`), 0o644)
+	require.NoError(t, err)
+
+	err = os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte(`package mypkg
+
+func init() {
+	// setup from b.go
+}
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(tmpDir))
+
+	// The first init() keeps its original name
+	initSource, err := store.GetNode("mypkg/functions/init/source")
+	require.NoError(t, err, "first init() should exist at original path")
+	firstContent := string(initSource.Data)
+
+	// The second init() gets a dedup suffix from its source filename.
+	// filepath.Walk processes files alphabetically, so a.go is first.
+	// b.go's init gets the suffix ".from_b_go".
+	dedupSource, err := store.GetNode("mypkg/functions/init.from_b_go/source")
+	require.NoError(t, err, "second init() should exist with .from_b_go suffix")
+	secondContent := string(dedupSource.Data)
+
+	// Verify they contain different content (from different files)
+	assert.NotEqual(t, firstContent, secondContent,
+		"the two init() sources should have different content")
+	assert.Contains(t, firstContent, "setup from a.go")
+	assert.Contains(t, secondContent, "setup from b.go")
+
+	// The functions directory should list both
+	fns, err := store.GetNode("mypkg/functions")
+	require.NoError(t, err)
+	assert.Contains(t, fns.Children, "mypkg/functions/init")
+	assert.Contains(t, fns.Children, "mypkg/functions/init.from_b_go")
 }

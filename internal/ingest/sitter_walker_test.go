@@ -254,6 +254,40 @@ const (
 	assert.NotContains(t, bSource, "A")
 }
 
+func TestSitterWalkerGo_ImportSpec(t *testing.T) {
+	code := []byte(`package main
+
+import "fmt"
+
+import (
+	"os"
+	"strings"
+)
+`)
+	root := parseSitterRoot(t, code)
+	w := NewSitterWalker()
+
+	query := `(import_spec path: (interpreted_string_literal) @path) @scope`
+	matches, err := w.Query(root, query)
+	require.NoError(t, err)
+	require.Len(t, matches, 3)
+
+	// Single import
+	assert.Equal(t, `"fmt"`, matches[0].Values()["path"])
+	assert.Contains(t, matches[0].Values()["scope"].(string), `"fmt"`)
+
+	// Grouped imports
+	assert.Equal(t, `"os"`, matches[1].Values()["path"])
+	assert.Contains(t, matches[1].Values()["scope"].(string), `"os"`)
+
+	assert.Equal(t, `"strings"`, matches[2].Values()["path"])
+	assert.Contains(t, matches[2].Values()["scope"].(string), `"strings"`)
+
+	// Each scope captures only its own import_spec
+	assert.NotContains(t, matches[1].Values()["scope"].(string), "strings")
+	assert.NotContains(t, matches[2].Values()["scope"].(string), "os")
+}
+
 func TestSitterWalkerGo_ConstantsAndVariables(t *testing.T) {
 	code := []byte(`package foo
 
