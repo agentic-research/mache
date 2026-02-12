@@ -79,28 +79,42 @@ func TestEngine_IngestSQLite_NVD(t *testing.T) {
 	assert.True(t, byCve.Mode.IsDir())
 	assert.Len(t, byCve.Children, 2) // "2024" and "2023"
 
-	// Year directory has CVE children
+	// Year directory has month children
 	year2024, err := store.GetNode("by-cve/2024")
 	require.NoError(t, err)
 	assert.True(t, year2024.Mode.IsDir())
-	assert.Len(t, year2024.Children, 2) // CVE-2024-0001 and CVE-2024-0002
+	assert.Len(t, year2024.Children, 2) // "01" and "02"
+
+	// Month directory has CVE children
+	month01, err := store.GetNode("by-cve/2024/01")
+	require.NoError(t, err)
+	assert.True(t, month01.Mode.IsDir())
+	assert.Len(t, month01.Children, 1) // CVE-2024-0001
+
+	month02, err := store.GetNode("by-cve/2024/02")
+	require.NoError(t, err)
+	assert.Len(t, month02.Children, 1) // CVE-2024-0002
 
 	year2023, err := store.GetNode("by-cve/2023")
 	require.NoError(t, err)
-	assert.Len(t, year2023.Children, 1) // CVE-2023-0001
+	assert.Len(t, year2023.Children, 1) // "06"
 
-	// description uses nested template with index (now under year dir)
-	desc, err := store.GetNode("by-cve/2024/CVE-2024-0001/description")
+	month06, err := store.GetNode("by-cve/2023/06")
+	require.NoError(t, err)
+	assert.Len(t, month06.Children, 1) // CVE-2023-0001
+
+	// description uses nested template with index (now under year/month dir)
+	desc, err := store.GetNode("by-cve/2024/01/CVE-2024-0001/description")
 	require.NoError(t, err)
 	assert.Equal(t, "A buffer overflow in FooBar allows remote code execution.", string(desc.Data))
 
 	// status from nested path
-	status, err := store.GetNode("by-cve/2024/CVE-2024-0001/status")
+	status, err := store.GetNode("by-cve/2024/01/CVE-2024-0001/status")
 	require.NoError(t, err)
 	assert.Equal(t, "Analyzed", string(status.Data))
 
 	// raw.json is valid JSON
-	raw, err := store.GetNode("by-cve/2024/CVE-2024-0001/raw.json")
+	raw, err := store.GetNode("by-cve/2024/01/CVE-2024-0001/raw.json")
 	require.NoError(t, err)
 	var rawData map[string]any
 	require.NoError(t, json.Unmarshal(raw.Data, &rawData))
@@ -109,7 +123,7 @@ func TestEngine_IngestSQLite_NVD(t *testing.T) {
 	assert.Equal(t, "CVE-2024-0001", cve["id"])
 
 	// Cross-year: 2023 CVE also works
-	desc2023, err := store.GetNode("by-cve/2023/CVE-2023-0001/description")
+	desc2023, err := store.GetNode("by-cve/2023/06/CVE-2023-0001/description")
 	require.NoError(t, err)
 	assert.Equal(t, "A null pointer dereference in Quux.", string(desc2023.Data))
 }

@@ -106,16 +106,22 @@ func nvdSchema() *api.Topology {
 				Selector: "$",
 				Children: []api.Node{
 					{
-						Name:     "{{slice .item.cve.id 4 8}}",
+						Name:     "{{slice .item.cve.published 0 4}}",
 						Selector: "$[*]",
 						Children: []api.Node{
 							{
-								Name:     "{{.item.cve.id}}",
+								Name:     "{{slice .item.cve.published 5 7}}",
 								Selector: "$",
-								Files: []api.Leaf{
-									{Name: "description", ContentTemplate: "{{with (index .item.cve.descriptions 0)}}{{.value}}{{end}}"},
-									{Name: "status", ContentTemplate: "{{.item.cve.vulnStatus}}"},
-									{Name: "raw.json", ContentTemplate: "{{. | json}}"},
+								Children: []api.Node{
+									{
+										Name:     "{{.item.cve.id}}",
+										Selector: "$",
+										Files: []api.Leaf{
+											{Name: "description", ContentTemplate: "{{with (index .item.cve.descriptions 0)}}{{.value}}{{end}}"},
+											{Name: "status", ContentTemplate: "{{.item.cve.vulnStatus}}"},
+											{Name: "raw.json", ContentTemplate: "{{. | json}}"},
+										},
+									},
 								},
 							},
 						},
@@ -296,26 +302,44 @@ func TestSQLiteGraph_NVD_TemporalSharding(t *testing.T) {
 		t.Fatalf("years = %v, want 2", years)
 	}
 
-	// CVEs in 2024
-	cves2024, err := g.ListChildren("by-cve/2024")
+	// Months in 2024
+	months2024, err := g.ListChildren("by-cve/2024")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cves2024) != 2 {
-		t.Fatalf("2024 CVEs = %v, want 2", cves2024)
+	if len(months2024) != 2 {
+		t.Fatalf("2024 months = %v, want 2", months2024)
 	}
 
-	// CVEs in 2023
-	cves2023, err := g.ListChildren("by-cve/2023")
+	// CVEs in 2024/01
+	cves202401, err := g.ListChildren("by-cve/2024/01")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cves2023) != 1 {
-		t.Fatalf("2023 CVEs = %v, want 1", cves2023)
+	if len(cves202401) != 1 {
+		t.Fatalf("2024/01 CVEs = %v, want 1", cves202401)
+	}
+
+	// CVEs in 2024/02
+	cves202402, err := g.ListChildren("by-cve/2024/02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cves202402) != 1 {
+		t.Fatalf("2024/02 CVEs = %v, want 1", cves202402)
+	}
+
+	// Months in 2023
+	months2023, err := g.ListChildren("by-cve/2023")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(months2023) != 1 {
+		t.Fatalf("2023 months = %v, want 1", months2023)
 	}
 
 	// File content
-	desc, err := g.GetNode("by-cve/2024/CVE-2024-0001/description")
+	desc, err := g.GetNode("by-cve/2024/01/CVE-2024-0001/description")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +347,7 @@ func TestSQLiteGraph_NVD_TemporalSharding(t *testing.T) {
 		t.Errorf("description = %q", desc.Data)
 	}
 
-	status, err := g.GetNode("by-cve/2024/CVE-2024-0001/status")
+	status, err := g.GetNode("by-cve/2024/01/CVE-2024-0001/status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +356,7 @@ func TestSQLiteGraph_NVD_TemporalSharding(t *testing.T) {
 	}
 
 	// Cross-year
-	desc2023, err := g.GetNode("by-cve/2023/CVE-2023-0001/description")
+	desc2023, err := g.GetNode("by-cve/2023/06/CVE-2023-0001/description")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +367,7 @@ func TestSQLiteGraph_NVD_TemporalSharding(t *testing.T) {
 
 func TestSQLiteGraph_NVD_RawJSON(t *testing.T) {
 	dbPath := createTestDB(t, map[string]string{
-		"CVE-2024-0001": `{"schema":"nvd","identifier":"CVE-2024-0001","item":{"cve":{"id":"CVE-2024-0001","descriptions":[{"lang":"en","value":"test"}],"vulnStatus":"Analyzed"}}}`,
+		"CVE-2024-0001": `{"schema":"nvd","identifier":"CVE-2024-0001","item":{"cve":{"id":"CVE-2024-0001","descriptions":[{"lang":"en","value":"test"}],"published":"2024-01-15T00:00:00Z","vulnStatus":"Analyzed"}}}`,
 	})
 
 	g, err := OpenSQLiteGraph(dbPath, nvdSchema(), testRender)
@@ -352,7 +376,7 @@ func TestSQLiteGraph_NVD_RawJSON(t *testing.T) {
 	}
 	defer func() { _ = g.Close() }()
 
-	node, err := g.GetNode("by-cve/2024/CVE-2024-0001/raw.json")
+	node, err := g.GetNode("by-cve/2024/01/CVE-2024-0001/raw.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,22 +546,34 @@ func TestSQLiteGraph_Integration_NVD(t *testing.T) {
 	fmt.Printf("NVD: %d year directories\n", len(years))
 
 	if len(years) > 0 {
-		// Check 2024 has CVEs
-		cves, err := g.ListChildren("by-cve/2024")
+		// Check 2024 has month directories (not CVEs directly)
+		months, err := g.ListChildren("by-cve/2024")
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Printf("NVD 2024: %d CVEs\n", len(cves))
+		fmt.Printf("NVD 2024: %d month directories\n", len(months))
+		if len(months) > 12 {
+			t.Errorf("2024 should have <=12 month dirs, got %d", len(months))
+		}
 
-		// Read a file
-		if len(cves) > 0 {
-			descPath := cves[0] + "/description"
-			buf := make([]byte, 4096)
-			n, err := g.ReadContent(descPath, buf, 0)
+		// Drill into first month to find CVEs
+		if len(months) > 0 {
+			cves, err := g.ListChildren(months[0])
 			if err != nil {
-				t.Fatalf("ReadContent(%q) error: %v", descPath, err)
+				t.Fatalf("ListChildren(%q) error: %v", months[0], err)
 			}
-			fmt.Printf("NVD first CVE description: %s\n", buf[:n])
+			fmt.Printf("NVD %s: %d CVEs\n", filepath.Base(months[0]), len(cves))
+
+			// Read a file
+			if len(cves) > 0 {
+				descPath := cves[0] + "/description"
+				buf := make([]byte, 4096)
+				n, err := g.ReadContent(descPath, buf, 0)
+				if err != nil {
+					t.Fatalf("ReadContent(%q) error: %v", descPath, err)
+				}
+				fmt.Printf("NVD first CVE description: %s\n", buf[:n])
+			}
 		}
 	}
 }

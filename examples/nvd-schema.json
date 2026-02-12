@@ -6,28 +6,34 @@
       "selector": "$",
       "children": [
         {
-          "name": "{{slice .item.cve.id 4 8}}",
+          "name": "{{slice .item.cve.published 0 4}}",
           "selector": "$[*]",
           "children": [
             {
-              "name": "{{.item.cve.id}}",
+              "name": "{{slice .item.cve.published 5 7}}",
               "selector": "$",
-              "files": [
+              "children": [
                 {
-                  "name": "description",
-                  "content_template": "{{with (index .item.cve.descriptions 0)}}{{.value}}{{end}}"
-                },
-                {
-                  "name": "published",
-                  "content_template": "{{.item.cve.published}}"
-                },
-                {
-                  "name": "status",
-                  "content_template": "{{.item.cve.vulnStatus}}"
-                },
-                {
-                  "name": "raw.json",
-                  "content_template": "{{. | json}}"
+                  "name": "{{.item.cve.id}}",
+                  "selector": "$",
+                  "files": [
+                    {
+                      "name": "description",
+                      "content_template": "{{with (index .item.cve.descriptions 0)}}{{.value}}{{end}}"
+                    },
+                    {
+                      "name": "published",
+                      "content_template": "{{.item.cve.published}}"
+                    },
+                    {
+                      "name": "status",
+                      "content_template": "{{.item.cve.vulnStatus}}"
+                    },
+                    {
+                      "name": "raw.json",
+                      "content_template": "{{. | json}}"
+                    }
+                  ]
                 }
               ]
             }
