@@ -184,12 +184,74 @@ type MyInterface interface {
 	root := parseSitterRoot(t, code)
 	w := NewSitterWalker()
 
-	query := `(type_declaration (type_spec name: (type_identifier) @name)) @scope`
+	query := `(type_declaration (type_spec name: (type_identifier) @name) @scope)`
 	matches, err := w.Query(root, query)
 	require.NoError(t, err)
 	require.Len(t, matches, 2)
 	assert.Equal(t, "MyStruct", matches[0].Values()["name"])
 	assert.Equal(t, "MyInterface", matches[1].Values()["name"])
+
+	// @scope on type_spec captures just the spec, not the whole declaration
+	structSource := matches[0].Values()["scope"].(string)
+	assert.Contains(t, structSource, "MyStruct struct")
+	assert.NotContains(t, structSource, "MyInterface")
+}
+
+func TestSitterWalkerGo_GroupedTypes(t *testing.T) {
+	code := []byte(`package foo
+
+type (
+	Grouped1 struct {
+		X int
+	}
+
+	Grouped2 interface {
+		Method()
+	}
+)
+`)
+	root := parseSitterRoot(t, code)
+	w := NewSitterWalker()
+
+	query := `(type_declaration (type_spec name: (type_identifier) @name) @scope)`
+	matches, err := w.Query(root, query)
+	require.NoError(t, err)
+	require.Len(t, matches, 2)
+
+	// Each match captures only its own type_spec, not the whole grouped block
+	g1Source := matches[0].Values()["scope"].(string)
+	assert.Contains(t, g1Source, "Grouped1 struct")
+	assert.NotContains(t, g1Source, "Grouped2")
+
+	g2Source := matches[1].Values()["scope"].(string)
+	assert.Contains(t, g2Source, "Grouped2 interface")
+	assert.NotContains(t, g2Source, "Grouped1")
+}
+
+func TestSitterWalkerGo_GroupedConstants(t *testing.T) {
+	code := []byte(`package foo
+
+const (
+	A = "alpha"
+	B = "beta"
+)
+`)
+	root := parseSitterRoot(t, code)
+	w := NewSitterWalker()
+
+	query := `(const_spec name: (identifier) @name) @scope`
+	matches, err := w.Query(root, query)
+	require.NoError(t, err)
+	require.Len(t, matches, 2)
+
+	// Each const_spec captures only its own line, not the whole block
+	aSource := matches[0].Values()["scope"].(string)
+	assert.Contains(t, aSource, "A")
+	assert.NotContains(t, aSource, "B")
+
+	bSource := matches[1].Values()["scope"].(string)
+	assert.Contains(t, bSource, "B")
+	assert.NotContains(t, bSource, "A")
 }
 
 func TestSitterWalkerGo_ConstantsAndVariables(t *testing.T) {

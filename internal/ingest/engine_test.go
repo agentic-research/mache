@@ -154,12 +154,12 @@ func (g Greeter) String() string {
 
 	typeSource, err := store.GetNode("demo/types/Greeter/source")
 	require.NoError(t, err)
-	assert.Contains(t, string(typeSource.Data), "type Greeter struct")
+	assert.Contains(t, string(typeSource.Data), "Greeter struct")
 
 	// Interface type
 	ifaceSource, err := store.GetNode("demo/types/Speaker/source")
 	require.NoError(t, err)
-	assert.Contains(t, string(ifaceSource.Data), "type Speaker interface")
+	assert.Contains(t, string(ifaceSource.Data), "Speaker interface")
 
 	// Constants
 	constSource, err := store.GetNode("demo/constants/MaxRetries/source")
@@ -221,4 +221,61 @@ type TypeB struct{}
 	require.NoError(t, err)
 	assert.Contains(t, fns.Children, "shared/functions/FuncA")
 	assert.Contains(t, fns.Children, "shared/functions/FuncB")
+}
+
+func TestEngine_IngestTreeSitter_GroupedDeclarations(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "grouped.go")
+	err := os.WriteFile(goFile, []byte(`package grouped
+
+type (
+	Alpha struct {
+		Name string
+	}
+
+	Beta interface {
+		Run()
+	}
+)
+
+const (
+	ConstX = 1
+	ConstY = 2
+)
+
+var (
+	VarA = "a"
+	VarB = "b"
+)
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(goFile))
+
+	// Grouped types: each gets its own source, not the whole block
+	alphaSource, err := store.GetNode("grouped/types/Alpha/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(alphaSource.Data), "Alpha struct")
+	assert.NotContains(t, string(alphaSource.Data), "Beta interface")
+
+	betaSource, err := store.GetNode("grouped/types/Beta/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(betaSource.Data), "Beta interface")
+	assert.NotContains(t, string(betaSource.Data), "Alpha struct")
+
+	// Grouped constants: each const_spec is isolated
+	cxSource, err := store.GetNode("grouped/constants/ConstX/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(cxSource.Data), "ConstX")
+	assert.NotContains(t, string(cxSource.Data), "ConstY")
+
+	// Grouped variables: each var_spec is isolated
+	vaSource, err := store.GetNode("grouped/variables/VarA/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(vaSource.Data), "VarA")
+	assert.NotContains(t, string(vaSource.Data), "VarB")
 }
