@@ -61,8 +61,11 @@ var rootCmd = &cobra.Command{
 			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
-		// 3. Create the Data Store (Phase 0)
+		// 3. Create the Data Store with lazy content resolver
 		store := graph.NewMemoryStore()
+		resolver := ingest.NewSQLiteResolver()
+		defer resolver.Close()
+		store.SetResolver(resolver.Resolve)
 
 		// 4. Ingest Data
 		// If data path exists, ingest it.

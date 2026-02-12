@@ -62,7 +62,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	} else {
 		stat.Mode = fuse.S_IFREG | 0o444
 		stat.Nlink = 1
-		stat.Size = int64(len(node.Data))
+		stat.Size = node.ContentSize()
 	}
 	return 0
 }
@@ -105,13 +105,9 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 		return -fuse.EISDIR
 	}
 
-	if ofst >= int64(len(node.Data)) {
-		return 0
+	n, err := fs.Graph.ReadContent(path, buff, ofst)
+	if err != nil {
+		return -fuse.EIO
 	}
-	end := ofst + int64(len(buff))
-	if end > int64(len(node.Data)) {
-		end = int64(len(node.Data))
-	}
-	n := copy(buff, node.Data[ofst:end])
 	return n
 }

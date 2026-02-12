@@ -8,9 +8,40 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// StreamSQLite iterates over all records in a SQLite database, calling fn for each one.
+// Only one parsed record is alive at a time, keeping memory usage constant.
+func StreamSQLite(dbPath string, fn func(recordID string, record any) error) error {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite %s: %w", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rows, err := db.Query("SELECT id, record FROM results")
+	if err != nil {
+		return fmt.Errorf("query results: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return fmt.Errorf("scan row: %w", err)
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			return fmt.Errorf("parse record json: %w", err)
+		}
+		if err := fn(id, parsed); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // LoadSQLite opens a SQLite database, reads all records from the results table,
 // parses each JSON record, and returns them as a slice.
-// Phase 0: loads everything into memory so we can measure baseline cost.
+// Kept for backward compatibility with tests; prefer StreamSQLite for large datasets.
 func LoadSQLite(dbPath string) ([]any, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {

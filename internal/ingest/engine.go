@@ -17,6 +17,8 @@ import (
 	"github.com/smacker/go-tree-sitter/python"
 )
 
+const inlineThreshold = 4096
+
 // IngestionTarget combines Graph reading with writing capabilities.
 type IngestionTarget interface {
 	graph.Graph
@@ -28,6 +30,10 @@ type IngestionTarget interface {
 type Engine struct {
 	Schema *api.Topology
 	Store  IngestionTarget
+
+	// Phase 1: lazy loading context (set during SQLite streaming)
+	currentDBPath   string
+	currentRecordID string
 }
 
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
@@ -61,61 +67,51 @@ func (e *Engine) Ingest(path string) error {
 func (e *Engine) ingestFile(path string) error {
 	ext := filepath.Ext(path)
 
-	var walker Walker
-	var root any
-
 	switch ext {
-	case ".json":
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		var data any
-		if err := json.Unmarshal(content, &data); err != nil {
-			return fmt.Errorf("failed to parse json %s: %w", path, err)
-		}
-		walker = NewJsonWalker()
-		root = data
 	case ".db":
-		records, err := LoadSQLite(path)
-		if err != nil {
-			return fmt.Errorf("failed to load sqlite %s: %w", path, err)
-		}
-		walker = NewJsonWalker()
-		root = records
+		return e.ingestSQLiteStreaming(path)
+	case ".json":
+		return e.ingestJSON(path)
 	case ".py":
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		lang := python.GetLanguage()
-		parser := sitter.NewParser()
-		parser.SetLanguage(lang)
-		tree, err := parser.ParseCtx(context.Background(), nil, content)
-		if err != nil {
-			return fmt.Errorf("failed to parse python %s: %w", path, err)
-		}
-		walker = NewSitterWalker()
-		root = SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
+		return e.ingestTreeSitter(path, python.GetLanguage())
 	case ".go":
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		lang := golang.GetLanguage()
-		parser := sitter.NewParser()
-		parser.SetLanguage(lang)
-		tree, err := parser.ParseCtx(context.Background(), nil, content)
-		if err != nil {
-			return fmt.Errorf("failed to parse go %s: %w", path, err)
-		}
-		walker = NewSitterWalker()
-		root = SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
+		return e.ingestTreeSitter(path, golang.GetLanguage())
 	default:
 		return nil // Skip unsupported files
 	}
+}
 
-	// Process schema roots
+func (e *Engine) ingestJSON(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var data any
+	if err := json.Unmarshal(content, &data); err != nil {
+		return fmt.Errorf("failed to parse json %s: %w", path, err)
+	}
+	walker := NewJsonWalker()
+	for _, nodeSchema := range e.Schema.Nodes {
+		if err := e.processNode(nodeSchema, walker, data, ""); err != nil {
+			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, content)
+	if err != nil {
+		return fmt.Errorf("failed to parse %s: %w", path, err)
+	}
+	walker := NewSitterWalker()
+	root := SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
 	for _, nodeSchema := range e.Schema.Nodes {
 		if err := e.processNode(nodeSchema, walker, root, ""); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
@@ -124,11 +120,46 @@ func (e *Engine) ingestFile(path string) error {
 	return nil
 }
 
+// ingestSQLiteStreaming processes a SQLite database one record at a time.
+// This keeps memory usage constant regardless of database size.
+func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
+	walker := NewJsonWalker()
+
+	// Pre-create root directory nodes from schema
+	for _, nodeSchema := range e.Schema.Nodes {
+		rootNode := &graph.Node{
+			ID:   nodeSchema.Name,
+			Mode: os.ModeDir | 0o555,
+		}
+		e.Store.AddNode(rootNode)
+		e.Store.AddRoot(rootNode)
+	}
+
+	e.currentDBPath = dbPath
+	defer func() {
+		e.currentDBPath = ""
+		e.currentRecordID = ""
+	}()
+
+	return StreamSQLite(dbPath, func(recordID string, record any) error {
+		e.currentRecordID = recordID
+
+		// Wrap single record so JSONPath $[*] extracts it
+		wrapper := []any{record}
+		for _, nodeSchema := range e.Schema.Nodes {
+			for _, childSchema := range nodeSchema.Children {
+				if err := e.processNode(childSchema, walker, wrapper, nodeSchema.Name); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
 func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath string) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
-		// If query fails, maybe just log and continue? Or fail?
-		// For now fail.
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
 	}
 
@@ -163,7 +194,6 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			parentId := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
 			parent, err := e.Store.GetNode(parentId)
 			if err == nil {
-				// Check if already child
 				exists := false
 				for _, c := range parent.Children {
 					if c == id {
@@ -173,7 +203,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				}
 				if !exists {
 					parent.Children = append(parent.Children, id)
-					e.Store.AddNode(parent) // Save parent
+					e.Store.AddNode(parent)
 				}
 			}
 		}
@@ -190,7 +220,6 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Process files
 		for _, fileSchema := range schema.Files {
-			// Render filename
 			fileName, err := renderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
 				continue
@@ -198,7 +227,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			filePath := filepath.Join(currentPath, fileName)
 			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
 
-			// Render content
+			// Render content to determine size
 			content, err := renderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
 				continue
@@ -207,13 +236,23 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			fileNode := &graph.Node{
 				ID:   fileId,
 				Mode: 0o444, // Read-only file
-				Data: []byte(content),
 			}
-			e.Store.AddNode(fileNode)
 
-			// Add to parent children
+			// Phase 1: classify content — inline small, lazy large
+			if e.currentDBPath != "" && len(content) > inlineThreshold {
+				fileNode.Ref = &graph.ContentRef{
+					DBPath:     e.currentDBPath,
+					RecordID:   e.currentRecordID,
+					Template:   fileSchema.ContentTemplate,
+					ContentLen: int64(len(content)),
+				}
+			} else {
+				fileNode.Data = []byte(content)
+			}
+
+			e.Store.AddNode(fileNode)
 			node.Children = append(node.Children, fileId)
-			e.Store.AddNode(node) // Update current node
+			e.Store.AddNode(node)
 		}
 	}
 	return nil
