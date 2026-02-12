@@ -378,3 +378,44 @@ func init() {
 	assert.Contains(t, fns.Children, "mypkg/functions/init")
 	assert.Contains(t, fns.Children, "mypkg/functions/init.from_b_go")
 }
+
+func TestEngine_IngestTreeSitter_CrossReference(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+
+	// a.go calls Other()
+	err := os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte(`package demo
+
+func Main() {
+	Other()
+}
+`), 0o644)
+	require.NoError(t, err)
+
+	// b.go defines Other()
+	err = os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte(`package demo
+
+func Other() {}
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(tmpDir))
+
+	// Verify that Main calls Other
+	callers, err := store.GetCallers("Other")
+	require.NoError(t, err)
+	require.NotEmpty(t, callers)
+
+	// Check if "demo/functions/Main/source" is among the callers
+	found := false
+	for _, node := range callers {
+		if node.ID == "demo/functions/Main/source" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Main/source should be a caller of Other")
+}

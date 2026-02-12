@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/agentic-research/mache/api"
 	_ "modernc.org/sqlite"
 )
@@ -36,12 +38,20 @@ type TemplateRenderer func(tmpl string, values map[string]any) (string, error)
 //
 // Content is never loaded during scan — only on FUSE read via resolveContent,
 // which does a primary key lookup + template render + FIFO cache.
+//
+// Cross-references (token → file bitmap) are stored in a sidecar database
+// (<dbpath>.refs.db) to keep the source DB immutable. Refs are accumulated
+// in-memory during ingestion and flushed once via FlushRefs.
 type SQLiteGraph struct {
 	db     *sql.DB
 	dbPath string
 	schema *api.Topology
 	render TemplateRenderer
 	levels []*schemaLevel // compiled schema tree, immutable after construction
+
+	// Sidecar database for cross-reference index (node_refs + file_ids tables).
+	// Kept separate from source DB to preserve immutability of Venturi data.
+	refsDB *sql.DB
 
 	// Lazy scan: one pass per root node populates dirChildren + recordIDs.
 	// sync.Once ensures exactly one scan per root, even under concurrent FUSE access.
@@ -55,6 +65,14 @@ type SQLiteGraph struct {
 	// Record mapping: leaf directory path → results table primary key.
 	// Used by resolveContent to fetch the JSON blob on demand.
 	recordIDs sync.Map // dir path (string) → string (record ID)
+
+	// In-memory ref accumulator: token → bitmap of file IDs.
+	// Populated by AddRef during ingestion, written to refsDB by FlushRefs.
+	// Populated by AddRef during ingestion, written to refsDB by FlushRefs.
+	pendingMu   sync.Mutex
+	pendingRefs map[string]*roaring.Bitmap
+	nextFileID  uint32
+	fileIDMap   map[string]uint32 // path → file ID (in-memory during ingestion)
 
 	// Rendered content cache (FIFO-bounded, protects against hot-file storms)
 	contentMu    sync.Mutex
@@ -87,17 +105,45 @@ func (g *SQLiteGraph) EagerScan() error {
 	return nil
 }
 
-// OpenSQLiteGraph opens a read-only connection to the source DB and compiles the schema.
+// OpenSQLiteGraph opens a connection to the source DB and compiles the schema.
 func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
+	// Source DB opened read-only — Venturi data is immutable.
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
-
 	db.SetMaxOpenConns(4)
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+
+	// Sidecar DB for cross-reference index (token→bitmap, path→fileID).
+	// Kept separate so we never write to the source Venturi database.
+	refsPath := dbPath + ".refs.db"
+	refsDB, err := sql.Open("sqlite", refsPath)
+	if err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
+		return nil, fmt.Errorf("open refs db %s: %w", refsPath, err)
+	}
+	refsDB.SetMaxOpenConns(1)
+
+	if _, err := refsDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		_ = db.Close()
+		_ = refsDB.Close()
+		return nil, fmt.Errorf("set WAL mode on refs db: %w", err)
+	}
+
+	_, err = refsDB.Exec(`
+		CREATE TABLE IF NOT EXISTS node_refs (
+			token TEXT PRIMARY KEY,
+			bitmap BLOB
+		);
+		CREATE TABLE IF NOT EXISTS file_ids (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			path TEXT UNIQUE NOT NULL
+		);
+	`)
+	if err != nil {
+		_ = db.Close()
+		_ = refsDB.Close()
+		return nil, fmt.Errorf("create index tables: %w", err)
 	}
 
 	return &SQLiteGraph{
@@ -106,6 +152,9 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		schema:       schema,
 		render:       render,
 		levels:       compileLevels(schema),
+		refsDB:       refsDB,
+		pendingRefs:  make(map[string]*roaring.Bitmap),
+		fileIDMap:    make(map[string]uint32),
 		contentCache: make(map[string][]byte),
 		maxContent:   2048,
 	}, nil
@@ -238,9 +287,149 @@ func (g *SQLiteGraph) ReadContent(id string, buf []byte, offset int64) (int, err
 	return copy(buf, content[offset:end]), nil
 }
 
-// Close closes the underlying database connection.
+// AddRef accumulates a reference in-memory. No SQL is issued until FlushRefs.
+// This eliminates the read-modify-write cycle per call — all bitmap mutations
+// happen in RAM, and FlushRefs writes them in a single transaction.
+func (g *SQLiteGraph) AddRef(token, nodeID string) error {
+	g.pendingMu.Lock()
+	defer g.pendingMu.Unlock()
+
+	fid, ok := g.fileIDMap[nodeID]
+	if !ok {
+		fid = g.nextFileID
+		g.nextFileID++
+		g.fileIDMap[nodeID] = fid
+	}
+
+	bm, ok := g.pendingRefs[token]
+	if !ok {
+		bm = roaring.New()
+		g.pendingRefs[token] = bm
+	}
+	bm.Add(fid)
+	return nil
+}
+
+// FlushRefs writes all accumulated refs to the sidecar database in a single
+// transaction. Call once after ingestion is complete. This replaces the old
+// per-call AddRef write path, reducing N*M SQL round-trips to exactly
+// len(fileIDMap) + len(pendingRefs) inserts in one transaction.
+func (g *SQLiteGraph) FlushRefs() error {
+	g.pendingMu.Lock()
+	refs := g.pendingRefs
+	fileIDs := g.fileIDMap
+	g.pendingRefs = make(map[string]*roaring.Bitmap)
+	g.fileIDMap = make(map[string]uint32)
+	g.nextFileID = 0
+	g.pendingMu.Unlock()
+
+	if len(refs) == 0 {
+		return nil
+	}
+
+	tx, err := g.refsDB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin refs flush: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Write file_ids
+	fileStmt, err := tx.Prepare("INSERT OR IGNORE INTO file_ids (id, path) VALUES (?, ?)")
+	if err != nil {
+		return fmt.Errorf("prepare file_ids insert: %w", err)
+	}
+	defer func() { _ = fileStmt.Close() }()
+
+	for path, id := range fileIDs {
+		if _, err := fileStmt.Exec(id, path); err != nil {
+			return fmt.Errorf("insert file_id %s: %w", path, err)
+		}
+	}
+
+	// Write bitmaps
+	refStmt, err := tx.Prepare("INSERT OR REPLACE INTO node_refs (token, bitmap) VALUES (?, ?)")
+	if err != nil {
+		return fmt.Errorf("prepare node_refs insert: %w", err)
+	}
+	defer func() { _ = refStmt.Close() }()
+
+	var buf bytes.Buffer
+	for token, bm := range refs {
+		buf.Reset()
+		if _, err := bm.WriteTo(&buf); err != nil {
+			return fmt.Errorf("serialize bitmap for %s: %w", token, err)
+		}
+		if _, err := refStmt.Exec(token, buf.Bytes()); err != nil {
+			return fmt.Errorf("insert ref %s: %w", token, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetCallers returns the list of files (nodes) that reference the given token.
+// Reads from the sidecar refs database.
+func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
+	var blob []byte
+	err := g.refsDB.QueryRow("SELECT bitmap FROM node_refs WHERE token = ?", token).Scan(&blob)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rb := roaring.New()
+	if err := rb.UnmarshalBinary(blob); err != nil {
+		return nil, fmt.Errorf("unmarshal bitmap: %w", err)
+	}
+
+	var fileIDs []uint32
+	it := rb.Iterator()
+	for it.HasNext() {
+		fileIDs = append(fileIDs, it.Next())
+	}
+	if len(fileIDs) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, len(fileIDs))
+	placeholders := make([]string, len(fileIDs))
+	for i, id := range fileIDs {
+		args[i] = id
+		placeholders[i] = "?"
+	}
+
+	query := fmt.Sprintf("SELECT path FROM file_ids WHERE id IN (%s)", strings.Join(placeholders, ","))
+	rows, err := g.refsDB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query file paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var nodes []*Node
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			continue
+		}
+		node, err := g.GetNode(path)
+		if err == nil {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes, nil
+}
+
+// Close closes both the source and sidecar database connections.
 func (g *SQLiteGraph) Close() error {
-	return g.db.Close()
+	err := g.db.Close()
+	if g.refsDB != nil {
+		if err2 := g.refsDB.Close(); err == nil {
+			err = err2
+		}
+	}
+	return err
 }
 
 // ---------------------------------------------------------------------------

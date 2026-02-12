@@ -58,6 +58,7 @@ type Graph interface {
 	GetNode(id string) (*Node, error)
 	ListChildren(id string) ([]string, error)
 	ReadContent(id string, buf []byte, offset int64) (int, error)
+	GetCallers(token string) ([]*Node, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -70,12 +71,14 @@ type MemoryStore struct {
 	roots    []string // Top-level nodes (e.g. "vulns")
 	resolver ContentResolverFunc
 	cache    *contentCache
+	refs     map[string][]string // token -> []nodeID
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		nodes: make(map[string]*Node),
 		roots: []string{},
+		refs:  make(map[string][]string),
 	}
 }
 
@@ -104,6 +107,33 @@ func (s *MemoryStore) AddNode(n *Node) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nodes[n.ID] = n
+}
+
+// AddRef records a reference from a file (nodeID) to a token.
+func (s *MemoryStore) AddRef(token, nodeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refs[token] = append(s.refs[token], nodeID)
+	return nil
+}
+
+// GetCallers implements Graph.
+func (s *MemoryStore) GetCallers(token string) ([]*Node, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ids, ok := s.refs[token]
+	if !ok {
+		return nil, nil
+	}
+
+	var nodes []*Node
+	for _, id := range ids {
+		if n, ok := s.nodes[id]; ok {
+			nodes = append(nodes, n)
+		}
+	}
+	return nodes, nil
 }
 
 // GetNode implements Graph.
