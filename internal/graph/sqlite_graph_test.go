@@ -583,3 +583,106 @@ func TestSQLiteGraph_Integration_NVD(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Benchmarks — run with real data to validate streaming scan performance:
+//   MACHE_TEST_KEV_DB=~/.agentic-research/venturi/kev/results/results.db \
+//   MACHE_TEST_NVD_DB=~/.agentic-research/venturi/nvd/results/results.db \
+//   go test ./internal/graph/... -bench=BenchmarkScanRoot -benchmem -count=3
+// ---------------------------------------------------------------------------
+
+func BenchmarkScanRoot_KEV(b *testing.B) {
+	kevDB := os.Getenv("MACHE_TEST_KEV_DB")
+	if kevDB == "" {
+		b.Skip("MACHE_TEST_KEV_DB not set")
+	}
+
+	schema := kevSchema()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g, err := OpenSQLiteGraph(kevDB, schema, testRender)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := g.EagerScan(); err != nil {
+			b.Fatal(err)
+		}
+		_ = g.Close()
+	}
+}
+
+func BenchmarkScanRoot_NVD(b *testing.B) {
+	nvdDB := os.Getenv("MACHE_TEST_NVD_DB")
+	if nvdDB == "" {
+		b.Skip("MACHE_TEST_NVD_DB not set")
+	}
+
+	schemaJSON, err := os.ReadFile("../../examples/nvd-schema.json")
+	if err != nil {
+		b.Fatal(err)
+	}
+	var schema api.Topology
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g, err := OpenSQLiteGraph(nvdDB, &schema, testRender)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := g.EagerScan(); err != nil {
+			b.Fatal(err)
+		}
+		_ = g.Close()
+	}
+}
+
+// BenchmarkScanRoot_Synthetic benchmarks scan with in-memory test data (no env vars needed).
+// Useful for CI and for A/B comparison of scan implementations.
+func BenchmarkScanRoot_Synthetic(b *testing.B) {
+	// Build a 10K record DB
+	const numRecords = 10000
+	records := make(map[string]string, numRecords)
+	for i := 0; i < numRecords; i++ {
+		id := fmt.Sprintf("CVE-2024-%04d", i)
+		records[id] = fmt.Sprintf(
+			`{"schema":"kev","identifier":"%s","item":{"cveID":"%s","vendorProject":"Vendor%d","product":"Product%d","shortDescription":"Desc %d"}}`,
+			id, id, i%100, i%50, i,
+		)
+	}
+
+	dir := b.TempDir()
+	dbPath := filepath.Join(dir, "bench.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE results (id TEXT PRIMARY KEY, record TEXT NOT NULL)"); err != nil {
+		b.Fatal(err)
+	}
+	tx, _ := db.Begin()
+	for id, rec := range records {
+		if _, err := tx.Exec("INSERT INTO results (id, record) VALUES (?, ?)", id, rec); err != nil {
+			b.Fatal(err)
+		}
+	}
+	_ = tx.Commit()
+	_ = db.Close()
+
+	schema := kevSchema()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g, err := OpenSQLiteGraph(dbPath, schema, testRender)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := g.EagerScan(); err != nil {
+			b.Fatal(err)
+		}
+		_ = g.Close()
+	}
+}

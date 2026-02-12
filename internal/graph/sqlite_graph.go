@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,26 +19,44 @@ import (
 type TemplateRenderer func(tmpl string, values map[string]any) (string, error)
 
 // SQLiteGraph implements Graph by querying the source SQLite database directly.
-// No index copy, no ingestion step. The source DB's B+ tree IS the index.
-// Directory structure is derived lazily from schema + DB on first access, then cached.
+// No index copy, no ingestion step — the source DB's B+ tree IS the index.
+//
+// Design: directory structure is derived lazily from schema + DB on first access,
+// then cached in sync.Maps for lock-free concurrent reads from FUSE callbacks.
+//
+// The scan is single-threaded and streaming: one sequential pass over all records,
+// rendering name templates to build parent→child path relationships. This avoids
+// the deadlock risk and channel overhead of a worker pool — SQLite sequential
+// reads are I/O-bound and template rendering for name fields is cheap.
+//
+// Memory model after scan:
+//   - dirChildren: sorted []string slices (one per directory), read-only post-scan
+//   - recordIDs: leaf dir path → DB row ID, for on-demand content resolution
+//   - contentCache: FIFO-bounded rendered content (avoids re-fetching hot files)
+//
+// Content is never loaded during scan — only on FUSE read via resolveContent,
+// which does a primary key lookup + template render + FIFO cache.
 type SQLiteGraph struct {
 	db     *sql.DB
 	dbPath string
 	schema *api.Topology
 	render TemplateRenderer
-	levels []*schemaLevel
+	levels []*schemaLevel // compiled schema tree, immutable after construction
 
-	// Lazy scan: one pass per root node populates all directory caches
+	// Lazy scan: one pass per root node populates dirChildren + recordIDs.
+	// sync.Once ensures exactly one scan per root, even under concurrent FUSE access.
 	scanOnce sync.Map // root name → *sync.Once
-	scanErr  sync.Map // root name → error
+	scanErr  sync.Map // root name → error (sticky: if scan fails, all lookups fail)
 
-	// Directory children (populated by scan, then read-only)
+	// Directory children — populated by scanRoot, then read-only.
+	// Values are sorted []string for O(log n) binary search in isChild.
 	dirChildren sync.Map // dir path (string) → []string (sorted child full paths)
 
-	// Record mapping: leaf directory path → record table ID
+	// Record mapping: leaf directory path → results table primary key.
+	// Used by resolveContent to fetch the JSON blob on demand.
 	recordIDs sync.Map // dir path (string) → string (record ID)
 
-	// Rendered content cache (FIFO-bounded)
+	// Rendered content cache (FIFO-bounded, protects against hot-file storms)
 	contentMu    sync.Mutex
 	contentCache map[string][]byte
 	contentKeys  []string
@@ -295,12 +312,7 @@ func (g *SQLiteGraph) ensureScanned(rootName string) error {
 	return nil
 }
 
-// --- Parallel scan types ---
-
-type scanJob struct {
-	recordID string
-	fields   []string
-}
+// --- Scan types ---
 
 type scanResult struct {
 	entries  []pathEntry
@@ -390,9 +402,20 @@ func setNestedField(m map[string]any, dottedPath, value string) {
 
 // --- Scan implementation ---
 
-// scanRoot performs a single-pass scan of all DB records to build the directory
-// tree for one root node. Uses json_extract to skip Go-side JSON parsing and
-// a worker pool to saturate all CPU cores on template rendering.
+// scanRoot performs a single-pass streaming scan of all DB records to build the
+// directory tree for one root node. Uses json_extract to push field extraction
+// into SQLite, avoiding Go-side JSON parsing of the full record blob.
+//
+// Why single-threaded: The previous worker-pool implementation (NumCPU goroutines +
+// channels) was designed for CPU-bound template rendering, but profiling showed the
+// bottleneck is SQLite I/O, not rendering. Name templates are simple field lookups
+// (e.g. "{{.item.cve.id}}") that render in <1μs. The channel/goroutine overhead
+// actually hurt throughput and introduced deadlock risk. If a future schema uses
+// expensive template functions (regex, crypto), re-add parallelism — but measure first.
+//
+// Memory: accumulates into []string slices (not map[string]bool sets), then
+// deduplicates in-place via sort+compact. Transient overhead ≈ O(unique_paths) strings,
+// which is the same as the final cached state (we need all paths in memory for FUSE).
 func (g *SQLiteGraph) scanRoot(rootName string) error {
 	level := g.findRootLevel(rootName)
 	if level == nil {
@@ -403,70 +426,37 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	fieldPaths := extractFieldPaths(collectNameTemplates(level))
 	query := buildScanQuery(fieldPaths)
 
-	numWorkers := runtime.NumCPU()
-	jobs := make(chan scanJob, numWorkers*4)
-	results := make(chan scanResult, numWorkers*4)
-
-	// Workers: build minimal values map, render templates, produce path entries
-	var workerWg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		workerWg.Add(1)
-		go func() {
-			defer workerWg.Done()
-			for job := range jobs {
-				results <- g.processScanJob(level, rootName, job, fieldPaths)
-			}
-		}()
-	}
-
-	// Collector: single goroutine merges results, no lock contention
-	childSets := make(map[string]map[string]bool)
-	recIDs := make(map[string]string)
-	childSets[rootName] = make(map[string]bool) // ensure root exists even if DB empty
-
-	var collectWg sync.WaitGroup
-	collectWg.Add(1)
-	go func() {
-		defer collectWg.Done()
-		count := 0
-		for res := range results {
-			count++
-			if count%100000 == 0 {
-				fmt.Printf("\rScanning %d records...", count)
-			}
-			for _, e := range res.entries {
-				if childSets[e.parent] == nil {
-					childSets[e.parent] = make(map[string]bool)
-				}
-				childSets[e.parent][e.child] = true
-			}
-			for _, l := range res.leafDirs {
-				recIDs[l.dirPath] = l.recordID
-			}
-		}
-		if count >= 100000 {
-			fmt.Printf("\rScanned %d records.\n", count)
-		}
-	}()
-
-	// Reader: stream extracted fields from SQLite (I/O bound, single goroutine)
 	rows, err := g.db.Query(query)
 	if err != nil {
 		return fmt.Errorf("scan query: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 
+	// Accumulate children as slices directly (no intermediate bool sets).
+	// Duplicates are removed after the scan via sort + compact.
+	childSlices := make(map[string][]string)
+	recIDs := make(map[string]string)
+	childSlices[rootName] = nil // ensure root exists even if DB is empty
+
+	// Reusable per-row scan buffers — allocated once, reused every iteration
 	nCols := len(fieldPaths) + 1
+	scanVals := make([]sql.NullString, nCols)
+	scanPtrs := make([]any, nCols)
+	for i := range scanVals {
+		scanPtrs[i] = &scanVals[i]
+	}
+	fields := make([]string, len(fieldPaths))
+
+	// Reusable result buffer for collectPathEntries
+	var result scanResult
+
+	count := 0
 	for rows.Next() {
-		scanVals := make([]sql.NullString, nCols)
-		scanPtrs := make([]any, nCols)
-		for i := range scanVals {
-			scanPtrs[i] = &scanVals[i]
-		}
 		if err := rows.Scan(scanPtrs...); err != nil {
 			continue
 		}
 
-		fields := make([]string, len(fieldPaths))
+		// Check for NULL fields (records missing required template values)
 		skip := false
 		for i := range fieldPaths {
 			if !scanVals[i+1].Valid {
@@ -479,46 +469,54 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 			continue
 		}
 
-		jobs <- scanJob{recordID: scanVals[0].String, fields: fields}
-	}
-	readErr := rows.Err()
-	_ = rows.Close()
-
-	close(jobs)
-	workerWg.Wait()
-	close(results)
-	collectWg.Wait()
-
-	if readErr != nil {
-		return fmt.Errorf("scan rows: %w", readErr)
-	}
-
-	// Convert sets → sorted slices and store
-	for parent, childSet := range childSets {
-		sorted := make([]string, 0, len(childSet))
-		for c := range childSet {
-			sorted = append(sorted, c)
+		// Build minimal values map and render schema path tree
+		values := make(map[string]any)
+		for i, path := range fieldPaths {
+			setNestedField(values, path, fields[i])
 		}
-		sort.Strings(sorted)
-		g.dirChildren.Store(parent, sorted)
+
+		result.entries = result.entries[:0]
+		result.leafDirs = result.leafDirs[:0]
+		g.collectPathEntries(level, values, rootName, scanVals[0].String, &result)
+
+		for _, e := range result.entries {
+			childSlices[e.parent] = append(childSlices[e.parent], e.child)
+		}
+		for _, l := range result.leafDirs {
+			recIDs[l.dirPath] = l.recordID
+		}
+
+		count++
+		if count%100000 == 0 {
+			fmt.Printf("\rScanning %d records...", count)
+		}
+	}
+	if count >= 100000 {
+		fmt.Printf("\rScanned %d records.\n", count)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("scan rows: %w", err)
+	}
+
+	// Sort and deduplicate children in-place, then store
+	for parent, children := range childSlices {
+		sort.Strings(children)
+		// Compact: remove adjacent duplicates
+		j := 0
+		for i, c := range children {
+			if i == 0 || c != children[i-1] {
+				children[j] = c
+				j++
+			}
+		}
+		g.dirChildren.Store(parent, children[:j])
 	}
 	for path, id := range recIDs {
 		g.recordIDs.Store(path, id)
 	}
 
 	return nil
-}
-
-// processScanJob builds a minimal values map from extracted fields
-// and renders the schema path tree. Called by worker goroutines.
-func (g *SQLiteGraph) processScanJob(level *schemaLevel, rootName string, job scanJob, fieldPaths []string) scanResult {
-	values := make(map[string]any)
-	for i, path := range fieldPaths {
-		setNestedField(values, path, job.fields[i])
-	}
-	var result scanResult
-	g.collectPathEntries(level, values, rootName, job.recordID, &result)
-	return result
 }
 
 // collectPathEntries walks the schema children for one record, producing
