@@ -1,8 +1,22 @@
-# Mache
+# 🗂️ Mache
 
 **The Universal Semantic Overlay Engine**
 
 Mache projects structured data and source code into navigable, read-only filesystems using declarative schemas. Point it at a JSON feed or a codebase, define a topology, and mount a FUSE filesystem you can explore with `ls`, `cat`, `grep`, and friends.
+
+## Table of Contents
+
+- [Status](#status)
+- [Feature Matrix](#feature-matrix)
+- [How It Works](#how-it-works)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Architecture](#architecture)
+- [Roadmap](#roadmap)
+- [Development](#development)
+- [License](#license)
+- [Contributing](#contributing)
+- [Related Work](#related-work)
 
 ## Status
 
@@ -19,6 +33,9 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | SQLite Ingestion (MemoryStore) | **Implemented** | Bulk-loads `.db` records into in-memory graph for smaller datasets |
 | Tree-sitter Code Parsing | **Implemented** | Go and Python source files |
 | In-Memory Graph Store | **Implemented** | `sync.RWMutex`-backed map, suitable for small datasets |
+| NVD Schema (`examples/nvd-schema.json`) | **Included** | 323K CVE records sharded by year/month over the SQLite direct backend |
+| KEV Schema (`examples/kev-schema.json`) | **Included** | CISA Known Exploited Vulnerabilities catalog |
+| Go Source Schema (`examples/go-schema.json`) | **Included** | Tree-sitter function extraction from Go source files |
 | Content-Addressed Storage (CAS) | **Ideated** | Described in ADR-0003; no code exists |
 | Layered Overlays (Docker-style) | **Ideated** | Composable data views; no code exists |
 | SQLite Virtual Tables | **Ideated** | Complex queries beyond fs navigation; described in ADR-0004 |
@@ -28,6 +45,7 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 ### Legend
 
 - **Implemented** — Working code with tests
+- **Included** — Ready-to-use example schema in `examples/`
 - **Stubbed** — Interface/types exist but implementation is partial or placeholder
 - **Ideated** — Described in an ADR or design doc; no code yet
 
