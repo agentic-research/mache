@@ -12,9 +12,11 @@ Mache is in **Phase 0** — a working proof-of-concept. The core pipeline (schem
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| FUSE Bridge (read-only) | **Implemented** | macOS via fuse-t + cgofuse, Linux via libfuse |
-| Declarative Topology Schemas | **Implemented** | JSON schema with Go `text/template` rendering |
+| FUSE Bridge (read-only) | **Implemented** | macOS via fuse-t + cgofuse, Linux via libfuse; handle-based readdir with auto-mode |
+| Declarative Topology Schemas | **Implemented** | JSON schema with Go `text/template` rendering; supports arbitrary nesting depth |
 | JSON Ingestion (JSONPath) | **Implemented** | Powered by [ojg/jp](https://github.com/ohler55/ojg) |
+| SQLite Direct Backend | **Implemented** | Zero-copy: mounts `.db` files instantly, reads records on demand via primary key lookup |
+| SQLite Ingestion (MemoryStore) | **Implemented** | Bulk-loads `.db` records into in-memory graph for smaller datasets |
 | Tree-sitter Code Parsing | **Implemented** | Go and Python source files |
 | In-Memory Graph Store | **Implemented** | `sync.RWMutex`-backed map, suitable for small datasets |
 | Content-Addressed Storage (CAS) | **Ideated** | Described in ADR-0003; no code exists |
@@ -32,37 +34,42 @@ Mache is in **Phase 0** — a working proof-of-concept. The core pipeline (schem
 ## How It Works
 
 ```
- Schema (JSON)         Data Source            Source Code
- ┌─────────────┐      ┌──────────────┐       ┌──────────────┐
- │ topology:    │      │ data.json    │       │ *.go / *.py  │
- │   nodes:     │      │ (JSONPath)   │       │ (tree-sitter)│
- │     ...      │      └──────┬───────┘       └──────┬───────┘
- └──────┬───────┘             │                      │
-        │              ┌──────┴──────────────────────┘
-        ▼              ▼
- ┌─────────────────────────────┐
- │     Ingestion Engine        │
- │  Walker interface:          │
- │   - JsonWalker (JSONPath)   │
- │   - SitterWalker (AST)     │
- └──────────────┬──────────────┘
-                ▼
- ┌─────────────────────────────┐
- │   Graph (MemoryStore)       │
- │   Node { ID, Mode, Data,   │
- │          Children }         │
- └──────────────┬──────────────┘
-                ▼
- ┌─────────────────────────────┐
- │   FUSE Bridge (cgofuse)     │
- │   ls / cat / grep / find    │
- └─────────────────────────────┘
+ Schema (JSON)         Data Source
+ ┌─────────────┐      ┌──────────────────────────────────────┐
+ │ topology:    │      │ .db (SQLite)  │ .json   │ .go / .py │
+ │   nodes:     │      └───────┬───────┴────┬────┴─────┬─────┘
+ │     ...      │              │            │          │
+ └──────┬───────┘              │     ┌──────┴──────────┘
+        │              ┌───────┘     │
+        ▼              ▼             ▼
+ ┌──────────────┐  ┌─────────────────────────────┐
+ │ SQLiteGraph  │  │     Ingestion Engine        │
+ │ (zero-copy)  │  │  Walker interface:          │
+ │ Direct SQL   │  │   - JsonWalker (JSONPath)   │
+ │ queries on   │  │   - SitterWalker (AST)      │
+ │ source DB    │  │   - SQLite loader           │
+ └──────┬───────┘  └──────────────┬──────────────┘
+        │                         ▼
+        │          ┌─────────────────────────────┐
+        │          │   Graph (MemoryStore)       │
+        │          │   Node { ID, Mode, Data,   │
+        │          │          Children }         │
+        │          └──────────────┬──────────────┘
+        │                        │
+        └────────┬───────────────┘
+                 ▼
+      ┌─────────────────────────────────┐
+      │   FUSE Bridge (cgofuse)         │
+      │   ls / cat / grep / find        │
+      └─────────────────────────────────┘
 ```
 
-1. A **Topology Schema** declares the directory structure using selectors (JSONPath or tree-sitter queries) and Go template strings for names/content.
-2. The **Ingestion Engine** dispatches to the appropriate **Walker** by file extension (`.json` → JSONPath, `.go`/`.py` → tree-sitter).
-3. Walkers query the data, extract captures, and the engine renders templates to build a **Graph** of nodes.
-4. The **FUSE Bridge** projects the graph as a read-only filesystem.
+There are two data paths depending on the source:
+
+1. **SQLite direct (`.db` files)** — `SQLiteGraph` queries the source database directly. A one-pass scan builds the directory tree (~4s for 323K records), then content is resolved on demand via primary key lookup. No data is copied.
+2. **Ingestion (`.json`, `.go`, `.py`)** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`.
+
+Both paths are fronted by the same `Graph` interface and `FUSE Bridge`. A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
 
 ## Quick Start
 
@@ -123,12 +130,61 @@ go test ./...
 ## Usage
 
 ```bash
-# Mount with a schema and data source
-./mache --schema schema.json --data data.json /path/to/mountpoint
+# Mount a SQLite database (instant — zero-copy, direct SQL queries)
+./mache --schema examples/nvd-schema.json --data results.db /tmp/nvd
+
+# Mount a JSON file (ingests into memory)
+./mache --schema schema.json --data data.json /tmp/mount
 
 # Flags:
 #   -s, --schema   Path to topology schema (default: ~/.agentic-research/mache/mache.json)
 #   -d, --data     Path to data source file or directory (default: ~/.agentic-research/mache/data.json)
+```
+
+### Example: NVD Vulnerability Database
+
+Mount 323K NVD CVE records as a browsable filesystem, sharded by year and month:
+
+```bash
+./mache --schema examples/nvd-schema.json \
+        --data ~/.agentic-research/venturi/nvd/results/results.db \
+        /tmp/nvd
+```
+
+```
+/tmp/nvd/
+  by-cve/
+    2024/
+      01/
+        CVE-2024-0001/
+          description   # "A buffer overflow in FooBar..."
+          published     # "2024-01-15T00:00:00Z"
+          status        # "Analyzed"
+          raw.json      # Full JSON record
+        CVE-2024-0002/
+        ...
+      02/
+      ...
+    2023/
+      ...
+```
+
+The schema that produces this structure (`examples/nvd-schema.json`) uses `slice` to extract year and month from the published date:
+
+```json
+{
+  "name": "{{slice .item.cve.published 0 4}}",
+  "selector": "$[*]",
+  "children": [{
+    "name": "{{slice .item.cve.published 5 7}}",
+    "selector": "$",
+    "children": [{
+      "name": "{{.item.cve.id}}",
+      "selector": "$",
+      "files": [...]
+    }]
+  }]
+}
 ```
 
 ### Example: Projecting JSON Data
@@ -146,7 +202,7 @@ Given a `data.json`:
 And a `schema.json`:
 ```json
 {
-  "version": "v1alpha1",
+  "version": "v1",
   "nodes": [
     {
       "name": "users",
@@ -200,9 +256,11 @@ Captures named `@scope` define the recursion context for child nodes.
 ### Core Abstractions
 
 - **`Walker` interface** — Abstracts over query engines. `JsonWalker` uses JSONPath; `SitterWalker` uses tree-sitter AST queries. Both return `Match` results with captured values and optional recursion context.
-- **`Graph` interface** — Read-only access to the node store (`GetNode`, `ListChildren`). Currently backed by `MemoryStore`; designed to be swappable (SQLite, mmap, etc.).
+- **`Graph` interface** — Read-only access to the node store (`GetNode`, `ListChildren`, `ReadContent`). Two implementations:
+  - **`MemoryStore`** — In-memory map for small datasets (JSON files, source code).
+  - **`SQLiteGraph`** — Direct SQL backend for `.db` sources. One-pass parallel scan builds the directory tree; content resolved on demand via primary key lookup and template rendering. No data copied.
 - **`Engine`** — Drives ingestion: walks files, dispatches to walkers, renders templates, builds the graph.
-- **`MacheFS`** — FUSE implementation via cgofuse. Translates `Open`/`Getattr`/`Readdir`/`Read` to graph lookups. No heuristics — all decisions come from the graph.
+- **`MacheFS`** — FUSE implementation via cgofuse. Handle-based readdir with auto-mode for fuse-t compatibility. Extended cache timeouts (300s) for NFS performance. Translates `Open`/`Getattr`/`Readdir`/`Read` to graph lookups.
 
 ### ADRs
 
@@ -217,12 +275,12 @@ Captures named `@scope` define the recursion context for child nodes.
 
 These are directional goals, not commitments:
 
-- **Persistent storage** — Replace `MemoryStore` with something durable (SQLite, mmap-backed arena)
 - **Content-addressed storage** — Store data by hash, reference via hard links for deduplication
 - **Layered overlays** — Docker-style composable layers for versioned data views
 - **Additional walkers** — YAML, TOML, HCL, more tree-sitter grammars
 - **Write support** — Bidirectional sync between filesystem mutations and source data
 - **SQLite virtual tables** — SQL queries over the projected filesystem
+- **Go NFS server** — Replace fuse-t's NFS translation layer for full control over caching behavior
 
 ## Development
 
