@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -281,52 +283,202 @@ func (g *SQLiteGraph) ensureScanned(rootName string) error {
 	return nil
 }
 
+// --- Parallel scan types ---
+
+type scanJob struct {
+	recordID string
+	fields   []string
+}
+
+type scanResult struct {
+	entries  []pathEntry
+	leafDirs []leafMapping
+}
+
+type pathEntry struct {
+	parent string
+	child  string
+}
+
+type leafMapping struct {
+	dirPath  string
+	recordID string
+}
+
+// --- Field extraction from name templates ---
+
+// fieldRefRe matches Go template field references like .item.cve.id
+var fieldRefRe = regexp.MustCompile(`\.(\w+(?:\.\w+)*)`)
+
+// collectNameTemplates gathers all dynamic name template strings from the schema tree.
+func collectNameTemplates(level *schemaLevel) []string {
+	var tmpls []string
+	var walk func(*schemaLevel)
+	walk = func(l *schemaLevel) {
+		if !l.isStatic {
+			tmpls = append(tmpls, l.nameRaw)
+		}
+		for _, c := range l.children {
+			walk(c)
+		}
+	}
+	walk(level)
+	return tmpls
+}
+
+// extractFieldPaths pulls dotted field references from Go templates.
+// e.g. "{{slice .item.cve.id 4 8}}" → ["item.cve.id"]
+func extractFieldPaths(templates []string) []string {
+	seen := make(map[string]bool)
+	for _, tmpl := range templates {
+		for _, m := range fieldRefRe.FindAllStringSubmatch(tmpl, -1) {
+			seen[m[1]] = true
+		}
+	}
+	paths := make([]string, 0, len(seen))
+	for p := range seen {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// buildScanQuery builds a SELECT using json_extract for only the fields
+// needed by name templates. Avoids transferring and parsing full record JSON.
+func buildScanQuery(fieldPaths []string) string {
+	cols := make([]string, 0, len(fieldPaths)+1)
+	cols = append(cols, "id")
+	for _, fp := range fieldPaths {
+		cols = append(cols, fmt.Sprintf("json_extract(record, '$.%s')", fp))
+	}
+	return "SELECT " + strings.Join(cols, ", ") + " FROM results"
+}
+
+// setNestedField builds a nested map from a dotted path.
+// e.g. setNestedField(m, "item.cve.id", "CVE-2024-0001")
+//
+//	→ m["item"]["cve"]["id"] = "CVE-2024-0001"
+func setNestedField(m map[string]any, dottedPath, value string) {
+	parts := strings.Split(dottedPath, ".")
+	current := m
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			current[part] = value
+		} else {
+			if v, ok := current[part]; ok {
+				current = v.(map[string]any)
+			} else {
+				next := make(map[string]any)
+				current[part] = next
+				current = next
+			}
+		}
+	}
+}
+
+// --- Scan implementation ---
+
 // scanRoot performs a single-pass scan of all DB records to build the directory
-// tree for one root node. After this, all ListChildren calls are cache lookups.
+// tree for one root node. Uses json_extract to skip Go-side JSON parsing and
+// a worker pool to saturate all CPU cores on template rendering.
 func (g *SQLiteGraph) scanRoot(rootName string) error {
 	level := g.findRootLevel(rootName)
 	if level == nil {
 		return fmt.Errorf("root %q not found in schema", rootName)
 	}
 
+	// Analyze schema to find which fields the name templates need
+	fieldPaths := extractFieldPaths(collectNameTemplates(level))
+	query := buildScanQuery(fieldPaths)
+
+	numWorkers := runtime.NumCPU()
+	jobs := make(chan scanJob, numWorkers*4)
+	results := make(chan scanResult, numWorkers*4)
+
+	// Workers: build minimal values map, render templates, produce path entries
+	var workerWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go func() {
+			defer workerWg.Done()
+			for job := range jobs {
+				results <- g.processScanJob(level, rootName, job, fieldPaths)
+			}
+		}()
+	}
+
+	// Collector: single goroutine merges results, no lock contention
 	childSets := make(map[string]map[string]bool)
 	recIDs := make(map[string]string)
+	childSets[rootName] = make(map[string]bool) // ensure root exists even if DB empty
 
-	// Ensure root node always has an entry (even if DB is empty)
-	childSets[rootName] = make(map[string]bool)
+	var collectWg sync.WaitGroup
+	collectWg.Add(1)
+	go func() {
+		defer collectWg.Done()
+		count := 0
+		for res := range results {
+			count++
+			if count%100000 == 0 {
+				fmt.Printf("\rScanning %d records...", count)
+			}
+			for _, e := range res.entries {
+				if childSets[e.parent] == nil {
+					childSets[e.parent] = make(map[string]bool)
+				}
+				childSets[e.parent][e.child] = true
+			}
+			for _, l := range res.leafDirs {
+				recIDs[l.dirPath] = l.recordID
+			}
+		}
+		if count >= 100000 {
+			fmt.Printf("\rScanned %d records.\n", count)
+		}
+	}()
 
-	rows, err := g.db.Query("SELECT id, record FROM results")
+	// Reader: stream extracted fields from SQLite (I/O bound, single goroutine)
+	rows, err := g.db.Query(query)
 	if err != nil {
 		return fmt.Errorf("scan query: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	count := 0
+	nCols := len(fieldPaths) + 1
 	for rows.Next() {
-		var recordID, raw string
-		if err := rows.Scan(&recordID, &raw); err != nil {
-			continue
+		scanVals := make([]sql.NullString, nCols)
+		scanPtrs := make([]any, nCols)
+		for i := range scanVals {
+			scanPtrs[i] = &scanVals[i]
 		}
-		var parsed any
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-			continue
-		}
-		values, ok := parsed.(map[string]any)
-		if !ok {
+		if err := rows.Scan(scanPtrs...); err != nil {
 			continue
 		}
 
-		g.buildPaths(level, values, rootName, recordID, childSets, recIDs)
-		count++
-		if count%100000 == 0 {
-			fmt.Printf("\rScanning %d records...", count)
+		fields := make([]string, len(fieldPaths))
+		skip := false
+		for i := range fieldPaths {
+			if !scanVals[i+1].Valid {
+				skip = true
+				break
+			}
+			fields[i] = scanVals[i+1].String
 		}
+		if skip {
+			continue
+		}
+
+		jobs <- scanJob{recordID: scanVals[0].String, fields: fields}
 	}
-	if count >= 100000 {
-		fmt.Printf("\rScanned %d records.\n", count)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("scan rows: %w", err)
+	readErr := rows.Err()
+	_ = rows.Close()
+
+	close(jobs)
+	workerWg.Wait()
+	close(results)
+	collectWg.Wait()
+
+	if readErr != nil {
+		return fmt.Errorf("scan rows: %w", readErr)
 	}
 
 	// Convert sets → sorted slices and store
@@ -345,9 +497,21 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	return nil
 }
 
-// buildPaths walks the schema children for one record, accumulating directory
-// entries and record-ID mappings. Called once per DB row during scan.
-func (g *SQLiteGraph) buildPaths(level *schemaLevel, values map[string]any, parentPath, recordID string, childSets map[string]map[string]bool, recIDs map[string]string) {
+// processScanJob builds a minimal values map from extracted fields
+// and renders the schema path tree. Called by worker goroutines.
+func (g *SQLiteGraph) processScanJob(level *schemaLevel, rootName string, job scanJob, fieldPaths []string) scanResult {
+	values := make(map[string]any)
+	for i, path := range fieldPaths {
+		setNestedField(values, path, job.fields[i])
+	}
+	var result scanResult
+	g.collectPathEntries(level, values, rootName, job.recordID, &result)
+	return result
+}
+
+// collectPathEntries walks the schema children for one record, producing
+// parent→child entries and leaf directory→recordID mappings.
+func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values map[string]any, parentPath, recordID string, result *scanResult) {
 	for _, child := range level.children {
 		name, err := g.render(child.nameRaw, values)
 		if err != nil || name == "" {
@@ -355,25 +519,18 @@ func (g *SQLiteGraph) buildPaths(level *schemaLevel, values map[string]any, pare
 		}
 
 		childPath := parentPath + "/" + name
-
-		if childSets[parentPath] == nil {
-			childSets[parentPath] = make(map[string]bool)
-		}
-		childSets[parentPath][childPath] = true
+		result.entries = append(result.entries, pathEntry{parent: parentPath, child: childPath})
 
 		// Recurse into deeper directory levels
 		if len(child.children) > 0 {
-			g.buildPaths(child, values, childPath, recordID, childSets, recIDs)
+			g.collectPathEntries(child, values, childPath, recordID, result)
 		}
 
 		// Leaf directory: add file children and record mapping
 		if len(child.files) > 0 {
-			recIDs[childPath] = recordID
-			if childSets[childPath] == nil {
-				childSets[childPath] = make(map[string]bool)
-			}
+			result.leafDirs = append(result.leafDirs, leafMapping{dirPath: childPath, recordID: recordID})
 			for _, f := range child.files {
-				childSets[childPath][childPath+"/"+f.Name] = true
+				result.entries = append(result.entries, pathEntry{parent: childPath, child: childPath + "/" + f.Name})
 			}
 		}
 	}
