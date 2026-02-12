@@ -229,7 +229,7 @@ func TestMacheFS_Readdir(t *testing.T) {
 			var entries []string
 			fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
 				entries = append(entries, name)
-				return true
+				return false // false = buffer has space, keep sending
 			}
 
 			errCode := mfs.Readdir(tt.path, fill, 0, 0)
@@ -248,6 +248,32 @@ func TestMacheFS_Readdir(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMacheFS_Readdir_AllEntriesReturned(t *testing.T) {
+	mfs := newTestFS()
+
+	// In auto mode (offset=0), readdir should return ALL entries regardless
+	// of fill return value. FUSE manages buffering internally.
+	var entries []string
+	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return false
+	}
+
+	errCode := mfs.Readdir("/vulns", fill, 0, 0)
+	if errCode != 0 {
+		t.Fatalf("Readdir() errCode = %v, want 0", errCode)
+	}
+	want := []string{".", "..", "CVE-2024-1234", "CVE-2024-5678"}
+	if len(entries) != len(want) {
+		t.Fatalf("got %v entries %v, want %v", len(entries), entries, want)
+	}
+	for i, w := range want {
+		if entries[i] != w {
+			t.Errorf("entry[%d] = %q, want %q", i, entries[i], w)
+		}
 	}
 }
 

@@ -39,6 +39,34 @@ func StreamSQLite(dbPath string, fn func(recordID string, record any) error) err
 	return rows.Err()
 }
 
+// StreamSQLiteRaw iterates over all records yielding raw (id, json) strings
+// without parsing. Used by the parallel ingestion pipeline where workers
+// handle JSON parsing on their own goroutines.
+func StreamSQLiteRaw(dbPath string, fn func(id, raw string) error) error {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite %s: %w", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rows, err := db.Query("SELECT id, record FROM results")
+	if err != nil {
+		return fmt.Errorf("query results: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return fmt.Errorf("scan row: %w", err)
+		}
+		if err := fn(id, raw); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // LoadSQLite opens a SQLite database, reads all records from the results table,
 // parses each JSON record, and returns them as a slice.
 // Kept for backward compatibility with tests; prefer StreamSQLite for large datasets.

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/agentic-research/mache/api"
@@ -30,10 +32,26 @@ type IngestionTarget interface {
 type Engine struct {
 	Schema *api.Topology
 	Store  IngestionTarget
+}
 
-	// Phase 1: lazy loading context (set during SQLite streaming)
-	currentDBPath   string
-	currentRecordID string
+// --- Parallel ingestion types ---
+
+// recordJob is sent from the SQLite reader to worker goroutines.
+type recordJob struct {
+	recordID string
+	raw      string
+}
+
+// recordResult is the output from a worker: all nodes for one record.
+type recordResult struct {
+	nodes       []*graph.Node
+	parentLinks []parentLink
+	err         error
+}
+
+type parentLink struct {
+	childID  string
+	parentID string
 }
 
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
@@ -120,11 +138,10 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 	return nil
 }
 
-// ingestSQLiteStreaming processes a SQLite database one record at a time.
-// This keeps memory usage constant regardless of database size.
+// ingestSQLiteStreaming processes a SQLite database using a parallel worker pool.
+// Reader goroutine streams rows, workers parse JSON + render templates,
+// collector applies nodes to the store. Saturates all CPU cores.
 func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
-	walker := NewJsonWalker()
-
 	// Pre-create root directory nodes from schema
 	for _, nodeSchema := range e.Schema.Nodes {
 		rootNode := &graph.Node{
@@ -135,26 +152,182 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 		e.Store.AddRoot(rootNode)
 	}
 
-	e.currentDBPath = dbPath
-	defer func() {
-		e.currentDBPath = ""
-		e.currentRecordID = ""
-	}()
+	numWorkers := runtime.NumCPU()
+	jobs := make(chan recordJob, numWorkers*2)
+	results := make(chan recordResult, numWorkers*2)
 
-	return StreamSQLite(dbPath, func(recordID string, record any) error {
-		e.currentRecordID = recordID
+	// Workers: parse JSON, render templates, build nodes
+	var workerWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go func() {
+			defer workerWg.Done()
+			w := NewJsonWalker()
+			for job := range jobs {
+				results <- processRecord(e.Schema, w, dbPath, job)
+			}
+		}()
+	}
 
-		// Wrap single record so JSONPath $[*] extracts it
-		wrapper := []any{record}
-		for _, nodeSchema := range e.Schema.Nodes {
-			for _, childSchema := range nodeSchema.Children {
-				if err := e.processNode(childSchema, walker, wrapper, nodeSchema.Name); err != nil {
-					return err
+	// Collector: apply nodes to store (single goroutine, no lock contention).
+	// Handles dedup for shared directory nodes (e.g. year dirs from temporal sharding)
+	// and parent-child links.
+	var collectErr error
+	var collectWg sync.WaitGroup
+	collectWg.Add(1)
+	go func() {
+		defer collectWg.Done()
+		parentChildSeen := make(map[string]map[string]bool)
+		for res := range results {
+			if res.err != nil {
+				if collectErr == nil {
+					collectErr = res.err
+				}
+				continue
+			}
+			for _, node := range res.nodes {
+				// For directory nodes, only create if it doesn't exist yet.
+				// Multiple workers may produce the same intermediate dir (e.g. "by-cve/2024").
+				// Children are managed exclusively via parentLinks below.
+				if node.Mode.IsDir() {
+					if _, err := e.Store.GetNode(node.ID); err != nil {
+						e.Store.AddNode(node)
+					}
+				} else {
+					e.Store.AddNode(node)
+				}
+			}
+			for _, link := range res.parentLinks {
+				if parentChildSeen[link.parentID] == nil {
+					parentChildSeen[link.parentID] = make(map[string]bool)
+				}
+				if !parentChildSeen[link.parentID][link.childID] {
+					parentChildSeen[link.parentID][link.childID] = true
+					parent, err := e.Store.GetNode(link.parentID)
+					if err == nil {
+						parent.Children = append(parent.Children, link.childID)
+					}
 				}
 			}
 		}
+	}()
+
+	// Reader: stream raw rows from SQLite (I/O bound, single goroutine)
+	readErr := StreamSQLiteRaw(dbPath, func(id, raw string) error {
+		jobs <- recordJob{recordID: id, raw: raw}
 		return nil
 	})
+
+	close(jobs)     // signal workers: no more jobs
+	workerWg.Wait() // wait for all workers to finish
+	close(results)  // signal collector: no more results
+	collectWg.Wait()
+
+	if collectErr != nil {
+		return collectErr
+	}
+	return readErr
+}
+
+// processRecord is a pure function — parses one SQLite record through the schema
+// and returns all nodes to create, without touching the store.
+func processRecord(schema *api.Topology, walker Walker, dbPath string, job recordJob) recordResult {
+	var parsed any
+	if err := json.Unmarshal([]byte(job.raw), &parsed); err != nil {
+		return recordResult{err: fmt.Errorf("parse record %s: %w", job.recordID, err)}
+	}
+
+	wrapper := []any{parsed}
+	var result recordResult
+
+	for _, nodeSchema := range schema.Nodes {
+		for _, childSchema := range nodeSchema.Children {
+			collectNodes(&result, childSchema, walker, wrapper, nodeSchema.Name, dbPath, job.recordID)
+			if result.err != nil {
+				return result
+			}
+		}
+	}
+
+	return result
+}
+
+// collectNodes is the pure equivalent of processNode — builds node lists
+// without any store access. Safe to call from multiple goroutines.
+func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any, parentPath, dbPath, recordID string) {
+	matches, err := walker.Query(ctx, schema.Selector)
+	if err != nil {
+		result.err = fmt.Errorf("query failed for %s: %w", schema.Name, err)
+		return
+	}
+
+	for _, match := range matches {
+		name, err := renderTemplate(schema.Name, match.Values())
+		if err != nil {
+			result.err = fmt.Errorf("failed to render name %s: %w", schema.Name, err)
+			return
+		}
+
+		currentPath := filepath.Join(parentPath, name)
+		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+
+		node := &graph.Node{
+			ID:   id,
+			Mode: os.ModeDir | 0o555,
+		}
+
+		// Recurse children
+		nextCtx := match.Context()
+		if nextCtx != nil {
+			for _, childSchema := range schema.Children {
+				collectNodes(result, childSchema, walker, nextCtx, currentPath, dbPath, recordID)
+				if result.err != nil {
+					return
+				}
+			}
+		}
+
+		// Process files
+		for _, fileSchema := range schema.Files {
+			fileName, err := renderTemplate(fileSchema.Name, match.Values())
+			if err != nil {
+				continue
+			}
+			filePath := filepath.Join(currentPath, fileName)
+			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
+
+			content, err := renderTemplate(fileSchema.ContentTemplate, match.Values())
+			if err != nil {
+				continue
+			}
+
+			fileNode := &graph.Node{
+				ID:   fileId,
+				Mode: 0o444,
+			}
+
+			// Inline small content, lazy-resolve large content from SQLite
+			if len(content) > inlineThreshold {
+				fileNode.Ref = &graph.ContentRef{
+					DBPath:     dbPath,
+					RecordID:   recordID,
+					Template:   fileSchema.ContentTemplate,
+					ContentLen: int64(len(content)),
+				}
+			} else {
+				fileNode.Data = []byte(content)
+			}
+
+			result.nodes = append(result.nodes, fileNode)
+			node.Children = append(node.Children, fileId)
+		}
+
+		result.nodes = append(result.nodes, node)
+
+		// Link to parent (collector will apply this)
+		parentID := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
+		result.parentLinks = append(result.parentLinks, parentLink{childID: id, parentID: parentID})
+	}
 }
 
 func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath string) error {
@@ -218,7 +391,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			}
 		}
 
-		// Process files
+		// Process files (JSON/tree-sitter paths — always inline content)
 		for _, fileSchema := range schema.Files {
 			fileName, err := renderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
@@ -227,7 +400,6 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			filePath := filepath.Join(currentPath, fileName)
 			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
 
-			// Render content to determine size
 			content, err := renderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
 				continue
@@ -235,19 +407,8 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 			fileNode := &graph.Node{
 				ID:   fileId,
-				Mode: 0o444, // Read-only file
-			}
-
-			// Phase 1: classify content — inline small, lazy large
-			if e.currentDBPath != "" && len(content) > inlineThreshold {
-				fileNode.Ref = &graph.ContentRef{
-					DBPath:     e.currentDBPath,
-					RecordID:   e.currentRecordID,
-					Template:   fileSchema.ContentTemplate,
-					ContentLen: int64(len(content)),
-				}
-			} else {
-				fileNode.Data = []byte(content)
+				Mode: 0o444,
+				Data: []byte(content),
 			}
 
 			e.Store.AddNode(fileNode)
@@ -274,6 +435,20 @@ var tmplFuncs = template.FuncMap{
 			}
 		}
 		return nil
+	},
+	// slice extracts a substring: {{slice .someField 4 8}} → characters [4:8].
+	// Used for temporal sharding: {{slice .item.cve.id 4 8}} → "2024" from "CVE-2024-0001".
+	"slice": func(s string, start, end int) string {
+		if start < 0 {
+			start = 0
+		}
+		if end > len(s) {
+			end = len(s)
+		}
+		if start >= end {
+			return ""
+		}
+		return s[start:end]
 	},
 }
 

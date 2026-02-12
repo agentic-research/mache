@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"hash/fnv"
 	"path/filepath"
 	"time"
 
@@ -8,6 +9,21 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/winfsp/cgofuse/fuse"
 )
+
+// pathIno returns a stable inode number for a given path.
+// Root gets inode 1 (FUSE convention). All others use FNV-1a hash.
+func pathIno(path string) uint64 {
+	if path == "/" {
+		return 1
+	}
+	h := fnv.New64a()
+	h.Write([]byte(path))
+	ino := h.Sum64()
+	if ino <= 1 {
+		ino = 2 // 0 = unknown, 1 = root — both reserved
+	}
+	return ino
+}
 
 // MacheFS implements the FUSE interface from cgofuse.
 // It delegates all file/directory decisions to the Graph — no heuristics.
@@ -45,6 +61,8 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	stat.Ctim = fs.mountTime
 	stat.Birthtim = fs.mountTime
 
+	stat.Ino = pathIno(path)
+
 	if path == "/" {
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
@@ -68,6 +86,8 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 // Readdir lists children of a directory node.
+// Uses explicit offsets for pagination to handle large directories (e.g. 323K NVD entries).
+// Offset layout: 0=start, 1=".", 2="..", 3+i=children[i].
 func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
 	// For non-root paths, verify this is actually a directory
 	if path != "/" {
@@ -80,13 +100,17 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		}
 	}
 
-	fill(".", nil, 0)
-	fill("..", nil, 0)
-
 	children, err := fs.Graph.ListChildren(path)
 	if err != nil {
 		return -fuse.ENOENT
 	}
+
+	// Use offset=0 (auto mode): FUSE manages buffering and pagination internally.
+	// In auto mode, fill() should never return true (per FUSE spec), so we don't
+	// check the return value. This is required for fuse-t compatibility.
+	fill(".", nil, 0)
+	fill("..", nil, 0)
+
 	for _, childID := range children {
 		name := filepath.Base(childID)
 		fill(name, nil, 0)

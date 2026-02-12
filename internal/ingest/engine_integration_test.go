@@ -64,6 +64,7 @@ func TestEngine_IngestSQLite_NVD(t *testing.T) {
 	dbPath := createTestDB(t, []string{
 		`{"schema":"nvd","identifier":"CVE-2024-0001","item":{"cve":{"id":"CVE-2024-0001","descriptions":[{"lang":"en","value":"A buffer overflow in FooBar allows remote code execution."}],"published":"2024-01-15T00:00:00Z","vulnStatus":"Analyzed"}}}`,
 		`{"schema":"nvd","identifier":"CVE-2024-0002","item":{"cve":{"id":"CVE-2024-0002","descriptions":[{"lang":"en","value":"An authentication bypass in BazQux."}],"published":"2024-02-01T00:00:00Z","vulnStatus":"Modified"}}}`,
+		`{"schema":"nvd","identifier":"CVE-2023-0001","item":{"cve":{"id":"CVE-2023-0001","descriptions":[{"lang":"en","value":"A null pointer dereference in Quux."}],"published":"2023-06-01T00:00:00Z","vulnStatus":"Analyzed"}}}`,
 	})
 
 	schema := loadSchema(t, "../../examples/nvd-schema.json")
@@ -72,28 +73,43 @@ func TestEngine_IngestSQLite_NVD(t *testing.T) {
 
 	require.NoError(t, engine.Ingest(dbPath))
 
-	// by-cve root dir exists with 2 children
+	// by-cve root dir exists with year-level children
 	byCve, err := store.GetNode("by-cve")
 	require.NoError(t, err)
 	assert.True(t, byCve.Mode.IsDir())
-	assert.Len(t, byCve.Children, 2)
+	assert.Len(t, byCve.Children, 2) // "2024" and "2023"
 
-	// description uses nested template with index
-	desc, err := store.GetNode("by-cve/CVE-2024-0001/description")
+	// Year directory has CVE children
+	year2024, err := store.GetNode("by-cve/2024")
+	require.NoError(t, err)
+	assert.True(t, year2024.Mode.IsDir())
+	assert.Len(t, year2024.Children, 2) // CVE-2024-0001 and CVE-2024-0002
+
+	year2023, err := store.GetNode("by-cve/2023")
+	require.NoError(t, err)
+	assert.Len(t, year2023.Children, 1) // CVE-2023-0001
+
+	// description uses nested template with index (now under year dir)
+	desc, err := store.GetNode("by-cve/2024/CVE-2024-0001/description")
 	require.NoError(t, err)
 	assert.Equal(t, "A buffer overflow in FooBar allows remote code execution.", string(desc.Data))
 
 	// status from nested path
-	status, err := store.GetNode("by-cve/CVE-2024-0001/status")
+	status, err := store.GetNode("by-cve/2024/CVE-2024-0001/status")
 	require.NoError(t, err)
 	assert.Equal(t, "Analyzed", string(status.Data))
 
 	// raw.json is valid JSON
-	raw, err := store.GetNode("by-cve/CVE-2024-0001/raw.json")
+	raw, err := store.GetNode("by-cve/2024/CVE-2024-0001/raw.json")
 	require.NoError(t, err)
 	var rawData map[string]any
 	require.NoError(t, json.Unmarshal(raw.Data, &rawData))
 	item := rawData["item"].(map[string]any)
 	cve := item["cve"].(map[string]any)
 	assert.Equal(t, "CVE-2024-0001", cve["id"])
+
+	// Cross-year: 2023 CVE also works
+	desc2023, err := store.GetNode("by-cve/2023/CVE-2023-0001/description")
+	require.NoError(t, err)
+	assert.Equal(t, "A null pointer dereference in Quux.", string(desc2023.Data))
 }
