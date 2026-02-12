@@ -178,7 +178,12 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 	go func() {
 		defer collectWg.Done()
 		parentChildSeen := make(map[string]map[string]bool)
+		count := 0
 		for res := range results {
+			count++
+			if count%50000 == 0 {
+				fmt.Printf("\rProcessed %d records...", count)
+			}
 			if res.err != nil {
 				if collectErr == nil {
 					collectErr = res.err
@@ -210,6 +215,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 				}
 			}
 		}
+		fmt.Printf("\rProcessed %d records... Done.\n", count)
 	}()
 
 	// Reader: stream raw rows from SQLite (I/O bound, single goroutine)
@@ -262,7 +268,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 	}
 
 	for _, match := range matches {
-		name, err := renderTemplate(schema.Name, match.Values())
+		name, err := RenderTemplate(schema.Name, match.Values())
 		if err != nil {
 			result.err = fmt.Errorf("failed to render name %s: %w", schema.Name, err)
 			return
@@ -289,14 +295,14 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 
 		// Process files
 		for _, fileSchema := range schema.Files {
-			fileName, err := renderTemplate(fileSchema.Name, match.Values())
+			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
 			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
 
-			content, err := renderTemplate(fileSchema.ContentTemplate, match.Values())
+			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
 				continue
 			}
@@ -337,7 +343,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	}
 
 	for _, match := range matches {
-		name, err := renderTemplate(schema.Name, match.Values())
+		name, err := RenderTemplate(schema.Name, match.Values())
 		if err != nil {
 			return fmt.Errorf("failed to render name %s: %w", schema.Name, err)
 		}
@@ -393,14 +399,14 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Process files (JSON/tree-sitter paths — always inline content)
 		for _, fileSchema := range schema.Files {
-			fileName, err := renderTemplate(fileSchema.Name, match.Values())
+			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
 			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
 
-			content, err := renderTemplate(fileSchema.ContentTemplate, match.Values())
+			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
 				continue
 			}
@@ -452,7 +458,8 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
-func renderTemplate(tmpl string, values map[string]any) (string, error) {
+// RenderTemplate renders a Go text/template with the standard mache template functions.
+func RenderTemplate(tmpl string, values map[string]any) (string, error) {
 	t, err := template.New("").Funcs(tmplFuncs).Parse(tmpl)
 	if err != nil {
 		return "", err

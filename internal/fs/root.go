@@ -86,8 +86,8 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 // Readdir lists children of a directory node.
-// Uses explicit offsets for pagination to handle large directories (e.g. 323K NVD entries).
-// Offset layout: 0=start, 1=".", 2="..", 3+i=children[i].
+// Uses auto-mode (offset=0) for all fill() calls — proven 10x faster with
+// fuse-t (NFS transport) because all entries fit in a single NFS response.
 func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
 	// For non-root paths, verify this is actually a directory
 	if path != "/" {
@@ -105,15 +105,16 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		return -fuse.ENOENT
 	}
 
-	// Use offset=0 (auto mode): FUSE manages buffering and pagination internally.
-	// In auto mode, fill() should never return true (per FUSE spec), so we don't
-	// check the return value. This is required for fuse-t compatibility.
-	fill(".", nil, 0)
-	fill("..", nil, 0)
-
-	for _, childID := range children {
-		name := filepath.Base(childID)
-		fill(name, nil, 0)
+	if fill(".", nil, 0) {
+		return 0
+	}
+	if fill("..", nil, 0) {
+		return 0
+	}
+	for _, c := range children {
+		if fill(filepath.Base(c), nil, 0) {
+			break
+		}
 	}
 
 	return 0

@@ -254,12 +254,10 @@ func TestMacheFS_Readdir(t *testing.T) {
 func TestMacheFS_Readdir_AllEntriesReturned(t *testing.T) {
 	mfs := newTestFS()
 
-	// In auto mode (offset=0), readdir should return ALL entries regardless
-	// of fill return value. FUSE manages buffering internally.
 	var entries []string
 	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
 		entries = append(entries, name)
-		return false
+		return false // buffer has space
 	}
 
 	errCode := mfs.Readdir("/vulns", fill, 0, 0)
@@ -274,6 +272,29 @@ func TestMacheFS_Readdir_AllEntriesReturned(t *testing.T) {
 		if entries[i] != w {
 			t.Errorf("entry[%d] = %q, want %q", i, entries[i], w)
 		}
+	}
+}
+
+func TestMacheFS_Readdir_AutoMode_BufferFull(t *testing.T) {
+	mfs := newTestFS()
+
+	// In auto-mode (offset=0), fill returning true means buffer full — we stop early.
+	// Verify we get only the first entry when buffer is immediately full.
+	var entries []string
+	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		if ofst != 0 {
+			t.Errorf("auto-mode should pass offset 0, got %d", ofst)
+		}
+		return true // buffer full after first entry
+	}
+
+	errCode := mfs.Readdir("/vulns", fill, 0, 0)
+	if errCode != 0 {
+		t.Fatalf("Readdir errCode = %v, want 0", errCode)
+	}
+	if len(entries) != 1 || entries[0] != "." {
+		t.Fatalf("entries = %v, want [\".\"]", entries)
 	}
 }
 

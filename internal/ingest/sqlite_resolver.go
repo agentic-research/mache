@@ -42,7 +42,7 @@ func (r *SQLiteResolver) Resolve(ref *graph.ContentRef) ([]byte, error) {
 	}
 
 	values, _ := parsed.(map[string]any)
-	content, err := renderTemplate(ref.Template, values)
+	content, err := RenderTemplate(ref.Template, values)
 	if err != nil {
 		return nil, fmt.Errorf("render template for %s: %w", ref.RecordID, err)
 	}

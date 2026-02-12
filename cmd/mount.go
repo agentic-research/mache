@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/agentic-research/mache/api"
 	machefs "github.com/agentic-research/mache/internal/fs"
@@ -61,40 +62,64 @@ var rootCmd = &cobra.Command{
 			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
-		// 3. Create the Data Store with lazy content resolver
-		store := graph.NewMemoryStore()
-		resolver := ingest.NewSQLiteResolver()
-		defer resolver.Close()
-		store.SetResolver(resolver.Resolve)
+		// 3. Create the Graph backend
+		var g graph.Graph
 
-		// 4. Ingest Data
-		// If data path exists, ingest it.
 		if _, err := os.Stat(dataPath); err == nil {
-			fmt.Printf("Ingesting data from %s...\n", dataPath)
-			engine := ingest.NewEngine(schema, store)
-			if err := engine.Ingest(dataPath); err != nil {
-				return fmt.Errorf("ingestion failed: %w", err)
+			if filepath.Ext(dataPath) == ".db" {
+				// SQLite source: direct read, no ingestion, instant mount
+				fmt.Printf("Opening %s (direct SQL backend)...\n", dataPath)
+				sg, err := graph.OpenSQLiteGraph(dataPath, schema, ingest.RenderTemplate)
+				if err != nil {
+					return fmt.Errorf("open sqlite graph: %w", err)
+				}
+				defer func() { _ = sg.Close() }()
+				g = sg
+			} else {
+				// Non-DB source: use MemoryStore + ingestion pipeline
+				store := graph.NewMemoryStore()
+				resolver := ingest.NewSQLiteResolver()
+				defer resolver.Close()
+				store.SetResolver(resolver.Resolve)
+
+				fmt.Printf("Ingesting data from %s...\n", dataPath)
+				start := time.Now()
+				engine := ingest.NewEngine(schema, store)
+				if err := engine.Ingest(dataPath); err != nil {
+					return fmt.Errorf("ingestion failed: %w", err)
+				}
+				fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+				g = store
 			}
 		} else {
 			if cmd.Flags().Changed("data") {
 				return fmt.Errorf("data path not found: %s", dataPath)
 			}
 			fmt.Printf("No data found at %s, starting empty.\n", dataPath)
+			g = graph.NewMemoryStore()
 		}
 
-		// 5. Create the FS, injecting the Store
-		macheFs := machefs.NewMacheFS(schema, store)
+		// 4. Create the FS, injecting the Graph backend
+		macheFs := machefs.NewMacheFS(schema, g)
 
 		// 6. Host it
 		host := fuse.NewFileSystemHost(macheFs)
+		host.SetCapReaddirPlus(true)
 
 		fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
 
 		// 7. Mount passes control to the library.
+		// nobrowse: hide from Finder sidebar & prevent Spotlight auto-indexing
 		opts := []string{
 			"-o", "ro",
 			"-o", fmt.Sprintf("uid=%d", os.Getuid()),
 			"-o", fmt.Sprintf("gid=%d", os.Getgid()),
+			"-o", "fsname=mache",
+			"-o", "subtype=mache",
+			"-o", "nobrowse",
+			"-o", "entry_timeout=60.0",
+			"-o", "attr_timeout=60.0",
+			"-o", "negative_timeout=60.0",
 		}
 
 		if !host.Mount(mountPoint, opts) {

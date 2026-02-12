@@ -1,0 +1,543 @@
+package graph
+
+import (
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"text/template"
+
+	"github.com/agentic-research/mache/api"
+	_ "modernc.org/sqlite"
+)
+
+// testRenderer is a minimal template renderer matching ingest.RenderTemplate.
+var testTmplFuncs = template.FuncMap{
+	"json": func(v any) string {
+		b, _ := json.Marshal(v)
+		return string(b)
+	},
+	"first": func(v any) any {
+		if s, ok := v.([]any); ok && len(s) > 0 {
+			return s[0]
+		}
+		return nil
+	},
+	"slice": func(s string, start, end int) string {
+		if start < 0 {
+			start = 0
+		}
+		if end > len(s) {
+			end = len(s)
+		}
+		if start >= end {
+			return ""
+		}
+		return s[start:end]
+	},
+}
+
+func testRender(tmpl string, values map[string]any) (string, error) {
+	t, err := template.New("").Funcs(testTmplFuncs).Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, values); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func createTestDB(t *testing.T, records map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.Exec("CREATE TABLE results (id TEXT PRIMARY KEY, record TEXT NOT NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	for id, rec := range records {
+		if _, err := db.Exec("INSERT INTO results (id, record) VALUES (?, ?)", id, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dbPath
+}
+
+func kevSchema() *api.Topology {
+	return &api.Topology{
+		Version: "v1",
+		Nodes: []api.Node{
+			{
+				Name:     "vulns",
+				Selector: "$",
+				Children: []api.Node{
+					{
+						Name:     "{{.item.cveID}}",
+						Selector: "$[*]",
+						Files: []api.Leaf{
+							{Name: "vendor", ContentTemplate: "{{.item.vendorProject}}"},
+							{Name: "product", ContentTemplate: "{{.item.product}}"},
+							{Name: "description", ContentTemplate: "{{.item.shortDescription}}"},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func nvdSchema() *api.Topology {
+	return &api.Topology{
+		Version: "v1",
+		Nodes: []api.Node{
+			{
+				Name:     "by-cve",
+				Selector: "$",
+				Children: []api.Node{
+					{
+						Name:     "{{slice .item.cve.id 4 8}}",
+						Selector: "$[*]",
+						Children: []api.Node{
+							{
+								Name:     "{{.item.cve.id}}",
+								Selector: "$",
+								Files: []api.Leaf{
+									{Name: "description", ContentTemplate: "{{with (index .item.cve.descriptions 0)}}{{.value}}{{end}}"},
+									{Name: "status", ContentTemplate: "{{.item.cve.vulnStatus}}"},
+									{Name: "raw.json", ContentTemplate: "{{. | json}}"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+func TestSQLiteGraph_KEV_ListChildren(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"RCE in Widget"}}`,
+		"CVE-2024-0002": `{"schema":"kev","identifier":"CVE-2024-0002","item":{"cveID":"CVE-2024-0002","vendorProject":"Globex","product":"Gizmo","shortDescription":"SQLi in Gizmo"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	// Root
+	roots, err := g.ListChildren("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 || roots[0] != "vulns" {
+		t.Fatalf("roots = %v, want [vulns]", roots)
+	}
+
+	// vulns directory
+	children, err := g.ListChildren("vulns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 2 {
+		t.Fatalf("vulns children = %v, want 2 entries", children)
+	}
+
+	// CVE directory (files)
+	files, err := g.ListChildren("vulns/CVE-2024-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("CVE files = %v, want 3", files)
+	}
+}
+
+func TestSQLiteGraph_KEV_GetNode(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"RCE in Widget"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	// Directory nodes
+	for _, path := range []string{"vulns", "vulns/CVE-2024-0001"} {
+		node, err := g.GetNode(path)
+		if err != nil {
+			t.Fatalf("GetNode(%q) error: %v", path, err)
+		}
+		if !node.Mode.IsDir() {
+			t.Errorf("GetNode(%q) should be directory", path)
+		}
+	}
+
+	// File node
+	node, err := g.GetNode("vulns/CVE-2024-0001/vendor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Mode.IsDir() {
+		t.Error("vendor should be a file")
+	}
+	if string(node.Data) != "Acme" {
+		t.Errorf("vendor content = %q, want %q", node.Data, "Acme")
+	}
+
+	// Not found
+	_, err = g.GetNode("vulns/CVE-9999-0001")
+	if err != ErrNotFound {
+		t.Errorf("GetNode(missing) err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSQLiteGraph_KEV_ReadContent(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"RCE in Widget"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"vulns/CVE-2024-0001/vendor", "Acme"},
+		{"vulns/CVE-2024-0001/product", "Widget"},
+		{"vulns/CVE-2024-0001/description", "RCE in Widget"},
+	}
+
+	for _, tt := range tests {
+		buf := make([]byte, 1024)
+		n, err := g.ReadContent(tt.path, buf, 0)
+		if err != nil {
+			t.Fatalf("ReadContent(%q) error: %v", tt.path, err)
+		}
+		got := string(buf[:n])
+		if got != tt.want {
+			t.Errorf("ReadContent(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestSQLiteGraph_KEV_ReadContent_WithOffset(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"RCE in Widget"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	buf := make([]byte, 1024)
+	n, err := g.ReadContent("vulns/CVE-2024-0001/vendor", buf, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "me" {
+		t.Errorf("ReadContent with offset = %q, want %q", buf[:n], "me")
+	}
+}
+
+func TestSQLiteGraph_NVD_TemporalSharding(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"nvd","identifier":"CVE-2024-0001","item":{"cve":{"id":"CVE-2024-0001","descriptions":[{"lang":"en","value":"Buffer overflow in FooBar"}],"published":"2024-01-15T00:00:00Z","vulnStatus":"Analyzed"}}}`,
+		"CVE-2024-0002": `{"schema":"nvd","identifier":"CVE-2024-0002","item":{"cve":{"id":"CVE-2024-0002","descriptions":[{"lang":"en","value":"Auth bypass in BazQux"}],"published":"2024-02-01T00:00:00Z","vulnStatus":"Modified"}}}`,
+		"CVE-2023-0001": `{"schema":"nvd","identifier":"CVE-2023-0001","item":{"cve":{"id":"CVE-2023-0001","descriptions":[{"lang":"en","value":"Null deref in Quux"}],"published":"2023-06-01T00:00:00Z","vulnStatus":"Analyzed"}}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, nvdSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	// Root
+	roots, err := g.ListChildren("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 || roots[0] != "by-cve" {
+		t.Fatalf("roots = %v", roots)
+	}
+
+	// Year directories
+	years, err := g.ListChildren("by-cve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(years) != 2 {
+		t.Fatalf("years = %v, want 2", years)
+	}
+
+	// CVEs in 2024
+	cves2024, err := g.ListChildren("by-cve/2024")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cves2024) != 2 {
+		t.Fatalf("2024 CVEs = %v, want 2", cves2024)
+	}
+
+	// CVEs in 2023
+	cves2023, err := g.ListChildren("by-cve/2023")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cves2023) != 1 {
+		t.Fatalf("2023 CVEs = %v, want 1", cves2023)
+	}
+
+	// File content
+	desc, err := g.GetNode("by-cve/2024/CVE-2024-0001/description")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(desc.Data) != "Buffer overflow in FooBar" {
+		t.Errorf("description = %q", desc.Data)
+	}
+
+	status, err := g.GetNode("by-cve/2024/CVE-2024-0001/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(status.Data) != "Analyzed" {
+		t.Errorf("status = %q", status.Data)
+	}
+
+	// Cross-year
+	desc2023, err := g.GetNode("by-cve/2023/CVE-2023-0001/description")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(desc2023.Data) != "Null deref in Quux" {
+		t.Errorf("2023 description = %q", desc2023.Data)
+	}
+}
+
+func TestSQLiteGraph_NVD_RawJSON(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"nvd","identifier":"CVE-2024-0001","item":{"cve":{"id":"CVE-2024-0001","descriptions":[{"lang":"en","value":"test"}],"vulnStatus":"Analyzed"}}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, nvdSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	node, err := g.GetNode("by-cve/2024/CVE-2024-0001/raw.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(node.Data, &parsed); err != nil {
+		t.Fatalf("raw.json is not valid JSON: %v", err)
+	}
+	if parsed["identifier"] != "CVE-2024-0001" {
+		t.Errorf("raw.json identifier = %v", parsed["identifier"])
+	}
+}
+
+func TestSQLiteGraph_LeadingSlashNormalization(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	// All these should work identically
+	for _, path := range []string{"/vulns", "vulns"} {
+		node, err := g.GetNode(path)
+		if err != nil {
+			t.Fatalf("GetNode(%q) error: %v", path, err)
+		}
+		if !node.Mode.IsDir() {
+			t.Errorf("GetNode(%q) should be dir", path)
+		}
+	}
+
+	for _, path := range []string{"/", ""} {
+		children, err := g.ListChildren(path)
+		if err != nil {
+			t.Fatalf("ListChildren(%q) error: %v", path, err)
+		}
+		if len(children) != 1 {
+			t.Errorf("ListChildren(%q) = %v, want 1 root", path, children)
+		}
+	}
+}
+
+func TestSQLiteGraph_NotFound(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	notFoundPaths := []string{
+		"nonexistent",
+		"vulns/CVE-9999-0001",
+		"vulns/CVE-2024-0001/nonexistent",
+	}
+	for _, path := range notFoundPaths {
+		_, err := g.GetNode(path)
+		if err != ErrNotFound {
+			t.Errorf("GetNode(%q) err = %v, want ErrNotFound", path, err)
+		}
+	}
+}
+
+func TestSQLiteGraph_EmptyDB(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	// Root listing works
+	roots, err := g.ListChildren("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("roots = %v", roots)
+	}
+
+	// Schema root exists but has no children
+	children, err := g.ListChildren("vulns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 0 {
+		t.Errorf("vulns should have 0 children, got %v", children)
+	}
+}
+
+func TestSQLiteGraph_Integration_KEV(t *testing.T) {
+	kevDB := os.ExpandEnv("$HOME/.agentic-research/venturi/kev/results/results.db")
+	if _, err := os.Stat(kevDB); os.IsNotExist(err) {
+		t.Skip("venturi KEV database not found")
+	}
+
+	schemaJSON, err := os.ReadFile("../../examples/kev-schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema api.Topology
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := OpenSQLiteGraph(kevDB, &schema, testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	children, err := g.ListChildren("vulns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) < 1000 {
+		t.Errorf("KEV should have >1000 vulns, got %d", len(children))
+	}
+
+	// Spot-check a known CVE
+	if len(children) > 0 {
+		first := children[0]
+		files, err := g.ListChildren(first)
+		if err != nil {
+			t.Fatalf("ListChildren(%q) error: %v", first, err)
+		}
+		if len(files) == 0 {
+			t.Errorf("CVE directory should have files")
+		}
+		fmt.Printf("KEV: %d vulns, first=%s (%d files)\n", len(children), filepath.Base(first), len(files))
+	}
+}
+
+func TestSQLiteGraph_Integration_NVD(t *testing.T) {
+	nvdDB := os.ExpandEnv("$HOME/.agentic-research/venturi/nvd/results/results.db")
+	if _, err := os.Stat(nvdDB); os.IsNotExist(err) {
+		t.Skip("venturi NVD database not found")
+	}
+
+	schemaJSON, err := os.ReadFile("../../examples/nvd-schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema api.Topology
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := OpenSQLiteGraph(nvdDB, &schema, testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	years, err := g.ListChildren("by-cve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("NVD: %d year directories\n", len(years))
+
+	if len(years) > 0 {
+		// Check 2024 has CVEs
+		cves, err := g.ListChildren("by-cve/2024")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("NVD 2024: %d CVEs\n", len(cves))
+
+		// Read a file
+		if len(cves) > 0 {
+			descPath := cves[0] + "/description"
+			buf := make([]byte, 4096)
+			n, err := g.ReadContent(descPath, buf, 0)
+			if err != nil {
+				t.Fatalf("ReadContent(%q) error: %v", descPath, err)
+			}
+			fmt.Printf("NVD first CVE description: %s\n", buf[:n])
+		}
+	}
+}
