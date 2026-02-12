@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,4 +71,154 @@ func TestEngine_IngestJson(t *testing.T) {
 	node, err = store.GetNode("users/Alice/role")
 	require.NoError(t, err)
 	assert.Equal(t, "admin", string(node.Data))
+}
+
+func loadGoSchema(t *testing.T) *api.Topology {
+	t.Helper()
+	data, err := os.ReadFile("../../examples/go-schema.json")
+	require.NoError(t, err)
+	var topo api.Topology
+	require.NoError(t, json.Unmarshal(data, &topo))
+	return &topo
+}
+
+func TestEngine_IngestTreeSitter_GoSchema(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "example.go")
+	err := os.WriteFile(goFile, []byte(`package demo
+
+const MaxRetries = 3
+
+var DefaultName = "world"
+
+type Greeter struct {
+	Name string
+}
+
+type Speaker interface {
+	Speak() string
+}
+
+func Hello() string {
+	return "hello"
+}
+
+func (g *Greeter) Greet() string {
+	return "Hi, " + g.Name
+}
+
+func (g Greeter) String() string {
+	return g.Name
+}
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(goFile))
+
+	// Package directory
+	pkg, err := store.GetNode("demo")
+	require.NoError(t, err)
+	assert.True(t, pkg.Mode.IsDir())
+
+	// Functions
+	fnNode, err := store.GetNode("demo/functions/Hello")
+	require.NoError(t, err)
+	assert.True(t, fnNode.Mode.IsDir())
+
+	fnSource, err := store.GetNode("demo/functions/Hello/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(fnSource.Data), "func Hello()")
+
+	// Methods — pointer receiver
+	methodNode, err := store.GetNode("demo/methods/Greeter.Greet")
+	require.NoError(t, err)
+	assert.True(t, methodNode.Mode.IsDir())
+
+	methodSource, err := store.GetNode("demo/methods/Greeter.Greet/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(methodSource.Data), "func (g *Greeter) Greet()")
+
+	// Methods — value receiver
+	valMethodSource, err := store.GetNode("demo/methods/Greeter.String/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(valMethodSource.Data), "func (g Greeter) String()")
+
+	// Types
+	typeNode, err := store.GetNode("demo/types/Greeter")
+	require.NoError(t, err)
+	assert.True(t, typeNode.Mode.IsDir())
+
+	typeSource, err := store.GetNode("demo/types/Greeter/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(typeSource.Data), "type Greeter struct")
+
+	// Interface type
+	ifaceSource, err := store.GetNode("demo/types/Speaker/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(ifaceSource.Data), "type Speaker interface")
+
+	// Constants
+	constSource, err := store.GetNode("demo/constants/MaxRetries/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(constSource.Data), "MaxRetries")
+
+	// Variables
+	varSource, err := store.GetNode("demo/variables/DefaultName/source")
+	require.NoError(t, err)
+	assert.Contains(t, string(varSource.Data), "DefaultName")
+}
+
+func TestEngine_IngestTreeSitter_MultiFileMerge(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+
+	// First file in package
+	err := os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte(`package shared
+
+func FuncA() {}
+
+type TypeA struct{}
+`), 0o644)
+	require.NoError(t, err)
+
+	// Second file in same package
+	err = os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte(`package shared
+
+func FuncB() {}
+
+type TypeB struct{}
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(tmpDir))
+
+	// Both files contribute to the same package directory
+	pkg, err := store.GetNode("shared")
+	require.NoError(t, err)
+	assert.True(t, pkg.Mode.IsDir())
+
+	// Functions from both files
+	_, err = store.GetNode("shared/functions/FuncA/source")
+	require.NoError(t, err)
+	_, err = store.GetNode("shared/functions/FuncB/source")
+	require.NoError(t, err)
+
+	// Types from both files
+	_, err = store.GetNode("shared/types/TypeA/source")
+	require.NoError(t, err)
+	_, err = store.GetNode("shared/types/TypeB/source")
+	require.NoError(t, err)
+
+	// Functions dir contains both
+	fns, err := store.GetNode("shared/functions")
+	require.NoError(t, err)
+	assert.Contains(t, fns.Children, "shared/functions/FuncA")
+	assert.Contains(t, fns.Children, "shared/functions/FuncB")
 }

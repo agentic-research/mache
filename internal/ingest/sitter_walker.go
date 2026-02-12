@@ -33,6 +33,16 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 		}
 	}
 
+	// "$" is a passthrough selector — returns the root itself with empty values.
+	// Used for grouping nodes (like "functions", "types") that use literal names.
+	if selector == "$" {
+		return []Match{&sitterMatch{
+			values: make(map[string]string),
+			scope:  sr.Node,
+			root:   sr,
+		}}, nil
+	}
+
 	// Compile the query
 	q, err := sitter.NewQuery([]byte(selector), sr.Lang)
 	if err != nil {

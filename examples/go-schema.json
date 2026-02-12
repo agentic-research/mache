@@ -2,16 +2,96 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "functions",
-      "selector": "$",
+      "name": "{{.pkg}}",
+      "selector": "(source_file (package_clause (package_identifier) @pkg)) @scope",
       "children": [
         {
-          "name": "{{.name}}",
-          "selector": "(function_declaration name: (identifier) @name) @scope",
-          "files": [
+          "name": "functions",
+          "selector": "$",
+          "children": [
             {
-              "name": "source",
-              "content_template": "{{.scope}}"
+              "name": "{{.name}}",
+              "selector": "(function_declaration name: (identifier) @name) @scope",
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "methods",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.receiver}}.{{.name}}",
+              "selector": "(method_declaration receiver: (parameter_list (parameter_declaration type: (pointer_type (type_identifier) @receiver))) name: (field_identifier) @name) @scope",
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            },
+            {
+              "name": "{{.receiver}}.{{.name}}",
+              "selector": "(method_declaration receiver: (parameter_list (parameter_declaration type: (type_identifier) @receiver)) name: (field_identifier) @name) @scope",
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "types",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.name}}",
+              "selector": "(type_declaration (type_spec name: (type_identifier) @name)) @scope",
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "constants",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.name}}",
+              "selector": "(const_spec name: (identifier) @name) @scope",
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "variables",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.name}}",
+              "selector": "(var_spec name: (identifier) @name) @scope",
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
             }
           ]
         }
