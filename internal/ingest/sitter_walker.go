@@ -33,6 +33,16 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 		}
 	}
 
+	// "$" is a passthrough selector — returns the root itself with empty values.
+	// Used for grouping nodes (like "functions", "types") that use literal names.
+	if selector == "$" {
+		return []Match{&sitterMatch{
+			values: make(map[string]string),
+			scope:  sr.Node,
+			root:   sr,
+		}}, nil
+	}
+
 	// Compile the query
 	q, err := sitter.NewQuery([]byte(selector), sr.Lang)
 	if err != nil {
@@ -55,6 +65,7 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 
 		// Convert captures to map
 		vals := make(map[string]string)
+		captures := make(map[string]*sitter.Node)
 		var scope *sitter.Node
 
 		for _, c := range m.Captures {
@@ -64,6 +75,9 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 			if name == "scope" {
 				scope = c.Node
 			}
+
+			// Retain the raw sitter node for origin tracking
+			captures[name] = c.Node
 
 			// Extract content from source
 			start := c.Node.StartByte()
@@ -77,9 +91,10 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 			}
 		}
 		matches = append(matches, &sitterMatch{
-			values: vals,
-			scope:  scope,
-			root:   sr,
+			values:   vals,
+			captures: captures,
+			scope:    scope,
+			root:     sr,
 		})
 	}
 
@@ -87,9 +102,19 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 }
 
 type sitterMatch struct {
-	values map[string]string
-	scope  *sitter.Node
-	root   SitterRoot
+	values   map[string]string
+	captures map[string]*sitter.Node // raw nodes for origin tracking
+	scope    *sitter.Node
+	root     SitterRoot
+}
+
+// CaptureOrigin implements OriginProvider.
+func (m *sitterMatch) CaptureOrigin(name string) (uint32, uint32, bool) {
+	n, ok := m.captures[name]
+	if !ok {
+		return 0, 0, false
+	}
+	return n.StartByte(), n.EndByte(), true
 }
 
 // Values implements Match.

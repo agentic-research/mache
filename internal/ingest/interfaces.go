@@ -22,3 +22,9 @@ type Match interface {
 	// For Tree-sitter, this is the node captured as @scope (or similar convention).
 	Context() any
 }
+
+// OriginProvider is an optional interface that Match implementations can satisfy
+// to expose source byte ranges for write-back. Type-asserted in engine, not required by JSON walker.
+type OriginProvider interface {
+	CaptureOrigin(name string) (startByte, endByte uint32, ok bool)
+}

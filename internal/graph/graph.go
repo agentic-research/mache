@@ -17,6 +17,14 @@ type ContentRef struct {
 	ContentLen int64  // Pre-computed rendered byte length
 }
 
+// SourceOrigin tracks the byte range of a construct in its source file.
+// Used by write-back to splice edits into the original source.
+type SourceOrigin struct {
+	FilePath  string
+	StartByte uint32
+	EndByte   uint32
+}
+
 // Node is the universal primitive.
 // The Mode field explicitly declares whether this is a file or directory.
 type Node struct {
@@ -26,6 +34,7 @@ type Node struct {
 	Ref        *ContentRef       // Lazy content reference (large files, nil for inline nodes)
 	Properties map[string][]byte // Metadata / extended attributes
 	Children   []string          // Child node IDs (directories only)
+	Origin     *SourceOrigin     // Source byte range (nil for dirs, JSON, SQLite nodes)
 }
 
 // ContentSize returns the byte length of this node's content,

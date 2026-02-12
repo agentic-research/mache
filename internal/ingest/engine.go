@@ -30,8 +30,9 @@ type IngestionTarget interface {
 
 // Engine drives the ingestion process.
 type Engine struct {
-	Schema *api.Topology
-	Store  IngestionTarget
+	Schema     *api.Topology
+	Store      IngestionTarget
+	sourceFile string // absolute path, set during ingestTreeSitter for origin tracking
 }
 
 // --- Parallel ingestion types ---
@@ -110,7 +111,7 @@ func (e *Engine) ingestJSON(path string) error {
 	}
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, ""); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", ""); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -118,7 +119,11 @@ func (e *Engine) ingestJSON(path string) error {
 }
 
 func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
-	content, err := os.ReadFile(path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return err
 	}
@@ -130,8 +135,11 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 	}
 	walker := NewSitterWalker()
 	root := SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
+	sourceFile := filepath.Base(path)
+	e.sourceFile = absPath
+	defer func() { e.sourceFile = "" }()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, root, ""); err != nil {
+		if err := e.processNode(nodeSchema, walker, root, "", sourceFile); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -336,7 +344,15 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 	}
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath string) error {
+// dedupSuffix returns a ".from_<sanitized>" suffix derived from the source filename.
+// Dots in the filename are replaced with underscores to avoid path separator confusion.
+// e.g., "a.go" -> ".from_a_go"
+func dedupSuffix(sourceFile string) string {
+	sanitized := strings.ReplaceAll(sourceFile, ".", "_")
+	return ".from_" + sanitized
+}
+
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -351,6 +367,19 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// Normalize path
 		currentPath := filepath.Join(parentPath, name)
 		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+
+		// Dedup: when this node has files and a node with the same ID
+		// already exists with file children (i.e., from a different source file),
+		// append a source-file suffix to disambiguate.
+		// This handles cases like multiple init() functions across Go files.
+		if len(schema.Files) > 0 && sourceFile != "" {
+			if existing, err := e.Store.GetNode(id); err == nil && len(existing.Children) > 0 {
+				suffix := dedupSuffix(sourceFile)
+				name = name + suffix
+				currentPath = filepath.Join(parentPath, name)
+				id = strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+			}
+		}
 
 		// Create/Update Node — preserve existing children when merging
 		// multiple files into the same node (e.g. multiple .go files in one package).
@@ -391,7 +420,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile); err != nil {
 					return err
 				}
 			}
@@ -415,6 +444,17 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				ID:   fileId,
 				Mode: 0o444,
 				Data: []byte(content),
+			}
+
+			// Populate Origin from tree-sitter captures for write-back
+			if op, ok := match.(OriginProvider); ok && e.sourceFile != "" {
+				if start, end, ok := op.CaptureOrigin("scope"); ok {
+					fileNode.Origin = &graph.SourceOrigin{
+						FilePath:  e.sourceFile,
+						StartByte: start,
+						EndByte:   end,
+					}
+				}
 			}
 
 			e.Store.AddNode(fileNode)
