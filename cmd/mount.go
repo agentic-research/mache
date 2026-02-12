@@ -67,13 +67,19 @@ var rootCmd = &cobra.Command{
 
 		if _, err := os.Stat(dataPath); err == nil {
 			if filepath.Ext(dataPath) == ".db" {
-				// SQLite source: direct read, no ingestion, instant mount
+				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
 				fmt.Printf("Opening %s (direct SQL backend)...\n", dataPath)
 				sg, err := graph.OpenSQLiteGraph(dataPath, schema, ingest.RenderTemplate)
 				if err != nil {
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}
 				defer func() { _ = sg.Close() }()
+				start := time.Now()
+				fmt.Print("Scanning records...")
+				if err := sg.EagerScan(); err != nil {
+					return fmt.Errorf("scan failed: %w", err)
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
 				g = sg
 			} else {
 				// Non-DB source: use MemoryStore + ingestion pipeline
@@ -102,13 +108,13 @@ var rootCmd = &cobra.Command{
 		// 4. Create the FS, injecting the Graph backend
 		macheFs := machefs.NewMacheFS(schema, g)
 
-		// 6. Host it
+		// 5. Host it
 		host := fuse.NewFileSystemHost(macheFs)
 		host.SetCapReaddirPlus(true)
 
 		fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
 
-		// 7. Mount passes control to the library.
+		// 6. Mount passes control to the library.
 		// nobrowse: hide from Finder sidebar & prevent Spotlight auto-indexing
 		opts := []string{
 			"-o", "ro",

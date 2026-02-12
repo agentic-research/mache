@@ -229,7 +229,7 @@ func TestMacheFS_Readdir(t *testing.T) {
 			var entries []string
 			fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
 				entries = append(entries, name)
-				return false // false = buffer has space, keep sending
+				return true // true = accepted, keep sending
 			}
 
 			errCode := mfs.Readdir(tt.path, fill, 0, 0)
@@ -257,7 +257,7 @@ func TestMacheFS_Readdir_AllEntriesReturned(t *testing.T) {
 	var entries []string
 	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
 		entries = append(entries, name)
-		return false // buffer has space
+		return true // true = accepted, keep sending
 	}
 
 	errCode := mfs.Readdir("/vulns", fill, 0, 0)
@@ -278,7 +278,7 @@ func TestMacheFS_Readdir_AllEntriesReturned(t *testing.T) {
 func TestMacheFS_Readdir_AutoMode_BufferFull(t *testing.T) {
 	mfs := newTestFS()
 
-	// In auto-mode (offset=0), fill returning true means buffer full — we stop early.
+	// In auto-mode (offset=0), fill returning false means buffer full — we stop early.
 	// Verify we get only the first entry when buffer is immediately full.
 	var entries []string
 	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
@@ -286,15 +286,56 @@ func TestMacheFS_Readdir_AutoMode_BufferFull(t *testing.T) {
 		if ofst != 0 {
 			t.Errorf("auto-mode should pass offset 0, got %d", ofst)
 		}
-		return true // buffer full after first entry
+		return false // false = buffer full, stop sending
 	}
 
 	errCode := mfs.Readdir("/vulns", fill, 0, 0)
 	if errCode != 0 {
 		t.Fatalf("Readdir errCode = %v, want 0", errCode)
 	}
-	if len(entries) != 1 || entries[0] != "." {
-		t.Fatalf("entries = %v, want [\".\"]", entries)
+	// "." and ".." are always emitted (return value unchecked, matching cgofuse memfs).
+	// Buffer full kicks in on the first real child, so we get 3 entries.
+	want := []string{".", "..", "CVE-2024-1234"}
+	if len(entries) != len(want) {
+		t.Fatalf("entries = %v, want %v", entries, want)
+	}
+	for i, w := range want {
+		if entries[i] != w {
+			t.Errorf("entry[%d] = %q, want %q", i, entries[i], w)
+		}
+	}
+}
+
+// Regression test: the fill() convention was inverted, causing auto-mode readdir
+// to return only "." and ".." (fill returned true=accepted, old code broke on true).
+// This test ensures ALL children are returned when fill always accepts (returns true).
+func TestMacheFS_Readdir_FillConventionRegression(t *testing.T) {
+	mfs := newTestFS()
+
+	var entries []string
+	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return true // cgofuse: true = accepted, continue
+	}
+
+	errCode := mfs.Readdir("/vulns/CVE-2024-1234", fill, 0, 0)
+	if errCode != 0 {
+		t.Fatalf("Readdir errCode = %v, want 0", errCode)
+	}
+
+	// Must contain all file children, not just "." and ".."
+	if len(entries) < 3 {
+		t.Fatalf("fill convention bug: only got %v — expected at least 3 (., .., + children)", entries)
+	}
+	// Verify specific children are present (not just . and ..)
+	found := make(map[string]bool)
+	for _, e := range entries {
+		found[e] = true
+	}
+	for _, want := range []string{"description", "severity"} {
+		if !found[want] {
+			t.Errorf("missing child %q in entries %v", want, entries)
+		}
 	}
 }
 

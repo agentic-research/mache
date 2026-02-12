@@ -57,8 +57,20 @@ type schemaLevel struct {
 	depth      int
 }
 
+// EagerScan pre-scans all root nodes so no FUSE callback ever blocks on a scan.
+// Call this before mounting — fuse-t's NFS transport times out if a callback takes >2s.
+func (g *SQLiteGraph) EagerScan() error {
+	for _, l := range g.levels {
+		if l.isStatic {
+			if err := g.ensureScanned(l.staticName); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // OpenSQLiteGraph opens a read-only connection to the source DB and compiles the schema.
-// Mount time is instant — no scanning until the first directory access.
 func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	if err != nil {

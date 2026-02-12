@@ -86,8 +86,8 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 // Readdir lists children of a directory node.
-// Uses auto-mode (offset=0) for all fill() calls — proven 10x faster with
-// fuse-t (NFS transport) because all entries fit in a single NFS response.
+// Uses auto-mode (offset=0) — all entries returned in a single pass.
+// cgofuse fill() convention: returns true = accepted, false = buffer full.
 func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
 	// For non-root paths, verify this is actually a directory
 	if path != "/" {
@@ -105,14 +105,11 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		return -fuse.ENOENT
 	}
 
-	if fill(".", nil, 0) {
-		return 0
-	}
-	if fill("..", nil, 0) {
-		return 0
-	}
+	// Auto-mode: offset=0, fill returns true=accepted, false=buffer full
+	fill(".", nil, 0)
+	fill("..", nil, 0)
 	for _, c := range children {
-		if fill(filepath.Base(c), nil, 0) {
+		if !fill(filepath.Base(c), nil, 0) {
 			break
 		}
 	}
