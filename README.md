@@ -55,16 +55,14 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 
 ## Feature Matrix
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| FUSE Bridge (read-only) | **Implemented** | macOS via fuse-t + cgofuse, Linux via libfuse |
-| Declarative Topology Schemas | **Implemented** | JSON schema with Go `text/template` rendering |
-| JSON Ingestion (JSONPath) | **Implemented** | Powered by [ojg/jp](https://github.com/ohler55/ojg) |
-| SQLite Direct Backend | **Implemented** | Zero-copy: mounts `.db` files instantly |
-| Tree-sitter Code Parsing | **Implemented** | Go and Python source files |
-| Schema Inference (FCA) | **Implemented** | `--infer` flag; builds concept lattice from data |
-| Cross-Reference Indexing | **Implemented** | Roaring bitmap inverted index |
-| Write-Back (FUSE writes) | **Implemented** | `--writable` flag; splice edits into source |
+| Capability | Status | Notes |
+| --- | --- | --- |
+| **Graph Filesystem** | **Stable** | FUSE bridge (macOS/Linux) mounts any graph as a directory tree. |
+| **Hybrid SQL Index** | **Active** | In-memory SQLite sidecar for instant, zero-copy queries. |
+| **Plan 9 Interface** | **Live** | Synthetic `ctl` files for executing complex SQL via shell. |
+| **Write-Back** | **Beta** | Edits to the mount splice atomically back into source code. |
+| **Tree-sitter Parsing** | **Active** | Native support for Go and Python ASTs. |
+| **Schema Inference** | **Experimental** | Auto-derives topology using Formal Concept Analysis (FCA). |
 
 ## Quick Start
 
