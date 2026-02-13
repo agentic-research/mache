@@ -3,6 +3,9 @@ package graph
 import (
 	"io/fs"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMemoryStore_AddRootAndGetNode(t *testing.T) {
@@ -197,4 +200,108 @@ func TestMemoryStore_DirAndFileCoexist(t *testing.T) {
 	if string(sevNode.Data) != "CRITICAL\n" {
 		t.Errorf("Data = %q, want %q", sevNode.Data, "CRITICAL\n")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// MemoryStore refs / SQL query tests
+// ---------------------------------------------------------------------------
+
+func TestMemoryStore_FlushRefs_QueryRefs(t *testing.T) {
+	store := NewMemoryStore()
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+
+	// Add refs: 3 tokens across 2 files
+	require.NoError(t, store.AddRef("Println", "pkg/main/source.go"))
+	require.NoError(t, store.AddRef("Println", "pkg/util/helper.go"))
+	require.NoError(t, store.AddRef("Sprintf", "pkg/main/source.go"))
+	require.NoError(t, store.AddRef("ErrorNew", "pkg/util/helper.go"))
+
+	require.NoError(t, store.FlushRefs())
+
+	// Query via mache_refs vtab for a specific token
+	rows, err := store.QueryRefs("SELECT path FROM mache_refs WHERE token = ?", "Println")
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var p string
+		require.NoError(t, rows.Scan(&p))
+		paths = append(paths, p)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Len(t, paths, 2)
+	assert.Contains(t, paths, "pkg/main/source.go")
+	assert.Contains(t, paths, "pkg/util/helper.go")
+}
+
+func TestMemoryStore_VTab_LIKE(t *testing.T) {
+	store := NewMemoryStore()
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+
+	require.NoError(t, store.AddRef("MyComponent", "ui/app.go"))
+	require.NoError(t, store.AddRef("MyHelper", "ui/helper.go"))
+	require.NoError(t, store.AddRef("OtherThing", "pkg/other.go"))
+
+	require.NoError(t, store.FlushRefs())
+
+	rows, err := store.QueryRefs("SELECT path FROM mache_refs WHERE token LIKE ?", "My%")
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var p string
+		require.NoError(t, rows.Scan(&p))
+		paths = append(paths, p)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Len(t, paths, 2)
+	assert.Contains(t, paths, "ui/app.go")
+	assert.Contains(t, paths, "ui/helper.go")
+}
+
+func TestMemoryStore_FlushRefs_Idempotent(t *testing.T) {
+	store := NewMemoryStore()
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+
+	require.NoError(t, store.AddRef("Foo", "a.go"))
+	require.NoError(t, store.FlushRefs())
+	require.NoError(t, store.FlushRefs()) // second call is a no-op
+
+	// Data should still be intact
+	rows, err := store.QueryRefs("SELECT path FROM mache_refs WHERE token = ?", "Foo")
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var p string
+		require.NoError(t, rows.Scan(&p))
+		paths = append(paths, p)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"a.go"}, paths)
+}
+
+func TestMemoryStore_FlushRefs_Empty(t *testing.T) {
+	store := NewMemoryStore()
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+
+	// FlushRefs with no refs added — should succeed without error
+	require.NoError(t, store.FlushRefs())
+}
+
+func TestMemoryStore_QueryRefs_BeforeInit(t *testing.T) {
+	store := NewMemoryStore()
+
+	_, err := store.QueryRefs("SELECT 1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "refsDB not initialized")
 }

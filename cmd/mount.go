@@ -119,6 +119,16 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("ingestion failed: %w", err)
 				}
 				fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+
+				// Enable SQL query support for MemoryStore
+				if err := store.InitRefsDB(); err != nil {
+					return fmt.Errorf("init refs db: %w", err)
+				}
+				defer func() { _ = store.Close() }()
+				if err := store.FlushRefs(); err != nil {
+					fmt.Printf("Warning: refs flush failed: %v\n", err)
+				}
+
 				g = store
 			}
 		} else {
@@ -131,6 +141,13 @@ var rootCmd = &cobra.Command{
 
 		// 4. Create the FS, injecting the Graph backend
 		macheFs := machefs.NewMacheFS(schema, g)
+
+		// Wire up query directory (enables /.query/ magic dir for both backends)
+		if sg, ok := g.(*graph.SQLiteGraph); ok {
+			macheFs.SetQueryFunc(sg.QueryRefs)
+		} else if ms, ok := g.(*graph.MemoryStore); ok {
+			macheFs.SetQueryFunc(ms.QueryRefs)
+		}
 
 		// Wire up write-back if requested (only for MemoryStore + tree-sitter sources)
 		if writable && engine != nil {

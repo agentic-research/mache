@@ -79,13 +79,33 @@ type refsTable struct {
 func (t *refsTable) BestIndex(info *vtab.IndexInfo) error {
 	for i := range info.Constraints {
 		c := &info.Constraints[i]
-		if c.Usable && c.Column == 0 && c.Op == vtab.OpEQ {
+		if !c.Usable || c.Column != 0 {
+			continue
+		}
+		switch c.Op {
+		case vtab.OpEQ:
 			// Token equality lookup — cheap.
 			c.ArgIndex = 0
 			c.Omit = true
 			info.IdxNum = 1
 			info.EstimatedCost = 1
 			info.EstimatedRows = 10
+			return nil
+		case vtab.OpLIKE:
+			// LIKE pattern — SQLite can use PK index for prefix patterns.
+			c.ArgIndex = 0
+			c.Omit = true
+			info.IdxNum = 2
+			info.EstimatedCost = 100
+			info.EstimatedRows = 100
+			return nil
+		case vtab.OpGLOB:
+			// GLOB pattern — same as LIKE but case-sensitive.
+			c.ArgIndex = 0
+			c.Omit = true
+			info.IdxNum = 3
+			info.EstimatedCost = 100
+			info.EstimatedRows = 100
 			return nil
 		}
 	}
@@ -127,17 +147,32 @@ func (c *refsCursor) Filter(idxNum int, idxStr string, vals []vtab.Value) error 
 		return nil // no refsDB yet — return empty
 	}
 
-	if idxNum == 1 {
+	switch idxNum {
+	case 1:
 		// Token equality lookup.
 		token, ok := vals[0].(string)
 		if !ok {
 			return nil
 		}
 		return c.loadToken(db, token)
+	case 2:
+		// LIKE pattern.
+		pattern, ok := vals[0].(string)
+		if !ok {
+			return nil
+		}
+		return c.loadFiltered(db, "LIKE", pattern)
+	case 3:
+		// GLOB pattern.
+		pattern, ok := vals[0].(string)
+		if !ok {
+			return nil
+		}
+		return c.loadFiltered(db, "GLOB", pattern)
+	default:
+		// Full scan: iterate all tokens.
+		return c.loadAll(db)
 	}
-
-	// Full scan: iterate all tokens.
-	return c.loadAll(db)
 }
 
 // loadToken resolves a single token's bitmap into (token, path) rows.
@@ -152,6 +187,44 @@ func (c *refsCursor) loadToken(db *sql.DB, token string) error {
 	}
 
 	return c.expandBitmap(db, token, blob)
+}
+
+// loadFiltered queries tokens matching a LIKE or GLOB pattern and expands
+// their bitmaps. Same materialization pattern as loadAll — collect rows first,
+// close cursor, then expand. SQLite can use the PRIMARY KEY index for prefix
+// patterns (e.g., "Login%").
+func (c *refsCursor) loadFiltered(db *sql.DB, op, pattern string) error {
+	type entry struct {
+		token string
+		blob  []byte
+	}
+
+	query := fmt.Sprintf("SELECT token, bitmap FROM node_refs WHERE token %s ?", op)
+	rows, err := db.Query(query, pattern)
+	if err != nil {
+		return fmt.Errorf("refsvtab: filtered scan (%s %q): %w", op, pattern, err)
+	}
+
+	var entries []entry
+	for rows.Next() {
+		var e entry
+		if err := rows.Scan(&e.token, &e.blob); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("refsvtab: filtered scan rows: %w", err)
+	}
+	_ = rows.Close()
+
+	for _, e := range entries {
+		if err := c.expandBitmap(db, e.token, e.blob); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadAll iterates every row in node_refs and expands all bitmaps.

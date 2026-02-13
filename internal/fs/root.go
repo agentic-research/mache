@@ -1,11 +1,13 @@
 package fs
 
 import (
+	"database/sql"
 	"encoding/json"
 	"hash/fnv"
 	"log"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,6 +50,24 @@ type writeHandle struct {
 	dirty  bool
 }
 
+// queryWriteHandle tracks an in-progress write to a .query/ file.
+type queryWriteHandle struct {
+	name string // query name (base of /.query/<name>)
+	buf  []byte
+}
+
+// queryEntry stores one result row from a query execution.
+type queryEntry struct {
+	name   string // display name: path with "/" → "_"
+	target string // symlink target: "../../" + original_path
+}
+
+// queryResult stores executed query results.
+type queryResult struct {
+	sql     string
+	entries []queryEntry
+}
+
 // MacheFS implements the FUSE interface from cgofuse.
 // It delegates all file/directory decisions to the Graph — no heuristics.
 type MacheFS struct {
@@ -65,23 +85,42 @@ type MacheFS struct {
 
 	// Directory handle cache: Opendir builds the entry list once,
 	// Readdir slices from it, Releasedir frees it.
-	handleMu     sync.Mutex
-	handles      map[uint64]*dirHandle   // fh → directory listing + path
-	writeHandles map[uint64]*writeHandle // fh → write buffer
-	nextHandle   uint64
+	handleMu          sync.Mutex
+	handles           map[uint64]*dirHandle        // fh → directory listing + path
+	writeHandles      map[uint64]*writeHandle      // fh → write buffer
+	queryWriteHandles map[uint64]*queryWriteHandle // fh → query write buffer
+	nextHandle        uint64
+
+	// Query directory support (nil queryFn = feature disabled)
+	queryFn func(string, ...any) (*sql.Rows, error)
+	queryMu sync.RWMutex
+	queries map[string]*queryResult
 }
 
 func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 	sj, _ := json.MarshalIndent(schema, "", "  ")
 	sj = append(sj, '\n')
 	return &MacheFS{
-		Schema:       schema,
-		Graph:        g,
-		schemaJSON:   sj,
-		mountTime:    fuse.NewTimespec(time.Now()),
-		handles:      make(map[uint64]*dirHandle),
-		writeHandles: make(map[uint64]*writeHandle),
+		Schema:            schema,
+		Graph:             g,
+		schemaJSON:        sj,
+		mountTime:         fuse.NewTimespec(time.Now()),
+		handles:           make(map[uint64]*dirHandle),
+		writeHandles:      make(map[uint64]*writeHandle),
+		queryWriteHandles: make(map[uint64]*queryWriteHandle),
 	}
+}
+
+// SetQueryFunc enables the /.query/ magic directory. Pass the SQLiteGraph's
+// QueryRefs method. If never called, /.query is not exposed.
+func (fs *MacheFS) SetQueryFunc(fn func(string, ...any) (*sql.Rows, error)) {
+	fs.queryFn = fn
+	fs.queries = make(map[string]*queryResult)
+}
+
+// isQueryPath returns true if the path is under /.query.
+func (fs *MacheFS) isQueryPath(path string) bool {
+	return fs.queryFn != nil && (path == "/.query" || strings.HasPrefix(path, "/.query/"))
 }
 
 // Open validates that the path is a file node. For writable mounts,
@@ -157,6 +196,10 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return 0
 	}
 
+	if fs.isQueryPath(path) {
+		return fs.queryGetattr(path, stat)
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT
@@ -179,6 +222,10 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 
 // Opendir fetches the directory listing once and caches it by handle.
 func (fs *MacheFS) Opendir(path string) (int, uint64) {
+	if fs.isQueryPath(path) {
+		return fs.queryOpendir(path)
+	}
+
 	if path != "/" {
 		node, err := fs.Graph.GetNode(path)
 		if err != nil {
@@ -194,10 +241,13 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return -fuse.ENOENT, 0
 	}
 
-	entries := make([]string, 0, len(children)+3)
+	entries := make([]string, 0, len(children)+4)
 	entries = append(entries, ".", "..")
 	if path == "/" {
 		entries = append(entries, "_schema.json")
+		if fs.queryFn != nil {
+			entries = append(entries, ".query")
+		}
 	}
 	for _, c := range children {
 		entries = append(entries, filepath.Base(c))
@@ -241,10 +291,13 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		if err != nil {
 			return -fuse.ENOENT
 		}
-		entries := make([]string, 0, len(children)+3)
+		entries := make([]string, 0, len(children)+4)
 		entries = append(entries, ".", "..")
 		if path == "/" {
 			entries = append(entries, "_schema.json")
+			if fs.queryFn != nil {
+				entries = append(entries, ".query")
+			}
 		}
 		for _, c := range children {
 			entries = append(entries, filepath.Base(c))
@@ -305,6 +358,13 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		stat.Mode = fuse.S_IFREG | 0o444
 		stat.Nlink = 1
 		stat.Size = int64(len(fs.schemaJSON))
+		return stat
+	}
+
+	if name == ".query" && fs.queryFn != nil {
+		stat.Ino = pathIno(fullPath)
+		stat.Mode = fuse.S_IFDIR | 0o777
+		stat.Nlink = 2
 		return stat
 	}
 
@@ -369,6 +429,15 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 
 // Write appends/overwrites data in the writeHandle buffer.
 func (fs *MacheFS) Write(path string, buff []byte, ofst int64, fh uint64) int {
+	// Query write handle?
+	fs.handleMu.Lock()
+	qwh, isQuery := fs.queryWriteHandles[fh]
+	fs.handleMu.Unlock()
+	if isQuery {
+		qwh.buf = append(qwh.buf, buff...)
+		return len(buff)
+	}
+
 	fs.handleMu.Lock()
 	wh, ok := fs.writeHandles[fh]
 	fs.handleMu.Unlock()
@@ -421,6 +490,17 @@ func (fs *MacheFS) Flush(path string, fh uint64) int {
 // Release is THE COMMIT POINT for write-back.
 // On close: splice new content into source → goimports → re-ingest → graph updated.
 func (fs *MacheFS) Release(path string, fh uint64) int {
+	// Query write handle? Execute the SQL on close.
+	fs.handleMu.Lock()
+	qwh, isQuery := fs.queryWriteHandles[fh]
+	if isQuery {
+		delete(fs.queryWriteHandles, fh)
+	}
+	fs.handleMu.Unlock()
+	if isQuery {
+		return fs.queryExecute(qwh)
+	}
+
 	fs.handleMu.Lock()
 	wh, ok := fs.writeHandles[fh]
 	if ok {
@@ -465,5 +545,200 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 	// stale data on the next Getattr or Read.
 	fs.Graph.Invalidate(wh.nodeID)
 
+	return 0
+}
+
+// ---------------------------------------------------------------------------
+// Magic /.query/ directory — Plan 9-style: write SQL, get symlink results
+// ---------------------------------------------------------------------------
+
+// queryGetattr handles Getattr for paths under /.query.
+func (fs *MacheFS) queryGetattr(path string, stat *fuse.Stat_t) int {
+	if path == "/.query" {
+		stat.Mode = fuse.S_IFDIR | 0o777
+		stat.Nlink = 2
+		return 0
+	}
+
+	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+	name := parts[0]
+
+	fs.queryMu.RLock()
+	qr, ok := fs.queries[name]
+	fs.queryMu.RUnlock()
+
+	if !ok {
+		return -fuse.ENOENT
+	}
+
+	if len(parts) == 1 {
+		// /.query/<name> — result directory
+		stat.Mode = fuse.S_IFDIR | 0o555
+		stat.Nlink = 2
+		return 0
+	}
+
+	// /.query/<name>/<entry> — symlink
+	entryName := parts[1]
+	for _, e := range qr.entries {
+		if e.name == entryName {
+			stat.Mode = fuse.S_IFLNK | 0o777
+			stat.Nlink = 1
+			stat.Size = int64(len(e.target))
+			return 0
+		}
+	}
+	return -fuse.ENOENT
+}
+
+// queryOpendir handles Opendir for /.query and /.query/<name>.
+func (fs *MacheFS) queryOpendir(path string) (int, uint64) {
+	var entries []string
+
+	if path == "/.query" {
+		entries = []string{".", ".."}
+		fs.queryMu.RLock()
+		for name := range fs.queries {
+			entries = append(entries, name)
+		}
+		fs.queryMu.RUnlock()
+	} else {
+		name := strings.TrimPrefix(path, "/.query/")
+		if strings.Contains(name, "/") {
+			return -fuse.ENOENT, 0
+		}
+		fs.queryMu.RLock()
+		qr, ok := fs.queries[name]
+		fs.queryMu.RUnlock()
+		if !ok {
+			return -fuse.ENOENT, 0
+		}
+		entries = make([]string, 0, len(qr.entries)+2)
+		entries = append(entries, ".", "..")
+		for _, e := range qr.entries {
+			entries = append(entries, e.name)
+		}
+	}
+
+	fs.handleMu.Lock()
+	fh := fs.nextHandle
+	fs.nextHandle++
+	fs.handles[fh] = &dirHandle{path: path, entries: entries}
+	fs.handleMu.Unlock()
+
+	return 0, fh
+}
+
+// Create handles file creation under /.query — allocates a write handle
+// for accumulating SQL. Also handles regular FUSE Create if needed.
+func (fs *MacheFS) Create(path string, flags int, mode uint32) (int, uint64) {
+	if !fs.isQueryPath(path) {
+		return -fuse.EACCES, 0
+	}
+
+	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+	if len(parts) != 1 || parts[0] == "" {
+		return -fuse.EACCES, 0
+	}
+	name := parts[0]
+
+	fs.handleMu.Lock()
+	fh := fs.nextHandle
+	fs.nextHandle++
+	fs.queryWriteHandles[fh] = &queryWriteHandle{name: name}
+	fs.handleMu.Unlock()
+
+	return 0, fh
+}
+
+// queryExecute runs the SQL from a completed query write and stores results.
+func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
+	sqlStr := strings.TrimSpace(string(qwh.buf))
+	if sqlStr == "" {
+		return 0
+	}
+
+	rows, err := fs.queryFn(sqlStr)
+	if err != nil {
+		log.Printf("query: execute %q: %v", qwh.name, err)
+		return -fuse.EIO
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entries []queryEntry
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			continue
+		}
+		// Strip leading slash if present
+		p = strings.TrimPrefix(p, "/")
+		if p == "" {
+			continue
+		}
+		entries = append(entries, queryEntry{
+			name:   strings.ReplaceAll(p, "/", "_"),
+			target: "../../" + p,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("query: rows %q: %v", qwh.name, err)
+	}
+
+	fs.queryMu.Lock()
+	fs.queries[qwh.name] = &queryResult{sql: sqlStr, entries: entries}
+	fs.queryMu.Unlock()
+
+	return 0
+}
+
+// Readlink returns the symlink target for /.query/<name>/<entry>.
+func (fs *MacheFS) Readlink(path string) (int, string) {
+	if !fs.isQueryPath(path) {
+		return -fuse.EINVAL, ""
+	}
+
+	rel := strings.TrimPrefix(path, "/.query/")
+	parts := strings.SplitN(rel, "/", 2)
+	if len(parts) != 2 {
+		return -fuse.EINVAL, ""
+	}
+
+	fs.queryMu.RLock()
+	qr, ok := fs.queries[parts[0]]
+	fs.queryMu.RUnlock()
+	if !ok {
+		return -fuse.ENOENT, ""
+	}
+
+	for _, e := range qr.entries {
+		if e.name == parts[1] {
+			return 0, e.target
+		}
+	}
+	return -fuse.ENOENT, ""
+}
+
+// Unlink removes a stored query result (/.query/<name>).
+func (fs *MacheFS) Unlink(path string) int {
+	if !fs.isQueryPath(path) {
+		return -fuse.EACCES
+	}
+
+	name := strings.TrimPrefix(path, "/.query/")
+	if strings.Contains(name, "/") || name == "" {
+		return -fuse.EACCES
+	}
+
+	fs.queryMu.Lock()
+	_, ok := fs.queries[name]
+	if ok {
+		delete(fs.queries, name)
+	}
+	fs.queryMu.Unlock()
+
+	if !ok {
+		return -fuse.ENOENT
+	}
 	return 0
 }

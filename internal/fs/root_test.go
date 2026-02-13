@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io/fs"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/winfsp/cgofuse/fuse"
+	_ "modernc.org/sqlite"
 )
 
 // newTestFS creates a MacheFS with a pre-populated MemoryStore for testing.
@@ -636,5 +638,354 @@ func TestMacheFS_Readdir_RootPopulatesSchemaStats(t *testing.T) {
 func TestMacheFS_ErrorCodesArePositive(t *testing.T) {
 	if fuse.ENOENT <= 0 {
 		t.Errorf("fuse.ENOENT = %v, expected positive value", fuse.ENOENT)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Magic .query/ directory tests
+// ---------------------------------------------------------------------------
+
+// mockQueryFn simulates SQLiteGraph.QueryRefs by returning canned paths.
+// It uses an in-memory SQLite database with a "paths" table.
+func newMockQueryFn(t *testing.T, paths []string) func(string, ...any) (*sql.Rows, error) {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec("CREATE TABLE paths (path TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range paths {
+		if _, err := db.Exec("INSERT INTO paths VALUES (?)", p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return func(query string, args ...any) (*sql.Rows, error) {
+		// Ignore the user's SQL and always return all paths.
+		return db.Query("SELECT path FROM paths")
+	}
+}
+
+func TestMacheFS_Query_Lifecycle(t *testing.T) {
+	mfs := newTestFS()
+	qfn := newMockQueryFn(t, []string{
+		"vulns/CVE-2024-1234/vendor",
+		"vulns/CVE-2024-5678/severity",
+	})
+	mfs.SetQueryFunc(qfn)
+
+	// 1. Root readdir should include .query
+	t.Run("root_includes_query_dir", func(t *testing.T) {
+		errCode, fh := mfs.Opendir("/")
+		if errCode != 0 {
+			t.Fatalf("Opendir(/) = %v", errCode)
+		}
+		var entries []string
+		mfs.Readdir("/", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+			entries = append(entries, name)
+			return true
+		}, 0, fh)
+		mfs.Releasedir("/", fh)
+
+		found := false
+		for _, e := range entries {
+			if e == ".query" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("root readdir missing .query, got %v", entries)
+		}
+	})
+
+	// 2. Getattr on /.query returns directory
+	t.Run("getattr_query_dir", func(t *testing.T) {
+		var stat fuse.Stat_t
+		errCode := mfs.Getattr("/.query", &stat, 0)
+		if errCode != 0 {
+			t.Fatalf("Getattr(/.query) = %v", errCode)
+		}
+		if stat.Mode&fuse.S_IFDIR == 0 {
+			t.Error(".query should be a directory")
+		}
+	})
+
+	// 3. Create + Write + Release: write SQL to /.query/my_search
+	t.Run("create_write_release", func(t *testing.T) {
+		errCode, fh := mfs.Create("/.query/my_search", 0, 0)
+		if errCode != 0 {
+			t.Fatalf("Create(/.query/my_search) = %v", errCode)
+		}
+
+		sql := []byte("SELECT path FROM mache_refs WHERE token = 'test'")
+		n := mfs.Write("/.query/my_search", sql, 0, fh)
+		if n != len(sql) {
+			t.Fatalf("Write = %v, want %v", n, len(sql))
+		}
+
+		errCode = mfs.Release("/.query/my_search", fh)
+		if errCode != 0 {
+			t.Fatalf("Release = %v", errCode)
+		}
+	})
+
+	// 4. Getattr on /.query/my_search returns directory
+	t.Run("getattr_result_dir", func(t *testing.T) {
+		var stat fuse.Stat_t
+		errCode := mfs.Getattr("/.query/my_search", &stat, 0)
+		if errCode != 0 {
+			t.Fatalf("Getattr(/.query/my_search) = %v", errCode)
+		}
+		if stat.Mode&fuse.S_IFDIR == 0 {
+			t.Error("my_search should be a directory")
+		}
+	})
+
+	// 5. Opendir + Readdir on /.query/my_search lists symlinks
+	t.Run("readdir_result_dir", func(t *testing.T) {
+		errCode, fh := mfs.Opendir("/.query/my_search")
+		if errCode != 0 {
+			t.Fatalf("Opendir(/.query/my_search) = %v", errCode)
+		}
+		var entries []string
+		mfs.Readdir("/.query/my_search", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+			entries = append(entries, name)
+			return true
+		}, 0, fh)
+		mfs.Releasedir("/.query/my_search", fh)
+
+		// Expect: ".", "..", "vulns_CVE-2024-1234_vendor", "vulns_CVE-2024-5678_severity"
+		if len(entries) != 4 {
+			t.Fatalf("got %d entries %v, want 4", len(entries), entries)
+		}
+		expected := map[string]bool{
+			"vulns_CVE-2024-1234_vendor":   false,
+			"vulns_CVE-2024-5678_severity": false,
+		}
+		for _, e := range entries {
+			if _, ok := expected[e]; ok {
+				expected[e] = true
+			}
+		}
+		for name, found := range expected {
+			if !found {
+				t.Errorf("missing entry %q in %v", name, entries)
+			}
+		}
+	})
+
+	// 6. Getattr on symlink entry
+	t.Run("getattr_symlink", func(t *testing.T) {
+		var stat fuse.Stat_t
+		errCode := mfs.Getattr("/.query/my_search/vulns_CVE-2024-1234_vendor", &stat, 0)
+		if errCode != 0 {
+			t.Fatalf("Getattr(symlink) = %v", errCode)
+		}
+		if stat.Mode&fuse.S_IFLNK == 0 {
+			t.Errorf("entry should be a symlink, got mode %o", stat.Mode)
+		}
+	})
+
+	// 7. Readlink on symlink entry
+	t.Run("readlink", func(t *testing.T) {
+		errCode, target := mfs.Readlink("/.query/my_search/vulns_CVE-2024-1234_vendor")
+		if errCode != 0 {
+			t.Fatalf("Readlink = %v", errCode)
+		}
+		want := "../../vulns/CVE-2024-1234/vendor"
+		if target != want {
+			t.Errorf("Readlink target = %q, want %q", target, want)
+		}
+	})
+
+	// 8. Opendir on /.query lists the query name
+	t.Run("readdir_query_root", func(t *testing.T) {
+		errCode, fh := mfs.Opendir("/.query")
+		if errCode != 0 {
+			t.Fatalf("Opendir(/.query) = %v", errCode)
+		}
+		var entries []string
+		mfs.Readdir("/.query", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+			entries = append(entries, name)
+			return true
+		}, 0, fh)
+		mfs.Releasedir("/.query", fh)
+
+		found := false
+		for _, e := range entries {
+			if e == "my_search" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("/.query readdir missing my_search, got %v", entries)
+		}
+	})
+
+	// 9. Unlink removes the query
+	t.Run("unlink", func(t *testing.T) {
+		errCode := mfs.Unlink("/.query/my_search")
+		if errCode != 0 {
+			t.Fatalf("Unlink = %v", errCode)
+		}
+
+		var stat fuse.Stat_t
+		errCode = mfs.Getattr("/.query/my_search", &stat, 0)
+		if errCode != -fuse.ENOENT {
+			t.Errorf("Getattr after Unlink = %v, want ENOENT", errCode)
+		}
+	})
+}
+
+func TestMacheFS_Query_Disabled_Without_SetQueryFunc(t *testing.T) {
+	mfs := newTestFS()
+	// No SetQueryFunc called — .query should not appear
+
+	var stat fuse.Stat_t
+	errCode := mfs.Getattr("/.query", &stat, 0)
+	if errCode != -fuse.ENOENT {
+		t.Errorf("Getattr(/.query) without queryFn = %v, want ENOENT", errCode)
+	}
+
+	// Root readdir should NOT include .query
+	errCode2, fh := mfs.Opendir("/")
+	if errCode2 != 0 {
+		t.Fatalf("Opendir(/) = %v", errCode2)
+	}
+	var entries []string
+	mfs.Readdir("/", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return true
+	}, 0, fh)
+	mfs.Releasedir("/", fh)
+
+	for _, e := range entries {
+		if e == ".query" {
+			t.Error("root readdir should not include .query when queryFn is nil")
+		}
+	}
+}
+
+func TestMacheFS_Query_Create_Outside_Query(t *testing.T) {
+	mfs := newTestFS()
+	qfn := newMockQueryFn(t, nil)
+	mfs.SetQueryFunc(qfn)
+
+	// Create outside .query should fail
+	errCode, _ := mfs.Create("/vulns/nope", 0, 0)
+	if errCode != -fuse.EACCES {
+		t.Errorf("Create outside .query = %v, want EACCES", errCode)
+	}
+}
+
+func TestMacheFS_Query_Unlink_Nonexistent(t *testing.T) {
+	mfs := newTestFS()
+	qfn := newMockQueryFn(t, nil)
+	mfs.SetQueryFunc(qfn)
+
+	errCode := mfs.Unlink("/.query/nonexistent")
+	if errCode != -fuse.ENOENT {
+		t.Errorf("Unlink nonexistent = %v, want ENOENT", errCode)
+	}
+}
+
+// TestMacheFS_Query_MemoryStore tests the full MemoryStore→vtab→.query/ pipeline.
+// Proves that source-code mounts (tree-sitter) get the same SQL query support
+// as SQLiteGraph mounts.
+func TestMacheFS_Query_MemoryStore(t *testing.T) {
+	schema := &api.Topology{Version: "v1alpha1"}
+	store := graph.NewMemoryStore()
+
+	// Build a minimal graph with two files
+	store.AddRoot(&graph.Node{
+		ID:   "pkg",
+		Mode: fs.ModeDir,
+		Children: []string{
+			"pkg/main.go",
+			"pkg/helper.go",
+		},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "pkg/main.go",
+		Mode: 0,
+		Data: []byte("package main\n"),
+	})
+	store.AddNode(&graph.Node{
+		ID:   "pkg/helper.go",
+		Mode: 0,
+		Data: []byte("package main\n"),
+	})
+
+	// Add cross-references (simulating tree-sitter ingestion)
+	_ = store.AddRef("Println", "pkg/main.go")
+	_ = store.AddRef("Println", "pkg/helper.go")
+	_ = store.AddRef("Sprintf", "pkg/main.go")
+
+	// Initialize refs DB and flush
+	if err := store.InitRefsDB(); err != nil {
+		t.Fatalf("InitRefsDB: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.FlushRefs(); err != nil {
+		t.Fatalf("FlushRefs: %v", err)
+	}
+
+	// Wire up MacheFS with MemoryStore's QueryRefs
+	mfs := NewMacheFS(schema, store)
+	mfs.SetQueryFunc(store.QueryRefs)
+
+	// 1. Create a query file and write SQL
+	errCode, fh := mfs.Create("/.query/println_refs", 0, 0)
+	if errCode != 0 {
+		t.Fatalf("Create = %v", errCode)
+	}
+
+	sqlBytes := []byte("SELECT path FROM mache_refs WHERE token = 'Println'")
+	n := mfs.Write("/.query/println_refs", sqlBytes, 0, fh)
+	if n != len(sqlBytes) {
+		t.Fatalf("Write = %v, want %v", n, len(sqlBytes))
+	}
+
+	// 2. Release triggers query execution
+	errCode = mfs.Release("/.query/println_refs", fh)
+	if errCode != 0 {
+		t.Fatalf("Release = %v", errCode)
+	}
+
+	// 3. Readdir on result directory should list symlinks
+	errCode, fh = mfs.Opendir("/.query/println_refs")
+	if errCode != 0 {
+		t.Fatalf("Opendir(/.query/println_refs) = %v", errCode)
+	}
+	var entries []string
+	mfs.Readdir("/.query/println_refs", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return true
+	}, 0, fh)
+	mfs.Releasedir("/.query/println_refs", fh)
+
+	// Should have ".", "..", plus 2 symlink entries for the 2 files
+	if len(entries) != 4 {
+		t.Fatalf("got %d entries %v, want 4", len(entries), entries)
+	}
+
+	// 4. Readlink on a result entry should point back to the graph
+	expected := map[string]string{
+		"pkg_main.go":   "../../pkg/main.go",
+		"pkg_helper.go": "../../pkg/helper.go",
+	}
+	for name, wantTarget := range expected {
+		errCode, target := mfs.Readlink("/.query/println_refs/" + name)
+		if errCode != 0 {
+			t.Errorf("Readlink(%s) = %v", name, errCode)
+			continue
+		}
+		if target != wantTarget {
+			t.Errorf("Readlink(%s) target = %q, want %q", name, target, wantTarget)
+		}
 	}
 }

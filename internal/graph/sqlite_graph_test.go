@@ -974,6 +974,54 @@ func TestSQLiteGraph_VTab_MacheRefs(t *testing.T) {
 		assert.False(t, hasRow)
 	})
 
+	t.Run("like_query", func(t *testing.T) {
+		rows, err := g.QueryRefs("SELECT token, path FROM mache_refs WHERE token LIKE ?", "My%")
+		require.NoError(t, err)
+
+		type ref struct{ token, path string }
+		var refs []ref
+		for rows.Next() {
+			var r ref
+			require.NoError(t, rows.Scan(&r.token, &r.path))
+			refs = append(refs, r)
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+
+		// "MyFunc" matches "My%", "Other" does not
+		assert.Len(t, refs, 2)
+		for _, r := range refs {
+			assert.Equal(t, "MyFunc", r.token)
+		}
+	})
+
+	t.Run("glob_query", func(t *testing.T) {
+		rows, err := g.QueryRefs("SELECT token, path FROM mache_refs WHERE token GLOB ?", "Other*")
+		require.NoError(t, err)
+
+		type ref struct{ token, path string }
+		var refs []ref
+		for rows.Next() {
+			var r ref
+			require.NoError(t, rows.Scan(&r.token, &r.path))
+			refs = append(refs, r)
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+
+		assert.Len(t, refs, 1)
+		assert.Equal(t, "Other", refs[0].token)
+		assert.Equal(t, "vulns/CVE-2024-0001/vendor", refs[0].path)
+	})
+
+	t.Run("like_no_match", func(t *testing.T) {
+		rows, err := g.QueryRefs("SELECT path FROM mache_refs WHERE token LIKE ?", "ZZZ%")
+		require.NoError(t, err)
+		hasRow := rows.Next()
+		_ = rows.Close()
+		assert.False(t, hasRow)
+	})
+
 	t.Run("full_scan", func(t *testing.T) {
 		rows, err := g.QueryRefs("SELECT token, path FROM mache_refs")
 		require.NoError(t, err)
