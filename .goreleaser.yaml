@@ -7,20 +7,38 @@ before:
     - go mod tidy
 
 builds:
-  - id: mache
+  - id: linux-build
     binary: mache
-    env:
-      - CGO_ENABLED=1
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
-      - arm64
+    env:
+      - CGO_ENABLED=1
     flags:
       - -trimpath
     ldflags:
       - -s -w
+
+  - id: macos-build
+    binary: mache
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      # Point to where the CI workflow will install fuse-t
+      - CGO_CFLAGS=-I/usr/local/include/fuse-t
+      - CGO_LDFLAGS=-L/usr/local/lib -lfuse-t -Wl,-rpath,/usr/local/lib
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    hooks:
+      # Sign the binary after build
+      post: codesign -s - --force --deep --entitlements entitlements.plist "{{ .Path }}"
 
 archives:
   - format: tar.gz
@@ -34,6 +52,23 @@ archives:
     files:
       - README.md
       - LICENSE
+
+brews:
+  - repository:
+      owner: agentic-research
+      name: homebrew-tap
+      token: "{{ .Env.GITHUB_TOKEN }}"
+
+    # Formula name
+    name: mache
+
+    homepage: "https://github.com/agentic-research/mache"
+    description: "The Graph-Native Filesystem"
+    license: "Apache-2.0"
+
+    # Test to run after installation
+    test: |
+      system "#{bin}/mache --version"
 
 checksum:
   name_template: 'checksums.txt'
