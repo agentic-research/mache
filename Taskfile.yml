@@ -51,7 +51,7 @@ tasks:
     desc: Run all tests
     deps: [check-fuse-t]
     cmds:
-      - go test -v ./...
+      - go test -race -gcflags=all=-d=checkptr=0 -v ./...
 
   test-coverage:
     desc: Run tests with coverage
