@@ -14,6 +14,7 @@ import (
 var (
 	once      sync.Once
 	singleton *RefsModule
+	initErr   error
 )
 
 // RefsModule implements vtab.Module. It is a process-wide singleton because
@@ -27,15 +28,16 @@ type RefsModule struct {
 // Register registers the mache_refs module with the global SQLite driver.
 // Safe to call multiple times — only the first call registers. Returns the
 // singleton so callers can set the refsDB pointer via SetRefsDB.
-func Register() *RefsModule {
+func Register() (*RefsModule, error) {
 	once.Do(func() {
 		singleton = &RefsModule{}
 		// db parameter is unused by the engine; pass nil.
 		if err := vtab.RegisterModule(nil, "mache_refs", singleton); err != nil {
-			panic(fmt.Sprintf("refsvtab: register module: %v", err))
+			initErr = fmt.Errorf("refsvtab: register module: %w", err)
+			singleton = nil
 		}
 	})
-	return singleton
+	return singleton, initErr
 }
 
 // SetRefsDB updates the sidecar database pointer. Must be called after
@@ -209,7 +211,7 @@ func (c *refsCursor) loadFiltered(db *sql.DB, op, pattern string) error {
 	for rows.Next() {
 		var e entry
 		if err := rows.Scan(&e.token, &e.blob); err != nil {
-			continue
+			continue // scan failure on a single row; remaining rows may still be valid
 		}
 		entries = append(entries, e)
 	}
@@ -247,7 +249,7 @@ func (c *refsCursor) loadAll(db *sql.DB) error {
 	for rows.Next() {
 		var e entry
 		if err := rows.Scan(&e.token, &e.blob); err != nil {
-			continue
+			continue // scan failure on a single row; remaining rows may still be valid
 		}
 		entries = append(entries, e)
 	}
@@ -299,7 +301,7 @@ func (c *refsCursor) expandBitmap(db *sql.DB, token string, blob []byte) error {
 	for rows.Next() {
 		var path string
 		if err := rows.Scan(&path); err != nil {
-			continue
+			continue // scan failure on a single row; remaining rows may still be valid
 		}
 		c.rows = append(c.rows, refsRow{token: token, path: path})
 	}

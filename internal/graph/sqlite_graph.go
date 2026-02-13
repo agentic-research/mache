@@ -136,7 +136,11 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	// Register the mache_refs vtab module globally before opening refsDB.
 	// sql.Open is lazy (no connection until first query), so registering
 	// before the first Exec ensures the new connection sees the module.
-	refsMod := refsvtab.Register()
+	refsMod, err := refsvtab.Register()
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 
 	refsDB, err := sql.Open("sqlite", refsPath)
 	if err != nil {
@@ -463,6 +467,7 @@ func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
 	for rows.Next() {
 		var path string
 		if err := rows.Scan(&path); err != nil {
+			log.Printf("GetCallers: skip row scan: %v", err)
 			continue
 		}
 		// Return lightweight node — content resolved on demand by FUSE Read.

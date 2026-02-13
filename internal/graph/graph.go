@@ -298,7 +298,10 @@ func (s *MemoryStore) InitRefsDB() error {
 		return nil
 	}
 
-	refsMod := refsvtab.Register()
+	refsMod, err := refsvtab.Register()
+	if err != nil {
+		return err
+	}
 
 	// Use a temp file (not :memory:) because the vtab's xFilter runs inside
 	// the SQLite engine on the outer connection and needs a SECOND pool

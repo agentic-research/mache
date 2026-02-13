@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -342,6 +343,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
+				log.Printf("collectNodes: skip file name render %q: %v", fileSchema.Name, err)
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
@@ -349,6 +351,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 
 			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
+				log.Printf("collectNodes: skip file content render %q: %v", fileId, err)
 				continue
 			}
 
@@ -478,6 +481,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
+				log.Printf("processNode: skip file name render %q: %v", fileSchema.Name, err)
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
@@ -485,6 +489,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
+				log.Printf("processNode: skip file content render %q: %v", fileId, err)
 				continue
 			}
 
