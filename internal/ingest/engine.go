@@ -511,10 +511,12 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	for _, match := range matches {
 		// Skip self-match if requested (e.g. for recursive schemas to avoid infinite loops)
 		if schema.SkipSelfMatch {
-			// Check for Tree-sitter node equality
+			// Check for Tree-sitter node equality using byte ranges
 			if parentRoot, ok := ctx.(SitterRoot); ok {
 				if childCtx, ok := match.Context().(SitterRoot); ok {
-					if parentRoot.Node == childCtx.Node {
+					if parentRoot.Node.StartByte() == childCtx.Node.StartByte() &&
+						parentRoot.Node.EndByte() == childCtx.Node.EndByte() &&
+						parentRoot.Node.Type() == childCtx.Node.Type() {
 						continue
 					}
 				}

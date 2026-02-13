@@ -15,6 +15,7 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lattice"
 	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/sql"
@@ -144,6 +145,19 @@ var rootCmd = &cobra.Command{
 				} else {
 					parser := sitter.NewParser()
 					parser.SetLanguage(python.GetLanguage())
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".go":
+				fmt.Print("Inferring schema from Go source via Tree-sitter...")
+				start := time.Now()
+				content, readErr := os.ReadFile(dataPath)
+				if readErr != nil {
+					err = readErr
+				} else {
+					parser := sitter.NewParser()
+					parser.SetLanguage(golang.GetLanguage())
 					tree, _ := parser.ParseCtx(context.Background(), nil, content)
 					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
 				}
