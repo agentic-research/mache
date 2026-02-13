@@ -10,123 +10,40 @@ Mache projects structured data and source code into navigable, read-only filesys
 
 - [Status](#status)
 - [Feature Matrix](#feature-matrix)
-- [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
+  - [Example: NVD Vulnerability Database](#example-nvd-vulnerability-database)
+  - [Example: Projecting JSON Data](#example-projecting-json-data)
+  - [Example: Projecting Source Code](#example-projecting-source-code)
   - [Write-Back Mode](#write-back-mode)
-- [Architecture](#architecture)
-  - [Write-Commit-Reparse Pipeline](#write-commit-reparse-pipeline)
-- [Roadmap](#roadmap)
-  - [Construct Creation via FUSE](#near-term-construct-creation-via-fuse)
-  - [Cross-File References](#near-term-cross-file-references-callersusages)
-  - [Key File Reference](#key-file-reference)
-- [Development](#development)
-- [License](#license)
+- [How It Works](#how-it-works)
+- [Documentation](#documentation)
 - [Contributing](#contributing)
-- [Related Work](#related-work)
+- [License](#license)
 
 ## Status
 
-Mache is in **early development**. The core pipeline (schema + ingestion + FUSE mount) works end-to-end across multiple data sources. See the [Feature Matrix](#feature-matrix) below for current status.
+Mache is in **early development**. The core pipeline (schema + ingestion + FUSE mount) works end-to-end across multiple data sources.
 
 ## Feature Matrix
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| FUSE Bridge (read-only) | **Implemented** | macOS via fuse-t + cgofuse, Linux via libfuse; handle-based readdir with auto-mode |
-| Declarative Topology Schemas | **Implemented** | JSON schema with Go `text/template` rendering; supports arbitrary nesting depth |
+| FUSE Bridge (read-only) | **Implemented** | macOS via fuse-t + cgofuse, Linux via libfuse |
+| Declarative Topology Schemas | **Implemented** | JSON schema with Go `text/template` rendering |
 | JSON Ingestion (JSONPath) | **Implemented** | Powered by [ojg/jp](https://github.com/ohler55/ojg) |
-| SQLite Direct Backend | **Implemented** | Zero-copy: mounts `.db` files instantly, reads records on demand via primary key lookup |
-| SQLite Ingestion (MemoryStore) | **Implemented** | Bulk-loads `.db` records into in-memory graph for smaller datasets |
-| Tree-sitter Code Parsing | **Implemented** | Go and Python source files; captures functions, methods, types, constants, variables, imports |
-| In-Memory Graph Store | **Implemented** | `sync.RWMutex`-backed map, suitable for small datasets |
-| NVD Schema (`examples/nvd-schema.json`) | **Included** | 323K CVE records sharded by year/month over the SQLite direct backend |
-| KEV Schema (`examples/kev-schema.json`) | **Included** | CISA Known Exploited Vulnerabilities catalog |
-| Go Source Schema (`examples/go-schema.json`) | **Included** | Functions, methods, types, constants, variables, imports; same-name dedup (e.g. multiple `init()`) |
-| Schema Inference (FCA) | **Implemented** | `--infer` flag; reservoir-samples records, builds concept lattice, projects topology automatically |
-| Cross-Reference Indexing | **Implemented** | Roaring bitmap inverted index; token → file ID lookups for callers/usages |
-| Virtual `_schema.json` | **Implemented** | Exposes active topology schema as a virtual file at the FUSE mount root |
-| Write-Back (FUSE writes) | **Implemented** | `--writable` flag; splice edits into source, run goimports, re-ingest. Tree-sitter sources only |
-| Content-Addressed Storage (CAS) | **Ideated** | Described in ADR-0003; no code exists |
-| Layered Overlays (Docker-style) | **Ideated** | Composable data views; no code exists |
-| SQLite Virtual Tables | **Ideated** | Complex queries beyond fs navigation; described in ADR-0004 |
-| MVCC Memory Ledger | **Ideated** | Wait-free reads, mmap-backed; described in ADR-0004 |
-
-### Legend
-
-- **Implemented** — Working code with tests
-- **Included** — Ready-to-use example schema in `examples/`
-- **Stubbed** — Interface/types exist but implementation is partial or placeholder
-- **Ideated** — Described in an ADR or design doc; no code yet
-
-## How It Works
-
-```
- Schema (JSON)         Data Source
- ┌─────────────┐      ┌──────────────────────────────────────┐
- │ topology:    │      │ .db (SQLite)  │ .json   │ .go / .py │
- │   nodes:     │      └───────┬───────┴────┬────┴─────┬─────┘
- │     ...      │              │            │          │
- └──────┬───────┘              │     ┌──────┴──────────┘
-        │              ┌───────┘     │
-        ▼              ▼             ▼
- ┌──────────────┐  ┌─────────────────────────────┐
- │ SQLiteGraph  │  │     Ingestion Engine        │
- │ (zero-copy)  │  │  Walker interface:          │
- │ Direct SQL   │  │   - JsonWalker (JSONPath)   │
- │ queries on   │  │   - SitterWalker (AST)      │
- │ source DB    │  │   - SQLite loader           │
- └──────┬───────┘  └──────────────┬──────────────┘
-        │                         ▼
-        │          ┌─────────────────────────────┐
-        │          │   Graph (MemoryStore)       │
-        │          │   Node { ID, Mode, Data,   │
-        │          │          Children }         │
-        │          └──────────────┬──────────────┘
-        │                        │
-        └────────┬───────────────┘
-                 ▼
-      ┌─────────────────────────────────┐
-      │   FUSE Bridge (cgofuse)         │
-      │   ls / cat / grep / find        │
-      └─────────────────────────────────┘
-```
-
-There are two data paths depending on the source:
-
-1. **SQLite direct (`.db` files)** — `SQLiteGraph` queries the source database directly. A one-pass scan builds the directory tree (~4s for 323K records), then content is resolved on demand via primary key lookup. No data is copied.
-2. **Ingestion (`.json`, `.go`, `.py`)** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`.
-
-Both paths are fronted by the same `Graph` interface and `FUSE Bridge`. A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
-
-With `--infer`, the schema itself can be derived automatically: the `lattice` package reservoir-samples records from a SQLite source, builds a Formal Concept Analysis lattice, and projects it into a valid `Topology` — detecting identifier fields, temporal shard levels, and leaf files without any hand-authored schema.
+| SQLite Direct Backend | **Implemented** | Zero-copy: mounts `.db` files instantly |
+| Tree-sitter Code Parsing | **Implemented** | Go and Python source files |
+| Schema Inference (FCA) | **Implemented** | `--infer` flag; builds concept lattice from data |
+| Cross-Reference Indexing | **Implemented** | Roaring bitmap inverted index |
+| Write-Back (FUSE writes) | **Implemented** | `--writable` flag; splice edits into source |
 
 ## Quick Start
 
 ### Prerequisites
 
-**macOS (Apple Silicon/Intel):**
-```bash
-# Install fuse-t (userspace FUSE, no kernel extensions required)
-brew install --cask fuse-t
-
-# Install Task (build tool)
-brew install go-task
-```
-
-**Linux:**
-```bash
-# Install FUSE development headers
-# Ubuntu/Debian:
-sudo apt-get install libfuse-dev
-
-# Fedora/RHEL:
-sudo dnf install fuse-devel
-
-# Install Task
-brew install go-task
-# or: go install github.com/go-task/task/v3/cmd/task@latest
-```
+- **macOS:** `brew install --cask fuse-t` and `brew install go-task`
+- **Linux:** `apt-get install libfuse-dev` and [install Task](https://taskfile.dev/installation/)
 
 ### Building
 
@@ -139,22 +56,6 @@ task build
 
 # Run tests
 task test
-
-# See all available tasks
-task --list
-```
-
-### Using Plain Go Commands
-
-If you prefer not to use Task, set CGO flags manually on macOS:
-
-```bash
-# macOS only
-export CGO_CFLAGS="-I/Library/Frameworks/fuse_t.framework/Versions/Current/Headers"
-export CGO_LDFLAGS="-F/Library/Frameworks -framework fuse_t -Wl,-rpath,/Library/Frameworks"
-
-go build
-go test ./...
 ```
 
 ## Usage
@@ -166,44 +67,9 @@ go test ./...
 # Mount with zero-config schema inference (no schema authoring needed)
 ./mache --infer --data results.db /tmp/nvd
 
-# Infer schema and save it for hand-tuning
-./mache --infer --data results.db --schema inferred.json /tmp/nvd
-
 # Mount a JSON file (ingests into memory)
 ./mache --schema schema.json --data data.json /tmp/mount
-
-# Flags:
-#   -s, --schema     Path to topology schema (default: ~/.mache/mache.json)
-#   -d, --data       Path to data source file or directory (default: ~/.mache/data.json)
-#   -w, --writable   Enable write-back (splice edits into source files)
-#       --infer      Auto-infer schema from data via Formal Concept Analysis
 ```
-
-### Write-Back Mode
-
-With `--writable`, file nodes backed by tree-sitter source code become editable. When you write to a file and close it, mache:
-
-1. **Splices** the new content into the original source file at the exact byte range
-2. **Runs `goimports`** to fix imports and formatting (failure-tolerant)
-3. **Re-ingests** the source file so all graph nodes get fresh byte ranges
-
-```bash
-# Mount Go source with write-back enabled
-./mache -w -s examples/go-schema.json -d . /tmp/mache-src
-
-# Read a function
-cat /tmp/mache-src/ingest/functions/NewEngine/source
-
-# Edit it (via echo, editor, or AI agent)
-echo 'func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
-    return &Engine{Schema: schema, Store: store}
-}' > /tmp/mache-src/ingest/functions/NewEngine/source
-
-# The source file is now updated
-grep -A3 'func NewEngine' internal/ingest/engine.go
-```
-
-Only tree-sitter-backed nodes (`.go`, `.py`) support writes. JSON and SQLite nodes remain read-only. Nodes without write support report `0444` permissions; writable nodes report `0644`.
 
 ### Example: NVD Vulnerability Database
 
@@ -223,247 +89,49 @@ Mount 323K NVD CVE records as a browsable filesystem, sharded by year and month:
         CVE-2024-0001/
           description   # "A buffer overflow in FooBar..."
           published     # "2024-01-15T00:00:00Z"
-          status        # "Analyzed"
           raw.json      # Full JSON record
-        CVE-2024-0002/
-        ...
-      02/
-      ...
-    2023/
-      ...
-```
-
-The schema that produces this structure (`examples/nvd-schema.json`) uses `slice` to extract year and month from the published date:
-
-```json
-{
-  "name": "{{slice .item.cve.published 0 4}}",
-  "selector": "$[*]",
-  "children": [{
-    "name": "{{slice .item.cve.published 5 7}}",
-    "selector": "$",
-    "children": [{
-      "name": "{{.item.cve.id}}",
-      "selector": "$",
-      "files": [...]
-    }]
-  }]
-}
 ```
 
 ### Example: Projecting JSON Data
 
-Given a `data.json`:
-```json
-{
-  "users": [
-    {"name": "Alice", "role": "admin"},
-    {"name": "Bob", "role": "user"}
-  ]
-}
-```
-
-And a `schema.json`:
-```json
-{
-  "version": "v1",
-  "nodes": [
-    {
-      "name": "users",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "users[*]",
-          "files": [
-            {
-              "name": "role",
-              "content_template": "{{.role}}"
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
-
-Produces the filesystem:
-```
-/mountpoint/
-  users/
-    Alice/
-      role        # contains "admin"
-    Bob/
-      role        # contains "user"
-```
+Given a `data.json` with users, you can project it into a `users/` directory where each file contains specific fields.
 
 ### Example: Projecting Source Code
 
-The ingestion engine auto-detects `.go` and `.py` files and uses tree-sitter for parsing. A schema can use tree-sitter query syntax as selectors:
+Mache auto-detects `.go` and `.py` files. Use tree-sitter queries in your schema to map AST nodes (functions, types) to directories.
 
-```json
-{
-  "nodes": [
-    {
-      "name": "{{.name}}",
-      "selector": "(function_declaration name: (identifier) @name body: (block) @scope)"
-    }
-  ]
-}
-```
+### Write-Back Mode
 
-Captures named `@scope` define the recursion context for child nodes.
-
-## Architecture
-
-### Core Abstractions
-
-- **`Walker` interface** — Abstracts over query engines. `JsonWalker` uses JSONPath; `SitterWalker` uses tree-sitter AST queries. Both return `Match` results with captured values and optional recursion context.
-- **`Graph` interface** — Read-only access to the node store (`GetNode`, `ListChildren`, `ReadContent`). Two implementations:
-  - **`MemoryStore`** — In-memory map for small datasets (JSON files, source code).
-  - **`SQLiteGraph`** — Direct SQL backend for `.db` sources. One-pass parallel scan builds the directory tree; content resolved on demand via primary key lookup and template rendering. No data copied.
-- **`Engine`** — Drives ingestion: walks files, dispatches to walkers, renders templates, builds the graph. Tracks source file paths for origin-aware nodes. Deduplicates same-name constructs (e.g. multiple `init()`) by appending `.from_<filename>` suffixes.
-- **`MacheFS`** — FUSE implementation via cgofuse. Handle-based readdir with auto-mode for fuse-t compatibility. Extended cache timeouts (300s) for NFS performance. Supports both read-only and writable mounts.
-
-### Write-Commit-Reparse Pipeline
-
-When `--writable` is enabled, the FUSE layer supports writing to tree-sitter-backed file nodes:
-
-```
-Agent opens file → FUSE writeHandle buffers → Agent closes file →
-  Splice into source → goimports → Re-ingest file → Graph updated
-```
-
-Key types:
-- **`SourceOrigin`** (`graph.go`) — Tracks `FilePath`, `StartByte`, `EndByte` for each file node's position in its source.
-- **`OriginProvider`** (`interfaces.go`) — Optional interface on `Match` to expose byte ranges from tree-sitter captures.
-- **`Splice`** (`writeback/splice.go`) — Pure function: atomically replaces a byte range in a source file (temp file + rename).
-- **`writeHandle`** (`fs/root.go`) — Per-open-file buffer. Dirty handles trigger splice → goimports → re-ingest on `Release`.
-
-Re-ingestion after each write ensures all byte offsets stay correct — tree-sitter recalculates everything, so no manual offset math is needed.
-
-### ADRs
-
-| ADR | Status | Summary |
-|-----|--------|---------|
-| [0001: User-Space FUSE Bridge](docs/adr/0001-user-space-fuse-bridge.md) | Accepted | fuse-t + cgofuse for macOS (no kexts) |
-| [0002: Declarative Topology Schema](docs/adr/0002-declarative-topology-schema.md) | Accepted | Schema-driven ingestion with Go templates |
-| [0003: CAS & Layered Overlays](docs/adr/0003-cas-layered-overlays.md) | Proposed | Content-Addressed Storage and Docker-style layers (ideated) |
-| [0004: MVCC Memory Ledger](docs/adr/0004-mvcc-memory-ledger.md) | Proposed | ECS + mmap + RCU for 10M+ entities (ideated) |
-| [0005: FCA Schema Inference](docs/adr/0005-fca-schema-inference.md) | Proposed | NextClosure on sampled records, bitmap-accelerated lattice → topology |
-
-## Roadmap
-
-### Current State (as of Feb 2026)
-
-**What's landed:**
-- Schema-driven ingestion for JSON, SQLite, Go, Python sources
-- Two graph backends: `MemoryStore` (in-memory map) and `SQLiteGraph` (zero-copy SQL)
-- FUSE bridge with read + write support (tree-sitter sources only)
-- Write-commit-reparse: splice → goimports → re-ingest on file close
-- Go schema captures: functions, methods, types, constants, variables, imports
-- Init dedup: same-name constructs get `.from_<filename>` suffixes (`engine.go:dedupSuffix`)
-- Parallel SQLite ingestion: 323K NVD records in ~6s (worker pool in `engine.go:ingestSQLiteStreaming`)
-- FCA schema inference: `--infer` auto-generates topology from data via Formal Concept Analysis (~33ms for 1.5K KEV records)
-- Cross-reference indexing: roaring bitmap inverted index for token → file lookups
-- Virtual `_schema.json` at mount root exposing the active topology
-
-**Known limitations:**
-- fuse-t NFS translation bottleneck: ~8s for `ls` on 30K+ entry dirs (cookie verifier invalidation)
-- Memory: ~2GB peak for 323K NVD records (1.6M graph nodes with string IDs)
-- Write-back is Go-only (Python tree-sitter captures exist but no goimports equivalent wired)
-- No offset-based readdir pagination (fuse-t requires auto-mode, see `fs/root.go:Readdir`)
-
-### Near-Term: Construct Creation via FUSE
-
-**Problem:** You can edit existing nodes but not create new ones. `mkdir {pkg}/functions/NewFunc` doesn't work.
-
-**What exists:** `SourceOrigin` (`graph.go`) tracks which file owns each construct. The engine knows all files per package. `MacheFS` already has `writeHandle` tracking in `fs/root.go`.
-
-**What's needed:** A `Mkdir` + `Create` FUSE handler in `fs/root.go` that:
-1. Resolves the parent node's `SourceOrigin.FilePath` to find the target source file
-2. Generates a stub from a template (e.g. empty function signature)
-3. Appends to the source file (reuse `writeback/splice.go` with `EndByte` = file length)
-4. Re-ingests via `Engine.Ingest` (same as write-back Release handler)
-
-**Pragmatic alternative:** Agents can write directly to source files (`echo >> file.go`) and mache re-ingests on the next writable file close. This works today without any FUSE changes.
-
-### Near-Term: Cross-File References (Callers/Usages)
-
-**Problem:** The graph shows what a file *defines* but not who *uses* it. `{pkg}/functions/Foo/callers/` doesn't exist.
-
-**What exists:** Tree-sitter can already find call sites with queries like:
-- `(call_expression function: (identifier) @callee) @scope`
-- `(call_expression function: (selector_expression field: (field_identifier) @callee)) @scope`
-
-The `SitterWalker` (`sitter_walker.go`) and `OriginProvider` interface already support capturing these.
-
-**What's needed:** A **post-ingestion pass** in `Engine` that:
-1. Walks all ingested file nodes to find call sites (second tree-sitter query pass)
-2. Builds an inverted index: `callee_name → [(source_file, call_site_origin)]`
-3. Injects synthetic `callers/` directory nodes into the graph via `Store.AddNode`
-4. This is a new method on Engine (e.g. `Engine.BuildCrossRefs`) called after `Ingest` completes
-
-**Key design question:** File↔construct ownership. `SourceOrigin` currently maps one construct → one file. Cross-refs need the reverse: one construct → many call sites across files. The graph supports this (nodes are just IDs + children), but the schema format (`examples/go-schema.json`) would need a way to express "post-ingestion derived nodes" vs "direct query nodes."
-
-### Medium-Term
-
-- **Additional walkers** — YAML, TOML, HCL, more tree-sitter grammars (TypeScript, Rust). Adding a grammar requires: a `smacker/go-tree-sitter` language binding + a file extension case in `engine.go:ingestFile` + an example schema
-- **Go NFS server** — Replace fuse-t's NFS translation layer for full control over caching, pagination, and large directory performance. Would eliminate the 30K+ dir bottleneck
-
-### Long-Term (ADR-Described, No Code)
-
-- **Content-addressed storage** (ADR-0003) — Store data by hash, hard links for dedup
-- **Layered overlays** (ADR-0003) — Docker-style composable layers for versioned views
-- **SQLite virtual tables** (ADR-0004) — SQL queries over the projected filesystem
-- **MVCC memory ledger** (ADR-0004) — Wait-free RCU + ECS for 10M+ entities, gated on profiling
-
-### Key File Reference
-
-For future sessions — where things live:
-
-| Concern | File | Key functions/types |
-|---------|------|-------------------|
-| CLI + mount wiring | `cmd/mount.go` | `rootCmd`, `--writable`, `--infer` flags |
-| Schema types | `api/schema.go` | `Topology`, `Node`, `Leaf` |
-| Ingestion orchestration | `internal/ingest/engine.go` | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `dedupSuffix` |
-| JSON queries | `internal/ingest/json_walker.go` | `JsonWalker.Query` |
-| Tree-sitter queries | `internal/ingest/sitter_walker.go` | `SitterWalker.Query`, `sitterMatch.CaptureOrigin` |
-| Walker/Match contracts | `internal/ingest/interfaces.go` | `Walker`, `Match`, `OriginProvider` |
-| SQLite streaming | `internal/ingest/sqlite_loader.go` | `StreamSQLiteRaw` |
-| Graph (in-memory) | `internal/graph/graph.go` | `MemoryStore`, `Node`, `SourceOrigin`, `ContentRef` |
-| Graph (SQLite direct) | `internal/graph/sqlite_graph.go` | `SQLiteGraph`, `EagerScan` |
-| FUSE bridge + writes | `internal/fs/root.go` | `MacheFS`, `writeHandle`, `Open`, `Write`, `Release` |
-| Source splicing | `internal/writeback/splice.go` | `Splice` |
-| Go schema | `examples/go-schema.json` | functions, methods, types, constants, variables, imports |
-| FCA inference | `internal/lattice/` | `FormalContext`, `NextClosure`, `Project`, `Inferrer` |
-| Build/test | `Taskfile.yml` | `task build`, `task test`, `task check` |
-
-## Development
+With `--writable`, file nodes backed by tree-sitter source code become editable.
 
 ```bash
-task test              # Run all tests
-task test-coverage     # Generate coverage report
-task fmt               # Format code (gofumpt)
-task vet               # Run go vet
-task lint              # Run golangci-lint
-task check             # Run all checks (fmt, vet, lint, test)
-task clean             # Remove build artifacts
-task tidy              # Tidy go modules
+# Mount Go source with write-back enabled
+./mache -w -s examples/go-schema.json -d . /tmp/mache-src
 ```
 
-## License
+When you edit a file in the mount, Mache splices the content back into the original source file and runs `goimports`.
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+## How It Works
+
+Mache uses a **Topology Schema** to map data from SQLite, JSON, or source code into a filesystem structure.
+
+1. **Direct Mode:** For SQLite, it queries the DB on-demand (zero-copy).
+2. **Ingest Mode:** For JSON/Code, it loads data into an in-memory graph.
+3. **Inference:** With `--infer`, it uses Formal Concept Analysis to guess the best folder structure.
+
+See [Architecture](docs/ARCHITECTURE.md) for details.
+
+## Documentation
+
+- [Architecture & Design](docs/ARCHITECTURE.md) - Deep dive into internals, pipelines, and abstractions.
+- [Roadmap](docs/ROADMAP.md) - Future plans and known limitations.
+- [Example Schemas](examples/README.md) - Details on the included examples.
+- [ADRs](docs/adr/) - Architectural Decision Records.
 
 ## Contributing
 
-This is an early-stage research project. Contributions welcome, but expect rapid API changes. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-## Related Work
+## License
 
-- **fuse-t** — Userspace FUSE implementation for macOS
-- **cgofuse** — Cross-platform FUSE binding for Go
-- **ojg** — JSON processing and JSONPath for Go
-- **go-tree-sitter** — Tree-sitter bindings for Go
+Apache License 2.0. See [LICENSE](LICENSE).
