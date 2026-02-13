@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"hash/fnv"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -258,6 +259,11 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		stat.Nlink = 1
 		stat.Size = node.ContentSize()
 	}
+
+	if !node.ModTime.IsZero() {
+		stat.Mtim = fuse.NewTimespec(node.ModTime)
+	}
+
 	return 0
 }
 
@@ -898,22 +904,82 @@ func (fs *MacheFS) Readlink(path string) (int, string) {
 	return -fuse.ENOENT, ""
 }
 
-// Unlink removes a stored query result (/.query/<name>).
+// Unlink removes a stored query result (/.query/<name>) or a file node.
 func (fs *MacheFS) Unlink(path string) int {
-	if !fs.isQueryPath(path) {
+	if fs.isQueryPath(path) {
+		parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+		if len(parts) == 1 {
+			// Attempting to unlink the query directory itself
+			return -fuse.EISDIR
+		}
+
+		// Unlinking contents?
+		// ctl: prevent deletion? or allow and do nothing?
+		// symlinks: these are virtual, can't delete individual results.
 		return -fuse.EACCES
 	}
 
-	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
-	if len(parts) == 1 {
-		// Attempting to unlink the query directory itself
-		return -fuse.EISDIR
+	// Regular file deletion
+	if !fs.Writable {
+		return -fuse.EACCES
 	}
 
-	// Unlinking contents?
-	// ctl: prevent deletion? or allow and do nothing?
-	// symlinks: these are virtual, can't delete individual results.
-	return -fuse.EACCES
+	node, err := fs.Graph.GetNode(path)
+	if err != nil {
+		return -fuse.ENOENT
+	}
+	if node.Mode.IsDir() {
+		return -fuse.EISDIR
+	}
+	if node.Origin == nil {
+		return -fuse.EACCES // Virtual node without origin
+	}
+
+	// Check if this node represents the whole file?
+	isWholeFile := false
+	if info, err := os.Stat(node.Origin.FilePath); err == nil {
+		if node.Origin.StartByte == 0 && int64(node.Origin.EndByte) == info.Size() {
+			isWholeFile = true
+		}
+	}
+
+	if isWholeFile {
+		if err := os.Remove(node.Origin.FilePath); err != nil {
+			log.Printf("Unlink: failed to remove file %s: %v", node.Origin.FilePath, err)
+			return -fuse.EIO
+		}
+	} else {
+		// Splice with empty content to "delete" the code block
+		if err := writeback.Splice(*node.Origin, []byte{}); err != nil {
+			log.Printf("Unlink: splice failed for %s: %v", node.Origin.FilePath, err)
+			return -fuse.EIO
+		}
+		// Run goimports if it's a Go file (cleanup newlines etc)
+		if strings.HasSuffix(node.Origin.FilePath, ".go") {
+			_ = exec.Command("goimports", "-w", node.Origin.FilePath).Run()
+		}
+	}
+
+	// Re-ingest
+	if fs.Engine != nil {
+		if isWholeFile {
+			// File is gone, ingest parent dir to update structure
+			// This might be expensive, but necessary to remove the node from graph
+			parent := filepath.Dir(node.Origin.FilePath)
+			if err := fs.Engine.Ingest(parent); err != nil {
+				log.Printf("Unlink: re-ingest parent %s failed: %v", parent, err)
+			}
+			// Also need to remove the node from memory if Ingest doesn't?
+			// Ingest(parent) will re-scan.
+		} else {
+			if err := fs.Engine.Ingest(node.Origin.FilePath); err != nil {
+				log.Printf("Unlink: re-ingest file %s failed: %v", node.Origin.FilePath, err)
+			}
+		}
+	}
+
+	fs.Graph.Invalidate(node.ID)
+	return 0
 }
 
 // Rmdir removes a query directory (/.query/<name>).

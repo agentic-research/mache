@@ -140,6 +140,58 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 	return nil
 }
 
+// DeleteFileNodes removes all nodes that originated from the given source file.
+// This is used to clear stale nodes before re-ingesting a file.
+func (s *MemoryStore) DeleteFileNodes(filePath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. Collect IDs to delete
+	var toDelete []string
+	for id, n := range s.nodes {
+		if n.Origin != nil && n.Origin.FilePath == filePath {
+			toDelete = append(toDelete, id)
+		}
+	}
+
+	// 2. Delete nodes and clean up children references
+	for _, id := range toDelete {
+		delete(s.nodes, id)
+	}
+
+	// 3. Clean up children pointers in remaining nodes
+	// (This is expensive O(Nodes * Children), but correct graph maintenance requires it.
+	//  Optimization: If we knew the parents, we could target them.
+	//  For now, we rely on the fact that re-ingest will restore valid parent-child links.)
+	// Actually, Re-ingest usually handles "AddNode" which updates the parent.
+	// But if a child is *removed* (function deleted), the parent (directory) needs to know.
+	// Directories usually don't have an Origin in the same way, or they are virtual.
+	// If a directory lists a child that is now deleted, that child ID is in toDelete.
+	for _, n := range s.nodes {
+		if n.Mode.IsDir() && len(n.Children) > 0 {
+			newChildren := n.Children[:0]
+			changed := false
+			for _, c := range n.Children {
+				keep := true
+				for _, del := range toDelete {
+					if c == del {
+						keep = false
+						break
+					}
+				}
+				if keep {
+					newChildren = append(newChildren, c)
+				} else {
+					changed = true
+				}
+			}
+			if changed {
+				n.Children = newChildren
+			}
+		}
+	}
+}
+
 // GetCallers implements Graph.
 func (s *MemoryStore) GetCallers(token string) ([]*Node, error) {
 	s.mu.RLock()
