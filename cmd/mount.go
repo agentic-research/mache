@@ -17,10 +17,17 @@ import (
 )
 
 var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
+
+var (
 	schemaPath  string
 	dataPath    string
 	writable    bool
 	inferSchema bool
+	quiet       bool
 )
 
 func init() {
@@ -28,6 +35,16 @@ func init() {
 	rootCmd.Flags().StringVarP(&dataPath, "data", "d", "", "Path to data source")
 	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back (splice edits into source files)")
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
+	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
+	rootCmd.AddCommand(versionCmd)
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version number",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("mache version %s (commit %s, built %s)\n", Version, Commit, Date)
+	},
 }
 
 var rootCmd = &cobra.Command{
@@ -35,6 +52,13 @@ var rootCmd = &cobra.Command{
 	Short: "Mache: The Universal Semantic Overlay Engine",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if quiet {
+			f, err := os.Open(os.DevNull)
+			if err == nil {
+				os.Stdout = f
+			}
+		}
+
 		mountPoint := args[0]
 
 		// 1. Resolve Configuration Paths
