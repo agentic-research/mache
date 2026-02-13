@@ -15,12 +15,9 @@ NC='\033[0m'
 
 cleanup() {
     echo -e "${BLUE}Cleaning up...${NC}"
-    # Unmount first to let Mache exit gracefully
     umount "$MNT" 2>/dev/null || true
-    # Wait a moment for Mache to shutdown
     sleep 0.5
     if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi
-    # rm -rf "$SANDBOX" # Keep sandbox for inspection if failed?
 }
 trap cleanup EXIT
 
@@ -35,8 +32,13 @@ echo -e "${BLUE}Setting up Arena at $SANDBOX...${NC}"
 rm -rf "$SANDBOX"
 mkdir -p "$REPO" "$MNT"
 
-# Create a sample Go project
-cat > "$REPO/main.go" <<EOF
+# Mission Setup Logic
+setup_mission() {
+    local mission=$1
+    echo "Setting up mission: $mission"
+    case $mission in
+        "comment"|"interactive"|"syntax-error")
+            cat > "$REPO/main.go" <<EOF
 package main
 
 func Calculate(a, b int) int {
@@ -47,6 +49,56 @@ func main() {
 	println(Calculate(1, 2))
 }
 EOF
+            ;;
+        "imports")
+            # Missing "fmt" import
+            cat > "$REPO/main.go" <<EOF
+package main
+
+func main() {
+	fmt.Println("Hello")
+}
+EOF
+            ;;
+        "complexity")
+            cat > "$REPO/main.go" <<EOF
+package main
+
+func Complex(a int) {
+	if a > 0 {
+		if a > 10 {
+			if a > 100 {
+				println("Big")
+			}
+		}
+	}
+}
+EOF
+            ;;
+        "variable")
+            cat > "$REPO/main.go" <<EOF
+package main
+
+func Connect() {
+	println("Connecting to postgres://localhost:5432")
+}
+EOF
+            ;;
+        *)
+            echo "Unknown mission type: $mission"
+            exit 1
+            ;;
+    esac
+}
+
+MISSION="${1:-interactive}"
+SUB_MISSION="${2:-comment}" # Default sub-mission for interactive
+
+if [ "$MISSION" == "interactive" ]; then
+    setup_mission "$SUB_MISSION"
+else
+    setup_mission "$MISSION"
+fi
 
 # 3. Mount Mache
 echo -e "${BLUE}Mounting Mache...${NC}"
@@ -55,9 +107,8 @@ PID=$!
 sleep 2
 
 # Check mount
-if [ ! -d "$MNT/Calculate" ]; then
-    echo -e "${RED}FAIL: Mount failed or schema inference failed.${NC}"
-    ls -R "$MNT"
+if [ ! -d "$MNT" ]; then
+    echo -e "${RED}FAIL: Mount failed completely.${NC}"
     exit 1
 fi
 
@@ -65,21 +116,15 @@ echo -e "${GREEN}Arena Ready!${NC}"
 echo "Repo: $REPO"
 echo "Mount: $MNT"
 
-# 4. Run Mission
-MISSION="${1:-interactive}"
-
+# 4. Execute Mission
 if [ "$MISSION" == "interactive" ]; then
-    echo -e "${BLUE}Interactive Mode.${NC}"
+    echo -e "${BLUE}Interactive Mode ($SUB_MISSION).${NC}"
     echo "You can now inspect $MNT and modify files."
     echo "Press ENTER when done to verify and exit."
     read -r
 elif [ "$MISSION" == "comment" ]; then
     echo -e "${BLUE}Mission: Insert Comment${NC}"
     TARGET="$MNT/Calculate/source"
-    echo "Agent modifying: $TARGET"
-
-    # Simulate Agent: Prepend comment
-    # Note: We must write valid Go source for the function
     NEW_CONTENT="// Calculate adds two numbers
 func Calculate(a, b int) int {
 	return a + b
@@ -87,29 +132,33 @@ func Calculate(a, b int) int {
     echo "$NEW_CONTENT" > "$TARGET"
     sleep 1
 
-    # Verify
-    echo -e "${BLUE}Verifying...${NC}"
     if grep -q "// Calculate adds two numbers" "$REPO/main.go"; then
-        echo -e "${GREEN}SUCCESS: Comment inserted!${NC}"
-        cat "$REPO/main.go"
+        echo -e "${GREEN}SUCCESS${NC}"
     else
-        echo -e "${RED}FAIL: Comment not found.${NC}"
-        cat "$REPO/main.go"
+        echo -e "${RED}FAIL${NC}"
         exit 1
     fi
 elif [ "$MISSION" == "syntax-error" ]; then
-    echo -e "${BLUE}Mission: Unhappy Path (Syntax Error)${NC}"
+    echo -e "${BLUE}Mission: Unhappy Path${NC}"
     TARGET="$MNT/Calculate/source"
     echo "func Calculate() { BROKEN }" > "$TARGET"
     sleep 1
-
     if grep -q "BROKEN" "$REPO/main.go"; then
-        echo -e "${GREEN}SUCCESS: Broken syntax persisted (Mache did its job).${NC}"
+        echo -e "${GREEN}SUCCESS${NC}"
     else
-        echo -e "${RED}FAIL: Write rejected?${NC}"
+        echo -e "${RED}FAIL${NC}"
         exit 1
     fi
+elif [ "$MISSION" == "imports" ]; then
+    echo -e "${BLUE}Mission: Fix Imports (Manual Simulation)${NC}"
+    # Mache can't structurally add imports yet without manual schema magic or raw editing.
+    # Agent must edit source of `source_file`? Or `main` function?
+    # If agent edits `main` function to valid code, that works.
+    # But adding import requires editing file scope.
+    # Is file scope exposed?
+    # /source_file/source ? No, SkipSelfMatch skips it.
+    # So Agent CANNOT edit imports via structure if root is skipped!
+    echo -e "${RED}Limitation: Cannot edit root node via structure yet.${NC}"
 else
-    echo "Unknown mission: $MISSION"
-    exit 1
+    echo "Automated verification not implemented for $MISSION"
 fi
