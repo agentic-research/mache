@@ -13,11 +13,24 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+KEEP_SANDBOX=false
+if [ "$1" == "--keep" ]; then
+    KEEP_SANDBOX=true
+    shift
+fi
+
 cleanup() {
     echo -e "${BLUE}Cleaning up...${NC}"
     umount "$MNT" 2>/dev/null || true
     sleep 0.5
     if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi
+
+    if [ "$KEEP_SANDBOX" = true ]; then
+        echo -e "${GREEN}Sandbox kept at $SANDBOX${NC}"
+    else
+        echo -e "${BLUE}Removing sandbox...${NC}"
+        rm -rf "$SANDBOX"
+    fi
 }
 trap cleanup EXIT
 
