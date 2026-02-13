@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/agentic-research/mache/api"
@@ -189,17 +190,23 @@ var rootCmd = &cobra.Command{
 		fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
 
 		// 6. Mount passes control to the library.
-		// nobrowse: hide from Finder sidebar & prevent Spotlight auto-indexing
 		opts := []string{
 			"-o", fmt.Sprintf("uid=%d", os.Getuid()),
 			"-o", fmt.Sprintf("gid=%d", os.Getgid()),
 			"-o", "fsname=mache",
 			"-o", "subtype=mache",
-			"-o", "nobrowse",
+			// Timeouts MUST be 0.0 to prevent NFS caching issues with dynamic content
 			"-o", "entry_timeout=0.0",
 			"-o", "attr_timeout=0.0",
 			"-o", "negative_timeout=0.0",
 		}
+
+		// "nobrowse" is a macOS-specific flag to hide the mount from Finder/Spotlight.
+		// Passing it on Linux (GitHub Actions) causes a crash.
+		if runtime.GOOS == "darwin" {
+			opts = append(opts, "-o", "nobrowse")
+		}
+
 		if !macheFs.Writable {
 			opts = append([]string{"-o", "ro"}, opts...)
 		}
