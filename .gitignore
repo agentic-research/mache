@@ -52,3 +52,4 @@ experiments/
 # Taskfile artifacts
 .task/
 .mache-mount/
+bin/
