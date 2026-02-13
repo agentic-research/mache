@@ -9,13 +9,13 @@ graph TD
     end
 
     subgraph "Data Sources"
-        SQLiteFile[.db (SQLite)]
-        FlatFile[.json]
-        SourceCode[.go / .py]
+        SQLiteFile[".db (SQLite)"]
+        FlatFile[".json"]
+        SourceCode[".go / .py"]
     end
 
     subgraph "Mache Core"
-        SQLiteGraph[SQLiteGraph<br/>(Zero-Copy / Direct SQL)]
+        SQLiteGraph["SQLiteGraph<br/>(Zero-Copy / Direct SQL)"]
         Engine[Ingestion Engine]
 
         subgraph "Walkers"
@@ -24,12 +24,12 @@ graph TD
             SL[SQLite Loader]
         end
 
-        MemoryStore[MemoryStore Graph]
+        MemoryStore["MemoryStore Graph"]
     end
 
     subgraph "System Interface"
-        FUSE[FUSE Bridge<br/>(cgofuse)]
-        Tools[User Tools<br/>ls, cat, grep]
+        FUSE["FUSE Bridge<br/>(cgofuse)"]
+        Tools["User Tools<br/>ls, cat, grep"]
     end
 
     Schema -->|Configures| SQLiteGraph
