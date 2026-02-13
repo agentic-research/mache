@@ -326,3 +326,176 @@ var (
 	assert.Equal(t, "GroupedVarX", matches[1].Values()["name"])
 	assert.Equal(t, "GroupedVarY", matches[2].Values()["name"])
 }
+
+// cobraSource is a minimal Go file with cobra.Command and flag patterns,
+// used by the CLI schema query tests below.
+const cobraSource = `package cmd
+
+import "github.com/spf13/cobra"
+
+var (
+	schemaPath string
+	dataPath   string
+	writable   bool
+)
+
+func init() {
+	rootCmd.Flags().StringVarP(&schemaPath, "schema", "s", "", "Path to topology schema")
+	rootCmd.Flags().StringVarP(&dataPath, "data", "d", "", "Path to data source")
+	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back")
+}
+
+var rootCmd = &cobra.Command{
+	Use:   "mache [mountpoint]",
+	Short: "Mache: The Universal Semantic Overlay Engine",
+	Args:  cobra.ExactArgs(1),
+}
+`
+
+func TestSitterWalkerGo_CobraCommandQuery(t *testing.T) {
+	root := parseSitterRoot(t, []byte(cobraSource))
+	w := NewSitterWalker()
+
+	query := `(var_spec
+  name: (identifier) @cmd_var
+  value: (expression_list
+    (unary_expression
+      operand: (composite_literal
+        type: (qualified_type
+          package: (package_identifier) @_pkg (#eq? @_pkg "cobra")
+          name: (type_identifier) @_type (#eq? @_type "Command"))
+        body: (literal_value) @scope))))`
+
+	matches, err := w.Query(root, query)
+	require.NoError(t, err)
+	require.Len(t, matches, 1, "should find exactly one cobra.Command var")
+
+	vals := matches[0].Values()
+	assert.Equal(t, "rootCmd", vals["cmd_var"])
+	assert.Equal(t, "cobra", vals["_pkg"])
+	assert.Equal(t, "Command", vals["_type"])
+
+	// Scope should contain the literal_value (struct body)
+	scope, ok := vals["scope"].(string)
+	require.True(t, ok)
+	assert.Contains(t, scope, `"mache [mountpoint]"`)
+	assert.Contains(t, scope, `"Mache: The Universal Semantic Overlay Engine"`)
+
+	// Context should be non-nil so child queries can run against the scope
+	assert.NotNil(t, matches[0].Context())
+}
+
+func TestSitterWalkerGo_CobraCommandFields(t *testing.T) {
+	root := parseSitterRoot(t, []byte(cobraSource))
+	w := NewSitterWalker()
+
+	// First find the cobra.Command scope
+	cmdQuery := `(var_spec
+  name: (identifier) @cmd_var
+  value: (expression_list
+    (unary_expression
+      operand: (composite_literal
+        type: (qualified_type
+          package: (package_identifier) @_pkg (#eq? @_pkg "cobra")
+          name: (type_identifier) @_type (#eq? @_type "Command"))
+        body: (literal_value) @scope))))`
+
+	cmdMatches, err := w.Query(root, cmdQuery)
+	require.NoError(t, err)
+	require.Len(t, cmdMatches, 1)
+
+	// Now query for string-valued keyed_elements within the scope
+	fieldQuery := `(keyed_element
+  (literal_element (identifier) @field_name)
+  (literal_element (interpreted_string_literal) @value)) @scope`
+
+	scopeCtx := cmdMatches[0].Context()
+	require.NotNil(t, scopeCtx)
+
+	fieldMatches, err := w.Query(scopeCtx, fieldQuery)
+	require.NoError(t, err)
+	require.Len(t, fieldMatches, 2, "should find Use and Short (Args is not a string)")
+
+	assert.Equal(t, "Use", fieldMatches[0].Values()["field_name"])
+	assert.Equal(t, `"mache [mountpoint]"`, fieldMatches[0].Values()["value"])
+
+	assert.Equal(t, "Short", fieldMatches[1].Values()["field_name"])
+	assert.Equal(t, `"Mache: The Universal Semantic Overlay Engine"`, fieldMatches[1].Values()["value"])
+}
+
+func TestSitterWalkerGo_FlagQuery(t *testing.T) {
+	root := parseSitterRoot(t, []byte(cobraSource))
+	w := NewSitterWalker()
+
+	query := `(call_expression
+  function: (selector_expression
+    operand: (call_expression
+      function: (selector_expression
+        operand: (identifier) @receiver
+        field: (field_identifier) @_flags_fn (#eq? @_flags_fn "Flags")))
+    field: (field_identifier) @flag_method)
+  arguments: (argument_list
+    (_)
+    (interpreted_string_literal) @flag_name
+    (interpreted_string_literal) @flag_short
+    (_) @flag_default
+    (interpreted_string_literal) @flag_desc)) @scope`
+
+	matches, err := w.Query(root, query)
+	require.NoError(t, err)
+	require.Len(t, matches, 3, "should find schema, data, writable flags")
+
+	// Flag 1: schema (StringVarP)
+	assert.Equal(t, "StringVarP", matches[0].Values()["flag_method"])
+	assert.Equal(t, `"schema"`, matches[0].Values()["flag_name"])
+	assert.Equal(t, `"s"`, matches[0].Values()["flag_short"])
+	assert.Equal(t, `""`, matches[0].Values()["flag_default"])
+	assert.Equal(t, `"Path to topology schema"`, matches[0].Values()["flag_desc"])
+
+	// Flag 2: data (StringVarP)
+	assert.Equal(t, "StringVarP", matches[1].Values()["flag_method"])
+	assert.Equal(t, `"data"`, matches[1].Values()["flag_name"])
+	assert.Equal(t, `"d"`, matches[1].Values()["flag_short"])
+
+	// Flag 3: writable (BoolVarP) — non-string default
+	assert.Equal(t, "BoolVarP", matches[2].Values()["flag_method"])
+	assert.Equal(t, `"writable"`, matches[2].Values()["flag_name"])
+	assert.Equal(t, `"w"`, matches[2].Values()["flag_short"])
+	assert.Equal(t, "false", matches[2].Values()["flag_default"])
+}
+
+func TestSitterWalkerGo_PredicateFiltering(t *testing.T) {
+	root := parseSitterRoot(t, []byte(cobraSource))
+	w := NewSitterWalker()
+
+	// Query for ANY var_spec with qualified_type — without predicates, this
+	// would match any package.Type composite literal.
+	queryNoPredicate := `(var_spec
+  name: (identifier) @cmd_var
+  value: (expression_list
+    (unary_expression
+      operand: (composite_literal
+        type: (qualified_type
+          package: (package_identifier) @pkg
+          name: (type_identifier) @typ)
+        body: (literal_value) @scope))))`
+
+	matches, err := w.Query(root, queryNoPredicate)
+	require.NoError(t, err)
+	require.Len(t, matches, 1, "only one qualified-type var in test source")
+
+	// Now with a WRONG predicate — should filter out the match
+	queryWrongPredicate := `(var_spec
+  name: (identifier) @cmd_var
+  value: (expression_list
+    (unary_expression
+      operand: (composite_literal
+        type: (qualified_type
+          package: (package_identifier) @_pkg (#eq? @_pkg "notcobra")
+          name: (type_identifier) @_type (#eq? @_type "Command"))
+        body: (literal_value) @scope))))`
+
+	matches, err = w.Query(root, queryWrongPredicate)
+	require.NoError(t, err)
+	assert.Len(t, matches, 0, "wrong predicate should filter out the match")
+}

@@ -79,6 +79,13 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 			break
 		}
 
+		// Enforce #eq? / #not-eq? predicates in the query.
+		// When no predicates exist this is a no-op (copies captures through unchanged).
+		m = qc.FilterPredicates(m, sr.Source)
+		if len(m.Captures) == 0 {
+			continue
+		}
+
 		// Convert captures to map
 		vals := make(map[string]string)
 		captures := make(map[string]*sitter.Node)

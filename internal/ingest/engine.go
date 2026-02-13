@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -535,6 +536,14 @@ var tmplFuncs = template.FuncMap{
 			}
 		}
 		return nil
+	},
+	// unquote strips Go string quotes: {{unquote .path}} → cobra from "cobra".
+	// Tree-sitter captures of interpreted_string_literal include surrounding quotes.
+	"unquote": func(s string) string {
+		if u, err := strconv.Unquote(s); err == nil {
+			return u
+		}
+		return s
 	},
 	// slice extracts a substring: {{slice .someField 4 8}} → characters [4:8].
 	// Used for temporal sharding: {{slice .item.cve.id 4 8}} → "2024" from "CVE-2024-0001".

@@ -1,0 +1,49 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "{{.pkg}}",
+      "selector": "(source_file (package_clause (package_identifier) @pkg)) @scope",
+      "children": [
+        {
+          "name": "commands",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.cmd_var}}",
+              "selector": "(var_spec name: (identifier) @cmd_var value: (expression_list (unary_expression operand: (composite_literal type: (qualified_type package: (package_identifier) @_pkg (#eq? @_pkg \"cobra\") name: (type_identifier) @_type (#eq? @_type \"Command\")) body: (literal_value) @scope))))",
+              "children": [
+                {
+                  "name": "{{.field_name}}",
+                  "selector": "(keyed_element (literal_element (identifier) @field_name) (literal_element (interpreted_string_literal) @value)) @scope",
+                  "files": [
+                    {
+                      "name": "value",
+                      "content_template": "{{unquote .value}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "flags",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{unquote .flag_name}}",
+              "selector": "(call_expression function: (selector_expression operand: (call_expression function: (selector_expression operand: (identifier) @receiver field: (field_identifier) @_flags_fn (#eq? @_flags_fn \"Flags\"))) field: (field_identifier) @flag_method) arguments: (argument_list (_) (interpreted_string_literal) @flag_name (interpreted_string_literal) @flag_short (_) @flag_default (interpreted_string_literal) @flag_desc)) @scope",
+              "files": [
+                {
+                  "name": "info",
+                  "content_template": "method: {{.flag_method}}\nshort: {{unquote .flag_short}}\ndefault: {{.flag_default}}\ndescription: {{unquote .flag_desc}}"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
