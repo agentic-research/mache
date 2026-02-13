@@ -51,9 +51,12 @@ tasks:
   test:
     desc: Run all tests
     deps: [check-fuse-t]
+    env:
+      CGO_CFLAGS: '{{if eq .OS "darwin"}}-I{{.FUSE_T_HEADERS}}{{end}}'
+      CGO_LDFLAGS: '{{if eq .OS "darwin"}}-F{{.FUSE_T_FRAMEWORK}} -framework fuse_t -Wl,-rpath,{{.FUSE_T_FRAMEWORK}}{{end}}'
     cmds:
-      - echo "OS={{OS}} FUSE={{.FUSE_T_HEADERS}}"
-      - CGO_CFLAGS="{{if eq OS "darwin"}}-I{{.FUSE_T_HEADERS}}{{end}}" CGO_LDFLAGS="{{if eq OS "darwin"}}-F{{.FUSE_T_FRAMEWORK}} -framework fuse_t -Wl,-rpath,{{.FUSE_T_FRAMEWORK}}{{end}}" go test -race -gcflags=all=-d=checkptr=0 -v ./...
+      - echo "OS={{.OS}} FUSE={{.FUSE_T_HEADERS}}"
+      - go test -race -gcflags=all=-d=checkptr=0 -v ./...
 
   test-coverage:
     desc: Run tests with coverage
