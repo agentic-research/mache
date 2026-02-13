@@ -18,7 +18,10 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
 const inlineThreshold = 4096
@@ -131,6 +134,15 @@ func (e *Engine) ingestFile(path string) error {
 		return e.ingestJSON(path)
 	case ".py":
 		return e.ingestTreeSitter(path, python.GetLanguage())
+	case ".js":
+		return e.ingestTreeSitter(path, javascript.GetLanguage())
+	case ".ts", ".tsx":
+		// Use Typescript grammar for both .ts and .tsx (it handles JSX mostly, or use tsx grammar if strictly needed)
+		// go-tree-sitter/typescript usually has typescript and tsx subpackages.
+		// For now, use typescript.
+		return e.ingestTreeSitter(path, typescript.GetLanguage())
+	case ".sql":
+		return e.ingestTreeSitter(path, sql.GetLanguage())
 	case ".go":
 		return e.ingestTreeSitter(path, golang.GetLanguage())
 	default:

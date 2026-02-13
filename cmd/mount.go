@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,11 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lattice"
+	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/javascript"
+	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/spf13/cobra"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -78,17 +84,80 @@ var rootCmd = &cobra.Command{
 
 		// 2. Load Schema (or infer from data)
 		var schema *api.Topology
-		if inferSchema && filepath.Ext(dataPath) == ".db" {
-			fmt.Print("Inferring schema from data via FCA...")
-			start := time.Now()
+		if inferSchema {
 			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
-			inferred, err := inf.InferFromSQLite(dataPath)
+			var inferred *api.Topology
+			var err error
+			ext := filepath.Ext(dataPath)
+
+			switch ext {
+			case ".db":
+				fmt.Print("Inferring schema from SQLite data via FCA...")
+				start := time.Now()
+				inferred, err = inf.InferFromSQLite(dataPath)
+				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".js":
+				fmt.Print("Inferring schema from JavaScript source via Tree-sitter...")
+				start := time.Now()
+				content, readErr := os.ReadFile(dataPath)
+				if readErr != nil {
+					err = readErr
+				} else {
+					parser := sitter.NewParser()
+					parser.SetLanguage(javascript.GetLanguage())
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".ts", ".tsx":
+				fmt.Print("Inferring schema from TypeScript source via Tree-sitter...")
+				start := time.Now()
+				content, readErr := os.ReadFile(dataPath)
+				if readErr != nil {
+					err = readErr
+				} else {
+					parser := sitter.NewParser()
+					parser.SetLanguage(typescript.GetLanguage())
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".sql":
+				fmt.Print("Inferring schema from SQL source via Tree-sitter...")
+				start := time.Now()
+				content, readErr := os.ReadFile(dataPath)
+				if readErr != nil {
+					err = readErr
+				} else {
+					parser := sitter.NewParser()
+					parser.SetLanguage(sql.GetLanguage())
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".py":
+				fmt.Print("Inferring schema from Python source via Tree-sitter...")
+				start := time.Now()
+				content, readErr := os.ReadFile(dataPath)
+				if readErr != nil {
+					err = readErr
+				} else {
+					parser := sitter.NewParser()
+					parser.SetLanguage(python.GetLanguage())
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
+			default:
+				err = fmt.Errorf("automatic inference not supported for %s", ext)
+			}
+
 			if err != nil {
 				return fmt.Errorf("schema inference failed: %w", err)
 			}
 			schema = inferred
-			fmt.Printf(" done in %v\n", time.Since(start))
-			// Write inferred schema if --schema path was provided
+
+			// Write inferred schema if --schema path was provided explicitly (not default)
 			if cmd.Flags().Changed("schema") {
 				data, _ := json.MarshalIndent(schema, "", "  ")
 				if err := os.WriteFile(schemaPath, data, 0o644); err != nil {
