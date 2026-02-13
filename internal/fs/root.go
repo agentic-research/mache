@@ -32,6 +32,14 @@ func pathIno(path string) uint64 {
 	return ino
 }
 
+// dirHandle caches a directory listing and its path for stat population.
+// Readdir uses the path to construct full FUSE paths for GetNode calls,
+// enabling ReaddirPlus (stats returned inline, eliminating N+1 LOOKUP calls).
+type dirHandle struct {
+	path    string   // FUSE directory path (e.g., "/vulns")
+	entries []string // base names: [".", "..", "child1", ...]
+}
+
 // writeHandle tracks an in-progress write to a file node.
 type writeHandle struct {
 	path   string // FUSE path (used to resolve node ID)
@@ -58,7 +66,7 @@ type MacheFS struct {
 	// Directory handle cache: Opendir builds the entry list once,
 	// Readdir slices from it, Releasedir frees it.
 	handleMu     sync.Mutex
-	handles      map[uint64][]string     // fh → [".", "..", "child1", ...]
+	handles      map[uint64]*dirHandle   // fh → directory listing + path
 	writeHandles map[uint64]*writeHandle // fh → write buffer
 	nextHandle   uint64
 }
@@ -71,7 +79,7 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 		Graph:        g,
 		schemaJSON:   sj,
 		mountTime:    fuse.NewTimespec(time.Now()),
-		handles:      make(map[uint64][]string),
+		handles:      make(map[uint64]*dirHandle),
 		writeHandles: make(map[uint64]*writeHandle),
 	}
 }
@@ -198,7 +206,7 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	fs.handleMu.Lock()
 	fh := fs.nextHandle
 	fs.nextHandle++
-	fs.handles[fh] = entries
+	fs.handles[fh] = &dirHandle{path: path, entries: entries}
 	fs.handleMu.Unlock()
 
 	return 0, fh
@@ -212,22 +220,28 @@ func (fs *MacheFS) Releasedir(path string, fh uint64) int {
 	return 0
 }
 
-// Readdir serves entries from the cached handle.
+// Readdir serves entries from the cached handle with inline stats (ReaddirPlus).
 // Auto-mode (offset=0 to fill): fuse-t requires all results in the first pass.
 // The NFS translation layer handles pagination to the macOS NFS client.
 // cgofuse fill() convention: true = accepted, false = buffer full.
+//
+// Stats are populated for each entry to enable ReaddirPlus — this eliminates
+// the N+1 LOOKUP storm where the kernel would issue a separate Getattr call
+// for every directory entry. With fuse-t's NFS translation, this maps to
+// NFS READDIRPLUS which returns attributes inline.
 func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
 	fs.handleMu.Lock()
-	entries, ok := fs.handles[fh]
+	dh, ok := fs.handles[fh]
 	fs.handleMu.Unlock()
 
 	if !ok {
-		// Fallback: no handle (shouldn't happen, but be safe)
+		// Fallback: no handle (shouldn't happen, but be safe).
+		// Uses nil stats — the kernel falls back to individual LOOKUPs.
 		children, err := fs.Graph.ListChildren(path)
 		if err != nil {
 			return -fuse.ENOENT
 		}
-		entries = make([]string, 0, len(children)+3)
+		entries := make([]string, 0, len(children)+3)
 		entries = append(entries, ".", "..")
 		if path == "/" {
 			entries = append(entries, "_schema.json")
@@ -235,17 +249,84 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		for _, c := range children {
 			entries = append(entries, filepath.Base(c))
 		}
+		for _, name := range entries {
+			if !fill(name, nil, 0) {
+				break
+			}
+		}
+		return 0
 	}
 
 	// Auto-mode: pass offset=0 to fill(). FUSE handles pagination internally.
 	// fuse-t translates to NFS READDIR and manages cookie-based continuation.
-	for _, name := range entries {
-		if !fill(name, nil, 0) {
+	for _, name := range dh.entries {
+		stat := fs.readdirStat(dh.path, name)
+		if !fill(name, stat, 0) {
 			break // buffer full
 		}
 	}
 
 	return 0
+}
+
+// readdirStat builds a fuse.Stat_t for one directory entry.
+// Returns nil for entries that can't be resolved (kernel falls back to LOOKUP).
+func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
+	stat := &fuse.Stat_t{
+		Atim:     fs.mountTime,
+		Mtim:     fs.mountTime,
+		Ctim:     fs.mountTime,
+		Birthtim: fs.mountTime,
+	}
+
+	switch name {
+	case ".":
+		stat.Ino = pathIno(dirPath)
+		stat.Mode = fuse.S_IFDIR | 0o555
+		stat.Nlink = 2
+		return stat
+	case "..":
+		stat.Ino = pathIno(filepath.Dir(dirPath))
+		stat.Mode = fuse.S_IFDIR | 0o555
+		stat.Nlink = 2
+		return stat
+	}
+
+	// Build full FUSE path for this entry
+	var fullPath string
+	if dirPath == "/" {
+		fullPath = "/" + name
+	} else {
+		fullPath = dirPath + "/" + name
+	}
+
+	if name == "_schema.json" {
+		stat.Ino = pathIno(fullPath)
+		stat.Mode = fuse.S_IFREG | 0o444
+		stat.Nlink = 1
+		stat.Size = int64(len(fs.schemaJSON))
+		return stat
+	}
+
+	node, err := fs.Graph.GetNode(fullPath)
+	if err != nil {
+		return nil // fallback to individual LOOKUP
+	}
+
+	stat.Ino = pathIno(fullPath)
+	if node.Mode.IsDir() {
+		stat.Mode = fuse.S_IFDIR | 0o555
+		stat.Nlink = 2
+	} else {
+		perm := uint32(0o444)
+		if fs.Writable && node.Origin != nil {
+			perm = 0o644
+		}
+		stat.Mode = fuse.S_IFREG | perm
+		stat.Nlink = 1
+		stat.Size = node.ContentSize()
+	}
+	return stat
 }
 
 // Read returns the Data of a file node.

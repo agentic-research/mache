@@ -531,6 +531,108 @@ func TestMacheFS_SchemaFile(t *testing.T) {
 	}
 }
 
+func TestMacheFS_Readdir_PopulatesStats(t *testing.T) {
+	mfs := newTestFS()
+
+	errCode, fh := mfs.Opendir("/vulns/CVE-2024-1234")
+	if errCode != 0 {
+		t.Fatalf("Opendir errCode = %v, want 0", errCode)
+	}
+
+	type entry struct {
+		name string
+		stat *fuse.Stat_t
+	}
+	var entries []entry
+	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, entry{name: name, stat: stat})
+		return true
+	}
+
+	errCode = mfs.Readdir("/vulns/CVE-2024-1234", fill, 0, fh)
+	if errCode != 0 {
+		t.Fatalf("Readdir errCode = %v, want 0", errCode)
+	}
+
+	// Expect: ".", "..", "description", "severity"
+	if len(entries) != 4 {
+		t.Fatalf("got %d entries, want 4", len(entries))
+	}
+
+	for _, e := range entries {
+		if e.stat == nil {
+			t.Errorf("entry %q has nil stat (ReaddirPlus not populated)", e.name)
+			continue
+		}
+		switch e.name {
+		case ".", "..":
+			if e.stat.Mode&fuse.S_IFDIR == 0 {
+				t.Errorf("%q should be S_IFDIR, got mode %o", e.name, e.stat.Mode)
+			}
+		case "description":
+			if e.stat.Mode&fuse.S_IFREG == 0 {
+				t.Errorf("description should be S_IFREG, got mode %o", e.stat.Mode)
+			}
+			wantSize := int64(len("Buffer overflow in example.c\n"))
+			if e.stat.Size != wantSize {
+				t.Errorf("description size = %d, want %d", e.stat.Size, wantSize)
+			}
+		case "severity":
+			if e.stat.Mode&fuse.S_IFREG == 0 {
+				t.Errorf("severity should be S_IFREG, got mode %o", e.stat.Mode)
+			}
+			wantSize := int64(len("CRITICAL\n"))
+			if e.stat.Size != wantSize {
+				t.Errorf("severity size = %d, want %d", e.stat.Size, wantSize)
+			}
+		}
+	}
+}
+
+func TestMacheFS_Readdir_RootPopulatesSchemaStats(t *testing.T) {
+	mfs := newTestFS()
+
+	errCode, fh := mfs.Opendir("/")
+	if errCode != 0 {
+		t.Fatalf("Opendir errCode = %v, want 0", errCode)
+	}
+
+	type entry struct {
+		name string
+		stat *fuse.Stat_t
+	}
+	var entries []entry
+	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, entry{name: name, stat: stat})
+		return true
+	}
+
+	errCode = mfs.Readdir("/", fill, 0, fh)
+	if errCode != 0 {
+		t.Fatalf("Readdir errCode = %v, want 0", errCode)
+	}
+
+	for _, e := range entries {
+		if e.stat == nil {
+			t.Errorf("entry %q has nil stat", e.name)
+			continue
+		}
+		switch e.name {
+		case "_schema.json":
+			if e.stat.Mode&fuse.S_IFREG == 0 {
+				t.Errorf("_schema.json should be S_IFREG")
+			}
+			if e.stat.Size == 0 {
+				t.Errorf("_schema.json size should be > 0")
+			}
+		case "vulns":
+			if e.stat.Mode&fuse.S_IFDIR == 0 {
+				t.Errorf("vulns should be S_IFDIR")
+			}
+		}
+	}
+}
+
 func TestMacheFS_ErrorCodesArePositive(t *testing.T) {
 	if fuse.ENOENT <= 0 {
 		t.Errorf("fuse.ENOENT = %v, expected positive value", fuse.ENOENT)
