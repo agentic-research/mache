@@ -714,20 +714,25 @@ func TestMacheFS_Query_Lifecycle(t *testing.T) {
 		}
 	})
 
-	// 3. Create + Write + Release: write SQL to /.query/my_search
+	// 3. Create + Write + Release: Mkdir /.query/my_search, then write SQL to ctl
 	t.Run("create_write_release", func(t *testing.T) {
-		errCode, fh := mfs.Create("/.query/my_search", 0, 0)
+		errCode := mfs.Mkdir("/.query/my_search", 0)
 		if errCode != 0 {
-			t.Fatalf("Create(/.query/my_search) = %v", errCode)
+			t.Fatalf("Mkdir(/.query/my_search) = %v", errCode)
+		}
+
+		errCode, fh := mfs.Create("/.query/my_search/ctl", 0, 0)
+		if errCode != 0 {
+			t.Fatalf("Create(/.query/my_search/ctl) = %v", errCode)
 		}
 
 		sql := []byte("SELECT path FROM mache_refs WHERE token = 'test'")
-		n := mfs.Write("/.query/my_search", sql, 0, fh)
+		n := mfs.Write("/.query/my_search/ctl", sql, 0, fh)
 		if n != len(sql) {
 			t.Fatalf("Write = %v, want %v", n, len(sql))
 		}
 
-		errCode = mfs.Release("/.query/my_search", fh)
+		errCode = mfs.Release("/.query/my_search/ctl", fh)
 		if errCode != 0 {
 			t.Fatalf("Release = %v", errCode)
 		}
@@ -758,11 +763,12 @@ func TestMacheFS_Query_Lifecycle(t *testing.T) {
 		}, 0, fh)
 		mfs.Releasedir("/.query/my_search", fh)
 
-		// Expect: ".", "..", "vulns_CVE-2024-1234_vendor", "vulns_CVE-2024-5678_severity"
-		if len(entries) != 4 {
-			t.Fatalf("got %d entries %v, want 4", len(entries), entries)
+		// Expect: ".", "..", "ctl", "vulns_CVE-2024-1234_vendor", "vulns_CVE-2024-5678_severity"
+		if len(entries) != 5 {
+			t.Fatalf("got %d entries %v, want 5", len(entries), entries)
 		}
 		expected := map[string]bool{
+			"ctl":                          false,
 			"vulns_CVE-2024-1234_vendor":   false,
 			"vulns_CVE-2024-5678_severity": false,
 		}
@@ -826,17 +832,17 @@ func TestMacheFS_Query_Lifecycle(t *testing.T) {
 		}
 	})
 
-	// 9. Unlink removes the query
+	// 9. Rmdir removes the query
 	t.Run("unlink", func(t *testing.T) {
-		errCode := mfs.Unlink("/.query/my_search")
+		errCode := mfs.Rmdir("/.query/my_search")
 		if errCode != 0 {
-			t.Fatalf("Unlink = %v", errCode)
+			t.Fatalf("Rmdir = %v", errCode)
 		}
 
 		var stat fuse.Stat_t
 		errCode = mfs.Getattr("/.query/my_search", &stat, 0)
 		if errCode != -fuse.ENOENT {
-			t.Errorf("Getattr after Unlink = %v, want ENOENT", errCode)
+			t.Errorf("Getattr after Rmdir = %v, want ENOENT", errCode)
 		}
 	})
 }
@@ -887,9 +893,16 @@ func TestMacheFS_Query_Unlink_Nonexistent(t *testing.T) {
 	qfn := newMockQueryFn(t, nil)
 	mfs.SetQueryFunc(qfn)
 
+	// Unlink on a query root returns EISDIR (it's a directory)
 	errCode := mfs.Unlink("/.query/nonexistent")
+	if errCode != -fuse.EISDIR {
+		t.Errorf("Unlink nonexistent query root = %v, want EISDIR", errCode)
+	}
+
+	// Rmdir on a nonexistent query returns ENOENT
+	errCode = mfs.Rmdir("/.query/nonexistent")
 	if errCode != -fuse.ENOENT {
-		t.Errorf("Unlink nonexistent = %v, want ENOENT", errCode)
+		t.Errorf("Rmdir nonexistent = %v, want ENOENT", errCode)
 	}
 }
 
@@ -938,20 +951,25 @@ func TestMacheFS_Query_MemoryStore(t *testing.T) {
 	mfs := NewMacheFS(schema, store)
 	mfs.SetQueryFunc(store.QueryRefs)
 
-	// 1. Create a query file and write SQL
-	errCode, fh := mfs.Create("/.query/println_refs", 0, 0)
+	// 1. Mkdir query dir, then write SQL to ctl
+	errCode := mfs.Mkdir("/.query/println_refs", 0)
+	if errCode != 0 {
+		t.Fatalf("Mkdir = %v", errCode)
+	}
+
+	errCode, fh := mfs.Create("/.query/println_refs/ctl", 0, 0)
 	if errCode != 0 {
 		t.Fatalf("Create = %v", errCode)
 	}
 
 	sqlBytes := []byte("SELECT path FROM mache_refs WHERE token = 'Println'")
-	n := mfs.Write("/.query/println_refs", sqlBytes, 0, fh)
+	n := mfs.Write("/.query/println_refs/ctl", sqlBytes, 0, fh)
 	if n != len(sqlBytes) {
 		t.Fatalf("Write = %v, want %v", n, len(sqlBytes))
 	}
 
 	// 2. Release triggers query execution
-	errCode = mfs.Release("/.query/println_refs", fh)
+	errCode = mfs.Release("/.query/println_refs/ctl", fh)
 	if errCode != 0 {
 		t.Fatalf("Release = %v", errCode)
 	}
@@ -968,9 +986,9 @@ func TestMacheFS_Query_MemoryStore(t *testing.T) {
 	}, 0, fh)
 	mfs.Releasedir("/.query/println_refs", fh)
 
-	// Should have ".", "..", plus 2 symlink entries for the 2 files
-	if len(entries) != 4 {
-		t.Fatalf("got %d entries %v, want 4", len(entries), entries)
+	// Should have ".", "..", "ctl", plus 2 symlink entries for the 2 files
+	if len(entries) != 5 {
+		t.Fatalf("got %d entries %v, want 5", len(entries), entries)
 	}
 
 	// 4. Readlink on a result entry should point back to the graph
