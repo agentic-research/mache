@@ -126,6 +126,16 @@ func DecideScaling(stats map[string]*FieldStats, totalRecords int) []Attribute {
 
 		fs := stats[field]
 		switch {
+		case field == "type":
+			// Always scale "type" field for AST inference
+			sortedVals := sortedKeys(boolMap(fs.Values))
+			for _, val := range sortedVals {
+				attrs = append(attrs, Attribute{
+					Name:  field + "=" + val,
+					Kind:  ScaledValue,
+					Field: field,
+				})
+			}
 		case fs.IsDate && fs.Count > totalRecords/2:
 			// Date scaling: add year and month value attributes
 			years := make(map[string]bool)
