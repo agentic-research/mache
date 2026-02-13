@@ -216,10 +216,10 @@ func (c *refsCursor) loadFiltered(db *sql.DB, op, pattern string) error {
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		_ = rows.Close() // safe to ignore
 		return fmt.Errorf("refsvtab: filtered scan rows: %w", err)
 	}
-	_ = rows.Close()
+	_ = rows.Close() // safe to ignore
 
 	for _, e := range entries {
 		if err := c.expandBitmap(db, e.token, e.blob); err != nil {
@@ -254,10 +254,10 @@ func (c *refsCursor) loadAll(db *sql.DB) error {
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		_ = rows.Close() // safe to ignore
 		return fmt.Errorf("refsvtab: scan node_refs rows: %w", err)
 	}
-	_ = rows.Close()
+	_ = rows.Close() // safe to ignore
 
 	for _, e := range entries {
 		if err := c.expandBitmap(db, e.token, e.blob); err != nil {
@@ -296,7 +296,7 @@ func (c *refsCursor) expandBitmap(db *sql.DB, token string, blob []byte) error {
 	if err != nil {
 		return fmt.Errorf("refsvtab: resolve file_ids: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() // safe to ignore
 
 	for rows.Next() {
 		var path string

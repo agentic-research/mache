@@ -15,13 +15,13 @@ func StreamSQLite(dbPath string, fn func(recordID string, record any) error) err
 	if err != nil {
 		return fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() { _ = db.Close() }() // safe to ignore
 
 	rows, err := db.Query("SELECT id, record FROM results")
 	if err != nil {
 		return fmt.Errorf("query results: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() // safe to ignore
 
 	for rows.Next() {
 		var id, raw string
@@ -47,13 +47,13 @@ func StreamSQLiteRaw(dbPath string, fn func(id, raw string) error) error {
 	if err != nil {
 		return fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() { _ = db.Close() }() // safe to ignore
 
 	rows, err := db.Query("SELECT id, record FROM results")
 	if err != nil {
 		return fmt.Errorf("query results: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() // safe to ignore
 
 	for rows.Next() {
 		var id, raw string
@@ -75,13 +75,13 @@ func LoadSQLite(dbPath string) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() { _ = db.Close() }() // safe to ignore
 
 	rows, err := db.Query("SELECT record FROM results")
 	if err != nil {
 		return nil, fmt.Errorf("query results: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() // safe to ignore
 
 	var records []any
 	for rows.Next() {

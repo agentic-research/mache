@@ -317,7 +317,7 @@ func (s *MemoryStore) InitRefsDB() error {
 
 	db, err := sql.Open("sqlite", refsPath)
 	if err != nil {
-		_ = os.Remove(refsPath)
+		_ = os.Remove(refsPath) // cleanup temp file
 		return fmt.Errorf("open refs db: %w", err)
 	}
 	// Allow 2 connections: one for normal queries, one for vtab Filter callbacks.
@@ -325,8 +325,8 @@ func (s *MemoryStore) InitRefsDB() error {
 	db.SetMaxOpenConns(2)
 
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
-		_ = os.Remove(refsPath)
+		_ = db.Close()          // ignore close error
+		_ = os.Remove(refsPath) // cleanup temp file
 		return fmt.Errorf("set WAL mode on refs db: %w", err)
 	}
 
@@ -341,15 +341,15 @@ func (s *MemoryStore) InitRefsDB() error {
 		);
 	`)
 	if err != nil {
-		_ = db.Close()
-		_ = os.Remove(refsPath)
+		_ = db.Close()          // ignore close error
+		_ = os.Remove(refsPath) // cleanup temp file
 		return fmt.Errorf("create refs tables: %w", err)
 	}
 
 	refsMod.SetRefsDB(db)
 	if _, err := db.Exec("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs()"); err != nil {
-		_ = db.Close()
-		_ = os.Remove(refsPath)
+		_ = db.Close()          // ignore close error
+		_ = os.Remove(refsPath) // cleanup temp file
 		return fmt.Errorf("create mache_refs vtab: %w", err)
 	}
 
@@ -408,13 +408,13 @@ func (s *MemoryStore) flushRefsInternal() error {
 	if err != nil {
 		return fmt.Errorf("begin refs flush: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // safe to ignore (no-op if committed)
 
 	fileStmt, err := tx.Prepare("INSERT OR IGNORE INTO file_ids (id, path) VALUES (?, ?)")
 	if err != nil {
 		return fmt.Errorf("prepare file_ids insert: %w", err)
 	}
-	defer func() { _ = fileStmt.Close() }()
+	defer func() { _ = fileStmt.Close() }() // safe to ignore
 
 	for path, id := range fileIDMap {
 		if _, err := fileStmt.Exec(id, path); err != nil {
@@ -426,7 +426,7 @@ func (s *MemoryStore) flushRefsInternal() error {
 	if err != nil {
 		return fmt.Errorf("prepare node_refs insert: %w", err)
 	}
-	defer func() { _ = refStmt.Close() }()
+	defer func() { _ = refStmt.Close() }() // safe to ignore
 
 	var buf bytes.Buffer
 	for token, bm := range bitmaps {
@@ -456,7 +456,7 @@ func (s *MemoryStore) Close() error {
 	if s.refsDB != nil {
 		err := s.refsDB.Close()
 		if s.refsDBPath != "" {
-			_ = os.Remove(s.refsDBPath)
+			_ = os.Remove(s.refsDBPath) // best-effort cleanup
 			_ = os.Remove(s.refsDBPath + "-wal")
 			_ = os.Remove(s.refsDBPath + "-shm")
 		}

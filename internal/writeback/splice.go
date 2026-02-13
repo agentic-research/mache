@@ -39,22 +39,22 @@ func Splice(origin graph.SourceOrigin, newContent []byte) error {
 
 	if _, err := tmp.Write(result); err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		_ = os.Remove(tmpName) // best-effort cleanup
 		return fmt.Errorf("write temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
+		_ = os.Remove(tmpName) // best-effort cleanup
 		return fmt.Errorf("close temp: %w", err)
 	}
 
 	// Preserve original file permissions
 	info, err := os.Stat(origin.FilePath)
 	if err == nil {
-		_ = os.Chmod(tmpName, info.Mode())
+		_ = os.Chmod(tmpName, info.Mode()) // best-effort permission sync
 	}
 
 	if err := os.Rename(tmpName, origin.FilePath); err != nil {
-		_ = os.Remove(tmpName)
+		_ = os.Remove(tmpName) // best-effort cleanup
 		return fmt.Errorf("rename temp to %s: %w", origin.FilePath, err)
 	}
 

@@ -64,11 +64,11 @@ func (r *SQLiteResolver) getDB(path string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(4)
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
+		_ = db.Close() // ignore error
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA query_only=ON"); err != nil {
-		_ = db.Close()
+		_ = db.Close() // ignore error
 		return nil, fmt.Errorf("set query_only: %w", err)
 	}
 
@@ -81,6 +81,6 @@ func (r *SQLiteResolver) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, db := range r.dbs {
-		_ = db.Close()
+		_ = db.Close() // ignore error
 	}
 }

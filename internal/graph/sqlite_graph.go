@@ -131,20 +131,20 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	// The in-memory nextFileID counter starts at 0 on every open; if a
 	// previous .refs.db exists with IDs 0..N mapped to different paths,
 	// INSERT OR IGNORE silently drops the new mappings.
-	_ = os.Remove(refsPath)
+	_ = os.Remove(refsPath) // best-effort cleanup
 
 	// Register the mache_refs vtab module globally before opening refsDB.
 	// sql.Open is lazy (no connection until first query), so registering
 	// before the first Exec ensures the new connection sees the module.
 	refsMod, err := refsvtab.Register()
 	if err != nil {
-		_ = db.Close()
+		_ = db.Close() // ignore error
 		return nil, err
 	}
 
 	refsDB, err := sql.Open("sqlite", refsPath)
 	if err != nil {
-		_ = db.Close()
+		_ = db.Close() // ignore error
 		return nil, fmt.Errorf("open refs db %s: %w", refsPath, err)
 	}
 	// Allow 2 connections: one for normal queries, one for vtab Filter callbacks.
@@ -154,8 +154,8 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	refsDB.SetMaxOpenConns(2)
 
 	if _, err := refsDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
-		_ = refsDB.Close()
+		_ = db.Close()     // ignore error
+		_ = refsDB.Close() // ignore error
 		return nil, fmt.Errorf("set WAL mode on refs db: %w", err)
 	}
 
@@ -170,16 +170,16 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		);
 	`)
 	if err != nil {
-		_ = db.Close()
-		_ = refsDB.Close()
+		_ = db.Close()     // ignore error
+		_ = refsDB.Close() // ignore error
 		return nil, fmt.Errorf("create index tables: %w", err)
 	}
 
 	// Point the vtab module at this refsDB and create the virtual table.
 	refsMod.SetRefsDB(refsDB)
 	if _, err := refsDB.Exec("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs()"); err != nil {
-		_ = db.Close()
-		_ = refsDB.Close()
+		_ = db.Close()     // ignore error
+		_ = refsDB.Close() // ignore error
 		return nil, fmt.Errorf("create mache_refs vtab: %w", err)
 	}
 
@@ -387,14 +387,14 @@ func (g *SQLiteGraph) flushRefsInternal() error {
 	if err != nil {
 		return fmt.Errorf("begin refs flush: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // safe to ignore
 
 	// Write file_ids
 	fileStmt, err := tx.Prepare("INSERT OR IGNORE INTO file_ids (id, path) VALUES (?, ?)")
 	if err != nil {
 		return fmt.Errorf("prepare file_ids insert: %w", err)
 	}
-	defer func() { _ = fileStmt.Close() }()
+	defer func() { _ = fileStmt.Close() }() // safe to ignore
 
 	for path, id := range fileIDs {
 		if _, err := fileStmt.Exec(id, path); err != nil {
@@ -407,7 +407,7 @@ func (g *SQLiteGraph) flushRefsInternal() error {
 	if err != nil {
 		return fmt.Errorf("prepare node_refs insert: %w", err)
 	}
-	defer func() { _ = refStmt.Close() }()
+	defer func() { _ = refStmt.Close() }() // safe to ignore
 
 	var buf bytes.Buffer
 	for token, bm := range refs {
@@ -461,7 +461,7 @@ func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query file paths: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() // safe to ignore
 
 	var nodes []*Node
 	for rows.Next() {
@@ -705,13 +705,13 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	if err != nil {
 		return fmt.Errorf("begin scan tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // safe to ignore
 
 	rows, err := tx.Query(query)
 	if err != nil {
 		return fmt.Errorf("scan query: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() // safe to ignore
 
 	// Accumulate children as slices directly (no intermediate bool sets).
 	// Flushed to sync.Map every flushBatchSize records to bound memory.

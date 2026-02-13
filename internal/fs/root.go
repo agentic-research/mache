@@ -663,7 +663,7 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 		log.Printf("query: execute %q: %v", qwh.name, err)
 		return -fuse.EIO
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = rows.Close() }() // safe to ignore
 
 	var entries []queryEntry
 	for rows.Next() {

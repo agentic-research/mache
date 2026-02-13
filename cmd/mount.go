@@ -97,7 +97,7 @@ var rootCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}
-				defer func() { _ = sg.Close() }()
+				defer func() { _ = sg.Close() }() // safe to ignore
 				start := time.Now()
 				fmt.Print("Scanning records...")
 				if err := sg.EagerScan(); err != nil {
@@ -124,7 +124,7 @@ var rootCmd = &cobra.Command{
 				if err := store.InitRefsDB(); err != nil {
 					return fmt.Errorf("init refs db: %w", err)
 				}
-				defer func() { _ = store.Close() }()
+				defer func() { _ = store.Close() }() // safe to ignore
 				if err := store.FlushRefs(); err != nil {
 					fmt.Printf("Warning: refs flush failed: %v\n", err)
 				}
