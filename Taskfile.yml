@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: mache
+  BINARY_NAME: bin/mache
   # fuse-t configuration for macOS
   FUSE_T_HEADERS: /Library/Frameworks/fuse_t.framework/Versions/Current/Headers
   FUSE_T_FRAMEWORK: /Library/Frameworks
@@ -24,7 +24,7 @@ tasks:
       - |
         if [ "$(uname)" = "Darwin" ]; then
           if [ ! -d "{{.FUSE_T_HEADERS}}" ]; then
-            echo "❌ fuse-t not found. Install with: brew install --cask fuse-t"
+            echo "❌ fuse-t not found. Run 'task setup' to install."
             exit 1
           else
             echo "✅ fuse-t found at {{.FUSE_T_HEADERS}}"
@@ -32,6 +32,25 @@ tasks:
         else
           echo "ℹ️  fuse-t check skipped (not macOS)"
         fi
+
+  setup:
+    desc: Install system dependencies (e.g. fuse-t on macOS)
+    cmds:
+      - |
+        if [ "$(uname)" = "Darwin" ]; then
+          if [ ! -d "{{.FUSE_T_HEADERS}}" ]; then
+            echo "Installing fuse-t via Homebrew..."
+            brew install --cask fuse-t
+          else
+            echo "✅ fuse-t is already installed."
+          fi
+        fi
+
+  install:
+    desc: Install mache binary to $GOPATH/bin
+    deps: [check-fuse-t]
+    cmds:
+      - go install .
 
   build:
     desc: Build and codesign mache (with FUSE-T network entitlements)
