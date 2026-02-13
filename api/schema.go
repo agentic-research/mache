@@ -16,6 +16,9 @@ type Node struct {
 	Name string `json:"name"`
 	// Selector is a query (e.g., JSONPath) to select data for this node context.
 	Selector string `json:"selector,omitempty"`
+	// SkipSelfMatch prevents the selector from matching the current context node itself.
+	// Useful for recursive schemas to avoid infinite loops.
+	SkipSelfMatch bool `json:"skip_self_match,omitempty"`
 	// Children directories.
 	Children []Node `json:"children,omitempty"`
 	// Files within this directory.

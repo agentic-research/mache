@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/ingest"
+	sitter "github.com/smacker/go-tree-sitter"
 )
 
 // InferConfig controls the schema inference pipeline.
@@ -47,12 +48,31 @@ func (inf *Inferrer) InferFromRecords(records []any) (*api.Topology, error) {
 	// Compute concept lattice
 	concepts := NextClosure(ctx)
 
+	// Check if this looks like AST data (has "type" attributes)
+	isAST := false
+	for _, attr := range ctx.Attributes {
+		if attr.Name == "type" || (attr.Kind == ScaledValue && attr.Field == "type") {
+			isAST = true
+			break
+		}
+	}
+
+	if isAST {
+		return ProjectAST(concepts, ctx), nil
+	}
+
 	// Project into topology
 	config := ProjectConfig{RootName: inf.Config.RootName}
 	if config.RootName == "" {
 		config.RootName = "records"
 	}
 	return Project(concepts, ctx, config), nil
+}
+
+// InferFromTreeSitter infers a topology from a parsed Tree-sitter AST.
+func (inf *Inferrer) InferFromTreeSitter(root *sitter.Node) (*api.Topology, error) {
+	records := ingest.FlattenAST(root)
+	return inf.InferFromRecords(records)
 }
 
 // InferFromSQLite infers a topology by streaming records from a SQLite database.

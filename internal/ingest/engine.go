@@ -18,7 +18,10 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
 const inlineThreshold = 4096
@@ -35,6 +38,7 @@ type IngestionTarget interface {
 type Engine struct {
 	Schema     *api.Topology
 	Store      IngestionTarget
+	RootPath   string // absolute path to the root of the ingestion
 	sourceFile string // absolute path, set during ingestTreeSitter for origin tracking
 }
 
@@ -79,7 +83,13 @@ func schemaUsesTreeSitter(schema *api.Topology) bool {
 
 // Ingest processes a file or directory.
 func (e *Engine) Ingest(path string) error {
-	info, err := os.Stat(path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	e.RootPath = absPath
+
+	info, err := os.Stat(absPath)
 	if err != nil {
 		return err
 	}
@@ -104,18 +114,25 @@ func (e *Engine) Ingest(path string) error {
 				}
 				return nil
 			}
-			// Filter by schema type: tree-sitter schemas skip data files,
-			// JSONPath schemas skip source files.
+			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
+			shouldParse := false
 			if treeSitter {
 				switch ext {
-				case ".go", ".py":
-					return e.ingestFile(p)
-				default:
-					return nil
+				case ".go", ".py", ".js", ".ts", ".tsx", ".sql":
+					shouldParse = true
+				}
+			} else {
+				switch ext {
+				case ".json", ".db":
+					shouldParse = true
 				}
 			}
-			return e.ingestFile(p)
+
+			if shouldParse {
+				return e.ingestFile(p)
+			}
+			return e.ingestRawFile(p)
 		})
 	}
 	return e.ingestFile(path)
@@ -131,10 +148,19 @@ func (e *Engine) ingestFile(path string) error {
 		return e.ingestJSON(path)
 	case ".py":
 		return e.ingestTreeSitter(path, python.GetLanguage())
+	case ".js":
+		return e.ingestTreeSitter(path, javascript.GetLanguage())
+	case ".ts", ".tsx":
+		// Use Typescript grammar for both .ts and .tsx (it handles JSX mostly, or use tsx grammar if strictly needed)
+		// go-tree-sitter/typescript usually has typescript and tsx subpackages.
+		// For now, use typescript.
+		return e.ingestTreeSitter(path, typescript.GetLanguage())
+	case ".sql":
+		return e.ingestTreeSitter(path, sql.GetLanguage())
 	case ".go":
 		return e.ingestTreeSitter(path, golang.GetLanguage())
 	default:
-		return nil // Skip unsupported files
+		return e.ingestRawFile(path)
 	}
 }
 
@@ -181,6 +207,90 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
+	return nil
+}
+
+func (e *Engine) ingestRawFile(path string) error {
+	rel, err := filepath.Rel(e.RootPath, path)
+	if err != nil {
+		return err
+	}
+	rel = filepath.ToSlash(rel)
+	parts := strings.Split(rel, "/")
+
+	parentID := "" // Root starts empty
+
+	// 1. Create/Ensure intermediate directories
+	for i := 0; i < len(parts)-1; i++ {
+		part := parts[i]
+		currentID := part
+		if parentID != "" {
+			currentID = parentID + "/" + part
+		}
+
+		if _, err := e.Store.GetNode(currentID); err != nil {
+			// Create directory node
+			node := &graph.Node{
+				ID:   currentID,
+				Mode: os.ModeDir | 0o555,
+			}
+			e.Store.AddNode(node)
+
+			// Link to parent
+			if parentID == "" {
+				e.Store.AddRoot(node)
+			} else {
+				parent, err := e.Store.GetNode(parentID)
+				if err == nil {
+					// Check if child already linked (dedup)
+					exists := false
+					for _, c := range parent.Children {
+						if c == currentID {
+							exists = true
+							break
+						}
+					}
+					if !exists {
+						parent.Children = append(parent.Children, currentID)
+						e.Store.AddNode(parent)
+					}
+				}
+			}
+		}
+		parentID = currentID
+	}
+
+	// 2. Create file node
+	fileID := rel
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	fileNode := &graph.Node{
+		ID:      fileID,
+		Mode:    0o444,
+		ModTime: info.ModTime(),
+		Data:    content,
+	}
+	e.Store.AddNode(fileNode)
+
+	// Link to parent
+	if parentID == "" {
+		e.Store.AddRoot(fileNode)
+	} else {
+		parent, err := e.Store.GetNode(parentID)
+		if err == nil {
+			parent.Children = append(parent.Children, fileID)
+			e.Store.AddNode(parent)
+		}
+	}
+
 	return nil
 }
 
@@ -399,6 +509,18 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	}
 
 	for _, match := range matches {
+		// Skip self-match if requested (e.g. for recursive schemas to avoid infinite loops)
+		if schema.SkipSelfMatch {
+			// Check for Tree-sitter node equality
+			if parentRoot, ok := ctx.(SitterRoot); ok {
+				if childCtx, ok := match.Context().(SitterRoot); ok {
+					if parentRoot.Node == childCtx.Node {
+						continue
+					}
+				}
+			}
+		}
+
 		name, err := RenderTemplate(schema.Name, match.Values())
 		if err != nil {
 			return fmt.Errorf("failed to render name %s: %w", schema.Name, err)

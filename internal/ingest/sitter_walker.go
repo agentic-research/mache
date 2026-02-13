@@ -113,6 +113,7 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 				vals[name] = "" // Should not happen if source matches tree
 			}
 		}
+
 		matches = append(matches, &sitterMatch{
 			values:   vals,
 			captures: captures,
