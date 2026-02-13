@@ -196,9 +196,9 @@ var rootCmd = &cobra.Command{
 			"-o", "fsname=mache",
 			"-o", "subtype=mache",
 			"-o", "nobrowse",
-			"-o", "entry_timeout=300.0",
-			"-o", "attr_timeout=300.0",
-			"-o", "negative_timeout=300.0",
+			"-o", "entry_timeout=0.0",
+			"-o", "attr_timeout=0.0",
+			"-o", "negative_timeout=0.0",
 		}
 		if !macheFs.Writable {
 			opts = append([]string{"-o", "ro"}, opts...)

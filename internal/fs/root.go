@@ -133,6 +133,47 @@ func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 		return 0, 0
 	}
 
+	if fs.isQueryPath(path) {
+		if path == "/.query" {
+			return -fuse.EISDIR, 0
+		}
+
+		parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+		name := parts[0]
+
+		if len(parts) == 1 {
+			// /.query/<name>
+			fs.queryMu.RLock()
+			_, ok := fs.queries[name]
+			fs.queryMu.RUnlock()
+			if ok {
+				return -fuse.EISDIR, 0
+			}
+			return -fuse.ENOENT, 0
+		}
+
+		// /.query/<name>/<entry>
+		entry := parts[1]
+		if entry == "ctl" {
+			writing := flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0
+			if writing {
+				// Allocate write handle for query
+				fs.handleMu.Lock()
+				fh := fs.nextHandle
+				fs.nextHandle++
+				fs.queryWriteHandles[fh] = &queryWriteHandle{name: name}
+				fs.handleMu.Unlock()
+				return 0, fh
+			}
+			return 0, 0 // Read-only open of ctl (maybe allow reading SQL back?)
+		}
+
+		// Symlinks (results) -> Open should probably fail or be handled?
+		// FUSE usually uses Readlink. Open on a symlink depends on O_NOFOLLOW.
+		// If we return 0, we claim it's a file.
+		return -fuse.ENOENT, 0
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT, 0
@@ -552,19 +593,71 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 // Magic /.query/ directory — Plan 9-style: write SQL, get symlink results
 // ---------------------------------------------------------------------------
 
+// Mkdir handles directory creation.
+
+// We only allow Mkdir under /.query to create a new query container.
+
+func (fs *MacheFS) Mkdir(path string, mode uint32) int {
+	if !fs.isQueryPath(path) {
+		return -fuse.EACCES
+	}
+
+	// Path must be /.query/<name>
+
+	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+
+	if len(parts) != 1 || parts[0] == "" {
+		return -fuse.EACCES
+	}
+
+	name := parts[0]
+
+	fs.queryMu.Lock()
+
+	if _, exists := fs.queries[name]; exists {
+
+		fs.queryMu.Unlock()
+
+		return -fuse.EEXIST
+
+	}
+
+	// Create empty query result
+
+	fs.queries[name] = &queryResult{
+		sql: "",
+
+		entries: []queryEntry{},
+	}
+
+	fs.queryMu.Unlock()
+
+	return 0
+}
+
 // queryGetattr handles Getattr for paths under /.query.
+
 func (fs *MacheFS) queryGetattr(path string, stat *fuse.Stat_t) int {
 	if path == "/.query" {
+
 		stat.Mode = fuse.S_IFDIR | 0o777
+
 		stat.Nlink = 2
+
+		stat.Ino = pathIno(path)
+
 		return 0
+
 	}
 
 	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+
 	name := parts[0]
 
 	fs.queryMu.RLock()
+
 	qr, ok := fs.queries[name]
+
 	fs.queryMu.RUnlock()
 
 	if !ok {
@@ -572,80 +665,163 @@ func (fs *MacheFS) queryGetattr(path string, stat *fuse.Stat_t) int {
 	}
 
 	if len(parts) == 1 {
+
 		// /.query/<name> — result directory
-		stat.Mode = fuse.S_IFDIR | 0o555
+
+		stat.Ino = pathIno(path)
+
+		stat.Mode = fuse.S_IFDIR | 0o777
+
 		stat.Nlink = 2
+
 		return 0
+
 	}
 
-	// /.query/<name>/<entry> — symlink
+	// /.query/<name>/<entry>
+
 	entryName := parts[1]
+
+	// Special "ctl" file
+
+	if entryName == "ctl" {
+
+		stat.Ino = pathIno(path)
+
+		stat.Mode = fuse.S_IFREG | 0o666
+
+		stat.Nlink = 1
+
+		stat.Size = int64(len(qr.sql)) // show current SQL size?
+
+		return 0
+
+	}
+
+	// Result symlinks
+
 	for _, e := range qr.entries {
 		if e.name == entryName {
+
+			stat.Ino = pathIno(path)
+
 			stat.Mode = fuse.S_IFLNK | 0o777
+
 			stat.Nlink = 1
+
 			stat.Size = int64(len(e.target))
+
 			return 0
+
 		}
 	}
+
 	return -fuse.ENOENT
 }
 
 // queryOpendir handles Opendir for /.query and /.query/<name>.
+
 func (fs *MacheFS) queryOpendir(path string) (int, uint64) {
 	var entries []string
 
 	if path == "/.query" {
+
 		entries = []string{".", ".."}
+
 		fs.queryMu.RLock()
+
 		for name := range fs.queries {
 			entries = append(entries, name)
 		}
+
 		fs.queryMu.RUnlock()
+
 	} else {
+
 		name := strings.TrimPrefix(path, "/.query/")
+
 		if strings.Contains(name, "/") {
 			return -fuse.ENOENT, 0
 		}
+
 		fs.queryMu.RLock()
+
 		qr, ok := fs.queries[name]
+
 		fs.queryMu.RUnlock()
+
 		if !ok {
 			return -fuse.ENOENT, 0
 		}
-		entries = make([]string, 0, len(qr.entries)+2)
-		entries = append(entries, ".", "..")
+
+		entries = make([]string, 0, len(qr.entries)+3)
+
+		entries = append(entries, ".", "..", "ctl") // Always list ctl
+
 		for _, e := range qr.entries {
 			entries = append(entries, e.name)
 		}
+
 	}
 
 	fs.handleMu.Lock()
+
 	fh := fs.nextHandle
+
 	fs.nextHandle++
+
 	fs.handles[fh] = &dirHandle{path: path, entries: entries}
+
 	fs.handleMu.Unlock()
 
 	return 0, fh
 }
 
 // Create handles file creation under /.query — allocates a write handle
+
 // for accumulating SQL. Also handles regular FUSE Create if needed.
+
 func (fs *MacheFS) Create(path string, flags int, mode uint32) (int, uint64) {
 	if !fs.isQueryPath(path) {
 		return -fuse.EACCES, 0
 	}
 
+	// Must be /.query/<name>/ctl
+
 	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
-	if len(parts) != 1 || parts[0] == "" {
+
+	if len(parts) != 2 {
 		return -fuse.EACCES, 0
 	}
+
 	name := parts[0]
 
+	entry := parts[1]
+
+	if entry != "ctl" {
+		return -fuse.EACCES, 0
+	}
+
+	// Ensure parent query directory exists
+
+	fs.queryMu.RLock()
+
+	_, ok := fs.queries[name]
+
+	fs.queryMu.RUnlock()
+
+	if !ok {
+		return -fuse.ENOENT, 0
+	}
+
 	fs.handleMu.Lock()
+
 	fh := fs.nextHandle
+
 	fs.nextHandle++
+
 	fs.queryWriteHandles[fh] = &queryWriteHandle{name: name}
+
 	fs.handleMu.Unlock()
 
 	return 0, fh
@@ -725,10 +901,29 @@ func (fs *MacheFS) Unlink(path string) int {
 		return -fuse.EACCES
 	}
 
-	name := strings.TrimPrefix(path, "/.query/")
-	if strings.Contains(name, "/") || name == "" {
+	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+	if len(parts) == 1 {
+		// Attempting to unlink the query directory itself
+		return -fuse.EISDIR
+	}
+
+	// Unlinking contents?
+	// ctl: prevent deletion? or allow and do nothing?
+	// symlinks: these are virtual, can't delete individual results.
+	return -fuse.EACCES
+}
+
+// Rmdir removes a query directory (/.query/<name>).
+func (fs *MacheFS) Rmdir(path string) int {
+	if !fs.isQueryPath(path) {
 		return -fuse.EACCES
 	}
+
+	parts := strings.SplitN(strings.TrimPrefix(path, "/.query/"), "/", 2)
+	if len(parts) != 1 || parts[0] == "" {
+		return -fuse.ENOTDIR
+	}
+	name := parts[0]
 
 	fs.queryMu.Lock()
 	_, ok := fs.queries[name]
@@ -740,5 +935,20 @@ func (fs *MacheFS) Unlink(path string) int {
 	if !ok {
 		return -fuse.ENOENT
 	}
+	return 0
+}
+
+// Utimens stub
+func (fs *MacheFS) Utimens(path string, tmsp []fuse.Timespec) int {
+	return 0
+}
+
+// Chmod stub
+func (fs *MacheFS) Chmod(path string, mode uint32) int {
+	return 0
+}
+
+// Chown stub
+func (fs *MacheFS) Chown(path string, uid, gid uint32) int {
 	return 0
 }
