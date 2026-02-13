@@ -686,3 +686,183 @@ func BenchmarkScanRoot_Synthetic(b *testing.B) {
 		_ = g.Close()
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Cross-reference tests (AddRef / FlushRefs / GetCallers)
+// ---------------------------------------------------------------------------
+
+func TestSQLiteGraph_AddRef_FlushRefs_GetCallers(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	// Accumulate refs
+	if err := g.AddRef("Println", "pkg/main/source"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.AddRef("Println", "pkg/util/source"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.AddRef("Sprintf", "pkg/main/source"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Flush to sidecar DB
+	if err := g.FlushRefs(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query callers of Println — should return both files
+	nodes, err := g.GetCallers("Println")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("GetCallers(Println) = %d nodes, want 2", len(nodes))
+	}
+	paths := map[string]bool{}
+	for _, n := range nodes {
+		paths[n.ID] = true
+	}
+	if !paths["pkg/main/source"] || !paths["pkg/util/source"] {
+		t.Errorf("unexpected paths: %v", paths)
+	}
+
+	// Query callers of Sprintf — should return 1 file
+	nodes, err = g.GetCallers("Sprintf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || nodes[0].ID != "pkg/main/source" {
+		t.Errorf("GetCallers(Sprintf) = %v, want [pkg/main/source]", nodes)
+	}
+
+	// Nonexistent token — should return nil, nil
+	nodes, err = g.GetCallers("nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes != nil {
+		t.Errorf("GetCallers(nonexistent) = %v, want nil", nodes)
+	}
+}
+
+func TestSQLiteGraph_FlushRefs_Idempotent(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	if err := g.AddRef("Println", "pkg/main/source"); err != nil {
+		t.Fatal(err)
+	}
+
+	// First flush succeeds
+	if err := g.FlushRefs(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second flush is a no-op (sync.Once), no error
+	if err := g.FlushRefs(); err != nil {
+		t.Fatalf("second FlushRefs should be no-op, got: %v", err)
+	}
+
+	// Data from first flush is still intact
+	nodes, err := g.GetCallers("Println")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("GetCallers after double flush = %d nodes, want 1", len(nodes))
+	}
+}
+
+func TestSQLiteGraph_RefsDB_WipedOnOpen(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+	})
+
+	// First session: add refs and flush
+	g1, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g1.AddRef("Println", "pkg/main/source"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g1.FlushRefs(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify data exists before close
+	nodes, err := g1.GetCallers("Println")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("session 1: GetCallers = %d, want 1", len(nodes))
+	}
+	_ = g1.Close()
+
+	// Second session: re-open should wipe the stale .refs.db
+	g2, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g2.Close() }()
+
+	// Stale refs should be gone — clean slate
+	nodes, err = g2.GetCallers("Println")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes != nil {
+		t.Errorf("session 2: GetCallers should be nil after wipe, got %v", nodes)
+	}
+}
+
+func TestSQLiteGraph_GetCallers_Lightweight(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	if err := g.AddRef("Println", "vulns/CVE-2024-0001/vendor"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.FlushRefs(); err != nil {
+		t.Fatal(err)
+	}
+
+	nodes, err := g.GetCallers("Println")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("GetCallers = %d nodes, want 1", len(nodes))
+	}
+
+	// Verify lightweight: Data should be nil (no eager content resolution)
+	if nodes[0].Data != nil {
+		t.Errorf("GetCallers returned node with Data populated (len=%d), want nil (lightweight)", len(nodes[0].Data))
+	}
+	if nodes[0].ID != "vulns/CVE-2024-0001/vendor" {
+		t.Errorf("node ID = %q, want %q", nodes[0].ID, "vulns/CVE-2024-0001/vendor")
+	}
+}

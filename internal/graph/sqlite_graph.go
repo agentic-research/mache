@@ -70,7 +70,7 @@ type SQLiteGraph struct {
 
 	// In-memory ref accumulator: token → bitmap of file IDs.
 	// Populated by AddRef during ingestion, written to refsDB by FlushRefs.
-	// Populated by AddRef during ingestion, written to refsDB by FlushRefs.
+	flushOnce   sync.Once
 	pendingMu   sync.Mutex
 	pendingRefs map[string]*roaring.Bitmap
 	nextFileID  uint32
@@ -119,6 +119,11 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	// Sidecar DB for cross-reference index (token→bitmap, path→fileID).
 	// Kept separate so we never write to the source Venturi database.
 	refsPath := dbPath + ".refs.db"
+	// Wipe stale sidecar — refs are a derived index, rebuilt each run.
+	// The in-memory nextFileID counter starts at 0 on every open; if a
+	// previous .refs.db exists with IDs 0..N mapped to different paths,
+	// INSERT OR IGNORE silently drops the new mappings.
+	_ = os.Remove(refsPath)
 	refsDB, err := sql.Open("sqlite", refsPath)
 	if err != nil {
 		_ = db.Close()
@@ -316,13 +321,22 @@ func (g *SQLiteGraph) AddRef(token, nodeID string) error {
 // transaction. Call once after ingestion is complete. This replaces the old
 // per-call AddRef write path, reducing N*M SQL round-trips to exactly
 // len(fileIDMap) + len(pendingRefs) inserts in one transaction.
+//
+// Guarded by sync.Once — safe to call multiple times; only the first call
+// performs the flush. This prevents the double-call bug where a second flush
+// would reset nextFileID to 0, causing ID collisions in file_ids.
 func (g *SQLiteGraph) FlushRefs() error {
+	var flushErr error
+	g.flushOnce.Do(func() {
+		flushErr = g.flushRefsInternal()
+	})
+	return flushErr
+}
+
+func (g *SQLiteGraph) flushRefsInternal() error {
 	g.pendingMu.Lock()
 	refs := g.pendingRefs
 	fileIDs := g.fileIDMap
-	g.pendingRefs = make(map[string]*roaring.Bitmap)
-	g.fileIDMap = make(map[string]uint32)
-	g.nextFileID = 0
 	g.pendingMu.Unlock()
 
 	if len(refs) == 0 {
@@ -415,10 +429,12 @@ func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
 		if err := rows.Scan(&path); err != nil {
 			continue
 		}
-		node, err := g.GetNode(path)
-		if err == nil {
-			nodes = append(nodes, node)
-		}
+		// Return lightweight node — content resolved on demand by FUSE Read.
+		// The Graph interface doesn't require Data to be populated here.
+		nodes = append(nodes, &Node{
+			ID:   path,
+			Mode: 0o444,
+		})
 	}
 	return nodes, nil
 }
