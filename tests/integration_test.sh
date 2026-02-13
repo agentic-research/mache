@@ -20,11 +20,13 @@ NC='\033[0m'
 
 cleanup() {
 
-    # echo "Cleaning up..."
+    echo "Cleaning up..."
 
     if [ -n "$MACHE_PID" ]; then
 
         kill "$MACHE_PID" 2>/dev/null || true
+
+
 
         wait "$MACHE_PID" 2>/dev/null || true
 
@@ -32,19 +34,35 @@ cleanup() {
 
 
 
-    if mount | grep -q "$MNT_DIR"; then
-
-        # echo "Unmounting $MNT_DIR..."
-
-        umount "$MNT_DIR" 2>/dev/null || true
-
-    fi
+        if mount | grep -q "$MNT_DIR"; then
 
 
 
-    # echo "Removing sandbox..."
+            echo "Unmounting $MNT_DIR..."
 
-    rm -rf "$SANDBOX_DIR"
+
+
+            umount "$MNT_DIR" 2>/dev/null || true
+
+
+
+        fi
+
+
+
+
+
+
+
+        echo "Removing sandbox..."
+
+
+
+        rm -rf "$SANDBOX_DIR"
+
+
+
+
 
 }
 
@@ -58,17 +76,33 @@ trap cleanup EXIT
 
 # 1. Setup Sandbox (Idempotent)
 
-# echo "--- 1. Setting up Sandbox ---"
+
+
+echo "--- 1. Setting up Sandbox ---"
+
+
 
 rm -rf "$SANDBOX_DIR"
 
+
+
 mkdir -p "$SRC_DIR"
+
+
 
 mkdir -p "$MNT_DIR"
 
 
 
+
+
+
+
 echo "Creating schema..."
+
+
+
+
 
 cp examples/go-schema.json "${SANDBOX_DIR}/schema.json"
 

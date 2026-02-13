@@ -1,10 +1,36 @@
 # 🗂️ Mache
 
 [![CI](https://github.com/agentic-research/mache/actions/workflows/ci.yml/badge.svg)](https://github.com/agentic-research/mache/actions/workflows/ci.yml)
+[![Integration](https://github.com/agentic-research/mache/actions/workflows/integration.yml/badge.svg)](https://github.com/agentic-research/mache/actions/workflows/integration.yml)
 
-**The Universal Semantic Overlay Engine**
+## Mache: The Graph-Native Filesystem
 
-Mache projects structured data and source code into navigable, read-only filesystems using declarative schemas. Point it at a JSON feed or a codebase, define a topology (or let mache infer one), and mount a FUSE filesystem you can explore with `ls`, `cat`, `grep`, and friends.
+**We realized that JSON, YAML, Source Code, and Filesystems are all just Graphs.**
+
+Mache is the engine that aligns them. It treats your structured data not as text to be parsed, but as a Graph to be mounted. By bridging the gap between your Data's structure (ASTs, Objects) and your OS's structure (Directories, Inodes), Mache allows you to traverse complex logic as easily as you traverse a directory tree.
+
+And because it's a Graph, Mache gives you the ultimate tool to query it: **SQL**.
+
+```text
+       The Data Graph                The Mache Bridge               The OS Graph
+    (JSON / Code / YAML)           (Query & Transform)             (Filesystem)
+
+       [Root Object]                                                 / (Mount)
+      /      |      \                                              /     |     \
+  {key}    {key}   [Arr]    <====   SQL Projection   ====>      /key/  /key/  /Arr/
+    |        |       |                                            |      |      |
+  "val"    {obj}   {item}                                       file    dir/   dir/
+```
+
+### The "Aha!" Moment: Isomorphism
+
+If `Data = Graph` and `Filesystem = Graph`, then the fact that they don't map to each other 1:1 is a failure of modern operating systems. Mache fixes that alignment.
+
+1.  **SQL as the Operator:** The SQLite sidecar isn't just a feature; it's the mathematical operator for the graph.
+2.  **Schema as Topology:** The schema isn't configuration; it's the topology definition for the graph projection.
+3.  **FUSE as Traversal:** FUSE is just the standard interface for graph traversal (`cd` = edge traversal, `ls` = node enumeration).
+
+---
 
 ## Table of Contents
 

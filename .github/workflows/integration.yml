@@ -1,0 +1,35 @@
+name: Integration Test
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install libfuse (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libfuse-dev fuse
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Build mache
+        run: go build -o mache .
+
+      - name: Run Integration Test
+        run: ./tests/integration_test.sh
