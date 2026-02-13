@@ -2,35 +2,55 @@
 
 ## High-Level Design
 
-```
- Schema (JSON)         Data Source
- ┌─────────────┐      ┌──────────────────────────────────────┐
- │ topology:    │      │ .db (SQLite)  │ .json   │ .go / .py │
- │   nodes:     │      └───────┬───────┴────┬────┴─────┬─────┘
- │     ...      │              │            │          │
- └──────┬───────┘              │     ┌──────┴──────────┘
-        │              ┌───────┘     │
-        ▼              ▼             ▼
- ┌──────────────┐  ┌─────────────────────────────┐
- │ SQLiteGraph  │  │     Ingestion Engine        │
- │ (zero-copy)  │  │  Walker interface:          │
- │ Direct SQL   │  │   - JsonWalker (JSONPath)   │
- │ queries on   │  │   - SitterWalker (AST)      │
- │ source DB    │  │   - SQLite loader           │
- └──────┬───────┘  └──────────────┬──────────────┘
-        │                         ▼
-        │          ┌─────────────────────────────┐
-        │          │   Graph (MemoryStore)       │
-        │          │   Node { ID, Mode, Data,   │
-        │          │          Children }         │
-        │          └──────────────┬──────────────┘
-        │                        │
-        └────────┬───────────────┘
-                 ▼
-      ┌─────────────────────────────────┐
-      │   FUSE Bridge (cgofuse)         │
-      │   ls / cat / grep / find        │
-      └─────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Configuration
+        Schema[Schema (JSON)]
+    end
+
+    subgraph "Data Sources"
+        SQLiteFile[.db (SQLite)]
+        FlatFile[.json]
+        SourceCode[.go / .py]
+    end
+
+    subgraph "Mache Core"
+        SQLiteGraph[SQLiteGraph<br/>(Zero-Copy / Direct SQL)]
+        Engine[Ingestion Engine]
+
+        subgraph "Walkers"
+            JW[JsonWalker]
+            SW[SitterWalker]
+            SL[SQLite Loader]
+        end
+
+        MemoryStore[MemoryStore Graph]
+    end
+
+    subgraph "System Interface"
+        FUSE[FUSE Bridge<br/>(cgofuse)]
+        Tools[User Tools<br/>ls, cat, grep]
+    end
+
+    Schema -->|Configures| SQLiteGraph
+    Schema -->|Configures| Engine
+
+    SQLiteFile -->|Direct Read| SQLiteGraph
+    FlatFile -->|Ingest| Engine
+    SourceCode -->|Ingest| Engine
+
+    Engine --> JW
+    Engine --> SW
+    Engine --> SL
+
+    JW -->|Builds| MemoryStore
+    SW -->|Builds| MemoryStore
+    SL -->|Builds| MemoryStore
+
+    SQLiteGraph -->|Graph Interface| FUSE
+    MemoryStore -->|Graph Interface| FUSE
+
+    FUSE --- Tools
 ```
 
 There are two data paths depending on the source:
