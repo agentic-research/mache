@@ -5,7 +5,7 @@
 ```mermaid
 graph TD
     subgraph Configuration
-        Schema[Schema (JSON)]
+        Schema["Schema (JSON)"]
     end
 
     subgraph "Data Sources"
