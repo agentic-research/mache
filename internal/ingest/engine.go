@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
@@ -32,6 +33,7 @@ type IngestionTarget interface {
 	AddNode(n *graph.Node)
 	AddRoot(n *graph.Node)
 	AddRef(token, nodeID string) error
+	DeleteFileNodes(filePath string)
 }
 
 // Engine drives the ingestion process.
@@ -169,13 +171,24 @@ func (e *Engine) ingestJSON(path string) error {
 	if err != nil {
 		return err
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	modTime := info.ModTime()
+
 	var data any
 	if err := json.Unmarshal(content, &data); err != nil {
 		return fmt.Errorf("failed to parse json %s: %w", path, err)
 	}
+
+	// Clear old nodes from this file (if any)
+	absPath, _ := filepath.Abs(path)
+	e.Store.DeleteFileNodes(absPath)
+
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", ""); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", modTime); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -191,6 +204,15 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 	if err != nil {
 		return err
 	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return err
+	}
+	modTime := info.ModTime()
+
+	// Clear old nodes from this source file
+	e.Store.DeleteFileNodes(absPath)
+
 	parser := sitter.NewParser()
 	parser.SetLanguage(lang)
 	tree, err := parser.ParseCtx(context.Background(), nil, content)
@@ -203,7 +225,7 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 	e.sourceFile = absPath
 	defer func() { e.sourceFile = "" }()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, root, "", sourceFile); err != nil {
+		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -272,11 +294,19 @@ func (e *Engine) ingestRawFile(path string) error {
 		return err
 	}
 
+	absPath, _ := filepath.Abs(path)
+	e.Store.DeleteFileNodes(absPath)
+
 	fileNode := &graph.Node{
 		ID:      fileID,
 		Mode:    0o444,
 		ModTime: info.ModTime(),
 		Data:    content,
+		Origin: &graph.SourceOrigin{
+			FilePath:  absPath,
+			StartByte: 0,
+			EndByte:   uint32(len(content)),
+		},
 	}
 	e.Store.AddNode(fileNode)
 
@@ -502,7 +532,7 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string, modTime time.Time) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -555,6 +585,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		node := &graph.Node{
 			ID:       id,
 			Mode:     os.ModeDir | 0o555, // Read-only dir
+			ModTime:  modTime,            // Propagate source file time
 			Children: existingChildren,
 		}
 		e.Store.AddNode(node)
@@ -584,7 +615,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, modTime); err != nil {
 					return err
 				}
 			}
@@ -618,9 +649,10 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			}
 
 			fileNode := &graph.Node{
-				ID:   fileId,
-				Mode: 0o444,
-				Data: []byte(content),
+				ID:      fileId,
+				Mode:    0o444,
+				ModTime: modTime,
+				Data:    []byte(content),
 			}
 
 			// Populate Origin from tree-sitter captures for write-back
