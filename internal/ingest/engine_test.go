@@ -379,6 +379,68 @@ func init() {
 	assert.Contains(t, fns.Children, "mypkg/functions/init.from_b_go")
 }
 
+// TestEngine_Ingest_SkipsHiddenDirs verifies that the directory walk skips
+// dot-prefixed directories like .mache-mount, .git, etc. This prevents
+// recursive self-mounting when mache's FUSE mount lives inside the data source.
+func TestEngine_Ingest_SkipsHiddenDirs(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+
+	// Visible Go file — should be ingested
+	err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(`package demo
+
+func Visible() {}
+`), 0o644)
+	require.NoError(t, err)
+
+	// Hidden directory simulating a FUSE mount point
+	macheMountDir := filepath.Join(tmpDir, ".mache-mount", "default", "graph", "functions")
+	require.NoError(t, os.MkdirAll(macheMountDir, 0o755))
+	err = os.WriteFile(filepath.Join(tmpDir, ".mache-mount", "default", "graph", "functions", "Trap.go"), []byte(`package trap
+
+func Trap() {}
+`), 0o644)
+	require.NoError(t, err)
+
+	// Another hidden dir (.git style)
+	gitDir := filepath.Join(tmpDir, ".git", "objects")
+	require.NoError(t, os.MkdirAll(gitDir, 0o755))
+	err = os.WriteFile(filepath.Join(tmpDir, ".git", "config.go"), []byte(`package git
+
+func GitConfig() {}
+`), 0o644)
+	require.NoError(t, err)
+
+	// Non-hidden subdir — should be ingested
+	subDir := filepath.Join(tmpDir, "pkg")
+	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	err = os.WriteFile(filepath.Join(subDir, "util.go"), []byte(`package pkg
+
+func Util() {}
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(tmpDir))
+
+	// Visible file was ingested
+	_, err = store.GetNode("demo/functions/Visible/source")
+	require.NoError(t, err, "Visible() should be ingested from root")
+
+	// Subdir file was ingested
+	_, err = store.GetNode("pkg/functions/Util/source")
+	require.NoError(t, err, "Util() should be ingested from pkg/")
+
+	// Hidden dir files were NOT ingested
+	_, err = store.GetNode("trap/functions/Trap/source")
+	assert.ErrorIs(t, err, graph.ErrNotFound, "Trap() from .mache-mount should NOT be ingested")
+
+	_, err = store.GetNode("git/functions/GitConfig/source")
+	assert.ErrorIs(t, err, graph.ErrNotFound, "GitConfig() from .git should NOT be ingested")
+}
+
 func TestEngine_IngestTreeSitter_CrossReference(t *testing.T) {
 	schema := loadGoSchema(t)
 
