@@ -22,11 +22,17 @@ jobs:
       - name: Install FUSE
         run: sudo apt-get install -y libfuse-dev
 
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build
-        run: go build ./...
+        run: task build
 
       - name: Test
-        run: go test -race ./...
+        run: task test
 
   lint:
     runs-on: ubuntu-latest
