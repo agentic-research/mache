@@ -29,9 +29,9 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=1
-      # Point to where the CI workflow will install fuse-t
-      - CGO_CFLAGS=-I/usr/local/include/fuse-t
-      - CGO_LDFLAGS=-L/usr/local/lib -lfuse-t -Wl,-rpath,/usr/local/lib
+      # Align with Taskfile.yml: Use Framework paths for macOS
+      - CGO_CFLAGS=-I/Library/Frameworks/fuse_t.framework/Versions/Current/Headers
+      - CGO_LDFLAGS=-F/Library/Frameworks -framework fuse_t -Wl,-rpath,/Library/Frameworks
     flags:
       - -trimpath
     ldflags:
