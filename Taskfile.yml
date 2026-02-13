@@ -8,8 +8,8 @@ vars:
 
 env:
   # Set CGO flags for fuse-t on macOS (no-op on other platforms)
-  CGO_CFLAGS: -I{{.FUSE_T_HEADERS}}
-  CGO_LDFLAGS: -F{{.FUSE_T_FRAMEWORK}} -framework fuse_t -Wl,-rpath,{{.FUSE_T_FRAMEWORK}}
+  CGO_CFLAGS: '{{if eq .OS "darwin"}}-I{{.FUSE_T_HEADERS}}{{end}}'
+  CGO_LDFLAGS: '{{if eq .OS "darwin"}}-F{{.FUSE_T_FRAMEWORK}} -framework fuse_t -Wl,-rpath,{{.FUSE_T_FRAMEWORK}}{{end}}'
 
 tasks:
   default:
@@ -38,7 +38,8 @@ tasks:
     deps: [check-fuse-t]
     cmds:
       - go build -o {{.BINARY_NAME}} .
-      - codesign -s - --force --deep --entitlements entitlements.plist ./{{.BINARY_NAME}}
+      - cmd: codesign -s - --force --deep --entitlements entitlements.plist ./{{.BINARY_NAME}}
+        platforms: [darwin]
     sources:
       - "**/*.go"
       - go.mod
