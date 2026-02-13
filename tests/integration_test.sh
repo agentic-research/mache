@@ -17,62 +17,136 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # Cleanup function
+
 cleanup() {
+
     # echo "Cleaning up..."
+
     if [ -n "$MACHE_PID" ]; then
+
         kill "$MACHE_PID" 2>/dev/null || true
+
         wait "$MACHE_PID" 2>/dev/null || true
+
     fi
+
+
 
     if mount | grep -q "$MNT_DIR"; then
+
         # echo "Unmounting $MNT_DIR..."
+
         umount "$MNT_DIR" 2>/dev/null || true
+
     fi
 
+
+
     # echo "Removing sandbox..."
+
     rm -rf "$SANDBOX_DIR"
+
 }
+
+
 
 # Register cleanup
+
 trap cleanup EXIT
 
+
+
 # 1. Setup Sandbox (Idempotent)
+
 # echo "--- 1. Setting up Sandbox ---"
+
 rm -rf "$SANDBOX_DIR"
+
 mkdir -p "$SRC_DIR"
+
 mkdir -p "$MNT_DIR"
 
+
+
 echo "Creating schema..."
+
 cp examples/go-schema.json "${SANDBOX_DIR}/schema.json"
 
+
+
 echo "Creating dummy Go file..."
+
 cat > "${SRC_DIR}/main.go" <<EOF
+
 package main
 
+
+
 func HelloWorld() {
+
 	println("hello")
+
 	DatabaseInit()
+
 }
 
+
+
 func DatabaseInit() { println("db init") }
+
 EOF
 
+
+
 # 2. Build & Mount
+
 echo "--- 2. Build & Mount ---"
+
 # echo "Building mache binary..."
+
 # rm -f mache
+
 # if ! task build; then
+
 #     echo -e "${RED}Build failed!${NC}"
+
 #     exit 1
+
 # fi
 
+
+
 echo "Mounting mache..."
+
+
+
 # Pass the schema explicitly
-"$MACHE_BIN" "$MNT_DIR" -d "$SRC_DIR" -s "${SANDBOX_DIR}/schema.json" -w &
+
+
+
+# Redirect stderr to suppress "mount failed" on kill
+
+
+
+"$MACHE_BIN" "$MNT_DIR" -d "$SRC_DIR" -s "${SANDBOX_DIR}/schema.json" -w >/dev/null 2>&1 &
+
+
+
 MACHE_PID=$!
+
+
+
 echo "Mache running with PID: $MACHE_PID"
 
+
+
+
+
+
+
 echo "Waiting 2 seconds for ingestion..."
+
+
 sleep 2
 
 # 3. Verify SQL Query
