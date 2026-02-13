@@ -22,7 +22,7 @@ task tidy           # go mod tidy
 
 Run a single test: `task test -- -run TestName` or set the env vars from Taskfile.yml and use `go test -v -run TestName ./internal/graph/`.
 
-Integration tests require real Venturi databases and are gated behind env vars (`MACHE_TEST_KEV_DB`, `MACHE_TEST_NVD_DB`) — they skip automatically when unset.
+Integration tests require real SQLite databases and are gated behind env vars (`MACHE_TEST_KEV_DB`, `MACHE_TEST_NVD_DB`) — they skip automatically when unset.
 
 ## Architecture
 

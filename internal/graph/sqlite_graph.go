@@ -119,7 +119,7 @@ func (g *SQLiteGraph) EagerScan() error {
 
 // OpenSQLiteGraph opens a connection to the source DB and compiles the schema.
 func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
-	// Source DB opened read-only — Venturi data is immutable.
+	// Source DB opened read-only — source data is immutable.
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err)
@@ -127,7 +127,7 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	db.SetMaxOpenConns(4)
 
 	// Sidecar DB for cross-reference index (token→bitmap, path→fileID).
-	// Kept separate so we never write to the source Venturi database.
+	// Kept separate so we never write to the source database.
 	refsPath := dbPath + ".refs.db"
 	// Wipe stale sidecar — refs are a derived index, rebuilt each run.
 	// The in-memory nextFileID counter starts at 0 on every open; if a
