@@ -2,7 +2,7 @@
 
 **The Universal Semantic Overlay Engine**
 
-Mache projects structured data and source code into navigable, read-only filesystems using declarative schemas. Point it at a JSON feed or a codebase, define a topology, and mount a FUSE filesystem you can explore with `ls`, `cat`, `grep`, and friends.
+Mache projects structured data and source code into navigable, read-only filesystems using declarative schemas. Point it at a JSON feed or a codebase, define a topology (or let mache infer one), and mount a FUSE filesystem you can explore with `ls`, `cat`, `grep`, and friends.
 
 ## Table of Contents
 
@@ -41,6 +41,9 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | NVD Schema (`examples/nvd-schema.json`) | **Included** | 323K CVE records sharded by year/month over the SQLite direct backend |
 | KEV Schema (`examples/kev-schema.json`) | **Included** | CISA Known Exploited Vulnerabilities catalog |
 | Go Source Schema (`examples/go-schema.json`) | **Included** | Functions, methods, types, constants, variables, imports; same-name dedup (e.g. multiple `init()`) |
+| Schema Inference (FCA) | **Implemented** | `--infer` flag; reservoir-samples records, builds concept lattice, projects topology automatically |
+| Cross-Reference Indexing | **Implemented** | Roaring bitmap inverted index; token → file ID lookups for callers/usages |
+| Virtual `_schema.json` | **Implemented** | Exposes active topology schema as a virtual file at the FUSE mount root |
 | Write-Back (FUSE writes) | **Implemented** | `--writable` flag; splice edits into source, run goimports, re-ingest. Tree-sitter sources only |
 | Content-Addressed Storage (CAS) | **Ideated** | Described in ADR-0003; no code exists |
 | Layered Overlays (Docker-style) | **Ideated** | Composable data views; no code exists |
@@ -94,6 +97,8 @@ There are two data paths depending on the source:
 2. **Ingestion (`.json`, `.go`, `.py`)** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`.
 
 Both paths are fronted by the same `Graph` interface and `FUSE Bridge`. A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
+
+With `--infer`, the schema itself can be derived automatically: the `lattice` package reservoir-samples records from a SQLite source, builds a Formal Concept Analysis lattice, and projects it into a valid `Topology` — detecting identifier fields, temporal shard levels, and leaf files without any hand-authored schema.
 
 ## Quick Start
 
@@ -157,6 +162,12 @@ go test ./...
 # Mount a SQLite database (instant — zero-copy, direct SQL queries)
 ./mache --schema examples/nvd-schema.json --data results.db /tmp/nvd
 
+# Mount with zero-config schema inference (no schema authoring needed)
+./mache --infer --data results.db /tmp/nvd
+
+# Infer schema and save it for hand-tuning
+./mache --infer --data results.db --schema inferred.json /tmp/nvd
+
 # Mount a JSON file (ingests into memory)
 ./mache --schema schema.json --data data.json /tmp/mount
 
@@ -164,6 +175,7 @@ go test ./...
 #   -s, --schema     Path to topology schema (default: ~/.mache/mache.json)
 #   -d, --data       Path to data source file or directory (default: ~/.mache/data.json)
 #   -w, --writable   Enable write-back (splice edits into source files)
+#       --infer      Auto-infer schema from data via Formal Concept Analysis
 ```
 
 ### Write-Back Mode
@@ -338,6 +350,7 @@ Re-ingestion after each write ensures all byte offsets stay correct — tree-sit
 | [0002: Declarative Topology Schema](docs/adr/0002-declarative-topology-schema.md) | Accepted | Schema-driven ingestion with Go templates |
 | [0003: Self-Organizing Learned FS](docs/adr/0003-self-organizing-learned-filesystem.md) | Proposed | ML-driven directory reorganization (ideated) |
 | [0004: MVCC Memory Ledger](docs/adr/0004-mvcc-memory-ledger.md) | Proposed | ECS + mmap + RCU for 10M+ entities (ideated) |
+| [0005: FCA Schema Inference](docs/adr/0005-fca-schema-inference.md) | Proposed | NextClosure on sampled records, bitmap-accelerated lattice → topology |
 
 ## Roadmap
 
@@ -351,6 +364,9 @@ Re-ingestion after each write ensures all byte offsets stay correct — tree-sit
 - Go schema captures: functions, methods, types, constants, variables, imports
 - Init dedup: same-name constructs get `.from_<filename>` suffixes (`engine.go:dedupSuffix`)
 - Parallel SQLite ingestion: 323K NVD records in ~6s (worker pool in `engine.go:ingestSQLiteStreaming`)
+- FCA schema inference: `--infer` auto-generates topology from data via Formal Concept Analysis (~33ms for 1.5K KEV records)
+- Cross-reference indexing: roaring bitmap inverted index for token → file lookups
+- Virtual `_schema.json` at mount root exposing the active topology
 
 **Known limitations:**
 - fuse-t NFS translation bottleneck: ~8s for `ls` on 30K+ entry dirs (cookie verifier invalidation)
@@ -394,7 +410,6 @@ The `SitterWalker` (`sitter_walker.go`) and `OriginProvider` interface already s
 
 - **Additional walkers** — YAML, TOML, HCL, more tree-sitter grammars (TypeScript, Rust). Adding a grammar requires: a `smacker/go-tree-sitter` language binding + a file extension case in `engine.go:ingestFile` + an example schema
 - **Go NFS server** — Replace fuse-t's NFS translation layer for full control over caching, pagination, and large directory performance. Would eliminate the 30K+ dir bottleneck
-- **Schema auto-inference** — `mache infer` command: analyze JSON data to generate a schema. Entropy-based hierarchy selection (high-cardinality fields → deeper nesting). Investigated in INVESTIGATION_LOG.md (Feb 2026)
 
 ### Long-Term (ADR-Described, No Code)
 
@@ -410,7 +425,7 @@ For future sessions — where things live:
 
 | Concern | File | Key functions/types |
 |---------|------|-------------------|
-| CLI + mount wiring | `cmd/mount.go` | `rootCmd`, `--writable` flag |
+| CLI + mount wiring | `cmd/mount.go` | `rootCmd`, `--writable`, `--infer` flags |
 | Schema types | `api/schema.go` | `Topology`, `Node`, `Leaf` |
 | Ingestion orchestration | `internal/ingest/engine.go` | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `dedupSuffix` |
 | JSON queries | `internal/ingest/json_walker.go` | `JsonWalker.Query` |
@@ -422,6 +437,7 @@ For future sessions — where things live:
 | FUSE bridge + writes | `internal/fs/root.go` | `MacheFS`, `writeHandle`, `Open`, `Write`, `Release` |
 | Source splicing | `internal/writeback/splice.go` | `Splice` |
 | Go schema | `examples/go-schema.json` | functions, methods, types, constants, variables, imports |
+| FCA inference | `internal/lattice/` | `FormalContext`, `NextClosure`, `Project`, `Inferrer` |
 | Build/test | `Taskfile.yml` | `task build`, `task test`, `task check` |
 
 ## Development
