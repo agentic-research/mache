@@ -5,7 +5,7 @@ set -e
 SANDBOX="/tmp/mache-arena"
 REPO="$SANDBOX/repo"
 MNT="$SANDBOX/mnt"
-MACHE_BIN="$(pwd)/mache"
+MACHE_BIN="$(pwd)/bin/mache"
 
 # Colors
 GREEN='\033[0;32m'
@@ -15,8 +15,11 @@ NC='\033[0m'
 
 cleanup() {
     echo -e "${BLUE}Cleaning up...${NC}"
-    if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi
+    # Unmount first to let Mache exit gracefully
     umount "$MNT" 2>/dev/null || true
+    # Wait a moment for Mache to shutdown
+    sleep 0.5
+    if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; fi
     # rm -rf "$SANDBOX" # Keep sandbox for inspection if failed?
 }
 trap cleanup EXIT
