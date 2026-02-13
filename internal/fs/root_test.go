@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"encoding/json"
 	"io/fs"
 	"testing"
 
@@ -198,7 +199,7 @@ func TestMacheFS_Readdir(t *testing.T) {
 			name:        "readdir root lists graph roots",
 			path:        "/",
 			wantErr:     0,
-			wantEntries: []string{".", "..", "vulns"},
+			wantEntries: []string{".", "..", "_schema.json", "vulns"},
 		},
 		{
 			name:        "readdir vulns lists CVEs",
@@ -467,6 +468,66 @@ func TestMacheFS_Read(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMacheFS_SchemaFile(t *testing.T) {
+	mfs := newTestFS()
+
+	// Getattr returns a regular file with correct size
+	var stat fuse.Stat_t
+	errCode := mfs.Getattr("/_schema.json", &stat, 0)
+	if errCode != 0 {
+		t.Fatalf("Getattr(/_schema.json) = %v, want 0", errCode)
+	}
+	if stat.Mode&fuse.S_IFREG == 0 {
+		t.Error("_schema.json should be a regular file")
+	}
+	if stat.Size == 0 {
+		t.Error("_schema.json size should be > 0")
+	}
+
+	// Open succeeds read-only
+	errCode, _ = mfs.Open("/_schema.json", 0)
+	if errCode != 0 {
+		t.Fatalf("Open(/_schema.json) = %v, want 0", errCode)
+	}
+
+	// Read returns valid JSON matching the schema
+	buf := make([]byte, stat.Size)
+	n := mfs.Read("/_schema.json", buf, 0, 0)
+	if int64(n) != stat.Size {
+		t.Fatalf("Read() n = %v, want %v", n, stat.Size)
+	}
+
+	var parsed api.Topology
+	if err := json.Unmarshal(buf[:n], &parsed); err != nil {
+		t.Fatalf("_schema.json is not valid JSON: %v", err)
+	}
+	if parsed.Version != "v1alpha1" {
+		t.Errorf("parsed version = %q, want %q", parsed.Version, "v1alpha1")
+	}
+
+	// Root readdir includes _schema.json
+	errCode2, fh := mfs.Opendir("/")
+	if errCode2 != 0 {
+		t.Fatalf("Opendir(/) = %v, want 0", errCode2)
+	}
+	var entries []string
+	fill := func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return true
+	}
+	mfs.Readdir("/", fill, 0, fh)
+	found := false
+	for _, e := range entries {
+		if e == "_schema.json" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("root readdir missing _schema.json, got %v", entries)
 	}
 }
 

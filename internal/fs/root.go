@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"encoding/json"
 	"hash/fnv"
 	"log"
 	"os/exec"
@@ -47,6 +48,9 @@ type MacheFS struct {
 	Graph     graph.Graph
 	mountTime fuse.Timespec
 
+	// Virtual _schema.json content (serialized once at mount time)
+	schemaJSON []byte
+
 	// Write-back support (nil Engine = read-only)
 	Writable bool
 	Engine   *ingest.Engine
@@ -60,9 +64,12 @@ type MacheFS struct {
 }
 
 func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
+	sj, _ := json.MarshalIndent(schema, "", "  ")
+	sj = append(sj, '\n')
 	return &MacheFS{
 		Schema:       schema,
 		Graph:        g,
+		schemaJSON:   sj,
 		mountTime:    fuse.NewTimespec(time.Now()),
 		handles:      make(map[uint64][]string),
 		writeHandles: make(map[uint64]*writeHandle),
@@ -72,6 +79,13 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 // Open validates that the path is a file node. For writable mounts,
 // write flags allocate a writeHandle backed by the node's current content.
 func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
+	if path == "/_schema.json" {
+		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
+			return -fuse.EACCES, 0
+		}
+		return 0, 0
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT, 0
@@ -128,6 +142,13 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return 0
 	}
 
+	if path == "/_schema.json" {
+		stat.Mode = fuse.S_IFREG | 0o444
+		stat.Nlink = 1
+		stat.Size = int64(len(fs.schemaJSON))
+		return 0
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT
@@ -165,8 +186,11 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return -fuse.ENOENT, 0
 	}
 
-	entries := make([]string, 0, len(children)+2)
+	entries := make([]string, 0, len(children)+3)
 	entries = append(entries, ".", "..")
+	if path == "/" {
+		entries = append(entries, "_schema.json")
+	}
 	for _, c := range children {
 		entries = append(entries, filepath.Base(c))
 	}
@@ -203,8 +227,11 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		if err != nil {
 			return -fuse.ENOENT
 		}
-		entries = make([]string, 0, len(children)+2)
+		entries = make([]string, 0, len(children)+3)
 		entries = append(entries, ".", "..")
+		if path == "/" {
+			entries = append(entries, "_schema.json")
+		}
 		for _, c := range children {
 			entries = append(entries, filepath.Base(c))
 		}
@@ -233,6 +260,14 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 			return 0
 		}
 		n := copy(buff, wh.buf[ofst:])
+		return n
+	}
+
+	if path == "/_schema.json" {
+		if ofst >= int64(len(fs.schemaJSON)) {
+			return 0
+		}
+		n := copy(buff, fs.schemaJSON[ofst:])
 		return n
 	}
 
