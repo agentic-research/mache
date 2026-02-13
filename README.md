@@ -99,7 +99,8 @@ task test
 
 ### Example: NVD Vulnerability Database
 
-Mount 323K NVD CVE records as a browsable filesystem, sharded by year and month:
+Mount 323K NVD CVE records as a browsable filesystem, sharded by year and month.
+(Data can be generated using [Venturi](https://github.com/agentic-research/venturi)):
 
 ```bash
 ./mache --schema examples/nvd-schema.json \
