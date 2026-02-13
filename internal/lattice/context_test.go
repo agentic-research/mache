@@ -77,9 +77,14 @@ func TestScaleRecord_DateScaling(t *testing.T) {
 	stats := AnalyzeFields(records)
 	attrs := DecideScaling(stats, len(records))
 
-	// Date field should produce year and month scaled attributes
+	// Date field should produce year and month scaled attributes + presence
 	var years, months []string
+	hasPresence := false
 	for _, a := range attrs {
+		if a.Kind == Presence && a.Name == "published" {
+			hasPresence = true
+			continue
+		}
 		assert.Equal(t, ScaledValue, a.Kind)
 		assert.Equal(t, "published", a.Field)
 		if name := a.Name; len(name) > 0 {
@@ -91,6 +96,7 @@ func TestScaleRecord_DateScaling(t *testing.T) {
 			}
 		}
 	}
+	assert.True(t, hasPresence, "should include presence attribute for date field")
 	assert.ElementsMatch(t, []string{"2023", "2024"}, years)
 	assert.Contains(t, months, "01")
 	assert.Contains(t, months, "02")
@@ -111,7 +117,7 @@ func TestScaleRecord_EnumDetection(t *testing.T) {
 	stats := AnalyzeFields(records)
 	attrs := DecideScaling(stats, len(records))
 
-	// status has 3 distinct values → enum scaling
+	// status has 3 distinct values → enum scaling + presence
 	// id has 4 distinct values → presence
 	var enumAttrs []Attribute
 	for _, a := range attrs {
@@ -119,15 +125,14 @@ func TestScaleRecord_EnumDetection(t *testing.T) {
 			enumAttrs = append(enumAttrs, a)
 		}
 	}
-	assert.Len(t, enumAttrs, 3)
-	for _, a := range enumAttrs {
-		assert.Equal(t, ScaledValue, a.Kind)
-	}
+	// 3 values + 1 presence = 4 attributes
+	assert.Len(t, enumAttrs, 4)
+
 	names := make([]string, len(enumAttrs))
 	for i, a := range enumAttrs {
 		names[i] = a.Name
 	}
-	assert.ElementsMatch(t, []string{"status=Analyzed", "status=Modified", "status=Rejected"}, names)
+	assert.ElementsMatch(t, []string{"status", "status=Analyzed", "status=Modified", "status=Rejected"}, names)
 }
 
 // ---------------------------------------------------------------------------

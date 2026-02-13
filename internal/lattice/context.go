@@ -117,6 +117,13 @@ func DecideScaling(stats map[string]*FieldStats, totalRecords int) []Attribute {
 
 	var attrs []Attribute
 	for _, field := range fields {
+		// Always add Presence attribute so the field is known to exist
+		attrs = append(attrs, Attribute{
+			Name:  field,
+			Kind:  Presence,
+			Field: field,
+		})
+
 		fs := stats[field]
 		switch {
 		case fs.IsDate && fs.Count > totalRecords/2:
@@ -156,13 +163,6 @@ func DecideScaling(stats map[string]*FieldStats, totalRecords int) []Attribute {
 					Field: field,
 				})
 			}
-		default:
-			// Presence only
-			attrs = append(attrs, Attribute{
-				Name:  field,
-				Kind:  Presence,
-				Field: field,
-			})
 		}
 	}
 	return attrs
