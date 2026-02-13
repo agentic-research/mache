@@ -834,6 +834,8 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 		return 0
 	}
 
+	// 1. Run SQL (No Lock held!)
+	// Multiple agents can do this simultaneously
 	rows, err := fs.queryFn(sqlStr)
 	if err != nil {
 		log.Printf("query: execute %q: %v", qwh.name, err)
@@ -861,6 +863,7 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 		log.Printf("query: rows %q: %v", qwh.name, err)
 	}
 
+	// 2. Save Results (Microsecond Lock)
 	fs.queryMu.Lock()
 	fs.queries[qwh.name] = &queryResult{sql: sqlStr, entries: entries}
 	fs.queryMu.Unlock()
