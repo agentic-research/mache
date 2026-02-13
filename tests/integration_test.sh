@@ -152,36 +152,27 @@ echo "--- 2. Build & Mount ---"
 
 echo "Mounting mache..."
 
-
-
 # Pass the schema explicitly
 
-
-
-# Redirect stderr to suppress "mount failed" on kill
-
-
-
-"$MACHE_BIN" "$MNT_DIR" -d "$SRC_DIR" -s "${SANDBOX_DIR}/schema.json" -w >/dev/null 2>&1 &
-
-
+# Redirect output to a log file for debugging
+LOG_FILE="${SANDBOX_DIR}/mache.log"
+"$MACHE_BIN" "$MNT_DIR" -d "$SRC_DIR" -s "${SANDBOX_DIR}/schema.json" -w > "$LOG_FILE" 2>&1 &
 
 MACHE_PID=$!
 
-
-
 echo "Mache running with PID: $MACHE_PID"
 
-
-
-
-
-
-
 echo "Waiting 2 seconds for ingestion..."
-
-
 sleep 2
+
+# Check if Mache is still running
+if ! kill -0 "$MACHE_PID" 2>/dev/null; then
+    echo -e "${RED}Mache process died unexpectedly!${NC}"
+    echo "--- Mache Logs ---"
+    cat "$LOG_FILE"
+    exit 1
+fi
+
 
 # 3. Verify SQL Query
 echo "--- 3. Verify SQL Query (God Mode) ---"
@@ -217,6 +208,8 @@ if ls "$QUERY_DIR" | grep -q "main"; then
     echo "Query Result: Found main..."
 else
     echo -e "${RED}Query Result: FAIL - main not found in ${QUERY_DIR}/${NC}"
+    echo "--- Mache Logs ---"
+    cat "$LOG_FILE"
     exit 1
 fi
 
@@ -277,6 +270,8 @@ else
     echo -e "${RED}Write-Back: FAIL - Did not find '// Checked' in source.${NC}"
     echo "Source content:"
     cat "${SRC_DIR}/main.go"
+    echo "--- Mache Logs ---"
+    cat "$LOG_FILE"
     exit 1
 fi
 
