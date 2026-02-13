@@ -1,5 +1,7 @@
 # 🗂️ Mache
 
+[![CI](https://github.com/agentic-research/mache/actions/workflows/ci.yml/badge.svg)](https://github.com/agentic-research/mache/actions/workflows/ci.yml)
+
 **The Universal Semantic Overlay Engine**
 
 Mache projects structured data and source code into navigable, read-only filesystems using declarative schemas. Point it at a JSON feed or a codebase, define a topology (or let mache infer one), and mount a FUSE filesystem you can explore with `ls`, `cat`, `grep`, and friends.
