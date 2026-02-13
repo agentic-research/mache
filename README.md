@@ -49,7 +49,6 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | Layered Overlays (Docker-style) | **Ideated** | Composable data views; no code exists |
 | SQLite Virtual Tables | **Ideated** | Complex queries beyond fs navigation; described in ADR-0004 |
 | MVCC Memory Ledger | **Ideated** | Wait-free reads, mmap-backed; described in ADR-0004 |
-| Self-Organizing Learned FS | **Ideated** | ML-driven directory reorganization; described in ADR-0003 |
 
 ### Legend
 
@@ -348,7 +347,7 @@ Re-ingestion after each write ensures all byte offsets stay correct — tree-sit
 |-----|--------|---------|
 | [0001: User-Space FUSE Bridge](docs/adr/0001-user-space-fuse-bridge.md) | Accepted | fuse-t + cgofuse for macOS (no kexts) |
 | [0002: Declarative Topology Schema](docs/adr/0002-declarative-topology-schema.md) | Accepted | Schema-driven ingestion with Go templates |
-| [0003: Self-Organizing Learned FS](docs/adr/0003-self-organizing-learned-filesystem.md) | Proposed | ML-driven directory reorganization (ideated) |
+| [0003: CAS & Layered Overlays](docs/adr/0003-cas-layered-overlays.md) | Proposed | Content-Addressed Storage and Docker-style layers (ideated) |
 | [0004: MVCC Memory Ledger](docs/adr/0004-mvcc-memory-ledger.md) | Proposed | ECS + mmap + RCU for 10M+ entities (ideated) |
 | [0005: FCA Schema Inference](docs/adr/0005-fca-schema-inference.md) | Proposed | NextClosure on sampled records, bitmap-accelerated lattice → topology |
 
@@ -417,7 +416,6 @@ The `SitterWalker` (`sitter_walker.go`) and `OriginProvider` interface already s
 - **Layered overlays** (ADR-0003) — Docker-style composable layers for versioned views
 - **SQLite virtual tables** (ADR-0004) — SQL queries over the projected filesystem
 - **MVCC memory ledger** (ADR-0004) — Wait-free RCU + ECS for 10M+ entities, gated on profiling
-- **Self-organizing learned FS** (ADR-0003) — ML-driven directory reorganization
 
 ### Key File Reference
 
@@ -463,7 +461,6 @@ This is an early-stage research project. Contributions welcome, but expect rapid
 
 ## Related Work
 
-- **BREAD Paper** — Theoretical foundation for graph-to-filesystem projection
 - **fuse-t** — Userspace FUSE implementation for macOS
 - **cgofuse** — Cross-platform FUSE binding for Go
 - **ojg** — JSON processing and JSONPath for Go

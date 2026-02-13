@@ -3,7 +3,7 @@
 Date: 2026-02-11
 Status: Proposed
 Depends-On: ADR-0001 (FUSE bridge), ADR-0002 (Declarative Topology)
-Enables: ADR-0003 (Self-Organizing Learned Filesystem)
+Enables: ADR-0003 (CAS & Layered Overlays)
 
 ## Context
 
@@ -313,7 +313,7 @@ Using Go's `unsafe` package with mmap is the highest-risk aspect of this design.
 ### Composition with Other ADRs
 
 - **ADR-0002 (Schema):** The schema engine drives _what_ gets projected. This ADR provides _where_ the data lives at runtime. The schema's eager-loading walk (ADR-0002) populates the ECS dense arrays at mount time.
-- **ADR-0003 (Learned FS):** The learned filesystem reorganizes directory views. With this ADR, reorganization means updating the name→entity mapping and potentially reordering dense arrays for locality. The underlying CAS data (ADR-0003's hard links) maps to entity IDs in the ECS.
+- **ADR-0003 (CAS):** The layered filesystem reorganizes directory views. With this ADR, reorganization means updating the name→entity mapping. The underlying CAS data (ADR-0003's hard links) maps to entity IDs in the ECS.
 
 ## Phased Approach
 
@@ -356,4 +356,4 @@ This design is complex. We will build incrementally and let profiling data justi
 - Michael, M. (2004). _Hazard pointers._ Safe memory reclamation for lock-free objects.
 - ADR-0001: User-Space FUSE Bridge (transport layer)
 - ADR-0002: Declarative Topology Schema (shape of projection)
-- ADR-0003: Self-Organizing Learned Filesystem (intelligence layer)
+- ADR-0003: CAS & Layered Overlays
