@@ -13,24 +13,59 @@ Mache is the engine that aligns them. It treats your structured data not as text
 
 And because it's a Graph, Mache gives you the ultimate tool to query it: **SQL**.
 
-```text
-       The Data Graph                The Mache Bridge               The OS Graph
-    (JSON / Code / YAML)           (Query & Transform)             (Filesystem)
+```mermaid
+graph TD
+    DH["<b>Data Graph</b><br/>(JSON / Code / YAML)"]
+    
+    root["Root Object"]
+    root --> key1["{key}"]
+    root --> key2["{key}"]
+    root --> arr["[Array]"]
+    key1 --> val["'value'"]
+    key2 --> obj["{object}"]
+    arr --> item["{item}"]
+    
+    bridge["<b>Mache Bridge: SQL Projection</b><br/>Graph → Tree"]
+    
+    OSH["<b>OS Graph</b><br/>(Filesystem)"]
+    
+    mount["/  (mount)"]
+    mount --> dir1["/key/"]
+    mount --> dir2["/key/"]
+    mount --> dirArr["/Arr/"]
+    dir1 --> file["file"]
+    dir2 --> subdir["dir/"]
+    dirArr --> itemdir["dir/"]
+    
+    DH --> root
+    val --> bridge
+    obj --> bridge
+    item --> bridge
+    bridge --> mount
+    mount --> OSH
+    
+    style DH fill:#e1f5ff,stroke:#333,stroke-width:2px
+    style bridge fill:#fff4e1,stroke:#333,stroke-width:2px
+    style OSH fill:#ffe1f5,stroke:#333,stroke-width:2px
+    style root fill:#b3e5fc
+    style mount fill:#f8bbd0
 
-       [Root Object]                                                 / (Mount)
-      /      |      \                                              /     |     \
-  {key}    {key}   [Arr]    <====   SQL Projection   ====>      /key/  /key/  /Arr/
-    |        |       |                                            |      |      |
-  "val"    {obj}   {item}                                       file    dir/   dir/
 ```
 
-### The "Aha!" Moment: Isomorphism
+### The Core Insight: Graph Isomorphism
 
-If `Data = Graph` and `Filesystem = Graph`, then the fact that they don't map to each other 1:1 is a failure of modern operating systems. Mache fixes that alignment.
+Both structured data and filesystems are graphs. Your JSON object has nodes (keys, arrays) and edges (containment). Your filesystem has nodes (files, directories) and edges (parent-child relationships). They're the same structure.
 
-1.  **SQL as the Operator:** The SQLite sidecar isn't just a feature; it's the mathematical operator for the graph.
-2.  **Schema as Topology:** The schema isn't configuration; it's the topology definition for the graph projection.
-3.  **FUSE as Traversal:** FUSE is just the standard interface for graph traversal (`cd` = edge traversal, `ls` = node enumeration).
+The gap exists because operating systems never formalized this mapping. Mache does:
+
+- **SQL is the graph operator.** Queries define projections from one graph topology to another.
+- **Schema defines topology.** It's not configuration—it's the formal specification of how source nodes map to filesystem nodes.
+- **FUSE exposes traversal primitives.**
+  - `cd` traverses an edge
+  - `ls` enumerates children
+  - `cat` reads node data.
+
+This isn't metaphorical. Mache literally treats both sides as graphs and uses SQL to transform one into the other.
 
 ---
 
