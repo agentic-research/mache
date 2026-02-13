@@ -38,6 +38,7 @@ type IngestionTarget interface {
 type Engine struct {
 	Schema     *api.Topology
 	Store      IngestionTarget
+	RootPath   string // absolute path to the root of the ingestion
 	sourceFile string // absolute path, set during ingestTreeSitter for origin tracking
 }
 
@@ -82,7 +83,13 @@ func schemaUsesTreeSitter(schema *api.Topology) bool {
 
 // Ingest processes a file or directory.
 func (e *Engine) Ingest(path string) error {
-	info, err := os.Stat(path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	e.RootPath = absPath
+
+	info, err := os.Stat(absPath)
 	if err != nil {
 		return err
 	}
@@ -146,7 +153,7 @@ func (e *Engine) ingestFile(path string) error {
 	case ".go":
 		return e.ingestTreeSitter(path, golang.GetLanguage())
 	default:
-		return nil // Skip unsupported files
+		return e.ingestRawFile(path)
 	}
 }
 
@@ -193,6 +200,84 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
+	return nil
+}
+
+func (e *Engine) ingestRawFile(path string) error {
+	rel, err := filepath.Rel(e.RootPath, path)
+	if err != nil {
+		return err
+	}
+	rel = filepath.ToSlash(rel)
+	parts := strings.Split(rel, "/")
+
+	parentID := "" // Root starts empty
+
+	// 1. Create/Ensure intermediate directories
+	for i := 0; i < len(parts)-1; i++ {
+		part := parts[i]
+		currentID := part
+		if parentID != "" {
+			currentID = parentID + "/" + part
+		}
+
+		if _, err := e.Store.GetNode(currentID); err != nil {
+			// Create directory node
+			node := &graph.Node{
+				ID:   currentID,
+				Mode: os.ModeDir | 0o555,
+			}
+			e.Store.AddNode(node)
+
+			// Link to parent
+			if parentID == "" {
+				e.Store.AddRoot(node)
+			} else {
+				parent, err := e.Store.GetNode(parentID)
+				if err == nil {
+					// Check if child already linked (dedup)
+					exists := false
+					for _, c := range parent.Children {
+						if c == currentID {
+							exists = true
+							break
+						}
+					}
+					if !exists {
+						parent.Children = append(parent.Children, currentID)
+						e.Store.AddNode(parent)
+					}
+				}
+			}
+		}
+		parentID = currentID
+	}
+
+	// 2. Create file node
+	fileID := rel
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	fileNode := &graph.Node{
+		ID:   fileID,
+		Mode: 0o444,
+		Data: content,
+	}
+	e.Store.AddNode(fileNode)
+
+	// Link to parent
+	if parentID == "" {
+		e.Store.AddRoot(fileNode)
+	} else {
+		parent, err := e.Store.GetNode(parentID)
+		if err == nil {
+			parent.Children = append(parent.Children, fileID)
+			e.Store.AddNode(parent)
+		}
+	}
+
 	return nil
 }
 
