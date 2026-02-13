@@ -114,14 +114,6 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 			}
 		}
 
-		// Prevent infinite recursion: if the captured @scope is identical to the
-		// query root, skip this match. This happens because tree-sitter queries
-		// match the root node itself, but in a directory traversal hierarchy,
-		// we only want to find children/descendants.
-		if scope != nil && scope == sr.Node {
-			continue
-		}
-
 		matches = append(matches, &sitterMatch{
 			values:   vals,
 			captures: captures,

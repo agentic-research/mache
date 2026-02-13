@@ -411,6 +411,18 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	}
 
 	for _, match := range matches {
+		// Skip self-match if requested (e.g. for recursive schemas to avoid infinite loops)
+		if schema.SkipSelfMatch {
+			// Check for Tree-sitter node equality
+			if parentRoot, ok := ctx.(SitterRoot); ok {
+				if childCtx, ok := match.Context().(SitterRoot); ok {
+					if parentRoot.Node == childCtx.Node {
+						continue
+					}
+				}
+			}
+		}
+
 		name, err := RenderTemplate(schema.Name, match.Values())
 		if err != nil {
 			return fmt.Errorf("failed to render name %s: %w", schema.Name, err)

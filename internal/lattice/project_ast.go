@@ -105,8 +105,9 @@ func ProjectAST(concepts []Concept, ctx *FormalContext) *api.Topology {
 	for _, t := range sortedTypes {
 		nameType := containerTypes[t]
 		node := api.Node{
-			Name:     "{{.name}}",
-			Selector: fmt.Sprintf("(%s name: (%s) @name) @scope", t, nameType),
+			Name:          "{{.name}}",
+			Selector:      fmt.Sprintf("(%s name: (%s) @name) @scope", t, nameType),
+			SkipSelfMatch: true,
 			Files: []api.Leaf{
 				{
 					Name:            "source",
