@@ -76,6 +76,13 @@ type SQLiteGraph struct {
 	nextFileID  uint32
 	fileIDMap   map[string]uint32 // path → file ID (in-memory during ingestion)
 
+	// Size cache: file path → rendered byte length.
+	// Populated on first GetNode (which renders content), used on subsequent
+	// GetNode calls to return a lightweight Node without re-rendering.
+	// Unlike contentCache (FIFO-bounded), sizeCache is unbounded — int64 values
+	// are tiny and we need them to survive across large directory traversals.
+	sizeCache sync.Map // file path (string) → int64
+
 	// Rendered content cache (FIFO-bounded, protects against hot-file storms)
 	contentMu    sync.Mutex
 	contentCache map[string][]byte
@@ -210,12 +217,22 @@ func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 		return nil, ErrNotFound
 	}
 
-	// File node — render content to get accurate size
+	// File node — return cached size if available (avoids content render for stat).
+	// First call renders content and populates both contentCache and sizeCache.
+	// Subsequent calls return a lightweight node with ContentRef (no SQL/render).
 	if fileLeaf != nil {
+		if cachedSize, ok := g.sizeCache.Load(id); ok {
+			return &Node{
+				ID:   id,
+				Mode: 0o444,
+				Ref:  &ContentRef{ContentLen: cachedSize.(int64)},
+			}, nil
+		}
 		content, err := g.resolveContent(id, segments, fileLeaf)
 		if err != nil {
 			return nil, err
 		}
+		g.sizeCache.Store(id, int64(len(content)))
 		return &Node{ID: id, Mode: 0o444, Data: content}, nil
 	}
 

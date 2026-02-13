@@ -561,11 +561,24 @@ var tmplFuncs = template.FuncMap{
 	},
 }
 
+// tmplCache stores parsed templates keyed by their source string.
+// template.Template.Execute is safe for concurrent use (Go docs guarantee this),
+// so a shared cache with sync.Map is correct. Each caller uses its own bytes.Buffer.
+var tmplCache sync.Map // template string → *template.Template
+
 // RenderTemplate renders a Go text/template with the standard mache template functions.
+// Parsed templates are cached — repeated calls with the same template string skip parsing.
 func RenderTemplate(tmpl string, values map[string]any) (string, error) {
-	t, err := template.New("").Funcs(tmplFuncs).Parse(tmpl)
-	if err != nil {
-		return "", err
+	var t *template.Template
+	if cached, ok := tmplCache.Load(tmpl); ok {
+		t = cached.(*template.Template)
+	} else {
+		var err error
+		t, err = template.New("").Funcs(tmplFuncs).Parse(tmpl)
+		if err != nil {
+			return "", err
+		}
+		tmplCache.Store(tmpl, t)
 	}
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, values); err != nil {
