@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/agentic-research/mache/api"
@@ -55,6 +56,7 @@ type SQLiteGraph struct {
 	// Sidecar database for cross-reference index (node_refs + file_ids tables).
 	// Kept separate from source DB to preserve immutability of Venturi data.
 	refsDB *sql.DB
+	dbID   string // unique ID for vtab registry
 
 	// Lazy scan: one pass per root node populates dirChildren + recordIDs.
 	// sync.Once ensures exactly one scan per root, even under concurrent FUSE access.
@@ -176,8 +178,12 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	}
 
 	// Point the vtab module at this refsDB and create the virtual table.
-	refsMod.SetRefsDB(refsDB)
-	if _, err := refsDB.Exec("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs()"); err != nil {
+	dbID := fmt.Sprintf("sqlite_%d", time.Now().UnixNano())
+	refsMod.RegisterDB(dbID, refsDB)
+
+	query := fmt.Sprintf("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs(%s)", dbID)
+	if _, err := refsDB.Exec(query); err != nil {
+		refsMod.UnregisterDB(dbID)
 		_ = db.Close()     // ignore error
 		_ = refsDB.Close() // ignore error
 		return nil, fmt.Errorf("create mache_refs vtab: %w", err)
@@ -190,6 +196,7 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		render:       render,
 		levels:       compileLevels(schema),
 		refsDB:       refsDB,
+		dbID:         dbID,
 		pendingRefs:  make(map[string]*roaring.Bitmap),
 		fileIDMap:    make(map[string]uint32),
 		contentCache: make(map[string][]byte),
@@ -498,6 +505,11 @@ func (g *SQLiteGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 
 // Close closes both the source and sidecar database connections.
 func (g *SQLiteGraph) Close() error {
+	// Unregister from vtab module to prevent leaks/races
+	if mod, err := refsvtab.Register(); err == nil && mod != nil {
+		mod.UnregisterDB(g.dbID)
+	}
+
 	err := g.db.Close()
 	if g.refsDB != nil {
 		if err2 := g.refsDB.Close(); err == nil {

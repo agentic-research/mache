@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/agentic-research/mache/internal/refsvtab"
@@ -90,6 +91,7 @@ type MemoryStore struct {
 	// pool connection that can see the same tables — :memory: isolates per-connection.
 	refsDB     *sql.DB
 	refsDBPath string // temp file path, cleaned up on Close
+	dbID       string // unique ID for vtab registry
 	flushOnce  sync.Once
 	flushErr   error
 }
@@ -346,8 +348,17 @@ func (s *MemoryStore) InitRefsDB() error {
 		return fmt.Errorf("create refs tables: %w", err)
 	}
 
-	refsMod.SetRefsDB(db)
-	if _, err := db.Exec("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs()"); err != nil {
+	// Generate a unique ID for this DB connection to register with the vtab module.
+	// This allows multiple MemoryStore instances (e.g. tests) to coexist without
+	// race conditions on a single global refsDB pointer.
+	dbID := fmt.Sprintf("mem_%d", time.Now().UnixNano())
+	refsMod.RegisterDB(dbID, db)
+
+	// Declare vtab with the unique ID as an argument.
+	// The Create method in refs_module.go will look up the DB using this ID.
+	query := fmt.Sprintf("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs(%s)", dbID)
+	if _, err := db.Exec(query); err != nil {
+		refsMod.UnregisterDB(dbID)
 		_ = db.Close()          // ignore close error
 		_ = os.Remove(refsPath) // cleanup temp file
 		return fmt.Errorf("create mache_refs vtab: %w", err)
@@ -355,6 +366,7 @@ func (s *MemoryStore) InitRefsDB() error {
 
 	s.refsDB = db
 	s.refsDBPath = refsPath
+	s.dbID = dbID
 	return nil
 }
 
@@ -454,6 +466,11 @@ func (s *MemoryStore) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 // Close closes the refs database and removes the temp file.
 func (s *MemoryStore) Close() error {
 	if s.refsDB != nil {
+		// Unregister from vtab module to prevent leaks/races
+		if mod, err := refsvtab.Register(); err == nil && mod != nil {
+			mod.UnregisterDB(s.dbID)
+		}
+
 		err := s.refsDB.Close()
 		if s.refsDBPath != "" {
 			_ = os.Remove(s.refsDBPath) // best-effort cleanup

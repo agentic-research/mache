@@ -19,18 +19,21 @@ var (
 
 // RefsModule implements vtab.Module. It is a process-wide singleton because
 // modernc.org/sqlite registers modules globally (driver-level, not per-DB).
-// The mutable refsDB pointer is updated each time OpenSQLiteGraph runs.
 type RefsModule struct {
-	mu     sync.RWMutex
-	refsDB *sql.DB
+	mu sync.RWMutex
+	// dbs maps a unique ID (passed as argument to CREATE VIRTUAL TABLE)
+	// to the *sql.DB instance containing the sidecar tables.
+	dbs map[string]*sql.DB
 }
 
 // Register registers the mache_refs module with the global SQLite driver.
 // Safe to call multiple times — only the first call registers. Returns the
-// singleton so callers can set the refsDB pointer via SetRefsDB.
+// singleton so callers can register their DB instances via RegisterDB.
 func Register() (*RefsModule, error) {
 	once.Do(func() {
-		singleton = &RefsModule{}
+		singleton = &RefsModule{
+			dbs: make(map[string]*sql.DB),
+		}
 		// db parameter is unused by the engine; pass nil.
 		if err := vtab.RegisterModule(nil, "mache_refs", singleton); err != nil {
 			initErr = fmt.Errorf("refsvtab: register module: %w", err)
@@ -40,19 +43,20 @@ func Register() (*RefsModule, error) {
 	return singleton, initErr
 }
 
-// SetRefsDB updates the sidecar database pointer. Must be called after
-// opening the refsDB connection and before any queries hit the vtab.
-func (m *RefsModule) SetRefsDB(db *sql.DB) {
+// RegisterDB registers a database connection with a unique ID.
+// The ID must be passed to CREATE VIRTUAL TABLE ... USING mache_refs(id).
+func (m *RefsModule) RegisterDB(id string, db *sql.DB) {
 	m.mu.Lock()
-	m.refsDB = db
+	m.dbs[id] = db
 	m.mu.Unlock()
 }
 
-// getRefsDB returns the current refsDB pointer under read lock.
-func (m *RefsModule) getRefsDB() *sql.DB {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.refsDB
+// UnregisterDB removes a database connection from the registry.
+// Should be called when the graph is closed.
+func (m *RefsModule) UnregisterDB(id string) {
+	m.mu.Lock()
+	delete(m.dbs, id)
+	m.mu.Unlock()
 }
 
 // ---------------------------------------------------------------------------
@@ -60,10 +64,37 @@ func (m *RefsModule) getRefsDB() *sql.DB {
 // ---------------------------------------------------------------------------
 
 func (m *RefsModule) Create(ctx vtab.Context, args []string) (vtab.Table, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("mache_refs: missing DB ID argument")
+	}
+	// args[0] is module name, args[1] is table name, args[2]... are arguments.
+	// But modernc.org/sqlite passes arguments differently?
+	// According to docs/source, args includes module name etc?
+	// Actually, standard SQLite xCreate(db, pAux, argc, argv).
+	// modernc adapter passes args as []string.
+	// argv[0] = module name
+	// argv[1] = database name
+	// argv[2] = table name
+	// argv[3]... = arguments inside ()
+	//
+	// So if we do USING mache_refs(my_id), args[3] should be "my_id".
+	if len(args) < 4 {
+		return nil, fmt.Errorf("mache_refs: missing DB ID argument (expected USING mache_refs(id))")
+	}
+	id := args[3]
+
+	m.mu.RLock()
+	db, ok := m.dbs[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("mache_refs: unknown DB ID %q", id)
+	}
+
 	if err := ctx.Declare("CREATE TABLE x(token TEXT, path TEXT)"); err != nil {
 		return nil, err
 	}
-	return &refsTable{mod: m}, nil
+	return &refsTable{mod: m, db: db}, nil
 }
 
 func (m *RefsModule) Connect(ctx vtab.Context, args []string) (vtab.Table, error) {
@@ -76,6 +107,7 @@ func (m *RefsModule) Connect(ctx vtab.Context, args []string) (vtab.Table, error
 
 type refsTable struct {
 	mod *RefsModule
+	db  *sql.DB
 }
 
 func (t *refsTable) BestIndex(info *vtab.IndexInfo) error {
@@ -119,7 +151,7 @@ func (t *refsTable) BestIndex(info *vtab.IndexInfo) error {
 }
 
 func (t *refsTable) Open() (vtab.Cursor, error) {
-	return &refsCursor{mod: t.mod}, nil
+	return &refsCursor{table: t}, nil
 }
 
 func (t *refsTable) Disconnect() error { return nil }
@@ -135,18 +167,18 @@ type refsRow struct {
 }
 
 type refsCursor struct {
-	mod  *RefsModule
-	rows []refsRow
-	pos  int
+	table *refsTable
+	rows  []refsRow
+	pos   int
 }
 
 func (c *refsCursor) Filter(idxNum int, idxStr string, vals []vtab.Value) error {
 	c.rows = c.rows[:0]
 	c.pos = 0
 
-	db := c.mod.getRefsDB()
+	db := c.table.db
 	if db == nil {
-		return nil // no refsDB yet — return empty
+		return nil // paranoid check
 	}
 
 	switch idxNum {
