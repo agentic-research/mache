@@ -114,18 +114,25 @@ func (e *Engine) Ingest(path string) error {
 				}
 				return nil
 			}
-			// Filter by schema type: tree-sitter schemas skip data files,
-			// JSONPath schemas skip source files.
+			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
+			shouldParse := false
 			if treeSitter {
 				switch ext {
-				case ".go", ".py":
-					return e.ingestFile(p)
-				default:
-					return nil
+				case ".go", ".py", ".js", ".ts", ".tsx", ".sql":
+					shouldParse = true
+				}
+			} else {
+				switch ext {
+				case ".json", ".db":
+					shouldParse = true
 				}
 			}
-			return e.ingestFile(p)
+
+			if shouldParse {
+				return e.ingestFile(p)
+			}
+			return e.ingestRawFile(p)
 		})
 	}
 	return e.ingestFile(path)
@@ -260,10 +267,16 @@ func (e *Engine) ingestRawFile(path string) error {
 		return err
 	}
 
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
 	fileNode := &graph.Node{
-		ID:   fileID,
-		Mode: 0o444,
-		Data: content,
+		ID:      fileID,
+		Mode:    0o444,
+		ModTime: info.ModTime(),
+		Data:    content,
 	}
 	e.Store.AddNode(fileNode)
 

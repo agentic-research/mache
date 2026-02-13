@@ -39,6 +39,7 @@ type SourceOrigin struct {
 type Node struct {
 	ID         string
 	Mode       fs.FileMode       // fs.ModeDir for directories, 0 for regular files
+	ModTime    time.Time         // Modification time
 	Data       []byte            // Inline content (small files, nil for lazy nodes)
 	Ref        *ContentRef       // Lazy content reference (large files, nil for inline nodes)
 	Properties map[string][]byte // Metadata / extended attributes
