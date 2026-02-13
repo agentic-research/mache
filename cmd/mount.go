@@ -11,20 +11,23 @@ import (
 	machefs "github.com/agentic-research/mache/internal/fs"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/spf13/cobra"
 	"github.com/winfsp/cgofuse/fuse"
 )
 
 var (
-	schemaPath string
-	dataPath   string
-	writable   bool
+	schemaPath  string
+	dataPath    string
+	writable    bool
+	inferSchema bool
 )
 
 func init() {
 	rootCmd.Flags().StringVarP(&schemaPath, "schema", "s", "", "Path to topology schema")
 	rootCmd.Flags().StringVarP(&dataPath, "data", "d", "", "Path to data source")
 	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back (splice edits into source files)")
+	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 }
 
 var rootCmd = &cobra.Command{
@@ -48,9 +51,27 @@ var rootCmd = &cobra.Command{
 			dataPath = filepath.Join(defaultDir, "data.json")
 		}
 
-		// 2. Load Schema
+		// 2. Load Schema (or infer from data)
 		var schema *api.Topology
-		if s, err := os.ReadFile(schemaPath); err == nil {
+		if inferSchema && filepath.Ext(dataPath) == ".db" {
+			fmt.Print("Inferring schema from data via FCA...")
+			start := time.Now()
+			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
+			inferred, err := inf.InferFromSQLite(dataPath)
+			if err != nil {
+				return fmt.Errorf("schema inference failed: %w", err)
+			}
+			schema = inferred
+			fmt.Printf(" done in %v\n", time.Since(start))
+			// Write inferred schema if --schema path was provided
+			if cmd.Flags().Changed("schema") {
+				data, _ := json.MarshalIndent(schema, "", "  ")
+				if err := os.WriteFile(schemaPath, data, 0o644); err != nil {
+					return fmt.Errorf("write inferred schema: %w", err)
+				}
+				fmt.Printf("Inferred schema written to %s\n", schemaPath)
+			}
+		} else if s, err := os.ReadFile(schemaPath); err == nil {
 			fmt.Printf("Loaded schema from %s\n", schemaPath)
 			schema = &api.Topology{}
 			if err := json.Unmarshal(s, schema); err != nil {
