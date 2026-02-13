@@ -16,6 +16,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/refsvtab"
 	_ "modernc.org/sqlite"
 )
 
@@ -131,12 +132,22 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	// previous .refs.db exists with IDs 0..N mapped to different paths,
 	// INSERT OR IGNORE silently drops the new mappings.
 	_ = os.Remove(refsPath)
+
+	// Register the mache_refs vtab module globally before opening refsDB.
+	// sql.Open is lazy (no connection until first query), so registering
+	// before the first Exec ensures the new connection sees the module.
+	refsMod := refsvtab.Register()
+
 	refsDB, err := sql.Open("sqlite", refsPath)
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("open refs db %s: %w", refsPath, err)
 	}
-	refsDB.SetMaxOpenConns(1)
+	// Allow 2 connections: one for normal queries, one for vtab Filter callbacks.
+	// The mache_refs vtab's xFilter runs inside the SQLite engine on the outer
+	// connection; it needs a second connection to query node_refs/file_ids.
+	// WAL mode ensures concurrent readers don't conflict.
+	refsDB.SetMaxOpenConns(2)
 
 	if _, err := refsDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
@@ -158,6 +169,14 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		_ = db.Close()
 		_ = refsDB.Close()
 		return nil, fmt.Errorf("create index tables: %w", err)
+	}
+
+	// Point the vtab module at this refsDB and create the virtual table.
+	refsMod.SetRefsDB(refsDB)
+	if _, err := refsDB.Exec("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs()"); err != nil {
+		_ = db.Close()
+		_ = refsDB.Close()
+		return nil, fmt.Errorf("create mache_refs vtab: %w", err)
 	}
 
 	return &SQLiteGraph{
@@ -464,6 +483,12 @@ func (g *SQLiteGraph) Invalidate(id string) {
 	g.contentMu.Lock()
 	delete(g.contentCache, id)
 	g.contentMu.Unlock()
+}
+
+// QueryRefs executes a SQL query against the refs sidecar database,
+// which includes the mache_refs virtual table.
+func (g *SQLiteGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
+	return g.refsDB.Query(query, args...)
 }
 
 // Close closes both the source and sidecar database connections.

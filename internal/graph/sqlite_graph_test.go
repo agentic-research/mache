@@ -11,6 +11,8 @@ import (
 	"text/template"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
@@ -920,4 +922,73 @@ func TestSQLiteGraph_GetCallers_Lightweight(t *testing.T) {
 	if nodes[0].ID != "vulns/CVE-2024-0001/vendor" {
 		t.Errorf("node ID = %q, want %q", nodes[0].ID, "vulns/CVE-2024-0001/vendor")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Virtual table (mache_refs) tests
+// ---------------------------------------------------------------------------
+
+func TestSQLiteGraph_VTab_MacheRefs(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+		"CVE-2024-0002": `{"schema":"kev","identifier":"CVE-2024-0002","item":{"cveID":"CVE-2024-0002","vendorProject":"Globex","product":"Gizmo","shortDescription":"test2"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	// Add refs
+	require.NoError(t, g.AddRef("MyFunc", "vulns/CVE-2024-0001/vendor"))
+	require.NoError(t, g.AddRef("MyFunc", "vulns/CVE-2024-0002/vendor"))
+	require.NoError(t, g.AddRef("Other", "vulns/CVE-2024-0001/vendor"))
+	require.NoError(t, g.FlushRefs())
+
+	// Each sub-test closes its rows before the next opens, avoiding
+	// connection-pool exhaustion (refsDB MaxOpenConns=2: one for the
+	// outer vtab query, one for Filter's inner queries).
+
+	t.Run("token_lookup", func(t *testing.T) {
+		rows, err := g.QueryRefs("SELECT path FROM mache_refs WHERE token = ?", "MyFunc")
+		require.NoError(t, err)
+
+		var paths []string
+		for rows.Next() {
+			var p string
+			require.NoError(t, rows.Scan(&p))
+			paths = append(paths, p)
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+
+		assert.Len(t, paths, 2)
+		assert.Contains(t, paths, "vulns/CVE-2024-0001/vendor")
+		assert.Contains(t, paths, "vulns/CVE-2024-0002/vendor")
+	})
+
+	t.Run("nonexistent_token", func(t *testing.T) {
+		rows, err := g.QueryRefs("SELECT path FROM mache_refs WHERE token = ?", "Nope")
+		require.NoError(t, err)
+		hasRow := rows.Next()
+		_ = rows.Close()
+		assert.False(t, hasRow)
+	})
+
+	t.Run("full_scan", func(t *testing.T) {
+		rows, err := g.QueryRefs("SELECT token, path FROM mache_refs")
+		require.NoError(t, err)
+
+		type ref struct{ token, path string }
+		var allRefs []ref
+		for rows.Next() {
+			var r ref
+			require.NoError(t, rows.Scan(&r.token, &r.path))
+			allRefs = append(allRefs, r)
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+
+		// MyFunc→2 paths + Other→1 path = 3 total
+		assert.Len(t, allRefs, 3)
+	})
 }
