@@ -124,40 +124,45 @@ type shardLevel struct {
 }
 
 func detectShardLevels(dateFields map[string]bool, ctx *FormalContext) []shardLevel {
-	var levels []shardLevel
-	// Sort date fields for deterministic output
-	var sortedDateFields []string
-	for f := range dateFields {
-		sortedDateFields = append(sortedDateFields, f)
-	}
-	sort.Strings(sortedDateFields)
+	// Pick the single best date field for sharding (most distinct years).
+	// Using multiple date fields creates over-deep directory trees.
+	var bestField string
+	bestYears := 0
 
-	for _, field := range sortedDateFields {
-		// Count distinct years and months
+	for field := range dateFields {
 		yearCount := 0
-		monthCount := 0
 		for _, attr := range ctx.Attributes {
-			if attr.Field != field || attr.Kind != ScaledValue {
-				continue
-			}
-			if strings.Contains(attr.Name, ".year=") {
+			if attr.Field == field && attr.Kind == ScaledValue && strings.Contains(attr.Name, ".year=") {
 				yearCount++
 			}
-			if strings.Contains(attr.Name, ".month=") {
-				monthCount++
-			}
 		}
-		if yearCount >= 2 {
-			levels = append(levels, shardLevel{
-				field: field, component: "year", start: 0, end: 4,
-			})
-		}
-		if monthCount >= 2 {
-			levels = append(levels, shardLevel{
-				field: field, component: "month", start: 5, end: 7,
-			})
+		if yearCount > bestYears {
+			bestYears = yearCount
+			bestField = field
 		}
 	}
+
+	if bestField == "" || bestYears < 2 {
+		return nil
+	}
+
+	var levels []shardLevel
+	levels = append(levels, shardLevel{
+		field: bestField, component: "year", start: 0, end: 4,
+	})
+
+	monthCount := 0
+	for _, attr := range ctx.Attributes {
+		if attr.Field == bestField && attr.Kind == ScaledValue && strings.Contains(attr.Name, ".month=") {
+			monthCount++
+		}
+	}
+	if monthCount >= 2 {
+		levels = append(levels, shardLevel{
+			field: bestField, component: "month", start: 5, end: 7,
+		})
+	}
+
 	return levels
 }
 
@@ -244,12 +249,16 @@ func buildLeafFiles(fields []string) []api.Leaf {
 }
 
 // camelToKebab converts camelCase to kebab-case.
-// e.g., "vendorProject" → "vendor-project", "cveID" → "cve-id"
+// Handles acronyms: "vendorProject" → "vendor-project", "cveID" → "cve-id"
 func camelToKebab(s string) string {
+	runes := []rune(s)
 	var result []rune
-	for i, r := range s {
+	for i, r := range runes {
 		if i > 0 && r >= 'A' && r <= 'Z' {
-			result = append(result, '-')
+			prev := runes[i-1]
+			if prev >= 'a' && prev <= 'z' {
+				result = append(result, '-')
+			}
 		}
 		if r >= 'A' && r <= 'Z' {
 			result = append(result, r+32) // lowercase
