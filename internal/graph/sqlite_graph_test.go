@@ -832,6 +832,61 @@ func TestSQLiteGraph_RefsDB_WipedOnOpen(t *testing.T) {
 	}
 }
 
+func TestSQLiteGraph_SizeCache_Invalidation(t *testing.T) {
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = g.Close() }()
+
+	// First GetNode renders content and populates sizeCache
+	node1, err := g.GetNode("vulns/CVE-2024-0001/vendor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(node1.Data) != "Acme" {
+		t.Fatalf("first GetNode data = %q, want %q", node1.Data, "Acme")
+	}
+
+	// Verify sizeCache is populated
+	if _, ok := g.sizeCache.Load("vulns/CVE-2024-0001/vendor"); !ok {
+		t.Fatal("sizeCache should have entry after first GetNode")
+	}
+
+	// Second GetNode should return lightweight node from sizeCache (no Data)
+	node2, err := g.GetNode("vulns/CVE-2024-0001/vendor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node2.Data != nil {
+		t.Error("second GetNode should return lightweight node (nil Data)")
+	}
+	if node2.Ref == nil || node2.Ref.ContentLen != int64(len("Acme")) {
+		t.Errorf("second GetNode should have Ref with ContentLen=4, got %v", node2.Ref)
+	}
+
+	// Invalidate clears the cache
+	g.Invalidate("vulns/CVE-2024-0001/vendor")
+
+	// Verify sizeCache is cleared
+	if _, ok := g.sizeCache.Load("vulns/CVE-2024-0001/vendor"); ok {
+		t.Fatal("sizeCache should be empty after Invalidate")
+	}
+
+	// Next GetNode should re-render (return Data again, not Ref)
+	node3, err := g.GetNode("vulns/CVE-2024-0001/vendor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(node3.Data) != "Acme" {
+		t.Fatalf("GetNode after Invalidate data = %q, want %q", node3.Data, "Acme")
+	}
+}
+
 func TestSQLiteGraph_GetCallers_Lightweight(t *testing.T) {
 	dbPath := createTestDB(t, map[string]string{
 		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"test"}}`,

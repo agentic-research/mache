@@ -52,13 +52,16 @@ func (n *Node) ContentSize() int64 {
 // ContentResolverFunc resolves a ContentRef into byte content.
 type ContentResolverFunc func(ref *ContentRef) ([]byte, error)
 
-// Graph is the Read-Only interface for the FUSE layer.
+// Graph is the interface for the FUSE layer.
 // This allows us to swap the backend later (Memory -> SQLite -> Mmap).
 type Graph interface {
 	GetNode(id string) (*Node, error)
 	ListChildren(id string) ([]string, error)
 	ReadContent(id string, buf []byte, offset int64) (int, error)
 	GetCallers(token string) ([]*Node, error)
+	// Invalidate evicts cached data for a node (size, content).
+	// Called after write-back to force re-render on next access.
+	Invalidate(id string)
 }
 
 // -----------------------------------------------------------------------------
@@ -135,6 +138,9 @@ func (s *MemoryStore) GetCallers(token string) ([]*Node, error) {
 	}
 	return nodes, nil
 }
+
+// Invalidate is a no-op for MemoryStore — nodes are updated in-place.
+func (s *MemoryStore) Invalidate(id string) {}
 
 // GetNode implements Graph.
 func (s *MemoryStore) GetNode(id string) (*Node, error) {

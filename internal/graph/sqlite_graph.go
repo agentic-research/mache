@@ -456,6 +456,16 @@ func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
 	return nodes, nil
 }
 
+// Invalidate evicts cached size and content for a node.
+// Must be called after write-back modifies a file's content to prevent
+// stale size/data from being served on the next Getattr or Read.
+func (g *SQLiteGraph) Invalidate(id string) {
+	g.sizeCache.Delete(id)
+	g.contentMu.Lock()
+	delete(g.contentCache, id)
+	g.contentMu.Unlock()
+}
+
 // Close closes both the source and sidecar database connections.
 func (g *SQLiteGraph) Close() error {
 	err := g.db.Close()

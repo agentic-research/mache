@@ -460,5 +460,10 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		}
 	}
 
+	// 4. Invalidate cached size/content — the file's content changed,
+	// so the size cache and content cache must be evicted to prevent
+	// stale data on the next Getattr or Read.
+	fs.Graph.Invalidate(wh.nodeID)
+
 	return 0
 }
