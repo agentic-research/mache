@@ -12,9 +12,12 @@ import (
 
 // InferConfig controls the schema inference pipeline.
 type InferConfig struct {
-	SampleSize int    // max records to sample (default 1000)
-	RootName   string // root directory name (default "records")
-	Seed       int64  // random seed for reservoir sampling (0 = deterministic)
+	SampleSize int               // max records to sample (default 1000)
+	RootName   string            // root directory name (default "records")
+	Seed       int64             // random seed for reservoir sampling (0 = deterministic)
+	Method     string            // "fca" (default) or "greedy"
+	MaxDepth   int               // max depth for greedy inference (default 5)
+	Hints      map[string]string // user-provided type hints
 }
 
 // DefaultInferConfig returns sensible defaults.
@@ -22,6 +25,9 @@ func DefaultInferConfig() InferConfig {
 	return InferConfig{
 		SampleSize: 1000,
 		RootName:   "records",
+		Method:     "greedy",
+		MaxDepth:   5,
+		Hints:      make(map[string]string),
 	}
 }
 
@@ -40,6 +46,21 @@ func (inf *Inferrer) InferFromRecords(records []any) (*api.Topology, error) {
 	sampled := records
 	if len(records) > inf.Config.SampleSize && inf.Config.SampleSize > 0 {
 		sampled = reservoirSample(records, inf.Config.SampleSize, inf.Config.Seed)
+	}
+
+	if inf.Config.Method == "greedy" {
+		config := ProjectConfig{
+			RootName: inf.Config.RootName,
+			MaxDepth: inf.Config.MaxDepth,
+			Hints:    inf.Config.Hints,
+		}
+		if config.RootName == "" {
+			config.RootName = "records"
+		}
+		if config.MaxDepth <= 0 {
+			config.MaxDepth = 5
+		}
+		return InferGreedy(sampled, config), nil
 	}
 
 	// Build formal context

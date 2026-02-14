@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/ohler55/ojg/jp"
 )
@@ -43,6 +44,18 @@ func (m *jsonMatch) Values() map[string]any {
 	case map[string]any:
 		return v // preserve nesting
 	default:
+		// Fallback: check for other map types via reflection
+		val := reflect.ValueOf(m.value)
+		if val.Kind() == reflect.Ptr {
+			val = val.Elem()
+		}
+		if val.Kind() == reflect.Map {
+			out := make(map[string]any, val.Len())
+			for _, k := range val.MapKeys() {
+				out[fmt.Sprint(k.Interface())] = val.MapIndex(k).Interface()
+			}
+			return out
+		}
 		return map[string]any{"value": v}
 	}
 }

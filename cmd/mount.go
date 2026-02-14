@@ -162,6 +162,22 @@ var rootCmd = &cobra.Command{
 					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
 				}
 				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".git":
+				fmt.Print("Loading git commits...")
+				start := time.Now()
+				recs, readErr := ingest.LoadGitCommits(dataPath)
+				if readErr != nil {
+					err = readErr
+					fmt.Printf(" failed in %v\n", time.Since(start))
+				} else {
+					fmt.Printf(" done (%d commits) in %v\n", len(recs), time.Since(start))
+					fmt.Print("Inferring schema from Git history (Greedy)...")
+					start = time.Now()
+					// Enable Git hints
+					inf.Config.Hints = ingest.GetGitHints()
+					inferred, err = inf.InferFromRecords(recs)
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
 			default:
 				err = fmt.Errorf("automatic inference not supported for %s", ext)
 			}
@@ -220,13 +236,27 @@ var rootCmd = &cobra.Command{
 				defer resolver.Close()
 				store.SetResolver(resolver.Resolve)
 
-				fmt.Printf("Ingesting data from %s...\n", dataPath)
-				start := time.Now()
 				engine = ingest.NewEngine(schema, store)
-				if err := engine.Ingest(dataPath); err != nil {
-					return fmt.Errorf("ingestion failed: %w", err)
+
+				if filepath.Ext(dataPath) == ".git" {
+					fmt.Printf("Ingesting git history from %s...\n", dataPath)
+					start := time.Now()
+					recs, err := ingest.LoadGitCommits(dataPath)
+					if err != nil {
+						return fmt.Errorf("load git: %w", err)
+					}
+					if err := engine.IngestRecords(recs); err != nil {
+						return fmt.Errorf("ingest git records: %w", err)
+					}
+					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+				} else {
+					fmt.Printf("Ingesting data from %s...\n", dataPath)
+					start := time.Now()
+					if err := engine.Ingest(dataPath); err != nil {
+						return fmt.Errorf("ingestion failed: %w", err)
+					}
+					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
 				}
-				fmt.Printf("Ingestion complete in %v\n", time.Since(start))
 
 				// Enable SQL query support for MemoryStore
 				if err := store.InitRefsDB(); err != nil {

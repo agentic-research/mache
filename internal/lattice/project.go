@@ -11,12 +11,18 @@ import (
 
 // ProjectConfig controls how the lattice is projected into a topology.
 type ProjectConfig struct {
-	RootName string // directory name for the root node (default: "records")
+	RootName string            // directory name for the root node (default: "records")
+	MaxDepth int               // maximum depth for recursive inference (default: 5)
+	Hints    map[string]string // hints for attribute types ("id", "temporal", "reference")
 }
 
 // DefaultProjectConfig returns sensible defaults.
 func DefaultProjectConfig() ProjectConfig {
-	return ProjectConfig{RootName: "records"}
+	return ProjectConfig{
+		RootName: "records",
+		MaxDepth: 5,
+		Hints:    make(map[string]string),
+	}
 }
 
 // Project walks the concept lattice and emits an api.Topology.
