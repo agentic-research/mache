@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/nfsmount"
+	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/javascript"
@@ -291,7 +295,7 @@ var rootCmd = &cobra.Command{
 		// 4. Mount via selected backend
 		switch backend {
 		case "nfs":
-			return mountNFS(schema, g, mountPoint, writable)
+			return mountNFS(schema, g, engine, mountPoint, writable)
 		case "fuse":
 			return mountFUSE(schema, g, engine, mountPoint, writable)
 		default:
@@ -301,8 +305,31 @@ var rootCmd = &cobra.Command{
 }
 
 // mountNFS starts an NFS server backed by GraphFS and mounts it.
-func mountNFS(schema *api.Topology, g graph.Graph, mountPoint string, writable bool) error {
+func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
 	graphFs := nfsmount.NewGraphFS(g, schema)
+
+	// Wire write-back if requested (same pipeline as FUSE: splice → goimports → re-ingest → invalidate)
+	if writable && engine != nil {
+		graphFs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
+			if err := writeback.Splice(origin, content); err != nil {
+				return err
+			}
+			// Auto-format Go files (failure-tolerant)
+			if strings.HasSuffix(origin.FilePath, ".go") {
+				_ = exec.Command("goimports", "-w", origin.FilePath).Run()
+			}
+			// Re-ingest to update graph
+			time.Sleep(2 * time.Millisecond) // timestamp granularity safety
+			if err := engine.Ingest(origin.FilePath); err != nil {
+				log.Printf("writeback: re-ingest failed for %s: %v", origin.FilePath, err)
+			}
+			g.Invalidate(nodeID)
+			return nil
+		})
+		fmt.Println("Write-back enabled: edits will splice into source files.")
+	} else if writable {
+		fmt.Println("Warning: --writable ignored (only supported for non-.db sources)")
+	}
 
 	srv, err := nfsmount.NewServer(graphFs)
 	if err != nil {

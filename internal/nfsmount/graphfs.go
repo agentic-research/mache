@@ -26,6 +26,8 @@ type GraphFS struct {
 	schema     *api.Topology
 	schemaJSON []byte
 	mountTime  time.Time
+	writable   bool
+	writeBack  WriteBackFunc
 }
 
 // NewGraphFS creates a billy.Filesystem backed by a mache Graph.
@@ -40,10 +42,35 @@ func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 	}
 }
 
+// SetWriteBack enables write support. The callback is invoked when a
+// written file is closed, triggering the splice pipeline.
+func (fs *GraphFS) SetWriteBack(fn WriteBackFunc) {
+	fs.writable = true
+	fs.writeBack = fn
+}
+
 // --- billy.Basic ---
 
+// Create signals success for existing writable files (NFS CREATE on existing file).
+// go-nfs closes this file immediately — the actual writes come via separate
+// OpenFile calls from WRITE RPCs. We return a no-op file to avoid premature splice.
 func (fs *GraphFS) Create(filename string) (billy.File, error) {
-	return nil, errReadOnly
+	if !fs.writable {
+		return nil, errReadOnly
+	}
+	filename = cleanPath(filename)
+
+	node, err := fs.graph.GetNode(filename)
+	if err != nil {
+		return nil, &os.PathError{Op: "create", Path: filename, Err: os.ErrNotExist}
+	}
+	if node.Origin == nil {
+		return nil, &os.PathError{Op: "create", Path: filename, Err: fmt.Errorf("no source origin")}
+	}
+
+	// Return a no-op file — go-nfs will close this immediately.
+	// The real content writes come through OpenFile via WRITE RPCs.
+	return &bytesFile{name: filename, data: nil}, nil
 }
 
 func (fs *GraphFS) Open(filename string) (billy.File, error) {
@@ -53,8 +80,13 @@ func (fs *GraphFS) Open(filename string) (billy.File, error) {
 func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
 	filename = cleanPath(filename)
 
-	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0 {
-		return nil, errReadOnly
+	writing := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0
+
+	if writing {
+		if !fs.writable {
+			return nil, errReadOnly
+		}
+		return fs.openWritable(filename, flag)
 	}
 
 	// Virtual: _schema.json
@@ -77,6 +109,42 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 	}, nil
 }
 
+// openWritable returns a writeFile for nodes that have a SourceOrigin.
+func (fs *GraphFS) openWritable(filename string, flag int) (billy.File, error) {
+	if filename == "/_schema.json" {
+		return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("read-only virtual file")}
+	}
+
+	node, err := fs.graph.GetNode(filename)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+	}
+	if node.Mode.IsDir() {
+		return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("is a directory")}
+	}
+	if node.Origin == nil {
+		return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("no source origin for write-back")}
+	}
+
+	// Pre-fill buffer with existing content (for O_RDWR / partial writes)
+	var buf []byte
+	if flag&os.O_TRUNC == 0 {
+		size := node.ContentSize()
+		if size > 0 {
+			buf = make([]byte, size)
+			n, _ := fs.graph.ReadContent(filename, buf, 0)
+			buf = buf[:n]
+		}
+	}
+
+	return &writeFile{
+		id:      filename,
+		origin:  *node.Origin,
+		buf:     buf,
+		onClose: fs.writeBack,
+	}, nil
+}
+
 func (fs *GraphFS) Stat(filename string) (os.FileInfo, error) {
 	return fs.Lstat(filename)
 }
@@ -86,7 +154,24 @@ func (fs *GraphFS) Rename(oldpath, newpath string) error {
 }
 
 func (fs *GraphFS) Remove(filename string) error {
-	return errReadOnly
+	if !fs.writable {
+		return errReadOnly
+	}
+	filename = cleanPath(filename)
+
+	node, err := fs.graph.GetNode(filename)
+	if err != nil {
+		return &os.PathError{Op: "remove", Path: filename, Err: os.ErrNotExist}
+	}
+	if node.Origin == nil {
+		return &os.PathError{Op: "remove", Path: filename, Err: fmt.Errorf("no source origin for delete")}
+	}
+
+	// Splice empty content to "delete" the node
+	if fs.writeBack != nil {
+		return fs.writeBack(filename, *node.Origin, []byte{})
+	}
+	return nil
 }
 
 func (fs *GraphFS) Join(elem ...string) string {
@@ -197,7 +282,11 @@ func (fs *GraphFS) Root() string {
 // --- billy.Capable ---
 
 func (fs *GraphFS) Capabilities() billy.Capability {
-	return billy.ReadCapability | billy.SeekCapability
+	caps := billy.ReadCapability | billy.SeekCapability
+	if fs.writable {
+		caps |= billy.WriteCapability
+	}
+	return caps
 }
 
 // --- internals ---
@@ -225,6 +314,8 @@ func nodeToFileInfo(n *graph.Node) os.FileInfo {
 	mode := os.FileMode(0o444)
 	if n.Mode.IsDir() {
 		mode = os.ModeDir | 0o555
+	} else if n.Origin != nil {
+		mode = 0o644
 	}
 	size := n.ContentSize()
 

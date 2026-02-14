@@ -186,8 +186,9 @@ func TestOpenNotFound(t *testing.T) {
 func TestReadOnly(t *testing.T) {
 	gfs := NewGraphFS(newTestGraph(), newTestSchema())
 
+	// Create on a non-existent file (no Origin) should fail
 	_, err := gfs.Create("newfile.txt")
-	assert.Equal(t, errReadOnly, err)
+	assert.Error(t, err)
 
 	err = gfs.MkdirAll("/newdir", 0o755)
 	assert.Equal(t, errReadOnly, err)
@@ -216,6 +217,94 @@ func TestRoot(t *testing.T) {
 func TestJoin(t *testing.T) {
 	gfs := NewGraphFS(newTestGraph(), newTestSchema())
 	assert.Equal(t, "a/b/c", gfs.Join("a", "b", "c"))
+}
+
+func TestWritableOpenAndClose(t *testing.T) {
+	store := newTestGraph()
+	// Add a node with SourceOrigin (writable)
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-0001.json",
+		Mode: 0,
+		Data: []byte(`{"id": "CVE-2024-0001", "severity": "HIGH"}`),
+		Origin: &graph.SourceOrigin{
+			FilePath:  "/tmp/test-source.json",
+			StartByte: 0,
+			EndByte:   43,
+		},
+	})
+
+	gfs := NewGraphFS(store, newTestSchema())
+
+	// Without write-back, writes should fail
+	_, err := gfs.OpenFile("/vulns/CVE-2024-0001.json", os.O_RDWR, 0)
+	assert.Equal(t, errReadOnly, err)
+
+	// Enable write-back
+	var capturedID string
+	var capturedContent []byte
+	gfs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
+		capturedID = nodeID
+		capturedContent = make([]byte, len(content))
+		copy(capturedContent, content)
+		return nil
+	})
+
+	// Now open for write
+	f, err := gfs.OpenFile("/vulns/CVE-2024-0001.json", os.O_RDWR, 0)
+	require.NoError(t, err)
+
+	// Write new content
+	_, err = f.Write([]byte(`{"id": "CVE-2024-0001", "severity": "CRITICAL"}`))
+	require.NoError(t, err)
+
+	// Close triggers write-back
+	err = f.Close()
+	require.NoError(t, err)
+
+	assert.Equal(t, "/vulns/CVE-2024-0001.json", capturedID)
+	assert.Contains(t, string(capturedContent), "CRITICAL")
+}
+
+func TestWritableCapabilities(t *testing.T) {
+	gfs := NewGraphFS(newTestGraph(), newTestSchema())
+
+	// Read-only by default
+	assert.Zero(t, gfs.Capabilities()&1) // WriteCapability (1 << 0)
+
+	// Enable write-back
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+	assert.NotZero(t, gfs.Capabilities()&1) // WriteCapability now set
+}
+
+func TestRemoveWithWriteBack(t *testing.T) {
+	store := newTestGraph()
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-0001.json",
+		Mode: 0,
+		Data: []byte(`test`),
+		Origin: &graph.SourceOrigin{
+			FilePath:  "/tmp/test.json",
+			StartByte: 0,
+			EndByte:   4,
+		},
+	})
+
+	gfs := NewGraphFS(store, newTestSchema())
+
+	// Without write-back, remove fails
+	err := gfs.Remove("/vulns/CVE-2024-0001.json")
+	assert.Equal(t, errReadOnly, err)
+
+	// Enable write-back
+	var deletedContent []byte
+	gfs.SetWriteBack(func(_ string, _ graph.SourceOrigin, content []byte) error {
+		deletedContent = content
+		return nil
+	})
+
+	err = gfs.Remove("/vulns/CVE-2024-0001.json")
+	require.NoError(t, err)
+	assert.Empty(t, deletedContent) // splice with empty content = delete
 }
 
 func TestNFSServerStarts(t *testing.T) {
