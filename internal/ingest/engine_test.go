@@ -73,6 +73,51 @@ func TestEngine_IngestJson(t *testing.T) {
 	assert.Equal(t, "admin", string(node.Data))
 }
 
+func TestEngine_IngestRecords(t *testing.T) {
+	// Schema designed for a list of records
+	schema := &api.Topology{
+		Nodes: []api.Node{
+			{
+				Name:     "records",
+				Selector: "$", // Root list
+				Children: []api.Node{
+					{
+						Name:     "{{.id}}",
+						Selector: "$[*]", // Iterate items
+						Files: []api.Leaf{
+							{
+								Name:            "value",
+								ContentTemplate: "{{.value}}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	records := []any{
+		map[string]any{"id": "rec1", "value": "v1"},
+		map[string]any{"id": "rec2", "value": "v2"},
+	}
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+
+	err := engine.IngestRecords(records)
+	require.NoError(t, err)
+
+	// Check /records/rec1/value
+	node, err := store.GetNode("records/rec1/value")
+	require.NoError(t, err)
+	assert.Equal(t, "v1", string(node.Data))
+
+	// Check /records/rec2/value
+	node, err = store.GetNode("records/rec2/value")
+	require.NoError(t, err)
+	assert.Equal(t, "v2", string(node.Data))
+}
+
 func loadGoSchema(t *testing.T) *api.Topology {
 	t.Helper()
 	data, err := os.ReadFile("../../examples/go-schema.json")

@@ -13,6 +13,8 @@ import (
 func InferGreedy(records []any, config ProjectConfig) *api.Topology {
 	// Root depth is 0
 	root := buildTreeRecursive(records, config.RootName, 0, config.MaxDepth, config.Hints)
+	// Root selector must be "$" to pass the list to children filters
+	root.Selector = "$"
 	return &api.Topology{
 		Version: "v1",
 		Nodes:   []api.Node{root},
@@ -22,7 +24,7 @@ func InferGreedy(records []any, config ProjectConfig) *api.Topology {
 func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints map[string]string) api.Node {
 	// Base cases
 	if depth >= maxDepth || len(records) < 10 {
-		return makeLeafNode(name, records)
+		return makeLeafNode(name, records, hints)
 	}
 
 	// 1. Analyze fields
@@ -80,7 +82,7 @@ func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints m
 
 	// 3. If no candidates, stop
 	if len(candidates) == 0 {
-		return makeLeafNode(name, records)
+		return makeLeafNode(name, records, hints)
 	}
 
 	// 4. Find best attribute (field or virtual field)
@@ -88,9 +90,8 @@ func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints m
 
 	// Threshold
 	if bestScore < 0.5 {
-		return makeLeafNode(name, records)
+		return makeLeafNode(name, records, hints)
 	}
-
 	// 5. Partition records
 	partitions := partitionByAttribute(records, bestAttr)
 
@@ -142,34 +143,93 @@ func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints m
 	}
 }
 
-func makeLeafNode(name string, records []any) api.Node {
-	stats := AnalyzeFields(records)
+func makeLeafNode(name string, records []any, hints map[string]string) api.Node {
+	ctx := BuildContextFromRecords(records)
 
-	var universal []string
-	for field, fs := range stats {
+	// Collect universal fields manually from stats
+
+	var universal []universalFieldInfo
+
+	for field, fs := range ctx.Stats {
 		if fs.Count == len(records) {
-			universal = append(universal, field)
+			universal = append(universal, universalFieldInfo{
+				path: field,
+
+				cardinality: fs.Cardinality,
+			})
 		}
 	}
-	sort.Strings(universal)
 
-	leaves := greedyBuildLeafFiles(universal)
+	// Detect identifier
+
+	// Prefer field hinted as "id"
+
+	var idField string
+
+	for _, f := range universal {
+		if hints[f.path] == "id" {
+
+			idField = f.path
+
+			break
+
+		}
+	}
+
+	if idField == "" {
+		idField = detectIdentifier(universal, ctx)
+	}
+
+	if idField == "" {
+		idField = "id" // Fallback
+	}
+
+	// Collect other fields for files
+
+	var leafFields []string
+
+	for _, f := range universal {
+		if f.path != idField {
+			leafFields = append(leafFields, f.path)
+		}
+	}
+
+	sort.Strings(leafFields)
+
+	leaves := greedyBuildLeafFiles(leafFields)
+
 	leaves = append(leaves, api.Leaf{
-		Name:            "raw.json",
+		Name: "raw.json",
+
 		ContentTemplate: "{{. | json}}",
 	})
 
-	return api.Node{
-		Name:     name,
+	// Iterator node (creates directory per record)
+
+	iterator := api.Node{
+		Name: fmt.Sprintf("{{.%s}}", idField),
+
 		Selector: "$[*]",
-		Files:    leaves,
+
+		Files: leaves,
+	}
+
+	return api.Node{
+		Name: name,
+
+		Selector: "$", // Will be overwritten by caller if not root
+
+		Children: []api.Node{iterator},
 	}
 }
 
 // selectBestAttribute selects the attribute that maximizes a weighted score.
+
 // Score = StructuralGain + (IntrinsicEntropy * 0.1) + HintBoost
+
 func selectBestAttribute(records []any, candidates []string, stats map[string]*FieldStats, hints map[string]string) (string, float64) {
 	signatures := make([]string, len(records))
+
 	for i, rec := range records {
 		signatures[i] = getSchemaSignature(rec)
 	}
@@ -177,61 +237,90 @@ func selectBestAttribute(records []any, candidates []string, stats map[string]*F
 	baseEntropy := calculateEntropyFromSignatures(signatures)
 
 	bestAttr := ""
+
 	bestScore := -1.0
+
 	bestCard := math.MaxInt32
+
 	bestCount := -1
 
 	for _, attr := range candidates {
+
 		partitions := partitionByAttribute(records, attr)
+
 		distinctValues := len(partitions)
 
 		// 1. Calculate Structural Gain
+
 		weightedEntropy := 0.0
+
 		total := float64(len(records))
 
 		for _, subset := range partitions {
+
 			subSigs := make([]string, len(subset))
+
 			for k, rec := range subset {
 				subSigs[k] = getSchemaSignature(rec)
 			}
+
 			weight := float64(len(subset)) / total
+
 			weightedEntropy += weight * calculateEntropyFromSignatures(subSigs)
+
 		}
 
 		structuralGain := baseEntropy - weightedEntropy
 
 		// 2. Calculate Intrinsic Entropy (Distribution)
+
 		intrinsicEntropy := 0.0
+
 		for _, subset := range partitions {
+
 			p := float64(len(subset)) / total
+
 			if p > 0 {
 				intrinsicEntropy -= p * math.Log2(p)
 			}
+
 		}
 
 		// 3. Compute Score
+
 		// Start with structural gain
+
 		score := structuralGain
 
 		// If structural gain is negligible, use intrinsic entropy to encourage partitioning large buckets
+
 		// But scale it down so it doesn't override structural differences
+
 		if structuralGain < 0.001 {
 			score += intrinsicEntropy * 0.1
 		}
 
 		// 4. Apply Hint Boost
+
 		field, mod := parseAttribute(attr)
+
 		hint := hints[field]
+
 		if hint == "temporal" {
 			// Boost temporal fields if they actually split data
+
 			if intrinsicEntropy > 0.01 {
+
 				score += 10.0
+
 				if mod == "year" {
 					score += 3.0
 				}
+
 				if mod == "month" {
 					score += 2.0
 				}
+
 			}
 		}
 

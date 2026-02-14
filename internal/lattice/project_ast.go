@@ -104,15 +104,48 @@ func ProjectAST(concepts []Concept, ctx *FormalContext) *api.Topology {
 	// Create a node for each container type
 	for _, t := range sortedTypes {
 		nameType := containerTypes[t]
+
+		// Enhanced Selector: Attempt to capture preceding comments as @doc.
+		// Use the "seq" operator "." to ensure adjacency if possible, or just juxtaposition.
+		// Note: Not all languages support "." for adjacency in queries yet, but standard juxtaposition works.
+		// We use a choice: either with comment or without.
+		// Actually, the simplest way to optional capture is:
+		// ((comment)* @doc . (type ...))
+		// But let's keep it robust.
+		// selector := fmt.Sprintf("(%s name: (%s) @name) @scope", t, nameType)
+
+		// New Selector: Capture doc comments optionally
+		// We wrap it in [] to allow multiple nodes (comments + def) to be matched?
+		// No, Mache processNode expects one match to drive one directory.
+		// If we use the "Extended Backward" logic we just added to Engine, we don't need complex selectors!
+		// The Engine now automatically extends "scope" to include comments if we capture them?
+		// Wait. My Engine fix extends 'Origin' (for write-back). It updates 'Data' (for read).
+		// So 'source' ALREADY includes comments now!
+
+		// But we want a SEPARATE 'doc' file.
+		// To get a separate 'doc' file, we need a separate capture '@doc'.
+		// The Engine's backward scan logic is hardcoded for 'scope'.
+
+		// Let's stick to the reliable selector for now, and add metadata files.
+		// We can use 'ast.json' to dump the node structure.
+		// And 'doc' if we can capture it.
+
+		selector := fmt.Sprintf("(%s name: (%s) @name) @scope", t, nameType)
+
 		node := api.Node{
 			Name:          "{{.name}}",
-			Selector:      fmt.Sprintf("(%s name: (%s) @name) @scope", t, nameType),
+			Selector:      selector,
 			SkipSelfMatch: true,
 			Files: []api.Leaf{
 				{
 					Name:            "source",
-					ContentTemplate: "{{.scope}}",
+					ContentTemplate: "{{.scope}}", // Now includes comments thanks to Engine fix
 				},
+				{
+					Name:            "ast.json",
+					ContentTemplate: "{{. | json}}", // Rich metadata
+				},
+				// We could add 'doc' if we parsed it separately, but 'source' is the primary view.
 			},
 			// Recursion will be handled by assigning the full list of children to this node
 		}
