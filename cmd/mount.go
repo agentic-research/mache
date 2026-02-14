@@ -282,6 +282,7 @@ var rootCmd = &cobra.Command{
 			"-o", "entry_timeout=0.0",
 			"-o", "attr_timeout=0.0",
 			"-o", "negative_timeout=0.0",
+			"-o", "direct_io",
 		}
 
 		// "nobrowse" is a macOS-specific flag to hide the mount from Finder/Spotlight.
