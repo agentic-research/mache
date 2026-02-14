@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/agentic-research/mache/api"
@@ -14,6 +16,7 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lattice"
+	"github.com/agentic-research/mache/internal/nfsmount"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/javascript"
@@ -36,6 +39,7 @@ var (
 	writable    bool
 	inferSchema bool
 	quiet       bool
+	backend     string
 )
 
 func init() {
@@ -44,6 +48,13 @@ func init() {
 	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back (splice edits into source files)")
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
+
+	defaultBackend := "fuse"
+	if runtime.GOOS == "darwin" {
+		defaultBackend = "nfs"
+	}
+	rootCmd.Flags().StringVar(&backend, "backend", defaultBackend, "Mount backend: nfs or fuse")
+
 	rootCmd.AddCommand(versionCmd)
 }
 
@@ -277,61 +288,98 @@ var rootCmd = &cobra.Command{
 			g = graph.NewMemoryStore()
 		}
 
-		// 4. Create the FS, injecting the Graph backend
-		macheFs := machefs.NewMacheFS(schema, g)
-
-		// Wire up query directory (enables /.query/ magic dir for both backends)
-		if sg, ok := g.(*graph.SQLiteGraph); ok {
-			macheFs.SetQueryFunc(sg.QueryRefs)
-		} else if ms, ok := g.(*graph.MemoryStore); ok {
-			macheFs.SetQueryFunc(ms.QueryRefs)
+		// 4. Mount via selected backend
+		switch backend {
+		case "nfs":
+			return mountNFS(schema, g, mountPoint, writable)
+		case "fuse":
+			return mountFUSE(schema, g, engine, mountPoint, writable)
+		default:
+			return fmt.Errorf("unknown backend %q (use nfs or fuse)", backend)
 		}
-
-		// Wire up write-back if requested (only for MemoryStore + tree-sitter sources)
-		if writable && engine != nil {
-			macheFs.Writable = true
-			macheFs.Engine = engine
-			fmt.Println("Write-back enabled: edits will splice into source files.")
-		} else if writable {
-			fmt.Println("Warning: --writable ignored (only supported for non-.db sources)")
-		}
-
-		// 5. Host it
-		host := fuse.NewFileSystemHost(macheFs)
-		host.SetCapReaddirPlus(true)
-
-		fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
-
-		// 6. Mount passes control to the library.
-		opts := []string{
-			"-o", fmt.Sprintf("uid=%d", os.Getuid()),
-			"-o", fmt.Sprintf("gid=%d", os.Getgid()),
-			"-o", "fsname=mache",
-			"-o", "subtype=mache",
-			// Timeouts MUST be 0.0 to prevent NFS caching issues with dynamic content
-			"-o", "entry_timeout=0.0",
-			"-o", "attr_timeout=0.0",
-			"-o", "negative_timeout=0.0",
-			"-o", "direct_io",
-		}
-
-		// "nobrowse" is a macOS-specific flag to hide the mount from Finder/Spotlight.
-		// Passing it on Linux (GitHub Actions) causes a crash.
-		if runtime.GOOS == "darwin" {
-			opts = append(opts, "-o", "nobrowse")
-			opts = append(opts, "-o", "noattrcache")
-		}
-
-		if !macheFs.Writable {
-			opts = append([]string{"-o", "ro"}, opts...)
-		}
-
-		if !host.Mount(mountPoint, opts) {
-			return fmt.Errorf("mount failed")
-		}
-
-		return nil
 	},
+}
+
+// mountNFS starts an NFS server backed by GraphFS and mounts it.
+func mountNFS(schema *api.Topology, g graph.Graph, mountPoint string, writable bool) error {
+	graphFs := nfsmount.NewGraphFS(g, schema)
+
+	srv, err := nfsmount.NewServer(graphFs)
+	if err != nil {
+		return fmt.Errorf("start NFS server: %w", err)
+	}
+	defer func() { _ = srv.Close() }()
+
+	fmt.Printf("Mounting mache at %s (NFS on localhost:%d)...\n", mountPoint, srv.Port())
+
+	if err := nfsmount.Mount(srv.Port(), mountPoint, writable); err != nil {
+		return err
+	}
+	fmt.Printf("Mounted. Press Ctrl-C to unmount.\n")
+
+	// Block until signal
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+
+	fmt.Printf("\nUnmounting %s...\n", mountPoint)
+	if err := nfsmount.Unmount(mountPoint); err != nil {
+		fmt.Printf("Warning: unmount failed: %v\n", err)
+		fmt.Printf("Run manually: sudo umount %s\n", mountPoint)
+	}
+	return nil
+}
+
+// mountFUSE starts a FUSE mount (original backend).
+func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
+	macheFs := machefs.NewMacheFS(schema, g)
+
+	// Wire up query directory (enables /.query/ magic dir for both backends)
+	if sg, ok := g.(*graph.SQLiteGraph); ok {
+		macheFs.SetQueryFunc(sg.QueryRefs)
+	} else if ms, ok := g.(*graph.MemoryStore); ok {
+		macheFs.SetQueryFunc(ms.QueryRefs)
+	}
+
+	// Wire up write-back if requested (only for MemoryStore + tree-sitter sources)
+	if writable && engine != nil {
+		macheFs.Writable = true
+		macheFs.Engine = engine
+		fmt.Println("Write-back enabled: edits will splice into source files.")
+	} else if writable {
+		fmt.Println("Warning: --writable ignored (only supported for non-.db sources)")
+	}
+
+	host := fuse.NewFileSystemHost(macheFs)
+	host.SetCapReaddirPlus(true)
+
+	fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
+
+	opts := []string{
+		"-o", fmt.Sprintf("uid=%d", os.Getuid()),
+		"-o", fmt.Sprintf("gid=%d", os.Getgid()),
+		"-o", "fsname=mache",
+		"-o", "subtype=mache",
+		"-o", "entry_timeout=0.0",
+		"-o", "attr_timeout=0.0",
+		"-o", "negative_timeout=0.0",
+		"-o", "direct_io",
+	}
+
+	if runtime.GOOS == "darwin" {
+		opts = append(opts, "-o", "nobrowse")
+		opts = append(opts, "-o", "noattrcache")
+	}
+
+	if !macheFs.Writable {
+		opts = append([]string{"-o", "ro"}, opts...)
+	}
+
+	if !host.Mount(mountPoint, opts) {
+		return fmt.Errorf("mount failed")
+	}
+
+	return nil
 }
 
 // Execute runs the root command.
