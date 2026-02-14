@@ -289,6 +289,7 @@ var rootCmd = &cobra.Command{
 		// Passing it on Linux (GitHub Actions) causes a crash.
 		if runtime.GOOS == "darwin" {
 			opts = append(opts, "-o", "nobrowse")
+			opts = append(opts, "-o", "noattrcache")
 		}
 
 		if !macheFs.Writable {

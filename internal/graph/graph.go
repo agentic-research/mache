@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -143,6 +144,11 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 // DeleteFileNodes removes all nodes that originated from the given source file.
 // This is used to clear stale nodes before re-ingesting a file.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {
+	// Canonicalize path to match Ingest behavior
+	if realPath, err := filepath.EvalSymlinks(filePath); err == nil {
+		filePath = realPath
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

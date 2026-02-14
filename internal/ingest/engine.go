@@ -89,9 +89,13 @@ func (e *Engine) Ingest(path string) error {
 	if err != nil {
 		return err
 	}
-	e.RootPath = absPath
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		realPath = absPath
+	}
+	e.RootPath = realPath
 
-	info, err := os.Stat(absPath)
+	info, err := os.Stat(realPath)
 	if err != nil {
 		return err
 	}
@@ -104,14 +108,14 @@ func (e *Engine) Ingest(path string) error {
 		// can produce confusing errors (e.g. S-expression as JSONPath).
 		treeSitter := schemaUsesTreeSitter(e.Schema)
 
-		return filepath.Walk(path, func(p string, d os.FileInfo, err error) error {
+		return filepath.Walk(realPath, func(p string, d os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 			if d.IsDir() {
 				// Skip hidden directories (.git, .mache, etc.)
 				base := filepath.Base(p)
-				if p != path && len(base) > 0 && base[0] == '.' {
+				if p != realPath && len(base) > 0 && base[0] == '.' {
 					return filepath.SkipDir
 				}
 				return nil
@@ -171,11 +175,8 @@ func (e *Engine) ingestJSON(path string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	modTime := info.ModTime()
+	// Use time.Now() to force NFS cache invalidation
+	modTime := time.Now()
 
 	var data any
 	if err := json.Unmarshal(content, &data); err != nil {
@@ -184,7 +185,11 @@ func (e *Engine) ingestJSON(path string) error {
 
 	// Clear old nodes from this file (if any)
 	absPath, _ := filepath.Abs(path)
-	e.Store.DeleteFileNodes(absPath)
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		realPath = absPath
+	}
+	e.Store.DeleteFileNodes(realPath)
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
@@ -200,34 +205,67 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 	if err != nil {
 		return err
 	}
-	content, err := os.ReadFile(absPath)
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		realPath = absPath
+	}
+
+	content, err := os.ReadFile(realPath)
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return err
-	}
-	modTime := info.ModTime()
+	// Use time.Now() to force NFS cache invalidation on updates
+	modTime := time.Now()
 
 	// Clear old nodes from this source file
-	e.Store.DeleteFileNodes(absPath)
+	e.Store.DeleteFileNodes(realPath)
 
 	parser := sitter.NewParser()
 	parser.SetLanguage(lang)
 	tree, err := parser.ParseCtx(context.Background(), nil, content)
+	// Fail-Open: If parsing fails or yields no nodes, create a fallback RAW node
+	// so the user can still access/fix the file.
+	// Note: Tree-sitter often returns a tree with error nodes rather than a Go error.
+	// But we proceed to traverse it. If traversal yields 0 nodes, we fallback below.
 	if err != nil {
-		return fmt.Errorf("failed to parse %s: %w", path, err)
+		log.Printf("ingest: parse failed for %s (using raw fallback): %v", path, err)
 	}
-	walker := NewSitterWalker()
-	root := SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
-	sourceFile := filepath.Base(path)
-	e.sourceFile = absPath
-	defer func() { e.sourceFile = "" }()
-	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime); err != nil {
-			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
+
+	if err == nil {
+		walker := NewSitterWalker()
+		root := SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
+		sourceFile := filepath.Base(path)
+		e.sourceFile = realPath
+		defer func() { e.sourceFile = "" }()
+		for _, nodeSchema := range e.Schema.Nodes {
+			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime); err != nil {
+				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
+			}
 		}
+	}
+
+	if err != nil {
+		// Fallback: Create a "raw" node at the root (or derived name)
+		// We name it "raw_<filename>" to avoid collision with potential future valid parsing?
+		// Or better: mimic the structure of a raw file ingest?
+		// Just exposing it as "broken_<filename>" at the top level is safest.
+
+		baseName := filepath.Base(path)
+		fallbackID := "BROKEN_" + baseName
+
+		fileNode := &graph.Node{
+			ID:      fallbackID,
+			Mode:    0o444,
+			ModTime: modTime,
+			Data:    content,
+			Origin: &graph.SourceOrigin{
+				FilePath:  realPath,
+				StartByte: 0,
+				EndByte:   uint32(len(content)),
+			},
+		}
+		e.Store.AddNode(fileNode)
+		e.Store.AddRoot(fileNode)
 	}
 	return nil
 }
@@ -289,10 +327,8 @@ func (e *Engine) ingestRawFile(path string) error {
 		return err
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
+	// Use time.Now() to force NFS cache invalidation
+	modTime := time.Now()
 
 	absPath, _ := filepath.Abs(path)
 	e.Store.DeleteFileNodes(absPath)
@@ -300,7 +336,7 @@ func (e *Engine) ingestRawFile(path string) error {
 	fileNode := &graph.Node{
 		ID:      fileID,
 		Mode:    0o444,
-		ModTime: info.ModTime(),
+		ModTime: modTime,
 		Data:    content,
 		Origin: &graph.SourceOrigin{
 			FilePath:  absPath,
@@ -657,7 +693,51 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 			// Populate Origin from tree-sitter captures for write-back
 			if op, ok := match.(OriginProvider); ok && e.sourceFile != "" {
-				if start, end, ok := op.CaptureOrigin("scope"); ok {
+				// Extend Backward to capture preceding comments (Doc Comments)
+				// Access raw node via sitterMatch if possible
+				if sm, ok := match.(interface{ GetCaptureNode(string) *sitter.Node }); ok {
+					if node := sm.GetCaptureNode("scope"); node != nil {
+						startByte := node.StartByte()
+
+						// Walk backward to find contiguous comments
+						prev := node.PrevSibling()
+						for prev != nil && prev.Type() == "comment" {
+							// Check adjacency: <= 2 bytes gap (allow \n or \n\n)
+							// Note: Tree-sitter byte ranges are accurate.
+							if int(node.StartByte())-int(prev.EndByte()) <= 2 {
+								startByte = prev.StartByte()
+								// Update node to prev to keep walking back
+								node = prev // Just for loop logic, we use startByte
+								prev = prev.PrevSibling()
+							} else {
+								break
+							}
+						}
+
+						// If we extended the range, we must also update the CONTENT (Data)
+						// because the current 'content' (from RenderTemplate) only includes the original scope.
+						// We need to re-read from the source file in memory.
+						if startByte < sm.GetCaptureNode("scope").StartByte() {
+							// We need the source content.
+							// Fortunately, match.Context() is SitterRoot which has Source!
+							if root, ok := match.Context().(SitterRoot); ok {
+								// Re-slice content
+								endByte := sm.GetCaptureNode("scope").EndByte()
+								if endByte <= uint32(len(root.Source)) {
+									extendedContent := root.Source[startByte:endByte]
+									fileNode.Data = []byte(extendedContent)
+								}
+							}
+						}
+
+						fileNode.Origin = &graph.SourceOrigin{
+							FilePath:  e.sourceFile,
+							StartByte: startByte,
+							EndByte:   sm.GetCaptureNode("scope").EndByte(),
+						}
+					}
+				} else if start, end, ok := op.CaptureOrigin("scope"); ok {
+					// Fallback for non-sitter matches (shouldn't happen here but safe)
 					fileNode.Origin = &graph.SourceOrigin{
 						FilePath:  e.sourceFile,
 						StartByte: start,

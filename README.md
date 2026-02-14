@@ -16,7 +16,7 @@ And because it's a Graph, Mache gives you the ultimate tool to query it: **SQL**
 ```mermaid
 graph TD
     DH["<b>Data Graph</b><br/>(JSON / Code / YAML)"]
-    
+
     root["Root Object"]
     root --> key1["{key}"]
     root --> key2["{key}"]
@@ -24,11 +24,11 @@ graph TD
     key1 --> val["'value'"]
     key2 --> obj["{object}"]
     arr --> item["{item}"]
-    
+
     bridge["<b>Mache Bridge: SQL Projection</b><br/>Graph → Tree"]
-    
+
     OSH["<b>OS Graph</b><br/>(Filesystem)"]
-    
+
     mount["/  (mount)"]
     mount --> dir1["/key/"]
     mount --> dir2["/key/"]
@@ -36,14 +36,14 @@ graph TD
     dir1 --> file["file"]
     dir2 --> subdir["dir/"]
     dirArr --> itemdir["dir/"]
-    
+
     DH --> root
     val --> bridge
     obj --> bridge
     item --> bridge
     bridge --> mount
     mount --> OSH
-    
+
     style DH fill:#e1f5ff,stroke:#333,stroke-width:2px
     style bridge fill:#fff4e1,stroke:#333,stroke-width:2px
     style OSH fill:#ffe1f5,stroke:#333,stroke-width:2px
@@ -171,7 +171,23 @@ With `--writable`, file nodes backed by tree-sitter source code become editable.
 ./mache -w -s examples/go-schema.json -d . /tmp/mache-src
 ```
 
-When you edit a file in the mount, Mache splices the content back into the original source file and runs `goimports`.
+When you edit a file in the mount, Mache splices the content back into the original source file and runs `goimports`. It includes robust **Fail-Open** recovery: if you write syntax errors that break the parser, the node won't disappear; instead, a `BROKEN_<filename>` node appears, allowing you to read and fix your broken code.
+
+### The Plan 9 Interface: SQL on Files
+
+Mache exposes a special `.query/` directory at the root of the mount. You can create ad-hoc queries by writing SQL to a control file.
+
+```bash
+# 1. Create a query session
+mkdir /tmp/mount/.query/my_search
+
+# 2. Write your SQL query (selects paths where token 'Calculate' appears)
+echo "SELECT path FROM mache_refs WHERE token = 'Calculate'" > /tmp/mount/.query/my_search/ctl
+
+# 3. Read the results (symlinks to the actual nodes)
+ls -l /tmp/mount/.query/my_search/
+# -> main_Calculate_source -> ../../main/Calculate/source
+```
 
 ## How It Works
 

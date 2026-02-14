@@ -141,6 +141,12 @@ func (m *sitterMatch) CaptureOrigin(name string) (uint32, uint32, bool) {
 	return n.StartByte(), n.EndByte(), true
 }
 
+// GetCaptureNode returns the raw tree-sitter node for a given capture name.
+// This allows access to the AST for advanced processing (e.g. extending range).
+func (m *sitterMatch) GetCaptureNode(name string) *sitter.Node {
+	return m.captures[name]
+}
+
 // Values implements Match.
 func (m *sitterMatch) Values() map[string]any {
 	result := make(map[string]any, len(m.values))
