@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // GetGitHints returns the default inference hints for Git repositories.
@@ -87,9 +88,15 @@ func LoadGitCommits(repoPath string) ([]any, error) {
 			"message": strings.TrimSpace(lines[5]),
 		}
 
+		// Parse date and enrich
+		if t, err := time.Parse(time.RFC3339, lines[4]); err == nil {
+			// Inject derived fields for robust sharding
+			commit["date_year"] = fmt.Sprintf("%04d", t.Year())
+			commit["date_month"] = fmt.Sprintf("%02d", t.Month())
+			commit["date_day"] = fmt.Sprintf("%02d", t.Day())
+		}
 		commits = append(commits, commit)
 	}
-
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scanner error: %w", err)
 	}

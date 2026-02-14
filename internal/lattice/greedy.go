@@ -23,7 +23,7 @@ func InferGreedy(records []any, config ProjectConfig) *api.Topology {
 
 func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints map[string]string) api.Node {
 	// Base cases
-	if depth >= maxDepth || len(records) < 10 {
+	if depth >= maxDepth || len(records) < 2 {
 		return makeLeafNode(name, records, hints)
 	}
 
@@ -45,10 +45,17 @@ func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints m
 
 		// If hint says "temporal", add virtual candidates
 		if hint == "temporal" || (hint == "" && fs.IsDate && fs.Cardinality > 10) {
-			// Add .year, .month, .day candidates
-			candidates = append(candidates, field+":year")
-			candidates = append(candidates, field+":month")
-			candidates = append(candidates, field+":day")
+			// Check for pre-enriched fields (e.g. date_year)
+			if _, ok := stats[field+"_year"]; ok {
+				candidates = append(candidates, field+"_year")
+				candidates = append(candidates, field+"_month")
+				candidates = append(candidates, field+"_day")
+			} else {
+				// Fallback to virtual regex fields
+				candidates = append(candidates, field+":year")
+				candidates = append(candidates, field+":month")
+				candidates = append(candidates, field+":day")
+			}
 
 			// Also add raw field only if cardinality is low enough to be a directory
 			if fs.Cardinality < 50 {
@@ -57,7 +64,6 @@ func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints m
 			processedFields[field] = true
 			continue
 		}
-
 		// Standard handling
 		if fs.Cardinality < 2 {
 			// Sparse field check
@@ -105,6 +111,7 @@ func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints m
 	sort.Strings(keys)
 
 	field, modifier := parseAttribute(bestAttr)
+	isVirtual := strings.Contains(bestAttr, ":")
 
 	for _, key := range keys {
 		subset := partitions[key]
@@ -116,12 +123,14 @@ func buildTreeRecursive(records []any, name string, depth, maxDepth int, hints m
 
 		if key == "__MACHE_MISSING__" {
 			childSelector = fmt.Sprintf("$[?(!(@.%s))]", field)
+		} else if !isVirtual && modifier != "" {
+			// Enriched field (e.g. date_year) - use exact match on the enriched field itself
+			childSelector = fmt.Sprintf("$[?(@.%s == '%s')]", bestAttr, escKey)
 		} else {
 			switch modifier {
 			case "year":
 				childSelector = fmt.Sprintf("$[?(@.%s =~ '^%s')]", field, escKey)
-			case "month":
-				// Match YYYY-MM
+			case "month": // Match YYYY-MM
 				childSelector = fmt.Sprintf("$[?(@.%s =~ '^.{5}%s')]", field, escKey)
 			case "day":
 				// Match YYYY-MM-DD
@@ -361,6 +370,15 @@ func parseAttribute(attr string) (string, string) {
 	if strings.Contains(attr, ":") {
 		parts := strings.Split(attr, ":")
 		return parts[0], parts[1]
+	}
+	if strings.HasSuffix(attr, "_year") {
+		return strings.TrimSuffix(attr, "_year"), "year"
+	}
+	if strings.HasSuffix(attr, "_month") {
+		return strings.TrimSuffix(attr, "_month"), "month"
+	}
+	if strings.HasSuffix(attr, "_day") {
+		return strings.TrimSuffix(attr, "_day"), "day"
 	}
 	return attr, ""
 }
