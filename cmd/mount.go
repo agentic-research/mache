@@ -282,12 +282,14 @@ var rootCmd = &cobra.Command{
 			"-o", "entry_timeout=0.0",
 			"-o", "attr_timeout=0.0",
 			"-o", "negative_timeout=0.0",
+			"-o", "direct_io",
 		}
 
 		// "nobrowse" is a macOS-specific flag to hide the mount from Finder/Spotlight.
 		// Passing it on Linux (GitHub Actions) causes a crash.
 		if runtime.GOOS == "darwin" {
 			opts = append(opts, "-o", "nobrowse")
+			opts = append(opts, "-o", "noattrcache")
 		}
 
 		if !macheFs.Writable {

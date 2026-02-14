@@ -262,6 +262,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 
 	if !node.ModTime.IsZero() {
 		stat.Mtim = fuse.NewTimespec(node.ModTime)
+		stat.Ctim = fuse.NewTimespec(node.ModTime)
 	}
 
 	return 0
@@ -582,6 +583,8 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 
 	// 3. Re-ingest the source file — updates ALL Origins from this file
 	if fs.Engine != nil {
+		// Ensure timestamp changes for NFS cache invalidation (granularity safety)
+		time.Sleep(2 * time.Millisecond)
 		if err := fs.Engine.Ingest(node.Origin.FilePath); err != nil {
 			log.Printf("writeback: re-ingest failed for %s: %v", node.Origin.FilePath, err)
 		}

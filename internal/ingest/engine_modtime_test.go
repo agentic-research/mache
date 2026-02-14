@@ -128,8 +128,14 @@ func TestEngine_DeleteFileNodes_Explicit(t *testing.T) {
 	require.NoError(t, engine.Ingest(tempDir))
 
 	// Verify existence
-	_, err := store.GetNode("utils/marker")
+	n, err := store.GetNode("utils/marker")
 	require.NoError(t, err)
+	if n.Origin == nil {
+		t.Logf("Node utils/marker has NIL origin!")
+	} else {
+		t.Logf("Node utils/marker Origin: %s", n.Origin.FilePath)
+	}
+	t.Logf("Deleting nodes for: %s", goFilePath)
 
 	// Explicitly Delete
 	store.DeleteFileNodes(goFilePath)
