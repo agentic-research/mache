@@ -432,3 +432,50 @@ func TestNFSServerStarts(t *testing.T) {
 	require.NoError(t, err)
 	_ = conn.Close()
 }
+
+func TestDraftMode(t *testing.T) {
+	store := newTestGraph()
+	// Add a writable node
+	store.AddNode(&graph.Node{
+		ID:   "vulns/CVE-2024-0001.json",
+		Mode: 0,
+		Data: []byte(`original`),
+		Origin: &graph.SourceOrigin{
+			FilePath:  "/tmp/test.json",
+			StartByte: 0,
+			EndByte:   8,
+		},
+	})
+
+	gfs := NewGraphFS(store, newTestSchema())
+
+	// Simulate cmd/mount.go logic: validation fail -> save draft -> return nil
+	gfs.SetWriteBack(func(nodeID string, _ graph.SourceOrigin, content []byte) error {
+		node, _ := store.GetNode(nodeID)
+		// Simulate saving draft
+		node.DraftData = make([]byte, len(content))
+		copy(node.DraftData, content)
+		return nil
+	})
+
+	// 1. Write "invalid" content
+	f, err := gfs.OpenFile("/vulns/CVE-2024-0001.json", os.O_RDWR, 0)
+	require.NoError(t, err)
+	_, err = f.Write([]byte(`draft_content`))
+	require.NoError(t, err)
+	err = f.Close() // Triggers WriteBack
+	require.NoError(t, err)
+
+	// 2. Read back -> should see draft
+	f, err = gfs.OpenFile("/vulns/CVE-2024-0001.json", os.O_RDONLY, 0)
+	require.NoError(t, err)
+	buf := make([]byte, 100)
+	n, _ := f.Read(buf)
+	assert.Equal(t, "draft_content", string(buf[:n]))
+	_ = f.Close()
+
+	// 3. Verify original data is untouched
+	node, _ := store.GetNode("/vulns/CVE-2024-0001.json")
+	assert.Equal(t, "original", string(node.Data))
+	assert.Equal(t, "draft_content", string(node.DraftData))
+}
