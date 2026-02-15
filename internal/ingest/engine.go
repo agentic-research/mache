@@ -641,7 +641,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// append a source-file suffix to disambiguate.
 		// This handles cases like multiple init() functions across Go files.
 		if len(schema.Files) > 0 && sourceFile != "" {
-			if existing, err := e.Store.GetNode(id); err == nil && len(existing.Children) > 0 {
+			if existing, err := store.GetNode(id); err == nil && len(existing.Children) > 0 {
 				suffix := dedupSuffix(sourceFile)
 				name = name + suffix
 				currentPath = filepath.Join(parentPath, name)
