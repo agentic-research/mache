@@ -222,8 +222,10 @@ Each directory is a code construct (function, type, method). Inside each:
 implementation. The engine splices your changes back into the real .go files.
 Implicit truncation is handled — you do not need to pad writes.
 
-**If a write fails** (e.g. syntax error), read
-\`<node>/_diagnostics/last-write-status\` for the error message.
+**Writes are always accepted.** If your code has syntax errors, it is saved
+as a **Draft** (visible to you but not committed to the source file).
+ALWAYS check \`<node>/_diagnostics/last-write-status\` after writing to
+confirm it was "ok" (committed) or if there was an error.
 
 ## Rules
 
@@ -328,11 +330,11 @@ verify() {
 
     # Level 5: Notes mention diagnostics / EIO / write failure
     echo -n "Level 5 (Adversarial): "
-    if [ -f "$SANDBOX/agent-notes.md" ] && grep -qi "diagnostic\|EIO\|reject\|syntax error\|write.* fail\|last-write-status" "$SANDBOX/agent-notes.md" 2>/dev/null; then
+    if [ -f "$SANDBOX/agent-notes.md" ] && grep -qi "diagnostic\|draft\|syntax error\|last-write-status" "$SANDBOX/agent-notes.md" 2>/dev/null; then
         echo -e "${GREEN}PASS${NC}"
         score=$((score + 1))
     else
-        echo -e "${YELLOW}SKIP${NC} — no adversarial write documented"
+        echo -e "${YELLOW}SKIP${NC} — no adversarial write/draft documented"
     fi
 
     echo ""
