@@ -176,22 +176,6 @@ With `--writable`, file nodes backed by tree-sitter source code become editable.
 
 When you edit a file in the mount, Mache splices the content back into the original source file and runs `goimports`. It includes robust **Fail-Open** recovery: if you write syntax errors that break the parser, the node won't disappear; instead, a `BROKEN_<filename>` node appears, allowing you to read and fix your broken code.
 
-### The Plan 9 Interface: SQL on Files
-
-Mache exposes a special `.query/` directory at the root of the mount. You can create ad-hoc queries by writing SQL to a control file.
-
-```bash
-# 1. Create a query session
-mkdir /tmp/mount/.query/my_search
-
-# 2. Write your SQL query (selects paths where token 'Calculate' appears)
-echo "SELECT path FROM mache_refs WHERE token = 'Calculate'" > /tmp/mount/.query/my_search/ctl
-
-# 3. Read the results (symlinks to the actual nodes)
-ls -l /tmp/mount/.query/my_search/
-# -> main_Calculate_source -> ../../main/Calculate/source
-```
-
 ## How It Works
 
 Mache uses a **Topology Schema** to map data from SQLite, JSON, or source code into a filesystem structure.
