@@ -118,6 +118,12 @@ tasks:
     cmds:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
 
+  fuzz-gen:
+    desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target
+    dir: experiments/fuzz_mutate
+    cmds:
+      - go run main.go -file target/parser.go -target FuzzParseToken
+
   check:
     desc: Run all checks (fmt, vet, lint, test, validate)
     cmds:
