@@ -30,7 +30,7 @@ func (e *ValidationError) Error() string {
 // contains syntax errors. Files with no known tree-sitter language pass
 // through without validation (returns nil).
 func Validate(content []byte, filePath string) error {
-	lang := languageForPath(filePath)
+	lang := LanguageForPath(filePath)
 	if lang == nil {
 		return nil // unknown language — pass through
 	}
@@ -74,7 +74,7 @@ func Validate(content []byte, filePath string) error {
 // ASTErrors returns all ERROR node locations in the content for diagnostic reporting.
 // Returns nil if no errors or unknown language.
 func ASTErrors(content []byte, filePath string) []ValidationError {
-	lang := languageForPath(filePath)
+	lang := LanguageForPath(filePath)
 	if lang == nil {
 		return nil
 	}
@@ -133,9 +133,9 @@ func collectErrors(node *sitter.Node, filePath string, errs *[]ValidationError) 
 	}
 }
 
-// languageForPath maps file extensions to tree-sitter languages.
-// Mirrors the mapping in internal/ingest/engine.go.
-func languageForPath(filePath string) *sitter.Language {
+// LanguageForPath maps file extensions to tree-sitter languages.
+// Single source of truth — used by Validate, ASTErrors, and ingest.ReExtractContext.
+func LanguageForPath(filePath string) *sitter.Language {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".go":

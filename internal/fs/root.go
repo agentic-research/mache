@@ -744,48 +744,46 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 
 	// 1. Validate syntax before touching source file
 	if err := writeback.Validate(wh.buf, node.Origin.FilePath); err != nil {
-		log.Printf("writeback: validation failed for %s: %v", node.Origin.FilePath, err)
+		log.Printf("writeback: validation failed for %s: %v (saving draft)", node.Origin.FilePath, err)
 		// Store diagnostic for _diagnostics/ virtual dir
 		if store, ok := fs.Graph.(*graph.MemoryStore); ok {
 			store.WriteStatus.Store(filepath.Dir(wh.path), err.Error())
+			// Save as Draft
+			draft := make([]byte, len(wh.buf))
+			copy(draft, wh.buf)
+			node.DraftData = draft
 		}
-		return -fuse.EIO
+		// Return Success (0) so agent sees "saved" state
+		return 0
 	}
 
-	// 2. Splice new content into source file
+	// 2. Format in-process (gofumpt on the buffer, not the file)
+	formatted := writeback.FormatGoBuffer(wh.buf, node.Origin.FilePath)
+
+	// 3. Splice formatted content into source file
 	oldLen := node.Origin.EndByte - node.Origin.StartByte
-	if err := writeback.Splice(*node.Origin, wh.buf); err != nil {
+	if err := writeback.Splice(*node.Origin, formatted); err != nil {
 		log.Printf("writeback: splice failed for %s: %v", node.Origin.FilePath, err)
 		return -fuse.EIO
 	}
 
-	// 3. Shift sibling origins immediately (before re-ingest)
+	// 4. Surgical node update — no re-ingest
+	newOrigin := &graph.SourceOrigin{
+		FilePath:  node.Origin.FilePath,
+		StartByte: node.Origin.StartByte,
+		EndByte:   node.Origin.StartByte + uint32(len(formatted)),
+	}
 	if store, ok := fs.Graph.(*graph.MemoryStore); ok {
-		delta := int32(len(wh.buf)) - int32(oldLen)
+		// Shift sibling origins before updating this node's origin
+		delta := int32(len(formatted)) - int32(oldLen)
 		if delta != 0 {
 			store.ShiftOrigins(node.Origin.FilePath, node.Origin.EndByte, delta)
 		}
+		_ = store.UpdateNodeContent(wh.nodeID, formatted, newOrigin, time.Now())
 		store.WriteStatus.Store(filepath.Dir(wh.path), "ok")
 	}
 
-	// 4. Run goimports (failure-tolerant — if agent wrote broken code,
-	//    we still want it in the FS so the agent can see and fix the error)
-	if err := exec.Command("goimports", "-w", node.Origin.FilePath).Run(); err != nil {
-		log.Printf("writeback: goimports failed for %s (continuing): %v", node.Origin.FilePath, err)
-	}
-
-	// 5. Re-ingest the source file — updates ALL Origins from this file
-	if fs.Engine != nil {
-		// Ensure timestamp changes for NFS cache invalidation (granularity safety)
-		time.Sleep(2 * time.Millisecond)
-		if err := fs.Engine.Ingest(node.Origin.FilePath); err != nil {
-			log.Printf("writeback: re-ingest failed for %s: %v", node.Origin.FilePath, err)
-		}
-	}
-
-	// 6. Invalidate cached size/content — the file's content changed,
-	// so the size cache and content cache must be evicted to prevent
-	// stale data on the next Getattr or Read.
+	// 5. Invalidate cached size/content
 	fs.Graph.Invalidate(wh.nodeID)
 
 	return 0
@@ -984,6 +982,11 @@ func (fs *MacheFS) queryOpendir(path string) (int, uint64) {
 // for accumulating SQL. Also handles regular FUSE Create if needed.
 
 func (fs *MacheFS) Create(path string, flags int, mode uint32) (int, uint64) {
+	// For existing writable nodes, delegate to Open (handles write-back pipeline).
+	// Shell redirections (echo > file) use create() even for existing files on Linux.
+	if _, err := fs.Graph.GetNode(path); err == nil {
+		return fs.Open(path, flags|syscall.O_WRONLY|syscall.O_TRUNC)
+	}
 	if !fs.isQueryPath(path) {
 		return -fuse.EACCES, 0
 	}

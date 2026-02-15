@@ -47,11 +47,12 @@ type TemplateRenderer func(tmpl string, values map[string]any) (string, error)
 // (<dbpath>.refs.db) to keep the source DB immutable. Refs are accumulated
 // in-memory during ingestion and flushed once via FlushRefs.
 type SQLiteGraph struct {
-	db     *sql.DB
-	dbPath string
-	schema *api.Topology
-	render TemplateRenderer
-	levels []*schemaLevel // compiled schema tree, immutable after construction
+	db        *sql.DB
+	dbPath    string
+	tableName string // source table name (default: "results")
+	schema    *api.Topology
+	render    TemplateRenderer
+	levels    []*schemaLevel // compiled schema tree, immutable after construction
 
 	// Sidecar database for cross-reference index (node_refs + file_ids tables).
 	// Kept separate from source DB to preserve immutability of Venturi data.
@@ -189,9 +190,15 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		return nil, fmt.Errorf("create mache_refs vtab: %w", err)
 	}
 
+	tableName := schema.Table
+	if tableName == "" {
+		tableName = "results"
+	}
+
 	return &SQLiteGraph{
 		db:           db,
 		dbPath:       dbPath,
+		tableName:    tableName,
 		schema:       schema,
 		render:       render,
 		levels:       compileLevels(schema),
@@ -645,13 +652,13 @@ func extractFieldPaths(templates []string) []string {
 
 // buildScanQuery builds a SELECT using json_extract for only the fields
 // needed by name templates. Avoids transferring and parsing full record JSON.
-func buildScanQuery(fieldPaths []string) string {
+func buildScanQuery(fieldPaths []string, tableName string) string {
 	cols := make([]string, 0, len(fieldPaths)+1)
 	cols = append(cols, "id")
 	for _, fp := range fieldPaths {
 		cols = append(cols, fmt.Sprintf("json_extract(record, '$.%s')", fp))
 	}
-	return "SELECT " + strings.Join(cols, ", ") + " FROM results"
+	return "SELECT " + strings.Join(cols, ", ") + " FROM " + tableName
 }
 
 // setNestedField builds a nested map from a dotted path.
@@ -709,7 +716,7 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 
 	// Analyze schema to find which fields the name templates need
 	fieldPaths := extractFieldPaths(collectNameTemplates(level))
-	query := buildScanQuery(fieldPaths)
+	query := buildScanQuery(fieldPaths, g.tableName)
 
 	// Read-only transaction for snapshot consistency — if the source DB is
 	// being written to during scan, we get a consistent point-in-time view.
@@ -935,7 +942,7 @@ func (g *SQLiteGraph) resolveContent(filePath string, segments []string, leaf *a
 
 	// Fetch record from source DB (primary key lookup — instant)
 	var raw string
-	if err := g.db.QueryRow("SELECT record FROM results WHERE id = ?", recordID).Scan(&raw); err != nil {
+	if err := g.db.QueryRow("SELECT record FROM "+g.tableName+" WHERE id = ?", recordID).Scan(&raw); err != nil {
 		return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
 	}
 
