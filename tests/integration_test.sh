@@ -88,6 +88,24 @@ else
     exit 1
 fi
 
+echo "--- 3a. Verify SQL Query (Plan 9 Interface) ---"
+# Test .query interface
+QUERY_NAME="find_hello_$(date +%s)"
+QUERY_DIR="${MNT_DIR}/.query/${QUERY_NAME}"
+mkdir -p "$QUERY_DIR"
+# Search for usage of "fmt" (which is imported) or "HelloWorld"
+echo "SELECT path FROM mache_refs WHERE token = 'Println'" > "${QUERY_DIR}/ctl"
+
+# Check if result exists (HelloWorld calls Println)
+# Path should be .../HelloWorld/source
+if ls "$QUERY_DIR" | grep -q "source"; then
+    echo -e "${GREEN}SQL Query: PASS${NC}"
+else
+    echo -e "${RED}SQL Query: FAIL - Result not found${NC}"
+    ls -la "$QUERY_DIR"
+    exit 1
+fi
+
 echo "--- 4. Verify Implicit Truncation ---"
 # Overwrite with SHORTER content. If truncation fails, old tail remains.
 # Original: fmt.Println("Original Content Long Long Long")
