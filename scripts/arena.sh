@@ -215,8 +215,9 @@ Each directory is a code construct (function, type, method). Inside each:
     \$ ls $MNT/PackReading/
     source          # The full source code of this construct
     context         # (Read-only) Imports, types, and globals visible to this scope
-    ast.json        # AST metadata
-    _diagnostics/   # Write feedback (check after failed writes)
+    \$ ls $MNT/PackReading/_diagnostics/
+    last-write-status # Write feedback (check after failed writes)
+    lint              # (Read-only) Static analysis warnings
 
 **To edit code**: overwrite the \`source\` file with the COMPLETE new
 implementation. The engine splices your changes back into the real .go files.
