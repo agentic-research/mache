@@ -10,8 +10,8 @@ set -e
 SANDBOX_DIR="/tmp/mache-integration"
 SRC_DIR="${SANDBOX_DIR}/src"
 MNT_DIR="${SANDBOX_DIR}/mnt"
-# Use the binary built by task build
-MACHE_BIN="$(pwd)/bin/mache"
+# Use the binary built by task build (override with MACHE_BIN env var)
+MACHE_BIN="${MACHE_BIN:-$(pwd)/bin/mache}"
 
 # Colors
 GREEN='\033[0;32m'

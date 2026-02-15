@@ -10,7 +10,14 @@ on:
 
 jobs:
   integration:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev fuse
+          - os: macos-latest
+            fuse_setup: brew install --cask fuse-t
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -21,8 +28,8 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      - name: Install libfuse (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libfuse-dev fuse
+      - name: Install FUSE
+        run: ${{ matrix.fuse_setup }}
 
       - name: Install Task
         uses: arduino/setup-task@v2
@@ -30,7 +37,7 @@ jobs:
           version: 3.x
 
       - name: Build mache
-        run: go build -o mache .
+        run: task build
 
       - name: Run Integration Test
-        run: ./tests/integration_test.sh
+        run: MACHE_BIN="$(pwd)/bin/mache" ./tests/integration_test.sh

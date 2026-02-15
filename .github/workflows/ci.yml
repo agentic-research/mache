@@ -11,7 +11,14 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            fuse_setup: sudo apt-get install -y libfuse-dev
+          - os: macos-latest
+            fuse_setup: brew install --cask fuse-t
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
@@ -20,7 +27,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install FUSE
-        run: sudo apt-get install -y libfuse-dev
+        run: ${{ matrix.fuse_setup }}
 
       - name: Install Task
         uses: arduino/setup-task@v2
