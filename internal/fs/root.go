@@ -992,6 +992,11 @@ func (fs *MacheFS) queryOpendir(path string) (int, uint64) {
 // for accumulating SQL. Also handles regular FUSE Create if needed.
 
 func (fs *MacheFS) Create(path string, flags int, mode uint32) (int, uint64) {
+	// For existing writable nodes, delegate to Open (handles write-back pipeline).
+	// Shell redirections (echo > file) use create() even for existing files on Linux.
+	if _, err := fs.Graph.GetNode(path); err == nil {
+		return fs.Open(path, flags|syscall.O_WRONLY|syscall.O_TRUNC)
+	}
 	if !fs.isQueryPath(path) {
 		return -fuse.EACCES, 0
 	}
