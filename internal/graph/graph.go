@@ -87,6 +87,16 @@ type MemoryStore struct {
 	cache    *contentCache
 	refs     map[string][]string // token -> []nodeID
 
+	// Roaring bitmap index: file path → set of node internal IDs.
+	// Enables O(k) DeleteFileNodes and ShiftOrigins instead of O(N) full scan.
+	fileToNodes map[string]*roaring.Bitmap // FilePath → bitmap of internal node IDs
+	nodeIntID   map[string]uint32          // Node.ID → internal bitmap uint32 ID
+	intToNodeID []string                   // reverse: uint32 → Node.ID
+	nextIntID   uint32                     // monotonic counter
+
+	// Diagnostics: last write status per node path (for _diagnostics/ virtual dir).
+	WriteStatus sync.Map // node path (string) → error message (string)
+
 	// Temp-file SQLite sidecar for cross-reference queries.
 	// Same schema as SQLiteGraph's .refs.db (node_refs + file_ids + mache_refs vtab).
 	// Uses a temp file (not :memory:) because the vtab's xFilter needs a second
@@ -100,9 +110,11 @@ type MemoryStore struct {
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		nodes: make(map[string]*Node),
-		roots: []string{},
-		refs:  make(map[string][]string),
+		nodes:       make(map[string]*Node),
+		roots:       []string{},
+		refs:        make(map[string][]string),
+		fileToNodes: make(map[string]*roaring.Bitmap),
+		nodeIntID:   make(map[string]uint32),
 	}
 }
 
@@ -131,6 +143,34 @@ func (s *MemoryStore) AddNode(n *Node) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nodes[n.ID] = n
+	s.indexNode(n)
+}
+
+// indexNode assigns an internal bitmap ID and registers the node in fileToNodes.
+// Must be called with s.mu held.
+func (s *MemoryStore) indexNode(n *Node) {
+	if n.Origin == nil {
+		return
+	}
+	// Assign internal ID if not already assigned
+	intID, ok := s.nodeIntID[n.ID]
+	if !ok {
+		intID = s.nextIntID
+		s.nextIntID++
+		s.nodeIntID[n.ID] = intID
+		// Grow reverse map
+		for uint32(len(s.intToNodeID)) <= intID {
+			s.intToNodeID = append(s.intToNodeID, "")
+		}
+		s.intToNodeID[intID] = n.ID
+	}
+	// Set bit in file→nodes bitmap
+	bm, exists := s.fileToNodes[n.Origin.FilePath]
+	if !exists {
+		bm = roaring.New()
+		s.fileToNodes[n.Origin.FilePath] = bm
+	}
+	bm.Add(intID)
 }
 
 // AddRef records a reference from a file (nodeID) to a token.
@@ -142,7 +182,7 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 }
 
 // DeleteFileNodes removes all nodes that originated from the given source file.
-// This is used to clear stale nodes before re-ingesting a file.
+// Uses the roaring bitmap index for O(k) lookup instead of O(N) full scan.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {
 	// Canonicalize path to match Ingest behavior
 	if realPath, err := filepath.EvalSymlinks(filePath); err == nil {
@@ -152,48 +192,104 @@ func (s *MemoryStore) DeleteFileNodes(filePath string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 1. Collect IDs to delete
+	// 1. Collect IDs to delete via bitmap index
+	bm, hasBitmap := s.fileToNodes[filePath]
 	var toDelete []string
-	for id, n := range s.nodes {
-		if n.Origin != nil && n.Origin.FilePath == filePath {
-			toDelete = append(toDelete, id)
+	if hasBitmap {
+		it := bm.Iterator()
+		for it.HasNext() {
+			intID := it.Next()
+			if int(intID) < len(s.intToNodeID) {
+				nodeID := s.intToNodeID[intID]
+				if nodeID != "" {
+					toDelete = append(toDelete, nodeID)
+				}
+			}
+		}
+	} else {
+		// Fallback: full scan for nodes not yet indexed (e.g. added before indexing)
+		for id, n := range s.nodes {
+			if n.Origin != nil && n.Origin.FilePath == filePath {
+				toDelete = append(toDelete, id)
+			}
 		}
 	}
 
-	// 2. Delete nodes and clean up children references
+	// 2. Build deletion set for O(1) lookups
+	deleteSet := make(map[string]struct{}, len(toDelete))
 	for _, id := range toDelete {
+		deleteSet[id] = struct{}{}
 		delete(s.nodes, id)
+		// Clean up bitmap index entries
+		if intID, ok := s.nodeIntID[id]; ok {
+			if hasBitmap {
+				bm.Remove(intID)
+			}
+			delete(s.nodeIntID, id)
+			if int(intID) < len(s.intToNodeID) {
+				s.intToNodeID[intID] = ""
+			}
+		}
+	}
+
+	// Remove empty bitmap
+	if hasBitmap && bm.IsEmpty() {
+		delete(s.fileToNodes, filePath)
 	}
 
 	// 3. Clean up children pointers in remaining nodes
-	// (This is expensive O(Nodes * Children), but correct graph maintenance requires it.
-	//  Optimization: If we knew the parents, we could target them.
-	//  For now, we rely on the fact that re-ingest will restore valid parent-child links.)
-	// Actually, Re-ingest usually handles "AddNode" which updates the parent.
-	// But if a child is *removed* (function deleted), the parent (directory) needs to know.
-	// Directories usually don't have an Origin in the same way, or they are virtual.
-	// If a directory lists a child that is now deleted, that child ID is in toDelete.
 	for _, n := range s.nodes {
 		if n.Mode.IsDir() && len(n.Children) > 0 {
 			newChildren := n.Children[:0]
 			changed := false
 			for _, c := range n.Children {
-				keep := true
-				for _, del := range toDelete {
-					if c == del {
-						keep = false
-						break
-					}
-				}
-				if keep {
-					newChildren = append(newChildren, c)
-				} else {
+				if _, del := deleteSet[c]; del {
 					changed = true
+				} else {
+					newChildren = append(newChildren, c)
 				}
 			}
 			if changed {
 				n.Children = newChildren
 			}
+		}
+	}
+}
+
+// ShiftOrigins adjusts StartByte/EndByte for all nodes from filePath whose
+// origin starts at or after afterByte. delta is the signed byte count change
+// (positive = content grew, negative = content shrank).
+// Called after splice, BEFORE re-ingest, to keep sibling offsets correct.
+func (s *MemoryStore) ShiftOrigins(filePath string, afterByte uint32, delta int32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	bm, ok := s.fileToNodes[filePath]
+	if !ok {
+		return
+	}
+
+	it := bm.Iterator()
+	for it.HasNext() {
+		intID := it.Next()
+		if int(intID) >= len(s.intToNodeID) {
+			continue
+		}
+		nodeID := s.intToNodeID[intID]
+		if nodeID == "" {
+			continue
+		}
+		n, exists := s.nodes[nodeID]
+		if !exists || n.Origin == nil {
+			continue
+		}
+		if n.Origin.FilePath != filePath {
+			continue
+		}
+		// Only shift nodes that start at or after the splice point
+		if n.Origin.StartByte >= afterByte {
+			n.Origin.StartByte = uint32(int32(n.Origin.StartByte) + delta)
+			n.Origin.EndByte = uint32(int32(n.Origin.EndByte) + delta)
 		}
 	}
 }

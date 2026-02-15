@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	billy "github.com/go-git/go-billy/v5"
@@ -28,17 +30,32 @@ type GraphFS struct {
 	mountTime  time.Time
 	writable   bool
 	writeBack  WriteBackFunc
+
+	// Diagnostics: last write status per node path.
+	// Shared with MemoryStore.WriteStatus when available,
+	// otherwise uses this local map.
+	diagStatus *sync.Map
 }
 
 // NewGraphFS creates a billy.Filesystem backed by a mache Graph.
 func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 	sj, _ := json.MarshalIndent(schema, "", "  ")
 	sj = append(sj, '\n')
+
+	// Share diagnostics map with MemoryStore if available
+	var diagStatus *sync.Map
+	if ms, ok := g.(*graph.MemoryStore); ok {
+		diagStatus = &ms.WriteStatus
+	} else {
+		diagStatus = &sync.Map{}
+	}
+
 	return &GraphFS{
 		graph:      g,
 		schema:     schema,
 		schemaJSON: sj,
 		mountTime:  time.Now(),
+		diagStatus: diagStatus,
 	}
 }
 
@@ -92,6 +109,19 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 	// Virtual: _schema.json
 	if filename == "/_schema.json" {
 		return &bytesFile{name: "_schema.json", data: fs.schemaJSON}, nil
+	}
+
+	// Virtual: _diagnostics/ files
+	if fs.writable && isDiagPath(filename) {
+		parentDir, diagFile := parseDiagPath(filename)
+		if diagFile == "" {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("is a directory")}
+		}
+		content, ok := fs.diagContent(parentDir, diagFile)
+		if !ok {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		return &bytesFile{name: diagFile, data: content}, nil
 	}
 
 	node, err := fs.graph.GetNode(filename)
@@ -189,6 +219,19 @@ func (fs *GraphFS) TempFile(dir, prefix string) (billy.File, error) {
 func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 	path = cleanPath(path)
 
+	// Virtual: _diagnostics/ directory listing
+	if fs.writable && isDiagPath(path) {
+		_, fileName := parseDiagPath(path)
+		if fileName == "" {
+			// List diagnostics dir contents
+			return []os.FileInfo{
+				&staticFileInfo{name: "last-write-status", mode: 0o444, modTime: fs.mountTime},
+				&staticFileInfo{name: "ast-errors", mode: 0o444, modTime: fs.mountTime},
+			}, nil
+		}
+		return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
+	}
+
 	node, err := fs.resolveNode(path)
 	if err != nil && path != "/" {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
@@ -202,7 +245,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
 	}
 
-	infos := make([]os.FileInfo, 0, len(children)+1)
+	infos := make([]os.FileInfo, 0, len(children)+2)
 
 	// Virtual files at root
 	if path == "/" {
@@ -210,6 +253,15 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 			name:    "_schema.json",
 			size:    int64(len(fs.schemaJSON)),
 			mode:    0o444,
+			modTime: fs.mountTime,
+		})
+	}
+
+	// Add _diagnostics/ virtual dir to writable node directories
+	if fs.writable && path != "/" {
+		infos = append(infos, &staticFileInfo{
+			name:    "_diagnostics",
+			mode:    os.ModeDir | 0o555,
 			modTime: fs.mountTime,
 		})
 	}
@@ -253,6 +305,29 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		}, nil
 	}
 
+	// Virtual: _diagnostics/
+	if fs.writable && isDiagPath(filename) {
+		parentDir, fileName := parseDiagPath(filename)
+		if fileName == "" {
+			// The _diagnostics directory itself
+			return &staticFileInfo{
+				name:    "_diagnostics",
+				mode:    os.ModeDir | 0o555,
+				modTime: fs.mountTime,
+			}, nil
+		}
+		content, ok := fs.diagContent(parentDir, fileName)
+		if !ok {
+			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+		}
+		return &staticFileInfo{
+			name:    fileName,
+			size:    int64(len(content)),
+			mode:    0o444,
+			modTime: fs.mountTime,
+		}, nil
+	}
+
 	node, err := fs.resolveNode(filename)
 	if err != nil {
 		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
@@ -287,6 +362,58 @@ func (fs *GraphFS) Capabilities() billy.Capability {
 		caps |= billy.WriteCapability
 	}
 	return caps
+}
+
+// --- _diagnostics/ virtual directory ---
+
+// isDiagPath returns true if the path contains a _diagnostics/ segment.
+func isDiagPath(path string) bool {
+	return strings.Contains(path, "/_diagnostics")
+}
+
+// parseDiagPath splits a diagnostics path into (parentDir, fileName).
+// E.g. "/vulns/func_a/_diagnostics/last-write-status" → ("/vulns/func_a", "last-write-status")
+// Returns ("", "") if not a valid diagnostics path.
+func parseDiagPath(path string) (parentDir, fileName string) {
+	idx := strings.Index(path, "/_diagnostics")
+	if idx < 0 {
+		return "", ""
+	}
+	parentDir = path[:idx]
+	if parentDir == "" {
+		parentDir = "/"
+	}
+	rest := path[idx+len("/_diagnostics"):]
+	if rest == "" || rest == "/" {
+		return parentDir, "" // the _diagnostics dir itself
+	}
+	fileName = strings.TrimPrefix(rest, "/")
+	return parentDir, fileName
+}
+
+// diagContent returns the content of a diagnostics virtual file.
+func (fs *GraphFS) diagContent(parentDir, fileName string) ([]byte, bool) {
+	switch fileName {
+	case "last-write-status":
+		// Look up status for any child node of parentDir
+		val, ok := fs.diagStatus.Load(parentDir)
+		if !ok {
+			return []byte("no writes yet\n"), true
+		}
+		return []byte(val.(string) + "\n"), true
+	case "ast-errors":
+		val, ok := fs.diagStatus.Load(parentDir)
+		if !ok {
+			return []byte("no errors\n"), true
+		}
+		msg := val.(string)
+		if msg == "ok" {
+			return []byte("no errors\n"), true
+		}
+		return []byte(msg + "\n"), true
+	default:
+		return nil, false
+	}
 }
 
 // --- internals ---

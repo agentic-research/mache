@@ -308,17 +308,38 @@ var rootCmd = &cobra.Command{
 func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
 	graphFs := nfsmount.NewGraphFS(g, schema)
 
-	// Wire write-back if requested (same pipeline as FUSE: splice → goimports → re-ingest → invalidate)
+	// Wire write-back if requested (validate → splice → shift → goimports → re-ingest → invalidate)
 	if writable && engine != nil {
+		store, isMemStore := g.(*graph.MemoryStore)
 		graphFs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
+			// 1. Validate syntax before touching source file
+			if err := writeback.Validate(content, origin.FilePath); err != nil {
+				// Store diagnostic for _diagnostics/ virtual dir
+				if isMemStore {
+					store.WriteStatus.Store(nodeID, err.Error())
+				}
+				return fmt.Errorf("validation failed: %w", err)
+			}
+
+			oldLen := origin.EndByte - origin.StartByte
 			if err := writeback.Splice(origin, content); err != nil {
 				return err
 			}
-			// Auto-format Go files (failure-tolerant)
+
+			// 2. Shift sibling origins immediately (before re-ingest)
+			if isMemStore {
+				delta := int32(len(content)) - int32(oldLen)
+				if delta != 0 {
+					store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
+				}
+				store.WriteStatus.Store(nodeID, "ok")
+			}
+
+			// 3. Auto-format Go files (failure-tolerant)
 			if strings.HasSuffix(origin.FilePath, ".go") {
 				_ = exec.Command("goimports", "-w", origin.FilePath).Run()
 			}
-			// Re-ingest to update graph
+			// 4. Re-ingest to update graph
 			time.Sleep(2 * time.Millisecond) // timestamp granularity safety
 			if err := engine.Ingest(origin.FilePath); err != nil {
 				log.Printf("writeback: re-ingest failed for %s: %v", origin.FilePath, err)

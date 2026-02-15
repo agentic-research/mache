@@ -307,6 +307,117 @@ func TestRemoveWithWriteBack(t *testing.T) {
 	assert.Empty(t, deletedContent) // splice with empty content = delete
 }
 
+// ---------------------------------------------------------------------------
+// _diagnostics/ virtual directory tests
+// ---------------------------------------------------------------------------
+
+func TestDiagnostics_StatDir(t *testing.T) {
+	store := newTestGraph()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	info, err := gfs.Stat("/vulns/_diagnostics")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	assert.Equal(t, "_diagnostics", info.Name())
+}
+
+func TestDiagnostics_StatFile(t *testing.T) {
+	store := newTestGraph()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	info, err := gfs.Stat("/vulns/_diagnostics/last-write-status")
+	require.NoError(t, err)
+	assert.False(t, info.IsDir())
+	assert.Equal(t, "last-write-status", info.Name())
+	assert.True(t, info.Size() > 0)
+}
+
+func TestDiagnostics_ReadDir(t *testing.T) {
+	store := newTestGraph()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	entries, err := gfs.ReadDir("/vulns/_diagnostics")
+	require.NoError(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	assert.Contains(t, names, "last-write-status")
+	assert.Contains(t, names, "ast-errors")
+}
+
+func TestDiagnostics_ReadLastWriteStatus_Default(t *testing.T) {
+	store := newTestGraph()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	f, err := gfs.OpenFile("/vulns/_diagnostics/last-write-status", os.O_RDONLY, 0)
+	require.NoError(t, err)
+
+	buf := make([]byte, 256)
+	n, _ := f.Read(buf)
+	assert.Contains(t, string(buf[:n]), "no writes yet")
+}
+
+func TestDiagnostics_ReadLastWriteStatus_AfterWrite(t *testing.T) {
+	store := newTestGraph()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	// Simulate a write status being stored
+	store.WriteStatus.Store("/vulns", "ok")
+
+	f, err := gfs.OpenFile("/vulns/_diagnostics/last-write-status", os.O_RDONLY, 0)
+	require.NoError(t, err)
+
+	buf := make([]byte, 256)
+	n, _ := f.Read(buf)
+	assert.Equal(t, "ok\n", string(buf[:n]))
+}
+
+func TestDiagnostics_ReadASTErrors_AfterFailedWrite(t *testing.T) {
+	store := newTestGraph()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	// Simulate a validation failure
+	store.WriteStatus.Store("/vulns", "test.go:3:1: syntax error in AST")
+
+	f, err := gfs.OpenFile("/vulns/_diagnostics/ast-errors", os.O_RDONLY, 0)
+	require.NoError(t, err)
+
+	buf := make([]byte, 256)
+	n, _ := f.Read(buf)
+	assert.Contains(t, string(buf[:n]), "syntax error")
+}
+
+func TestDiagnostics_NotVisibleWhenReadOnly(t *testing.T) {
+	gfs := NewGraphFS(newTestGraph(), newTestSchema())
+	// No SetWriteBack called → read-only
+
+	_, err := gfs.Stat("/vulns/_diagnostics")
+	assert.Error(t, err) // Should not resolve
+}
+
+func TestDiagnostics_InReadDirListing(t *testing.T) {
+	store := newTestGraph()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	entries, err := gfs.ReadDir("/vulns")
+	require.NoError(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	assert.Contains(t, names, "_diagnostics")
+}
+
 func TestNFSServerStarts(t *testing.T) {
 	gfs := NewGraphFS(newTestGraph(), newTestSchema())
 

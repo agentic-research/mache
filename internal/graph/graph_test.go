@@ -305,3 +305,224 @@ func TestMemoryStore_QueryRefs_BeforeInit(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "refsDB not initialized")
 }
+
+// ---------------------------------------------------------------------------
+// Roaring file index + ShiftOrigins tests
+// ---------------------------------------------------------------------------
+
+func TestMemoryStore_FileIndex_AddNode(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:   "pkg/main/source.go/FuncA",
+		Mode: 0,
+		Data: []byte("func A() {}"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 0,
+			EndByte:   12,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/main/source.go/FuncB",
+		Mode: 0,
+		Data: []byte("func B() {}"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 13,
+			EndByte:   25,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/util/helper.go/FuncC",
+		Mode: 0,
+		Data: []byte("func C() {}"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/helper.go",
+			StartByte: 0,
+			EndByte:   12,
+		},
+	})
+
+	// Verify bitmap index populated
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	bm, ok := store.fileToNodes["/src/main.go"]
+	require.True(t, ok, "bitmap should exist for /src/main.go")
+	assert.Equal(t, uint64(2), bm.GetCardinality(), "should have 2 nodes for main.go")
+
+	bm2, ok := store.fileToNodes["/src/helper.go"]
+	require.True(t, ok, "bitmap should exist for /src/helper.go")
+	assert.Equal(t, uint64(1), bm2.GetCardinality(), "should have 1 node for helper.go")
+}
+
+func TestMemoryStore_FileIndex_NoOrigin(t *testing.T) {
+	store := NewMemoryStore()
+
+	// Nodes without Origin should NOT appear in file index
+	store.AddNode(&Node{
+		ID:   "virtual/dir",
+		Mode: fs.ModeDir,
+	})
+
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	assert.Empty(t, store.fileToNodes, "no bitmap should be created for nodes without Origin")
+}
+
+func TestMemoryStore_DeleteFileNodes_UsesBitmap(t *testing.T) {
+	store := NewMemoryStore()
+
+	// Parent dir
+	store.AddRoot(&Node{
+		ID:       "pkg",
+		Mode:     fs.ModeDir,
+		Children: []string{"pkg/FuncA", "pkg/FuncB", "pkg/FuncC"},
+	})
+
+	store.AddNode(&Node{
+		ID:   "pkg/FuncA",
+		Mode: 0,
+		Data: []byte("func A"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 0,
+			EndByte:   6,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncB",
+		Mode: 0,
+		Data: []byte("func B"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 7,
+			EndByte:   13,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncC",
+		Mode: 0,
+		Data: []byte("func C"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/other.go",
+			StartByte: 0,
+			EndByte:   6,
+		},
+	})
+
+	// Delete all nodes from main.go
+	store.DeleteFileNodes("/src/main.go")
+
+	// FuncA and FuncB should be gone
+	_, err := store.GetNode("pkg/FuncA")
+	assert.ErrorIs(t, err, ErrNotFound)
+	_, err = store.GetNode("pkg/FuncB")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// FuncC should remain
+	n, err := store.GetNode("pkg/FuncC")
+	require.NoError(t, err)
+	assert.Equal(t, "func C", string(n.Data))
+
+	// Parent's children should be cleaned up
+	parent, err := store.GetNode("pkg")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"pkg/FuncC"}, parent.Children)
+}
+
+func TestMemoryStore_ShiftOrigins_PositiveDelta(t *testing.T) {
+	store := NewMemoryStore()
+
+	// Simulate two functions in one file
+	store.AddNode(&Node{
+		ID:   "pkg/FuncA",
+		Mode: 0,
+		Data: []byte("func A() {}"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 0,
+			EndByte:   12,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncB",
+		Mode: 0,
+		Data: []byte("func B() {}"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 13,
+			EndByte:   25,
+		},
+	})
+
+	// Splice FuncA: old was 12 bytes, new is 20 bytes → delta = +8
+	// afterByte = FuncA.EndByte = 12
+	store.ShiftOrigins("/src/main.go", 12, 8)
+
+	// FuncA should be untouched (starts before afterByte)
+	nodeA, _ := store.GetNode("pkg/FuncA")
+	assert.Equal(t, uint32(0), nodeA.Origin.StartByte)
+	assert.Equal(t, uint32(12), nodeA.Origin.EndByte)
+
+	// FuncB should be shifted by +8
+	nodeB, _ := store.GetNode("pkg/FuncB")
+	assert.Equal(t, uint32(21), nodeB.Origin.StartByte) // 13 + 8
+	assert.Equal(t, uint32(33), nodeB.Origin.EndByte)   // 25 + 8
+}
+
+func TestMemoryStore_ShiftOrigins_NegativeDelta(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:   "pkg/FuncA",
+		Mode: 0,
+		Data: []byte("func A() { /* long */ }"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 0,
+			EndByte:   23,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncB",
+		Mode: 0,
+		Data: []byte("func B() {}"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 24,
+			EndByte:   36,
+		},
+	})
+
+	// Splice FuncA: old was 23 bytes, new is 12 bytes → delta = -11
+	store.ShiftOrigins("/src/main.go", 23, -11)
+
+	nodeB, _ := store.GetNode("pkg/FuncB")
+	assert.Equal(t, uint32(13), nodeB.Origin.StartByte) // 24 - 11
+	assert.Equal(t, uint32(25), nodeB.Origin.EndByte)   // 36 - 11
+}
+
+func TestMemoryStore_ShiftOrigins_NoOpDifferentFile(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:   "pkg/FuncX",
+		Mode: 0,
+		Data: []byte("func X"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/other.go",
+			StartByte: 10,
+			EndByte:   16,
+		},
+	})
+
+	// Shift on a different file should be a no-op
+	store.ShiftOrigins("/src/main.go", 0, 100)
+
+	nodeX, _ := store.GetNode("pkg/FuncX")
+	assert.Equal(t, uint32(10), nodeX.Origin.StartByte)
+	assert.Equal(t, uint32(16), nodeX.Origin.EndByte)
+}

@@ -124,10 +124,69 @@ func (fs *MacheFS) isQueryPath(path string) bool {
 	return fs.queryFn != nil && (path == "/.query" || strings.HasPrefix(path, "/.query/"))
 }
 
+// isDiagPath returns true if the path contains a _diagnostics/ segment.
+func (fs *MacheFS) isDiagPath(path string) bool {
+	return fs.Writable && strings.Contains(path, "/_diagnostics")
+}
+
+// parseDiagPath splits a diagnostics path into (parentDir, fileName).
+func parseDiagPath(path string) (parentDir, fileName string) {
+	idx := strings.Index(path, "/_diagnostics")
+	if idx < 0 {
+		return "", ""
+	}
+	parentDir = path[:idx]
+	if parentDir == "" {
+		parentDir = "/"
+	}
+	rest := path[idx+len("/_diagnostics"):]
+	if rest == "" || rest == "/" {
+		return parentDir, ""
+	}
+	fileName = strings.TrimPrefix(rest, "/")
+	return parentDir, fileName
+}
+
+// diagContent returns the content of a diagnostics virtual file.
+func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
+	store, ok := fs.Graph.(*graph.MemoryStore)
+	if !ok {
+		return nil, false
+	}
+	switch fileName {
+	case "last-write-status":
+		val, found := store.WriteStatus.Load(parentDir)
+		if !found {
+			return []byte("no writes yet\n"), true
+		}
+		return []byte(val.(string) + "\n"), true
+	case "ast-errors":
+		val, found := store.WriteStatus.Load(parentDir)
+		if !found {
+			return []byte("no errors\n"), true
+		}
+		msg := val.(string)
+		if msg == "ok" {
+			return []byte("no errors\n"), true
+		}
+		return []byte(msg + "\n"), true
+	default:
+		return nil, false
+	}
+}
+
 // Open validates that the path is a file node. For writable mounts,
 // write flags allocate a writeHandle backed by the node's current content.
 func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 	if path == "/_schema.json" {
+		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
+			return -fuse.EACCES, 0
+		}
+		return 0, 0
+	}
+
+	// _diagnostics/ files are read-only virtual files
+	if fs.isDiagPath(path) {
 		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
 			return -fuse.EACCES, 0
 		}
@@ -242,6 +301,23 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return fs.queryGetattr(path, stat)
 	}
 
+	if fs.isDiagPath(path) {
+		parentDir, fileName := parseDiagPath(path)
+		if fileName == "" {
+			stat.Mode = fuse.S_IFDIR | 0o555
+			stat.Nlink = 2
+			return 0
+		}
+		content, ok := fs.diagContent(parentDir, fileName)
+		if !ok {
+			return -fuse.ENOENT
+		}
+		stat.Mode = fuse.S_IFREG | 0o444
+		stat.Nlink = 1
+		stat.Size = int64(len(content))
+		return 0
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT
@@ -274,6 +350,21 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return fs.queryOpendir(path)
 	}
 
+	// _diagnostics/ virtual directory
+	if fs.isDiagPath(path) {
+		_, fileName := parseDiagPath(path)
+		if fileName != "" {
+			return -fuse.ENOTDIR, 0
+		}
+		entries := []string{".", "..", "last-write-status", "ast-errors"}
+		fs.handleMu.Lock()
+		fh := fs.nextHandle
+		fs.nextHandle++
+		fs.handles[fh] = &dirHandle{path: path, entries: entries}
+		fs.handleMu.Unlock()
+		return 0, fh
+	}
+
 	if path != "/" {
 		node, err := fs.Graph.GetNode(path)
 		if err != nil {
@@ -289,13 +380,17 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return -fuse.ENOENT, 0
 	}
 
-	entries := make([]string, 0, len(children)+4)
+	entries := make([]string, 0, len(children)+5)
 	entries = append(entries, ".", "..")
 	if path == "/" {
 		entries = append(entries, "_schema.json")
 		if fs.queryFn != nil {
 			entries = append(entries, ".query")
 		}
+	}
+	// Add _diagnostics/ to writable non-root dirs
+	if fs.Writable && path != "/" {
+		entries = append(entries, "_diagnostics")
 	}
 	for _, c := range children {
 		entries = append(entries, filepath.Base(c))
@@ -460,6 +555,20 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 		return n
 	}
 
+	// _diagnostics/ virtual files
+	if fs.isDiagPath(path) {
+		parentDir, fileName := parseDiagPath(path)
+		content, ok := fs.diagContent(parentDir, fileName)
+		if !ok {
+			return -fuse.ENOENT
+		}
+		if ofst >= int64(len(content)) {
+			return 0
+		}
+		n := copy(buff, content[ofst:])
+		return n
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT
@@ -569,19 +678,39 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		return -fuse.EACCES
 	}
 
-	// 1. Splice new content into source file
+	// 1. Validate syntax before touching source file
+	if err := writeback.Validate(wh.buf, node.Origin.FilePath); err != nil {
+		log.Printf("writeback: validation failed for %s: %v", node.Origin.FilePath, err)
+		// Store diagnostic for _diagnostics/ virtual dir
+		if store, ok := fs.Graph.(*graph.MemoryStore); ok {
+			store.WriteStatus.Store(wh.path, err.Error())
+		}
+		return -fuse.EIO
+	}
+
+	// 2. Splice new content into source file
+	oldLen := node.Origin.EndByte - node.Origin.StartByte
 	if err := writeback.Splice(*node.Origin, wh.buf); err != nil {
 		log.Printf("writeback: splice failed for %s: %v", node.Origin.FilePath, err)
 		return -fuse.EIO
 	}
 
-	// 2. Run goimports (failure-tolerant — if agent wrote broken code,
+	// 3. Shift sibling origins immediately (before re-ingest)
+	if store, ok := fs.Graph.(*graph.MemoryStore); ok {
+		delta := int32(len(wh.buf)) - int32(oldLen)
+		if delta != 0 {
+			store.ShiftOrigins(node.Origin.FilePath, node.Origin.EndByte, delta)
+		}
+		store.WriteStatus.Store(wh.path, "ok")
+	}
+
+	// 4. Run goimports (failure-tolerant — if agent wrote broken code,
 	//    we still want it in the FS so the agent can see and fix the error)
 	if err := exec.Command("goimports", "-w", node.Origin.FilePath).Run(); err != nil {
 		log.Printf("writeback: goimports failed for %s (continuing): %v", node.Origin.FilePath, err)
 	}
 
-	// 3. Re-ingest the source file — updates ALL Origins from this file
+	// 5. Re-ingest the source file — updates ALL Origins from this file
 	if fs.Engine != nil {
 		// Ensure timestamp changes for NFS cache invalidation (granularity safety)
 		time.Sleep(2 * time.Millisecond)
@@ -590,7 +719,7 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		}
 	}
 
-	// 4. Invalidate cached size/content — the file's content changed,
+	// 6. Invalidate cached size/content — the file's content changed,
 	// so the size cache and content cache must be evicted to prevent
 	// stale data on the next Getattr or Read.
 	fs.Graph.Invalidate(wh.nodeID)
