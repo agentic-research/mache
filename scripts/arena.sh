@@ -214,11 +214,13 @@ Each directory is a code construct (function, type, method). Inside each:
 
     \$ ls $MNT/PackReading/
     source          # The full source code of this construct
+    context         # (Read-only) Imports, types, and globals visible to this scope
     ast.json        # AST metadata
     _diagnostics/   # Write feedback (check after failed writes)
 
 **To edit code**: overwrite the \`source\` file with the COMPLETE new
 implementation. The engine splices your changes back into the real .go files.
+Implicit truncation is handled — you do not need to pad writes.
 
 **If a write fails** (e.g. syntax error), read
 \`<node>/_diagnostics/last-write-status\` for the error message.
