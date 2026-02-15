@@ -366,7 +366,12 @@ fi
 
 # 2. Setup
 echo -e "${BLUE}Setting up Arena at $SANDBOX...${NC}"
-rm -rf "$SANDBOX"
+if [ -d "$SANDBOX" ]; then
+    # Preserve the directory itself to avoid "stale file handle" for the user
+    find "$SANDBOX" -mindepth 1 -delete
+else
+    mkdir -p "$SANDBOX"
+fi
 setup_repo
 setup_mount
 write_prompt

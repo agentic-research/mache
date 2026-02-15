@@ -194,7 +194,73 @@ var rootCmd = &cobra.Command{
 				}
 				fmt.Printf(" done in %v\n", time.Since(start))
 			default:
-				err = fmt.Errorf("automatic inference not supported for %s", ext)
+				// Check if it's a directory
+				info, errStat := os.Stat(dataPath)
+				if errStat == nil && info.IsDir() {
+					fmt.Printf("Inferring schema from directory %s...\n", dataPath)
+					start := time.Now()
+					var allRecords []any
+
+					walkErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						if info.IsDir() {
+							if strings.HasPrefix(filepath.Base(path), ".") && path != dataPath {
+								return filepath.SkipDir // Skip hidden dirs like .git
+							}
+							return nil
+						}
+
+						ext := filepath.Ext(path)
+						var lang *sitter.Language
+
+						switch ext {
+						case ".go":
+							lang = golang.GetLanguage()
+						case ".js":
+							lang = javascript.GetLanguage()
+						case ".py":
+							lang = python.GetLanguage()
+						case ".ts", ".tsx":
+							lang = typescript.GetLanguage()
+						case ".sql":
+							lang = sql.GetLanguage()
+						default:
+							return nil // Skip unsupported files
+						}
+
+						content, readErr := os.ReadFile(path)
+						if readErr != nil {
+							fmt.Printf("Warning: skipping unreadable file %s: %v\n", path, readErr)
+							return nil
+						}
+
+						parser := sitter.NewParser()
+						parser.SetLanguage(lang)
+						tree, _ := parser.ParseCtx(context.Background(), nil, content)
+						if tree != nil {
+							records := ingest.FlattenAST(tree.RootNode())
+							allRecords = append(allRecords, records...)
+						}
+						return nil
+					})
+
+					if walkErr != nil {
+						err = fmt.Errorf("walk failed: %w", walkErr)
+					} else if len(allRecords) == 0 {
+						err = fmt.Errorf("no supported source files found in %s", dataPath)
+					} else {
+						// Use FCA for ASTs (same logic as InferFromTreeSitter)
+						saved := inf.Config.Method
+						inf.Config.Method = "fca"
+						inferred, err = inf.InferFromRecords(allRecords)
+						inf.Config.Method = saved
+						fmt.Printf(" done (%d records) in %v\n", len(allRecords), time.Since(start))
+					}
+				} else {
+					err = fmt.Errorf("automatic inference not supported for %s", ext)
+				}
 			}
 
 			if err != nil {
