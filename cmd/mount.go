@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -452,7 +451,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
 	graphFs := nfsmount.NewGraphFS(g, schema)
 
-	// Wire write-back if requested (validate → splice → shift → goimports → re-ingest → invalidate)
+	// Wire write-back if requested (validate → format → splice → surgical update → invalidate)
 	if writable && engine != nil {
 		store, isMemStore := g.(*graph.MemoryStore)
 		graphFs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
@@ -469,27 +468,19 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				if isMemStore {
 					store.WriteStatus.Store(filepath.Dir(nodeID), err.Error())
 					// Save as Draft
-					// Copy content because the buffer might be reused
 					draft := make([]byte, len(content))
 					copy(draft, content)
 					node.DraftData = draft
 				}
-				// Return Success so agent/editor sees the file as "saved" (in draft state)
 				return nil
 			}
 
-			oldLen := origin.EndByte - origin.StartByte
-			if err := writeback.Splice(origin, content); err != nil {
-				return err
-			}
-
-			// Clear draft on success
-			node.DraftData = nil
+			// 2. Format in-process (gofumpt on buffer, not file — no drift)
+			formatted := writeback.FormatGoBuffer(content, origin.FilePath)
 
 			// Linting (Warning only)
-			// TODO: Infer language from file extension
 			if strings.HasSuffix(origin.FilePath, ".go") {
-				if diags, err := linter.Lint(content, "go"); err == nil && len(diags) > 0 {
+				if diags, err := linter.Lint(formatted, "go"); err == nil && len(diags) > 0 {
 					var sb strings.Builder
 					for _, d := range diags {
 						sb.WriteString(d.String() + "\n")
@@ -500,24 +491,28 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				}
 			}
 
-			// 2. Shift sibling origins immediately (before re-ingest)
+			// 3. Splice formatted content into source file
+			oldLen := origin.EndByte - origin.StartByte
+			if err := writeback.Splice(origin, formatted); err != nil {
+				return err
+			}
+
+			// 4. Surgical node update — no re-ingest
+			newOrigin := &graph.SourceOrigin{
+				FilePath:  origin.FilePath,
+				StartByte: origin.StartByte,
+				EndByte:   origin.StartByte + uint32(len(formatted)),
+			}
 			if isMemStore {
-				delta := int32(len(content)) - int32(oldLen)
+				delta := int32(len(formatted)) - int32(oldLen)
 				if delta != 0 {
 					store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
 				}
+				_ = store.UpdateNodeContent(nodeID, formatted, newOrigin, time.Now())
 				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
 			}
 
-			// 3. Auto-format Go files (failure-tolerant)
-			if strings.HasSuffix(origin.FilePath, ".go") {
-				_ = exec.Command("goimports", "-w", origin.FilePath).Run()
-			}
-			// 4. Re-ingest to update graph
-			time.Sleep(2 * time.Millisecond) // timestamp granularity safety
-			if err := engine.Ingest(origin.FilePath); err != nil {
-				log.Printf("writeback: re-ingest failed for %s: %v", origin.FilePath, err)
-			}
+			// 5. Invalidate cached size/content
 			g.Invalidate(nodeID)
 			return nil
 		})

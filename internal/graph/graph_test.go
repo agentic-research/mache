@@ -3,6 +3,7 @@ package graph
 import (
 	"io/fs"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -503,6 +504,106 @@ func TestMemoryStore_ShiftOrigins_NegativeDelta(t *testing.T) {
 	nodeB, _ := store.GetNode("pkg/FuncB")
 	assert.Equal(t, uint32(13), nodeB.Origin.StartByte) // 24 - 11
 	assert.Equal(t, uint32(25), nodeB.Origin.EndByte)   // 36 - 11
+}
+
+// ---------------------------------------------------------------------------
+// UpdateNodeContent / UpdateNodeContext tests
+// ---------------------------------------------------------------------------
+
+func TestUpdateNodeContent_PreservesChildren(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:       "pkg/main",
+		Mode:     fs.ModeDir,
+		Children: []string{"pkg/main/FuncA", "pkg/main/FuncB"},
+		Context:  []byte("package main\n"),
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/main/FuncA",
+		Mode: 0,
+		Data: []byte("func A() {}"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 20,
+			EndByte:   32,
+		},
+	})
+
+	// Update FuncA content
+	newData := []byte("func A() { return 42 }")
+	newOrigin := &SourceOrigin{
+		FilePath:  "/src/main.go",
+		StartByte: 20,
+		EndByte:   20 + uint32(len(newData)),
+	}
+	err := store.UpdateNodeContent("pkg/main/FuncA", newData, newOrigin, time.Now())
+	require.NoError(t, err)
+
+	// Verify content updated
+	node, err := store.GetNode("pkg/main/FuncA")
+	require.NoError(t, err)
+	assert.Equal(t, newData, node.Data)
+	assert.Equal(t, newOrigin, node.Origin)
+
+	// Verify parent's Children are untouched
+	parent, err := store.GetNode("pkg/main")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"pkg/main/FuncA", "pkg/main/FuncB"}, parent.Children)
+	assert.Equal(t, []byte("package main\n"), parent.Context)
+}
+
+func TestUpdateNodeContent_ClearsDraft(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:        "pkg/main/FuncA",
+		Mode:      0,
+		Data:      []byte("func A() {}"),
+		DraftData: []byte("func A() { broken"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 0,
+			EndByte:   12,
+		},
+	})
+
+	err := store.UpdateNodeContent("pkg/main/FuncA", []byte("func A() { fixed }"), nil, time.Now())
+	require.NoError(t, err)
+
+	node, _ := store.GetNode("pkg/main/FuncA")
+	assert.Nil(t, node.DraftData, "DraftData should be cleared after successful update")
+	assert.Equal(t, "func A() { fixed }", string(node.Data))
+}
+
+func TestUpdateNodeContent_NotFound(t *testing.T) {
+	store := NewMemoryStore()
+
+	err := store.UpdateNodeContent("nonexistent", []byte("data"), nil, time.Now())
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestUpdateNodeContext_Basic(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:      "pkg/main",
+		Mode:    fs.ModeDir,
+		Context: []byte("package main\n"),
+	})
+
+	err := store.UpdateNodeContext("pkg/main", []byte("package main\n\nimport \"fmt\"\n"))
+	require.NoError(t, err)
+
+	node, _ := store.GetNode("pkg/main")
+	assert.Equal(t, "package main\n\nimport \"fmt\"\n", string(node.Context))
+}
+
+func TestUpdateNodeContext_NotFound(t *testing.T) {
+	store := NewMemoryStore()
+
+	err := store.UpdateNodeContext("nonexistent", []byte("ctx"))
+	assert.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestMemoryStore_ShiftOrigins_NoOpDifferentFile(t *testing.T) {

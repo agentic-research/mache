@@ -151,6 +151,38 @@ func (s *MemoryStore) AddNode(n *Node) {
 	s.indexNode(n)
 }
 
+// UpdateNodeContent surgically updates a node's content and origin in-place.
+// Preserves Children, Context, Properties, and Ref. Clears DraftData on success.
+func (s *MemoryStore) UpdateNodeContent(id string, data []byte, origin *SourceOrigin, modTime time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n, ok := s.nodes[id]
+	if !ok {
+		return ErrNotFound
+	}
+	n.Data = data
+	n.DraftData = nil
+	n.ModTime = modTime
+	if origin != nil {
+		n.Origin = origin
+	}
+	return nil
+}
+
+// UpdateNodeContext updates the Context field on a node (e.g., imports/package).
+func (s *MemoryStore) UpdateNodeContext(id string, ctx []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n, ok := s.nodes[id]
+	if !ok {
+		return ErrNotFound
+	}
+	n.Context = ctx
+	return nil
+}
+
 // indexNode assigns an internal bitmap ID and registers the node in fileToNodes.
 // Must be called with s.mu held.
 func (s *MemoryStore) indexNode(n *Node) {
