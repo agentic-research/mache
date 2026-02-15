@@ -95,9 +95,10 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | **Graph Filesystem** | **Stable** | FUSE bridge (macOS/Linux) mounts any graph as a directory tree. |
 | **Hybrid SQL Index** | **Active** | In-memory SQLite sidecar for instant, zero-copy queries. |
 | **Plan 9 Interface** | **Live** | Synthetic `ctl` files for executing complex SQL via shell. |
-| **Write-Back** | **Beta** | Edits to the mount splice atomically back into source code. |
+| **Write-Back** | **Stable** | Atomic splicing with implicit truncation and diagnostics feedback loop. |
+| **Context Awareness** | **Active** | Virtual `context` files expose global scope (imports/types) to agents. |
 | **Tree-sitter Parsing** | **Active** | Native support for Go and Python ASTs. |
-| **Schema Inference** | **Experimental** | Auto-derives topology using Formal Concept Analysis (FCA). |
+| **Schema Inference** | **Beta** | Recursive directory inference using Formal Concept Analysis (FCA). |
 
 ## Quick Start
 
@@ -161,6 +162,9 @@ Given a `data.json` with users, you can project it into a `users/` directory whe
 ### Example: Projecting Source Code
 
 Mache auto-detects `.go` and `.py` files. Use tree-sitter queries in your schema to map AST nodes (functions, types) to directories.
+
+- **Source:** The `source` file contains the function/type body.
+- **Context:** The `context` file (virtual) contains imports, types, and global variables visible to that scope. This is critical for LLM agents to understand dependencies without reading the whole file.
 
 ### Write-Back Mode
 
