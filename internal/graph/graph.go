@@ -42,6 +42,7 @@ type Node struct {
 	Mode       fs.FileMode       // fs.ModeDir for directories, 0 for regular files
 	ModTime    time.Time         // Modification time
 	Data       []byte            // Inline content (small files, nil for lazy nodes)
+	Context    []byte            // Context content (imports/globals, for virtual 'context' file)
 	Ref        *ContentRef       // Lazy content reference (large files, nil for inline nodes)
 	Properties map[string][]byte // Metadata / extended attributes
 	Children   []string          // Child node IDs (directories only)

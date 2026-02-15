@@ -124,6 +124,15 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 		return &bytesFile{name: diagFile, data: content}, nil
 	}
 
+	// Virtual: context file
+	if strings.HasSuffix(filename, "/context") {
+		parentDir := filepath.Dir(filename)
+		node, err := fs.graph.GetNode(parentDir)
+		if err == nil && len(node.Context) > 0 {
+			return &bytesFile{name: "context", data: node.Context}, nil
+		}
+	}
+
 	node, err := fs.graph.GetNode(filename)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
@@ -276,6 +285,16 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		})
 	}
 
+	// Add context virtual file if available
+	if node != nil && len(node.Context) > 0 {
+		infos = append(infos, &staticFileInfo{
+			name:    "context",
+			size:    int64(len(node.Context)),
+			mode:    0o444,
+			modTime: fs.mountTime,
+		})
+	}
+
 	for _, childID := range children {
 		childNode, err := fs.graph.GetNode(childID)
 		if err != nil {
@@ -336,6 +355,20 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			mode:    0o444,
 			modTime: fs.mountTime,
 		}, nil
+	}
+
+	// Virtual: context
+	if strings.HasSuffix(filename, "/context") {
+		parentDir := filepath.Dir(filename)
+		node, err := fs.graph.GetNode(parentDir)
+		if err == nil && len(node.Context) > 0 {
+			return &staticFileInfo{
+				name:    "context",
+				size:    int64(len(node.Context)),
+				mode:    0o444,
+				modTime: fs.mountTime,
+			}, nil
+		}
 	}
 
 	node, err := fs.resolveNode(filename)

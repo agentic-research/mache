@@ -659,16 +659,54 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Optimization: extract calls once per match if we are in Sitter mode
 		var calls []string
+		var contextData []byte
 		if sw, ok := walker.(*SitterWalker); ok {
-			if root, ok := match.Context().(SitterRoot); ok {
+			ctxAny := match.Context()
+			if ctxAny == nil {
+				log.Printf("Context is nil for %s", id)
+			} else if root, ok := ctxAny.(SitterRoot); ok {
 				c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang)
 				if err == nil {
 					calls = c
 				}
+				// Extract context (imports, globals) from the file root
+				// Use the file root node, not the match scope
+				fileRoot := root.FileRoot
+				if fileRoot == nil {
+					fileRoot = root.Node
+				}
+				ctxBytes, err := sw.ExtractContext(fileRoot, root.Source, root.Lang)
+				if err == nil {
+					contextData = ctxBytes
+					if len(ctxBytes) > 0 {
+						log.Printf("Context extracted for %s: %d bytes", id, len(ctxBytes))
+					} else {
+						log.Printf("Context extracted for %s: 0 bytes", id)
+					}
+				} else {
+					log.Printf("Context extraction failed for %s: %v", id, err)
+				}
+			} else {
+				log.Printf("Context type mismatch for %s: %T", id, ctxAny)
 			}
+		} else {
+			log.Printf("Walker is not SitterWalker for %s", id)
 		}
 
-		// Process files (JSON/tree-sitter paths — always inline content)
+		// Re-fetch current children (updated by recursion)
+		var currentChildren []string
+		if current, err := e.Store.GetNode(id); err == nil {
+			currentChildren = current.Children
+		}
+
+		node = &graph.Node{
+			ID:       id,
+			Mode:     os.ModeDir | 0o555, // Read-only dir
+			ModTime:  modTime,            // Propagate source file time
+			Children: currentChildren,
+			Context:  contextData,
+		}
+		e.Store.AddNode(node)
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {

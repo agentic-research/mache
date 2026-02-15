@@ -193,6 +193,19 @@ func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 		return 0, 0
 	}
 
+	// Virtual: context file
+	if strings.HasSuffix(path, "/context") {
+		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
+			return -fuse.EACCES, 0
+		}
+		parentDir := filepath.Dir(path)
+		node, err := fs.Graph.GetNode(parentDir)
+		if err == nil && len(node.Context) > 0 {
+			return 0, 0
+		}
+		return -fuse.ENOENT, 0
+	}
+
 	if fs.isQueryPath(path) {
 		if path == "/.query" {
 			return -fuse.EISDIR, 0
@@ -324,6 +337,19 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return 0
 	}
 
+	// Virtual: context file
+	if strings.HasSuffix(path, "/context") {
+		parentDir := filepath.Dir(path)
+		node, err := fs.Graph.GetNode(parentDir)
+		if err == nil && len(node.Context) > 0 {
+			stat.Mode = fuse.S_IFREG | 0o444
+			stat.Nlink = 1
+			stat.Size = int64(len(node.Context))
+			return 0
+		}
+		return -fuse.ENOENT
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT
@@ -371,8 +397,10 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return 0, fh
 	}
 
+	var node *graph.Node
 	if path != "/" {
-		node, err := fs.Graph.GetNode(path)
+		var err error
+		node, err = fs.Graph.GetNode(path)
 		if err != nil {
 			return -fuse.ENOENT, 0
 		}
@@ -397,6 +425,10 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	// Add _diagnostics/ to writable non-root dirs
 	if fs.Writable && path != "/" {
 		entries = append(entries, "_diagnostics")
+	}
+	// Add context if available
+	if node != nil && len(node.Context) > 0 {
+		entries = append(entries, "context")
 	}
 	for _, c := range children {
 		entries = append(entries, filepath.Base(c))
@@ -517,6 +549,18 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		return stat
 	}
 
+	if name == "context" {
+		// Parent path is dirPath
+		node, err := fs.Graph.GetNode(dirPath)
+		if err == nil && len(node.Context) > 0 {
+			stat.Ino = pathIno(fullPath)
+			stat.Mode = fuse.S_IFREG | 0o444
+			stat.Nlink = 1
+			stat.Size = int64(len(node.Context))
+			return stat
+		}
+	}
+
 	node, err := fs.Graph.GetNode(fullPath)
 	if err != nil {
 		return nil // fallback to individual LOOKUP
@@ -573,6 +617,20 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 		}
 		n := copy(buff, content[ofst:])
 		return n
+	}
+
+	// Virtual: context file
+	if strings.HasSuffix(path, "/context") {
+		parentDir := filepath.Dir(path)
+		node, err := fs.Graph.GetNode(parentDir)
+		if err == nil && len(node.Context) > 0 {
+			if ofst >= int64(len(node.Context)) {
+				return 0
+			}
+			n := copy(buff, node.Context[ofst:])
+			return n
+		}
+		return -fuse.ENOENT
 	}
 
 	node, err := fs.Graph.GetNode(path)
