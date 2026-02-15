@@ -1,0 +1,5 @@
+{
+  "level": "Hard",
+  "description": "The code has been mutated (Inverted \u003c to \u003e=). It crashes on the provided input.",
+  "crash_input": "crash.txt"
+}

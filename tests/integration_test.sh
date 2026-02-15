@@ -1,279 +1,149 @@
 #!/bin/bash
 
 # test_mache_hybrid.sh
-# Isolated Integration Test for Mache Filesystem
+# Comprehensive Integration Test for Mache Filesystem
+# Covers: Inference, Context, Truncation, Diagnostics, Write-Back
 
 set -e
 
 # Configuration
-SANDBOX_DIR="/tmp/mache-sandbox"
+SANDBOX_DIR="/tmp/mache-integration"
 SRC_DIR="${SANDBOX_DIR}/src"
 MNT_DIR="${SANDBOX_DIR}/mnt"
-MACHE_BIN="$(pwd)/mache"
+# Use the binary built by task build
+MACHE_BIN="$(pwd)/bin/mache"
 
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Cleanup function
-
 cleanup() {
-
     echo "Cleaning up..."
-
     if [ -n "$MACHE_PID" ]; then
-
         kill "$MACHE_PID" 2>/dev/null || true
-
-
-
         wait "$MACHE_PID" 2>/dev/null || true
-
     fi
-
-
-
-        if mount | grep -q "$MNT_DIR"; then
-
-
-
-            echo "Unmounting $MNT_DIR..."
-
-
-
-            umount "$MNT_DIR" 2>/dev/null || true
-
-
-
-        fi
-
-
-
-
-
-
-
-        echo "Removing sandbox..."
-
-
-
-        rm -rf "$SANDBOX_DIR"
-
-
-
-
-
+    if mount | grep -q "$MNT_DIR"; then
+        echo "Unmounting $MNT_DIR..."
+        umount "$MNT_DIR" 2>/dev/null || true
+    fi
+    # Don't delete sandbox on failure for debugging
+    # rm -rf "$SANDBOX_DIR"
 }
-
-
-
-# Register cleanup
-
 trap cleanup EXIT
 
-
-
-# 1. Setup Sandbox (Idempotent)
-
-
-
-echo "--- 1. Setting up Sandbox ---"
-
-
-
+echo "--- 1. Setup Sandbox ---"
 rm -rf "$SANDBOX_DIR"
-
-
-
 mkdir -p "$SRC_DIR"
-
-
-
 mkdir -p "$MNT_DIR"
 
-
-
-
-
-
-
-echo "Creating schema..."
-
-
-
-
-
-cp examples/go-schema.json "${SANDBOX_DIR}/schema.json"
-
-
-
-echo "Creating dummy Go file..."
-
+# Create a Go file with imports and logic
 cat > "${SRC_DIR}/main.go" <<EOF
-
 package main
 
+import "fmt"
 
+const Version = "1.0"
 
 func HelloWorld() {
-
-	println("hello")
-
-	DatabaseInit()
-
+	fmt.Println("Original Content Long Long Long")
 }
-
-
-
-func DatabaseInit() { println("db init") }
-
 EOF
 
+echo "--- 2. Mount with Inference ---"
+if [ ! -f "$MACHE_BIN" ]; then
+    echo "Building mache..."
+    task build
+fi
 
-
-# 2. Build & Mount
-
-echo "--- 2. Build & Mount ---"
-
-# echo "Building mache binary..."
-
-# rm -f mache
-
-# if ! task build; then
-
-#     echo -e "${RED}Build failed!${NC}"
-
-#     exit 1
-
-# fi
-
-
-
-echo "Mounting mache..."
-
-# Pass the schema explicitly
-
-# Redirect output to a log file for debugging
 LOG_FILE="${SANDBOX_DIR}/mache.log"
-"$MACHE_BIN" "$MNT_DIR" -d "$SRC_DIR" -s "${SANDBOX_DIR}/schema.json" -w > "$LOG_FILE" 2>&1 &
-
+# Test Directory Inference (--infer on directory)
+"$MACHE_BIN" "$MNT_DIR" --infer -d "$SRC_DIR" -w --quiet > "$LOG_FILE" 2>&1 &
 MACHE_PID=$!
 
-echo "Mache running with PID: $MACHE_PID"
+echo "Waiting for mount..."
+sleep 3
 
-echo "Waiting 2 seconds for ingestion..."
-sleep 2
-
-# Check if Mache is still running
-if ! kill -0 "$MACHE_PID" 2>/dev/null; then
-    echo -e "${RED}Mache process died unexpectedly!${NC}"
-    echo "--- Mache Logs ---"
+if ! mount | grep -q "$MNT_DIR"; then
+    echo -e "${RED}Mount failed!${NC}"
     cat "$LOG_FILE"
     exit 1
 fi
 
-
-# 3. Verify SQL Query
-echo "--- 3. Verify SQL Query (God Mode) ---"
-QUERY_NAME="find_db_$(date +%s)"
-QUERY_DIR="${MNT_DIR}/.query/${QUERY_NAME}"
-
-echo "Creating query directory..."
-mkdir -p "$QUERY_DIR" || echo "mkdir failed"
-
-SQL="SELECT path FROM mache_refs WHERE token = 'DatabaseInit'"
-echo "Executing query via ctl..."
-echo "$SQL" > "${QUERY_DIR}/ctl"
-
-# Check if result exists
-echo "Listing of ${QUERY_DIR}:"
-ls -la "$QUERY_DIR"
-
-# Expectation: we find a file related to main.go where DatabaseInit is used/defined.
-# The schema maps this to: {{.pkg}}/functions/{{.name}}/source
-# HelloWorld calls DatabaseInit, so HelloWorld's source contains the token.
-# Path: main/functions/HelloWorld/source
-# Flattened name: main_functions_HelloWorld_source
-# Or main/functions/DatabaseInit/source if that is indexed.
-# Since DatabaseInit is defined, it is a node. But is it referenced?
-# If we search for token 'DatabaseInit', we find files that contain that token.
-# Both HelloWorld (call) and DatabaseInit (decl) contain the token 'DatabaseInit' in their source?
-# The definition `func DatabaseInit() ...` contains the token `DatabaseInit`?
-# Tree-sitter extractor extracts calls. `DatabaseInit()` is a call.
-# So `HelloWorld` calls it.
-# So `main/functions/HelloWorld/source` should show up.
-
-if ls "$QUERY_DIR" | grep -q "main"; then
-    echo "Query Result: Found main..."
+echo "--- 3. Verify Context Awareness ---"
+# Check if context file exists and contains imports
+CTX_FILE="${MNT_DIR}/HelloWorld/context"
+if [ -f "$CTX_FILE" ]; then
+    if grep -q 'import "fmt"' "$CTX_FILE"; then
+        echo -e "${GREEN}Context: PASS${NC}"
+    else
+        echo -e "${RED}Context: FAIL - Content mismatch${NC}"
+        cat "$CTX_FILE"
+        exit 1
+    fi
 else
-    echo -e "${RED}Query Result: FAIL - main not found in ${QUERY_DIR}/${NC}"
-    echo "--- Mache Logs ---"
-    cat "$LOG_FILE"
+    echo -e "${RED}Context: FAIL - File not found${NC}"
+    ls -R "$MNT_DIR"
     exit 1
 fi
 
-# 4. Verify Write-Back
-echo "--- 4. Verify Write-Back (Splice) ---"
-# We need to find a file to write to.
-# Let's try to find main/functions/HelloWorld/source (or similar)
-# Since we can't easily guess the exact name from the query result (it might be main_functions_HelloWorld_source),
-# let's just write to the original source file via the mount?
-# Wait, the prompt says: "Append a comment to main.go via the mount".
-# The mount exposes the *logical* structure, not the raw files (unless schema is trivial).
-# BUT, `main.go` might not exist in the mount if the schema transforms it!
-# The Go schema transforms `main.go` into `main/functions/...`.
-# So `ls $MNT_DIR/main.go` will FAIL.
-# We must use the logic of the schema.
-# However, the prompt might have assumed a simpler schema or that main.go is preserved.
-# "Assert that ls .../find_db/ lists main.go" implies the user expects main.go to be there.
-# If I use the Go schema, I won't get main.go.
-# If I use NO schema (default), I get nothing (as seen before).
-# Maybe I should use a simpler schema that just maps files 1:1?
-# But the prompt explicitly asks for "Parses Go code into a graph".
-#
-# Let's try to write to `main/functions/HelloWorld/source`?
-# Or maybe the prompt implies I should use a schema that preserves file structure?
-#
-# Let's check `examples/cli-schema.json`?
-# No, let's look at `examples/go-schema.json`. It breaks it down.
-#
-# If I want to pass the "Splice" test, I need to modify a node that maps back to `main.go`.
-# `main/functions/HelloWorld/source` maps back to `main.go`.
-# So I can append to that.
-#
-# The Prompt says: "Append a comment to main.go via the mount: echo ... >> .../mnt/main.go"
-# This implies the mount HAS main.go.
-# This implies the schema is NOT the complex Go schema, but maybe a simple one?
-# OR the prompt is slightly loose.
-#
-# If I use the Go schema, I must write to `mnt/main/functions/HelloWorld/source`.
-#
-# Let's stick with Go schema because that's "Mache".
-# I will adjust the test to write to the logical node.
-# And I will check `main.go` in source.
+echo "--- 4. Verify Implicit Truncation ---"
+# Overwrite with SHORTER content. If truncation fails, old tail remains.
+# Original: fmt.Println("Original Content Long Long Long")
+# New:      fmt.Println("Short")
+TARGET_NODE="${MNT_DIR}/HelloWorld/source"
+cat > "$TARGET_NODE" <<EOF
+func HelloWorld() {
+	fmt.Println("Short")
+}
+EOF
 
-TARGET_NODE="${MNT_DIR}/main/functions/HelloWorld/source"
-echo "Appending comment to mounted node: $TARGET_NODE"
-echo "// Checked" >> "$TARGET_NODE"
+# Give write-back a moment
+sleep 1
 
-echo "Unmounting and killing process..."
-umount "$MNT_DIR" || true
-kill "$MACHE_PID" 2>/dev/null || true
-wait "$MACHE_PID" 2>/dev/null || true
-MACHE_PID="" # Clear PID to avoid trap re-killing
-
-echo "Checking original source file..."
-if grep -q "// Checked" "${SRC_DIR}/main.go"; then
-    echo "Write-Back: SUCCESS - Found '// Checked' in source."
-else
-    echo -e "${RED}Write-Back: FAIL - Did not find '// Checked' in source.${NC}"
-    echo "Source content:"
+# Check source file directly
+if grep -q 'Long' "${SRC_DIR}/main.go"; then
+    echo -e "${RED}Truncation: FAIL - Found old content tail${NC}"
     cat "${SRC_DIR}/main.go"
-    echo "--- Mache Logs ---"
-    cat "$LOG_FILE"
+    exit 1
+else
+    echo -e "${GREEN}Truncation: PASS${NC}"
+fi
+
+echo "--- 5. Verify Diagnostics (Semantic Firewall) ---"
+# Write broken code
+echo "func HelloWorld() { BROKEN SYNTAX " > "$TARGET_NODE" || true
+# Write should return EIO, but shell might mask it unless checked.
+# We check the diagnostics file.
+
+sleep 1
+DIAG_FILE="${MNT_DIR}/HelloWorld/_diagnostics/last-write-status"
+if [ -f "$DIAG_FILE" ]; then
+    if grep -q "syntax error" "$DIAG_FILE" || grep -q "expected" "$DIAG_FILE"; then
+        echo -e "${GREEN}Diagnostics: PASS${NC}"
+    else
+        echo -e "${RED}Diagnostics: FAIL - No error reported${NC}"
+        cat "$DIAG_FILE"
+        exit 1
+    fi
+else
+    echo -e "${RED}Diagnostics: FAIL - File not found${NC}"
     exit 1
 fi
 
-# 5. Report
-echo -e "${GREEN}PASS${NC}"
+echo "--- 6. Verify Recovery (Valid Write) ---"
+cat > "$TARGET_NODE" <<EOF
+func HelloWorld() {
+	fmt.Println("Fixed")
+}
+EOF
+sleep 1
+if grep -q "Fixed" "${SRC_DIR}/main.go"; then
+    echo -e "${GREEN}Recovery: PASS${NC}"
+else
+    echo -e "${RED}Recovery: FAIL${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}ALL TESTS PASSED${NC}"

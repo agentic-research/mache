@@ -91,8 +91,18 @@ func (inf *Inferrer) InferFromRecords(records []any) (*api.Topology, error) {
 }
 
 // InferFromTreeSitter infers a topology from a parsed Tree-sitter AST.
+// Always uses the FCA path (ProjectAST) because the greedy path generates
+// JSONPath selectors which are incompatible with tree-sitter ingestion.
+// ProjectAST generates proper S-expression selectors for tree-sitter queries.
 func (inf *Inferrer) InferFromTreeSitter(root *sitter.Node) (*api.Topology, error) {
 	records := ingest.FlattenAST(root)
+
+	// Force FCA method for AST data — greedy generates JSONPath selectors
+	// that fail when the engine tries to use them as tree-sitter queries.
+	saved := inf.Config.Method
+	inf.Config.Method = "fca"
+	defer func() { inf.Config.Method = saved }()
+
 	return inf.InferFromRecords(records)
 }
 

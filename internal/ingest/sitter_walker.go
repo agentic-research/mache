@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -32,9 +33,10 @@ func NewSitterWalker() *SitterWalker {
 // SitterRoot encapsulates the necessary context for querying a Tree-sitter tree.
 // It includes the root node, the source code (for extracting content), and the language (for compiling the query).
 type SitterRoot struct {
-	Node   *sitter.Node
-	Source []byte
-	Lang   *sitter.Language
+	Node     *sitter.Node
+	FileRoot *sitter.Node // The top-level file node (for global context)
+	Source   []byte
+	Lang     *sitter.Language
 }
 
 // Query implements Walker.
@@ -47,6 +49,11 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 		} else {
 			return nil, fmt.Errorf("root must be SitterRoot, got %T", root)
 		}
+	}
+
+	// Ensure FileRoot is set (if this is the top level)
+	if sr.FileRoot == nil {
+		sr.FileRoot = sr.Node
 	}
 
 	// "$" is a passthrough selector — returns the root itself with empty values.
@@ -160,12 +167,68 @@ func (m *sitterMatch) Values() map[string]any {
 func (m *sitterMatch) Context() any {
 	if m.scope != nil {
 		return SitterRoot{
-			Node:   m.scope,
-			Source: m.root.Source,
-			Lang:   m.root.Lang,
+			Node:     m.scope,
+			FileRoot: m.root.FileRoot,
+			Source:   m.root.Source,
+			Lang:     m.root.Lang,
 		}
 	}
 	return nil
+}
+
+// contextQueryStr captures package-level definitions for the context file.
+const contextQueryStr = `
+	; (package_clause) @ctx
+	(import_declaration) @ctx
+	(const_declaration) @ctx
+	(var_declaration) @ctx
+	(type_declaration) @ctx
+`
+
+// getContextQuery returns a cached compiled query for context extraction.
+func (w *SitterWalker) getContextQuery(lang *sitter.Language) (*sitter.Query, error) {
+	// Re-use callQueryCache mechanism or add a new cache?
+	// For simplicity, let's just compile it. Performance optimization can come later.
+	return sitter.NewQuery([]byte(contextQueryStr), lang)
+}
+
+// ExtractContext finds package-level context nodes.
+func (w *SitterWalker) ExtractContext(root *sitter.Node, source []byte, lang *sitter.Language) ([]byte, error) {
+	q, err := w.getContextQuery(lang)
+	if err != nil {
+		return nil, fmt.Errorf("invalid context query: %w", err)
+	}
+	defer q.Close()
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+
+	qc.Exec(q, root)
+
+	var buf bytes.Buffer
+	seen := make(map[uint32]bool) // avoid duplicates if multiple captures match same node
+
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+
+		for _, c := range m.Captures {
+			if seen[c.Node.StartByte()] {
+				continue
+			}
+			seen[c.Node.StartByte()] = true
+
+			start := c.Node.StartByte()
+			end := c.Node.EndByte()
+			if start < uint32(len(source)) && end <= uint32(len(source)) {
+				buf.Write(source[start:end])
+				buf.WriteString("\n\n")
+			}
+		}
+	}
+	return buf.Bytes(), nil
 }
 
 // getCallQuery returns a cached compiled query for call extraction, compiling
