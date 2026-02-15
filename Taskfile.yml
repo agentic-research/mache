@@ -120,7 +120,7 @@ tasks:
 
   fuzz-gen:
     desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target
-    dir: experiments/fuzz_mutate
+    dir: tools/fuzz-gen
     cmds:
       - go run main.go -file target/parser.go -target FuzzParseToken
 
