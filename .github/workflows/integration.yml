@@ -14,10 +14,17 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            backend: fuse
             fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev fuse
           - os: macos-latest
+            backend: fuse
             fuse_setup: brew install --cask fuse-t
+          - os: macos-latest
+            backend: nfs
+            fuse_setup: brew install --cask fuse-t
+      fail-fast: false
     runs-on: ${{ matrix.os }}
+    name: integration (${{ matrix.os }}, ${{ matrix.backend }})
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -40,4 +47,4 @@ jobs:
         run: task build
 
       - name: Run Integration Test
-        run: MACHE_BIN="$(pwd)/bin/mache" ./tests/integration_test.sh
+        run: MACHE_BIN="$(pwd)/bin/mache" MACHE_BACKEND="${{ matrix.backend }}" ./tests/integration_test.sh

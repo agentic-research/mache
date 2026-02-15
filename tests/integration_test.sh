@@ -12,6 +12,8 @@ SRC_DIR="${SANDBOX_DIR}/src"
 MNT_DIR="${SANDBOX_DIR}/mnt"
 # Use the binary built by task build (override with MACHE_BIN env var)
 MACHE_BIN="${MACHE_BIN:-$(pwd)/bin/mache}"
+# Backend: nfs (default on macOS), fuse (default on Linux), or override with MACHE_BACKEND
+BACKEND_FLAG="${MACHE_BACKEND:+--backend $MACHE_BACKEND}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -59,7 +61,8 @@ fi
 
 LOG_FILE="${SANDBOX_DIR}/mache.log"
 # Test Directory Inference (--infer on directory)
-"$MACHE_BIN" "$MNT_DIR" --infer -d "$SRC_DIR" -w --quiet > "$LOG_FILE" 2>&1 &
+# shellcheck disable=SC2086
+"$MACHE_BIN" "$MNT_DIR" --infer -d "$SRC_DIR" -w --quiet $BACKEND_FLAG > "$LOG_FILE" 2>&1 &
 MACHE_PID=$!
 
 echo "Waiting for mount..."
