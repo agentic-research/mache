@@ -215,15 +215,18 @@ Each directory is a code construct (function, type, method). Inside each:
     \$ ls $MNT/PackReading/
     source          # The full source code of this construct
     context         # (Read-only) Imports, types, and globals visible to this scope
-    ast.json        # AST metadata
-    _diagnostics/   # Write feedback (check after failed writes)
+    \$ ls $MNT/PackReading/_diagnostics/
+    last-write-status # Write feedback (check after failed writes)
+    lint              # (Read-only) Static analysis warnings
 
 **To edit code**: overwrite the \`source\` file with the COMPLETE new
 implementation. The engine splices your changes back into the real .go files.
 Implicit truncation is handled — you do not need to pad writes.
 
-**If a write fails** (e.g. syntax error), read
-\`<node>/_diagnostics/last-write-status\` for the error message.
+**Writes are always accepted.** If your code has syntax errors, it is saved
+as a **Draft** (visible to you but not committed to the source file).
+ALWAYS check \`<node>/_diagnostics/last-write-status\` after writing to
+confirm it was "ok" (committed) or if there was an error.
 
 ## Rules
 
@@ -328,11 +331,11 @@ verify() {
 
     # Level 5: Notes mention diagnostics / EIO / write failure
     echo -n "Level 5 (Adversarial): "
-    if [ -f "$SANDBOX/agent-notes.md" ] && grep -qi "diagnostic\|EIO\|reject\|syntax error\|write.* fail\|last-write-status" "$SANDBOX/agent-notes.md" 2>/dev/null; then
+    if [ -f "$SANDBOX/agent-notes.md" ] && grep -qi "diagnostic\|draft\|syntax error\|last-write-status" "$SANDBOX/agent-notes.md" 2>/dev/null; then
         echo -e "${GREEN}PASS${NC}"
         score=$((score + 1))
     else
-        echo -e "${YELLOW}SKIP${NC} — no adversarial write documented"
+        echo -e "${YELLOW}SKIP${NC} — no adversarial write/draft documented"
     fi
 
     echo ""

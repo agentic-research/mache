@@ -5,6 +5,8 @@ package api
 type Topology struct {
 	// Version of the Mache schema.
 	Version string `json:"version"`
+	// Table is the SQLite table name to query (default: "results").
+	Table string `json:"table,omitempty"`
 	// Root nodes of the filesystem.
 	Nodes []Node `json:"nodes,omitempty"`
 }

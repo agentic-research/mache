@@ -77,6 +77,11 @@ func (fs *GraphFS) Create(filename string) (billy.File, error) {
 	}
 	filename = cleanPath(filename)
 
+	// Block AppleDouble / metadata files (silently succeed to avoid log spam)
+	if strings.HasPrefix(filepath.Base(filename), "._") {
+		return &bytesFile{name: filename, data: nil}, nil
+	}
+
 	node, err := fs.graph.GetNode(filename)
 	if err != nil {
 		return nil, &os.PathError{Op: "create", Path: filename, Err: os.ErrNotExist}
@@ -246,6 +251,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 			return []os.FileInfo{
 				&staticFileInfo{name: "last-write-status", mode: 0o444, modTime: fs.mountTime},
 				&staticFileInfo{name: "ast-errors", mode: 0o444, modTime: fs.mountTime},
+				&staticFileInfo{name: "lint", mode: 0o444, modTime: fs.mountTime},
 			}, nil
 		}
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
@@ -342,7 +348,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			return &staticFileInfo{
 				name:    "_diagnostics",
 				mode:    os.ModeDir | 0o555,
-				modTime: fs.mountTime,
+				modTime: time.Now(), // Force refresh
 			}, nil
 		}
 		content, ok := fs.diagContent(parentDir, fileName)
@@ -353,7 +359,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			name:    fileName,
 			size:    int64(len(content)),
 			mode:    0o444,
-			modTime: fs.mountTime,
+			modTime: time.Now(), // Force refresh
 		}, nil
 	}
 
@@ -454,6 +460,12 @@ func (fs *GraphFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 			return []byte("no errors\n"), true
 		}
 		return []byte(msg + "\n"), true
+	case "lint":
+		val, ok := fs.diagStatus.Load(parentDir + "/lint")
+		if !ok {
+			return []byte("clean\n"), true
+		}
+		return []byte(val.(string)), true
 	default:
 		return nil, false
 	}

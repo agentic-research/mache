@@ -55,6 +55,10 @@ func testRender(tmpl string, values map[string]any) (string, error) {
 }
 
 func createTestDB(t *testing.T, records map[string]string) string {
+	return createTestDBWithTable(t, "results", records)
+}
+
+func createTestDBWithTable(t *testing.T, tableName string, records map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -65,11 +69,11 @@ func createTestDB(t *testing.T, records map[string]string) string {
 	}
 	defer func() { _ = db.Close() }()
 
-	if _, err := db.Exec("CREATE TABLE results (id TEXT PRIMARY KEY, record TEXT NOT NULL)"); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("CREATE TABLE %s (id TEXT PRIMARY KEY, record TEXT NOT NULL)", tableName)); err != nil {
 		t.Fatal(err)
 	}
 	for id, rec := range records {
-		if _, err := db.Exec("INSERT INTO results (id, record) VALUES (?, ?)", id, rec); err != nil {
+		if _, err := db.Exec(fmt.Sprintf("INSERT INTO %s (id, record) VALUES (?, ?)", tableName), id, rec); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1041,4 +1045,99 @@ func TestSQLiteGraph_VTab_MacheRefs(t *testing.T) {
 		// MyFunc→2 paths + Other→1 path = 3 total
 		assert.Len(t, allRefs, 3)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Regression: custom table name (Bug: hardcoded "FROM results")
+// ---------------------------------------------------------------------------
+
+func TestSQLiteGraph_CustomTableName(t *testing.T) {
+	dbPath := createTestDBWithTable(t, "vulnerabilities", map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Acme","product":"Widget","shortDescription":"RCE in Widget"}}`,
+	})
+
+	schema := &api.Topology{
+		Version: "v1",
+		Table:   "vulnerabilities",
+		Nodes: []api.Node{
+			{
+				Name:     "vulns",
+				Selector: "$",
+				Children: []api.Node{
+					{
+						Name:     "{{.item.cveID}}",
+						Selector: "$[*]",
+						Files: []api.Leaf{
+							{Name: "vendor", ContentTemplate: "{{.item.vendorProject}}"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	g, err := OpenSQLiteGraph(dbPath, schema, testRender)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	require.NoError(t, g.EagerScan())
+
+	children, err := g.ListChildren("vulns")
+	require.NoError(t, err)
+	assert.Contains(t, children, "vulns/CVE-2024-0001")
+
+	// Verify content resolves through the custom table
+	buf := make([]byte, 1024)
+	n, err := g.ReadContent("vulns/CVE-2024-0001/vendor", buf, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "Acme", string(buf[:n]))
+}
+
+func TestSQLiteGraph_DefaultTableName(t *testing.T) {
+	// Schema with no Table field should default to "results"
+	dbPath := createTestDB(t, map[string]string{
+		"CVE-2024-0001": `{"schema":"kev","identifier":"CVE-2024-0001","item":{"cveID":"CVE-2024-0001","vendorProject":"Globex","product":"Gizmo","shortDescription":"SQLi in Gizmo"}}`,
+	})
+
+	g, err := OpenSQLiteGraph(dbPath, kevSchema(), testRender)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	require.NoError(t, g.EagerScan())
+
+	children, err := g.ListChildren("vulns")
+	require.NoError(t, err)
+	assert.Contains(t, children, "vulns/CVE-2024-0001")
+}
+
+// ---------------------------------------------------------------------------
+// Regression: HotSwapGraph closes old graph on Swap
+// ---------------------------------------------------------------------------
+
+type closableGraph struct {
+	Graph
+	closed bool
+}
+
+func (c *closableGraph) Close() error {
+	c.closed = true
+	return nil
+}
+
+func TestHotSwapGraph_ClosesOldOnSwap(t *testing.T) {
+	store1 := &closableGraph{Graph: NewMemoryStore()}
+	store2 := &closableGraph{Graph: NewMemoryStore()}
+
+	hot := NewHotSwapGraph(store1)
+
+	// Swap should close the old graph
+	hot.Swap(store2)
+	assert.True(t, store1.closed, "old graph should be closed after Swap")
+	assert.False(t, store2.closed, "new graph should not be closed")
+
+	// Second swap should close store2
+	store3 := &closableGraph{Graph: NewMemoryStore()}
+	hot.Swap(store3)
+	assert.True(t, store2.closed, "second old graph should be closed after Swap")
+	assert.False(t, store3.closed, "current graph should not be closed")
 }

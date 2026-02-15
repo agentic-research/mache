@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/control"
 	machefs "github.com/agentic-research/mache/internal/fs"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lattice"
+	"github.com/agentic-research/mache/internal/linter"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -40,6 +42,7 @@ var (
 var (
 	schemaPath  string
 	dataPath    string
+	controlPath string
 	writable    bool
 	inferSchema bool
 	quiet       bool
@@ -49,6 +52,7 @@ var (
 func init() {
 	rootCmd.Flags().StringVarP(&schemaPath, "schema", "s", "", "Path to topology schema")
 	rootCmd.Flags().StringVarP(&dataPath, "data", "d", "", "Path to data source")
+	rootCmd.Flags().StringVar(&controlPath, "control", "", "Path to Leyline control block (enables hot-swap)")
 	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back (splice edits into source files)")
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
@@ -294,6 +298,10 @@ var rootCmd = &cobra.Command{
 		var g graph.Graph
 		var engine *ingest.Engine // non-nil for MemoryStore paths (needed for write-back)
 
+		if controlPath != "" {
+			return mountControl(controlPath, schema, mountPoint, backend)
+		}
+
 		if _, err := os.Stat(dataPath); err == nil {
 			if filepath.Ext(dataPath) == ".db" {
 				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
@@ -370,6 +378,76 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// mountControl starts Mache in hot-swap mode using the Control Block.
+func mountControl(path string, schema *api.Topology, mountPoint, backend string) error {
+	ctrl, err := control.OpenOrCreate(path)
+	if err != nil {
+		return fmt.Errorf("open control: %w", err)
+	}
+	defer func() { _ = ctrl.Close() }()
+
+	// Initial Load
+	gen := ctrl.GetGeneration()
+	arenaPath := ctrl.GetArenaPath()
+	fmt.Printf("Control Block: Gen %d -> %s\n", gen, arenaPath)
+
+	// Wait for first valid generation if empty?
+	if arenaPath == "" {
+		fmt.Println("Waiting for initial arena...")
+		for {
+			if p := ctrl.GetArenaPath(); p != "" {
+				arenaPath = p
+				gen = ctrl.GetGeneration()
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	initialGraph, err := graph.OpenSQLiteGraph(arenaPath, schema, ingest.RenderTemplate)
+	if err != nil {
+		return fmt.Errorf("open initial graph %s: %w", arenaPath, err)
+	}
+	// Note: We don't defer Close() here because HotSwapGraph owns it (mostly)
+	// But HotSwapGraph.Swap closes the old one. We should close the FINAL one on exit.
+
+	hotSwap := graph.NewHotSwapGraph(initialGraph)
+
+	// Start Watcher
+	go func() {
+		lastGen := gen
+		for {
+			time.Sleep(100 * time.Millisecond)
+			currentGen := ctrl.GetGeneration()
+			if currentGen > lastGen {
+				newPath := ctrl.GetArenaPath()
+				fmt.Printf("Hot Swap Detected: Gen %d -> %d (%s)\n", lastGen, currentGen, newPath)
+
+				// Open new graph
+				newGraph, err := graph.OpenSQLiteGraph(newPath, schema, ingest.RenderTemplate)
+				if err != nil {
+					fmt.Printf("Error opening new graph %s: %v\n", newPath, err)
+					continue // Skip update
+				}
+
+				// Atomic Swap
+				hotSwap.Swap(newGraph)
+				lastGen = currentGen
+			}
+		}
+	}()
+
+	// Mount
+	switch backend {
+	case "nfs":
+		return mountNFS(schema, hotSwap, nil, mountPoint, false)
+	case "fuse":
+		return mountFUSE(schema, hotSwap, nil, mountPoint, false)
+	default:
+		return fmt.Errorf("unknown backend %q", backend)
+	}
+}
+
 // mountNFS starts an NFS server backed by GraphFS and mounts it.
 func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
 	graphFs := nfsmount.NewGraphFS(g, schema)
@@ -378,18 +456,48 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 	if writable && engine != nil {
 		store, isMemStore := g.(*graph.MemoryStore)
 		graphFs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
+			// Retrieve node to update DraftData
+			node, err := g.GetNode(nodeID)
+			if err != nil {
+				return fmt.Errorf("node not found: %w", err)
+			}
+
 			// 1. Validate syntax before touching source file
 			if err := writeback.Validate(content, origin.FilePath); err != nil {
+				log.Printf("writeback: validation failed for %s: %v (saving draft)", origin.FilePath, err)
 				// Store diagnostic for _diagnostics/ virtual dir
 				if isMemStore {
 					store.WriteStatus.Store(filepath.Dir(nodeID), err.Error())
+					// Save as Draft
+					// Copy content because the buffer might be reused
+					draft := make([]byte, len(content))
+					copy(draft, content)
+					node.DraftData = draft
 				}
-				return fmt.Errorf("validation failed: %w", err)
+				// Return Success so agent/editor sees the file as "saved" (in draft state)
+				return nil
 			}
 
 			oldLen := origin.EndByte - origin.StartByte
 			if err := writeback.Splice(origin, content); err != nil {
 				return err
+			}
+
+			// Clear draft on success
+			node.DraftData = nil
+
+			// Linting (Warning only)
+			// TODO: Infer language from file extension
+			if strings.HasSuffix(origin.FilePath, ".go") {
+				if diags, err := linter.Lint(content, "go"); err == nil && len(diags) > 0 {
+					var sb strings.Builder
+					for _, d := range diags {
+						sb.WriteString(d.String() + "\n")
+					}
+					store.WriteStatus.Store(filepath.Dir(nodeID)+"/lint", sb.String())
+				} else {
+					store.WriteStatus.Delete(filepath.Dir(nodeID) + "/lint")
+				}
 			}
 
 			// 2. Shift sibling origins immediately (before re-ingest)

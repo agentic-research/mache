@@ -13,7 +13,7 @@ func (e *Engine) IngestRecords(records []any) error {
 	// The schema usually has a root selector like "$[*]" which iterates the list.
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, records, "", "", modTime); err != nil {
+		if err := e.processNode(nodeSchema, walker, records, "", "", modTime, e.Store); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
