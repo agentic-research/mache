@@ -113,6 +113,15 @@ type MemoryStore struct {
 	flushErr   error
 }
 
+// normalizeID strips a leading slash from node IDs.
+// GraphFS paths use "/Foo/source" but MemoryStore keys are "Foo/source".
+func normalizeID(id string) string {
+	if len(id) > 0 && id[0] == '/' {
+		return id[1:]
+	}
+	return id
+}
+
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		nodes:       make(map[string]*Node),
@@ -157,6 +166,7 @@ func (s *MemoryStore) UpdateNodeContent(id string, data []byte, origin *SourceOr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id = normalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return ErrNotFound
@@ -175,6 +185,7 @@ func (s *MemoryStore) UpdateNodeContext(id string, ctx []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id = normalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return ErrNotFound
@@ -376,11 +387,7 @@ func (s *MemoryStore) GetNode(id string) (*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Normalize path: remove leading slash
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
-
+	id = normalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -398,11 +405,7 @@ func (s *MemoryStore) ListChildren(id string) ([]string, error) {
 		return s.roots, nil
 	}
 
-	// Normalize
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
-
+	id = normalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound

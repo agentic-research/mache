@@ -583,6 +583,47 @@ func TestUpdateNodeContent_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestUpdateNodeContent_NormalizesLeadingSlash(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:   "HelloWorld/source",
+		Mode: 0,
+		Data: []byte("original"),
+		Origin: &SourceOrigin{
+			FilePath:  "/tmp/main.go",
+			StartByte: 0,
+			EndByte:   8,
+		},
+	})
+
+	// GraphFS passes IDs with leading slash — UpdateNodeContent must handle this
+	newOrigin := &SourceOrigin{FilePath: "/tmp/main.go", StartByte: 0, EndByte: 7}
+	err := store.UpdateNodeContent("/HelloWorld/source", []byte("updated"), newOrigin, time.Now())
+	require.NoError(t, err, "UpdateNodeContent should accept leading-slash IDs")
+
+	node, err := store.GetNode("HelloWorld/source")
+	require.NoError(t, err)
+	assert.Equal(t, "updated", string(node.Data))
+	assert.Equal(t, newOrigin, node.Origin)
+}
+
+func TestUpdateNodeContext_NormalizesLeadingSlash(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddNode(&Node{
+		ID:      "HelloWorld",
+		Mode:    0,
+		Context: []byte("package main\n"),
+	})
+
+	err := store.UpdateNodeContext("/HelloWorld", []byte("package main\n\nimport \"fmt\"\n"))
+	require.NoError(t, err, "UpdateNodeContext should accept leading-slash IDs")
+
+	node, _ := store.GetNode("HelloWorld")
+	assert.Equal(t, "package main\n\nimport \"fmt\"\n", string(node.Context))
+}
+
 func TestUpdateNodeContext_Basic(t *testing.T) {
 	store := NewMemoryStore()
 
