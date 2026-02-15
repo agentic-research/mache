@@ -94,7 +94,6 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | --- | --- | --- |
 | **Graph Filesystem** | **Stable** | FUSE bridge (macOS/Linux) mounts any graph as a directory tree. |
 | **Hybrid SQL Index** | **Active** | In-memory SQLite sidecar for instant, zero-copy queries. |
-| **Plan 9 Interface** | **Live** | Synthetic `ctl` files for executing complex SQL via shell. |
 | **Write-Back** | **Stable** | Atomic splicing with implicit truncation and diagnostics feedback loop. |
 | **Context Awareness** | **Active** | Virtual `context` files expose global scope (imports/types) to agents. |
 | **Tree-sitter Parsing** | **Active** | Native support for Go and Python ASTs. |
