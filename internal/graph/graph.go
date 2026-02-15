@@ -43,6 +43,7 @@ type Node struct {
 	ModTime    time.Time         // Modification time
 	Data       []byte            // Inline content (small files, nil for lazy nodes)
 	Context    []byte            // Context content (imports/globals, for virtual 'context' file)
+	DraftData  []byte            // Draft content (uncommitted/invalid edits)
 	Ref        *ContentRef       // Lazy content reference (large files, nil for inline nodes)
 	Properties map[string][]byte // Metadata / extended attributes
 	Children   []string          // Child node IDs (directories only)
@@ -52,6 +53,9 @@ type Node struct {
 // ContentSize returns the byte length of this node's content,
 // regardless of whether it is inline or lazy.
 func (n *Node) ContentSize() int64 {
+	if n.DraftData != nil {
+		return int64(len(n.DraftData))
+	}
 	if n.Data != nil {
 		return int64(len(n.Data))
 	}
@@ -364,7 +368,9 @@ func (s *MemoryStore) ReadContent(id string, buf []byte, offset int64) (int, err
 	}
 
 	var data []byte
-	if node.Data != nil {
+	if node.DraftData != nil {
+		data = node.DraftData
+	} else if node.Data != nil {
 		data = node.Data
 	} else if node.Ref != nil {
 		data, err = s.resolveContent(id, node.Ref)

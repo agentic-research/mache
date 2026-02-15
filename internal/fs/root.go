@@ -744,12 +744,17 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 
 	// 1. Validate syntax before touching source file
 	if err := writeback.Validate(wh.buf, node.Origin.FilePath); err != nil {
-		log.Printf("writeback: validation failed for %s: %v", node.Origin.FilePath, err)
+		log.Printf("writeback: validation failed for %s: %v (saving draft)", node.Origin.FilePath, err)
 		// Store diagnostic for _diagnostics/ virtual dir
 		if store, ok := fs.Graph.(*graph.MemoryStore); ok {
 			store.WriteStatus.Store(filepath.Dir(wh.path), err.Error())
+			// Save as Draft
+			draft := make([]byte, len(wh.buf))
+			copy(draft, wh.buf)
+			node.DraftData = draft
 		}
-		return -fuse.EIO
+		// Return Success (0) so agent sees "saved" state
+		return 0
 	}
 
 	// 2. Splice new content into source file
@@ -758,6 +763,9 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		log.Printf("writeback: splice failed for %s: %v", node.Origin.FilePath, err)
 		return -fuse.EIO
 	}
+
+	// Clear draft on success
+	node.DraftData = nil
 
 	// 3. Shift sibling origins immediately (before re-ingest)
 	if store, ok := fs.Graph.(*graph.MemoryStore); ok {

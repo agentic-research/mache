@@ -378,19 +378,35 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 	if writable && engine != nil {
 		store, isMemStore := g.(*graph.MemoryStore)
 		graphFs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
+			// Retrieve node to update DraftData
+			node, err := g.GetNode(nodeID)
+			if err != nil {
+				return fmt.Errorf("node not found: %w", err)
+			}
+
 			// 1. Validate syntax before touching source file
 			if err := writeback.Validate(content, origin.FilePath); err != nil {
+				log.Printf("writeback: validation failed for %s: %v (saving draft)", origin.FilePath, err)
 				// Store diagnostic for _diagnostics/ virtual dir
 				if isMemStore {
 					store.WriteStatus.Store(filepath.Dir(nodeID), err.Error())
+					// Save as Draft
+					// Copy content because the buffer might be reused
+					draft := make([]byte, len(content))
+					copy(draft, content)
+					node.DraftData = draft
 				}
-				return fmt.Errorf("validation failed: %w", err)
+				// Return Success so agent/editor sees the file as "saved" (in draft state)
+				return nil
 			}
 
 			oldLen := origin.EndByte - origin.StartByte
 			if err := writeback.Splice(origin, content); err != nil {
 				return err
 			}
+
+			// Clear draft on success
+			node.DraftData = nil
 
 			// 2. Shift sibling origins immediately (before re-ingest)
 			if isMemStore {
