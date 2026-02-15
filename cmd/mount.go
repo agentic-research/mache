@@ -382,7 +382,7 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 			if err := writeback.Validate(content, origin.FilePath); err != nil {
 				// Store diagnostic for _diagnostics/ virtual dir
 				if isMemStore {
-					store.WriteStatus.Store(nodeID, err.Error())
+					store.WriteStatus.Store(filepath.Dir(nodeID), err.Error())
 				}
 				return fmt.Errorf("validation failed: %w", err)
 			}
@@ -398,7 +398,7 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				if delta != 0 {
 					store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
 				}
-				store.WriteStatus.Store(nodeID, "ok")
+				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
 			}
 
 			// 3. Auto-format Go files (failure-tolerant)

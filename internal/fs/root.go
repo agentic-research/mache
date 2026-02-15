@@ -683,7 +683,7 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		log.Printf("writeback: validation failed for %s: %v", node.Origin.FilePath, err)
 		// Store diagnostic for _diagnostics/ virtual dir
 		if store, ok := fs.Graph.(*graph.MemoryStore); ok {
-			store.WriteStatus.Store(wh.path, err.Error())
+			store.WriteStatus.Store(filepath.Dir(wh.path), err.Error())
 		}
 		return -fuse.EIO
 	}
@@ -701,7 +701,7 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		if delta != 0 {
 			store.ShiftOrigins(node.Origin.FilePath, node.Origin.EndByte, delta)
 		}
-		store.WriteStatus.Store(wh.path, "ok")
+		store.WriteStatus.Store(filepath.Dir(wh.path), "ok")
 	}
 
 	// 4. Run goimports (failure-tolerant — if agent wrote broken code,
