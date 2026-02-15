@@ -251,6 +251,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 			return []os.FileInfo{
 				&staticFileInfo{name: "last-write-status", mode: 0o444, modTime: fs.mountTime},
 				&staticFileInfo{name: "ast-errors", mode: 0o444, modTime: fs.mountTime},
+				&staticFileInfo{name: "lint", mode: 0o444, modTime: fs.mountTime},
 			}, nil
 		}
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
@@ -459,6 +460,12 @@ func (fs *GraphFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 			return []byte("no errors\n"), true
 		}
 		return []byte(msg + "\n"), true
+	case "lint":
+		val, ok := fs.diagStatus.Load(parentDir + "/lint")
+		if !ok {
+			return []byte("clean\n"), true
+		}
+		return []byte(val.(string)), true
 	default:
 		return nil, false
 	}

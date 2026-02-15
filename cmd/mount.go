@@ -19,6 +19,7 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lattice"
+	"github.com/agentic-research/mache/internal/linter"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -407,6 +408,20 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 
 			// Clear draft on success
 			node.DraftData = nil
+
+			// Linting (Warning only)
+			// TODO: Infer language from file extension
+			if strings.HasSuffix(origin.FilePath, ".go") {
+				if diags, err := linter.Lint(content, "go"); err == nil && len(diags) > 0 {
+					var sb strings.Builder
+					for _, d := range diags {
+						sb.WriteString(d.String() + "\n")
+					}
+					store.WriteStatus.Store(filepath.Dir(nodeID)+"/lint", sb.String())
+				} else {
+					store.WriteStatus.Delete(filepath.Dir(nodeID) + "/lint")
+				}
+			}
 
 			// 2. Shift sibling origins immediately (before re-ingest)
 			if isMemStore {
