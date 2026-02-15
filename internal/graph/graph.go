@@ -189,13 +189,31 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 // DeleteFileNodes removes all nodes that originated from the given source file.
 // Uses the roaring bitmap index for O(k) lookup instead of O(N) full scan.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteFileNodes(filePath)
+}
+
+// ReplaceFileNodes atomically replaces all nodes from a file with a new set.
+// This prevents race conditions where files disappear during re-ingestion.
+func (s *MemoryStore) ReplaceFileNodes(filePath string, newNodes []*Node) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.deleteFileNodes(filePath)
+
+	for _, n := range newNodes {
+		s.nodes[n.ID] = n
+		s.indexNode(n)
+	}
+}
+
+// deleteFileNodes performs deletion with lock already held.
+func (s *MemoryStore) deleteFileNodes(filePath string) {
 	// Canonicalize path to match Ingest behavior
 	if realPath, err := filepath.EvalSymlinks(filePath); err == nil {
 		filePath = realPath
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// 1. Collect IDs to delete via bitmap index
 	bm, hasBitmap := s.fileToNodes[filePath]

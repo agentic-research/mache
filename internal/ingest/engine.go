@@ -193,11 +193,26 @@ func (e *Engine) ingestJSON(path string) error {
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", "", modTime); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", modTime, e.Store); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
 	return nil
+}
+
+// bufferingTarget buffers file nodes for atomic replacement while passing
+// directory updates through immediately.
+type bufferingTarget struct {
+	IngestionTarget
+	bufferedNodes []*graph.Node
+}
+
+func (b *bufferingTarget) AddNode(n *graph.Node) {
+	if n.Mode.IsDir() {
+		b.IngestionTarget.AddNode(n)
+	} else {
+		b.bufferedNodes = append(b.bufferedNodes, n)
+	}
 }
 
 func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
@@ -217,39 +232,50 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 	// Use time.Now() to force NFS cache invalidation on updates
 	modTime := time.Now()
 
-	// Clear old nodes from this source file
-	e.Store.DeleteFileNodes(realPath)
+	// Use buffering target for atomic swap
+	// Note: We do NOT call DeleteFileNodes here anymore.
+	// ReplaceFileNodes will handle deletion + addition atomically.
+	bt := &bufferingTarget{IngestionTarget: e.Store}
 
 	parser := sitter.NewParser()
 	parser.SetLanguage(lang)
 	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	// Fail-Open: If parsing fails or yields no nodes, create a fallback RAW node
-	// so the user can still access/fix the file.
-	// Note: Tree-sitter often returns a tree with error nodes rather than a Go error.
-	// But we proceed to traverse it. If traversal yields 0 nodes, we fallback below.
 	if err != nil {
 		log.Printf("ingest: parse failed for %s (using raw fallback): %v", path, err)
 	}
 
 	if err == nil {
 		walker := NewSitterWalker()
-		root := SitterRoot{Node: tree.RootNode(), Source: content, Lang: lang}
+		root := SitterRoot{Node: tree.RootNode(), FileRoot: tree.RootNode(), Source: content, Lang: lang}
 		sourceFile := filepath.Base(path)
 		e.sourceFile = realPath
 		defer func() { e.sourceFile = "" }()
+
+		// Use bt (buffering target) instead of e.Store inside loop
+		// We need to temporarily swap e.Store or pass bt?
+		// processNode uses e.Store directly.
+		// I should change processNode to take a store argument?
+		// Or simpler: e.Store is an interface. I can swap it on the Engine struct temporarily.
+		// But Engine is shared? No, Engine is created per mount?
+		// Engine is created in cmd/mount.go.
+		// If concurrent ingests happen on same Engine?
+		// Ingest is called by Release (write-back).
+		// If multiple write-backs happen, they race on e.Store swap.
+		// Engine struct shouldn't be mutated if shared.
+		// BUT processNode reads e.Store.
+
+		// Solution: Pass store to processNode.
+		// I will update processNode signature.
+
 		for _, nodeSchema := range e.Schema.Nodes {
-			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime); err != nil {
+			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime, bt); err != nil {
 				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 			}
 		}
 	}
 
 	if err != nil {
-		// Fallback: Create a "raw" node at the root (or derived name)
-		// We name it "raw_<filename>" to avoid collision with potential future valid parsing?
-		// Or better: mimic the structure of a raw file ingest?
-		// Just exposing it as "broken_<filename>" at the top level is safest.
-
+		// Fallback logic
 		baseName := filepath.Base(path)
 		fallbackID := "BROKEN_" + baseName
 
@@ -264,9 +290,21 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 				EndByte:   uint32(len(content)),
 			},
 		}
-		e.Store.AddNode(fileNode)
+		bt.AddNode(fileNode)
 		e.Store.AddRoot(fileNode)
 	}
+
+	// atomic swap
+	if ms, ok := e.Store.(*graph.MemoryStore); ok {
+		ms.ReplaceFileNodes(realPath, bt.bufferedNodes)
+	} else {
+		// Fallback for non-MemoryStore (shouldn't happen in write-back)
+		e.Store.DeleteFileNodes(realPath)
+		for _, n := range bt.bufferedNodes {
+			e.Store.AddNode(n)
+		}
+	}
+
 	return nil
 }
 
@@ -568,7 +606,7 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string, modTime time.Time) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string, modTime time.Time, store IngestionTarget) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -614,7 +652,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// Create/Update Node — preserve existing children when merging
 		// multiple files into the same node (e.g. multiple .go files in one package).
 		var existingChildren []string
-		if existing, err := e.Store.GetNode(id); err == nil {
+		if existing, err := store.GetNode(id); err == nil {
 			existingChildren = existing.Children
 		}
 
@@ -624,14 +662,14 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			ModTime:  modTime,            // Propagate source file time
 			Children: existingChildren,
 		}
-		e.Store.AddNode(node)
+		store.AddNode(node)
 
 		// Link to parent
 		if parentPath == "" {
-			e.Store.AddRoot(node)
+			store.AddRoot(node)
 		} else {
 			parentId := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
-			parent, err := e.Store.GetNode(parentId)
+			parent, err := store.GetNode(parentId)
 			if err == nil {
 				exists := false
 				for _, c := range parent.Children {
@@ -642,7 +680,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				}
 				if !exists {
 					parent.Children = append(parent.Children, id)
-					e.Store.AddNode(parent)
+					store.AddNode(parent)
 				}
 			}
 		}
@@ -651,7 +689,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, modTime); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, modTime, store); err != nil {
 					return err
 				}
 			}
@@ -695,7 +733,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Re-fetch current children (updated by recursion)
 		var currentChildren []string
-		if current, err := e.Store.GetNode(id); err == nil {
+		if current, err := store.GetNode(id); err == nil {
 			currentChildren = current.Children
 		}
 
@@ -706,7 +744,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Children: currentChildren,
 			Context:  contextData,
 		}
-		e.Store.AddNode(node)
+		store.AddNode(node)
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
@@ -784,13 +822,13 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				}
 			}
 
-			e.Store.AddNode(fileNode)
+			store.AddNode(fileNode)
 			node.Children = append(node.Children, fileId)
-			e.Store.AddNode(node)
+			store.AddNode(node)
 
 			// Update Index
 			for _, token := range calls {
-				if err := e.Store.AddRef(token, fileId); err != nil {
+				if err := store.AddRef(token, fileId); err != nil {
 					return fmt.Errorf("add ref %s -> %s: %w", token, fileId, err)
 				}
 			}
