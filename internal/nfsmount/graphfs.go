@@ -77,6 +77,11 @@ func (fs *GraphFS) Create(filename string) (billy.File, error) {
 	}
 	filename = cleanPath(filename)
 
+	// Block AppleDouble / metadata files
+	if strings.HasPrefix(filepath.Base(filename), "._") {
+		return nil, &os.PathError{Op: "create", Path: filename, Err: os.ErrPermission}
+	}
+
 	node, err := fs.graph.GetNode(filename)
 	if err != nil {
 		return nil, &os.PathError{Op: "create", Path: filename, Err: os.ErrNotExist}
