@@ -77,9 +77,9 @@ func (fs *GraphFS) Create(filename string) (billy.File, error) {
 	}
 	filename = cleanPath(filename)
 
-	// Block AppleDouble / metadata files
+	// Block AppleDouble / metadata files (silently succeed to avoid log spam)
 	if strings.HasPrefix(filepath.Base(filename), "._") {
-		return nil, &os.PathError{Op: "create", Path: filename, Err: os.ErrPermission}
+		return &bytesFile{name: filename, data: nil}, nil
 	}
 
 	node, err := fs.graph.GetNode(filename)
@@ -348,7 +348,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			return &staticFileInfo{
 				name:    "_diagnostics",
 				mode:    os.ModeDir | 0o555,
-				modTime: fs.mountTime,
+				modTime: time.Now(), // Force refresh
 			}, nil
 		}
 		content, ok := fs.diagContent(parentDir, fileName)
@@ -359,7 +359,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			name:    fileName,
 			size:    int64(len(content)),
 			mode:    0o444,
-			modTime: fs.mountTime,
+			modTime: time.Now(), // Force refresh
 		}, nil
 	}
 
