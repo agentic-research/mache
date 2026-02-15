@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"io"
 	"sync"
 )
 
@@ -20,8 +21,9 @@ func NewHotSwapGraph(initial Graph) *HotSwapGraph {
 func (h *HotSwapGraph) Swap(newGraph Graph) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// Optional: Close old graph if possible
-	// if closer, ok := h.current.(io.Closer); ok { closer.Close() }
+	if closer, ok := h.current.(io.Closer); ok {
+		_ = closer.Close()
+	}
 	h.current = newGraph
 }
 
