@@ -158,7 +158,17 @@ func (fs *GraphFS) openWritable(filename string, flag int) (billy.File, error) {
 
 	// Pre-fill buffer with existing content (for O_RDWR / partial writes)
 	var buf []byte
-	if flag&os.O_TRUNC == 0 {
+
+	// Implicit truncation for 'source' files:
+	// Agents/Editors usually mean "replace" when writing to source.
+	// If it's a 'source' file and NOT append mode, we treat it as O_TRUNC
+	// even if the client didn't send it. This avoids "old tail" garbage.
+	shouldTruncate := (flag&os.O_TRUNC != 0)
+	if filepath.Base(filename) == "source" && (flag&os.O_APPEND == 0) {
+		shouldTruncate = true
+	}
+
+	if !shouldTruncate {
 		size := node.ContentSize()
 		if size > 0 {
 			buf = make([]byte, size)

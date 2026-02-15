@@ -250,7 +250,13 @@ func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 
 		// Pre-fill buffer with existing content (for O_RDWR / partial writes)
 		var buf []byte
-		if flags&syscall.O_TRUNC == 0 {
+
+		shouldTruncate := (flags&syscall.O_TRUNC != 0)
+		if filepath.Base(path) == "source" && (flags&syscall.O_APPEND == 0) {
+			shouldTruncate = true
+		}
+
+		if !shouldTruncate {
 			size := node.ContentSize()
 			if size > 0 {
 				buf = make([]byte, size)
