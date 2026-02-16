@@ -363,11 +363,18 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 		}
 	}
 
-	// Extract initial DB from arena
-	dbPath, err := graph.ExtractActiveDB(arenaPath)
-	if err != nil {
-		return fmt.Errorf("extract initial db from %s: %w", arenaPath, err)
+	// Wait for valid arena header
+	fmt.Println("Waiting for valid arena header...")
+	var dbPath string
+	for {
+		dbPath, err = graph.ExtractActiveDB(arenaPath)
+		if err == nil {
+			break
+		}
+		// Retry until header is valid (written by Leyline atomic swap)
+		time.Sleep(500 * time.Millisecond)
 	}
+	fmt.Println("Arena header valid. Initializing graph.")
 
 	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, ingest.RenderTemplate)
 	if err != nil {

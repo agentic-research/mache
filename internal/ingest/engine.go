@@ -116,15 +116,23 @@ func (e *Engine) Ingest(path string) error {
 				return err
 			}
 			if d.IsDir() {
-				// Skip hidden directories (.git, .mache, etc.)
+				// Skip hidden directories (.git, .mache, etc.) and build artifacts
 				base := filepath.Base(p)
-				if p != realPath && len(base) > 0 && base[0] == '.' {
-					return filepath.SkipDir
+				if p != realPath {
+					if len(base) > 0 && base[0] == '.' {
+						return filepath.SkipDir
+					}
+					if base == "target" || base == "node_modules" || base == "dist" || base == "build" {
+						return filepath.SkipDir
+					}
 				}
 				return nil
 			}
 			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
+			if ext == ".o" || ext == ".a" {
+				return nil // Skip binary artifacts
+			}
 			shouldParse := false
 			if treeSitter {
 				switch ext {
