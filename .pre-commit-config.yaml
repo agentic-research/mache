@@ -24,14 +24,14 @@ repos:
 
       - id: go-vet
         name: go vet
-        entry: go vet ./...
+        entry: bash -c 'if [ "$(uname)" = "Darwin" ] && [ -d /Library/Frameworks/fuse_t.framework ]; then export CGO_CFLAGS="-I/Library/Frameworks/fuse_t.framework/Versions/Current/Headers" CGO_LDFLAGS="-F/Library/Frameworks -framework fuse_t -Wl,-rpath,/Library/Frameworks"; fi && go vet ./...'
         language: system
         files: \.go$
         pass_filenames: false
 
       - id: golangci-lint
         name: golangci-lint
-        entry: golangci-lint run --fix
+        entry: bash -c 'if [ "$(uname)" = "Darwin" ] && [ -d /Library/Frameworks/fuse_t.framework ]; then export CGO_CFLAGS="-I/Library/Frameworks/fuse_t.framework/Versions/Current/Headers" CGO_LDFLAGS="-F/Library/Frameworks -framework fuse_t -Wl,-rpath,/Library/Frameworks"; fi && golangci-lint run --fix'
         language: system
         files: \.go$
         pass_filenames: false

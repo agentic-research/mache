@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -65,6 +66,24 @@ type recordResult struct {
 type parentLink struct {
 	childID  string
 	parentID string
+}
+
+// isBinaryFile returns true if the file appears to contain binary content.
+// Uses the same heuristic as git: if the first 512 bytes contain a null byte,
+// the file is binary. SQLite files (.db) are handled before this is called.
+func isBinaryFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false
+	}
+	return bytes.ContainsRune(buf[:n], 0)
 }
 
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
@@ -149,6 +168,10 @@ func (e *Engine) Ingest(path string) error {
 			if shouldParse {
 				return e.ingestFile(p)
 			}
+			// Skip binary files (executables, object files, images, etc.)
+			if isBinaryFile(p) {
+				return nil
+			}
 			return e.ingestRawFile(p)
 		})
 	}
@@ -183,6 +206,9 @@ func (e *Engine) ingestFile(path string) error {
 	case ".rs":
 		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust")
 	default:
+		if isBinaryFile(path) {
+			return nil
+		}
 		return e.ingestRawFile(path)
 	}
 }
@@ -286,6 +312,15 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 
 		for _, nodeSchema := range e.Schema.Nodes {
 			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime, bt); err != nil {
+				// Tree-sitter query compilation fails when a schema selector
+				// uses node types from a different language (e.g. Go's
+				// "function_declaration" applied to a Python file). This is
+				// expected when FCA infers a schema from mixed-language dirs.
+				// Skip the file instead of aborting the entire ingestion.
+				if strings.Contains(err.Error(), "invalid query") {
+					log.Printf("ingest: skipping %s (schema selector incompatible with %s grammar)", path, langName)
+					return nil
+				}
 				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 			}
 		}

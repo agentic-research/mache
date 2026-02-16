@@ -59,7 +59,7 @@ func ExtractActiveDB(arenaPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -84,7 +84,7 @@ func ExtractActiveDB(arenaPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer tmp.Close()
+	defer func() { _ = tmp.Close() }()
 
 	// Copy efficiently using io.CopyN
 	if _, err := f.Seek(offset, 0); err != nil {

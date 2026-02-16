@@ -163,13 +163,18 @@ var rootCmd = &cobra.Command{
 							return err
 						}
 						if info.IsDir() {
-							if strings.HasPrefix(filepath.Base(path), ".") && path != dataPath {
-								return filepath.SkipDir // Skip hidden dirs like .git
+							base := filepath.Base(path)
+							if (strings.HasPrefix(base, ".") && path != dataPath) || base == "target" || base == "node_modules" || base == "dist" || base == "build" {
+								return filepath.SkipDir
 							}
 							return nil
 						}
 
 						ext := filepath.Ext(path)
+						if ext == ".o" || ext == ".a" {
+							return nil // Skip binary artifacts
+						}
+
 						var lang *sitter.Language
 
 						switch ext {
@@ -404,7 +409,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, ingest.RenderTemplate)
 				if err != nil {
 					fmt.Printf("Error opening new graph %s: %v\n", newDBPath, err)
-					os.Remove(newDBPath)
+					_ = os.Remove(newDBPath)
 					continue
 				}
 
