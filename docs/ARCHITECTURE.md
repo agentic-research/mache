@@ -90,7 +90,7 @@ Key types:
 - **`OriginProvider`** (`interfaces.go`) — Optional interface on `Match` to expose byte ranges from tree-sitter captures.
 - **`Splice`** (`writeback/splice.go`) — Pure function: atomically replaces a byte range in a source file (temp file + rename).
 - **`Validate`** (`writeback/validate.go`) — Tree-sitter syntax check before touching source.
-- **`FormatGoBuffer`** (`writeback/format.go`) — In-process gofumpt (no external CLI, no offset drift).
+- **`FormatBuffer`** (`writeback/format.go`) — In-process formatting: gofumpt for Go, hclwrite for HCL/Terraform (no external CLI, no offset drift).
 - **`writeHandle`** / **`writeFile`** — Per-open-file buffer. On `Release`/`Close`: validate → format → splice → surgical node update → `ShiftOrigins` for siblings.
 
 ### Draft Mode
@@ -149,7 +149,7 @@ readlink /funcs/Bar/callers/funcs_Foo_source
 | FUSE backend | `internal/fs/root.go` | `MacheFS`, `writeHandle`, `callers/`, `.query/` |
 | Source splicing | `internal/writeback/splice.go` | `Splice` |
 | Validation | `internal/writeback/validate.go` | `Validate` |
-| Formatting | `internal/writeback/format.go` | `FormatGoBuffer` |
+| Formatting | `internal/writeback/format.go` | `FormatBuffer` (Go: gofumpt, HCL: hclwrite) |
 | Cross-ref vtab | `internal/refsvtab/refs_module.go` | `mache_refs` virtual table |
 | Control block | `internal/control/` | HotSwapGraph, live schema reload |
 | Go schema | `examples/go-schema.json` | functions, methods, types, constants, variables, imports |

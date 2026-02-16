@@ -430,8 +430,8 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				return nil
 			}
 
-			// 2. Format in-process (gofumpt on buffer, not file — no drift)
-			formatted := writeback.FormatGoBuffer(content, origin.FilePath)
+			// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform)
+			formatted := writeback.FormatBuffer(content, origin.FilePath)
 
 			// Linting (Warning only)
 			if strings.HasSuffix(origin.FilePath, ".go") {
