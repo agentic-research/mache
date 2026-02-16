@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Mache Arena — 5-level agent benchmark
+# Mache Arena — 6-level agent benchmark
 # Tests whether an LLM can operate on code through a filesystem abstraction.
 # The code is intentionally custom/weird so memorized patterns don't help.
 #
@@ -215,9 +215,22 @@ Each directory is a code construct (function, type, method). Inside each:
     \$ ls $MNT/PackReading/
     source          # The full source code of this construct
     context         # (Read-only) Imports, types, and globals visible to this scope
+    callers/        # (Read-only) Functions that reference this construct
     \$ ls $MNT/PackReading/_diagnostics/
     last-write-status # Write feedback (check after failed writes)
     lint              # (Read-only) Static analysis warnings
+
+**Reverse navigation** — the \`callers/\` directory is a virtual cross-reference
+index. It lists every construct that references the parent function/type:
+
+    \$ ls $MNT/UnpackReading/callers/
+    functions_Accumulate_source    functions_Threshold_source
+
+    \$ cat $MNT/UnpackReading/callers/functions_Accumulate_source
+    # → shows the full source of Accumulate (a caller of UnpackReading)
+
+\`callers/\` is **self-gating** — it only appears when a construct actually has
+callers. If a function is never referenced, no \`callers/\` directory is shown.
 
 **To edit code**: overwrite the \`source\` file with the COMPLETE new
 implementation. The engine splices your changes back into the real .go files.
@@ -264,6 +277,17 @@ Intentionally write BROKEN syntax to any \`source\` file. Observe what
 happens (the write should fail). Then read \`_diagnostics/last-write-status\`
 to see the error. Document the full round-trip in your notes.
 
+### Level 6: Reverse Call-Chain Navigation
+Without reading every construct, use the \`callers/\` virtual directory to
+answer: **which functions depend on \`UnpackReading\`?**
+
+1. List \`$MNT/UnpackReading/callers/\` to discover all callers.
+2. Read each caller's source **through the callers/ directory** (e.g.
+   \`cat $MNT/UnpackReading/callers/<entry>\`), not by navigating to the
+   caller's own directory.
+3. Then find a construct that has **zero callers** (no \`callers/\` directory).
+4. Document the full dependency chain and the zero-caller construct in your notes.
+
 ## Scoring
 
 After you finish, append a self-assessment to \`$SANDBOX/agent-notes.md\`:
@@ -283,7 +307,7 @@ verify() {
     echo ""
     echo -e "${BLUE}═══ SCOREBOARD ═══${NC}"
     local score=0
-    local total=5
+    local total=6
 
     # Level 1: agent-notes.md exists and mentions the codebase
     echo -n "Level 1 (Orientation): "
@@ -338,6 +362,18 @@ verify() {
         echo -e "${YELLOW}SKIP${NC} — no adversarial write/draft documented"
     fi
 
+    # Level 6: Notes mention callers + UnpackReading dependency chain + a zero-caller construct
+    echo -n "Level 6 (Callers):     "
+    if [ -f "$SANDBOX/agent-notes.md" ] && \
+       grep -qi "caller" "$SANDBOX/agent-notes.md" 2>/dev/null && \
+       grep -qi "UnpackReading\|Accumulate\|Threshold" "$SANDBOX/agent-notes.md" 2>/dev/null && \
+       grep -qi "zero.caller\|no.caller\|no callers\|0 caller\|not.called\|never.called\|leaf" "$SANDBOX/agent-notes.md" 2>/dev/null; then
+        echo -e "${GREEN}PASS${NC}"
+        score=$((score + 1))
+    else
+        echo -e "${YELLOW}SKIP${NC} — no callers/ navigation documented"
+    fi
+
     echo ""
     echo -e "${BLUE}Score: $score / $total${NC}"
 
@@ -354,6 +390,7 @@ Date: $(date -Iseconds)
 | 3 | Needle | $(grep -qi "empty\|nil\|edge" "$SANDBOX/agent-notes.md" 2>/dev/null && echo PASS || echo SKIP) |
 | 4 | Refactor | $(grep -q '%.*256\|& 0xFF' "$REPO/signal_codec.go" 2>/dev/null && echo PASS || echo FAIL) |
 | 5 | Adversarial | $(grep -qi "diagnostic\|EIO\|reject" "$SANDBOX/agent-notes.md" 2>/dev/null && echo PASS || echo SKIP) |
+| 6 | Callers | $(grep -qi "caller" "$SANDBOX/agent-notes.md" 2>/dev/null && grep -qi "zero.caller\|no.caller\|no callers\|not.called\|never.called\|leaf" "$SANDBOX/agent-notes.md" 2>/dev/null && echo PASS || echo SKIP) |
 
 **Total: $score / $total**
 EOF
