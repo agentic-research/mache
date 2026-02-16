@@ -379,11 +379,10 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	// Start Watcher
 	go func() {
 		lastGen := gen
-		firstSwap := true
 		for {
 			time.Sleep(100 * time.Millisecond)
 			currentGen := ctrl.GetGeneration()
-			if currentGen > lastGen || (firstSwap && currentGen == lastGen) {
+			if currentGen > lastGen {
 				newPath := ctrl.GetArenaPath()
 				fmt.Printf("Hot Swap Detected: Gen %d -> %d (%s)\n", lastGen, currentGen, newPath)
 
@@ -405,7 +404,6 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 				// Atomic Swap
 				hotSwap.Swap(newGraph)
 				lastGen = currentGen
-				firstSwap = false
 			}
 		}
 	}()
