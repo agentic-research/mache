@@ -26,28 +26,29 @@ Integration tests require real SQLite databases and are gated behind env vars (`
 
 ## Architecture
 
-Mache projects structured data (JSON, SQLite, source code) as a read-only FUSE filesystem driven by declarative JSON schemas.
+Mache projects structured data (JSON, SQLite, source code) as a filesystem driven by declarative JSON schemas.
 
 ### Two Data Paths
 
 ```
-.db files  →  SQLiteGraph (zero-copy, lazy scan, direct SQL)  →  MacheFS (FUSE)
-other files →  Engine (walkers + loaders)  →  MemoryStore       →  MacheFS (FUSE)
+.db files  →  SQLiteGraph (zero-copy, lazy scan, direct SQL)  →  GraphFS (NFS) or MacheFS (FUSE)
+other files →  Engine (walkers + loaders)  →  MemoryStore       →  GraphFS (NFS) or MacheFS (FUSE)
 ```
 
-The mount wiring in `cmd/mount.go` selects the path based on file extension.
+The mount wiring in `cmd/mount.go` selects the data path based on file extension and the backend based on `--backend` flag (default: NFS on macOS, FUSE on Linux).
 
 ### Core Abstractions
 
 | Concept | Location | Role |
 |---------|----------|------|
 | Schema types | `api/schema.go` | `Topology` → `Node` (dirs) → `Leaf` (files) — declarative tree definition |
-| Graph interface | `internal/graph/graph.go` | `GetNode`, `ListChildren`, `ReadContent` — backend-agnostic |
+| Graph interface | `internal/graph/graph.go` | `GetNode`, `ListChildren`, `ReadContent`, `GetCallers` — backend-agnostic |
 | MemoryStore | `internal/graph/graph.go` | Map-based graph with RWMutex + FIFO content cache (1024 entries) |
 | SQLiteGraph | `internal/graph/sqlite_graph.go` | Direct SQL backend: `compileLevels()` builds schema tree, `scanRoot()` streams all records using `json_extract()` in SQL, content resolved on-demand via PK lookup + template render |
 | Engine | `internal/ingest/engine.go` | Dispatches by extension (.db/.json/.go/.py), recursive schema traversal, dedup via `dedupSuffix()` |
 | Walkers | `internal/ingest/json_walker.go`, `sitter_walker.go` | JSONPath (ojg) and tree-sitter AST query — both implement `Walker`/`Match` interfaces from `interfaces.go` |
-| MacheFS | `internal/fs/root.go` | FUSE impl: handle-based readdir (auto-mode for fuse-t), FNV-1a inodes, optional write-back |
+| GraphFS | `internal/nfsmount/graphfs.go` | NFS backend via go-nfs/billy, `callers/` virtual dir, write-back support |
+| MacheFS | `internal/fs/root.go` | FUSE backend: handle-based readdir (auto-mode for fuse-t), `callers/` symlinks, `.query/` magic dir |
 | Splice | `internal/writeback/splice.go` | Atomic byte-range replacement in source files for write-back |
 
 ### Key Design Details
@@ -55,8 +56,10 @@ The mount wiring in `cmd/mount.go` selects the path based on file extension.
 - **SQLiteGraph scan**: Single-pass streaming scan pushes field extraction into SQLite via `json_extract()`, builds directory tree (paths only) in `sync.Map`. Content is never bulk-loaded — resolved on-demand per file read.
 - **Template rendering**: `RenderTemplate()` in `engine.go` supports custom funcs: `json` (marshal), `first` (first element), `slice` (substring).
 - **ContentRef**: Large content (>4KB) uses lazy `ContentRef` with DBPath/RecordID/Template instead of inline bytes.
-- **Write-back pipeline** (on FUSE `Release`): splice source file → run `goimports -w` → re-ingest file to update graph.
-- **fuse-t on macOS**: Translates FUSE→NFS. Extended cache timeouts (300s) are critical for performance. Auto-mode readdir required (all results in first pass).
+- **Write-back pipeline**: validate (tree-sitter) → format (gofumpt in-process) → splice → surgical node update + `ShiftOrigins`. No re-ingest.
+- **Draft mode**: Invalid writes save as drafts; node path stays stable. Errors via `_diagnostics/ast-errors`.
+- **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `.query/` (SQL → symlinks), `callers/` (cross-refs, self-gating).
+- **NFS on macOS**: Default backend via `go-nfs`. Replaces fuse-t's NFS translation layer for full control.
 
 ### Example Schemas
 

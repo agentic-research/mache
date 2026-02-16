@@ -138,6 +138,40 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 		}
 	}
 
+	// Virtual: callers/ entries
+	if isCallersPath(filename) {
+		parentDir, entryName := parseCallersPath(filename)
+		if entryName == "" {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("is a directory")}
+		}
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		token := filepath.Base(parentDir)
+		callers, err := fs.graph.GetCallers(token)
+		if err != nil || len(callers) == 0 {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		for _, caller := range callers {
+			flatName := strings.ReplaceAll(caller.ID, "/", "_")
+			if flatName == entryName {
+				callerNode, err := fs.graph.GetNode(caller.ID)
+				if err != nil {
+					return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+				}
+				return &graphFile{
+					id:    "/" + caller.ID,
+					size:  callerNode.ContentSize(),
+					graph: fs.graph,
+				}, nil
+			}
+		}
+		return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+	}
+
 	node, err := fs.graph.GetNode(filename)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
@@ -257,6 +291,44 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
 	}
 
+	// Virtual: callers/ directory listing
+	if isCallersPath(path) {
+		parentDir, entryName := parseCallersPath(path)
+		if entryName != "" {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
+		}
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		token := filepath.Base(parentDir)
+		callers, err := fs.graph.GetCallers(token)
+		if err != nil || len(callers) == 0 {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		infos := make([]os.FileInfo, 0, len(callers))
+		for _, caller := range callers {
+			flatName := strings.ReplaceAll(caller.ID, "/", "_")
+			callerNode, err := fs.graph.GetNode(caller.ID)
+			if err != nil {
+				continue
+			}
+			size := callerNode.ContentSize()
+			infos = append(infos, &staticFileInfo{
+				name:    flatName,
+				size:    size,
+				mode:    0o444,
+				modTime: fs.mountTime,
+			})
+		}
+		if len(infos) == 0 {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		return infos, nil
+	}
+
 	node, err := fs.resolveNode(path)
 	if err != nil && path != "/" {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
@@ -270,7 +342,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
 	}
 
-	infos := make([]os.FileInfo, 0, len(children)+2)
+	infos := make([]os.FileInfo, 0, len(children)+3)
 
 	// Virtual files at root
 	if path == "/" {
@@ -299,6 +371,18 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 			mode:    0o444,
 			modTime: fs.mountTime,
 		})
+	}
+
+	// Add callers/ virtual dir if token has callers
+	if path != "/" {
+		token := filepath.Base(path)
+		if callers, err := fs.graph.GetCallers(token); err == nil && len(callers) > 0 {
+			infos = append(infos, &staticFileInfo{
+				name:    "callers",
+				mode:    os.ModeDir | 0o555,
+				modTime: fs.mountTime,
+			})
+		}
 	}
 
 	for _, childID := range children {
@@ -375,6 +459,45 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 				modTime: fs.mountTime,
 			}, nil
 		}
+	}
+
+	// Virtual: callers/
+	if isCallersPath(filename) {
+		parentDir, entryName := parseCallersPath(filename)
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+		}
+		token := filepath.Base(parentDir)
+		callers, err := fs.graph.GetCallers(token)
+		if err != nil || len(callers) == 0 {
+			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+		}
+		if entryName == "" {
+			return &staticFileInfo{
+				name:    "callers",
+				mode:    os.ModeDir | 0o555,
+				modTime: fs.mountTime,
+			}, nil
+		}
+		for _, caller := range callers {
+			flatName := strings.ReplaceAll(caller.ID, "/", "_")
+			if flatName == entryName {
+				callerNode, err := fs.graph.GetNode(caller.ID)
+				if err != nil {
+					return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+				}
+				return &staticFileInfo{
+					name:    entryName,
+					size:    callerNode.ContentSize(),
+					mode:    0o444,
+					modTime: fs.mountTime,
+				}, nil
+			}
+		}
+		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 	}
 
 	node, err := fs.resolveNode(filename)
@@ -469,6 +592,37 @@ func (fs *GraphFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// --- callers/ virtual directory ---
+
+// isCallersPath returns true if the path contains a /callers segment boundary.
+func isCallersPath(path string) bool {
+	return strings.HasSuffix(path, "/callers") || strings.Contains(path, "/callers/")
+}
+
+// parseCallersPath splits a callers path into (parentDir, entryName).
+// E.g. "/funcs/Foo/callers/funcs_Bar_source" → ("/funcs/Foo", "funcs_Bar_source")
+// Returns ("", "") if not a valid callers path.
+func parseCallersPath(path string) (parentDir, entryName string) {
+	idx := strings.Index(path, "/callers/")
+	if idx < 0 {
+		if strings.HasSuffix(path, "/callers") {
+			idx = len(path) - len("/callers")
+		} else {
+			return "", ""
+		}
+	}
+	parentDir = path[:idx]
+	if parentDir == "" {
+		parentDir = "/"
+	}
+	rest := path[idx+len("/callers"):]
+	if rest == "" || rest == "/" {
+		return parentDir, ""
+	}
+	entryName = strings.TrimPrefix(rest, "/")
+	return parentDir, entryName
 }
 
 // --- internals ---
