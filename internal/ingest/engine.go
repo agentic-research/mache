@@ -130,6 +130,15 @@ func (e *Engine) Ingest(path string) error {
 		// can produce confusing errors (e.g. S-expression as JSONPath).
 		treeSitter := schemaUsesTreeSitter(e.Schema)
 
+		// When using tree-sitter, create a _project_files root to hold
+		// non-AST files (configs, docs, etc.) so they're accessible but
+		// clearly separated from the structured AST view.
+		if treeSitter {
+			pfNode := &graph.Node{ID: "_project_files", Mode: os.ModeDir | 0o555}
+			e.Store.AddNode(pfNode)
+			e.Store.AddRoot(pfNode)
+		}
+
 		return filepath.Walk(realPath, func(p string, d os.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -171,6 +180,9 @@ func (e *Engine) Ingest(path string) error {
 			// Skip binary files (executables, object files, images, etc.)
 			if isBinaryFile(p) {
 				return nil
+			}
+			if treeSitter {
+				return e.ingestRawFileUnder(p, "_project_files")
 			}
 			return e.ingestRawFile(p)
 		})
@@ -316,10 +328,10 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 				// uses node types from a different language (e.g. Go's
 				// "function_declaration" applied to a Python file). This is
 				// expected when FCA infers a schema from mixed-language dirs.
-				// Skip the file instead of aborting the entire ingestion.
+				// Route to _project_files/ so the content is still accessible.
 				if strings.Contains(err.Error(), "invalid query") {
-					log.Printf("ingest: skipping %s (schema selector incompatible with %s grammar)", path, langName)
-					return nil
+					log.Printf("ingest: routing %s to _project_files/ (schema selector incompatible with %s grammar)", path, langName)
+					return e.ingestRawFileUnder(path, "_project_files")
 				}
 				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 			}
@@ -361,6 +373,10 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 }
 
 func (e *Engine) ingestRawFile(path string) error {
+	return e.ingestRawFileUnder(path, "")
+}
+
+func (e *Engine) ingestRawFileUnder(path, prefix string) error {
 	rel, err := filepath.Rel(e.RootPath, path)
 	if err != nil {
 		return err
@@ -368,14 +384,17 @@ func (e *Engine) ingestRawFile(path string) error {
 	rel = filepath.ToSlash(rel)
 	parts := strings.Split(rel, "/")
 
-	parentID := "" // Root starts empty
+	// When a prefix is set, the first parent is the prefix node (already created).
+	parentID := prefix
 
 	// 1. Create/Ensure intermediate directories
 	for i := 0; i < len(parts)-1; i++ {
 		part := parts[i]
-		currentID := part
+		var currentID string
 		if parentID != "" {
 			currentID = parentID + "/" + part
+		} else {
+			currentID = part
 		}
 
 		if _, err := e.Store.GetNode(currentID); err != nil {
@@ -411,7 +430,12 @@ func (e *Engine) ingestRawFile(path string) error {
 	}
 
 	// 2. Create file node
-	fileID := rel
+	var fileID string
+	if prefix != "" {
+		fileID = prefix + "/" + rel
+	} else {
+		fileID = rel
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err

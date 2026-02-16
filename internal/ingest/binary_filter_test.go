@@ -93,9 +93,14 @@ func TestEngine_Ingest_SkipsBinaryFiles(t *testing.T) {
 	_, err := store.GetNode("main/functions/Hello/source")
 	require.NoError(t, err, "Go function Hello() should be ingested")
 
-	// Text file was ingested as raw
-	_, err = store.GetNode("notes.txt")
-	require.NoError(t, err, "text file should be ingested as raw")
+	// Text file was ingested as raw under _project_files/
+	_, err = store.GetNode("_project_files/notes.txt")
+	require.NoError(t, err, "text file should be ingested under _project_files/")
+
+	// _project_files root node exists
+	pfNode, err := store.GetNode("_project_files")
+	require.NoError(t, err, "_project_files root should exist")
+	assert.True(t, pfNode.Mode.IsDir(), "_project_files should be a directory")
 
 	// Binary files should NOT be ingested
 	_, err = store.GetNode("mybinary")
@@ -155,6 +160,7 @@ func TestEngine_Ingest_MixedLanguages_NoError(t *testing.T) {
 	// FCA may infer a Go-specific schema (with Go tree-sitter selectors).
 	// When ingestion encounters non-Go source files (.py, .js, .yaml),
 	// the Go selector should be gracefully skipped, not crash.
+	// Language-mismatched files should appear under _project_files/.
 	schema := loadGoSchema(t)
 
 	tmpDir := t.TempDir()
@@ -189,4 +195,74 @@ func TestEngine_Ingest_MixedLanguages_NoError(t *testing.T) {
 	// Go file was ingested correctly
 	_, err = store.GetNode("main/functions/Hello/source")
 	require.NoError(t, err, "Go function Hello() should be ingested")
+
+	// Language-mismatched files routed to _project_files/
+	pyNode, err := store.GetNode("_project_files/helper.py")
+	require.NoError(t, err, "Python file should appear under _project_files/")
+	assert.Equal(t, "def greet():\n    print('hi')\n", string(pyNode.Data))
+
+	jsNode, err := store.GetNode("_project_files/util.js")
+	require.NoError(t, err, "JS file should appear under _project_files/")
+	assert.Equal(t, "function add(a, b) { return a + b; }\n", string(jsNode.Data))
+
+	yamlNode, err := store.GetNode("_project_files/config.yaml")
+	require.NoError(t, err, "YAML file should appear under _project_files/")
+	assert.Equal(t, "key: value\n", string(yamlNode.Data))
+}
+
+func TestEngine_Ingest_ProjectFilesHierarchy(t *testing.T) {
+	// Verify nested raw files preserve directory structure under _project_files/.
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+
+	// Go file at root — parsed via tree-sitter
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "main.go"),
+		[]byte("package main\n\nfunc Run() {}\n"), 0o644))
+
+	// Nested non-AST files
+	docsDir := filepath.Join(tmpDir, "docs")
+	require.NoError(t, os.MkdirAll(docsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(docsDir, "manual.md"),
+		[]byte("# Manual\n"), 0o644))
+
+	configDir := filepath.Join(tmpDir, "configs", "prod")
+	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(configDir, "settings.toml"),
+		[]byte("[server]\nport = 8080\n"), 0o644))
+
+	// Root-level non-AST file
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "README.md"),
+		[]byte("# Hello\n"), 0o644))
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(tmpDir))
+
+	// _project_files root
+	pfNode, err := store.GetNode("_project_files")
+	require.NoError(t, err, "_project_files root should exist")
+	assert.True(t, pfNode.Mode.IsDir())
+
+	// Root-level file
+	readmeNode, err := store.GetNode("_project_files/README.md")
+	require.NoError(t, err, "README.md should be under _project_files/")
+	assert.Equal(t, "# Hello\n", string(readmeNode.Data))
+
+	// Nested directory structure preserved
+	_, err = store.GetNode("_project_files/docs")
+	require.NoError(t, err, "docs/ dir should exist under _project_files/")
+
+	manualNode, err := store.GetNode("_project_files/docs/manual.md")
+	require.NoError(t, err, "manual.md should preserve nested path")
+	assert.Equal(t, "# Manual\n", string(manualNode.Data))
+
+	// Deeply nested
+	settingsNode, err := store.GetNode("_project_files/configs/prod/settings.toml")
+	require.NoError(t, err, "settings.toml should preserve deep nesting")
+	assert.Equal(t, "[server]\nport = 8080\n", string(settingsNode.Data))
 }

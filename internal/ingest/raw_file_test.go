@@ -47,23 +47,19 @@ func Main() {}
 	_, err = store.GetNode("main/functions/Main/source")
 	require.NoError(t, err, "Go file should be processed")
 
-	// Verify README.txt (Raw)
-	// ingestRawFile uses path relative to root.
-	// root is tmpDir.
-	// README.txt -> "README.txt"
-	readmeNode, err := store.GetNode("README.txt")
-	require.NoError(t, err, "README.txt should be ingested as raw")
+	// Verify README.txt (Raw) — routed to _project_files/ for tree-sitter schemas
+	readmeNode, err := store.GetNode("_project_files/README.txt")
+	require.NoError(t, err, "README.txt should be ingested under _project_files/")
 	assert.Equal(t, txtContent, readmeNode.Data)
 	assert.False(t, readmeNode.ModTime.IsZero(), "ModTime should be set")
 
-	// Verify docs/manual.md (Raw in Subdir)
-	// Should create "docs" dir and "docs/manual.md" file
-	docsNode, err := store.GetNode("docs")
-	require.NoError(t, err, "docs dir should be created")
+	// Verify docs/manual.md (Raw in Subdir) — nested under _project_files/
+	docsNode, err := store.GetNode("_project_files/docs")
+	require.NoError(t, err, "_project_files/docs dir should be created")
 	assert.True(t, docsNode.Mode.IsDir())
-	assert.Contains(t, docsNode.Children, "docs/manual.md")
+	assert.Contains(t, docsNode.Children, "_project_files/docs/manual.md")
 
-	manualNode, err := store.GetNode("docs/manual.md")
-	require.NoError(t, err, "manual.md should be ingested")
+	manualNode, err := store.GetNode("_project_files/docs/manual.md")
+	require.NoError(t, err, "manual.md should be ingested under _project_files/")
 	assert.Equal(t, mdContent, manualNode.Data)
 }
