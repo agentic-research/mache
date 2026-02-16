@@ -45,7 +45,7 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 | Graph interface | `internal/graph/graph.go` | `GetNode`, `ListChildren`, `ReadContent`, `GetCallers` — backend-agnostic |
 | MemoryStore | `internal/graph/graph.go` | Map-based graph with RWMutex + FIFO content cache (1024 entries) |
 | SQLiteGraph | `internal/graph/sqlite_graph.go` | Direct SQL backend: `compileLevels()` builds schema tree, `scanRoot()` streams all records using `json_extract()` in SQL, content resolved on-demand via PK lookup + template render |
-| Engine | `internal/ingest/engine.go` | Dispatches by extension (.db/.json/.go/.py), recursive schema traversal, dedup via `dedupSuffix()` |
+| Engine | `internal/ingest/engine.go` | Dispatches by extension (.db/.json/.go/.py/.js/.ts/.sql/.rs/.tf/.hcl/.yaml), recursive schema traversal, dedup via `dedupSuffix()` |
 | Walkers | `internal/ingest/json_walker.go`, `sitter_walker.go` | JSONPath (ojg) and tree-sitter AST query — both implement `Walker`/`Match` interfaces from `interfaces.go` |
 | GraphFS | `internal/nfsmount/graphfs.go` | NFS backend via go-nfs/billy, `callers/` virtual dir, write-back support |
 | MacheFS | `internal/fs/root.go` | FUSE backend: handle-based readdir (auto-mode for fuse-t), `callers/` symlinks, `.query/` magic dir |
@@ -56,7 +56,7 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 - **SQLiteGraph scan**: Single-pass streaming scan pushes field extraction into SQLite via `json_extract()`, builds directory tree (paths only) in `sync.Map`. Content is never bulk-loaded — resolved on-demand per file read.
 - **Template rendering**: `RenderTemplate()` in `engine.go` supports custom funcs: `json` (marshal), `first` (first element), `slice` (substring).
 - **ContentRef**: Large content (>4KB) uses lazy `ContentRef` with DBPath/RecordID/Template instead of inline bytes.
-- **Write-back pipeline**: validate (tree-sitter) → format (gofumpt in-process) → splice → surgical node update + `ShiftOrigins`. No re-ingest.
+- **Write-back pipeline**: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins`. No re-ingest.
 - **Draft mode**: Invalid writes save as drafts; node path stays stable. Errors via `_diagnostics/ast-errors`.
 - **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `.query/` (SQL → symlinks), `callers/` (cross-refs, self-gating).
 - **NFS on macOS**: Default backend via `go-nfs`. Replaces fuse-t's NFS translation layer for full control.

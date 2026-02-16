@@ -869,8 +869,8 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		return 0
 	}
 
-	// 2. Format in-process (gofumpt on the buffer, not the file)
-	formatted := writeback.FormatGoBuffer(wh.buf, node.Origin.FilePath)
+	// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform)
+	formatted := writeback.FormatBuffer(wh.buf, node.Origin.FilePath)
 
 	// 3. Splice formatted content into source file
 	oldLen := node.Origin.EndByte - node.Origin.StartByte

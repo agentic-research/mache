@@ -3,10 +3,10 @@
 ## Current State (as of Feb 2026)
 
 **What's landed:**
-- Schema-driven ingestion for JSON, SQLite, Go, Python sources
+- Schema-driven ingestion for JSON, SQLite, Go, Python, JavaScript, TypeScript, SQL, Rust, HCL/Terraform, YAML
 - Two graph backends: `MemoryStore` (in-memory map) and `SQLiteGraph` (zero-copy SQL)
 - Two mount backends: NFS (macOS default, `go-nfs`/`billy`) and FUSE (Linux default, `cgofuse`/`fuse-t`)
-- Write-back pipeline: validate → format (gofumpt) → splice → surgical node update + ShiftOrigins (no re-ingest)
+- Write-back pipeline: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + ShiftOrigins (no re-ingest)
 - Draft mode: invalid writes save as drafts, node path stays stable, errors via `_diagnostics/`
 - Context awareness: virtual `context` files expose imports/globals to agents
 - Cross-reference indexing: roaring bitmap inverted index for token → file lookups
@@ -21,7 +21,7 @@
 
 **Known limitations:**
 - Memory: ~2GB peak for 323K NVD records (1.6M graph nodes with string IDs)
-- Write-back is Go-only (Python tree-sitter captures exist but no goimports equivalent wired)
+- Write-back formatting is Go and HCL/Terraform only (other languages validate but don't auto-format)
 - No offset-based readdir pagination (fuse-t requires auto-mode, see `fs/root.go:Readdir`)
 
 ## Near-Term: Construct Creation via FUSE
@@ -40,7 +40,8 @@
 
 ## Medium-Term
 
-- **Additional walkers** — YAML, TOML, HCL, more tree-sitter grammars (TypeScript, Rust). Adding a grammar requires: a `smacker/go-tree-sitter` language binding + a file extension case in `engine.go:ingestFile` + an example schema
+- **Additional walkers** — TOML and more tree-sitter grammars. Adding a grammar requires: a `smacker/go-tree-sitter` language binding + a file extension case in `engine.go:ingestFile` + a ref/context query in `engine_languages.go`
+- **Additional formatters** — Python (black/ruff), TypeScript (prettier). Validation works for all tree-sitter languages; formatting needs per-language wiring in `writeback/format.go`
 
 ## Long-Term (ADR-Described, No Code)
 

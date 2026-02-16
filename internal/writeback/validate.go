@@ -8,10 +8,13 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/hcl"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	sqllang "github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	"github.com/smacker/go-tree-sitter/yaml"
 )
 
 // ValidationError contains structured information about a syntax error.
@@ -148,6 +151,12 @@ func LanguageForPath(filePath string) *sitter.Language {
 		return typescript.GetLanguage()
 	case ".sql":
 		return sqllang.GetLanguage()
+	case ".tf", ".hcl":
+		return hcl.GetLanguage()
+	case ".yaml", ".yml":
+		return yaml.GetLanguage()
+	case ".rs":
+		return rust.GetLanguage()
 	default:
 		return nil
 	}

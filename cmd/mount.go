@@ -24,10 +24,13 @@ import (
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/hcl"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	"github.com/smacker/go-tree-sitter/yaml"
 	"github.com/spf13/cobra"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -116,70 +119,21 @@ var rootCmd = &cobra.Command{
 				inferred, err = inf.InferFromSQLite(dataPath)
 				fmt.Printf(" done in %v\n", time.Since(start))
 			case ".js":
-				fmt.Print("Inferring schema from JavaScript source via Tree-sitter...")
-				start := time.Now()
-				content, readErr := os.ReadFile(dataPath)
-				if readErr != nil {
-					err = readErr
-				} else {
-					parser := sitter.NewParser()
-					parser.SetLanguage(javascript.GetLanguage())
-					tree, _ := parser.ParseCtx(context.Background(), nil, content)
-					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
-				}
-				fmt.Printf(" done in %v\n", time.Since(start))
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, javascript.GetLanguage(), "JavaScript")
 			case ".ts", ".tsx":
-				fmt.Print("Inferring schema from TypeScript source via Tree-sitter...")
-				start := time.Now()
-				content, readErr := os.ReadFile(dataPath)
-				if readErr != nil {
-					err = readErr
-				} else {
-					parser := sitter.NewParser()
-					parser.SetLanguage(typescript.GetLanguage())
-					tree, _ := parser.ParseCtx(context.Background(), nil, content)
-					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
-				}
-				fmt.Printf(" done in %v\n", time.Since(start))
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, typescript.GetLanguage(), "TypeScript")
 			case ".sql":
-				fmt.Print("Inferring schema from SQL source via Tree-sitter...")
-				start := time.Now()
-				content, readErr := os.ReadFile(dataPath)
-				if readErr != nil {
-					err = readErr
-				} else {
-					parser := sitter.NewParser()
-					parser.SetLanguage(sql.GetLanguage())
-					tree, _ := parser.ParseCtx(context.Background(), nil, content)
-					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
-				}
-				fmt.Printf(" done in %v\n", time.Since(start))
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, sql.GetLanguage(), "SQL")
 			case ".py":
-				fmt.Print("Inferring schema from Python source via Tree-sitter...")
-				start := time.Now()
-				content, readErr := os.ReadFile(dataPath)
-				if readErr != nil {
-					err = readErr
-				} else {
-					parser := sitter.NewParser()
-					parser.SetLanguage(python.GetLanguage())
-					tree, _ := parser.ParseCtx(context.Background(), nil, content)
-					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
-				}
-				fmt.Printf(" done in %v\n", time.Since(start))
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, python.GetLanguage(), "Python")
 			case ".go":
-				fmt.Print("Inferring schema from Go source via Tree-sitter...")
-				start := time.Now()
-				content, readErr := os.ReadFile(dataPath)
-				if readErr != nil {
-					err = readErr
-				} else {
-					parser := sitter.NewParser()
-					parser.SetLanguage(golang.GetLanguage())
-					tree, _ := parser.ParseCtx(context.Background(), nil, content)
-					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
-				}
-				fmt.Printf(" done in %v\n", time.Since(start))
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, golang.GetLanguage(), "Go")
+			case ".tf", ".hcl":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, hcl.GetLanguage(), "HCL/Terraform")
+			case ".yaml", ".yml":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, yaml.GetLanguage(), "YAML")
+			case ".rs":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, rust.GetLanguage(), "Rust")
 			case ".git":
 				fmt.Print("Loading git commits...")
 				start := time.Now()
@@ -229,6 +183,12 @@ var rootCmd = &cobra.Command{
 							lang = typescript.GetLanguage()
 						case ".sql":
 							lang = sql.GetLanguage()
+						case ".tf", ".hcl":
+							lang = hcl.GetLanguage()
+						case ".yaml", ".yml":
+							lang = yaml.GetLanguage()
+						case ".rs":
+							lang = rust.GetLanguage()
 						default:
 							return nil // Skip unsupported files
 						}
@@ -475,8 +435,8 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				return nil
 			}
 
-			// 2. Format in-process (gofumpt on buffer, not file — no drift)
-			formatted := writeback.FormatGoBuffer(content, origin.FilePath)
+			// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform)
+			formatted := writeback.FormatBuffer(content, origin.FilePath)
 
 			// Linting (Warning only)
 			if strings.HasSuffix(origin.FilePath, ".go") {
@@ -597,6 +557,29 @@ func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mount
 	}
 
 	return nil
+}
+
+// inferFromTreeSitterFile reads a source file, parses it with tree-sitter,
+// and infers a topology schema. Returns an error if parsing fails.
+func inferFromTreeSitterFile(inf *lattice.Inferrer, path string, lang *sitter.Language, label string) (*api.Topology, error) {
+	fmt.Printf("Inferring schema from %s source via Tree-sitter...", label)
+	start := time.Now()
+	defer func() { fmt.Printf(" done in %v\n", time.Since(start)) }()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+	if parseErr != nil {
+		return nil, fmt.Errorf("tree-sitter parse failed for %s: %w", path, parseErr)
+	}
+	if tree == nil {
+		return nil, fmt.Errorf("tree-sitter returned nil tree for %s", path)
+	}
+	return inf.InferFromTreeSitter(tree.RootNode())
 }
 
 // Execute runs the root command.

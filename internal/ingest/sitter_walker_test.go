@@ -464,6 +464,88 @@ func TestSitterWalkerGo_FlagQuery(t *testing.T) {
 	assert.Equal(t, "false", matches[2].Values()["flag_default"])
 }
 
+func TestRefQueryRegistry_DispatchesByLanguage(t *testing.T) {
+	// Go (no registered query) should use defaultCallQuery
+	w := NewSitterWalker()
+	code := []byte(`package main
+
+func main() {
+	foo()
+	bar()
+}
+
+func foo() {}
+func bar() {}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	calls, err := w.ExtractCalls(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+	assert.Contains(t, calls, "foo")
+	assert.Contains(t, calls, "bar")
+}
+
+func TestRefQueryRegistry_PythonUsesRegistered(t *testing.T) {
+	// Python uses registered query (call, not call_expression)
+	w := NewSitterWalker()
+	code := []byte(`
+def main():
+    print("hello")
+    helper()
+`)
+	lang := python.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	calls, err := w.ExtractCalls(tree.RootNode(), code, lang, "python")
+	require.NoError(t, err)
+	assert.Contains(t, calls, "print")
+	assert.Contains(t, calls, "helper")
+}
+
+func TestContextQueryRegistry_GoReturnsContext(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`package main
+
+import "fmt"
+
+const MaxSize = 100
+
+var globalVar = "hello"
+
+func main() {
+	fmt.Println(globalVar)
+}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	ctx, err := w.ExtractContext(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	assert.Contains(t, string(ctx), `import "fmt"`)
+	assert.Contains(t, string(ctx), "MaxSize")
+	assert.Contains(t, string(ctx), "globalVar")
+}
+
+func TestContextQueryRegistry_UnsupportedReturnsNil(t *testing.T) {
+	w := NewSitterWalker()
+	// YAML has no context query registered
+	lang := python.GetLanguage()
+	ctx, err := w.ExtractContext(nil, nil, lang, "yaml")
+	require.NoError(t, err)
+	assert.Nil(t, ctx)
+}
+
 func TestSitterWalkerGo_PredicateFiltering(t *testing.T) {
 	root := parseSitterRoot(t, []byte(cobraSource))
 	w := NewSitterWalker()

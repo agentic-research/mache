@@ -19,10 +19,13 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/hcl"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	"github.com/smacker/go-tree-sitter/yaml"
 )
 
 const inlineThreshold = 4096
@@ -125,7 +128,7 @@ func (e *Engine) Ingest(path string) error {
 			shouldParse := false
 			if treeSitter {
 				switch ext {
-				case ".go", ".py", ".js", ".ts", ".tsx", ".sql":
+				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml":
 					shouldParse = true
 				}
 			} else {
@@ -153,18 +156,24 @@ func (e *Engine) ingestFile(path string) error {
 	case ".json":
 		return e.ingestJSON(path)
 	case ".py":
-		return e.ingestTreeSitter(path, python.GetLanguage())
+		return e.ingestTreeSitter(path, python.GetLanguage(), "python")
 	case ".js":
-		return e.ingestTreeSitter(path, javascript.GetLanguage())
+		return e.ingestTreeSitter(path, javascript.GetLanguage(), "javascript")
 	case ".ts", ".tsx":
 		// Use Typescript grammar for both .ts and .tsx (it handles JSX mostly, or use tsx grammar if strictly needed)
 		// go-tree-sitter/typescript usually has typescript and tsx subpackages.
 		// For now, use typescript.
-		return e.ingestTreeSitter(path, typescript.GetLanguage())
+		return e.ingestTreeSitter(path, typescript.GetLanguage(), "typescript")
 	case ".sql":
-		return e.ingestTreeSitter(path, sql.GetLanguage())
+		return e.ingestTreeSitter(path, sql.GetLanguage(), "sql")
 	case ".go":
-		return e.ingestTreeSitter(path, golang.GetLanguage())
+		return e.ingestTreeSitter(path, golang.GetLanguage(), "go")
+	case ".tf", ".hcl":
+		return e.ingestTreeSitter(path, hcl.GetLanguage(), "hcl")
+	case ".yaml", ".yml":
+		return e.ingestTreeSitter(path, yaml.GetLanguage(), "yaml")
+	case ".rs":
+		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust")
 	default:
 		return e.ingestRawFile(path)
 	}
@@ -215,7 +224,7 @@ func (b *bufferingTarget) AddNode(n *graph.Node) {
 	}
 }
 
-func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
+func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -246,7 +255,7 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language) error {
 
 	if err == nil {
 		walker := NewSitterWalker()
-		root := SitterRoot{Node: tree.RootNode(), FileRoot: tree.RootNode(), Source: content, Lang: lang}
+		root := SitterRoot{Node: tree.RootNode(), FileRoot: tree.RootNode(), Source: content, Lang: lang, LangName: langName}
 		sourceFile := filepath.Base(path)
 		e.sourceFile = realPath
 		defer func() { e.sourceFile = "" }()
@@ -703,7 +712,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			if ctxAny == nil {
 				log.Printf("Context is nil for %s", id)
 			} else if root, ok := ctxAny.(SitterRoot); ok {
-				c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang)
+				c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang, root.LangName)
 				if err == nil {
 					calls = c
 				}
@@ -713,7 +722,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				if fileRoot == nil {
 					fileRoot = root.Node
 				}
-				ctxBytes, err := sw.ExtractContext(fileRoot, root.Source, root.Lang)
+				ctxBytes, err := sw.ExtractContext(fileRoot, root.Source, root.Lang, root.LangName)
 				if err == nil {
 					contextData = ctxBytes
 					if len(ctxBytes) > 0 {

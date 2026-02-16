@@ -102,8 +102,8 @@ func realWriteBack(store *graph.MemoryStore) func(string, graph.SourceOrigin, []
 			return nil
 		}
 
-		// 2. Format (gofumpt)
-		formatted := writeback.FormatGoBuffer(content, origin.FilePath)
+		// 2. Format (gofumpt for Go, hclwrite for HCL)
+		formatted := writeback.FormatBuffer(content, origin.FilePath)
 
 		// 3. Lint (warning only)
 		if strings.HasSuffix(origin.FilePath, ".go") {
