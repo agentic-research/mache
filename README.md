@@ -79,6 +79,7 @@ This isn't metaphorical. Mache literally treats both sides as graphs and uses SQ
   - [Example: Projecting JSON Data](#example-projecting-json-data)
   - [Example: Projecting Source Code](#example-projecting-source-code)
   - [Write-Back Mode](#write-back-mode)
+  - [Goto: Call-Chain Navigation](#goto-call-chain-navigation)
 - [How It Works](#how-it-works)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
@@ -191,6 +192,24 @@ The write-back pipeline is **identity-preserving** — node paths stay stable ac
 5. **Shift siblings** — adjacent node offsets adjusted to match the new file layout
 
 If validation fails, the write is saved as a **draft** — the node path remains stable, and the error is available via `_diagnostics/ast-errors`. The agent can read its broken code and fix it without losing the file path.
+
+### Goto: Call-Chain Navigation
+
+Mache exposes cross-references as a virtual `callers/` directory. For any function or type, `callers/` lists every node in the graph that references it — turning "who calls this?" into a simple `ls`.
+
+```bash
+# What calls HandleRequest?
+ls /functions/HandleRequest/callers/
+# → functions_Main_source  functions_Router_source
+
+# Read the calling code directly
+cat /functions/HandleRequest/callers/functions_Main_source
+# → func Main() { ... HandleRequest(ctx) ... }
+```
+
+The `callers/` directory is **self-gating** — it only appears when a function actually has callers. No flag needed. This works on both NFS and FUSE backends, for both source code and SQLite mounts with cross-reference data.
+
+Combined with `cat /functions/HandleRequest/source` for the definition, you get full call-chain tracing through filesystem paths alone — no grep, no LSP, no IDE required.
 
 ## How It Works
 

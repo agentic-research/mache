@@ -1007,3 +1007,175 @@ func TestMacheFS_Query_MemoryStore(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// callers/ virtual directory tests
+// ---------------------------------------------------------------------------
+
+// newTestFSWithCallers creates a MacheFS with cross-references for callers/ testing.
+func newTestFSWithCallers() *MacheFS {
+	schema := &api.Topology{Version: "v1alpha1"}
+	store := graph.NewMemoryStore()
+
+	store.AddRoot(&graph.Node{
+		ID:   "funcs",
+		Mode: fs.ModeDir,
+		Children: []string{
+			"funcs/Foo",
+			"funcs/Bar",
+		},
+	})
+	store.AddNode(&graph.Node{
+		ID:       "funcs/Foo",
+		Mode:     fs.ModeDir,
+		Children: []string{"funcs/Foo/source"},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "funcs/Foo/source",
+		Mode: 0,
+		Data: []byte("func Foo() { Bar() }"),
+	})
+	store.AddNode(&graph.Node{
+		ID:       "funcs/Bar",
+		Mode:     fs.ModeDir,
+		Children: []string{"funcs/Bar/source"},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "funcs/Bar/source",
+		Mode: 0,
+		Data: []byte("func Bar() { fmt.Println() }"),
+	})
+
+	// Foo calls Bar
+	_ = store.AddRef("Bar", "funcs/Foo/source")
+
+	return NewMacheFS(schema, store)
+}
+
+func TestMacheFS_Callers_Getattr_Dir(t *testing.T) {
+	mfs := newTestFSWithCallers()
+
+	var stat fuse.Stat_t
+	errCode := mfs.Getattr("/funcs/Bar/callers", &stat, 0)
+	if errCode != 0 {
+		t.Fatalf("Getattr(/funcs/Bar/callers) = %v, want 0", errCode)
+	}
+	if stat.Mode&fuse.S_IFDIR == 0 {
+		t.Error("callers should be a directory")
+	}
+}
+
+func TestMacheFS_Callers_Getattr_Symlink(t *testing.T) {
+	mfs := newTestFSWithCallers()
+
+	var stat fuse.Stat_t
+	errCode := mfs.Getattr("/funcs/Bar/callers/funcs_Foo_source", &stat, 0)
+	if errCode != 0 {
+		t.Fatalf("Getattr(callers entry) = %v, want 0", errCode)
+	}
+	if stat.Mode&fuse.S_IFLNK == 0 {
+		t.Errorf("callers entry should be a symlink, got mode %o", stat.Mode)
+	}
+}
+
+func TestMacheFS_Callers_Getattr_NoCallers(t *testing.T) {
+	mfs := newTestFSWithCallers()
+
+	var stat fuse.Stat_t
+	errCode := mfs.Getattr("/funcs/Foo/callers", &stat, 0)
+	if errCode != -fuse.ENOENT {
+		t.Errorf("Getattr(no callers) = %v, want ENOENT", errCode)
+	}
+}
+
+func TestMacheFS_Callers_Opendir_Readdir(t *testing.T) {
+	mfs := newTestFSWithCallers()
+
+	errCode, fh := mfs.Opendir("/funcs/Bar/callers")
+	if errCode != 0 {
+		t.Fatalf("Opendir(callers) = %v", errCode)
+	}
+
+	var entries []string
+	mfs.Readdir("/funcs/Bar/callers", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return true
+	}, 0, fh)
+	mfs.Releasedir("/funcs/Bar/callers", fh)
+
+	// Expect: ".", "..", "funcs_Foo_source"
+	if len(entries) != 3 {
+		t.Fatalf("got %d entries %v, want 3", len(entries), entries)
+	}
+	found := false
+	for _, e := range entries {
+		if e == "funcs_Foo_source" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing funcs_Foo_source in %v", entries)
+	}
+}
+
+func TestMacheFS_Callers_InParentReaddir(t *testing.T) {
+	mfs := newTestFSWithCallers()
+
+	errCode, fh := mfs.Opendir("/funcs/Bar")
+	if errCode != 0 {
+		t.Fatalf("Opendir = %v", errCode)
+	}
+
+	var entries []string
+	mfs.Readdir("/funcs/Bar", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return true
+	}, 0, fh)
+	mfs.Releasedir("/funcs/Bar", fh)
+
+	found := false
+	for _, e := range entries {
+		if e == "callers" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("parent readdir missing callers, got %v", entries)
+	}
+}
+
+func TestMacheFS_Callers_NotInParentReaddir_NoCallers(t *testing.T) {
+	mfs := newTestFSWithCallers()
+
+	errCode, fh := mfs.Opendir("/funcs/Foo")
+	if errCode != 0 {
+		t.Fatalf("Opendir = %v", errCode)
+	}
+
+	var entries []string
+	mfs.Readdir("/funcs/Foo", func(name string, stat *fuse.Stat_t, ofst int64) bool {
+		entries = append(entries, name)
+		return true
+	}, 0, fh)
+	mfs.Releasedir("/funcs/Foo", fh)
+
+	for _, e := range entries {
+		if e == "callers" {
+			t.Error("Foo should not have callers/ (nobody calls Foo)")
+		}
+	}
+}
+
+func TestMacheFS_Callers_Readlink(t *testing.T) {
+	mfs := newTestFSWithCallers()
+
+	errCode, target := mfs.Readlink("/funcs/Bar/callers/funcs_Foo_source")
+	if errCode != 0 {
+		t.Fatalf("Readlink = %v", errCode)
+	}
+	// /funcs/Bar has depth 2 from root, +1 for callers/ = 3 levels of ../
+	want := "../../../funcs/Foo/source"
+	if target != want {
+		t.Errorf("Readlink target = %q, want %q", target, want)
+	}
+}

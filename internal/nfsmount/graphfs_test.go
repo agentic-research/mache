@@ -479,3 +479,130 @@ func TestDraftMode(t *testing.T) {
 	assert.Equal(t, "original", string(node.Data))
 	assert.Equal(t, "draft_content", string(node.DraftData))
 }
+
+// ---------------------------------------------------------------------------
+// callers/ virtual directory tests
+// ---------------------------------------------------------------------------
+
+// newTestGraphWithCallers creates a graph with cross-references for callers/ testing.
+func newTestGraphWithCallers() *graph.MemoryStore {
+	store := graph.NewMemoryStore()
+
+	store.AddRoot(&graph.Node{
+		ID:   "funcs",
+		Mode: fs.ModeDir,
+		Children: []string{
+			"funcs/Foo",
+			"funcs/Bar",
+		},
+	})
+	store.AddNode(&graph.Node{
+		ID:       "funcs/Foo",
+		Mode:     fs.ModeDir,
+		Children: []string{"funcs/Foo/source"},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "funcs/Foo/source",
+		Mode: 0,
+		Data: []byte("func Foo() { Bar() }"),
+	})
+	store.AddNode(&graph.Node{
+		ID:       "funcs/Bar",
+		Mode:     fs.ModeDir,
+		Children: []string{"funcs/Bar/source"},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "funcs/Bar/source",
+		Mode: 0,
+		Data: []byte("func Bar() { fmt.Println() }"),
+	})
+
+	// Foo calls Bar
+	_ = store.AddRef("Bar", "funcs/Foo/source")
+
+	return store
+}
+
+func TestCallers_StatDir(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	info, err := gfs.Stat("/funcs/Bar/callers")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	assert.Equal(t, "callers", info.Name())
+}
+
+func TestCallers_StatEntry(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	info, err := gfs.Stat("/funcs/Bar/callers/funcs_Foo_source")
+	require.NoError(t, err)
+	assert.False(t, info.IsDir())
+	assert.Equal(t, "funcs_Foo_source", info.Name())
+	assert.Equal(t, int64(20), info.Size()) // len("func Foo() { Bar() }")
+}
+
+func TestCallers_StatNotFound_NoCallers(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	// Nobody calls Foo
+	_, err := gfs.Stat("/funcs/Foo/callers")
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestCallers_ReadDir(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	entries, err := gfs.ReadDir("/funcs/Bar/callers")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "funcs_Foo_source", entries[0].Name())
+	assert.Equal(t, int64(20), entries[0].Size())
+}
+
+func TestCallers_InParentReadDir(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	entries, err := gfs.ReadDir("/funcs/Bar")
+	require.NoError(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	assert.Contains(t, names, "callers")
+	assert.Contains(t, names, "source")
+}
+
+func TestCallers_NotInParentReadDir_NoCallers(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	entries, err := gfs.ReadDir("/funcs/Foo")
+	require.NoError(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	assert.NotContains(t, names, "callers")
+}
+
+func TestCallers_OpenAndRead(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	f, err := gfs.Open("/funcs/Bar/callers/funcs_Foo_source")
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, 1024)
+	n, _ := f.Read(buf)
+	require.True(t, n > 0)
+	assert.Equal(t, "func Foo() { Bar() }", string(buf[:n]))
+}
+
+func TestCallers_OpenDir_ReturnsError(t *testing.T) {
+	gfs := NewGraphFS(newTestGraphWithCallers(), newTestSchema())
+
+	_, err := gfs.Open("/funcs/Bar/callers")
+	assert.Error(t, err)
+}
