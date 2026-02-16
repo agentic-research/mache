@@ -350,7 +350,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	arenaPath := ctrl.GetArenaPath()
 	fmt.Printf("Control Block: Gen %d -> %s\n", gen, arenaPath)
 
-	// Wait for first valid generation if empty?
+	// Wait for first valid generation if empty
 	if arenaPath == "" {
 		fmt.Println("Waiting for initial arena...")
 		for {
@@ -363,35 +363,49 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 		}
 	}
 
-	initialGraph, err := graph.OpenSQLiteGraph(arenaPath, schema, ingest.RenderTemplate)
+	// Extract initial DB from arena
+	dbPath, err := graph.ExtractActiveDB(arenaPath)
 	if err != nil {
-		return fmt.Errorf("open initial graph %s: %w", arenaPath, err)
+		return fmt.Errorf("extract initial db from %s: %w", arenaPath, err)
 	}
-	// Note: We don't defer Close() here because HotSwapGraph owns it (mostly)
-	// But HotSwapGraph.Swap closes the old one. We should close the FINAL one on exit.
+
+	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, ingest.RenderTemplate)
+	if err != nil {
+		return fmt.Errorf("open initial graph %s: %w", dbPath, err)
+	}
 
 	hotSwap := graph.NewHotSwapGraph(initialGraph)
 
 	// Start Watcher
 	go func() {
 		lastGen := gen
+		firstSwap := true
 		for {
 			time.Sleep(100 * time.Millisecond)
 			currentGen := ctrl.GetGeneration()
-			if currentGen > lastGen {
+			if currentGen > lastGen || (firstSwap && currentGen == lastGen) {
 				newPath := ctrl.GetArenaPath()
 				fmt.Printf("Hot Swap Detected: Gen %d -> %d (%s)\n", lastGen, currentGen, newPath)
 
-				// Open new graph
-				newGraph, err := graph.OpenSQLiteGraph(newPath, schema, ingest.RenderTemplate)
+				// Extract new DB from arena
+				newDBPath, err := graph.ExtractActiveDB(newPath)
 				if err != nil {
-					fmt.Printf("Error opening new graph %s: %v\n", newPath, err)
-					continue // Skip update
+					fmt.Printf("Error extracting new db: %v\n", err)
+					continue
+				}
+
+				// Open new graph
+				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, ingest.RenderTemplate)
+				if err != nil {
+					fmt.Printf("Error opening new graph %s: %v\n", newDBPath, err)
+					os.Remove(newDBPath)
+					continue
 				}
 
 				// Atomic Swap
 				hotSwap.Swap(newGraph)
 				lastGen = currentGen
+				firstSwap = false
 			}
 		}
 	}()
