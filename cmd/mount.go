@@ -23,10 +23,12 @@ import (
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/hcl"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
+	"github.com/smacker/go-tree-sitter/yaml"
 	"github.com/spf13/cobra"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -177,6 +179,32 @@ var rootCmd = &cobra.Command{
 					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
 				}
 				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".tf", ".hcl":
+				fmt.Print("Inferring schema from HCL/Terraform source via Tree-sitter...")
+				start := time.Now()
+				content, readErr := os.ReadFile(dataPath)
+				if readErr != nil {
+					err = readErr
+				} else {
+					parser := sitter.NewParser()
+					parser.SetLanguage(hcl.GetLanguage())
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
+			case ".yaml", ".yml":
+				fmt.Print("Inferring schema from YAML source via Tree-sitter...")
+				start := time.Now()
+				content, readErr := os.ReadFile(dataPath)
+				if readErr != nil {
+					err = readErr
+				} else {
+					parser := sitter.NewParser()
+					parser.SetLanguage(yaml.GetLanguage())
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					inferred, err = inf.InferFromTreeSitter(tree.RootNode())
+				}
+				fmt.Printf(" done in %v\n", time.Since(start))
 			case ".git":
 				fmt.Print("Loading git commits...")
 				start := time.Now()
@@ -226,6 +254,10 @@ var rootCmd = &cobra.Command{
 							lang = typescript.GetLanguage()
 						case ".sql":
 							lang = sql.GetLanguage()
+						case ".tf", ".hcl":
+							lang = hcl.GetLanguage()
+						case ".yaml", ".yml":
+							lang = yaml.GetLanguage()
 						default:
 							return nil // Skip unsupported files
 						}

@@ -9,21 +9,26 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// callQueryStr is the tree-sitter query pattern for extracting function calls.
-// Extracted to a package-level const so it is defined once and reusable.
-const callQueryStr = `
+// defaultCallQuery is the tree-sitter query pattern for extracting function calls
+// in C-style languages (Go, JS, TS).
+const defaultCallQuery = `
 	(call_expression function: (identifier) @call)
 	(call_expression function: (selector_expression field: (field_identifier) @call))
 `
 
+// refQueryRegistry stores language-specific reference extraction queries.
+var refQueryRegistry sync.Map // string (language name) -> string
+
+// RegisterRefQuery registers a reference extraction query for a specific language.
+// This should be called during initialization.
+func RegisterRefQuery(langName string, query string) {
+	refQueryRegistry.Store(langName, query)
+}
+
 // SitterWalker implements Walker for Tree-sitter parsed code.
 type SitterWalker struct {
-	// callQueryCache caches compiled call-extraction queries keyed by *sitter.Language.
-	// Assumption: sitter.Query objects are read-only during QueryCursor.Exec();
-	// the cursor maintains its own iteration state, so sharing a compiled query
-	// across sequential calls is safe. If tree-sitter's Go bindings ever mutate
-	// the query during execution, this cache must be replaced with per-call compilation.
-	callQueryCache sync.Map // *sitter.Language -> *sitter.Query
+	// callQueryCache caches compiled call-extraction queries keyed by language name.
+	callQueryCache sync.Map // string (language name) -> *sitter.Query
 }
 
 func NewSitterWalker() *SitterWalker {
@@ -37,6 +42,7 @@ type SitterRoot struct {
 	FileRoot *sitter.Node // The top-level file node (for global context)
 	Source   []byte
 	Lang     *sitter.Language
+	LangName string // "go", "python", "hcl", etc.
 }
 
 // Query implements Walker.
@@ -171,6 +177,7 @@ func (m *sitterMatch) Context() any {
 			FileRoot: m.root.FileRoot,
 			Source:   m.root.Source,
 			Lang:     m.root.Lang,
+			LangName: m.root.LangName,
 		}
 	}
 	return nil
@@ -234,17 +241,24 @@ func (w *SitterWalker) ExtractContext(root *sitter.Node, source []byte, lang *si
 // getCallQuery returns a cached compiled query for call extraction, compiling
 // it on first use for the given language. The compiled query is reused across
 // all subsequent calls for the same language.
-func (w *SitterWalker) getCallQuery(lang *sitter.Language) (*sitter.Query, error) {
-	if cached, ok := w.callQueryCache.Load(lang); ok {
+func (w *SitterWalker) getCallQuery(lang *sitter.Language, langName string) (*sitter.Query, error) {
+	if cached, ok := w.callQueryCache.Load(langName); ok {
 		return cached.(*sitter.Query), nil
 	}
-	q, err := sitter.NewQuery([]byte(callQueryStr), lang)
+
+	// Lookup query string
+	qStr := defaultCallQuery
+	if val, ok := refQueryRegistry.Load(langName); ok {
+		qStr = val.(string)
+	}
+
+	q, err := sitter.NewQuery([]byte(qStr), lang)
 	if err != nil {
 		return nil, err
 	}
 	// Store-or-load to handle concurrent first calls for the same language.
 	// If another goroutine stored first, use theirs and close ours.
-	actual, loaded := w.callQueryCache.LoadOrStore(lang, q)
+	actual, loaded := w.callQueryCache.LoadOrStore(langName, q)
 	if loaded {
 		q.Close()
 		return actual.(*sitter.Query), nil
@@ -254,8 +268,8 @@ func (w *SitterWalker) getCallQuery(lang *sitter.Language) (*sitter.Query, error
 
 // ExtractCalls finds all function calls in the given node using a predefined query.
 // The compiled query is cached per language to avoid recompilation on every call.
-func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitter.Language) ([]string, error) {
-	q, err := w.getCallQuery(lang)
+func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitter.Language, langName string) ([]string, error) {
+	q, err := w.getCallQuery(lang, langName)
 	if err != nil {
 		return nil, fmt.Errorf("invalid call query: %w", err)
 	}
@@ -273,6 +287,12 @@ func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitt
 		m, ok := qc.NextMatch()
 		if !ok {
 			break
+		}
+
+		// Enforce #eq? / #not-eq? predicates in the query.
+		m = qc.FilterPredicates(m, source)
+		if len(m.Captures) == 0 {
+			continue
 		}
 
 		for _, c := range m.Captures {
