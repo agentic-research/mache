@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -67,6 +68,24 @@ type parentLink struct {
 	parentID string
 }
 
+// isBinaryFile returns true if the file appears to contain binary content.
+// Uses the same heuristic as git: if the first 512 bytes contain a null byte,
+// the file is binary. SQLite files (.db) are handled before this is called.
+func isBinaryFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return false
+	}
+	return bytes.ContainsRune(buf[:n], 0)
+}
+
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 	return &Engine{
 		Schema: schema,
@@ -116,15 +135,23 @@ func (e *Engine) Ingest(path string) error {
 				return err
 			}
 			if d.IsDir() {
-				// Skip hidden directories (.git, .mache, etc.)
+				// Skip hidden directories (.git, .mache, etc.) and build artifacts
 				base := filepath.Base(p)
-				if p != realPath && len(base) > 0 && base[0] == '.' {
-					return filepath.SkipDir
+				if p != realPath {
+					if len(base) > 0 && base[0] == '.' {
+						return filepath.SkipDir
+					}
+					if base == "target" || base == "node_modules" || base == "dist" || base == "build" {
+						return filepath.SkipDir
+					}
 				}
 				return nil
 			}
 			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
+			if ext == ".o" || ext == ".a" {
+				return nil // Skip binary artifacts
+			}
 			shouldParse := false
 			if treeSitter {
 				switch ext {
@@ -140,6 +167,13 @@ func (e *Engine) Ingest(path string) error {
 
 			if shouldParse {
 				return e.ingestFile(p)
+			}
+			// Skip binary files (executables, object files, images, etc.)
+			if isBinaryFile(p) {
+				return nil
+			}
+			if treeSitter {
+				return e.ingestRawFileUnder(p, "_project_files")
 			}
 			return e.ingestRawFile(p)
 		})
@@ -175,6 +209,9 @@ func (e *Engine) ingestFile(path string) error {
 	case ".rs":
 		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust")
 	default:
+		if isBinaryFile(path) {
+			return nil
+		}
 		return e.ingestRawFile(path)
 	}
 }
@@ -278,6 +315,15 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 
 		for _, nodeSchema := range e.Schema.Nodes {
 			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime, bt); err != nil {
+				// Tree-sitter query compilation fails when a schema selector
+				// uses node types from a different language (e.g. Go's
+				// "function_declaration" applied to a Python file). This is
+				// expected when FCA infers a schema from mixed-language dirs.
+				// Route to _project_files/ so the content is still accessible.
+				if strings.Contains(err.Error(), "invalid query") {
+					log.Printf("ingest: routing %s to _project_files/ (schema selector incompatible with %s grammar)", path, langName)
+					return e.ingestRawFileUnder(path, "_project_files")
+				}
 				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 			}
 		}
@@ -318,6 +364,10 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 }
 
 func (e *Engine) ingestRawFile(path string) error {
+	return e.ingestRawFileUnder(path, "")
+}
+
+func (e *Engine) ingestRawFileUnder(path, prefix string) error {
 	rel, err := filepath.Rel(e.RootPath, path)
 	if err != nil {
 		return err
@@ -325,14 +375,24 @@ func (e *Engine) ingestRawFile(path string) error {
 	rel = filepath.ToSlash(rel)
 	parts := strings.Split(rel, "/")
 
-	parentID := "" // Root starts empty
+	// When a prefix is set, lazily create the prefix root node on first use.
+	parentID := prefix
+	if prefix != "" {
+		if _, err := e.Store.GetNode(prefix); err != nil {
+			pfNode := &graph.Node{ID: prefix, Mode: os.ModeDir | 0o555}
+			e.Store.AddNode(pfNode)
+			e.Store.AddRoot(pfNode)
+		}
+	}
 
 	// 1. Create/Ensure intermediate directories
 	for i := 0; i < len(parts)-1; i++ {
 		part := parts[i]
-		currentID := part
+		var currentID string
 		if parentID != "" {
 			currentID = parentID + "/" + part
+		} else {
+			currentID = part
 		}
 
 		if _, err := e.Store.GetNode(currentID); err != nil {
@@ -368,7 +428,12 @@ func (e *Engine) ingestRawFile(path string) error {
 	}
 
 	// 2. Create file node
-	fileID := rel
+	var fileID string
+	if prefix != "" {
+		fileID = prefix + "/" + rel
+	} else {
+		fileID = rel
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err

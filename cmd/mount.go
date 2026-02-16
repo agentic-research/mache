@@ -90,6 +90,11 @@ var rootCmd = &cobra.Command{
 
 		mountPoint := args[0]
 
+		// 0. Ensure mount point exists (create if needed)
+		if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+			return fmt.Errorf("create mount point %s: %w", mountPoint, err)
+		}
+
 		// 1. Resolve Configuration Paths
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -163,13 +168,18 @@ var rootCmd = &cobra.Command{
 							return err
 						}
 						if info.IsDir() {
-							if strings.HasPrefix(filepath.Base(path), ".") && path != dataPath {
-								return filepath.SkipDir // Skip hidden dirs like .git
+							base := filepath.Base(path)
+							if (strings.HasPrefix(base, ".") && path != dataPath) || base == "target" || base == "node_modules" || base == "dist" || base == "build" {
+								return filepath.SkipDir
 							}
 							return nil
 						}
 
 						ext := filepath.Ext(path)
+						if ext == ".o" || ext == ".a" {
+							return nil // Skip binary artifacts
+						}
+
 						var lang *sitter.Language
 
 						switch ext {
@@ -350,10 +360,16 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	arenaPath := ctrl.GetArenaPath()
 	fmt.Printf("Control Block: Gen %d -> %s\n", gen, arenaPath)
 
-	// Wait for first valid generation if empty?
+	// Wait for first valid generation if empty
 	if arenaPath == "" {
 		fmt.Println("Waiting for initial arena...")
+		deadline := time.After(30 * time.Second)
 		for {
+			select {
+			case <-deadline:
+				return fmt.Errorf("timed out waiting for initial arena (30s)")
+			default:
+			}
 			if p := ctrl.GetArenaPath(); p != "" {
 				arenaPath = p
 				gen = ctrl.GetGeneration()
@@ -363,18 +379,36 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 		}
 	}
 
-	initialGraph, err := graph.OpenSQLiteGraph(arenaPath, schema, ingest.RenderTemplate)
-	if err != nil {
-		return fmt.Errorf("open initial graph %s: %w", arenaPath, err)
+	// Wait for valid arena header
+	fmt.Println("Waiting for valid arena header...")
+	var dbPath string
+	deadline := time.After(30 * time.Second)
+	for {
+		dbPath, err = graph.ExtractActiveDB(arenaPath)
+		if err == nil {
+			break
+		}
+		select {
+		case <-deadline:
+			return fmt.Errorf("timed out waiting for valid arena header (30s): %w", err)
+		default:
+		}
+		// Retry until header is valid (written by Leyline atomic swap)
+		time.Sleep(500 * time.Millisecond)
 	}
-	// Note: We don't defer Close() here because HotSwapGraph owns it (mostly)
-	// But HotSwapGraph.Swap closes the old one. We should close the FINAL one on exit.
+	fmt.Println("Arena header valid. Initializing graph.")
+
+	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, ingest.RenderTemplate)
+	if err != nil {
+		return fmt.Errorf("open initial graph %s: %w", dbPath, err)
+	}
 
 	hotSwap := graph.NewHotSwapGraph(initialGraph)
 
 	// Start Watcher
 	go func() {
 		lastGen := gen
+		prevDBPath := dbPath // track for cleanup
 		for {
 			time.Sleep(100 * time.Millisecond)
 			currentGen := ctrl.GetGeneration()
@@ -382,16 +416,30 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 				newPath := ctrl.GetArenaPath()
 				fmt.Printf("Hot Swap Detected: Gen %d -> %d (%s)\n", lastGen, currentGen, newPath)
 
-				// Open new graph
-				newGraph, err := graph.OpenSQLiteGraph(newPath, schema, ingest.RenderTemplate)
+				// Extract new DB from arena
+				newDBPath, err := graph.ExtractActiveDB(newPath)
 				if err != nil {
-					fmt.Printf("Error opening new graph %s: %v\n", newPath, err)
-					continue // Skip update
+					fmt.Printf("Error extracting new db: %v\n", err)
+					continue
+				}
+
+				// Open new graph
+				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, ingest.RenderTemplate)
+				if err != nil {
+					fmt.Printf("Error opening new graph %s: %v\n", newDBPath, err)
+					_ = os.Remove(newDBPath)
+					continue
 				}
 
 				// Atomic Swap
 				hotSwap.Swap(newGraph)
 				lastGen = currentGen
+
+				// Clean up previous temp DB
+				if prevDBPath != "" {
+					_ = os.Remove(prevDBPath)
+				}
+				prevDBPath = newDBPath
 			}
 		}
 	}()
