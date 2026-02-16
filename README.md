@@ -60,10 +60,10 @@ The gap exists because operating systems never formalized this mapping. Mache do
 
 - **SQL is the graph operator.** Queries define projections from one graph topology to another.
 - **Schema defines topology.** It's not configuration—it's the formal specification of how source nodes map to filesystem nodes.
-- **FUSE exposes traversal primitives.**
+- **The filesystem exposes traversal primitives** (via NFS or FUSE):
   - `cd` traverses an edge
   - `ls` enumerates children
-  - `cat` reads node data.
+  - `cat` reads node data
 
 This isn't metaphorical. Mache literally treats both sides as graphs and uses SQL to transform one into the other.
 
@@ -79,6 +79,7 @@ This isn't metaphorical. Mache literally treats both sides as graphs and uses SQ
   - [Example: Projecting JSON Data](#example-projecting-json-data)
   - [Example: Projecting Source Code](#example-projecting-source-code)
   - [Write-Back Mode](#write-back-mode)
+  - [Goto: Call-Chain Navigation](#goto-call-chain-navigation)
 - [How It Works](#how-it-works)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
@@ -92,18 +93,20 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| **Graph Filesystem** | **Stable** | FUSE bridge (macOS/Linux) mounts any graph as a directory tree. |
-| **Hybrid SQL Index** | **Active** | In-memory SQLite sidecar for instant, zero-copy queries. |
-| **Write-Back** | **Stable** | Atomic splicing with implicit truncation and diagnostics feedback loop. |
-| **Context Awareness** | **Active** | Virtual `context` files expose global scope (imports/types) to agents. |
-| **Tree-sitter Parsing** | **Active** | Native support for Go and Python ASTs. |
-| **Schema Inference** | **Beta** | Recursive directory inference using Formal Concept Analysis (FCA). |
+| **Graph Filesystem** | **Stable** | NFS (macOS default) and FUSE (Linux default) backends. |
+| **Hybrid SQL Index** | **Stable** | In-memory SQLite sidecar for instant, zero-copy queries via `/.query/`. |
+| **Write-Back** | **Stable** | Identity-preserving: validate → format (gofumpt) → splice → surgical node update. No re-ingest on write. |
+| **Draft Mode** | **Stable** | Invalid writes save as drafts; node path stays stable. Diagnostics via `_diagnostics/`. |
+| **Context Awareness** | **Stable** | Virtual `context` files expose global scope (imports/types) to agents. |
+| **Tree-sitter Parsing** | **Stable** | Go, Python, JavaScript, TypeScript, SQL. |
+| **Schema Inference** | **Beta** | Auto-infer schema from data via Formal Concept Analysis (FCA). |
 
 ## Quick Start
 
 ### Prerequisites
 
-- **macOS:** `brew install --cask fuse-t` and `brew install go-task`
+- **macOS:** `brew install go-task` (NFS backend is built-in, no fuse-t needed)
+- **macOS (FUSE backend):** `brew install --cask fuse-t` (only if using `--backend fuse`)
 - **Linux:** `apt-get install libfuse-dev` and [install Task](https://taskfile.dev/installation/)
 
 ### Building
@@ -130,6 +133,12 @@ task test
 
 # Mount a JSON file (ingests into memory)
 ./mache --schema schema.json --data data.json /tmp/mount
+
+# Mount source code with write-back (edits splice back into source files)
+./mache --infer --data ./src --writable /tmp/mache-src
+
+# Explicitly select backend (default: nfs on macOS, fuse on Linux)
+./mache --backend nfs --infer --data results.db /tmp/nvd
 ```
 
 ### Example: NVD Vulnerability Database
@@ -167,14 +176,40 @@ Mache auto-detects `.go` and `.py` files. Use tree-sitter queries in your schema
 
 ### Write-Back Mode
 
-With `--writable`, file nodes backed by tree-sitter source code become editable.
+With `--writable` (`-w`), file nodes backed by tree-sitter source code become editable.
 
 ```bash
 # Mount Go source with write-back enabled
-./mache -w -s examples/go-schema.json -d . /tmp/mache-src
+./mache -w --infer -d ./src /tmp/mache-src
 ```
 
-When you edit a file in the mount, Mache splices the content back into the original source file and runs `goimports`. It includes robust **Fail-Open** recovery: if you write syntax errors that break the parser, the node won't disappear; instead, a `BROKEN_<filename>` node appears, allowing you to read and fix your broken code.
+The write-back pipeline is **identity-preserving** — node paths stay stable across writes:
+
+1. **Validate** — tree-sitter checks syntax before touching the source file
+2. **Format** — gofumpt formats Go buffers in-memory (no external CLI, no offset drift)
+3. **Splice** — atomic byte-range replacement in the source file
+4. **Surgical update** — node content and origin updated in-place (no full re-ingest)
+5. **Shift siblings** — adjacent node offsets adjusted to match the new file layout
+
+If validation fails, the write is saved as a **draft** — the node path remains stable, and the error is available via `_diagnostics/ast-errors`. The agent can read its broken code and fix it without losing the file path.
+
+### Goto: Call-Chain Navigation
+
+Mache exposes cross-references as a virtual `callers/` directory. For any function or type, `callers/` lists every node in the graph that references it — turning "who calls this?" into a simple `ls`.
+
+```bash
+# What calls HandleRequest?
+ls /functions/HandleRequest/callers/
+# → functions_Main_source  functions_Router_source
+
+# Read the calling code directly
+cat /functions/HandleRequest/callers/functions_Main_source
+# → func Main() { ... HandleRequest(ctx) ... }
+```
+
+The `callers/` directory is **self-gating** — it only appears when a function actually has callers. No flag needed. This works on both NFS and FUSE backends, for both source code and SQLite mounts with cross-reference data.
+
+Combined with `cat /functions/HandleRequest/source` for the definition, you get full call-chain tracing through filesystem paths alone — no grep, no LSP, no IDE required.
 
 ## How It Works
 

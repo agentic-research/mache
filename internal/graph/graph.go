@@ -43,6 +43,7 @@ type Node struct {
 	ModTime    time.Time         // Modification time
 	Data       []byte            // Inline content (small files, nil for lazy nodes)
 	Context    []byte            // Context content (imports/globals, for virtual 'context' file)
+	DraftData  []byte            // Draft content (uncommitted/invalid edits)
 	Ref        *ContentRef       // Lazy content reference (large files, nil for inline nodes)
 	Properties map[string][]byte // Metadata / extended attributes
 	Children   []string          // Child node IDs (directories only)
@@ -52,6 +53,9 @@ type Node struct {
 // ContentSize returns the byte length of this node's content,
 // regardless of whether it is inline or lazy.
 func (n *Node) ContentSize() int64 {
+	if n.DraftData != nil {
+		return int64(len(n.DraftData))
+	}
 	if n.Data != nil {
 		return int64(len(n.Data))
 	}
@@ -109,6 +113,15 @@ type MemoryStore struct {
 	flushErr   error
 }
 
+// normalizeID strips a leading slash from node IDs.
+// GraphFS paths use "/Foo/source" but MemoryStore keys are "Foo/source".
+func normalizeID(id string) string {
+	if len(id) > 0 && id[0] == '/' {
+		return id[1:]
+	}
+	return id
+}
+
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		nodes:       make(map[string]*Node),
@@ -145,6 +158,40 @@ func (s *MemoryStore) AddNode(n *Node) {
 	defer s.mu.Unlock()
 	s.nodes[n.ID] = n
 	s.indexNode(n)
+}
+
+// UpdateNodeContent surgically updates a node's content and origin in-place.
+// Preserves Children, Context, Properties, and Ref. Clears DraftData on success.
+func (s *MemoryStore) UpdateNodeContent(id string, data []byte, origin *SourceOrigin, modTime time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id = normalizeID(id)
+	n, ok := s.nodes[id]
+	if !ok {
+		return ErrNotFound
+	}
+	n.Data = data
+	n.DraftData = nil
+	n.ModTime = modTime
+	if origin != nil {
+		n.Origin = origin
+	}
+	return nil
+}
+
+// UpdateNodeContext updates the Context field on a node (e.g., imports/package).
+func (s *MemoryStore) UpdateNodeContext(id string, ctx []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id = normalizeID(id)
+	n, ok := s.nodes[id]
+	if !ok {
+		return ErrNotFound
+	}
+	n.Context = ctx
+	return nil
 }
 
 // indexNode assigns an internal bitmap ID and registers the node in fileToNodes.
@@ -185,13 +232,31 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 // DeleteFileNodes removes all nodes that originated from the given source file.
 // Uses the roaring bitmap index for O(k) lookup instead of O(N) full scan.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteFileNodes(filePath)
+}
+
+// ReplaceFileNodes atomically replaces all nodes from a file with a new set.
+// This prevents race conditions where files disappear during re-ingestion.
+func (s *MemoryStore) ReplaceFileNodes(filePath string, newNodes []*Node) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.deleteFileNodes(filePath)
+
+	for _, n := range newNodes {
+		s.nodes[n.ID] = n
+		s.indexNode(n)
+	}
+}
+
+// deleteFileNodes performs deletion with lock already held.
+func (s *MemoryStore) deleteFileNodes(filePath string) {
 	// Canonicalize path to match Ingest behavior
 	if realPath, err := filepath.EvalSymlinks(filePath); err == nil {
 		filePath = realPath
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// 1. Collect IDs to delete via bitmap index
 	bm, hasBitmap := s.fileToNodes[filePath]
@@ -322,11 +387,7 @@ func (s *MemoryStore) GetNode(id string) (*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Normalize path: remove leading slash
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
-
+	id = normalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -344,11 +405,7 @@ func (s *MemoryStore) ListChildren(id string) ([]string, error) {
 		return s.roots, nil
 	}
 
-	// Normalize
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
-
+	id = normalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -364,7 +421,9 @@ func (s *MemoryStore) ReadContent(id string, buf []byte, offset int64) (int, err
 	}
 
 	var data []byte
-	if node.Data != nil {
+	if node.DraftData != nil {
+		data = node.DraftData
+	} else if node.Data != nil {
 		data = node.Data
 	} else if node.Ref != nil {
 		data, err = s.resolveContent(id, node.Ref)

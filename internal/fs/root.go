@@ -147,6 +147,41 @@ func parseDiagPath(path string) (parentDir, fileName string) {
 	return parentDir, fileName
 }
 
+// isCallersPath returns true if the path contains a /callers segment boundary.
+func isCallersPath(path string) bool {
+	return strings.HasSuffix(path, "/callers") || strings.Contains(path, "/callers/")
+}
+
+// parseCallersPath splits a callers path into (parentDir, entryName).
+// E.g. "/funcs/Foo/callers/funcs_Bar_source" → ("/funcs/Foo", "funcs_Bar_source")
+func parseCallersPath(path string) (parentDir, entryName string) {
+	idx := strings.Index(path, "/callers/")
+	if idx < 0 {
+		if strings.HasSuffix(path, "/callers") {
+			idx = len(path) - len("/callers")
+		} else {
+			return "", ""
+		}
+	}
+	parentDir = path[:idx]
+	if parentDir == "" {
+		parentDir = "/"
+	}
+	rest := path[idx+len("/callers"):]
+	if rest == "" || rest == "/" {
+		return parentDir, ""
+	}
+	entryName = strings.TrimPrefix(rest, "/")
+	return parentDir, entryName
+}
+
+// callersSymlinkTarget computes the relative symlink target from a callers/ entry
+// back to the caller's node in the graph.
+func callersSymlinkTarget(callersParentDir, callerID string) string {
+	depth := strings.Count(callersParentDir, "/") + 1 // +1 for callers/ dir itself
+	return strings.Repeat("../", depth) + callerID
+}
+
 // diagContent returns the content of a diagnostics virtual file.
 func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 	store, ok := fs.Graph.(*graph.MemoryStore)
@@ -350,6 +385,40 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return -fuse.ENOENT
 	}
 
+	// Virtual: callers/
+	if isCallersPath(path) {
+		parentDir, entryName := parseCallersPath(path)
+		if parentDir == "/" {
+			return -fuse.ENOENT
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT
+		}
+		token := filepath.Base(parentDir)
+		callers, err := fs.Graph.GetCallers(token)
+		if err != nil || len(callers) == 0 {
+			return -fuse.ENOENT
+		}
+		if entryName == "" {
+			stat.Ino = pathIno(path)
+			stat.Mode = fuse.S_IFDIR | 0o555
+			stat.Nlink = 2
+			return 0
+		}
+		for _, caller := range callers {
+			flatName := strings.ReplaceAll(caller.ID, "/", "_")
+			if flatName == entryName {
+				stat.Ino = pathIno(path)
+				stat.Mode = fuse.S_IFLNK | 0o777
+				stat.Nlink = 1
+				target := callersSymlinkTarget(parentDir, caller.ID)
+				stat.Size = int64(len(target))
+				return 0
+			}
+		}
+		return -fuse.ENOENT
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT
@@ -397,6 +466,35 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return 0, fh
 	}
 
+	// Virtual: callers/ directory
+	if isCallersPath(path) {
+		parentDir, entryName := parseCallersPath(path)
+		if entryName != "" {
+			return -fuse.ENOTDIR, 0
+		}
+		if parentDir == "/" {
+			return -fuse.ENOENT, 0
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT, 0
+		}
+		token := filepath.Base(parentDir)
+		callers, err := fs.Graph.GetCallers(token)
+		if err != nil || len(callers) == 0 {
+			return -fuse.ENOENT, 0
+		}
+		entries := []string{".", ".."}
+		for _, c := range callers {
+			entries = append(entries, strings.ReplaceAll(c.ID, "/", "_"))
+		}
+		fs.handleMu.Lock()
+		fh := fs.nextHandle
+		fs.nextHandle++
+		fs.handles[fh] = &dirHandle{path: path, entries: entries}
+		fs.handleMu.Unlock()
+		return 0, fh
+	}
+
 	var node *graph.Node
 	if path != "/" {
 		var err error
@@ -414,7 +512,7 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return -fuse.ENOENT, 0
 	}
 
-	entries := make([]string, 0, len(children)+5)
+	entries := make([]string, 0, len(children)+6)
 	entries = append(entries, ".", "..")
 	if path == "/" {
 		entries = append(entries, "_schema.json")
@@ -429,6 +527,13 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	// Add context if available
 	if node != nil && len(node.Context) > 0 {
 		entries = append(entries, "context")
+	}
+	// Add callers/ if token has callers (non-root dirs only)
+	if path != "/" {
+		token := filepath.Base(path)
+		if callers, err := fs.Graph.GetCallers(token); err == nil && len(callers) > 0 {
+			entries = append(entries, "callers")
+		}
 	}
 	for _, c := range children {
 		entries = append(entries, filepath.Base(c))
@@ -559,6 +664,13 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 			stat.Size = int64(len(node.Context))
 			return stat
 		}
+	}
+
+	if name == "callers" && !isCallersPath(dirPath) {
+		stat.Ino = pathIno(fullPath)
+		stat.Mode = fuse.S_IFDIR | 0o555
+		stat.Nlink = 2
+		return stat
 	}
 
 	node, err := fs.Graph.GetNode(fullPath)
@@ -744,48 +856,46 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 
 	// 1. Validate syntax before touching source file
 	if err := writeback.Validate(wh.buf, node.Origin.FilePath); err != nil {
-		log.Printf("writeback: validation failed for %s: %v", node.Origin.FilePath, err)
+		log.Printf("writeback: validation failed for %s: %v (saving draft)", node.Origin.FilePath, err)
 		// Store diagnostic for _diagnostics/ virtual dir
 		if store, ok := fs.Graph.(*graph.MemoryStore); ok {
 			store.WriteStatus.Store(filepath.Dir(wh.path), err.Error())
+			// Save as Draft
+			draft := make([]byte, len(wh.buf))
+			copy(draft, wh.buf)
+			node.DraftData = draft
 		}
-		return -fuse.EIO
+		// Return Success (0) so agent sees "saved" state
+		return 0
 	}
 
-	// 2. Splice new content into source file
+	// 2. Format in-process (gofumpt on the buffer, not the file)
+	formatted := writeback.FormatGoBuffer(wh.buf, node.Origin.FilePath)
+
+	// 3. Splice formatted content into source file
 	oldLen := node.Origin.EndByte - node.Origin.StartByte
-	if err := writeback.Splice(*node.Origin, wh.buf); err != nil {
+	if err := writeback.Splice(*node.Origin, formatted); err != nil {
 		log.Printf("writeback: splice failed for %s: %v", node.Origin.FilePath, err)
 		return -fuse.EIO
 	}
 
-	// 3. Shift sibling origins immediately (before re-ingest)
+	// 4. Surgical node update — no re-ingest
+	newOrigin := &graph.SourceOrigin{
+		FilePath:  node.Origin.FilePath,
+		StartByte: node.Origin.StartByte,
+		EndByte:   node.Origin.StartByte + uint32(len(formatted)),
+	}
 	if store, ok := fs.Graph.(*graph.MemoryStore); ok {
-		delta := int32(len(wh.buf)) - int32(oldLen)
+		// Shift sibling origins before updating this node's origin
+		delta := int32(len(formatted)) - int32(oldLen)
 		if delta != 0 {
 			store.ShiftOrigins(node.Origin.FilePath, node.Origin.EndByte, delta)
 		}
+		_ = store.UpdateNodeContent(wh.nodeID, formatted, newOrigin, time.Now())
 		store.WriteStatus.Store(filepath.Dir(wh.path), "ok")
 	}
 
-	// 4. Run goimports (failure-tolerant — if agent wrote broken code,
-	//    we still want it in the FS so the agent can see and fix the error)
-	if err := exec.Command("goimports", "-w", node.Origin.FilePath).Run(); err != nil {
-		log.Printf("writeback: goimports failed for %s (continuing): %v", node.Origin.FilePath, err)
-	}
-
-	// 5. Re-ingest the source file — updates ALL Origins from this file
-	if fs.Engine != nil {
-		// Ensure timestamp changes for NFS cache invalidation (granularity safety)
-		time.Sleep(2 * time.Millisecond)
-		if err := fs.Engine.Ingest(node.Origin.FilePath); err != nil {
-			log.Printf("writeback: re-ingest failed for %s: %v", node.Origin.FilePath, err)
-		}
-	}
-
-	// 6. Invalidate cached size/content — the file's content changed,
-	// so the size cache and content cache must be evicted to prevent
-	// stale data on the next Getattr or Read.
+	// 5. Invalidate cached size/content
 	fs.Graph.Invalidate(wh.nodeID)
 
 	return 0
@@ -984,6 +1094,11 @@ func (fs *MacheFS) queryOpendir(path string) (int, uint64) {
 // for accumulating SQL. Also handles regular FUSE Create if needed.
 
 func (fs *MacheFS) Create(path string, flags int, mode uint32) (int, uint64) {
+	// For existing writable nodes, delegate to Open (handles write-back pipeline).
+	// Shell redirections (echo > file) use create() even for existing files on Linux.
+	if _, err := fs.Graph.GetNode(path); err == nil {
+		return fs.Open(path, flags|syscall.O_WRONLY|syscall.O_TRUNC)
+	}
 	if !fs.isQueryPath(path) {
 		return -fuse.EACCES, 0
 	}
@@ -1073,8 +1188,34 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 	return 0
 }
 
-// Readlink returns the symlink target for /.query/<name>/<entry>.
+// Readlink returns the symlink target for callers/ entries and /.query/<name>/<entry>.
 func (fs *MacheFS) Readlink(path string) (int, string) {
+	// Virtual: callers/ symlinks
+	if isCallersPath(path) {
+		parentDir, entryName := parseCallersPath(path)
+		if entryName == "" {
+			return -fuse.EINVAL, ""
+		}
+		if parentDir == "/" {
+			return -fuse.ENOENT, ""
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT, ""
+		}
+		token := filepath.Base(parentDir)
+		callers, err := fs.Graph.GetCallers(token)
+		if err != nil || len(callers) == 0 {
+			return -fuse.ENOENT, ""
+		}
+		for _, caller := range callers {
+			flatName := strings.ReplaceAll(caller.ID, "/", "_")
+			if flatName == entryName {
+				return 0, callersSymlinkTarget(parentDir, caller.ID)
+			}
+		}
+		return -fuse.ENOENT, ""
+	}
+
 	if !fs.isQueryPath(path) {
 		return -fuse.EINVAL, ""
 	}
