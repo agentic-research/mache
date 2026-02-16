@@ -3,7 +3,7 @@
 ## Current State (as of Feb 2026)
 
 **What's landed:**
-- Schema-driven ingestion for JSON, SQLite, Go, Python, JavaScript, TypeScript, SQL, HCL/Terraform, YAML
+- Schema-driven ingestion for JSON, SQLite, Go, Python, JavaScript, TypeScript, SQL, Rust, HCL/Terraform, YAML
 - Two graph backends: `MemoryStore` (in-memory map) and `SQLiteGraph` (zero-copy SQL)
 - Two mount backends: NFS (macOS default, `go-nfs`/`billy`) and FUSE (Linux default, `cgofuse`/`fuse-t`)
 - Write-back pipeline: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + ShiftOrigins (no re-ingest)
@@ -40,7 +40,7 @@
 
 ## Medium-Term
 
-- **Additional walkers** — TOML, Rust, and more tree-sitter grammars. Adding a grammar requires: a `smacker/go-tree-sitter` language binding + a file extension case in `engine.go:ingestFile` + a ref/context query in `engine_languages.go`
+- **Additional walkers** — TOML and more tree-sitter grammars. Adding a grammar requires: a `smacker/go-tree-sitter` language binding + a file extension case in `engine.go:ingestFile` + a ref/context query in `engine_languages.go`
 - **Additional formatters** — Python (black/ruff), TypeScript (prettier). Validation works for all tree-sitter languages; formatting needs per-language wiring in `writeback/format.go`
 
 ## Long-Term (ADR-Described, No Code)

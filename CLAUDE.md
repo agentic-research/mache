@@ -45,7 +45,7 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 | Graph interface | `internal/graph/graph.go` | `GetNode`, `ListChildren`, `ReadContent`, `GetCallers` — backend-agnostic |
 | MemoryStore | `internal/graph/graph.go` | Map-based graph with RWMutex + FIFO content cache (1024 entries) |
 | SQLiteGraph | `internal/graph/sqlite_graph.go` | Direct SQL backend: `compileLevels()` builds schema tree, `scanRoot()` streams all records using `json_extract()` in SQL, content resolved on-demand via PK lookup + template render |
-| Engine | `internal/ingest/engine.go` | Dispatches by extension (.db/.json/.go/.py/.tf/.hcl/.yaml/.js/.ts/.sql), recursive schema traversal, dedup via `dedupSuffix()` |
+| Engine | `internal/ingest/engine.go` | Dispatches by extension (.db/.json/.go/.py/.js/.ts/.sql/.rs/.tf/.hcl/.yaml), recursive schema traversal, dedup via `dedupSuffix()` |
 | Walkers | `internal/ingest/json_walker.go`, `sitter_walker.go` | JSONPath (ojg) and tree-sitter AST query — both implement `Walker`/`Match` interfaces from `interfaces.go` |
 | GraphFS | `internal/nfsmount/graphfs.go` | NFS backend via go-nfs/billy, `callers/` virtual dir, write-back support |
 | MacheFS | `internal/fs/root.go` | FUSE backend: handle-based readdir (auto-mode for fuse-t), `callers/` symlinks, `.query/` magic dir |

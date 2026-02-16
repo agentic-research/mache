@@ -30,4 +30,11 @@ func init() {
 		(call function: (identifier) @call)
 		(call function: (attribute attribute: (identifier) @call))
 	`)
+
+	// Register Rust queries — function calls and method calls.
+	RegisterRefQuery("rust", `
+		(call_expression function: (identifier) @call)
+		(call_expression function: (scoped_identifier name: (identifier) @call))
+		(call_expression function: (field_expression field: (field_identifier) @call))
+	`)
 }

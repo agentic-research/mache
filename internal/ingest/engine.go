@@ -22,6 +22,7 @@ import (
 	"github.com/smacker/go-tree-sitter/hcl"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
@@ -127,7 +128,7 @@ func (e *Engine) Ingest(path string) error {
 			shouldParse := false
 			if treeSitter {
 				switch ext {
-				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".tf", ".hcl", ".yaml", ".yml":
+				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml":
 					shouldParse = true
 				}
 			} else {
@@ -171,6 +172,8 @@ func (e *Engine) ingestFile(path string) error {
 		return e.ingestTreeSitter(path, hcl.GetLanguage(), "hcl")
 	case ".yaml", ".yml":
 		return e.ingestTreeSitter(path, yaml.GetLanguage(), "yaml")
+	case ".rs":
+		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust")
 	default:
 		return e.ingestRawFile(path)
 	}

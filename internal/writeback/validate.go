@@ -11,6 +11,7 @@ import (
 	"github.com/smacker/go-tree-sitter/hcl"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	sqllang "github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
@@ -154,6 +155,8 @@ func LanguageForPath(filePath string) *sitter.Language {
 		return hcl.GetLanguage()
 	case ".yaml", ".yml":
 		return yaml.GetLanguage()
+	case ".rs":
+		return rust.GetLanguage()
 	default:
 		return nil
 	}

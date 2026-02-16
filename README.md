@@ -98,7 +98,7 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | **Write-Back** | **Stable** | Identity-preserving: validate → format → splice → surgical node update. Formatting: gofumpt (Go), hclwrite (HCL/Terraform). No re-ingest on write. |
 | **Draft Mode** | **Stable** | Invalid writes save as drafts; node path stays stable. Diagnostics via `_diagnostics/`. |
 | **Context Awareness** | **Stable** | Virtual `context` files expose global scope (imports/types) to agents. |
-| **Tree-sitter Parsing** | **Stable** | Go, Python, JavaScript, TypeScript, SQL, HCL/Terraform, YAML. |
+| **Tree-sitter Parsing** | **Stable** | Go, Python, JavaScript, TypeScript, SQL, Rust, HCL/Terraform, YAML. |
 | **Schema Inference** | **Beta** | Auto-infer schema from data via Formal Concept Analysis (FCA). |
 
 ## Quick Start
@@ -169,7 +169,7 @@ Given a `data.json` with users, you can project it into a `users/` directory whe
 
 ### Example: Projecting Source Code
 
-Mache auto-detects source files (`.go`, `.py`, `.js`, `.ts`, `.tf`, `.hcl`, `.yaml`, `.sql`). Use tree-sitter queries in your schema to map AST nodes (functions, types) to directories.
+Mache auto-detects source files (`.go`, `.py`, `.js`, `.ts`, `.rs`, `.tf`, `.hcl`, `.yaml`, `.sql`). Use tree-sitter queries in your schema to map AST nodes (functions, types) to directories.
 
 - **Source:** The `source` file contains the function/type body.
 - **Context:** The `context` file (virtual) contains imports, types, and global variables visible to that scope. This is critical for LLM agents to understand dependencies without reading the whole file.

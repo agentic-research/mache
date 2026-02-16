@@ -27,6 +27,7 @@ import (
 	"github.com/smacker/go-tree-sitter/hcl"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
@@ -131,6 +132,8 @@ var rootCmd = &cobra.Command{
 				inferred, err = inferFromTreeSitterFile(inf, dataPath, hcl.GetLanguage(), "HCL/Terraform")
 			case ".yaml", ".yml":
 				inferred, err = inferFromTreeSitterFile(inf, dataPath, yaml.GetLanguage(), "YAML")
+			case ".rs":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, rust.GetLanguage(), "Rust")
 			case ".git":
 				fmt.Print("Loading git commits...")
 				start := time.Now()
@@ -184,6 +187,8 @@ var rootCmd = &cobra.Command{
 							lang = hcl.GetLanguage()
 						case ".yaml", ".yml":
 							lang = yaml.GetLanguage()
+						case ".rs":
+							lang = rust.GetLanguage()
 						default:
 							return nil // Skip unsupported files
 						}
