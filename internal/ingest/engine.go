@@ -130,15 +130,6 @@ func (e *Engine) Ingest(path string) error {
 		// can produce confusing errors (e.g. S-expression as JSONPath).
 		treeSitter := schemaUsesTreeSitter(e.Schema)
 
-		// When using tree-sitter, create a _project_files root to hold
-		// non-AST files (configs, docs, etc.) so they're accessible but
-		// clearly separated from the structured AST view.
-		if treeSitter {
-			pfNode := &graph.Node{ID: "_project_files", Mode: os.ModeDir | 0o555}
-			e.Store.AddNode(pfNode)
-			e.Store.AddRoot(pfNode)
-		}
-
 		return filepath.Walk(realPath, func(p string, d os.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -384,8 +375,15 @@ func (e *Engine) ingestRawFileUnder(path, prefix string) error {
 	rel = filepath.ToSlash(rel)
 	parts := strings.Split(rel, "/")
 
-	// When a prefix is set, the first parent is the prefix node (already created).
+	// When a prefix is set, lazily create the prefix root node on first use.
 	parentID := prefix
+	if prefix != "" {
+		if _, err := e.Store.GetNode(prefix); err != nil {
+			pfNode := &graph.Node{ID: prefix, Mode: os.ModeDir | 0o555}
+			e.Store.AddNode(pfNode)
+			e.Store.AddRoot(pfNode)
+		}
+	}
 
 	// 1. Create/Ensure intermediate directories
 	for i := 0; i < len(parts)-1; i++ {

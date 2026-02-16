@@ -42,6 +42,12 @@ func (h *ArenaHeader) CalculateActiveOffset(fileSize int64) (int64, error) {
 	if h.Magic != ArenaMagic {
 		return 0, fmt.Errorf("invalid arena magic: %x", h.Magic)
 	}
+	if h.Version != 1 {
+		return 0, fmt.Errorf("unsupported arena version: %d", h.Version)
+	}
+	if h.ActiveBuffer > 1 {
+		return 0, fmt.Errorf("invalid active buffer index: %d", h.ActiveBuffer)
+	}
 
 	bufferSize := (fileSize - ArenaHeaderSize) / 2
 	if bufferSize <= 0 {
@@ -79,12 +85,19 @@ func ExtractActiveDB(arenaPath string) (string, error) {
 	// Calculate size (half of arena minus header)
 	size := (info.Size() - ArenaHeaderSize) / 2
 
-	// Create temp file
+	// Create temp file — remove on any error after this point.
 	tmp, err := os.CreateTemp("", "mache-arena-*.db")
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = tmp.Close() }()
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		_ = tmp.Close()
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	// Copy efficiently using io.CopyN
 	if _, err := f.Seek(offset, 0); err != nil {
@@ -95,5 +108,6 @@ func ExtractActiveDB(arenaPath string) (string, error) {
 		return "", fmt.Errorf("copy active db: %w", err)
 	}
 
-	return tmp.Name(), nil
+	cleanup = false
+	return tmpPath, nil
 }

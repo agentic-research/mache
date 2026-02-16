@@ -363,7 +363,13 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	// Wait for first valid generation if empty
 	if arenaPath == "" {
 		fmt.Println("Waiting for initial arena...")
+		deadline := time.After(30 * time.Second)
 		for {
+			select {
+			case <-deadline:
+				return fmt.Errorf("timed out waiting for initial arena (30s)")
+			default:
+			}
 			if p := ctrl.GetArenaPath(); p != "" {
 				arenaPath = p
 				gen = ctrl.GetGeneration()
@@ -376,10 +382,16 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	// Wait for valid arena header
 	fmt.Println("Waiting for valid arena header...")
 	var dbPath string
+	deadline := time.After(30 * time.Second)
 	for {
 		dbPath, err = graph.ExtractActiveDB(arenaPath)
 		if err == nil {
 			break
+		}
+		select {
+		case <-deadline:
+			return fmt.Errorf("timed out waiting for valid arena header (30s): %w", err)
+		default:
 		}
 		// Retry until header is valid (written by Leyline atomic swap)
 		time.Sleep(500 * time.Millisecond)
@@ -396,6 +408,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	// Start Watcher
 	go func() {
 		lastGen := gen
+		prevDBPath := dbPath // track for cleanup
 		for {
 			time.Sleep(100 * time.Millisecond)
 			currentGen := ctrl.GetGeneration()
@@ -421,6 +434,12 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 				// Atomic Swap
 				hotSwap.Swap(newGraph)
 				lastGen = currentGen
+
+				// Clean up previous temp DB
+				if prevDBPath != "" {
+					_ = os.Remove(prevDBPath)
+				}
+				prevDBPath = newDBPath
 			}
 		}
 	}()
