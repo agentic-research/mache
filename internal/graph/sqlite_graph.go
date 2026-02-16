@@ -92,6 +92,8 @@ type SQLiteGraph struct {
 	contentCache map[string][]byte
 	contentKeys  []string
 	maxContent   int
+
+	useNodesTable bool // Fast path: use "nodes" table instead of scanning "results"
 }
 
 // schemaLevel is a compiled representation of one level in the schema tree.
@@ -108,6 +110,9 @@ type schemaLevel struct {
 // EagerScan pre-scans all root nodes so no FUSE callback ever blocks on a scan.
 // Call this before mounting — fuse-t's NFS transport times out if a callback takes >2s.
 func (g *SQLiteGraph) EagerScan() error {
+	if g.useNodesTable {
+		return nil // No scan needed for indexed table
+	}
 	for _, l := range g.levels {
 		if l.isStatic {
 			if err := g.ensureScanned(l.staticName); err != nil {
@@ -126,6 +131,13 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
 	db.SetMaxOpenConns(4)
+
+	// Check if "nodes" table exists (Fast Path)
+	var count int
+	useNodesTable := false
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&count); err == nil && count > 0 {
+		useNodesTable = true
+	}
 
 	// Sidecar DB for cross-reference index (token→bitmap, path→fileID).
 	// Kept separate so we never write to the source database.
@@ -196,18 +208,19 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	}
 
 	return &SQLiteGraph{
-		db:           db,
-		dbPath:       dbPath,
-		tableName:    tableName,
-		schema:       schema,
-		render:       render,
-		levels:       compileLevels(schema),
-		refsDB:       refsDB,
-		dbID:         dbID,
-		pendingRefs:  make(map[string]*roaring.Bitmap),
-		fileIDMap:    make(map[string]uint32),
-		contentCache: make(map[string][]byte),
-		maxContent:   2048,
+		db:            db,
+		dbPath:        dbPath,
+		tableName:     tableName,
+		schema:        schema,
+		render:        render,
+		levels:        compileLevels(schema),
+		refsDB:        refsDB,
+		dbID:          dbID,
+		pendingRefs:   make(map[string]*roaring.Bitmap),
+		fileIDMap:     make(map[string]uint32),
+		contentCache:  make(map[string][]byte),
+		maxContent:    2048,
+		useNodesTable: useNodesTable,
 	}, nil
 }
 
@@ -246,6 +259,51 @@ func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 	}
 	if id == "" {
 		return &Node{ID: "", Mode: os.ModeDir | 0o555}, nil
+	}
+
+	// Fast Path: Nodes Table
+	if g.useNodesTable {
+		var kind, size int
+		var mtimeNano int64
+		var recordID sql.NullString
+		err := g.db.QueryRow("SELECT kind, size, mtime, record_id FROM nodes WHERE id = ?", id).Scan(&kind, &size, &mtimeNano, &recordID)
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		mode := os.FileMode(0o444)
+		if kind == 1 {
+			mode = os.ModeDir | 0o555
+		}
+
+		node := &Node{
+			ID:      id,
+			Mode:    mode,
+			ModTime: time.Unix(0, mtimeNano),
+		}
+
+		// If it's a file and has a record ID, set up lazy content ref
+		if kind == 0 && recordID.Valid {
+			// We need the content template.
+			// Currently, we still walk the schema to find the leaf definition.
+			// This is fast (in-memory).
+			segments := strings.Split(id, "/")
+			_, fileLeaf := g.walkSchema(segments)
+			if fileLeaf != nil {
+				node.Ref = &ContentRef{
+					DBPath:     g.dbPath,
+					RecordID:   recordID.String,
+					Template:   fileLeaf.ContentTemplate,
+					ContentLen: int64(size),
+				}
+				// Populate cache for repeated stats
+				g.sizeCache.Store(id, int64(size))
+			}
+		}
+		return node, nil
 	}
 
 	segments := strings.Split(id, "/")
@@ -298,6 +356,36 @@ func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
 	if len(id) > 0 && id[0] == '/' {
 		id = id[1:]
+	}
+
+	// Fast Path: Nodes Table
+	if g.useNodesTable {
+		// Root handling: if id is empty, parent_id should be NULL or empty depending on writer.
+		// My SQLiteWriter uses "" for root parent.
+		// Actually, top level nodes have parent_id = "".
+		// Let's assume parent_id is stored as is.
+		var rows *sql.Rows
+		var err error
+		if id == "" {
+			// Root children (top level dirs)
+			rows, err = g.db.Query("SELECT name FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		} else {
+			rows, err = g.db.Query("SELECT name FROM nodes WHERE parent_id = ? ORDER BY name", id)
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rows.Close() }()
+
+		var children []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return nil, err
+			}
+			children = append(children, name)
+		}
+		return children, nil
 	}
 
 	// Root: return schema root names
@@ -928,17 +1016,31 @@ func (g *SQLiteGraph) resolveContent(filePath string, segments []string, leaf *a
 	}
 	g.contentMu.Unlock()
 
-	// Find parent directory's record ID
-	parentPath := strings.Join(segments[:len(segments)-1], "/")
-	if err := g.ensureScanned(segments[0]); err != nil {
-		return nil, err
-	}
+	var recordID string
 
-	ridVal, ok := g.recordIDs.Load(parentPath)
-	if !ok {
-		return nil, ErrNotFound
+	if g.useNodesTable {
+		// Fetch record ID from nodes table
+		// This handles the "nodes mode" logic locally
+		err := g.db.QueryRow("SELECT record_id FROM nodes WHERE id = ?", filePath).Scan(&recordID)
+		if err == sql.ErrNoRows || recordID == "" {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Legacy mode: find parent directory's record ID
+		parentPath := strings.Join(segments[:len(segments)-1], "/")
+		if err := g.ensureScanned(segments[0]); err != nil {
+			return nil, err
+		}
+
+		ridVal, ok := g.recordIDs.Load(parentPath)
+		if !ok {
+			return nil, ErrNotFound
+		}
+		recordID = ridVal.(string)
 	}
-	recordID := ridVal.(string)
 
 	// Fetch record from source DB (primary key lookup — instant)
 	var raw string
