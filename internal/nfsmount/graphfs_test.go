@@ -595,7 +595,10 @@ func TestCallers_OpenAndRead(t *testing.T) {
 	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, 1024)
-	n, _ := f.Read(buf)
+	n, err := f.Read(buf)
+	if err != nil && err.Error() != "EOF" {
+		require.NoError(t, err)
+	}
 	require.True(t, n > 0)
 	assert.Equal(t, "func Foo() { Bar() }", string(buf[:n]))
 }

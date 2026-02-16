@@ -472,6 +472,12 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		if entryName != "" {
 			return -fuse.ENOTDIR, 0
 		}
+		if parentDir == "/" {
+			return -fuse.ENOENT, 0
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT, 0
+		}
 		token := filepath.Base(parentDir)
 		callers, err := fs.Graph.GetCallers(token)
 		if err != nil || len(callers) == 0 {
@@ -1189,6 +1195,12 @@ func (fs *MacheFS) Readlink(path string) (int, string) {
 		parentDir, entryName := parseCallersPath(path)
 		if entryName == "" {
 			return -fuse.EINVAL, ""
+		}
+		if parentDir == "/" {
+			return -fuse.ENOENT, ""
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT, ""
 		}
 		token := filepath.Base(parentDir)
 		callers, err := fs.Graph.GetCallers(token)

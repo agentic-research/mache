@@ -144,6 +144,12 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 		if entryName == "" {
 			return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("is a directory")}
 		}
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
 		token := filepath.Base(parentDir)
 		callers, err := fs.graph.GetCallers(token)
 		if err != nil || len(callers) == 0 {
@@ -291,6 +297,12 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		if entryName != "" {
 			return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
 		}
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
 		token := filepath.Base(parentDir)
 		callers, err := fs.graph.GetCallers(token)
 		if err != nil || len(callers) == 0 {
@@ -300,16 +312,19 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		for _, caller := range callers {
 			flatName := strings.ReplaceAll(caller.ID, "/", "_")
 			callerNode, err := fs.graph.GetNode(caller.ID)
-			size := int64(0)
-			if err == nil {
-				size = callerNode.ContentSize()
+			if err != nil {
+				continue
 			}
+			size := callerNode.ContentSize()
 			infos = append(infos, &staticFileInfo{
 				name:    flatName,
 				size:    size,
 				mode:    0o444,
 				modTime: fs.mountTime,
 			})
+		}
+		if len(infos) == 0 {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
 		}
 		return infos, nil
 	}
