@@ -90,6 +90,11 @@ var rootCmd = &cobra.Command{
 
 		mountPoint := args[0]
 
+		// 0. Ensure mount point exists (create if needed)
+		if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+			return fmt.Errorf("create mount point %s: %w", mountPoint, err)
+		}
+
 		// 1. Resolve Configuration Paths
 		home, err := os.UserHomeDir()
 		if err != nil {
