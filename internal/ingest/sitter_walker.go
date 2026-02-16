@@ -19,16 +19,27 @@ const defaultCallQuery = `
 // refQueryRegistry stores language-specific reference extraction queries.
 var refQueryRegistry sync.Map // string (language name) -> string
 
+// contextQueryRegistry stores language-specific context extraction queries.
+var contextQueryRegistry sync.Map // string (language name) -> string
+
 // RegisterRefQuery registers a reference extraction query for a specific language.
 // This should be called during initialization.
 func RegisterRefQuery(langName string, query string) {
 	refQueryRegistry.Store(langName, query)
 }
 
+// RegisterContextQuery registers a context extraction query for a specific language.
+// This should be called during initialization.
+func RegisterContextQuery(langName string, query string) {
+	contextQueryRegistry.Store(langName, query)
+}
+
 // SitterWalker implements Walker for Tree-sitter parsed code.
 type SitterWalker struct {
 	// callQueryCache caches compiled call-extraction queries keyed by language name.
 	callQueryCache sync.Map // string (language name) -> *sitter.Query
+	// contextQueryCache caches compiled context queries.
+	contextQueryCache sync.Map // string (language name) -> *sitter.Query
 }
 
 func NewSitterWalker() *SitterWalker {
@@ -183,29 +194,44 @@ func (m *sitterMatch) Context() any {
 	return nil
 }
 
-// contextQueryStr captures package-level definitions for the context file.
-const contextQueryStr = `
-	; (package_clause) @ctx
-	(import_declaration) @ctx
-	(const_declaration) @ctx
-	(var_declaration) @ctx
-	(type_declaration) @ctx
-`
-
 // getContextQuery returns a cached compiled query for context extraction.
-func (w *SitterWalker) getContextQuery(lang *sitter.Language) (*sitter.Query, error) {
-	// Re-use callQueryCache mechanism or add a new cache?
-	// For simplicity, let's just compile it. Performance optimization can come later.
-	return sitter.NewQuery([]byte(contextQueryStr), lang)
+func (w *SitterWalker) getContextQuery(lang *sitter.Language, langName string) (*sitter.Query, error) {
+	if cached, ok := w.contextQueryCache.Load(langName); ok {
+		return cached.(*sitter.Query), nil
+	}
+
+	qStr := ""
+	if val, ok := contextQueryRegistry.Load(langName); ok {
+		qStr = val.(string)
+	}
+
+	if qStr == "" {
+		return nil, nil // No query for this language
+	}
+
+	q, err := sitter.NewQuery([]byte(qStr), lang)
+	if err != nil {
+		return nil, err
+	}
+
+	actual, loaded := w.contextQueryCache.LoadOrStore(langName, q)
+	if loaded {
+		q.Close()
+		return actual.(*sitter.Query), nil
+	}
+	return q, nil
 }
 
 // ExtractContext finds package-level context nodes.
-func (w *SitterWalker) ExtractContext(root *sitter.Node, source []byte, lang *sitter.Language) ([]byte, error) {
-	q, err := w.getContextQuery(lang)
+func (w *SitterWalker) ExtractContext(root *sitter.Node, source []byte, lang *sitter.Language, langName string) ([]byte, error) {
+	q, err := w.getContextQuery(lang, langName)
 	if err != nil {
 		return nil, fmt.Errorf("invalid context query: %w", err)
 	}
-	defer q.Close()
+	if q == nil {
+		return nil, nil // Not supported for this language
+	}
+	// Do NOT close q here — it is owned by the cache.
 
 	qc := sitter.NewQueryCursor()
 	defer qc.Close()

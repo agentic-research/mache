@@ -681,7 +681,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				if fileRoot == nil {
 					fileRoot = root.Node
 				}
-				ctxBytes, err := sw.ExtractContext(fileRoot, root.Source, root.Lang)
+				ctxBytes, err := sw.ExtractContext(fileRoot, root.Source, root.Lang, root.LangName)
 				if err == nil {
 					contextData = ctxBytes
 					if len(ctxBytes) > 0 {
