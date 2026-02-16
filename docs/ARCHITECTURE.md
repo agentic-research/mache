@@ -11,7 +11,7 @@ graph TD
     subgraph "Data Sources"
         SQLiteFile[".db (SQLite)"]
         FlatFile[".json"]
-        SourceCode[".go / .py"]
+        SourceCode[".go / .py / .tf / .yaml / ..."]
     end
 
     subgraph "Mache Core"
@@ -60,7 +60,7 @@ graph TD
 There are two data paths depending on the source:
 
 1. **SQLite direct (`.db` files)** — `SQLiteGraph` queries the source database directly. A one-pass scan builds the directory tree (~4s for 323K records), then content is resolved on demand via primary key lookup. No data is copied.
-2. **Ingestion (`.json`, `.go`, `.py`)** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`.
+2. **Ingestion (`.json`, `.go`, `.py`, `.tf`, `.hcl`, `.yaml`, `.js`, `.ts`, `.sql`)** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`.
 
 Both paths are fronted by the same `Graph` interface and served via either an **NFS server** (macOS default, `go-nfs` + `billy`) or a **FUSE bridge** (Linux default, `cgofuse` + `fuse-t`). A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
 
@@ -82,7 +82,7 @@ When `--writable` is enabled, file nodes backed by tree-sitter source code becom
 
 ```
 Agent opens file → writeHandle buffers → Agent closes file →
-  Validate (tree-sitter) → Format (gofumpt) → Splice → Surgical update + ShiftOrigins
+  Validate (tree-sitter) → Format (gofumpt/hclwrite) → Splice → Surgical update + ShiftOrigins
 ```
 
 Key types:
