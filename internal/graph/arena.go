@@ -58,6 +58,64 @@ func (h *ArenaHeader) CalculateActiveOffset(fileSize int64) (int64, error) {
 	return offset, nil
 }
 
+// WriteArenaHeader serializes an ArenaHeader to the first 16 bytes at offset 0.
+func WriteArenaHeader(f *os.File, h *ArenaHeader) error {
+	buf := make([]byte, 16)
+	binary.LittleEndian.PutUint32(buf[0:4], h.Magic)
+	buf[4] = h.Version
+	buf[5] = h.ActiveBuffer
+	// buf[6:8] padding = 0
+	binary.LittleEndian.PutUint64(buf[8:16], h.Sequence)
+	_, err := f.WriteAt(buf, 0)
+	return err
+}
+
+// CreateArena creates a fresh double-buffered arena file from a .db file.
+// Layout: [Header (4KB)] [Buffer0 = dbBytes] [Buffer1 = zeros]
+// Buffer size is the .db file size rounded up to the next 4KB page boundary.
+func CreateArena(dbPath, arenaPath string) error {
+	dbBytes, err := os.ReadFile(dbPath)
+	if err != nil {
+		return fmt.Errorf("read db: %w", err)
+	}
+
+	// Round buffer size up to 4KB page boundary
+	bufferSize := int64(len(dbBytes))
+	if bufferSize%ArenaHeaderSize != 0 {
+		bufferSize = (bufferSize/ArenaHeaderSize + 1) * ArenaHeaderSize
+	}
+
+	f, err := os.Create(arenaPath)
+	if err != nil {
+		return fmt.Errorf("create arena: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	// Pre-allocate: header + 2 buffers
+	totalSize := int64(ArenaHeaderSize) + 2*bufferSize
+	if err := f.Truncate(totalSize); err != nil {
+		return fmt.Errorf("truncate arena: %w", err)
+	}
+
+	// Write header
+	h := &ArenaHeader{
+		Magic:        ArenaMagic,
+		Version:      1,
+		ActiveBuffer: 0,
+		Sequence:     1,
+	}
+	if err := WriteArenaHeader(f, h); err != nil {
+		return fmt.Errorf("write header: %w", err)
+	}
+
+	// Write DB bytes into Buffer0
+	if _, err := f.WriteAt(dbBytes, ArenaHeaderSize); err != nil {
+		return fmt.Errorf("write buffer0: %w", err)
+	}
+
+	return f.Sync()
+}
+
 // ExtractActiveDB extracts the active SQLite database from the arena to a temp file.
 // Returns the path to the temp file.
 func ExtractActiveDB(arenaPath string) (string, error) {

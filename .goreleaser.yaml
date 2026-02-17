@@ -7,18 +7,20 @@ before:
     - go mod tidy
 
 builds:
-  # - id: linux-build
-  #   binary: mache
-  #   goos:
-  #     - linux
-  #   goarch:
-  #     - amd64
-  #   env:
-  #     - CGO_ENABLED=1
-  #   flags:
-  #     - -trimpath
-  #   ldflags:
-  #     - -s -w
+  - id: linux-build
+    binary: mache
+    goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+      - CC=zig cc -target x86_64-linux-gnu
+      - CXX=zig c++ -target x86_64-linux-gnu
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
 
   - id: macos-build
     binary: mache

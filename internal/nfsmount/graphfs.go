@@ -390,7 +390,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		if err != nil {
 			continue
 		}
-		infos = append(infos, nodeToFileInfo(childNode))
+		infos = append(infos, fs.nodeToFileInfo(childNode))
 	}
 
 	return infos, nil
@@ -505,7 +505,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 	}
 
-	return nodeToFileInfo(node), nil
+	return fs.nodeToFileInfo(node), nil
 }
 
 func (fs *GraphFS) Symlink(target, link string) error {
@@ -646,7 +646,9 @@ func cleanPath(path string) string {
 }
 
 // nodeToFileInfo converts a graph.Node to os.FileInfo.
-func nodeToFileInfo(n *graph.Node) os.FileInfo {
+// Zero ModTime falls back to the stable mount time (not time.Now()) so that
+// build tools see deterministic timestamps across remounts.
+func (fs *GraphFS) nodeToFileInfo(n *graph.Node) os.FileInfo {
 	mode := os.FileMode(0o444)
 	if n.Mode.IsDir() {
 		mode = os.ModeDir | 0o555
@@ -657,7 +659,7 @@ func nodeToFileInfo(n *graph.Node) os.FileInfo {
 
 	modTime := n.ModTime
 	if modTime.IsZero() {
-		modTime = time.Now()
+		modTime = fs.mountTime
 	}
 
 	return &staticFileInfo{

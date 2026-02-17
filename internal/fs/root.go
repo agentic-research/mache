@@ -845,6 +845,17 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		return 0
 	}
 
+	// Arena write-back path: update record in DB, request coalesced flush.
+	if wg, ok := fs.Graph.(*graph.WritableGraph); ok {
+		if err := wg.UpdateRecord(wh.nodeID, wh.buf); err != nil {
+			log.Printf("writeback: update record %s failed: %v", wh.nodeID, err)
+			return -fuse.EIO
+		}
+		wg.Flush() // coalesced — actual I/O on next tick
+		return 0
+	}
+
+	// Splice write-back path: validate → format → splice into source file.
 	node, err := fs.Graph.GetNode(wh.path)
 	if err != nil {
 		log.Printf("writeback: node %s not found: %v", wh.nodeID, err)
@@ -891,7 +902,12 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		if delta != 0 {
 			store.ShiftOrigins(node.Origin.FilePath, node.Origin.EndByte, delta)
 		}
-		_ = store.UpdateNodeContent(wh.nodeID, formatted, newOrigin, time.Now())
+		// Use source file mtime for deterministic timestamps
+		modTime := time.Now()
+		if fi, err := os.Stat(node.Origin.FilePath); err == nil {
+			modTime = fi.ModTime()
+		}
+		_ = store.UpdateNodeContent(wh.nodeID, formatted, newOrigin, modTime)
 		store.WriteStatus.Store(filepath.Dir(wh.path), "ok")
 	}
 

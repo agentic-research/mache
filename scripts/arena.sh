@@ -22,8 +22,11 @@ YELLOW='\033[0;33m'
 NC='\033[0m'
 
 VERIFY=false
+DEMO=false
 if [ "$1" == "--verify" ]; then
     VERIFY=true
+elif [ "$1" == "--demo" ]; then
+    DEMO=true
 fi
 
 cleanup() {
@@ -437,7 +440,54 @@ echo -e "${GREEN}║  Notes:  $SANDBOX/agent-notes.md${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════════╝${NC}"
 echo ""
 echo "Point your LLM at $SANDBOX/PROMPT.txt"
-echo "When done, press ENTER to run verification."
+
+if [ "$DEMO" = true ]; then
+    echo ""
+    echo -e "${YELLOW}🤖 AUTO-PILOT: Simulating Agent Interaction...${NC}"
+    sleep 1
+
+    # pe = Print & Execute (simulates typing)
+    pe() {
+        echo -e "${BLUE}$ $1${NC}"
+        sleep 0.8
+        eval "$1"
+        sleep 1.5
+    }
+
+    echo ""
+    pe "ls -F $MNT/"
+
+    echo ""
+    echo -e "${YELLOW}# Inspecting a function (PackReading)...${NC}"
+    pe "ls -l $MNT/PackReading/"
+    pe "cat $MNT/PackReading/source"
+
+    echo ""
+    echo -e "${YELLOW}# What global context does this function see?${NC}"
+    pe "head -n 5 $MNT/PackReading/context"
+
+    echo ""
+    echo -e "${YELLOW}# REVERSE GRAPH: Who calls 'UnpackReading'?${NC}"
+    pe "ls $MNT/UnpackReading/callers/"
+
+    echo ""
+    echo -e "${YELLOW}# WRITE-BACK: Editing code via the filesystem...${NC}"
+    # Read-Modify-Write to ensure safety (NFS append support can be tricky)
+    pe "content=\$(cat $MNT/PackReading/source)"
+    pe "echo \"\$content
+// Signed by Mache\" > $MNT/PackReading/source"
+
+    echo -e "${YELLOW}# Verifying the change spliced into the real source file:${NC}"
+    pe "grep -A 1 'PackReading' $REPO/signal_codec.go"
+    pe "grep -A 6 'PackReading' $REPO/signal_codec.go | tail -n 2"
+
+                echo ""
+
+                echo -e "${GREEN}Demo complete.${NC}"
+
+    fi
+
+    echo "When done, press ENTER to run verification."
 read -r
 
 verify

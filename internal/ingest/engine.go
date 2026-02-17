@@ -166,63 +166,65 @@ func (e *Engine) Ingest(path string) error {
 			}
 
 			if shouldParse {
-				return e.ingestFile(p)
+				return e.ingestFile(p, d.ModTime())
 			}
 			// Skip binary files (executables, object files, images, etc.)
 			if isBinaryFile(p) {
 				return nil
 			}
 			if treeSitter {
-				return e.ingestRawFileUnder(p, "_project_files")
+				return e.ingestRawFileUnder(p, "_project_files", d.ModTime())
 			}
-			return e.ingestRawFile(p)
+			return e.ingestRawFile(p, d.ModTime())
 		})
 	}
-	return e.ingestFile(path)
+	info, err = os.Stat(realPath)
+	if err != nil {
+		return err
+	}
+	return e.ingestFile(path, info.ModTime())
 }
 
-func (e *Engine) ingestFile(path string) error {
+func (e *Engine) ingestFile(path string, modTime time.Time) error {
 	ext := filepath.Ext(path)
 
 	switch ext {
 	case ".db":
 		return e.ingestSQLiteStreaming(path)
 	case ".json":
-		return e.ingestJSON(path)
+		return e.ingestJSON(path, modTime)
 	case ".py":
-		return e.ingestTreeSitter(path, python.GetLanguage(), "python")
+		return e.ingestTreeSitter(path, python.GetLanguage(), "python", modTime)
 	case ".js":
-		return e.ingestTreeSitter(path, javascript.GetLanguage(), "javascript")
+		return e.ingestTreeSitter(path, javascript.GetLanguage(), "javascript", modTime)
 	case ".ts", ".tsx":
 		// Use Typescript grammar for both .ts and .tsx (it handles JSX mostly, or use tsx grammar if strictly needed)
 		// go-tree-sitter/typescript usually has typescript and tsx subpackages.
 		// For now, use typescript.
-		return e.ingestTreeSitter(path, typescript.GetLanguage(), "typescript")
+		return e.ingestTreeSitter(path, typescript.GetLanguage(), "typescript", modTime)
 	case ".sql":
-		return e.ingestTreeSitter(path, sql.GetLanguage(), "sql")
+		return e.ingestTreeSitter(path, sql.GetLanguage(), "sql", modTime)
 	case ".go":
-		return e.ingestTreeSitter(path, golang.GetLanguage(), "go")
+		return e.ingestTreeSitter(path, golang.GetLanguage(), "go", modTime)
 	case ".tf", ".hcl":
-		return e.ingestTreeSitter(path, hcl.GetLanguage(), "hcl")
+		return e.ingestTreeSitter(path, hcl.GetLanguage(), "hcl", modTime)
 	case ".yaml", ".yml":
-		return e.ingestTreeSitter(path, yaml.GetLanguage(), "yaml")
+		return e.ingestTreeSitter(path, yaml.GetLanguage(), "yaml", modTime)
 	case ".rs":
-		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust")
+		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust", modTime)
 	default:
 		if isBinaryFile(path) {
 			return nil
 		}
-		return e.ingestRawFile(path)
+		return e.ingestRawFile(path, modTime)
 	}
 }
 
-func (e *Engine) ingestJSON(path string) error {
+func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	// Use time.Now() to force NFS cache invalidation
-	modTime := time.Now()
 
 	var data any
 	if err := json.Unmarshal(content, &data); err != nil {
@@ -261,7 +263,7 @@ func (b *bufferingTarget) AddNode(n *graph.Node) {
 	}
 }
 
-func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName string) error {
+func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName string, modTime time.Time) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -275,8 +277,6 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 	if err != nil {
 		return err
 	}
-	// Use time.Now() to force NFS cache invalidation on updates
-	modTime := time.Now()
 
 	// Use buffering target for atomic swap
 	// Note: We do NOT call DeleteFileNodes here anymore.
@@ -322,7 +322,7 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 				// Route to _project_files/ so the content is still accessible.
 				if strings.Contains(err.Error(), "invalid query") {
 					log.Printf("ingest: routing %s to _project_files/ (schema selector incompatible with %s grammar)", path, langName)
-					return e.ingestRawFileUnder(path, "_project_files")
+					return e.ingestRawFileUnder(path, "_project_files", modTime)
 				}
 				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 			}
@@ -363,11 +363,11 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 	return nil
 }
 
-func (e *Engine) ingestRawFile(path string) error {
-	return e.ingestRawFileUnder(path, "")
+func (e *Engine) ingestRawFile(path string, modTime time.Time) error {
+	return e.ingestRawFileUnder(path, "", modTime)
 }
 
-func (e *Engine) ingestRawFileUnder(path, prefix string) error {
+func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) error {
 	rel, err := filepath.Rel(e.RootPath, path)
 	if err != nil {
 		return err
@@ -440,7 +440,8 @@ func (e *Engine) ingestRawFileUnder(path, prefix string) error {
 	}
 
 	// Use time.Now() to force NFS cache invalidation
-	modTime := time.Now()
+	// modTime := time.Now()
+	// Replaced with actual modTime passed from caller
 
 	absPath, _ := filepath.Abs(path)
 	e.Store.DeleteFileNodes(absPath)
@@ -612,8 +613,9 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
 
 		node := &graph.Node{
-			ID:   id,
-			Mode: os.ModeDir | 0o555,
+			ID:      id,
+			Mode:    os.ModeDir | 0o555,
+			ModTime: time.Unix(0, 0),
 		}
 
 		// Recurse children
@@ -644,8 +646,9 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 			}
 
 			fileNode := &graph.Node{
-				ID:   fileId,
-				Mode: 0o444,
+				ID:      fileId,
+				Mode:    0o444,
+				ModTime: time.Unix(0, 0),
 			}
 
 			// Inline small content, lazy-resolve large content from SQLite

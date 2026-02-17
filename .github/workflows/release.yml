@@ -28,6 +28,11 @@ jobs:
           brew install fuse-t
           # No manual symlinking needed; we use -F /Library/Frameworks in CGO_LDFLAGS
 
+      - name: Set up Zig (for Linux cross-compilation)
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
       - name: Import Signing Certificate
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
