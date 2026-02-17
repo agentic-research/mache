@@ -21,9 +21,9 @@ type MountMetadata struct {
 	PID        int       `json:"pid"`
 	Source     string    `json:"source"`
 	MountPoint string    `json:"mount_point"`
-	GitRepo    string    `json:"git_repo,omitempty"`    // org/repo
-	GitBranch  string    `json:"git_branch,omitempty"`  // branch name
-	GitRemote  string    `json:"git_remote,omitempty"`  // full remote URL
+	GitRepo    string    `json:"git_repo,omitempty"`   // org/repo
+	GitBranch  string    `json:"git_branch,omitempty"` // branch name
+	GitRemote  string    `json:"git_remote,omitempty"` // full remote URL
 	Timestamp  time.Time `json:"timestamp"`
 	Writable   bool      `json:"writable"`
 }
@@ -103,7 +103,7 @@ Start exploring! Use cd/ls to navigate the semantic graph.
 
 // generateMountName creates a human-readable mount directory name.
 // Format: basename-hash (e.g., "mono-a1b2c3" or "myorg-myrepo-a1b2c3")
-func generateMountName(sourcePath string, gitRepo string) string {
+func generateMountName(sourcePath, gitRepo string) string {
 	var baseName string
 
 	if gitRepo != "" {
@@ -183,20 +183,24 @@ func getAgentMountsDir() (string, error) {
 	return macheMountsDir, nil
 }
 
-// saveMountMetadata writes mount metadata to .mache-mount file.
+// sidecarPath returns the metadata sidecar path for a mount point.
+// Stored beside the mount dir (not inside it) to avoid NFS conflicts.
+func sidecarPath(mountPoint string) string {
+	return mountPoint + ".meta.json"
+}
+
+// saveMountMetadata writes mount metadata to a sidecar file beside the mount point.
 func saveMountMetadata(mountPoint string, meta *MountMetadata) error {
-	metaPath := filepath.Join(mountPoint, ".mache-mount")
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(metaPath, data, 0o644)
+	return os.WriteFile(sidecarPath(mountPoint), data, 0o644)
 }
 
-// loadMountMetadata reads mount metadata from .mache-mount file.
+// loadMountMetadata reads mount metadata from the sidecar file.
 func loadMountMetadata(mountPoint string) (*MountMetadata, error) {
-	metaPath := filepath.Join(mountPoint, ".mache-mount")
-	data, err := os.ReadFile(metaPath)
+	data, err := os.ReadFile(sidecarPath(mountPoint))
 	if err != nil {
 		return nil, err
 	}
@@ -207,8 +211,8 @@ func loadMountMetadata(mountPoint string) (*MountMetadata, error) {
 	return &meta, nil
 }
 
-// generatePromptFile creates the PROMPT.txt file for agents.
-func generatePromptFile(mountPoint string, meta *MountMetadata) error {
+// generatePromptContent creates the PROMPT.txt content for agents.
+func generatePromptContent(meta *MountMetadata) []byte {
 	gitInfo := "Not a git repository"
 	if meta.GitRepo != "" {
 		gitInfo = fmt.Sprintf("%s (branch: %s)", meta.GitRepo, meta.GitBranch)
@@ -233,11 +237,10 @@ Invalid writes save as drafts — check _diagnostics/ast-errors`
 		writeInfo,
 	)
 
-	promptPath := filepath.Join(mountPoint, "PROMPT.txt")
-	return os.WriteFile(promptPath, []byte(content), 0o644)
+	return []byte(content)
 }
 
-// listActiveMounts finds all active mache mounts in /tmp/mache.
+// listActiveMounts finds all active mache mounts by scanning sidecar files in /tmp/mache.
 func listActiveMounts() ([]*MountMetadata, error) {
 	mountsDir, err := getAgentMountsDir()
 	if err != nil {
@@ -254,17 +257,23 @@ func listActiveMounts() ([]*MountMetadata, error) {
 
 	var mounts []*MountMetadata
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		name := entry.Name()
+		// Look for sidecar files: <name>.meta.json
+		if !strings.HasSuffix(name, ".meta.json") {
 			continue
 		}
 
-		mountPoint := filepath.Join(mountsDir, entry.Name())
-		meta, err := loadMountMetadata(mountPoint)
+		metaPath := filepath.Join(mountsDir, name)
+		data, err := os.ReadFile(metaPath)
 		if err != nil {
-			continue // Skip invalid mounts
+			continue
+		}
+		var meta MountMetadata
+		if err := json.Unmarshal(data, &meta); err != nil {
+			continue
 		}
 
-		mounts = append(mounts, meta)
+		mounts = append(mounts, &meta)
 	}
 
 	return mounts, nil

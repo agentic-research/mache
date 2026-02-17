@@ -404,8 +404,47 @@ var rootCmd = &cobra.Command{
 				}
 				fmt.Printf(" done in %v\n", time.Since(start))
 				g = sg
+			} else if !writable && ingest.SchemaUsesTreeSitter(schema) {
+				// Read-only source: ingest to SQLite index, mount via SQLiteGraph (fast path).
+				mountName := filepath.Base(mountPoint)
+				tmpDir := filepath.Join(os.TempDir(), "mache")
+				if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+					return fmt.Errorf("create temp dir: %w", err)
+				}
+				indexPath := filepath.Join(tmpDir, mountName+"-index.db")
+
+				fmt.Printf("Indexing source to %s...\n", indexPath)
+				start := time.Now()
+
+				writer, err := ingest.NewSQLiteWriter(indexPath)
+				if err != nil {
+					return fmt.Errorf("create sqlite writer: %w", err)
+				}
+
+				eng := ingest.NewEngine(schema, writer)
+				if err := eng.Ingest(dataPath); err != nil {
+					_ = writer.Close()
+					return fmt.Errorf("ingestion failed: %w", err)
+				}
+				if err := writer.Close(); err != nil {
+					return fmt.Errorf("close sqlite writer: %w", err)
+				}
+				fmt.Printf("Indexing complete in %v\n", time.Since(start))
+				eng.PrintRoutingSummary()
+
+				sg, err := graph.OpenSQLiteGraph(indexPath, schema, ingest.RenderTemplate)
+				if err != nil {
+					return fmt.Errorf("open indexed graph: %w", err)
+				}
+				defer func() {
+					_ = sg.Close()
+					_ = os.Remove(indexPath)
+				}()
+
+				sg.SetCallExtractor(newCallExtractor())
+				g = sg
 			} else {
-				// Non-DB source: use MemoryStore + ingestion pipeline
+				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
 				store := graph.NewMemoryStore()
 				resolver := ingest.NewSQLiteResolver()
 				defer resolver.Close()
@@ -457,14 +496,13 @@ var rootCmd = &cobra.Command{
 			g = graph.NewMemoryStore()
 		}
 
-		// Agent mode: save metadata and generate PROMPT.txt
+		// Agent mode: save metadata sidecar and generate prompt content
+		var promptContent []byte
 		if agentMode && agentMetadata != nil {
 			if err := saveMountMetadata(mountPoint, agentMetadata); err != nil {
 				fmt.Printf("Warning: failed to save mount metadata: %v\n", err)
 			}
-			if err := generatePromptFile(mountPoint, agentMetadata); err != nil {
-				fmt.Printf("Warning: failed to generate PROMPT.txt: %v\n", err)
-			}
+			promptContent = generatePromptContent(agentMetadata)
 			fmt.Printf("\nAgent instructions: %s/PROMPT.txt\n", mountPoint)
 			fmt.Printf("\nTo start:\n")
 			fmt.Printf("  cd %s\n", mountPoint)
@@ -478,7 +516,7 @@ var rootCmd = &cobra.Command{
 		// 4. Mount via selected backend
 		switch backend {
 		case "nfs":
-			return mountNFS(schema, g, engine, mountPoint, writable)
+			return mountNFS(schema, g, engine, mountPoint, writable, promptContent)
 		case "fuse":
 			return mountFUSE(schema, g, engine, mountPoint, writable)
 		default:
@@ -593,7 +631,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	// Mount
 	switch backend {
 	case "nfs":
-		return mountNFS(schema, hotSwap, nil, mountPoint, false)
+		return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
 	case "fuse":
 		return mountFUSE(schema, hotSwap, nil, mountPoint, false)
 	default:
@@ -665,8 +703,11 @@ func mountWritableNFS(schema *api.Topology, wg *graph.WritableGraph, mountPoint 
 }
 
 // mountNFS starts an NFS server backed by GraphFS and mounts it.
-func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
+func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool, promptContent []byte) error {
 	graphFs := nfsmount.NewGraphFS(g, schema)
+	if len(promptContent) > 0 {
+		graphFs.SetPromptContent(promptContent)
+	}
 
 	// Wire write-back if requested (validate → format → splice → surgical update → invalidate)
 	if writable && engine != nil {
@@ -943,11 +984,12 @@ var unmountCmd = &cobra.Command{
 			}
 		}
 
-		// Clean up mount directory
+		// Clean up mount directory and sidecar
 		fmt.Printf("Removing mount directory: %s\n", mountPoint)
 		if err := os.RemoveAll(mountPoint); err != nil {
 			return fmt.Errorf("failed to remove mount directory: %w", err)
 		}
+		_ = os.Remove(sidecarPath(mountPoint))
 
 		fmt.Println("Mount stopped successfully.")
 		return nil
@@ -971,6 +1013,7 @@ var cleanCmd = &cobra.Command{
 				if err := os.RemoveAll(meta.MountPoint); err != nil {
 					fmt.Printf("Warning: failed to remove %s: %v\n", meta.MountPoint, err)
 				} else {
+					_ = os.Remove(sidecarPath(meta.MountPoint))
 					cleaned++
 				}
 			}

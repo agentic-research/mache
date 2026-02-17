@@ -35,6 +35,9 @@ type GraphFS struct {
 	// Shared with MemoryStore.WriteStatus when available,
 	// otherwise uses this local map.
 	diagStatus *sync.Map
+
+	// Optional prompt content served as /PROMPT.txt virtual file (agent mode).
+	promptContent []byte
 }
 
 // NewGraphFS creates a billy.Filesystem backed by a mache Graph.
@@ -57,6 +60,11 @@ func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 		mountTime:  time.Now(),
 		diagStatus: diagStatus,
 	}
+}
+
+// SetPromptContent sets the content for the /PROMPT.txt virtual file.
+func (fs *GraphFS) SetPromptContent(content []byte) {
+	fs.promptContent = content
 }
 
 // SetWriteBack enables write support. The callback is invoked when a
@@ -114,6 +122,11 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 	// Virtual: _schema.json
 	if filename == "/_schema.json" {
 		return &bytesFile{name: "_schema.json", data: fs.schemaJSON}, nil
+	}
+
+	// Virtual: PROMPT.txt (agent mode)
+	if filename == "/PROMPT.txt" && len(fs.promptContent) > 0 {
+		return &bytesFile{name: "PROMPT.txt", data: fs.promptContent}, nil
 	}
 
 	// Virtual: _diagnostics/ files
@@ -421,6 +434,14 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 			mode:    0o444,
 			modTime: fs.mountTime,
 		})
+		if len(fs.promptContent) > 0 {
+			infos = append(infos, &staticFileInfo{
+				name:    "PROMPT.txt",
+				size:    int64(len(fs.promptContent)),
+				mode:    0o444,
+				modTime: fs.mountTime,
+			})
+		}
 	}
 
 	// Add _diagnostics/ virtual dir to writable node directories
@@ -499,6 +520,16 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		return &staticFileInfo{
 			name:    "_schema.json",
 			size:    int64(len(fs.schemaJSON)),
+			mode:    0o444,
+			modTime: fs.mountTime,
+		}, nil
+	}
+
+	// Virtual: PROMPT.txt (agent mode)
+	if filename == "/PROMPT.txt" && len(fs.promptContent) > 0 {
+		return &staticFileInfo{
+			name:    "PROMPT.txt",
+			size:    int64(len(fs.promptContent)),
 			mode:    0o444,
 			modTime: fs.mountTime,
 		}, nil
