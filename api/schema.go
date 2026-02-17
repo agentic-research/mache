@@ -21,6 +21,9 @@ type Node struct {
 	// SkipSelfMatch prevents the selector from matching the current context node itself.
 	// Useful for recursive schemas to avoid infinite loops.
 	SkipSelfMatch bool `json:"skip_self_match,omitempty"`
+	// Language hint for multi-language schemas (e.g., "go", "terraform", "python").
+	// Used to filter nodes during ingestion to prevent cross-language query errors.
+	Language string `json:"language,omitempty"`
 	// Children directories.
 	Children []Node `json:"children,omitempty"`
 	// Files within this directory.

@@ -186,10 +186,10 @@ var rootCmd = &cobra.Command{
 				if errStat == nil && info.IsDir() {
 					fmt.Printf("Inferring schema from directory %s...\n", dataPath)
 					start := time.Now()
-					var allRecords []any
-					fileCount := 0
 
-					walkErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+					// Pass 1: Quick language detection scan (no parsing)
+					languageCounts := make(map[string]int)
+					quickScanErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
 						if err != nil {
 							return err
 						}
@@ -200,75 +200,149 @@ var rootCmd = &cobra.Command{
 							}
 							return nil
 						}
-
 						ext := filepath.Ext(path)
-						if ext == ".o" || ext == ".a" {
-							return nil // Skip binary artifacts
-						}
-
-						var lang *sitter.Language
-
-						switch ext {
-						case ".go":
-							lang = golang.GetLanguage()
-						case ".js":
-							lang = javascript.GetLanguage()
-						case ".py":
-							lang = python.GetLanguage()
-						case ".ts", ".tsx":
-							lang = typescript.GetLanguage()
-						case ".sql":
-							lang = sql.GetLanguage()
-						case ".tf", ".hcl":
-							lang = hcl.GetLanguage()
-						case ".yaml", ".yml":
-							lang = yaml.GetLanguage()
-						case ".rs":
-							lang = rust.GetLanguage()
-						default:
-							return nil // Skip unsupported files
-						}
-
-						content, readErr := os.ReadFile(path)
-						if readErr != nil {
-							fmt.Printf("Warning: skipping unreadable file %s: %v\n", path, readErr)
-							return nil
-						}
-
-						parser := sitter.NewParser()
-						parser.SetLanguage(lang)
-						tree, _ := parser.ParseCtx(context.Background(), nil, content)
-						if tree != nil {
-							records := ingest.FlattenAST(tree.RootNode())
-							allRecords = append(allRecords, records...)
-						}
-						fileCount++
-						if fileCount%100 == 0 {
-							fmt.Printf("\r  Scanned %d files...", fileCount)
+						if langName, _, ok := ingest.DetectLanguageFromExt(ext); ok {
+							languageCounts[langName]++
 						}
 						return nil
 					})
 
-					if fileCount > 0 {
-						fmt.Printf("\r  Scanned %d files total.\n", fileCount)
-					}
-
-					if walkErr != nil {
-						err = fmt.Errorf("walk failed: %w", walkErr)
-					} else if len(allRecords) == 0 {
-						// No source files found - use default passthrough schema
+					if quickScanErr != nil {
+						err = fmt.Errorf("language scan failed: %w", quickScanErr)
+					} else if len(languageCounts) == 0 {
 						fmt.Printf("No source files found, using passthrough schema\n")
-						inferred = &api.Topology{
-							Version: "1",
-							Nodes:   []api.Node{},
-						}
+						inferred = &api.Topology{Version: "v1", Nodes: []api.Node{}}
 					} else {
-						// Use FCA for ASTs (same logic as InferFromTreeSitter)
-						saved := inf.Config.Method
-						inf.Config.Method = "fca"
-						inferred, err = inf.InferFromRecords(allRecords)
-						inf.Config.Method = saved
-						fmt.Printf("Schema inferred from %d records in %v\n", len(allRecords), time.Since(start))
+						fmt.Printf("Detected languages: ")
+						for lang, count := range languageCounts {
+							fmt.Printf("%s(%d) ", lang, count)
+						}
+						fmt.Printf("\n")
+
+						// Pass 2: Parse and infer per language in parallel
+						type langResult struct {
+							lang    string
+							records []any
+							err     error
+						}
+
+						resultsChan := make(chan langResult, len(languageCounts))
+						var wg sync.WaitGroup
+
+						for targetLang := range languageCounts {
+							wg.Add(1)
+							go func(lang string) {
+								defer wg.Done()
+
+								var records []any
+								fileCount := 0
+								sampleLimit := 200 // Only parse first 200 files per language for FCA
+
+								// Walk and parse SAMPLE of files for this language (for schema inference only)
+								walkErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+									if err != nil {
+										return err
+									}
+									if info.IsDir() {
+										base := filepath.Base(path)
+										if (strings.HasPrefix(base, ".") && path != dataPath) || base == "target" || base == "node_modules" || base == "dist" || base == "build" {
+											return filepath.SkipDir
+										}
+										return nil
+									}
+
+									// Stop early once we've collected enough samples
+									if fileCount >= sampleLimit {
+										return nil
+									}
+
+									ext := filepath.Ext(path)
+									if ext == ".o" || ext == ".a" {
+										return nil
+									}
+
+									langName, treeLang, ok := ingest.DetectLanguageFromExt(ext)
+									if !ok || langName != lang {
+										return nil // Skip files not for this language
+									}
+
+									// Parse with tree-sitter
+									content, readErr := os.ReadFile(path)
+									if readErr != nil {
+										return nil // Skip unreadable files
+									}
+
+									parser := sitter.NewParser()
+									parser.SetLanguage(treeLang)
+									tree, _ := parser.ParseCtx(context.Background(), nil, content)
+									if tree != nil {
+										records = append(records, ingest.FlattenASTWithLanguage(tree.RootNode(), langName)...)
+									}
+
+									fileCount++
+									return nil
+								})
+
+								fmt.Printf("  %s: sampled %d/%d files for schema inference\n", lang, fileCount, languageCounts[lang])
+
+								if walkErr != nil {
+									resultsChan <- langResult{lang: lang, err: walkErr}
+									return
+								}
+
+								resultsChan <- langResult{lang: lang, records: records}
+							}(targetLang)
+						}
+
+						// Wait for all goroutines and close channel
+						go func() {
+							wg.Wait()
+							close(resultsChan)
+						}()
+
+						// Collect results
+						recordsByLang := make(map[string][]any)
+						for result := range resultsChan {
+							if result.err != nil {
+								err = fmt.Errorf("scan %s: %w", result.lang, result.err)
+								break
+							}
+							if len(result.records) > 0 {
+								recordsByLang[result.lang] = result.records
+							}
+						}
+
+						if err == nil {
+							if len(recordsByLang) == 0 {
+								// No records parsed
+								fmt.Printf("No parseable source files found, using passthrough schema\n")
+								inferred = &api.Topology{Version: "v1", Nodes: []api.Node{}}
+							} else if len(recordsByLang) == 1 {
+								// Single language - flatten (backward compat)
+								for langName, records := range recordsByLang {
+									saved := inf.Config.Method
+									savedLang := inf.Config.Language
+									inf.Config.Method = "fca"
+									inf.Config.Language = langName
+									inferred, err = inf.InferFromRecords(records)
+									inf.Config.Method = saved
+									inf.Config.Language = savedLang
+									if err == nil {
+										fmt.Printf("Schema inferred from %d records in %v\n", len(records), time.Since(start))
+									}
+								}
+							} else {
+								// Multi-language - create namespaced schema
+								inferred, err = inf.InferMultiLanguage(recordsByLang)
+								if err == nil {
+									totalRecords := 0
+									for _, recs := range recordsByLang {
+										totalRecords += len(recs)
+									}
+									fmt.Printf("Multi-language schema inferred from %d sampled records (%d languages) in %v\n", totalRecords, len(recordsByLang), time.Since(start))
+								}
+							}
+						}
 					}
 				} else {
 					err = fmt.Errorf("automatic inference not supported for %s", ext)
@@ -353,6 +427,7 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("ingest git records: %w", err)
 					}
 					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+					engine.PrintRoutingSummary()
 				} else {
 					fmt.Printf("Ingesting data from %s...\n", dataPath)
 					start := time.Now()
@@ -360,6 +435,7 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("ingestion failed: %w", err)
 					}
 					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+					engine.PrintRoutingSummary()
 				}
 
 				// Enable SQL query support for MemoryStore

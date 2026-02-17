@@ -20,7 +20,7 @@ import (
 //   - This covers classes inside functions, functions inside classes, etc.
 //
 // 4. Default to mapping "source" -> content of the node.
-func ProjectAST(concepts []Concept, ctx *FormalContext) *api.Topology {
+func ProjectAST(concepts []Concept, ctx *FormalContext, config ProjectConfig) *api.Topology {
 	containerTypes := make(map[string]string) // type -> name_type (e.g. identifier, property_identifier)
 
 	// Scan attributes to find types that have "has_name" and "has_body"
@@ -136,6 +136,7 @@ func ProjectAST(concepts []Concept, ctx *FormalContext) *api.Topology {
 			Name:          "{{.name}}",
 			Selector:      selector,
 			SkipSelfMatch: true,
+			Language:      config.Language,
 			Files: []api.Leaf{
 				{
 					Name:            "source",
