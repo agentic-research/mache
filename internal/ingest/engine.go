@@ -242,7 +242,7 @@ func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", "", modTime, e.Store); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", modTime, e.Store, nil); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -302,24 +302,15 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 		e.sourceFile = realPath
 		defer func() { e.sourceFile = "" }()
 
-		// Use bt (buffering target) instead of e.Store inside loop
-		// We need to temporarily swap e.Store or pass bt?
-		// processNode uses e.Store directly.
-		// I should change processNode to take a store argument?
-		// Or simpler: e.Store is an interface. I can swap it on the Engine struct temporarily.
-		// But Engine is shared? No, Engine is created per mount?
-		// Engine is created in cmd/mount.go.
-		// If concurrent ingests happen on same Engine?
-		// Ingest is called by Release (write-back).
-		// If multiple write-backs happen, they race on e.Store swap.
-		// Engine struct shouldn't be mutated if shared.
-		// BUT processNode reads e.Store.
-
-		// Solution: Pass store to processNode.
-		// I will update processNode signature.
+		// Extract context (imports, globals) ONCE per file — shared across all constructs.
+		// This avoids N duplicate allocations where N = number of constructs in the file.
+		var fileContext []byte
+		if ctxBytes, err := walker.ExtractContext(tree.RootNode(), content, lang, langName); err == nil {
+			fileContext = ctxBytes
+		}
 
 		for _, nodeSchema := range e.Schema.Nodes {
-			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime, bt); err != nil {
+			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime, bt, fileContext); err != nil {
 				// Tree-sitter query compilation fails when a schema selector
 				// uses node types from a different language (e.g. Go's
 				// "function_declaration" applied to a Python file). This is
@@ -688,7 +679,7 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string, modTime time.Time, store IngestionTarget) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -806,46 +797,22 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, modTime, store); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, modTime, store, fileContext); err != nil {
 					return err
 				}
 			}
 		}
 
-		// Optimization: extract calls once per match if we are in Sitter mode
+		// Extract calls for this match (refs index)
 		var calls []string
-		var contextData []byte
 		if sw, ok := walker.(*SitterWalker); ok {
-			ctxAny := match.Context()
-			if ctxAny == nil {
-				log.Printf("Context is nil for %s", id)
-			} else if root, ok := ctxAny.(SitterRoot); ok {
-				c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang, root.LangName)
-				if err == nil {
-					calls = c
-				}
-				// Extract context (imports, globals) from the file root
-				// Use the file root node, not the match scope
-				fileRoot := root.FileRoot
-				if fileRoot == nil {
-					fileRoot = root.Node
-				}
-				ctxBytes, err := sw.ExtractContext(fileRoot, root.Source, root.Lang, root.LangName)
-				if err == nil {
-					contextData = ctxBytes
-					if len(ctxBytes) > 0 {
-						log.Printf("Context extracted for %s: %d bytes", id, len(ctxBytes))
-					} else {
-						log.Printf("Context extracted for %s: 0 bytes", id)
+			if ctxAny := match.Context(); ctxAny != nil {
+				if root, ok := ctxAny.(SitterRoot); ok {
+					if c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang, root.LangName); err == nil {
+						calls = c
 					}
-				} else {
-					log.Printf("Context extraction failed for %s: %v", id, err)
 				}
-			} else {
-				log.Printf("Context type mismatch for %s: %T", id, ctxAny)
 			}
-		} else {
-			log.Printf("Walker is not SitterWalker for %s", id)
 		}
 
 		// Re-fetch current node (updated by recursion) — preserve Children + Properties
@@ -861,7 +828,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Mode:       os.ModeDir | 0o555, // Read-only dir
 			ModTime:    modTime,            // Propagate source file time
 			Children:   currentChildren,
-			Context:    contextData,
+			Context:    fileContext,
 			Properties: currentProps,
 		}
 		store.AddNode(node)
