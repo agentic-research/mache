@@ -279,6 +279,10 @@ func (g *WritableGraph) GetCallers(token string) ([]*Node, error) {
 	return nodes, nil
 }
 
+func (g *WritableGraph) GetCallees(id string) ([]*Node, error) {
+	return nil, nil // arena-mode mounts don't have call extraction
+}
+
 func (g *WritableGraph) Invalidate(id string) {
 	g.sizeCache.Delete(id)
 	g.contentMu.Lock()

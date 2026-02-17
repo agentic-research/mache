@@ -205,6 +205,10 @@ func (w *SQLiteWriter) AddRef(token, nodeID string) error {
 	return err
 }
 
+func (w *SQLiteWriter) AddDef(token, dirID string) error {
+	return nil // Not persisted in build output yet (Phase 2: node_defs table)
+}
+
 func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 	// Not implemented for batch writer (usually used for fresh ingest)
 }
@@ -268,6 +272,10 @@ func (w *SQLiteWriter) ReadContent(id string, buf []byte, offset int64) (int, er
 }
 
 func (w *SQLiteWriter) GetCallers(token string) ([]*graph.Node, error) {
+	return nil, nil // Not used during ingest
+}
+
+func (w *SQLiteWriter) GetCallees(id string) ([]*graph.Node, error) {
 	return nil, nil // Not used during ingest
 }
 

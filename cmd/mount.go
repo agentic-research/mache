@@ -280,6 +280,23 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}
 				defer func() { _ = sg.Close() }() // safe to ignore
+
+				// Wire call extractor for callees/ resolution
+				walker := ingest.NewSitterWalker()
+				sg.SetCallExtractor(func(content []byte, path, langName string) ([]string, error) {
+					lang := ingest.GetLanguage(langName)
+					if lang == nil {
+						return nil, nil
+					}
+					parser := sitter.NewParser()
+					parser.SetLanguage(lang)
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					if tree == nil {
+						return nil, nil
+					}
+					return walker.ExtractCalls(tree.RootNode(), content, lang, langName)
+				})
+
 				start := time.Now()
 				fmt.Print("Scanning records...")
 				if err := sg.EagerScan(); err != nil {
@@ -293,6 +310,22 @@ var rootCmd = &cobra.Command{
 				resolver := ingest.NewSQLiteResolver()
 				defer resolver.Close()
 				store.SetResolver(resolver.Resolve)
+
+				// Wire call extractor for callees/ resolution
+				walker := ingest.NewSitterWalker()
+				store.SetCallExtractor(func(content []byte, path, langName string) ([]string, error) {
+					lang := ingest.GetLanguage(langName)
+					if lang == nil {
+						return nil, nil
+					}
+					parser := sitter.NewParser()
+					parser.SetLanguage(lang)
+					tree, _ := parser.ParseCtx(context.Background(), nil, content)
+					if tree == nil {
+						return nil, nil
+					}
+					return walker.ExtractCalls(tree.RootNode(), content, lang, langName)
+				})
 
 				engine = ingest.NewEngine(schema, store)
 

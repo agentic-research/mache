@@ -55,6 +55,13 @@ func (h *HotSwapGraph) GetCallers(token string) ([]*Node, error) {
 	return h.current.GetCallers(token)
 }
 
+// GetCallees delegates to current graph.
+func (h *HotSwapGraph) GetCallees(id string) ([]*Node, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.current.GetCallees(id)
+}
+
 // Invalidate delegates to current graph.
 func (h *HotSwapGraph) Invalidate(id string) {
 	h.mu.RLock()

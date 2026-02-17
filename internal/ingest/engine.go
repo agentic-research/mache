@@ -37,6 +37,7 @@ type IngestionTarget interface {
 	AddNode(n *graph.Node)
 	AddRoot(n *graph.Node)
 	AddRef(token, nodeID string) error
+	AddDef(token, dirID string) error
 	DeleteFileNodes(filePath string)
 }
 
@@ -261,6 +262,10 @@ func (b *bufferingTarget) AddNode(n *graph.Node) {
 	} else {
 		b.bufferedNodes = append(b.bufferedNodes, n)
 	}
+}
+
+func (b *bufferingTarget) AddDef(token, dirID string) error {
+	return b.IngestionTarget.AddDef(token, dirID)
 }
 
 func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName string, modTime time.Time) error {
@@ -739,7 +744,26 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			ModTime:  modTime,            // Propagate source file time
 			Children: existingChildren,
 		}
+
+		// Store language name and register definition for callees/ resolution
+		if _, ok := walker.(*SitterWalker); ok {
+			if ctxAny := match.Context(); ctxAny != nil {
+				if root, ok := ctxAny.(SitterRoot); ok && root.LangName != "" {
+					if node.Properties == nil {
+						node.Properties = make(map[string][]byte)
+					}
+					node.Properties["lang"] = []byte(root.LangName)
+				}
+			}
+		}
 		store.AddNode(node)
+
+		// Register definition: construct name → directory ID
+		if len(schema.Files) > 0 {
+			if err := store.AddDef(name, id); err != nil {
+				return fmt.Errorf("add def %s -> %s: %w", name, id, err)
+			}
+		}
 
 		// Link to parent
 		if parentPath == "" {
@@ -808,18 +832,21 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			log.Printf("Walker is not SitterWalker for %s", id)
 		}
 
-		// Re-fetch current children (updated by recursion)
+		// Re-fetch current node (updated by recursion) — preserve Children + Properties
 		var currentChildren []string
+		var currentProps map[string][]byte
 		if current, err := store.GetNode(id); err == nil {
 			currentChildren = current.Children
+			currentProps = current.Properties
 		}
 
 		node = &graph.Node{
-			ID:       id,
-			Mode:     os.ModeDir | 0o555, // Read-only dir
-			ModTime:  modTime,            // Propagate source file time
-			Children: currentChildren,
-			Context:  contextData,
+			ID:         id,
+			Mode:       os.ModeDir | 0o555, // Read-only dir
+			ModTime:    modTime,            // Propagate source file time
+			Children:   currentChildren,
+			Context:    contextData,
+			Properties: currentProps,
 		}
 		store.AddNode(node)
 		for _, fileSchema := range schema.Files {
@@ -903,15 +930,42 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			node.Children = append(node.Children, fileId)
 			store.AddNode(node)
 
-			// Update Index
-			for _, token := range calls {
-				if err := store.AddRef(token, fileId); err != nil {
-					return fmt.Errorf("add ref %s -> %s: %w", token, fileId, err)
+			// Update Index — only for the source file to avoid duplicate refs
+			if fileSchema.Name == "source" {
+				for _, token := range calls {
+					if err := store.AddRef(token, fileId); err != nil {
+						return fmt.Errorf("add ref %s -> %s: %w", token, fileId, err)
+					}
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// GetLanguage returns the tree-sitter language for a language name string.
+// Returns nil for unsupported languages.
+func GetLanguage(langName string) *sitter.Language {
+	switch langName {
+	case "go":
+		return golang.GetLanguage()
+	case "python":
+		return python.GetLanguage()
+	case "javascript":
+		return javascript.GetLanguage()
+	case "typescript":
+		return typescript.GetLanguage()
+	case "sql":
+		return sql.GetLanguage()
+	case "hcl":
+		return hcl.GetLanguage()
+	case "yaml":
+		return yaml.GetLanguage()
+	case "rust":
+		return rust.GetLanguage()
+	default:
+		return nil
+	}
 }
 
 var tmplFuncs = template.FuncMap{

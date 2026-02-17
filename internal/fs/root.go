@@ -182,6 +182,58 @@ func callersSymlinkTarget(callersParentDir, callerID string) string {
 	return strings.Repeat("../", depth) + callerID
 }
 
+// isCalleesPath returns true if the path contains a /callees segment boundary.
+func isCalleesPath(path string) bool {
+	return strings.HasSuffix(path, "/callees") || strings.Contains(path, "/callees/")
+}
+
+// parseCalleesPath splits a callees path into (parentDir, entryName).
+func parseCalleesPath(path string) (parentDir, entryName string) {
+	idx := strings.Index(path, "/callees/")
+	if idx < 0 {
+		if strings.HasSuffix(path, "/callees") {
+			idx = len(path) - len("/callees")
+		} else {
+			return "", ""
+		}
+	}
+	parentDir = path[:idx]
+	if parentDir == "" {
+		parentDir = "/"
+	}
+	rest := path[idx+len("/callees"):]
+	if rest == "" || rest == "/" {
+		return parentDir, ""
+	}
+	entryName = strings.TrimPrefix(rest, "/")
+	return parentDir, entryName
+}
+
+// calleesSymlinkTarget computes the relative symlink target from a callees/ entry
+// back to the callee's source node in the graph.
+func calleesSymlinkTarget(calleesParentDir, sourceID string) string {
+	depth := strings.Count(calleesParentDir, "/") + 1 // +1 for callees/ dir itself
+	return strings.Repeat("../", depth) + sourceID
+}
+
+// findCalleeSource finds the "source" child of a callee directory node.
+// Returns the full source ID or "" if not found.
+func (fs *MacheFS) findCalleeSource(calleeID string) string {
+	children, err := fs.Graph.ListChildren(calleeID)
+	if err != nil {
+		return ""
+	}
+	for _, child := range children {
+		if filepath.Base(child) == "source" {
+			if !strings.Contains(child, "/") {
+				return calleeID + "/" + child
+			}
+			return child
+		}
+	}
+	return ""
+}
+
 // diagContent returns the content of a diagnostics virtual file.
 func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 	store, ok := fs.Graph.(*graph.MemoryStore)
@@ -419,6 +471,43 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return -fuse.ENOENT
 	}
 
+	// Virtual: callees/
+	if isCalleesPath(path) {
+		parentDir, entryName := parseCalleesPath(path)
+		if parentDir == "/" {
+			return -fuse.ENOENT
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT
+		}
+		callees, err := fs.Graph.GetCallees(parentDir)
+		if err != nil || len(callees) == 0 {
+			return -fuse.ENOENT
+		}
+		if entryName == "" {
+			stat.Ino = pathIno(path)
+			stat.Mode = fuse.S_IFDIR | 0o555
+			stat.Nlink = 2
+			return 0
+		}
+		for _, callee := range callees {
+			sourceID := fs.findCalleeSource(callee.ID)
+			if sourceID == "" {
+				continue
+			}
+			flatName := strings.ReplaceAll(sourceID, "/", "_")
+			if flatName == entryName {
+				stat.Ino = pathIno(path)
+				stat.Mode = fuse.S_IFLNK | 0o777
+				stat.Nlink = 1
+				target := calleesSymlinkTarget(parentDir, sourceID)
+				stat.Size = int64(len(target))
+				return 0
+			}
+		}
+		return -fuse.ENOENT
+	}
+
 	node, err := fs.Graph.GetNode(path)
 	if err != nil {
 		return -fuse.ENOENT
@@ -495,6 +584,37 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return 0, fh
 	}
 
+	// Virtual: callees/ directory
+	if isCalleesPath(path) {
+		parentDir, entryName := parseCalleesPath(path)
+		if entryName != "" {
+			return -fuse.ENOTDIR, 0
+		}
+		if parentDir == "/" {
+			return -fuse.ENOENT, 0
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT, 0
+		}
+		callees, err := fs.Graph.GetCallees(parentDir)
+		if err != nil || len(callees) == 0 {
+			return -fuse.ENOENT, 0
+		}
+		entries := []string{".", ".."}
+		for _, c := range callees {
+			sourceID := fs.findCalleeSource(c.ID)
+			if sourceID != "" {
+				entries = append(entries, strings.ReplaceAll(sourceID, "/", "_"))
+			}
+		}
+		fs.handleMu.Lock()
+		fh := fs.nextHandle
+		fs.nextHandle++
+		fs.handles[fh] = &dirHandle{path: path, entries: entries}
+		fs.handleMu.Unlock()
+		return 0, fh
+	}
+
 	var node *graph.Node
 	if path != "/" {
 		var err error
@@ -533,6 +653,12 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		token := filepath.Base(path)
 		if callers, err := fs.Graph.GetCallers(token); err == nil && len(callers) > 0 {
 			entries = append(entries, "callers")
+		}
+	}
+	// Add callees/ if construct has outgoing calls (self-gating)
+	if path != "/" {
+		if callees, err := fs.Graph.GetCallees(path); err == nil && len(callees) > 0 {
+			entries = append(entries, "callees")
 		}
 	}
 	for _, c := range children {
@@ -667,6 +793,13 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 	}
 
 	if name == "callers" && !isCallersPath(dirPath) {
+		stat.Ino = pathIno(fullPath)
+		stat.Mode = fuse.S_IFDIR | 0o555
+		stat.Nlink = 2
+		return stat
+	}
+
+	if name == "callees" && !isCalleesPath(dirPath) {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
@@ -1204,7 +1337,7 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 	return 0
 }
 
-// Readlink returns the symlink target for callers/ entries and /.query/<name>/<entry>.
+// Readlink returns the symlink target for callers/, callees/ entries and /.query/<name>/<entry>.
 func (fs *MacheFS) Readlink(path string) (int, string) {
 	// Virtual: callers/ symlinks
 	if isCallersPath(path) {
@@ -1227,6 +1360,35 @@ func (fs *MacheFS) Readlink(path string) (int, string) {
 			flatName := strings.ReplaceAll(caller.ID, "/", "_")
 			if flatName == entryName {
 				return 0, callersSymlinkTarget(parentDir, caller.ID)
+			}
+		}
+		return -fuse.ENOENT, ""
+	}
+
+	// Virtual: callees/ symlinks
+	if isCalleesPath(path) {
+		parentDir, entryName := parseCalleesPath(path)
+		if entryName == "" {
+			return -fuse.EINVAL, ""
+		}
+		if parentDir == "/" {
+			return -fuse.ENOENT, ""
+		}
+		if _, err := fs.Graph.GetNode(parentDir); err != nil {
+			return -fuse.ENOENT, ""
+		}
+		callees, err := fs.Graph.GetCallees(parentDir)
+		if err != nil || len(callees) == 0 {
+			return -fuse.ENOENT, ""
+		}
+		for _, callee := range callees {
+			sourceID := fs.findCalleeSource(callee.ID)
+			if sourceID == "" {
+				continue
+			}
+			flatName := strings.ReplaceAll(sourceID, "/", "_")
+			if flatName == entryName {
+				return 0, calleesSymlinkTarget(parentDir, sourceID)
 			}
 		}
 		return -fuse.ENOENT, ""
