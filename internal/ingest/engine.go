@@ -148,6 +148,15 @@ func (e *Engine) Ingest(path string) error {
 				}
 				return nil
 			}
+			// Skip symlinks to directories (e.g., kodata/templates -> ../templates)
+			// filepath.Walk doesn't follow symlinks, so d.IsDir() is false for them,
+			// but os.ReadFile will follow and fail with "is a directory".
+			if d.Mode()&os.ModeSymlink != 0 {
+				target, err := os.Stat(p)
+				if err == nil && target.IsDir() {
+					return nil
+				}
+			}
 			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
 			if ext == ".o" || ext == ".a" {
@@ -222,6 +231,15 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 }
 
 func (e *Engine) ingestJSON(path string, modTime time.Time) error {
+	// Defensive check: ensure path is a file, not a directory
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a JSON file", path)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -276,6 +294,15 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 	realPath, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		realPath = absPath
+	}
+
+	// Defensive check: ensure path is a file, not a directory
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a source file", realPath)
 	}
 
 	content, err := os.ReadFile(realPath)
@@ -430,6 +457,16 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 	} else {
 		fileID = rel
 	}
+
+	// Defensive check: ensure path is a file, not a directory
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, cannot ingest as raw file", path)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err

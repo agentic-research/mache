@@ -50,6 +50,7 @@ var (
 	inferSchema bool
 	quiet       bool
 	backend     string
+	agentMode   bool
 )
 
 func init() {
@@ -59,6 +60,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back (splice edits into source files)")
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
+	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
 
 	defaultBackend := "fuse"
 	if runtime.GOOS == "darwin" {
@@ -67,6 +69,9 @@ func init() {
 	rootCmd.Flags().StringVar(&backend, "backend", defaultBackend, "Mount backend: nfs or fuse")
 
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(unmountCmd)
+	rootCmd.AddCommand(cleanCmd)
 }
 
 var versionCmd = &cobra.Command{
@@ -78,9 +83,10 @@ var versionCmd = &cobra.Command{
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "mache [mountpoint]",
-	Short: "Mache: The Universal Semantic Overlay Engine",
-	Args:  cobra.ExactArgs(1),
+	Use:     "mache [mountpoint]",
+	Short:   "Mache: The Universal Semantic Overlay Engine",
+	Args:    cobra.MaximumNArgs(1),
+	Version: fmt.Sprintf("%s (commit %s, built %s)", Version, Commit, Date),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if quiet {
 			f, err := os.Open(os.DevNull)
@@ -89,7 +95,25 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		mountPoint := args[0]
+		// Agent mode: auto-generate mount point and configure
+		if agentMode {
+			if err := runAgentMode(); err != nil {
+				return err
+			}
+			// agentMetadata is now set, including the mount point
+		}
+
+		// Determine mount point
+		var mountPoint string
+		if agentMode {
+			mountPoint = agentMetadata.MountPoint
+		} else {
+			// Normal mode: require mountpoint argument
+			if len(args) == 0 {
+				return fmt.Errorf("mountpoint required (or use --agent for auto mode)")
+			}
+			mountPoint = args[0]
+		}
 
 		// 0. Ensure mount point exists (create if needed)
 		if err := os.MkdirAll(mountPoint, 0o755); err != nil {
@@ -223,7 +247,12 @@ var rootCmd = &cobra.Command{
 					if walkErr != nil {
 						err = fmt.Errorf("walk failed: %w", walkErr)
 					} else if len(allRecords) == 0 {
-						err = fmt.Errorf("no supported source files found in %s", dataPath)
+						// No source files found - use default passthrough schema
+						fmt.Printf(" no source files found, using passthrough schema\n")
+						inferred = &api.Topology{
+							Version: "1",
+							Nodes:   []api.Node{},
+						}
 					} else {
 						// Use FCA for ASTs (same logic as InferFromTreeSitter)
 						saved := inf.Config.Method
@@ -341,6 +370,24 @@ var rootCmd = &cobra.Command{
 			}
 			fmt.Printf("No data found at %s, starting empty.\n", dataPath)
 			g = graph.NewMemoryStore()
+		}
+
+		// Agent mode: save metadata and generate PROMPT.txt
+		if agentMode && agentMetadata != nil {
+			if err := saveMountMetadata(mountPoint, agentMetadata); err != nil {
+				fmt.Printf("Warning: failed to save mount metadata: %v\n", err)
+			}
+			if err := generatePromptFile(mountPoint, agentMetadata); err != nil {
+				fmt.Printf("Warning: failed to generate PROMPT.txt: %v\n", err)
+			}
+			fmt.Printf("\nAgent instructions: %s/PROMPT.txt\n", mountPoint)
+			fmt.Printf("\nTo start:\n")
+			fmt.Printf("  cd %s\n", mountPoint)
+			fmt.Printf("  cat PROMPT.txt\n")
+			fmt.Printf("  claude  # or your preferred LLM\n")
+			fmt.Printf("\nTo stop:\n")
+			fmt.Printf("  mache unmount %s\n", filepath.Base(mountPoint))
+			fmt.Printf("  # or press Ctrl+C in this terminal\n\n")
 		}
 
 		// 4. Mount via selected backend
@@ -733,6 +780,125 @@ func newCallExtractor() graph.CallExtractor {
 		}
 		return walker.ExtractQualifiedCalls(tree.RootNode(), content, lang, langName)
 	}
+}
+
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List active mache mounts",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mounts, err := listActiveMounts()
+		if err != nil {
+			return err
+		}
+
+		if len(mounts) == 0 {
+			fmt.Println("No active mache mounts found.")
+			return nil
+		}
+
+		fmt.Printf("%-20s %-10s %-50s %s\n", "MOUNT", "PID", "SOURCE", "STATUS")
+		fmt.Println(strings.Repeat("-", 100))
+
+		for _, meta := range mounts {
+			name := filepath.Base(meta.MountPoint)
+			status := "running"
+			if !isProcessRunning(meta.PID) {
+				status = "stale"
+			}
+			fmt.Printf("%-20s %-10d %-50s %s\n", name, meta.PID, meta.Source, status)
+		}
+
+		return nil
+	},
+}
+
+var unmountCmd = &cobra.Command{
+	Use:   "unmount <mount-name>",
+	Short: "Unmount and stop a mache mount",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mountName := args[0]
+
+		// Resolve mount point (support both short name and full path)
+		var mountPoint string
+		if filepath.IsAbs(mountName) {
+			mountPoint = mountName
+		} else {
+			mountsDir, err := getAgentMountsDir()
+			if err != nil {
+				return err
+			}
+			mountPoint = filepath.Join(mountsDir, mountName)
+		}
+
+		// Load metadata
+		meta, err := loadMountMetadata(mountPoint)
+		if err != nil {
+			return fmt.Errorf("failed to load mount metadata: %w", err)
+		}
+
+		// Kill the process
+		if isProcessRunning(meta.PID) {
+			process, err := os.FindProcess(meta.PID)
+			if err != nil {
+				return fmt.Errorf("failed to find process %d: %w", meta.PID, err)
+			}
+
+			fmt.Printf("Stopping mache process (PID %d)...\n", meta.PID)
+			if err := process.Signal(syscall.SIGTERM); err != nil {
+				return fmt.Errorf("failed to send SIGTERM: %w", err)
+			}
+
+			// Wait briefly for graceful shutdown
+			time.Sleep(2 * time.Second)
+
+			if isProcessRunning(meta.PID) {
+				fmt.Printf("Process still running, sending SIGKILL...\n")
+				_ = process.Signal(syscall.SIGKILL)
+			}
+		}
+
+		// Clean up mount directory
+		fmt.Printf("Removing mount directory: %s\n", mountPoint)
+		if err := os.RemoveAll(mountPoint); err != nil {
+			return fmt.Errorf("failed to remove mount directory: %w", err)
+		}
+
+		fmt.Println("Mount stopped successfully.")
+		return nil
+	},
+}
+
+var cleanCmd = &cobra.Command{
+	Use:   "clean",
+	Short: "Remove stale mache mounts (where process has died)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mounts, err := listActiveMounts()
+		if err != nil {
+			return err
+		}
+
+		cleaned := 0
+		for _, meta := range mounts {
+			if !isProcessRunning(meta.PID) {
+				fmt.Printf("Removing stale mount: %s (PID %d was not running)\n",
+					filepath.Base(meta.MountPoint), meta.PID)
+				if err := os.RemoveAll(meta.MountPoint); err != nil {
+					fmt.Printf("Warning: failed to remove %s: %v\n", meta.MountPoint, err)
+				} else {
+					cleaned++
+				}
+			}
+		}
+
+		if cleaned == 0 {
+			fmt.Println("No stale mounts found.")
+		} else {
+			fmt.Printf("Cleaned %d stale mount(s).\n", cleaned)
+		}
+
+		return nil
+	},
 }
 
 // Execute runs the root command.
