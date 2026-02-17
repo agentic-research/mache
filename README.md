@@ -5,6 +5,8 @@
 
 > **Mache** (/mɑʃe/ *mah-shay*): From the French *mâché*, meaning **"crushed and ground"** (as in *papier-mâché*). Just as waste paper is shredded and remolded into strong, complex shapes, Mache remolds raw data into navigable filesystems.
 
+![Mache Demo](demo.gif)
+
 ## Mache: The Graph-Native Filesystem
 
 **We realized that JSON, YAML, Source Code, and Filesystems are all just Graphs.**
