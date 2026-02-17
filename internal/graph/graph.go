@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +70,17 @@ func (n *Node) ContentSize() int64 {
 // ContentResolverFunc resolves a ContentRef into byte content.
 type ContentResolverFunc func(ref *ContentRef) ([]byte, error)
 
+// QualifiedCall represents a function call with optional package qualifier.
+type QualifiedCall struct {
+	Token     string // Function/method name (e.g., "Validate")
+	Qualifier string // Package qualifier (e.g., "auth"); empty for unqualified calls
+}
+
+// CallExtractor parses source code and returns qualified function call tokens.
+// Used for on-demand "callees/" resolution.
+// langName is the tree-sitter language identifier (e.g. "go", "python").
+type CallExtractor func(content []byte, path, langName string) ([]QualifiedCall, error)
+
 // Graph is the interface for the FUSE layer.
 // This allows us to swap the backend later (Memory -> SQLite -> Mmap).
 type Graph interface {
@@ -75,6 +88,7 @@ type Graph interface {
 	ListChildren(id string) ([]string, error)
 	ReadContent(id string, buf []byte, offset int64) (int, error)
 	GetCallers(token string) ([]*Node, error)
+	GetCallees(id string) ([]*Node, error)
 	// Invalidate evicts cached data for a node (size, content).
 	// Called after write-back to force re-render on next access.
 	Invalidate(id string)
@@ -90,7 +104,8 @@ type MemoryStore struct {
 	roots    []string // Top-level nodes (e.g. "vulns")
 	resolver ContentResolverFunc
 	cache    *contentCache
-	refs     map[string][]string // token -> []nodeID
+	refs     map[string][]string // token -> []nodeID (callers: who calls token)
+	defs     map[string][]string // token -> []construct_dir_id (definitions: where token is defined)
 
 	// Roaring bitmap index: file path → set of node internal IDs.
 	// Enables O(k) DeleteFileNodes and ShiftOrigins instead of O(N) full scan.
@@ -111,6 +126,8 @@ type MemoryStore struct {
 	dbID       string // unique ID for vtab registry
 	flushOnce  sync.Once
 	flushErr   error
+
+	extractor CallExtractor
 }
 
 // normalizeID strips a leading slash from node IDs.
@@ -127,9 +144,15 @@ func NewMemoryStore() *MemoryStore {
 		nodes:       make(map[string]*Node),
 		roots:       []string{},
 		refs:        make(map[string][]string),
+		defs:        make(map[string][]string),
 		fileToNodes: make(map[string]*roaring.Bitmap),
 		nodeIntID:   make(map[string]uint32),
 	}
+}
+
+// SetCallExtractor configures the parser for on-demand callee resolution.
+func (s *MemoryStore) SetCallExtractor(fn CallExtractor) {
+	s.extractor = fn
 }
 
 // SetResolver configures lazy content resolution for nodes with ContentRef.
@@ -226,6 +249,21 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refs[token] = append(s.refs[token], nodeID)
+	return nil
+}
+
+// AddDef records that a construct (dirID) defines the given token.
+// Used by callees/ resolution: token → where it is defined.
+// Uses copy-on-write: creates a new slice instead of appending to the existing one,
+// so concurrent readers (GetCallees holds RLock) never see a partially-updated slice.
+func (s *MemoryStore) AddDef(token, dirID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := s.defs[token]
+	newSlice := make([]string, len(existing)+1)
+	copy(newSlice, existing)
+	newSlice[len(existing)] = dirID
+	s.defs[token] = newSlice
 	return nil
 }
 
@@ -377,6 +415,168 @@ func (s *MemoryStore) GetCallers(token string) ([]*Node, error) {
 		}
 	}
 	return nodes, nil
+}
+
+// --- Import parsing for qualified callees resolution ---
+
+var (
+	singleImportRe = regexp.MustCompile(`import\s+(\w+\s+)?"([^"]+)"`)
+	groupImportRe  = regexp.MustCompile(`(?s)import\s*\(([^)]*)\)`)
+	memberImportRe = regexp.MustCompile(`(\w+)?\s*"([^"]+)"`)
+)
+
+// parseGoImports extracts alias → import path mappings from Go context text.
+// For unaliased imports, the alias is the last path segment.
+func parseGoImports(ctx []byte) map[string]string {
+	imports := make(map[string]string)
+	text := string(ctx)
+
+	for _, m := range singleImportRe.FindAllStringSubmatch(text, -1) {
+		addGoImport(imports, strings.TrimSpace(m[1]), m[2])
+	}
+
+	for _, m := range groupImportRe.FindAllStringSubmatch(text, -1) {
+		for _, im := range memberImportRe.FindAllStringSubmatch(m[1], -1) {
+			addGoImport(imports, strings.TrimSpace(im[1]), im[2])
+		}
+	}
+
+	return imports
+}
+
+func addGoImport(imports map[string]string, alias, path string) {
+	if alias == "_" || alias == "." {
+		return
+	}
+	if alias == "" {
+		alias = filepath.Base(path)
+	}
+	imports[alias] = path
+}
+
+// GetCallees implements Graph. It parses the node's source to find calls,
+// then looks up those tokens in the defs index to find definitions.
+func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
+	// 1. Find the "source" file child
+	s.mu.RLock()
+	id = normalizeID(id)
+	node, ok := s.nodes[id]
+	s.mu.RUnlock()
+
+	if !ok || !node.Mode.IsDir() {
+		return nil, nil
+	}
+
+	var sourceID string
+	for _, childID := range node.Children {
+		if filepath.Base(childID) == "source" {
+			sourceID = childID
+			break
+		}
+	}
+	if sourceID == "" {
+		return nil, nil
+	}
+
+	// 2. Read content
+	srcNode, err := s.GetNode(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	size := srcNode.ContentSize()
+	buf := make([]byte, size)
+	if _, err := s.ReadContent(sourceID, buf, 0); err != nil {
+		return nil, err
+	}
+
+	// 3. Determine langName from construct directory Properties
+	var langName string
+	if node.Properties != nil {
+		if v, ok := node.Properties["lang"]; ok {
+			langName = string(v)
+		}
+	}
+
+	// 4. Extract qualified calls
+	if s.extractor == nil {
+		return nil, nil
+	}
+	qcalls, err := s.extractor(buf, sourceID, langName)
+	if err != nil {
+		return nil, fmt.Errorf("extract calls: %w", err)
+	}
+
+	// 5. Resolve tokens via defs index (qualified → import fallback → bare)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var results []*Node
+	seen := make(map[string]bool)
+	var imports map[string]string // lazy-parsed Go imports
+
+	for _, qc := range qcalls {
+		resolved := false
+
+		// Qualified resolution: "auth.Validate" → defs["auth.Validate"]
+		if qc.Qualifier != "" {
+			qualKey := qc.Qualifier + "." + qc.Token
+			if defIDs, ok := s.defs[qualKey]; ok {
+				for _, defID := range defIDs {
+					if defID == id || seen[defID] {
+						continue
+					}
+					if defNode, ok := s.nodes[defID]; ok {
+						results = append(results, defNode)
+						seen[defID] = true
+						resolved = true
+					}
+				}
+			}
+
+			// Import-path fallback for aliased imports:
+			// import mypkg "github.com/foo/bar/auth" → mypkg.Validate → auth.Validate
+			if !resolved && node.Context != nil {
+				if imports == nil {
+					imports = parseGoImports(node.Context)
+				}
+				if importPath, ok := imports[qc.Qualifier]; ok {
+					altPkg := filepath.Base(importPath)
+					altKey := altPkg + "." + qc.Token
+					if defIDs, ok := s.defs[altKey]; ok {
+						for _, defID := range defIDs {
+							if defID == id || seen[defID] {
+								continue
+							}
+							if defNode, ok := s.nodes[defID]; ok {
+								results = append(results, defNode)
+								seen[defID] = true
+								resolved = true
+							}
+						}
+					}
+				}
+			}
+
+			if resolved {
+				continue
+			}
+		}
+
+		// Bare token lookup (unqualified calls or failed qualified resolution)
+		if defIDs, ok := s.defs[qc.Token]; ok {
+			for _, defID := range defIDs {
+				if defID == id || seen[defID] {
+					continue
+				}
+				if defNode, ok := s.nodes[defID]; ok {
+					results = append(results, defNode)
+					seen[defID] = true
+				}
+			}
+		}
+	}
+
+	return results, nil
 }
 
 // Invalidate is a no-op for MemoryStore — nodes are updated in-place.

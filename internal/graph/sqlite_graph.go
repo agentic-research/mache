@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -94,6 +95,9 @@ type SQLiteGraph struct {
 	maxContent   int
 
 	useNodesTable bool // Fast path: use "nodes" table instead of scanning "results"
+
+	extractor CallExtractor
+	defs      map[string][]string // symbol_name → []construct_dir_id (populated by AddDef)
 }
 
 // schemaLevel is a compiled representation of one level in the schema tree.
@@ -268,6 +272,22 @@ func compileOneLevel(node api.Node, depth int) *schemaLevel {
 // ---------------------------------------------------------------------------
 // Graph interface
 // ---------------------------------------------------------------------------
+
+// SetCallExtractor configures the parser for on-demand callee resolution.
+func (g *SQLiteGraph) SetCallExtractor(fn CallExtractor) {
+	g.extractor = fn
+}
+
+// AddDef records that a construct (dirID) defines the given token.
+func (g *SQLiteGraph) AddDef(token, dirID string) error {
+	g.pendingMu.Lock()
+	defer g.pendingMu.Unlock()
+	if g.defs == nil {
+		g.defs = make(map[string][]string)
+	}
+	g.defs[token] = append(g.defs[token], dirID)
+	return nil
+}
 
 func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 	if len(id) > 0 && id[0] == '/' {
@@ -553,6 +573,168 @@ func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
 		return g.getCallersFromMainDB(token)
 	}
 	return g.getCallersFromSidecar(token)
+}
+
+// GetCallees implements Graph.
+func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
+	if len(id) > 0 && id[0] == '/' {
+		id = id[1:]
+	}
+
+	// 1. Find the "source" file child
+	children, err := g.ListChildren(id)
+	if err != nil {
+		return nil, nil
+	}
+
+	var sourceID string
+	for _, child := range children {
+		base := filepath.Base(child)
+		if base == "source" {
+			// nodes-table path returns bare names; sidecar path returns full paths
+			if g.useNodesTable {
+				sourceID = id + "/" + child
+			} else {
+				sourceID = child
+			}
+			break
+		}
+	}
+	if sourceID == "" {
+		return nil, nil
+	}
+
+	// 2. Read content
+	segments := strings.Split(sourceID, "/")
+	_, fileLeaf := g.walkSchema(segments)
+
+	if fileLeaf == nil && !g.useNodesTable {
+		return nil, nil
+	}
+
+	content, err := g.resolveContent(sourceID, segments, fileLeaf)
+	if err != nil {
+		return nil, nil
+	}
+
+	// 3. Determine langName from construct node Properties (stored in record column)
+	var langName string
+	if g.useNodesTable {
+		var recordJSON sql.NullString
+		_ = g.db.QueryRow("SELECT record FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON)
+		if recordJSON.Valid && recordJSON.String != "" {
+			var props map[string][]byte
+			if json.Unmarshal([]byte(recordJSON.String), &props) == nil {
+				if lang, ok := props["lang"]; ok {
+					langName = string(lang)
+				}
+			}
+		}
+	}
+
+	// 4. Extract qualified calls
+	if g.extractor == nil {
+		return nil, nil
+	}
+	qcalls, err := g.extractor(content, sourceID, langName)
+	if err != nil {
+		return nil, fmt.Errorf("extract calls: %w", err)
+	}
+	if len(qcalls) == 0 {
+		return nil, nil
+	}
+
+	// 5. Resolve tokens to definition nodes (qualified → bare → SQL fallback)
+	var nodes []*Node
+	seen := make(map[string]bool)
+
+	// Snapshot defs under lock — deep copy slices to prevent races with concurrent AddDef.
+	var defs map[string][]string
+	g.pendingMu.Lock()
+	if g.defs != nil {
+		defs = make(map[string][]string, len(g.defs))
+		for k, v := range g.defs {
+			cp := make([]string, len(v))
+			copy(cp, v)
+			defs[k] = cp
+		}
+	}
+	g.pendingMu.Unlock()
+
+	for _, qc := range qcalls {
+		resolved := false
+
+		// Qualified resolution: "auth.Validate" → defs["auth.Validate"]
+		if qc.Qualifier != "" {
+			qualKey := qc.Qualifier + "." + qc.Token
+			if defs != nil {
+				if defIDs, ok := defs[qualKey]; ok {
+					for _, defID := range defIDs {
+						if defID == id || seen[defID] {
+							continue
+						}
+						seen[defID] = true
+						nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
+						resolved = true
+					}
+				}
+			}
+			// SQL fallback: node_defs table (pre-built DBs)
+			if !resolved && g.useNodesTable {
+				rows, qErr := g.db.Query("SELECT dir_id FROM node_defs WHERE token = ?", qualKey)
+				if qErr == nil {
+					for rows.Next() {
+						var defID string
+						if rows.Scan(&defID) == nil && defID != id && !seen[defID] {
+							seen[defID] = true
+							nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
+							resolved = true
+						}
+					}
+					_ = rows.Close()
+				}
+			}
+			if resolved {
+				continue
+			}
+		}
+
+		// Bare token lookup
+		if defs != nil {
+			if defIDs, ok := defs[qc.Token]; ok {
+				for _, defID := range defIDs {
+					if defID == id || seen[defID] {
+						continue
+					}
+					seen[defID] = true
+					nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
+					resolved = true
+				}
+				if resolved {
+					continue
+				}
+			}
+		}
+
+		// SQL fallback: node_defs then nodes table
+		if g.useNodesTable {
+			var defID string
+			err := g.db.QueryRow("SELECT dir_id FROM node_defs WHERE token = ? LIMIT 1", qc.Token).Scan(&defID)
+			if err == nil && defID != id && !seen[defID] {
+				seen[defID] = true
+				nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
+				continue
+			}
+			// Final fallback: name match in nodes table
+			err = g.db.QueryRow("SELECT id FROM nodes WHERE name = ? AND kind = 1 LIMIT 1", qc.Token).Scan(&defID)
+			if err == nil && defID != id && !seen[defID] {
+				seen[defID] = true
+				nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
+			}
+		}
+	}
+
+	return nodes, nil
 }
 
 // getCallersFromMainDB queries the main DB's node_refs table directly.

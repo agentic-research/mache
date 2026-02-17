@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -280,6 +281,10 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}
 				defer func() { _ = sg.Close() }() // safe to ignore
+
+				// Wire call extractor for callees/ resolution
+				sg.SetCallExtractor(newCallExtractor())
+
 				start := time.Now()
 				fmt.Print("Scanning records...")
 				if err := sg.EagerScan(); err != nil {
@@ -293,6 +298,9 @@ var rootCmd = &cobra.Command{
 				resolver := ingest.NewSQLiteResolver()
 				defer resolver.Close()
 				store.SetResolver(resolver.Resolve)
+
+				// Wire call extractor for callees/ resolution
+				store.SetCallExtractor(newCallExtractor())
 
 				engine = ingest.NewEngine(schema, store)
 
@@ -702,6 +710,29 @@ func inferFromTreeSitterFile(inf *lattice.Inferrer, path string, lang *sitter.La
 		return nil, fmt.Errorf("tree-sitter returned nil tree for %s", path)
 	}
 	return inf.InferFromTreeSitter(tree.RootNode())
+}
+
+// newCallExtractor creates a CallExtractor that uses a sync.Pool of tree-sitter
+// parsers to reduce allocation overhead. Safe for concurrent use.
+func newCallExtractor() graph.CallExtractor {
+	walker := ingest.NewSitterWalker()
+	pool := &sync.Pool{
+		New: func() any { return sitter.NewParser() },
+	}
+	return func(content []byte, path, langName string) ([]graph.QualifiedCall, error) {
+		lang := ingest.GetLanguage(langName)
+		if lang == nil {
+			return nil, nil
+		}
+		parser := pool.Get().(*sitter.Parser)
+		defer pool.Put(parser)
+		parser.SetLanguage(lang)
+		tree, _ := parser.ParseCtx(context.Background(), nil, content)
+		if tree == nil {
+			return nil, nil
+		}
+		return walker.ExtractQualifiedCalls(tree.RootNode(), content, lang, langName)
+	}
 }
 
 // Execute runs the root command.

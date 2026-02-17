@@ -139,8 +139,8 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 	}
 
 	// Virtual: callers/ entries
-	if isCallersPath(filename) {
-		parentDir, entryName := parseCallersPath(filename)
+	if graph.IsCallersPath(filename) {
+		parentDir, entryName := graph.ParseCallersPath(filename)
 		if entryName == "" {
 			return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("is a directory")}
 		}
@@ -165,6 +165,39 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 				return &graphFile{
 					id:    "/" + caller.ID,
 					size:  callerNode.ContentSize(),
+					graph: fs.graph,
+				}, nil
+			}
+		}
+		return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+	}
+
+	// Virtual: callees/ entries
+	if graph.IsCalleesPath(filename) {
+		parentDir, entryName := graph.ParseCalleesPath(filename)
+		if entryName == "" {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("is a directory")}
+		}
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		callees, err := fs.graph.GetCallees(parentDir)
+		if err != nil || len(callees) == 0 {
+			return nil, &os.PathError{Op: "open", Path: filename, Err: os.ErrNotExist}
+		}
+		for _, callee := range callees {
+			sourceID, srcNode := fs.calleesSourceChild(callee.ID)
+			if srcNode == nil {
+				continue
+			}
+			flatName := strings.ReplaceAll(sourceID, "/", "_")
+			if flatName == entryName {
+				return &graphFile{
+					id:    "/" + sourceID,
+					size:  srcNode.ContentSize(),
 					graph: fs.graph,
 				}, nil
 			}
@@ -292,8 +325,8 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 	}
 
 	// Virtual: callers/ directory listing
-	if isCallersPath(path) {
-		parentDir, entryName := parseCallersPath(path)
+	if graph.IsCallersPath(path) {
+		parentDir, entryName := graph.ParseCallersPath(path)
 		if entryName != "" {
 			return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
 		}
@@ -319,6 +352,42 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 			infos = append(infos, &staticFileInfo{
 				name:    flatName,
 				size:    size,
+				mode:    0o444,
+				modTime: fs.mountTime,
+			})
+		}
+		if len(infos) == 0 {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		return infos, nil
+	}
+
+	// Virtual: callees/ directory listing
+	if graph.IsCalleesPath(path) {
+		parentDir, entryName := graph.ParseCalleesPath(path)
+		if entryName != "" {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
+		}
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		callees, err := fs.graph.GetCallees(parentDir)
+		if err != nil || len(callees) == 0 {
+			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
+		}
+		var infos []os.FileInfo
+		for _, callee := range callees {
+			sourceID, srcNode := fs.calleesSourceChild(callee.ID)
+			if srcNode == nil {
+				continue
+			}
+			flatName := strings.ReplaceAll(sourceID, "/", "_")
+			infos = append(infos, &staticFileInfo{
+				name:    flatName,
+				size:    srcNode.ContentSize(),
 				mode:    0o444,
 				modTime: fs.mountTime,
 			})
@@ -379,6 +448,17 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		if callers, err := fs.graph.GetCallers(token); err == nil && len(callers) > 0 {
 			infos = append(infos, &staticFileInfo{
 				name:    "callers",
+				mode:    os.ModeDir | 0o555,
+				modTime: fs.mountTime,
+			})
+		}
+	}
+
+	// Add callees/ virtual dir if construct has outgoing calls (self-gating)
+	if path != "/" {
+		if callees, err := fs.graph.GetCallees(path); err == nil && len(callees) > 0 {
+			infos = append(infos, &staticFileInfo{
+				name:    "callees",
 				mode:    os.ModeDir | 0o555,
 				modTime: fs.mountTime,
 			})
@@ -462,8 +542,8 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 	}
 
 	// Virtual: callers/
-	if isCallersPath(filename) {
-		parentDir, entryName := parseCallersPath(filename)
+	if graph.IsCallersPath(filename) {
+		parentDir, entryName := graph.ParseCallersPath(filename)
 		if parentDir == "/" {
 			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 		}
@@ -492,6 +572,44 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 				return &staticFileInfo{
 					name:    entryName,
 					size:    callerNode.ContentSize(),
+					mode:    0o444,
+					modTime: fs.mountTime,
+				}, nil
+			}
+		}
+		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+	}
+
+	// Virtual: callees/
+	if graph.IsCalleesPath(filename) {
+		parentDir, entryName := graph.ParseCalleesPath(filename)
+		if parentDir == "/" {
+			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+		}
+		if _, err := fs.graph.GetNode(parentDir); err != nil {
+			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+		}
+		callees, err := fs.graph.GetCallees(parentDir)
+		if err != nil || len(callees) == 0 {
+			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
+		}
+		if entryName == "" {
+			return &staticFileInfo{
+				name:    "callees",
+				mode:    os.ModeDir | 0o555,
+				modTime: fs.mountTime,
+			}, nil
+		}
+		for _, callee := range callees {
+			sourceID, srcNode := fs.calleesSourceChild(callee.ID)
+			if srcNode == nil {
+				continue
+			}
+			flatName := strings.ReplaceAll(sourceID, "/", "_")
+			if flatName == entryName {
+				return &staticFileInfo{
+					name:    entryName,
+					size:    srcNode.ContentSize(),
 					mode:    0o444,
 					modTime: fs.mountTime,
 				}, nil
@@ -594,35 +712,21 @@ func (fs *GraphFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 	}
 }
 
-// --- callers/ virtual directory ---
+// --- callers/ and callees/ virtual directories ---
+// Path parsing uses shared helpers from graph.IsCallersPath, graph.ParseCallersPath, etc.
 
-// isCallersPath returns true if the path contains a /callers segment boundary.
-func isCallersPath(path string) bool {
-	return strings.HasSuffix(path, "/callers") || strings.Contains(path, "/callers/")
-}
-
-// parseCallersPath splits a callers path into (parentDir, entryName).
-// E.g. "/funcs/Foo/callers/funcs_Bar_source" → ("/funcs/Foo", "funcs_Bar_source")
-// Returns ("", "") if not a valid callers path.
-func parseCallersPath(path string) (parentDir, entryName string) {
-	idx := strings.Index(path, "/callers/")
-	if idx < 0 {
-		if strings.HasSuffix(path, "/callers") {
-			idx = len(path) - len("/callers")
-		} else {
-			return "", ""
-		}
+// calleesSourceChild finds the "source" child of a callee directory node
+// and returns (sourceID, sourceNode). Returns ("", nil) if not found.
+func (fs *GraphFS) calleesSourceChild(calleeID string) (string, *graph.Node) {
+	sourceID := graph.FindSourceChild(fs.graph, calleeID)
+	if sourceID == "" {
+		return "", nil
 	}
-	parentDir = path[:idx]
-	if parentDir == "" {
-		parentDir = "/"
+	srcNode, err := fs.graph.GetNode(sourceID)
+	if err != nil {
+		return "", nil
 	}
-	rest := path[idx+len("/callers"):]
-	if rest == "" || rest == "/" {
-		return parentDir, ""
-	}
-	entryName = strings.TrimPrefix(rest, "/")
-	return parentDir, entryName
+	return sourceID, srcNode
 }
 
 // --- internals ---

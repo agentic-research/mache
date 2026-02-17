@@ -10,6 +10,16 @@ func init() {
 		(type_declaration) @ctx
 	`)
 
+	// Register Go qualified call query — captures both @call and @pkg.
+	// Pattern 0: bare calls like foo()
+	// Pattern 1: qualified calls like auth.Validate()
+	RegisterQualifiedCallQuery("go", `
+		(call_expression function: (identifier) @call)
+		(call_expression function: (selector_expression
+			operand: (identifier) @pkg
+			field: (field_identifier) @call))
+	`)
+
 	// Register HCL/Terraform queries — narrow to semantic references:
 	// module sources, variable defaults, and provider/resource references.
 	RegisterRefQuery("hcl", `
