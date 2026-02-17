@@ -187,6 +187,7 @@ var rootCmd = &cobra.Command{
 					fmt.Printf("Inferring schema from directory %s...\n", dataPath)
 					start := time.Now()
 					var allRecords []any
+					fileCount := 0
 
 					walkErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
 						if err != nil {
@@ -241,14 +242,22 @@ var rootCmd = &cobra.Command{
 							records := ingest.FlattenAST(tree.RootNode())
 							allRecords = append(allRecords, records...)
 						}
+						fileCount++
+						if fileCount%100 == 0 {
+							fmt.Printf("\r  Scanned %d files...", fileCount)
+						}
 						return nil
 					})
+
+					if fileCount > 0 {
+						fmt.Printf("\r  Scanned %d files total.\n", fileCount)
+					}
 
 					if walkErr != nil {
 						err = fmt.Errorf("walk failed: %w", walkErr)
 					} else if len(allRecords) == 0 {
 						// No source files found - use default passthrough schema
-						fmt.Printf(" no source files found, using passthrough schema\n")
+						fmt.Printf("No source files found, using passthrough schema\n")
 						inferred = &api.Topology{
 							Version: "1",
 							Nodes:   []api.Node{},
@@ -259,7 +268,7 @@ var rootCmd = &cobra.Command{
 						inf.Config.Method = "fca"
 						inferred, err = inf.InferFromRecords(allRecords)
 						inf.Config.Method = saved
-						fmt.Printf(" done (%d records) in %v\n", len(allRecords), time.Since(start))
+						fmt.Printf("Schema inferred from %d records in %v\n", len(allRecords), time.Since(start))
 					}
 				} else {
 					err = fmt.Errorf("automatic inference not supported for %s", ext)
