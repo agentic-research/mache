@@ -147,92 +147,8 @@ func parseDiagPath(path string) (parentDir, fileName string) {
 	return parentDir, fileName
 }
 
-// isCallersPath returns true if the path contains a /callers segment boundary.
-func isCallersPath(path string) bool {
-	return strings.HasSuffix(path, "/callers") || strings.Contains(path, "/callers/")
-}
-
-// parseCallersPath splits a callers path into (parentDir, entryName).
-// E.g. "/funcs/Foo/callers/funcs_Bar_source" → ("/funcs/Foo", "funcs_Bar_source")
-func parseCallersPath(path string) (parentDir, entryName string) {
-	idx := strings.Index(path, "/callers/")
-	if idx < 0 {
-		if strings.HasSuffix(path, "/callers") {
-			idx = len(path) - len("/callers")
-		} else {
-			return "", ""
-		}
-	}
-	parentDir = path[:idx]
-	if parentDir == "" {
-		parentDir = "/"
-	}
-	rest := path[idx+len("/callers"):]
-	if rest == "" || rest == "/" {
-		return parentDir, ""
-	}
-	entryName = strings.TrimPrefix(rest, "/")
-	return parentDir, entryName
-}
-
-// callersSymlinkTarget computes the relative symlink target from a callers/ entry
-// back to the caller's node in the graph.
-func callersSymlinkTarget(callersParentDir, callerID string) string {
-	depth := strings.Count(callersParentDir, "/") + 1 // +1 for callers/ dir itself
-	return strings.Repeat("../", depth) + callerID
-}
-
-// isCalleesPath returns true if the path contains a /callees segment boundary.
-func isCalleesPath(path string) bool {
-	return strings.HasSuffix(path, "/callees") || strings.Contains(path, "/callees/")
-}
-
-// parseCalleesPath splits a callees path into (parentDir, entryName).
-func parseCalleesPath(path string) (parentDir, entryName string) {
-	idx := strings.Index(path, "/callees/")
-	if idx < 0 {
-		if strings.HasSuffix(path, "/callees") {
-			idx = len(path) - len("/callees")
-		} else {
-			return "", ""
-		}
-	}
-	parentDir = path[:idx]
-	if parentDir == "" {
-		parentDir = "/"
-	}
-	rest := path[idx+len("/callees"):]
-	if rest == "" || rest == "/" {
-		return parentDir, ""
-	}
-	entryName = strings.TrimPrefix(rest, "/")
-	return parentDir, entryName
-}
-
-// calleesSymlinkTarget computes the relative symlink target from a callees/ entry
-// back to the callee's source node in the graph.
-func calleesSymlinkTarget(calleesParentDir, sourceID string) string {
-	depth := strings.Count(calleesParentDir, "/") + 1 // +1 for callees/ dir itself
-	return strings.Repeat("../", depth) + sourceID
-}
-
-// findCalleeSource finds the "source" child of a callee directory node.
-// Returns the full source ID or "" if not found.
-func (fs *MacheFS) findCalleeSource(calleeID string) string {
-	children, err := fs.Graph.ListChildren(calleeID)
-	if err != nil {
-		return ""
-	}
-	for _, child := range children {
-		if filepath.Base(child) == "source" {
-			if !strings.Contains(child, "/") {
-				return calleeID + "/" + child
-			}
-			return child
-		}
-	}
-	return ""
-}
+// callers/ and callees/ virtual directory path parsing uses shared helpers
+// from graph.IsCallersPath, graph.ParseCallersPath, graph.VDirSymlinkTarget, etc.
 
 // diagContent returns the content of a diagnostics virtual file.
 func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
@@ -438,8 +354,8 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	}
 
 	// Virtual: callers/
-	if isCallersPath(path) {
-		parentDir, entryName := parseCallersPath(path)
+	if graph.IsCallersPath(path) {
+		parentDir, entryName := graph.ParseCallersPath(path)
 		if parentDir == "/" {
 			return -fuse.ENOENT
 		}
@@ -463,7 +379,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 				stat.Ino = pathIno(path)
 				stat.Mode = fuse.S_IFLNK | 0o777
 				stat.Nlink = 1
-				target := callersSymlinkTarget(parentDir, caller.ID)
+				target := graph.VDirSymlinkTarget(parentDir, caller.ID)
 				stat.Size = int64(len(target))
 				return 0
 			}
@@ -472,8 +388,8 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	}
 
 	// Virtual: callees/
-	if isCalleesPath(path) {
-		parentDir, entryName := parseCalleesPath(path)
+	if graph.IsCalleesPath(path) {
+		parentDir, entryName := graph.ParseCalleesPath(path)
 		if parentDir == "/" {
 			return -fuse.ENOENT
 		}
@@ -491,7 +407,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 			return 0
 		}
 		for _, callee := range callees {
-			sourceID := fs.findCalleeSource(callee.ID)
+			sourceID := graph.FindSourceChild(fs.Graph, callee.ID)
 			if sourceID == "" {
 				continue
 			}
@@ -500,7 +416,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 				stat.Ino = pathIno(path)
 				stat.Mode = fuse.S_IFLNK | 0o777
 				stat.Nlink = 1
-				target := calleesSymlinkTarget(parentDir, sourceID)
+				target := graph.VDirSymlinkTarget(parentDir, sourceID)
 				stat.Size = int64(len(target))
 				return 0
 			}
@@ -556,8 +472,8 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	}
 
 	// Virtual: callers/ directory
-	if isCallersPath(path) {
-		parentDir, entryName := parseCallersPath(path)
+	if graph.IsCallersPath(path) {
+		parentDir, entryName := graph.ParseCallersPath(path)
 		if entryName != "" {
 			return -fuse.ENOTDIR, 0
 		}
@@ -585,8 +501,8 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	}
 
 	// Virtual: callees/ directory
-	if isCalleesPath(path) {
-		parentDir, entryName := parseCalleesPath(path)
+	if graph.IsCalleesPath(path) {
+		parentDir, entryName := graph.ParseCalleesPath(path)
 		if entryName != "" {
 			return -fuse.ENOTDIR, 0
 		}
@@ -602,7 +518,7 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		}
 		entries := []string{".", ".."}
 		for _, c := range callees {
-			sourceID := fs.findCalleeSource(c.ID)
+			sourceID := graph.FindSourceChild(fs.Graph, c.ID)
 			if sourceID != "" {
 				entries = append(entries, strings.ReplaceAll(sourceID, "/", "_"))
 			}
@@ -792,14 +708,14 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		}
 	}
 
-	if name == "callers" && !isCallersPath(dirPath) {
+	if name == "callers" && !graph.IsCallersPath(dirPath) {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
 		return stat
 	}
 
-	if name == "callees" && !isCalleesPath(dirPath) {
+	if name == "callees" && !graph.IsCalleesPath(dirPath) {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
@@ -1340,8 +1256,8 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 // Readlink returns the symlink target for callers/, callees/ entries and /.query/<name>/<entry>.
 func (fs *MacheFS) Readlink(path string) (int, string) {
 	// Virtual: callers/ symlinks
-	if isCallersPath(path) {
-		parentDir, entryName := parseCallersPath(path)
+	if graph.IsCallersPath(path) {
+		parentDir, entryName := graph.ParseCallersPath(path)
 		if entryName == "" {
 			return -fuse.EINVAL, ""
 		}
@@ -1359,15 +1275,15 @@ func (fs *MacheFS) Readlink(path string) (int, string) {
 		for _, caller := range callers {
 			flatName := strings.ReplaceAll(caller.ID, "/", "_")
 			if flatName == entryName {
-				return 0, callersSymlinkTarget(parentDir, caller.ID)
+				return 0, graph.VDirSymlinkTarget(parentDir, caller.ID)
 			}
 		}
 		return -fuse.ENOENT, ""
 	}
 
 	// Virtual: callees/ symlinks
-	if isCalleesPath(path) {
-		parentDir, entryName := parseCalleesPath(path)
+	if graph.IsCalleesPath(path) {
+		parentDir, entryName := graph.ParseCalleesPath(path)
 		if entryName == "" {
 			return -fuse.EINVAL, ""
 		}
@@ -1382,13 +1298,13 @@ func (fs *MacheFS) Readlink(path string) (int, string) {
 			return -fuse.ENOENT, ""
 		}
 		for _, callee := range callees {
-			sourceID := fs.findCalleeSource(callee.ID)
+			sourceID := graph.FindSourceChild(fs.Graph, callee.ID)
 			if sourceID == "" {
 				continue
 			}
 			flatName := strings.ReplaceAll(sourceID, "/", "_")
 			if flatName == entryName {
-				return 0, calleesSymlinkTarget(parentDir, sourceID)
+				return 0, graph.VDirSymlinkTarget(parentDir, sourceID)
 			}
 		}
 		return -fuse.ENOENT, ""

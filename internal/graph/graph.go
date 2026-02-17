@@ -254,10 +254,16 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 
 // AddDef records that a construct (dirID) defines the given token.
 // Used by callees/ resolution: token → where it is defined.
+// Uses copy-on-write: creates a new slice instead of appending to the existing one,
+// so concurrent readers (GetCallees holds RLock) never see a partially-updated slice.
 func (s *MemoryStore) AddDef(token, dirID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.defs[token] = append(s.defs[token], dirID)
+	existing := s.defs[token]
+	newSlice := make([]string, len(existing)+1)
+	copy(newSlice, existing)
+	newSlice[len(existing)] = dirID
+	s.defs[token] = newSlice
 	return nil
 }
 

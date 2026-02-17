@@ -648,8 +648,17 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	var nodes []*Node
 	seen := make(map[string]bool)
 
+	// Snapshot defs under lock — deep copy slices to prevent races with concurrent AddDef.
+	var defs map[string][]string
 	g.pendingMu.Lock()
-	defs := g.defs
+	if g.defs != nil {
+		defs = make(map[string][]string, len(g.defs))
+		for k, v := range g.defs {
+			cp := make([]string, len(v))
+			copy(cp, v)
+			defs[k] = cp
+		}
+	}
 	g.pendingMu.Unlock()
 
 	for _, qc := range qcalls {
