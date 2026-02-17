@@ -155,9 +155,12 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		recordID = &r
 	}
 
-	// 4. Serialize Record (properties)
+	// 4. Record content: prefer inline Data (rendered file content),
+	// fall back to serialized Properties for metadata nodes.
 	var record []byte
-	if len(n.Properties) > 0 {
+	if n.Data != nil {
+		record = n.Data
+	} else if len(n.Properties) > 0 {
 		record, _ = json.Marshal(n.Properties)
 	}
 

@@ -139,7 +139,28 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		useNodesTable = true
 	}
 
-	// Sidecar DB for cross-reference index (token→bitmap, path→fileID).
+	tableName := schema.Table
+	if tableName == "" {
+		tableName = "results"
+	}
+
+	// When the main DB has a nodes table (built by mache build), node_refs
+	// is already present with (token, node_id) pairs. No sidecar needed.
+	if useNodesTable {
+		return &SQLiteGraph{
+			db:            db,
+			dbPath:        dbPath,
+			tableName:     tableName,
+			schema:        schema,
+			render:        render,
+			levels:        compileLevels(schema),
+			contentCache:  make(map[string][]byte),
+			maxContent:    2048,
+			useNodesTable: true,
+		}, nil
+	}
+
+	// Legacy path: sidecar DB for cross-reference index (token→bitmap, path→fileID).
 	// Kept separate so we never write to the source database.
 	refsPath := dbPath + ".refs.db"
 	// Wipe stale sidecar — refs are a derived index, rebuilt each run.
@@ -202,11 +223,6 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		return nil, fmt.Errorf("create mache_refs vtab: %w", err)
 	}
 
-	tableName := schema.Table
-	if tableName == "" {
-		tableName = "results"
-	}
-
 	return &SQLiteGraph{
 		db:            db,
 		dbPath:        dbPath,
@@ -220,7 +236,7 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		fileIDMap:     make(map[string]uint32),
 		contentCache:  make(map[string][]byte),
 		maxContent:    2048,
-		useNodesTable: useNodesTable,
+		useNodesTable: false,
 	}, nil
 }
 
@@ -439,7 +455,11 @@ func (g *SQLiteGraph) ReadContent(id string, buf []byte, offset int64) (int, err
 // AddRef accumulates a reference in-memory. No SQL is issued until FlushRefs.
 // This eliminates the read-modify-write cycle per call — all bitmap mutations
 // happen in RAM, and FlushRefs writes them in a single transaction.
+// Not used for nodes-table path (refs already in main DB from mache build).
 func (g *SQLiteGraph) AddRef(token, nodeID string) error {
+	if g.useNodesTable {
+		return nil // refs already in main DB
+	}
 	g.pendingMu.Lock()
 	defer g.pendingMu.Unlock()
 
@@ -526,8 +546,41 @@ func (g *SQLiteGraph) flushRefsInternal() error {
 }
 
 // GetCallers returns the list of files (nodes) that reference the given token.
-// Reads from the sidecar refs database.
+// For nodes-table path: queries main DB's node_refs (token, node_id) directly.
+// For legacy path: reads roaring bitmaps from the sidecar refs database.
 func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
+	if g.useNodesTable {
+		return g.getCallersFromMainDB(token)
+	}
+	return g.getCallersFromSidecar(token)
+}
+
+// getCallersFromMainDB queries the main DB's node_refs table directly.
+// node_refs schema: (token TEXT, node_id TEXT) — written by mache build.
+func (g *SQLiteGraph) getCallersFromMainDB(token string) ([]*Node, error) {
+	rows, err := g.db.Query("SELECT node_id FROM node_refs WHERE token = ?", token)
+	if err != nil {
+		return nil, fmt.Errorf("query node_refs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var nodes []*Node
+	for rows.Next() {
+		var nodeID string
+		if err := rows.Scan(&nodeID); err != nil {
+			log.Printf("GetCallers: skip row scan: %v", err)
+			continue
+		}
+		nodes = append(nodes, &Node{
+			ID:   nodeID,
+			Mode: 0o444,
+		})
+	}
+	return nodes, nil
+}
+
+// getCallersFromSidecar reads roaring bitmaps from the sidecar .refs.db.
+func (g *SQLiteGraph) getCallersFromSidecar(token string) ([]*Node, error) {
 	var blob []byte
 	err := g.refsDB.QueryRow("SELECT bitmap FROM node_refs WHERE token = ?", token).Scan(&blob)
 	if err == sql.ErrNoRows {
@@ -572,8 +625,6 @@ func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
 			log.Printf("GetCallers: skip row scan: %v", err)
 			continue
 		}
-		// Return lightweight node — content resolved on demand by FUSE Read.
-		// The Graph interface doesn't require Data to be populated here.
 		nodes = append(nodes, &Node{
 			ID:   path,
 			Mode: 0o444,
@@ -592,17 +643,23 @@ func (g *SQLiteGraph) Invalidate(id string) {
 	g.contentMu.Unlock()
 }
 
-// QueryRefs executes a SQL query against the refs sidecar database,
-// which includes the mache_refs virtual table.
+// QueryRefs executes a SQL query against the refs database.
+// For nodes-table path: queries the main DB (node_refs has (token, node_id)).
+// For legacy path: queries the sidecar (includes mache_refs virtual table).
 func (g *SQLiteGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
+	if g.useNodesTable {
+		return g.db.Query(query, args...)
+	}
 	return g.refsDB.Query(query, args...)
 }
 
 // Close closes both the source and sidecar database connections.
 func (g *SQLiteGraph) Close() error {
-	// Unregister from vtab module to prevent leaks/races
-	if mod, err := refsvtab.Register(); err == nil && mod != nil {
-		mod.UnregisterDB(g.dbID)
+	// Unregister from vtab module to prevent leaks/races (sidecar path only)
+	if g.refsDB != nil {
+		if mod, err := refsvtab.Register(); err == nil && mod != nil {
+			mod.UnregisterDB(g.dbID)
+		}
 	}
 
 	err := g.db.Close()
@@ -621,12 +678,18 @@ func (g *SQLiteGraph) Close() error {
 // walkSchema maps a path to its schema level and (if a file) leaf definition.
 // Returns (level, nil) for directories, (level, &leaf) for files, (nil, nil) for invalid paths.
 func (g *SQLiteGraph) walkSchema(segments []string) (*schemaLevel, *api.Leaf) {
+	return walkSchemaLevels(g.levels, segments)
+}
+
+// walkSchemaLevels walks compiled schema levels to find the level and optional
+// leaf matching the given path segments. Shared by SQLiteGraph and WritableGraph.
+func walkSchemaLevels(levels []*schemaLevel, segments []string) (*schemaLevel, *api.Leaf) {
 	if len(segments) == 0 {
 		return nil, nil
 	}
 
 	var root *schemaLevel
-	for _, l := range g.levels {
+	for _, l := range levels {
 		if l.isStatic && l.staticName == segments[0] {
 			root = l
 			break

@@ -613,8 +613,9 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
 
 		node := &graph.Node{
-			ID:   id,
-			Mode: os.ModeDir | 0o555,
+			ID:      id,
+			Mode:    os.ModeDir | 0o555,
+			ModTime: time.Unix(0, 0),
 		}
 
 		// Recurse children
@@ -645,8 +646,9 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 			}
 
 			fileNode := &graph.Node{
-				ID:   fileId,
-				Mode: 0o444,
+				ID:      fileId,
+				Mode:    0o444,
+				ModTime: time.Unix(0, 0),
 			}
 
 			// Inline small content, lazy-resolve large content from SQLite

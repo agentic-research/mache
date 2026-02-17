@@ -24,13 +24,13 @@ var contextQueryRegistry sync.Map // string (language name) -> string
 
 // RegisterRefQuery registers a reference extraction query for a specific language.
 // This should be called during initialization.
-func RegisterRefQuery(langName string, query string) {
+func RegisterRefQuery(langName, query string) {
 	refQueryRegistry.Store(langName, query)
 }
 
 // RegisterContextQuery registers a context extraction query for a specific language.
 // This should be called during initialization.
-func RegisterContextQuery(langName string, query string) {
+func RegisterContextQuery(langName, query string) {
 	contextQueryRegistry.Store(langName, query)
 }
 

@@ -398,6 +398,12 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	}
 	fmt.Println("Arena header valid. Initializing graph.")
 
+	// Writable arena mode: mache IS the writer, no hot-swap watcher.
+	if writable {
+		return mountControlWritable(dbPath, arenaPath, schema, ctrl, mountPoint, backend)
+	}
+
+	// Read-only hot-swap mode (existing logic)
 	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, ingest.RenderTemplate)
 	if err != nil {
 		return fmt.Errorf("open initial graph %s: %w", dbPath, err)
@@ -453,6 +459,69 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	default:
 		return fmt.Errorf("unknown backend %q", backend)
 	}
+}
+
+// mountControlWritable opens the extracted DB in read-write mode and
+// wires a WritableGraph + ArenaFlusher for arena write-back.
+func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, ctrl *control.Controller, mountPoint, backend string) error {
+	flusher := graph.NewArenaFlusher(arenaPath, masterDBPath, ctrl)
+	flusher.Start(100 * time.Millisecond)
+	defer func() { _ = flusher.Close() }() // final flush on unmount
+
+	wg, err := graph.OpenWritableGraph(masterDBPath, schema, ingest.RenderTemplate, flusher)
+	if err != nil {
+		return fmt.Errorf("open writable graph: %w", err)
+	}
+	defer func() { _ = wg.Close() }()
+
+	fmt.Println("Writable arena mode: edits write to master DB and flush to arena (100ms coalesce).")
+
+	switch backend {
+	case "nfs":
+		return mountWritableNFS(schema, wg, mountPoint)
+	case "fuse":
+		return mountFUSE(schema, wg, nil, mountPoint, true)
+	default:
+		return fmt.Errorf("unknown backend %q", backend)
+	}
+}
+
+// mountWritableNFS mounts a WritableGraph via NFS with arena write-back.
+func mountWritableNFS(schema *api.Topology, wg *graph.WritableGraph, mountPoint string) error {
+	graphFs := nfsmount.NewGraphFS(wg, schema)
+
+	graphFs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
+		// Update DB record, then request coalesced arena flush (non-blocking).
+		if err := wg.UpdateRecord(nodeID, content); err != nil {
+			return fmt.Errorf("update record: %w", err)
+		}
+		wg.Flush() // coalesced — actual I/O on next tick
+		return nil
+	})
+
+	srv, err := nfsmount.NewServer(graphFs)
+	if err != nil {
+		return fmt.Errorf("start NFS server: %w", err)
+	}
+	defer func() { _ = srv.Close() }()
+
+	fmt.Printf("Mounting mache at %s (NFS on localhost:%d)...\n", mountPoint, srv.Port())
+
+	if err := nfsmount.Mount(srv.Port(), mountPoint, true); err != nil {
+		return err
+	}
+	fmt.Printf("Mounted (writable). Press Ctrl-C to unmount.\n")
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+
+	fmt.Printf("\nUnmounting %s...\n", mountPoint)
+	if err := nfsmount.Unmount(mountPoint); err != nil {
+		fmt.Printf("Warning: unmount failed: %v\n", err)
+		fmt.Printf("Run manually: sudo umount %s\n", mountPoint)
+	}
+	return nil
 }
 
 // mountNFS starts an NFS server backed by GraphFS and mounts it.
@@ -516,7 +585,12 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				if delta != 0 {
 					store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
 				}
-				_ = store.UpdateNodeContent(nodeID, formatted, newOrigin, time.Now())
+				// Use source file mtime for deterministic timestamps
+				modTime := time.Now()
+				if fi, err := os.Stat(origin.FilePath); err == nil {
+					modTime = fi.ModTime()
+				}
+				_ = store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime)
 				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
 			}
 
