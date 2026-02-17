@@ -481,12 +481,13 @@ if [ "$DEMO" = true ]; then
     pe "grep -A 1 'PackReading' $REPO/signal_codec.go"
     pe "grep -A 6 'PackReading' $REPO/signal_codec.go | tail -n 2"
 
-    echo ""
-    echo -e "${GREEN}Demo complete.${NC}"
-    exit 0
-fi
+                echo ""
 
-echo "When done, press ENTER to run verification."
+                echo -e "${GREEN}Demo complete.${NC}"
+
+    fi
+
+    echo "When done, press ENTER to run verification."
 read -r
 
 verify
