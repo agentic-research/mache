@@ -466,24 +466,26 @@ if [ "$DEMO" = true ]; then
     echo -e "${YELLOW}# What global context does this function see?${NC}"
     pe "head -n 5 $MNT/PackReading/context"
 
-        echo ""
-        echo -e "${YELLOW}# REVERSE GRAPH: Who calls 'UnpackReading'?${NC}"
-        pe "ls $MNT/UnpackReading/callers/"
+    echo ""
+    echo -e "${YELLOW}# REVERSE GRAPH: Who calls 'UnpackReading'?${NC}"
+    pe "ls $MNT/UnpackReading/callers/"
 
-            echo ""
-            echo -e "${YELLOW}# WRITE-BACK: Editing code via the filesystem...${NC}"
-            # Read-Modify-Write to ensure safety (NFS append support can be tricky)
-            pe "content=\$(cat $MNT/PackReading/source)"
-            pe "echo \"\$content
-        // Signed by Mache\" > $MNT/PackReading/source"
+    echo ""
+    echo -e "${YELLOW}# WRITE-BACK: Editing code via the filesystem...${NC}"
+    # Read-Modify-Write to ensure safety (NFS append support can be tricky)
+    pe "content=\$(cat $MNT/PackReading/source)"
+    pe "echo \"\$content
+// Signed by Mache\" > $MNT/PackReading/source"
 
-            echo -e "${YELLOW}# Verifying the change spliced into the real source file:${NC}"
-            pe "grep -A 1 'PackReading' $REPO/signal_codec.go"
-            pe "grep -A 6 'PackReading' $REPO/signal_codec.go | tail -n 2"
+    echo -e "${YELLOW}# Verifying the change spliced into the real source file:${NC}"
+    pe "grep -A 1 'PackReading' $REPO/signal_codec.go"
+    pe "grep -A 6 'PackReading' $REPO/signal_codec.go | tail -n 2"
 
-            echo ""
-            echo -e "${GREEN}Demo complete.${NC}"
-            exit 0        fi
+    echo ""
+    echo -e "${GREEN}Demo complete.${NC}"
+    exit 0
+fi
+
 echo "When done, press ENTER to run verification."
 read -r
 
