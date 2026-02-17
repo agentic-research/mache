@@ -283,7 +283,7 @@ var rootCmd = &cobra.Command{
 
 				// Wire call extractor for callees/ resolution
 				walker := ingest.NewSitterWalker()
-				sg.SetCallExtractor(func(content []byte, path, langName string) ([]string, error) {
+				sg.SetCallExtractor(func(content []byte, path, langName string) ([]graph.QualifiedCall, error) {
 					lang := ingest.GetLanguage(langName)
 					if lang == nil {
 						return nil, nil
@@ -294,7 +294,7 @@ var rootCmd = &cobra.Command{
 					if tree == nil {
 						return nil, nil
 					}
-					return walker.ExtractCalls(tree.RootNode(), content, lang, langName)
+					return walker.ExtractQualifiedCalls(tree.RootNode(), content, lang, langName)
 				})
 
 				start := time.Now()
@@ -313,7 +313,7 @@ var rootCmd = &cobra.Command{
 
 				// Wire call extractor for callees/ resolution
 				walker := ingest.NewSitterWalker()
-				store.SetCallExtractor(func(content []byte, path, langName string) ([]string, error) {
+				store.SetCallExtractor(func(content []byte, path, langName string) ([]graph.QualifiedCall, error) {
 					lang := ingest.GetLanguage(langName)
 					if lang == nil {
 						return nil, nil
@@ -324,7 +324,7 @@ var rootCmd = &cobra.Command{
 					if tree == nil {
 						return nil, nil
 					}
-					return walker.ExtractCalls(tree.RootNode(), content, lang, langName)
+					return walker.ExtractQualifiedCalls(tree.RootNode(), content, lang, langName)
 				})
 
 				engine = ingest.NewEngine(schema, store)

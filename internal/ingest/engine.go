@@ -745,7 +745,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Children: existingChildren,
 		}
 
-		// Store language name and register definition for callees/ resolution
+		// Store language name, package name, and register definition for callees/ resolution
 		if _, ok := walker.(*SitterWalker); ok {
 			if ctxAny := match.Context(); ctxAny != nil {
 				if root, ok := ctxAny.(SitterRoot); ok && root.LangName != "" {
@@ -753,6 +753,13 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 						node.Properties = make(map[string][]byte)
 					}
 					node.Properties["lang"] = []byte(root.LangName)
+
+					// Extract Go package name for qualified def resolution
+					if root.LangName == "go" && root.FileRoot != nil {
+						if pkgName := extractGoPackageName(root.FileRoot, root.Source, root.Lang); pkgName != "" {
+							node.Properties["pkg"] = []byte(pkgName)
+						}
+					}
 				}
 			}
 		}
@@ -762,6 +769,15 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		if len(schema.Files) > 0 {
 			if err := store.AddDef(name, id); err != nil {
 				return fmt.Errorf("add def %s -> %s: %w", name, id, err)
+			}
+			// Register qualified definition (package.name → directory ID)
+			if node.Properties != nil {
+				if pkg, ok := node.Properties["pkg"]; ok && len(pkg) > 0 {
+					qualKey := string(pkg) + "." + name
+					if err := store.AddDef(qualKey, id); err != nil {
+						return fmt.Errorf("add qualified def %s -> %s: %w", qualKey, id, err)
+					}
+				}
 			}
 		}
 
@@ -941,6 +957,40 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		}
 	}
 	return nil
+}
+
+// --- Go package name extraction for qualified defs ---
+
+var (
+	goPackageQueryOnce sync.Once
+	goPackageQueryObj  *sitter.Query
+)
+
+// extractGoPackageName uses tree-sitter to find the package name from a Go file root.
+func extractGoPackageName(fileRoot *sitter.Node, source []byte, lang *sitter.Language) string {
+	goPackageQueryOnce.Do(func() {
+		goPackageQueryObj, _ = sitter.NewQuery([]byte(`(package_clause (package_identifier) @pkg)`), lang)
+	})
+	if goPackageQueryObj == nil {
+		return ""
+	}
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+	qc.Exec(goPackageQueryObj, fileRoot)
+
+	m, ok := qc.NextMatch()
+	if !ok || len(m.Captures) == 0 {
+		return ""
+	}
+
+	c := m.Captures[0]
+	start := c.Node.StartByte()
+	end := c.Node.EndByte()
+	if start < uint32(len(source)) && end <= uint32(len(source)) {
+		return string(source[start:end])
+	}
+	return ""
 }
 
 // GetLanguage returns the tree-sitter language for a language name string.

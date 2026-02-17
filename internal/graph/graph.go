@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,10 +70,16 @@ func (n *Node) ContentSize() int64 {
 // ContentResolverFunc resolves a ContentRef into byte content.
 type ContentResolverFunc func(ref *ContentRef) ([]byte, error)
 
-// CallExtractor parses source code and returns a list of function call tokens.
+// QualifiedCall represents a function call with optional package qualifier.
+type QualifiedCall struct {
+	Token     string // Function/method name (e.g., "Validate")
+	Qualifier string // Package qualifier (e.g., "auth"); empty for unqualified calls
+}
+
+// CallExtractor parses source code and returns qualified function call tokens.
 // Used for on-demand "callees/" resolution.
 // langName is the tree-sitter language identifier (e.g. "go", "python").
-type CallExtractor func(content []byte, path, langName string) ([]string, error)
+type CallExtractor func(content []byte, path, langName string) ([]QualifiedCall, error)
 
 // Graph is the interface for the FUSE layer.
 // This allows us to swap the backend later (Memory -> SQLite -> Mmap).
@@ -403,6 +411,43 @@ func (s *MemoryStore) GetCallers(token string) ([]*Node, error) {
 	return nodes, nil
 }
 
+// --- Import parsing for qualified callees resolution ---
+
+var (
+	singleImportRe = regexp.MustCompile(`import\s+(\w+\s+)?"([^"]+)"`)
+	groupImportRe  = regexp.MustCompile(`(?s)import\s*\(([^)]*)\)`)
+	memberImportRe = regexp.MustCompile(`(\w+)?\s*"([^"]+)"`)
+)
+
+// parseGoImports extracts alias → import path mappings from Go context text.
+// For unaliased imports, the alias is the last path segment.
+func parseGoImports(ctx []byte) map[string]string {
+	imports := make(map[string]string)
+	text := string(ctx)
+
+	for _, m := range singleImportRe.FindAllStringSubmatch(text, -1) {
+		addGoImport(imports, strings.TrimSpace(m[1]), m[2])
+	}
+
+	for _, m := range groupImportRe.FindAllStringSubmatch(text, -1) {
+		for _, im := range memberImportRe.FindAllStringSubmatch(m[1], -1) {
+			addGoImport(imports, strings.TrimSpace(im[1]), im[2])
+		}
+	}
+
+	return imports
+}
+
+func addGoImport(imports map[string]string, alias, path string) {
+	if alias == "_" || alias == "." {
+		return
+	}
+	if alias == "" {
+		alias = filepath.Base(path)
+	}
+	imports[alias] = path
+}
+
 // GetCallees implements Graph. It parses the node's source to find calls,
 // then looks up those tokens in the defs index to find definitions.
 func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
@@ -446,29 +491,75 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 		}
 	}
 
-	// 4. Extract calls
+	// 4. Extract qualified calls
 	if s.extractor == nil {
 		return nil, nil
 	}
-	calls, err := s.extractor(buf, sourceID, langName)
+	qcalls, err := s.extractor(buf, sourceID, langName)
 	if err != nil {
 		return nil, fmt.Errorf("extract calls: %w", err)
 	}
 
-	// 5. Resolve tokens to definition nodes via defs index
+	// 5. Resolve tokens via defs index (qualified → import fallback → bare)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var results []*Node
 	seen := make(map[string]bool)
+	var imports map[string]string // lazy-parsed Go imports
 
-	for _, token := range calls {
-		if defIDs, ok := s.defs[token]; ok {
-			for _, defID := range defIDs {
-				if defID == id {
-					continue // skip self
+	for _, qc := range qcalls {
+		resolved := false
+
+		// Qualified resolution: "auth.Validate" → defs["auth.Validate"]
+		if qc.Qualifier != "" {
+			qualKey := qc.Qualifier + "." + qc.Token
+			if defIDs, ok := s.defs[qualKey]; ok {
+				for _, defID := range defIDs {
+					if defID == id || seen[defID] {
+						continue
+					}
+					if defNode, ok := s.nodes[defID]; ok {
+						results = append(results, defNode)
+						seen[defID] = true
+						resolved = true
+					}
 				}
-				if seen[defID] {
+			}
+
+			// Import-path fallback for aliased imports:
+			// import mypkg "github.com/foo/bar/auth" → mypkg.Validate → auth.Validate
+			if !resolved && node.Context != nil {
+				if imports == nil {
+					imports = parseGoImports(node.Context)
+				}
+				if importPath, ok := imports[qc.Qualifier]; ok {
+					altPkg := filepath.Base(importPath)
+					altKey := altPkg + "." + qc.Token
+					if defIDs, ok := s.defs[altKey]; ok {
+						for _, defID := range defIDs {
+							if defID == id || seen[defID] {
+								continue
+							}
+							if defNode, ok := s.nodes[defID]; ok {
+								results = append(results, defNode)
+								seen[defID] = true
+								resolved = true
+							}
+						}
+					}
+				}
+			}
+
+			if resolved {
+				continue
+			}
+		}
+
+		// Bare token lookup (unqualified calls or failed qualified resolution)
+		if defIDs, ok := s.defs[qc.Token]; ok {
+			for _, defID := range defIDs {
+				if defID == id || seen[defID] {
 					continue
 				}
 				if defNode, ok := s.nodes[defID]; ok {

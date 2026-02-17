@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/agentic-research/mache/internal/graph"
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
@@ -22,6 +23,10 @@ var refQueryRegistry sync.Map // string (language name) -> string
 // contextQueryRegistry stores language-specific context extraction queries.
 var contextQueryRegistry sync.Map // string (language name) -> string
 
+// qualifiedCallQueryRegistry stores language-specific queries that capture
+// both @call and @pkg for qualified call resolution (e.g., auth.Validate).
+var qualifiedCallQueryRegistry sync.Map // string (language name) -> string
+
 // RegisterRefQuery registers a reference extraction query for a specific language.
 // This should be called during initialization.
 func RegisterRefQuery(langName, query string) {
@@ -34,12 +39,20 @@ func RegisterContextQuery(langName, query string) {
 	contextQueryRegistry.Store(langName, query)
 }
 
+// RegisterQualifiedCallQuery registers a call extraction query that captures
+// both @call (function name) and @pkg (package qualifier) for a language.
+func RegisterQualifiedCallQuery(langName, query string) {
+	qualifiedCallQueryRegistry.Store(langName, query)
+}
+
 // SitterWalker implements Walker for Tree-sitter parsed code.
 type SitterWalker struct {
 	// callQueryCache caches compiled call-extraction queries keyed by language name.
 	callQueryCache sync.Map // string (language name) -> *sitter.Query
 	// contextQueryCache caches compiled context queries.
 	contextQueryCache sync.Map // string (language name) -> *sitter.Query
+	// qualifiedCallQueryCache caches compiled qualified call queries.
+	qualifiedCallQueryCache sync.Map // string (language name) -> *sitter.Query
 }
 
 func NewSitterWalker() *SitterWalker {
@@ -339,5 +352,109 @@ func (w *SitterWalker) ExtractCalls(root *sitter.Node, source []byte, lang *sitt
 			}
 		}
 	}
+	return calls, nil
+}
+
+// getQualifiedCallQuery returns a cached compiled query for qualified call
+// extraction. Falls back to nil if no qualified query is registered.
+func (w *SitterWalker) getQualifiedCallQuery(lang *sitter.Language, langName string) (*sitter.Query, error) {
+	if cached, ok := w.qualifiedCallQueryCache.Load(langName); ok {
+		return cached.(*sitter.Query), nil
+	}
+
+	qStr := ""
+	if val, ok := qualifiedCallQueryRegistry.Load(langName); ok {
+		qStr = val.(string)
+	}
+	if qStr == "" {
+		return nil, nil // No qualified query for this language
+	}
+
+	q, err := sitter.NewQuery([]byte(qStr), lang)
+	if err != nil {
+		return nil, err
+	}
+	actual, loaded := w.qualifiedCallQueryCache.LoadOrStore(langName, q)
+	if loaded {
+		q.Close()
+		return actual.(*sitter.Query), nil
+	}
+	return q, nil
+}
+
+// ExtractQualifiedCalls finds all function calls with optional package qualifiers.
+// For languages with a registered qualified call query, returns QualifiedCall with
+// both Token and Qualifier. For others, falls back to ExtractCalls (bare tokens).
+func (w *SitterWalker) ExtractQualifiedCalls(root *sitter.Node, source []byte, lang *sitter.Language, langName string) ([]graph.QualifiedCall, error) {
+	q, err := w.getQualifiedCallQuery(lang, langName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid qualified call query: %w", err)
+	}
+
+	// Fall back to regular ExtractCalls if no qualified query registered
+	if q == nil {
+		bare, err := w.ExtractCalls(root, source, lang, langName)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]graph.QualifiedCall, len(bare))
+		for i, token := range bare {
+			result[i] = graph.QualifiedCall{Token: token}
+		}
+		return result, nil
+	}
+	// Do NOT close q here — it is owned by the cache.
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+	qc.Exec(q, root)
+
+	seen := make(map[string]bool)
+	var calls []graph.QualifiedCall
+
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+
+		m = qc.FilterPredicates(m, source)
+		if len(m.Captures) == 0 {
+			continue
+		}
+
+		var callToken, pkgQualifier string
+		for _, c := range m.Captures {
+			name := q.CaptureNameForId(c.Index)
+			start := c.Node.StartByte()
+			end := c.Node.EndByte()
+			if start < uint32(len(source)) && end <= uint32(len(source)) {
+				switch name {
+				case "call":
+					callToken = string(source[start:end])
+				case "pkg":
+					pkgQualifier = string(source[start:end])
+				}
+			}
+		}
+
+		if callToken == "" {
+			continue
+		}
+
+		key := callToken
+		if pkgQualifier != "" {
+			key = pkgQualifier + "." + callToken
+		}
+
+		if !seen[key] {
+			seen[key] = true
+			calls = append(calls, graph.QualifiedCall{
+				Token:     callToken,
+				Qualifier: pkgQualifier,
+			})
+		}
+	}
+
 	return calls, nil
 }

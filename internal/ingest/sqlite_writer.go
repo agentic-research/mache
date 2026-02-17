@@ -20,6 +20,7 @@ type SQLiteWriter struct {
 	tx        *sql.Tx
 	stmtNode  *sql.Stmt
 	stmtRef   *sql.Stmt // For adding refs
+	stmtDef   *sql.Stmt // For adding defs
 	batchSize int
 	count     int
 	mu        sync.Mutex
@@ -61,6 +62,12 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		node_id TEXT,
 		PRIMARY KEY (token, node_id)
 	) WITHOUT ROWID;
+
+	CREATE TABLE IF NOT EXISTS node_defs (
+		token TEXT,
+		dir_id TEXT,
+		PRIMARY KEY (token, dir_id)
+	) WITHOUT ROWID;
 	`
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -96,6 +103,11 @@ func (w *SQLiteWriter) beginTx() error {
 	}
 
 	w.stmtRef, err = w.tx.Prepare(`INSERT OR IGNORE INTO node_refs (token, node_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+
+	w.stmtDef, err = w.tx.Prepare(`INSERT OR IGNORE INTO node_defs (token, dir_id) VALUES (?, ?)`)
 	return err
 }
 
@@ -105,6 +117,9 @@ func (w *SQLiteWriter) commitTx() error {
 	}
 	if w.stmtRef != nil {
 		_ = w.stmtRef.Close()
+	}
+	if w.stmtDef != nil {
+		_ = w.stmtDef.Close()
 	}
 	if err := w.tx.Commit(); err != nil {
 		return err
@@ -206,7 +221,11 @@ func (w *SQLiteWriter) AddRef(token, nodeID string) error {
 }
 
 func (w *SQLiteWriter) AddDef(token, dirID string) error {
-	return nil // Not persisted in build output yet (Phase 2: node_defs table)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	_, err := w.stmtDef.Exec(token, dirID)
+	return err
 }
 
 func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
