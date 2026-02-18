@@ -51,6 +51,7 @@ var (
 	quiet       bool
 	backend     string
 	agentMode   bool
+	outPath     string
 )
 
 func init() {
@@ -61,6 +62,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
 	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
+	rootCmd.Flags().StringVar(&outPath, "out", "", "Write .db to path instead of mounting (for leyline load); not compatible with --agent")
 
 	defaultBackend := "fuse"
 	if runtime.GOOS == "darwin" {
@@ -93,6 +95,11 @@ var rootCmd = &cobra.Command{
 			if err == nil {
 				os.Stdout = f
 			}
+		}
+
+		// Validate flag combinations
+		if outPath != "" && agentMode {
+			return fmt.Errorf("--out and --agent cannot be used together (--agent enables writable mode, --out requires read-only)")
 		}
 
 		// Agent mode: auto-generate mount point and configure
@@ -431,6 +438,20 @@ var rootCmd = &cobra.Command{
 				}
 				fmt.Printf("Indexing complete in %v\n", time.Since(start))
 				eng.PrintRoutingSummary()
+
+				// --out: materialize virtuals, copy .db, exit (no mount)
+				if outPath != "" {
+					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
+						return fmt.Errorf("materialize virtuals: %w", err)
+					}
+					if err := copyFile(indexPath, outPath); err != nil {
+						return fmt.Errorf("copy db: %w", err)
+					}
+					_ = os.Remove(indexPath)
+					fmt.Printf("Wrote %s\n", outPath)
+					fmt.Printf("Load into leyline: leyline load --db %s --control /tmp/ll.ctrl\n", outPath)
+					return nil
+				}
 
 				sg, err := graph.OpenSQLiteGraph(indexPath, schema, ingest.RenderTemplate)
 				if err != nil {
