@@ -51,6 +51,7 @@ var (
 	quiet       bool
 	backend     string
 	agentMode   bool
+	outPath     string
 )
 
 func init() {
@@ -61,6 +62,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
 	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
+	rootCmd.Flags().StringVar(&outPath, "out", "", "Write .db to path instead of mounting (for leyline load)")
 
 	defaultBackend := "fuse"
 	if runtime.GOOS == "darwin" {
@@ -431,6 +433,19 @@ var rootCmd = &cobra.Command{
 				}
 				fmt.Printf("Indexing complete in %v\n", time.Since(start))
 				eng.PrintRoutingSummary()
+
+				// --out: materialize virtuals, copy .db, exit (no mount)
+				if outPath != "" {
+					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
+						return fmt.Errorf("materialize virtuals: %w", err)
+					}
+					if err := copyFile(indexPath, outPath); err != nil {
+						return fmt.Errorf("copy db: %w", err)
+					}
+					fmt.Printf("Wrote %s\n", outPath)
+					fmt.Printf("Load into leyline: leyline load --db %s --control /tmp/ll.ctrl\n", outPath)
+					return nil
+				}
 
 				sg, err := graph.OpenSQLiteGraph(indexPath, schema, ingest.RenderTemplate)
 				if err != nil {
