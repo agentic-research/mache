@@ -43,10 +43,12 @@ type IngestionTarget interface {
 
 // Engine drives the ingestion process.
 type Engine struct {
-	Schema     *api.Topology
-	Store      IngestionTarget
-	RootPath   string // absolute path to the root of the ingestion
-	sourceFile string // absolute path, set during ingestTreeSitter for origin tracking
+	Schema      *api.Topology
+	Store       IngestionTarget
+	RootPath    string // absolute path to the root of the ingestion
+	sourceFile  string // absolute path, set during ingestTreeSitter for origin tracking
+	routedFiles map[string]int
+	mu          sync.Mutex
 }
 
 // --- Parallel ingestion types ---
@@ -89,21 +91,45 @@ func isBinaryFile(path string) bool {
 
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 	return &Engine{
-		Schema: schema,
-		Store:  store,
+		Schema:      schema,
+		Store:       store,
+		routedFiles: make(map[string]int),
 	}
 }
 
-// schemaUsesTreeSitter returns true if the schema's selectors are tree-sitter
+// SchemaUsesTreeSitter returns true if the schema's selectors are tree-sitter
 // S-expressions rather than JSONPath. S-expressions always start with '('.
-func schemaUsesTreeSitter(schema *api.Topology) bool {
-	for _, n := range schema.Nodes {
+func SchemaUsesTreeSitter(schema *api.Topology) bool {
+	return hasTreeSitterSelectors(schema.Nodes)
+}
+
+// hasTreeSitterSelectors recursively checks for tree-sitter S-expression selectors.
+func hasTreeSitterSelectors(nodes []api.Node) bool {
+	for _, n := range nodes {
 		sel := strings.TrimSpace(n.Selector)
 		if len(sel) > 0 && sel[0] == '(' {
 			return true
 		}
+		if hasTreeSitterSelectors(n.Children) {
+			return true
+		}
 	}
 	return false
+}
+
+// filterNodesByLanguage returns nodes that match the given language.
+// Nodes match if:
+// - Their Language field equals langName (FCA-generated nodes with language tags)
+// - Their Name equals langName (namespace nodes from multi-language inference)
+// - Their Language field is empty (manual schemas, tests, language-agnostic nodes)
+func filterNodesByLanguage(nodes []api.Node, langName string) []api.Node {
+	var result []api.Node
+	for _, node := range nodes {
+		if node.Language == langName || node.Name == langName || node.Language == "" {
+			result = append(result, node)
+		}
+	}
+	return result
 }
 
 // Ingest processes a file or directory.
@@ -129,7 +155,7 @@ func (e *Engine) Ingest(path string) error {
 		// JSONPath schemas operate on data files (.json, .db).
 		// Ingesting the wrong type is harmless but wastes time and
 		// can produce confusing errors (e.g. S-expression as JSONPath).
-		treeSitter := schemaUsesTreeSitter(e.Schema)
+		treeSitter := SchemaUsesTreeSitter(e.Schema)
 
 		return filepath.Walk(realPath, func(p string, d os.FileInfo, err error) error {
 			if err != nil {
@@ -147,6 +173,15 @@ func (e *Engine) Ingest(path string) error {
 					}
 				}
 				return nil
+			}
+			// Skip symlinks to directories (e.g., kodata/templates -> ../templates)
+			// filepath.Walk doesn't follow symlinks, so d.IsDir() is false for them,
+			// but os.ReadFile will follow and fail with "is a directory".
+			if d.Mode()&os.ModeSymlink != 0 {
+				target, err := os.Stat(p)
+				if err == nil && target.IsDir() {
+					return nil
+				}
 			}
 			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
@@ -222,6 +257,15 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 }
 
 func (e *Engine) ingestJSON(path string, modTime time.Time) error {
+	// Defensive check: ensure path is a file, not a directory
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a JSON file", path)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -278,6 +322,15 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 		realPath = absPath
 	}
 
+	// Defensive check: ensure path is a file, not a directory
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a source file", realPath)
+	}
+
 	content, err := os.ReadFile(realPath)
 	if err != nil {
 		return err
@@ -309,7 +362,10 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 			fileContext = ctxBytes
 		}
 
-		for _, nodeSchema := range e.Schema.Nodes {
+		// Filter schema nodes by language to prevent cross-language query errors
+		applicableNodes := filterNodesByLanguage(e.Schema.Nodes, langName)
+
+		for _, nodeSchema := range applicableNodes {
 			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime, bt, fileContext); err != nil {
 				// Tree-sitter query compilation fails when a schema selector
 				// uses node types from a different language (e.g. Go's
@@ -317,7 +373,9 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 				// expected when FCA infers a schema from mixed-language dirs.
 				// Route to _project_files/ so the content is still accessible.
 				if strings.Contains(err.Error(), "invalid query") {
-					log.Printf("ingest: routing %s to _project_files/ (schema selector incompatible with %s grammar)", path, langName)
+					e.mu.Lock()
+					e.routedFiles[langName]++
+					e.mu.Unlock()
 					return e.ingestRawFileUnder(path, "_project_files", modTime)
 				}
 				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
@@ -430,6 +488,16 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 	} else {
 		fileID = rel
 	}
+
+	// Defensive check: ensure path is a file, not a directory
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, cannot ingest as raw file", path)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -1050,4 +1118,17 @@ func RenderTemplate(tmpl string, values map[string]any) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// PrintRoutingSummary outputs a summary of files routed to _project_files/.
+func (e *Engine) PrintRoutingSummary() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if len(e.routedFiles) > 0 {
+		log.Printf("Routing summary:")
+		for lang, count := range e.routedFiles {
+			log.Printf("  %s: %d files routed to _project_files/", lang, count)
+		}
+	}
 }

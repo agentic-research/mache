@@ -321,23 +321,25 @@ func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 			ModTime: time.Unix(0, mtimeNano),
 		}
 
-		// If it's a file and has a record ID, set up lazy content ref
-		if kind == 0 && recordID.Valid {
-			// We need the content template.
-			// Currently, we still walk the schema to find the leaf definition.
-			// This is fast (in-memory).
-			segments := strings.Split(id, "/")
-			_, fileLeaf := g.walkSchema(segments)
-			if fileLeaf != nil {
-				node.Ref = &ContentRef{
-					DBPath:     g.dbPath,
-					RecordID:   recordID.String,
-					Template:   fileLeaf.ContentTemplate,
-					ContentLen: int64(size),
+		// If it's a file, set up content ref for size reporting
+		if kind == 0 {
+			if recordID.Valid {
+				// Record ID reference — set up lazy content ref with template
+				segments := strings.Split(id, "/")
+				_, fileLeaf := g.walkSchema(segments)
+				if fileLeaf != nil {
+					node.Ref = &ContentRef{
+						DBPath:     g.dbPath,
+						RecordID:   recordID.String,
+						Template:   fileLeaf.ContentTemplate,
+						ContentLen: int64(size),
+					}
 				}
-				// Populate cache for repeated stats
-				g.sizeCache.Store(id, int64(size))
+			} else {
+				// Inline content (source code from SQLiteWriter) — use ContentRef for size only
+				node.Ref = &ContentRef{ContentLen: int64(size)}
 			}
+			g.sizeCache.Store(id, int64(size))
 		}
 		return node, nil
 	}
@@ -453,7 +455,10 @@ func (g *SQLiteGraph) ReadContent(id string, buf []byte, offset int64) (int, err
 
 	segments := strings.Split(id, "/")
 	_, fileLeaf := g.walkSchema(segments)
-	if fileLeaf == nil {
+
+	// For nodes-table inline content, fileLeaf may be nil (schema doesn't map these paths).
+	// resolveContent handles this: it reads the record column directly from the nodes table.
+	if fileLeaf == nil && !g.useNodesTable {
 		return 0, ErrNotFound
 	}
 
@@ -1261,17 +1266,41 @@ func (g *SQLiteGraph) resolveContent(filePath string, segments []string, leaf *a
 	}
 	g.contentMu.Unlock()
 
-	var recordID string
+	var content []byte
 
 	if g.useNodesTable {
-		// Fetch record ID from nodes table
-		// This handles the "nodes mode" logic locally
-		err := g.db.QueryRow("SELECT record_id FROM nodes WHERE id = ?", filePath).Scan(&recordID)
-		if err == sql.ErrNoRows || recordID == "" {
+		// Nodes-table path: check for inline content first, then record_id fallback.
+		var recordID sql.NullString
+		var record sql.NullString
+		err := g.db.QueryRow("SELECT record_id, record FROM nodes WHERE id = ?", filePath).Scan(&recordID, &record)
+		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
 		if err != nil {
 			return nil, err
+		}
+
+		if !recordID.Valid && record.Valid {
+			// Inline content (source code nodes written by SQLiteWriter) — return directly.
+			content = []byte(record.String)
+		} else if recordID.Valid && recordID.String != "" {
+			// Record ID reference — fetch from results table and render via template.
+			var raw string
+			if err := g.db.QueryRow("SELECT record FROM "+g.tableName+" WHERE id = ?", recordID.String).Scan(&raw); err != nil {
+				return nil, fmt.Errorf("fetch record %s: %w", recordID.String, err)
+			}
+			var parsed any
+			if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+				return nil, fmt.Errorf("parse record %s: %w", recordID.String, err)
+			}
+			values, _ := parsed.(map[string]any)
+			rendered, err := g.render(leaf.ContentTemplate, values)
+			if err != nil {
+				return nil, fmt.Errorf("render %s: %w", filePath, err)
+			}
+			content = []byte(rendered)
+		} else {
+			return nil, ErrNotFound
 		}
 	} else {
 		// Legacy mode: find parent directory's record ID
@@ -1284,27 +1313,26 @@ func (g *SQLiteGraph) resolveContent(filePath string, segments []string, leaf *a
 		if !ok {
 			return nil, ErrNotFound
 		}
-		recordID = ridVal.(string)
-	}
+		recordID := ridVal.(string)
 
-	// Fetch record from source DB (primary key lookup — instant)
-	var raw string
-	if err := g.db.QueryRow("SELECT record FROM "+g.tableName+" WHERE id = ?", recordID).Scan(&raw); err != nil {
-		return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
-	}
+		// Fetch record from source DB (primary key lookup — instant)
+		var raw string
+		if err := g.db.QueryRow("SELECT record FROM "+g.tableName+" WHERE id = ?", recordID).Scan(&raw); err != nil {
+			return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
+		}
 
-	var parsed any
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return nil, fmt.Errorf("parse record %s: %w", recordID, err)
-	}
-	values, _ := parsed.(map[string]any)
+		var parsed any
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			return nil, fmt.Errorf("parse record %s: %w", recordID, err)
+		}
+		values, _ := parsed.(map[string]any)
 
-	rendered, err := g.render(leaf.ContentTemplate, values)
-	if err != nil {
-		return nil, fmt.Errorf("render %s: %w", filePath, err)
+		rendered, err := g.render(leaf.ContentTemplate, values)
+		if err != nil {
+			return nil, fmt.Errorf("render %s: %w", filePath, err)
+		}
+		content = []byte(rendered)
 	}
-
-	content := []byte(rendered)
 
 	// Cache (FIFO eviction)
 	g.contentMu.Lock()

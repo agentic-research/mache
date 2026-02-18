@@ -50,6 +50,7 @@ var (
 	inferSchema bool
 	quiet       bool
 	backend     string
+	agentMode   bool
 )
 
 func init() {
@@ -59,6 +60,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&writable, "writable", "w", false, "Enable write-back (splice edits into source files)")
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
+	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
 
 	defaultBackend := "fuse"
 	if runtime.GOOS == "darwin" {
@@ -67,6 +69,9 @@ func init() {
 	rootCmd.Flags().StringVar(&backend, "backend", defaultBackend, "Mount backend: nfs or fuse")
 
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(unmountCmd)
+	rootCmd.AddCommand(cleanCmd)
 }
 
 var versionCmd = &cobra.Command{
@@ -78,9 +83,10 @@ var versionCmd = &cobra.Command{
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "mache [mountpoint]",
-	Short: "Mache: The Universal Semantic Overlay Engine",
-	Args:  cobra.ExactArgs(1),
+	Use:     "mache [mountpoint]",
+	Short:   "Mache: The Universal Semantic Overlay Engine",
+	Args:    cobra.MaximumNArgs(1),
+	Version: fmt.Sprintf("%s (commit %s, built %s)", Version, Commit, Date),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if quiet {
 			f, err := os.Open(os.DevNull)
@@ -89,7 +95,25 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		mountPoint := args[0]
+		// Agent mode: auto-generate mount point and configure
+		if agentMode {
+			if err := runAgentMode(); err != nil {
+				return err
+			}
+			// agentMetadata is now set, including the mount point
+		}
+
+		// Determine mount point
+		var mountPoint string
+		if agentMode {
+			mountPoint = agentMetadata.MountPoint
+		} else {
+			// Normal mode: require mountpoint argument
+			if len(args) == 0 {
+				return fmt.Errorf("mountpoint required (or use --agent for auto mode)")
+			}
+			mountPoint = args[0]
+		}
 
 		// 0. Ensure mount point exists (create if needed)
 		if err := os.MkdirAll(mountPoint, 0o755); err != nil {
@@ -162,9 +186,10 @@ var rootCmd = &cobra.Command{
 				if errStat == nil && info.IsDir() {
 					fmt.Printf("Inferring schema from directory %s...\n", dataPath)
 					start := time.Now()
-					var allRecords []any
 
-					walkErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+					// Pass 1: Quick language detection scan (no parsing)
+					languageCounts := make(map[string]int)
+					quickScanErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
 						if err != nil {
 							return err
 						}
@@ -175,62 +200,149 @@ var rootCmd = &cobra.Command{
 							}
 							return nil
 						}
-
 						ext := filepath.Ext(path)
-						if ext == ".o" || ext == ".a" {
-							return nil // Skip binary artifacts
-						}
-
-						var lang *sitter.Language
-
-						switch ext {
-						case ".go":
-							lang = golang.GetLanguage()
-						case ".js":
-							lang = javascript.GetLanguage()
-						case ".py":
-							lang = python.GetLanguage()
-						case ".ts", ".tsx":
-							lang = typescript.GetLanguage()
-						case ".sql":
-							lang = sql.GetLanguage()
-						case ".tf", ".hcl":
-							lang = hcl.GetLanguage()
-						case ".yaml", ".yml":
-							lang = yaml.GetLanguage()
-						case ".rs":
-							lang = rust.GetLanguage()
-						default:
-							return nil // Skip unsupported files
-						}
-
-						content, readErr := os.ReadFile(path)
-						if readErr != nil {
-							fmt.Printf("Warning: skipping unreadable file %s: %v\n", path, readErr)
-							return nil
-						}
-
-						parser := sitter.NewParser()
-						parser.SetLanguage(lang)
-						tree, _ := parser.ParseCtx(context.Background(), nil, content)
-						if tree != nil {
-							records := ingest.FlattenAST(tree.RootNode())
-							allRecords = append(allRecords, records...)
+						if langName, _, ok := ingest.DetectLanguageFromExt(ext); ok {
+							languageCounts[langName]++
 						}
 						return nil
 					})
 
-					if walkErr != nil {
-						err = fmt.Errorf("walk failed: %w", walkErr)
-					} else if len(allRecords) == 0 {
-						err = fmt.Errorf("no supported source files found in %s", dataPath)
+					if quickScanErr != nil {
+						err = fmt.Errorf("language scan failed: %w", quickScanErr)
+					} else if len(languageCounts) == 0 {
+						fmt.Printf("No source files found, using passthrough schema\n")
+						inferred = &api.Topology{Version: "v1", Nodes: []api.Node{}}
 					} else {
-						// Use FCA for ASTs (same logic as InferFromTreeSitter)
-						saved := inf.Config.Method
-						inf.Config.Method = "fca"
-						inferred, err = inf.InferFromRecords(allRecords)
-						inf.Config.Method = saved
-						fmt.Printf(" done (%d records) in %v\n", len(allRecords), time.Since(start))
+						fmt.Printf("Detected languages: ")
+						for lang, count := range languageCounts {
+							fmt.Printf("%s(%d) ", lang, count)
+						}
+						fmt.Printf("\n")
+
+						// Pass 2: Parse and infer per language in parallel
+						type langResult struct {
+							lang    string
+							records []any
+							err     error
+						}
+
+						resultsChan := make(chan langResult, len(languageCounts))
+						var wg sync.WaitGroup
+
+						for targetLang := range languageCounts {
+							wg.Add(1)
+							go func(lang string) {
+								defer wg.Done()
+
+								var records []any
+								fileCount := 0
+								sampleLimit := 200 // Only parse first 200 files per language for FCA
+
+								// Walk and parse SAMPLE of files for this language (for schema inference only)
+								walkErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+									if err != nil {
+										return err
+									}
+									if info.IsDir() {
+										base := filepath.Base(path)
+										if (strings.HasPrefix(base, ".") && path != dataPath) || base == "target" || base == "node_modules" || base == "dist" || base == "build" {
+											return filepath.SkipDir
+										}
+										return nil
+									}
+
+									// Stop early once we've collected enough samples
+									if fileCount >= sampleLimit {
+										return nil
+									}
+
+									ext := filepath.Ext(path)
+									if ext == ".o" || ext == ".a" {
+										return nil
+									}
+
+									langName, treeLang, ok := ingest.DetectLanguageFromExt(ext)
+									if !ok || langName != lang {
+										return nil // Skip files not for this language
+									}
+
+									// Parse with tree-sitter
+									content, readErr := os.ReadFile(path)
+									if readErr != nil {
+										return nil // Skip unreadable files
+									}
+
+									parser := sitter.NewParser()
+									parser.SetLanguage(treeLang)
+									tree, _ := parser.ParseCtx(context.Background(), nil, content)
+									if tree != nil {
+										records = append(records, ingest.FlattenASTWithLanguage(tree.RootNode(), langName)...)
+									}
+
+									fileCount++
+									return nil
+								})
+
+								fmt.Printf("  %s: sampled %d/%d files for schema inference\n", lang, fileCount, languageCounts[lang])
+
+								if walkErr != nil {
+									resultsChan <- langResult{lang: lang, err: walkErr}
+									return
+								}
+
+								resultsChan <- langResult{lang: lang, records: records}
+							}(targetLang)
+						}
+
+						// Wait for all goroutines and close channel
+						go func() {
+							wg.Wait()
+							close(resultsChan)
+						}()
+
+						// Collect results
+						recordsByLang := make(map[string][]any)
+						for result := range resultsChan {
+							if result.err != nil {
+								err = fmt.Errorf("scan %s: %w", result.lang, result.err)
+								break
+							}
+							if len(result.records) > 0 {
+								recordsByLang[result.lang] = result.records
+							}
+						}
+
+						if err == nil {
+							if len(recordsByLang) == 0 {
+								// No records parsed
+								fmt.Printf("No parseable source files found, using passthrough schema\n")
+								inferred = &api.Topology{Version: "v1", Nodes: []api.Node{}}
+							} else if len(recordsByLang) == 1 {
+								// Single language - flatten (backward compat)
+								for langName, records := range recordsByLang {
+									saved := inf.Config.Method
+									savedLang := inf.Config.Language
+									inf.Config.Method = "fca"
+									inf.Config.Language = langName
+									inferred, err = inf.InferFromRecords(records)
+									inf.Config.Method = saved
+									inf.Config.Language = savedLang
+									if err == nil {
+										fmt.Printf("Schema inferred from %d records in %v\n", len(records), time.Since(start))
+									}
+								}
+							} else {
+								// Multi-language - create namespaced schema
+								inferred, err = inf.InferMultiLanguage(recordsByLang)
+								if err == nil {
+									totalRecords := 0
+									for _, recs := range recordsByLang {
+										totalRecords += len(recs)
+									}
+									fmt.Printf("Multi-language schema inferred from %d sampled records (%d languages) in %v\n", totalRecords, len(recordsByLang), time.Since(start))
+								}
+							}
+						}
 					}
 				} else {
 					err = fmt.Errorf("automatic inference not supported for %s", ext)
@@ -292,8 +404,47 @@ var rootCmd = &cobra.Command{
 				}
 				fmt.Printf(" done in %v\n", time.Since(start))
 				g = sg
+			} else if !writable && ingest.SchemaUsesTreeSitter(schema) {
+				// Read-only source: ingest to SQLite index, mount via SQLiteGraph (fast path).
+				mountName := filepath.Base(mountPoint)
+				tmpDir := filepath.Join(os.TempDir(), "mache")
+				if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+					return fmt.Errorf("create temp dir: %w", err)
+				}
+				indexPath := filepath.Join(tmpDir, mountName+"-index.db")
+
+				fmt.Printf("Indexing source to %s...\n", indexPath)
+				start := time.Now()
+
+				writer, err := ingest.NewSQLiteWriter(indexPath)
+				if err != nil {
+					return fmt.Errorf("create sqlite writer: %w", err)
+				}
+
+				eng := ingest.NewEngine(schema, writer)
+				if err := eng.Ingest(dataPath); err != nil {
+					_ = writer.Close()
+					return fmt.Errorf("ingestion failed: %w", err)
+				}
+				if err := writer.Close(); err != nil {
+					return fmt.Errorf("close sqlite writer: %w", err)
+				}
+				fmt.Printf("Indexing complete in %v\n", time.Since(start))
+				eng.PrintRoutingSummary()
+
+				sg, err := graph.OpenSQLiteGraph(indexPath, schema, ingest.RenderTemplate)
+				if err != nil {
+					return fmt.Errorf("open indexed graph: %w", err)
+				}
+				defer func() {
+					_ = sg.Close()
+					_ = os.Remove(indexPath)
+				}()
+
+				sg.SetCallExtractor(newCallExtractor())
+				g = sg
 			} else {
-				// Non-DB source: use MemoryStore + ingestion pipeline
+				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
 				store := graph.NewMemoryStore()
 				resolver := ingest.NewSQLiteResolver()
 				defer resolver.Close()
@@ -315,6 +466,7 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("ingest git records: %w", err)
 					}
 					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+					engine.PrintRoutingSummary()
 				} else {
 					fmt.Printf("Ingesting data from %s...\n", dataPath)
 					start := time.Now()
@@ -322,6 +474,7 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("ingestion failed: %w", err)
 					}
 					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+					engine.PrintRoutingSummary()
 				}
 
 				// Enable SQL query support for MemoryStore
@@ -343,10 +496,27 @@ var rootCmd = &cobra.Command{
 			g = graph.NewMemoryStore()
 		}
 
+		// Agent mode: save metadata sidecar and generate prompt content
+		var promptContent []byte
+		if agentMode && agentMetadata != nil {
+			if err := saveMountMetadata(mountPoint, agentMetadata); err != nil {
+				fmt.Printf("Warning: failed to save mount metadata: %v\n", err)
+			}
+			promptContent = generatePromptContent(agentMetadata)
+			fmt.Printf("\nAgent instructions: %s/PROMPT.txt\n", mountPoint)
+			fmt.Printf("\nTo start:\n")
+			fmt.Printf("  cd %s\n", mountPoint)
+			fmt.Printf("  cat PROMPT.txt\n")
+			fmt.Printf("  claude  # or your preferred LLM\n")
+			fmt.Printf("\nTo stop:\n")
+			fmt.Printf("  mache unmount %s\n", filepath.Base(mountPoint))
+			fmt.Printf("  # or press Ctrl+C in this terminal\n\n")
+		}
+
 		// 4. Mount via selected backend
 		switch backend {
 		case "nfs":
-			return mountNFS(schema, g, engine, mountPoint, writable)
+			return mountNFS(schema, g, engine, mountPoint, writable, promptContent)
 		case "fuse":
 			return mountFUSE(schema, g, engine, mountPoint, writable)
 		default:
@@ -461,7 +631,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	// Mount
 	switch backend {
 	case "nfs":
-		return mountNFS(schema, hotSwap, nil, mountPoint, false)
+		return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
 	case "fuse":
 		return mountFUSE(schema, hotSwap, nil, mountPoint, false)
 	default:
@@ -533,8 +703,11 @@ func mountWritableNFS(schema *api.Topology, wg *graph.WritableGraph, mountPoint 
 }
 
 // mountNFS starts an NFS server backed by GraphFS and mounts it.
-func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
+func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool, promptContent []byte) error {
 	graphFs := nfsmount.NewGraphFS(g, schema)
+	if len(promptContent) > 0 {
+		graphFs.SetPromptContent(promptContent)
+	}
 
 	// Wire write-back if requested (validate → format → splice → surgical update → invalidate)
 	if writable && engine != nil {
@@ -733,6 +906,127 @@ func newCallExtractor() graph.CallExtractor {
 		}
 		return walker.ExtractQualifiedCalls(tree.RootNode(), content, lang, langName)
 	}
+}
+
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List active mache mounts",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mounts, err := listActiveMounts()
+		if err != nil {
+			return err
+		}
+
+		if len(mounts) == 0 {
+			fmt.Println("No active mache mounts found.")
+			return nil
+		}
+
+		fmt.Printf("%-20s %-10s %-50s %s\n", "MOUNT", "PID", "SOURCE", "STATUS")
+		fmt.Println(strings.Repeat("-", 100))
+
+		for _, meta := range mounts {
+			name := filepath.Base(meta.MountPoint)
+			status := "running"
+			if !isProcessRunning(meta.PID) {
+				status = "stale"
+			}
+			fmt.Printf("%-20s %-10d %-50s %s\n", name, meta.PID, meta.Source, status)
+		}
+
+		return nil
+	},
+}
+
+var unmountCmd = &cobra.Command{
+	Use:   "unmount <mount-name>",
+	Short: "Unmount and stop a mache mount",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mountName := args[0]
+
+		// Resolve mount point (support both short name and full path)
+		var mountPoint string
+		if filepath.IsAbs(mountName) {
+			mountPoint = mountName
+		} else {
+			mountsDir, err := getAgentMountsDir()
+			if err != nil {
+				return err
+			}
+			mountPoint = filepath.Join(mountsDir, mountName)
+		}
+
+		// Load metadata
+		meta, err := loadMountMetadata(mountPoint)
+		if err != nil {
+			return fmt.Errorf("failed to load mount metadata: %w", err)
+		}
+
+		// Kill the process
+		if isProcessRunning(meta.PID) {
+			process, err := os.FindProcess(meta.PID)
+			if err != nil {
+				return fmt.Errorf("failed to find process %d: %w", meta.PID, err)
+			}
+
+			fmt.Printf("Stopping mache process (PID %d)...\n", meta.PID)
+			if err := process.Signal(syscall.SIGTERM); err != nil {
+				return fmt.Errorf("failed to send SIGTERM: %w", err)
+			}
+
+			// Wait briefly for graceful shutdown
+			time.Sleep(2 * time.Second)
+
+			if isProcessRunning(meta.PID) {
+				fmt.Printf("Process still running, sending SIGKILL...\n")
+				_ = process.Signal(syscall.SIGKILL)
+			}
+		}
+
+		// Clean up mount directory and sidecar
+		fmt.Printf("Removing mount directory: %s\n", mountPoint)
+		if err := os.RemoveAll(mountPoint); err != nil {
+			return fmt.Errorf("failed to remove mount directory: %w", err)
+		}
+		_ = os.Remove(sidecarPath(mountPoint))
+
+		fmt.Println("Mount stopped successfully.")
+		return nil
+	},
+}
+
+var cleanCmd = &cobra.Command{
+	Use:   "clean",
+	Short: "Remove stale mache mounts (where process has died)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mounts, err := listActiveMounts()
+		if err != nil {
+			return err
+		}
+
+		cleaned := 0
+		for _, meta := range mounts {
+			if !isProcessRunning(meta.PID) {
+				fmt.Printf("Removing stale mount: %s (PID %d was not running)\n",
+					filepath.Base(meta.MountPoint), meta.PID)
+				if err := os.RemoveAll(meta.MountPoint); err != nil {
+					fmt.Printf("Warning: failed to remove %s: %v\n", meta.MountPoint, err)
+				} else {
+					_ = os.Remove(sidecarPath(meta.MountPoint))
+					cleaned++
+				}
+			}
+		}
+
+		if cleaned == 0 {
+			fmt.Println("No stale mounts found.")
+		} else {
+			fmt.Printf("Cleaned %d stale mount(s).\n", cleaned)
+		}
+
+		return nil
+	},
 }
 
 // Execute runs the root command.

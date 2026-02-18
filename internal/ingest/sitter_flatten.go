@@ -6,12 +6,19 @@ import (
 
 // FlattenAST walks the tree and returns a list of records for FCA analysis.
 func FlattenAST(root *sitter.Node) []any {
+	return FlattenASTWithLanguage(root, "")
+}
+
+// FlattenASTWithLanguage walks the tree and returns records for FCA analysis,
+// using language-specific enrichment if available.
+func FlattenASTWithLanguage(root *sitter.Node, langName string) []any {
 	var records []any
-	walkAST(root, &records)
+	profile := GetLanguageProfile(langName)
+	walkAST(root, &records, profile)
 	return records
 }
 
-func walkAST(n *sitter.Node, records *[]any) {
+func walkAST(n *sitter.Node, records *[]any, profile *LanguageProfile) {
 	if n == nil {
 		return
 	}
@@ -39,12 +46,17 @@ func walkAST(n *sitter.Node, records *[]any) {
 			}
 		}
 
+		// Apply language-specific enrichment for languages without field names
+		if profile != nil && profile.EnrichNode != nil {
+			profile.EnrichNode(n, rec)
+		}
+
 		*records = append(*records, rec)
 	}
 
 	// Recurse
 	count := int(n.ChildCount())
 	for i := 0; i < count; i++ {
-		walkAST(n.Child(i), records)
+		walkAST(n.Child(i), records, profile)
 	}
 }

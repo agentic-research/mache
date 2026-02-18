@@ -18,6 +18,7 @@ type InferConfig struct {
 	Method     string            // "fca" (default) or "greedy"
 	MaxDepth   int               // max depth for greedy inference (default 5)
 	Hints      map[string]string // user-provided type hints
+	Language   string            // language hint for generated nodes (e.g., "go", "terraform")
 }
 
 // DefaultInferConfig returns sensible defaults.
@@ -78,15 +79,21 @@ func (inf *Inferrer) InferFromRecords(records []any) (*api.Topology, error) {
 		}
 	}
 
-	if isAST {
-		return ProjectAST(concepts, ctx), nil
+	// Build projection config with language hint
+	config := ProjectConfig{
+		RootName: inf.Config.RootName,
+		MaxDepth: inf.Config.MaxDepth,
+		Hints:    inf.Config.Hints,
+		Language: inf.Config.Language,
 	}
-
-	// Project into topology
-	config := ProjectConfig{RootName: inf.Config.RootName}
 	if config.RootName == "" {
 		config.RootName = "records"
 	}
+
+	if isAST {
+		return ProjectAST(concepts, ctx, config), nil
+	}
+
 	return Project(concepts, ctx, config), nil
 }
 
@@ -184,6 +191,70 @@ func (inf *Inferrer) InferFromSQLiteJSON(dbPath string) (*api.Topology, error) {
 	}
 
 	return inf.InferFromRecords(records)
+}
+
+// InferMultiLanguage infers a multi-language schema from per-language record sets.
+// Creates a namespace node for each language and returns a unified topology.
+func (inf *Inferrer) InferMultiLanguage(recordsByLang map[string][]any) (*api.Topology, error) {
+	if len(recordsByLang) == 0 {
+		return &api.Topology{Version: "v1"}, nil
+	}
+
+	// Sort language names for deterministic output
+	languages := make([]string, 0, len(recordsByLang))
+	for lang := range recordsByLang {
+		languages = append(languages, lang)
+	}
+	// Sort to ensure deterministic schema generation
+	for i := 0; i < len(languages); i++ {
+		for j := i + 1; j < len(languages); j++ {
+			if languages[i] > languages[j] {
+				languages[i], languages[j] = languages[j], languages[i]
+			}
+		}
+	}
+
+	// Infer schema for each language
+	var rootNodes []api.Node
+	for _, langName := range languages {
+		records := recordsByLang[langName]
+		if len(records) == 0 {
+			continue
+		}
+
+		// Run FCA inference for this language
+		saved := inf.Config.Method
+		savedLang := inf.Config.Language
+		inf.Config.Method = "fca"
+		inf.Config.Language = langName
+		subSchema, err := inf.InferFromRecords(records)
+		inf.Config.Method = saved
+		inf.Config.Language = savedLang
+
+		if err != nil {
+			return nil, fmt.Errorf("infer %s: %w", langName, err)
+		}
+
+		// Skip languages where FCA produced no useful schema
+		if len(subSchema.Nodes) == 0 {
+			fmt.Printf("  Warning: %s FCA produced empty schema, files will go to _project_files/\n", langName)
+			continue
+		}
+
+		// Create language namespace node
+		langNode := api.Node{
+			Name:     langName,
+			Selector: "$", // Passthrough selector
+			Language: langName,
+			Children: subSchema.Nodes,
+		}
+		rootNodes = append(rootNodes, langNode)
+	}
+
+	return &api.Topology{
+		Version: "v1",
+		Nodes:   rootNodes,
+	}, nil
 }
 
 // reservoirSample performs reservoir sampling on a slice.

@@ -14,6 +14,7 @@ type ProjectConfig struct {
 	RootName string            // directory name for the root node (default: "records")
 	MaxDepth int               // maximum depth for recursive inference (default: 5)
 	Hints    map[string]string // hints for attribute types ("id", "temporal", "reference")
+	Language string            // language hint for generated nodes (e.g., "go", "terraform")
 }
 
 // DefaultProjectConfig returns sensible defaults.

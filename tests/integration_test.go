@@ -64,6 +64,7 @@ func setup(t *testing.T) *testFixture {
 
 	inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
 	inf.Config.Method = "fca"
+	inf.Config.Language = "go" // Set language for proper node tagging
 	schema, err := inf.InferFromRecords(records)
 	require.NoError(t, err, "schema inference failed")
 

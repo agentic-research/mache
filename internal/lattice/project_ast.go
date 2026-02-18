@@ -9,6 +9,25 @@ import (
 	"github.com/agentic-research/mache/api"
 )
 
+// containmentRules defines which AST container types can nest inside others,
+// per language. Keys are parent types; values are allowed child types.
+// Languages not listed (or with empty maps) default to flat — no nesting.
+var containmentRules = map[string]map[string][]string{
+	"go":        {}, // flat — no nested named functions
+	"hcl":       {}, // flat
+	"terraform": {}, // flat
+	"rust":      {}, // flat at top level
+	"python": {
+		"class_definition": {"function_definition"},
+	},
+	"javascript": {
+		"class_declaration": {"method_definition"},
+	},
+	"typescript": {
+		"class_declaration": {"method_definition"},
+	},
+}
+
 // ProjectAST converts Formal Concepts from a flattened AST into a recursive schema.
 //
 // Strategy:
@@ -20,7 +39,7 @@ import (
 //   - This covers classes inside functions, functions inside classes, etc.
 //
 // 4. Default to mapping "source" -> content of the node.
-func ProjectAST(concepts []Concept, ctx *FormalContext) *api.Topology {
+func ProjectAST(concepts []Concept, ctx *FormalContext, config ProjectConfig) *api.Topology {
 	containerTypes := make(map[string]string) // type -> name_type (e.g. identifier, property_identifier)
 
 	// Scan attributes to find types that have "has_name" and "has_body"
@@ -136,6 +155,7 @@ func ProjectAST(concepts []Concept, ctx *FormalContext) *api.Topology {
 			Name:          "{{.name}}",
 			Selector:      selector,
 			SkipSelfMatch: true,
+			Language:      config.Language,
 			Files: []api.Leaf{
 				{
 					Name:            "source",
@@ -177,36 +197,39 @@ func ProjectAST(concepts []Concept, ctx *FormalContext) *api.Topology {
 	// If we want "Infinite recursion" (arbitrary depth), we need the schema to be a DAG or contain a self-reference.
 	// JSON doesn't support references.
 
-	// Pragmatic approach: 3 levels of nesting is enough for 99% of code.
-	// Root -> [Func, Class] -> [Func, Class] -> [Func, Class]
+	// Language-aware containment: only assign children that the language permits.
+	// Unknown languages default to flat (safe — misses nesting but never generates garbage).
+	lang := strings.ToLower(config.Language)
+	rules := containmentRules[lang] // nil map is fine — all lookups return nil
 
-	// Base nodes (no children yet)
-	base := make([]api.Node, len(children))
-	copy(base, children)
-
-	// Depth 3 (Leaves)
-	d3 := make([]api.Node, len(base))
-	copy(d3, base)
-
-	// Depth 2 (Contains d3)
-	d2 := make([]api.Node, len(base))
-	for i, b := range base {
-		n := b
-		n.Children = d3 // Assign children
-		d2[i] = n
+	// Build a lookup from type name → index in children slice
+	typeIndex := make(map[string]int, len(sortedTypes))
+	for i, t := range sortedTypes {
+		typeIndex[t] = i
 	}
 
-	// Depth 1 (Contains d2)
-	d1 := make([]api.Node, len(base))
-	// This will be the root children
-	for i, b := range base {
-		n := b
-		n.Children = d2
-		d1[i] = n
+	// Assign permitted children (1 level of nesting — sufficient for real languages).
+	// Root → [Func, Class], Class → [Method] (per rules), Func → [] (flat).
+	result := make([]api.Node, len(children))
+	copy(result, children)
+	for i, t := range sortedTypes {
+		allowed := rules[t]
+		if len(allowed) == 0 {
+			continue
+		}
+		var nested []api.Node
+		for _, childType := range allowed {
+			if j, ok := typeIndex[childType]; ok {
+				nested = append(nested, children[j])
+			}
+		}
+		if len(nested) > 0 {
+			result[i].Children = nested
+		}
 	}
 
 	return &api.Topology{
 		Version: "v1",
-		Nodes:   d1, // Root children
+		Nodes:   result,
 	}
 }

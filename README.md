@@ -126,6 +126,8 @@ task test
 
 ## Usage
 
+### Basic Commands
+
 ```bash
 # Mount a SQLite database (instant — zero-copy, direct SQL queries)
 ./mache --schema examples/nvd-schema.json --data results.db /tmp/nvd
@@ -142,6 +144,65 @@ task test
 # Explicitly select backend (default: nfs on macOS, fuse on Linux)
 ./mache --backend nfs --infer --data results.db /tmp/nvd
 ```
+
+### Using with LLMs and Agents
+
+Mache mounts as a **standard POSIX filesystem** — no special tooling required. LLMs can use normal file operations.
+
+**Quick Start - Agent Mode:**
+
+```bash
+# Auto-mount your codebase with one command
+mache --agent -d ~/my-project
+
+# Mache will:
+# - Auto-infer schema from your code
+# - Enable write-back for editing
+# - Mount to /tmp/mache/my-project-abc123/
+# - Generate PROMPT.txt with instructions for your LLM
+# - Track the mount with git-aware naming
+
+# The mount runs in the foreground. Open a new terminal and:
+cd /tmp/mache/my-project-abc123
+cat PROMPT.txt    # Read agent instructions
+claude            # Start your LLM
+
+# When done, press Ctrl+C in the mache terminal, or:
+mache unmount my-project-abc123
+
+# List all active mounts anytime:
+mache list
+
+# Clean up stale mounts:
+mache clean
+```
+
+**Manual Mode (full control):**
+
+```bash
+# 1. Mount your codebase
+mache --infer --data ~/my-project --writable /tmp/project
+
+# 2. Navigate and work inside the mount
+cd /tmp/project
+
+# 3. Use any LLM with standard file tools (Read, Write, Edit)
+claude
+# or: aider, cursor, copilot, etc.
+```
+
+**Key Points for Agents:**
+- **It's just files.** Use standard Read/Write/Edit tools — no special bash commands needed.
+- **Structure mirrors semantics.** Navigate by function name, not file path: `cd functions/HandleRequest/`
+- **Virtual files provide context:**
+  - `source` — the function/type body (AST node content)
+  - `context` — imports, types, globals visible to this scope
+  - `callers/` — directory of functions that call this one (cross-references)
+  - `callees/` — directory of functions this one calls
+  - `_diagnostics/` — write status, AST errors, lint output
+- **Write-back preserves identity.** Edit `source` files and changes splice back into the original source tree. Invalid writes save as drafts in `_diagnostics/ast-errors`.
+
+**Important: Writes only work on AST-backed `source` files.** Raw text files and virtual files are read-only. If a write fails validation (syntax error), the node path stays stable and the error is available in `_diagnostics/` so the agent can retry.
 
 ### Example: NVD Vulnerability Database
 
