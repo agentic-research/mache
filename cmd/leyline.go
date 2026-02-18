@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/agentic-research/mache/api"
@@ -156,33 +157,15 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 }
 
 // extractFuncName pulls the function name from a node path like "functions/Foo/source".
-// Returns the second path component (the function directory name).
+// Returns the second-to-last path component (the function directory name).
 func extractFuncName(nodeID string) string {
-	// Split by "/" and take the second-to-last meaningful component
 	// "functions/ProcessOrder/source" -> "ProcessOrder"
 	// "types/MyStruct/source" -> "MyStruct"
-	parts := splitPath(nodeID)
+	parts := strings.Split(nodeID, "/")
 	if len(parts) < 2 {
 		return ""
 	}
 	return parts[len(parts)-2]
-}
-
-func splitPath(s string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '/' {
-			if i > start {
-				parts = append(parts, s[start:i])
-			}
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		parts = append(parts, s[start:])
-	}
-	return parts
 }
 
 // copyFile copies src to dst, creating dst if it doesn't exist.
@@ -197,9 +180,9 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = out.Close() }()
 
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
 		return err
 	}
 	return out.Close()

@@ -3,6 +3,7 @@ package cmd
 import (
 	"database/sql"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/api"
@@ -142,7 +143,7 @@ func TestMaterializeSchemaJSON(t *testing.T) {
 
 	// Use a temp file since materializeVirtuals opens by path
 	tmpDir := t.TempDir()
-	dbPath := tmpDir + "/test.db"
+	dbPath := filepath.Join(tmpDir, "test.db")
 
 	// Dump in-memory DB to file
 	_, err := db.Exec(`VACUUM INTO ?`, dbPath)
@@ -197,7 +198,7 @@ func TestMaterializePromptTxt(t *testing.T) {
 	schema := &api.Topology{Version: "v1"}
 
 	tmpDir := t.TempDir()
-	dbPath := tmpDir + "/test.db"
+	dbPath := filepath.Join(tmpDir, "test.db")
 
 	_, err := db.Exec(`VACUUM INTO ?`, dbPath)
 	if err != nil {
