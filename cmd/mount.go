@@ -539,7 +539,7 @@ var rootCmd = &cobra.Command{
 		case "nfs":
 			return mountNFS(schema, g, engine, mountPoint, writable, promptContent)
 		case "fuse":
-			return mountFUSE(schema, g, engine, mountPoint, writable)
+			return mountFUSE(schema, g, engine, mountPoint, writable, promptContent)
 		default:
 			return fmt.Errorf("unknown backend %q (use nfs or fuse)", backend)
 		}
@@ -654,7 +654,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	case "nfs":
 		return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
 	case "fuse":
-		return mountFUSE(schema, hotSwap, nil, mountPoint, false)
+		return mountFUSE(schema, hotSwap, nil, mountPoint, false, nil)
 	default:
 		return fmt.Errorf("unknown backend %q", backend)
 	}
@@ -679,7 +679,7 @@ func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, 
 	case "nfs":
 		return mountWritableNFS(schema, wg, mountPoint)
 	case "fuse":
-		return mountFUSE(schema, wg, nil, mountPoint, true)
+		return mountFUSE(schema, wg, nil, mountPoint, true, nil)
 	default:
 		return fmt.Errorf("unknown backend %q", backend)
 	}
@@ -832,8 +832,11 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 }
 
 // mountFUSE starts a FUSE mount (original backend).
-func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool) error {
+func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool, promptContent []byte) error {
 	macheFs := machefs.NewMacheFS(schema, g)
+	if len(promptContent) > 0 {
+		macheFs.SetPromptContent(promptContent)
+	}
 
 	// Wire up query directory (enables /.query/ magic dir for both backends)
 	if sg, ok := g.(*graph.SQLiteGraph); ok {
