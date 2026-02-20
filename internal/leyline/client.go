@@ -1,3 +1,5 @@
+//go:build leyline
+
 // Package leyline provides Go bindings to the ley-line C FFI.
 //
 // This wraps the Rust staticlib (libleyline_fs.a) via Cgo, giving mache
@@ -11,6 +13,9 @@
 //
 // The CGO_CFLAGS and CGO_LDFLAGS env vars must point to the header and
 // library. See the #cgo directives below for the default layout.
+//
+// This file is gated behind the "leyline" build tag because the C header
+// and static library are only available when ley-line is built locally.
 package leyline
 
 /*
