@@ -13,7 +13,7 @@ require (
 	github.com/willscott/go-nfs v0.0.3
 	github.com/winfsp/cgofuse v1.6.0
 	golang.org/x/sys v0.41.0
-	modernc.org/sqlite v1.45.0
+	modernc.org/sqlite v1.46.1
 	mvdan.cc/gofumpt v0.9.2
 )
 
