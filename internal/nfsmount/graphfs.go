@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	billy "github.com/go-git/go-billy/v5"
@@ -790,7 +791,12 @@ func (fs *GraphFS) nodeToFileInfo(n *graph.Node) os.FileInfo {
 	} else if n.Origin != nil {
 		mode = 0o644
 	}
-	size := n.ContentSize()
+	var size int64
+	if n.Mode.IsDir() {
+		size = 4096
+	} else {
+		size = n.ContentSize()
+	}
 
 	modTime := n.ModTime
 	if modTime.IsZero() {
@@ -806,6 +812,8 @@ func (fs *GraphFS) nodeToFileInfo(n *graph.Node) os.FileInfo {
 }
 
 // staticFileInfo implements os.FileInfo with static values.
+// Sys() returns a *syscall.Stat_t with the current user's uid/gid so that
+// go-nfs reports correct ownership instead of defaulting to root.
 type staticFileInfo struct {
 	name    string
 	size    int64
@@ -818,7 +826,12 @@ func (fi *staticFileInfo) Size() int64        { return fi.size }
 func (fi *staticFileInfo) Mode() os.FileMode  { return fi.mode }
 func (fi *staticFileInfo) ModTime() time.Time { return fi.modTime }
 func (fi *staticFileInfo) IsDir() bool        { return fi.mode.IsDir() }
-func (fi *staticFileInfo) Sys() interface{}   { return nil }
+func (fi *staticFileInfo) Sys() interface{} {
+	return &syscall.Stat_t{
+		Uid: uint32(os.Getuid()),
+		Gid: uint32(os.Getgid()),
+	}
+}
 
 // Compile-time interface checks.
 var (

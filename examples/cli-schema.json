@@ -40,6 +40,16 @@
                   "content_template": "method: {{.flag_method}}\nshort: {{unquote .flag_short}}\ndefault: {{.flag_default}}\ndescription: {{unquote .flag_desc}}"
                 }
               ]
+            },
+            {
+              "name": "{{unquote .flag_name}}",
+              "selector": "(call_expression function: (selector_expression operand: (call_expression function: (selector_expression operand: (identifier) @receiver field: (field_identifier) @_flags_fn (#eq? @_flags_fn \"Flags\"))) field: (field_identifier) @flag_method) arguments: (argument_list (_) (interpreted_string_literal) @flag_name (_) @flag_default (interpreted_string_literal) @flag_desc)) @scope",
+              "files": [
+                {
+                  "name": "info",
+                  "content_template": "method: {{.flag_method}}\ndefault: {{.flag_default}}\ndescription: {{unquote .flag_desc}}"
+                }
+              ]
             }
           ]
         }

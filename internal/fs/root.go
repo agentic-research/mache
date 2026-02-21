@@ -92,6 +92,9 @@ type MacheFS struct {
 	queryWriteHandles map[uint64]*queryWriteHandle // fh → query write buffer
 	nextHandle        uint64
 
+	// Optional prompt content served as /PROMPT.txt virtual file (agent mode).
+	promptContent []byte
+
 	// Query directory support (nil queryFn = feature disabled)
 	queryFn func(string, ...any) (*sql.Rows, error)
 	queryMu sync.RWMutex
@@ -110,6 +113,11 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 		writeHandles:      make(map[uint64]*writeHandle),
 		queryWriteHandles: make(map[uint64]*queryWriteHandle),
 	}
+}
+
+// SetPromptContent sets the content for the /PROMPT.txt virtual file (agent mode).
+func (fs *MacheFS) SetPromptContent(content []byte) {
+	fs.promptContent = content
 }
 
 // SetQueryFunc enables the /.query/ magic directory. Pass the SQLiteGraph's
@@ -182,6 +190,13 @@ func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 // write flags allocate a writeHandle backed by the node's current content.
 func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
 	if path == "/_schema.json" {
+		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
+			return -fuse.EACCES, 0
+		}
+		return 0, 0
+	}
+
+	if path == "/PROMPT.txt" && len(fs.promptContent) > 0 {
 		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
 			return -fuse.EACCES, 0
 		}
@@ -309,6 +324,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	if path == "/" {
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
+		stat.Size = 4096
 		return 0
 	}
 
@@ -316,6 +332,13 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		stat.Mode = fuse.S_IFREG | 0o444
 		stat.Nlink = 1
 		stat.Size = int64(len(fs.schemaJSON))
+		return 0
+	}
+
+	if path == "/PROMPT.txt" && len(fs.promptContent) > 0 {
+		stat.Mode = fuse.S_IFREG | 0o444
+		stat.Nlink = 1
+		stat.Size = int64(len(fs.promptContent))
 		return 0
 	}
 
@@ -432,6 +455,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	if node.Mode.IsDir() {
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
+		stat.Size = 4096
 	} else {
 		perm := uint32(0o444)
 		if fs.Writable && node.Origin != nil {
@@ -552,6 +576,9 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	entries = append(entries, ".", "..")
 	if path == "/" {
 		entries = append(entries, "_schema.json")
+		if len(fs.promptContent) > 0 {
+			entries = append(entries, "PROMPT.txt")
+		}
 		if fs.queryFn != nil {
 			entries = append(entries, ".query")
 		}
@@ -623,6 +650,9 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		entries = append(entries, ".", "..")
 		if path == "/" {
 			entries = append(entries, "_schema.json")
+			if len(fs.promptContent) > 0 {
+				entries = append(entries, "PROMPT.txt")
+			}
 			if fs.queryFn != nil {
 				entries = append(entries, ".query")
 			}
@@ -689,6 +719,14 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		return stat
 	}
 
+	if name == "PROMPT.txt" && len(fs.promptContent) > 0 {
+		stat.Ino = pathIno(fullPath)
+		stat.Mode = fuse.S_IFREG | 0o444
+		stat.Nlink = 1
+		stat.Size = int64(len(fs.promptContent))
+		return stat
+	}
+
 	if name == ".query" && fs.queryFn != nil {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFDIR | 0o777
@@ -731,6 +769,7 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 	if node.Mode.IsDir() {
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
+		stat.Size = 4096
 	} else {
 		perm := uint32(0o444)
 		if fs.Writable && node.Origin != nil {
@@ -763,6 +802,14 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 			return 0
 		}
 		n := copy(buff, fs.schemaJSON[ofst:])
+		return n
+	}
+
+	if path == "/PROMPT.txt" && len(fs.promptContent) > 0 {
+		if ofst >= int64(len(fs.promptContent)) {
+			return 0
+		}
+		n := copy(buff, fs.promptContent[ofst:])
 		return n
 	}
 
