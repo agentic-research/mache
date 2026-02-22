@@ -9,6 +9,40 @@ import (
 	"github.com/agentic-research/mache/api"
 )
 
+// friendlyTypeNames maps tree-sitter node types to human-friendly group names.
+var friendlyTypeNames = map[string]string{
+	// Go
+	"function_declaration": "functions",
+	"method_declaration":   "methods",
+	"type_declaration":     "types",
+	// Python
+	"function_definition": "functions",
+	"class_definition":    "classes",
+	// JavaScript / TypeScript
+	"class_declaration": "classes",
+	"method_definition": "methods",
+	// Rust
+	"function_item": "functions",
+	"struct_item":   "structs",
+	"enum_item":     "enums",
+	"impl_item":     "implementations",
+	"trait_item":    "traits",
+	// HCL/Terraform
+	"hcl_container": "blocks",
+	// SQL
+	"create_table": "tables",
+	"create_view":  "views",
+	// HTML / DOM
+	"element":        "elements",
+	"script_element": "scripts",
+	"style_element":  "styles",
+	// CSS
+	"rule_set":            "rules",
+	"media_statement":     "media",
+	"keyframes_statement": "keyframes",
+	"import_statement":    "imports",
+}
+
 // containmentRules defines which AST container types can nest inside others,
 // per language. Keys are parent types; values are allowed child types.
 // Languages not listed (or with empty maps) default to flat — no nesting.
@@ -228,8 +262,32 @@ func ProjectAST(concepts []Concept, ctx *FormalContext, config ProjectConfig) *a
 		}
 	}
 
+	// Wrap each container type in a friendly-name grouping directory.
+	// e.g. function_definition → "functions/", class_definition → "classes/"
+	var grouped []api.Node
+	groupIndex := make(map[string]int) // friendly_name → index in grouped
+
+	for i, t := range sortedTypes {
+		friendly := friendlyTypeNames[t]
+		if friendly == "" {
+			friendly = t // fallback: use raw type name
+		}
+		if idx, ok := groupIndex[friendly]; ok {
+			grouped[idx].Children = append(grouped[idx].Children, result[i])
+		} else {
+			group := api.Node{
+				Name:     friendly,
+				Selector: "$",
+				Language: config.Language,
+				Children: []api.Node{result[i]},
+			}
+			groupIndex[friendly] = len(grouped)
+			grouped = append(grouped, group)
+		}
+	}
+
 	return &api.Topology{
 		Version: "v1",
-		Nodes:   result,
+		Nodes:   grouped,
 	}
 }
