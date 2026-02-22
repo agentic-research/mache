@@ -12,7 +12,6 @@ import (
 	"github.com/smacker/go-tree-sitter/yaml"
 )
 
-
 // DetectLanguageFromExt returns the language name and tree-sitter Language
 // for a given file extension. Returns ok=false for unsupported extensions.
 func DetectLanguageFromExt(ext string) (langName string, lang *sitter.Language, ok bool) {

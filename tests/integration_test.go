@@ -169,15 +169,15 @@ func TestIntegration_InferAndIngest(t *testing.T) {
 	fix := setup(t)
 
 	// The inferred schema + ingestion should produce a HelloWorld node
-	node, err := fix.store.GetNode("HelloWorld/source")
-	require.NoError(t, err, "HelloWorld/source should exist in graph")
+	node, err := fix.store.GetNode("functions/HelloWorld/source")
+	require.NoError(t, err, "functions/HelloWorld/source should exist in graph")
 	assert.Contains(t, string(node.Data), "Original Content Long Long Long")
 }
 
 func TestIntegration_ContextAwareness(t *testing.T) {
 	fix := setup(t)
 
-	content := readNode(t, fix.gfs, "/HelloWorld/context")
+	content := readNode(t, fix.gfs, "/functions/HelloWorld/context")
 	assert.Contains(t, content, `import "fmt"`,
 		"context virtual file should contain imports from the source file")
 }
@@ -186,7 +186,7 @@ func TestIntegration_Truncation(t *testing.T) {
 	fix := setup(t)
 
 	// Write shorter content — old tail must not remain in source file
-	writeToNode(t, fix.gfs, "/HelloWorld/source", []byte("func HelloWorld() {\n\tfmt.Println(\"Short\")\n}\n"))
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte("func HelloWorld() {\n\tfmt.Println(\"Short\")\n}\n"))
 
 	src, err := os.ReadFile(fix.srcFile)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestIntegration_Diagnostics(t *testing.T) {
 	fix := setup(t)
 
 	// Write broken syntax
-	writeToNode(t, fix.gfs, "/HelloWorld/source", []byte("func HelloWorld() { BROKEN SYNTAX "))
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte("func HelloWorld() { BROKEN SYNTAX "))
 
 	// Source file should NOT have the broken content (draft saved, not spliced)
 	src, err := os.ReadFile(fix.srcFile)
@@ -209,12 +209,12 @@ func TestIntegration_Diagnostics(t *testing.T) {
 		"broken syntax should not be spliced into source")
 
 	// Diagnostics virtual file should report the error
-	diag := readNode(t, fix.gfs, "/HelloWorld/_diagnostics/last-write-status")
+	diag := readNode(t, fix.gfs, "/functions/HelloWorld/_diagnostics/last-write-status")
 	assert.Contains(t, diag, "syntax error",
 		"diagnostics should report syntax error")
 
 	// ast-errors should also have content
-	astErrs := readNode(t, fix.gfs, "/HelloWorld/_diagnostics/ast-errors")
+	astErrs := readNode(t, fix.gfs, "/functions/HelloWorld/_diagnostics/ast-errors")
 	assert.NotEmpty(t, astErrs, "ast-errors should have content after bad write")
 }
 
@@ -222,10 +222,10 @@ func TestIntegration_Recovery(t *testing.T) {
 	fix := setup(t)
 
 	// First: write broken syntax to set diagnostic state
-	writeToNode(t, fix.gfs, "/HelloWorld/source", []byte("func HelloWorld() { BROKEN "))
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte("func HelloWorld() { BROKEN "))
 
 	// Then: write valid code — should recover
-	writeToNode(t, fix.gfs, "/HelloWorld/source", []byte("func HelloWorld() {\n\tfmt.Println(\"Fixed\")\n}\n"))
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte("func HelloWorld() {\n\tfmt.Println(\"Fixed\")\n}\n"))
 
 	src, err := os.ReadFile(fix.srcFile)
 	require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestIntegration_Recovery(t *testing.T) {
 		"source file should contain recovered content")
 
 	// Diagnostics should clear to "ok"
-	diag := readNode(t, fix.gfs, "/HelloWorld/_diagnostics/last-write-status")
+	diag := readNode(t, fix.gfs, "/functions/HelloWorld/_diagnostics/last-write-status")
 	assert.Contains(t, diag, "ok",
 		"diagnostics should clear after valid write")
 }
@@ -245,14 +245,14 @@ func TestIntegration_SequentialWrites(t *testing.T) {
 	// The first write updates the origin via ShiftOrigins + UpdateNodeContent,
 	// so the second write should pick up the new byte range.
 	first := "func HelloWorld() {\n\tfmt.Println(\"First\")\n}\n"
-	writeToNode(t, fix.gfs, "/HelloWorld/source", []byte(first))
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte(first))
 
 	src1, err := os.ReadFile(fix.srcFile)
 	require.NoError(t, err)
 	assert.Contains(t, string(src1), "First")
 
 	second := "func HelloWorld() {\n\tfmt.Println(\"Second\")\n}\n"
-	writeToNode(t, fix.gfs, "/HelloWorld/source", []byte(second))
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte(second))
 
 	src2, err := os.ReadFile(fix.srcFile)
 	require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestIntegration_GofumptFormat(t *testing.T) {
 	// Function-body snippets (what NFS write-back sends) pass through unmodified.
 	// Verify the pipeline still splices correctly even though formatting is a no-op.
 	snippet := "func HelloWorld() {\n\tfmt.Println(\"formatted\")\n}\n"
-	writeToNode(t, fix.gfs, "/HelloWorld/source", []byte(snippet))
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte(snippet))
 
 	src, err := os.ReadFile(fix.srcFile)
 	require.NoError(t, err)
@@ -278,7 +278,7 @@ func TestIntegration_GofumptFormat(t *testing.T) {
 		"content should be spliced into source")
 
 	// Write status should be "ok" (successful pipeline completion)
-	diag := readNode(t, fix.gfs, "/HelloWorld/_diagnostics/last-write-status")
+	diag := readNode(t, fix.gfs, "/functions/HelloWorld/_diagnostics/last-write-status")
 	assert.Contains(t, diag, "ok",
 		"write-back pipeline should complete successfully")
 }
