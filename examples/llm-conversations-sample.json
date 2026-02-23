@@ -1,0 +1,133 @@
+[
+  {
+    "id": "conv_01JZ3X9K2M",
+    "title": "Blood group genetics",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "created": "2025-06-15T10:30:00Z",
+    "system_prompt": "You are a helpful biology tutor.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "A man with blood group A marries a woman with blood group O and their daughter has blood group O. Is this information enough to tell you which of the traits is dominant and which is recessive?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes — this is enough. The father must be heterozygous (AO) since he produced an O child. Blood group A is dominant over O. The daughter received one O allele from each parent."
+      }
+    ],
+    "usage": {
+      "input_tokens": 62,
+      "output_tokens": 48,
+      "total_tokens": 110
+    }
+  },
+  {
+    "id": "conv_02KA4Y0L3N",
+    "title": "Explain monads",
+    "provider": "openai",
+    "model": "gpt-4o",
+    "created": "2025-06-12T14:22:00Z",
+    "system_prompt": "",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain monads like I'm five."
+      },
+      {
+        "role": "assistant",
+        "content": "Imagine you have a lunchbox. A monad is a special lunchbox that knows how to open itself, let you change what's inside, and close back up — all without you having to worry about the lunchbox part."
+      },
+      {
+        "role": "user",
+        "content": "Now explain it like I'm a Haskell programmer."
+      },
+      {
+        "role": "assistant",
+        "content": "A monad is a typeclass with return :: a -> m a and (>>=) :: m a -> (a -> m b) -> m b, satisfying left identity, right identity, and associativity. It's how you sequence computations that carry context — IO, Maybe, State, etc."
+      }
+    ],
+    "usage": {
+      "input_tokens": 85,
+      "output_tokens": 130,
+      "total_tokens": 215
+    }
+  },
+  {
+    "id": "conv_03LB5Z1M4P",
+    "title": "Terraform module structure",
+    "provider": "google",
+    "model": "gemini-2.5-pro",
+    "created": "2025-07-01T09:15:00Z",
+    "system_prompt": "You are an infrastructure engineering assistant.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What's the recommended directory structure for a Terraform module?"
+      },
+      {
+        "role": "assistant",
+        "content": "A minimal Terraform module should have: main.tf (resources), variables.tf (input variables), outputs.tf (output values), versions.tf (provider and terraform version constraints), and a README.md. For larger modules, split resources into logical files like networking.tf, iam.tf, etc."
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 67,
+      "total_tokens": 91
+    }
+  },
+  {
+    "id": "conv_04MC6A2N5Q",
+    "title": "Debug segfault in parser",
+    "provider": "anthropic",
+    "model": "claude-opus-4-20250514",
+    "created": "2025-07-03T16:45:00Z",
+    "system_prompt": "",
+    "messages": [
+      {
+        "role": "user",
+        "content": "I'm getting a segfault in my tree-sitter parser when parsing this Go file. The crash is in ts_node_child."
+      },
+      {
+        "role": "assistant",
+        "content": "This is usually caused by accessing a node after its parent tree has been freed. Tree-sitter nodes are lightweight references — they don't own memory. Make sure you're not calling ts_tree_delete() before you're done reading nodes from it."
+      },
+      {
+        "role": "user",
+        "content": "That was it. I was deleting the tree in a defer and then iterating children after the function returned."
+      },
+      {
+        "role": "assistant",
+        "content": "Classic Go trap — defer runs at function exit, but if you return a closure or channel that references tree-sitter nodes, the tree is already gone. Move the tree lifetime management to the caller, or copy the data you need before the defer fires."
+      }
+    ],
+    "usage": {
+      "input_tokens": 112,
+      "output_tokens": 156,
+      "total_tokens": 268
+    }
+  },
+  {
+    "id": "conv_05ND7B3O6R",
+    "title": "Redis vs Memcached",
+    "provider": "openai",
+    "model": "o3",
+    "created": "2025-06-15T11:00:00Z",
+    "system_prompt": "Be concise.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Redis or Memcached for session storage?"
+      },
+      {
+        "role": "assistant",
+        "content": "Redis. It has persistence, TTL per key, and data structures beyond simple strings. Memcached wins on raw throughput for simple key-value at extreme scale, but for sessions Redis is the default choice."
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 52,
+      "total_tokens": 70
+    }
+  }
+]
