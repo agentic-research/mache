@@ -81,8 +81,9 @@ This isn't metaphorical. Mache literally treats both sides as graphs and uses SQ
   - [Example: Projecting JSON Data](#example-projecting-json-data)
   - [Example: Projecting Source Code](#example-projecting-source-code)
   - [Write-Back Mode](#write-back-mode)
-  - [Goto: Call-Chain Navigation](#goto-call-chain-navigation)
+  - [Cross-Reference Navigation](#cross-reference-navigation)
 - [How It Works](#how-it-works)
+- [Landscape](#landscape)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [License](#license)
@@ -101,7 +102,9 @@ Mache is in **early development**. The core pipeline (schema + ingestion + FUSE 
 | **Draft Mode** | **Stable** | Invalid writes save as drafts; node path stays stable. Diagnostics via `_diagnostics/`. |
 | **Context Awareness** | **Stable** | Virtual `context` files expose global scope (imports/types) to agents. |
 | **Tree-sitter Parsing** | **Stable** | Go, Python, JavaScript, TypeScript, SQL, Rust, HCL/Terraform, YAML. |
-| **Schema Inference** | **Beta** | Auto-infer schema from data via Formal Concept Analysis (FCA). |
+| **Cross-References** | **Stable** | `callers/` and `callees/` virtual dirs for bidirectional call-chain navigation. |
+| **`_project_files/`** | **Stable** | Non-AST files (READMEs, configs, docs) preserved in separate tree during source mounts. |
+| **Schema Inference** | **Beta** | Auto-infer schema from data via Formal Concept Analysis (FCA). Friendly-name grouping (`functions/`, `types/`, `classes/`). |
 
 ## Quick Start
 
@@ -194,12 +197,14 @@ claude
 **Key Points for Agents:**
 - **It's just files.** Use standard Read/Write/Edit tools — no special bash commands needed.
 - **Structure mirrors semantics.** Navigate by function name, not file path: `cd functions/HandleRequest/`
+- **Friendly-name grouping.** Schema inference creates intuitive containers — `functions/`, `types/`, `classes/` — instead of raw AST node types.
 - **Virtual files provide context:**
   - `source` — the function/type body (AST node content)
   - `context` — imports, types, globals visible to this scope
-  - `callers/` — directory of functions that call this one (cross-references)
-  - `callees/` — directory of functions this one calls
+  - `callers/` — directory of functions that call this one (incoming cross-references)
+  - `callees/` — directory of functions this one calls (outgoing cross-references)
   - `_diagnostics/` — write status, AST errors, lint output
+  - `_project_files/` — non-AST files (READMEs, configs, docs) preserved in a separate tree
 - **Write-back preserves identity.** Edit `source` files and changes splice back into the original source tree. Invalid writes save as drafts in `_diagnostics/ast-errors`.
 
 **Important: Writes only work on AST-backed `source` files.** Raw text files and virtual files are read-only. If a write fails validation (syntax error), the node path stays stable and the error is available in `_diagnostics/` so the agent can retry.
@@ -234,8 +239,29 @@ Given a `data.json` with users, you can project it into a `users/` directory whe
 
 Mache auto-detects source files (`.go`, `.py`, `.js`, `.ts`, `.rs`, `.tf`, `.hcl`, `.yaml`, `.sql`). Use tree-sitter queries in your schema to map AST nodes (functions, types) to directories.
 
+With `--infer`, schema inference creates **friendly-name container directories** — grouping constructs by type with intuitive names:
+
+```
+/tmp/mache-src/
+  functions/
+    HandleRequest/
+      source        # func HandleRequest(w http.ResponseWriter, r *http.Request) { ... }
+      context       # imports, types visible to this scope
+      callers/      # who calls this function
+      callees/      # what this function calls
+    ValidateToken/
+      source
+  types/
+    Config/
+      source        # type Config struct { ... }
+  _project_files/
+    README.md       # non-AST files preserved here
+    go.mod
+```
+
 - **Source:** The `source` file contains the function/type body.
 - **Context:** The `context` file (virtual) contains imports, types, and global variables visible to that scope. This is critical for LLM agents to understand dependencies without reading the whole file.
+- **`_project_files/`:** Non-AST files (READMEs, configs, build files) are automatically routed into a separate tree so they remain accessible without polluting the AST structure.
 
 ### Write-Back Mode
 
@@ -256,9 +282,11 @@ The write-back pipeline is **identity-preserving** — node paths stay stable ac
 
 If validation fails, the write is saved as a **draft** — the node path remains stable, and the error is available via `_diagnostics/ast-errors`. The agent can read its broken code and fix it without losing the file path.
 
-### Goto: Call-Chain Navigation
+### Cross-Reference Navigation
 
-Mache exposes cross-references as a virtual `callers/` directory. For any function or type, `callers/` lists every node in the graph that references it — turning "who calls this?" into a simple `ls`.
+Mache exposes bidirectional cross-references as virtual directories. For any function or type:
+- **`callers/`** lists every node that references it — "who calls this?"
+- **`callees/`** lists every function it calls — "what does this call?"
 
 ```bash
 # What calls HandleRequest?
@@ -268,11 +296,19 @@ ls /functions/HandleRequest/callers/
 # Read the calling code directly
 cat /functions/HandleRequest/callers/functions_Main_source
 # → func Main() { ... HandleRequest(ctx) ... }
+
+# What does HandleRequest call?
+ls /functions/HandleRequest/callees/
+# → functions_ValidateToken_source  functions_WriteResponse_source
+
+# Read callee source
+cat /functions/HandleRequest/callees/functions_ValidateToken_source
+# → func ValidateToken(tok string) error { ... }
 ```
 
-The `callers/` directory is **self-gating** — it only appears when a function actually has callers. No flag needed. This works on both NFS and FUSE backends, for both source code and SQLite mounts with cross-reference data.
+Both directories are **self-gating** — they only appear when a function actually has callers or callees. No flag needed. This works on both NFS and FUSE backends, for both source code and SQLite mounts with cross-reference data.
 
-Combined with `cat /functions/HandleRequest/source` for the definition, you get full call-chain tracing through filesystem paths alone — no grep, no LSP, no IDE required.
+Combined with `cat /functions/HandleRequest/source` for the definition, you get full bidirectional call-chain tracing through filesystem paths alone — no grep, no LSP, no IDE required.
 
 ## How It Works
 
@@ -284,9 +320,28 @@ Mache uses a **Topology Schema** to map data from SQLite, JSON, or source code i
 
 See [Architecture](docs/ARCHITECTURE.md) for details.
 
+## Landscape
+
+Mache occupies a unique position: it's a **projection engine** that maps structured data into a real, mounted filesystem using declarative schemas. Most tools in the AI-agent ecosystem solve adjacent problems — context retrieval (RAG), protocol plumbing (MCP), or agent orchestration — but none combine schema-driven projection, AST decomposition, write-back, and a real POSIX mount.
+
+| Tool | Schema-Driven | AST-Aware | Write-Back | Real FS Mount |
+|------|:---:|:---:|:---:|:---:|
+| **Mache** | Yes | Yes | Yes | Yes |
+| AgentFS (Turso) | No | No | Yes | No |
+| Dust | No | No | No | No (synthetic) |
+| MCP | No | No | Varies | No (protocol) |
+| LlamaIndex / LangChain | No | No | No | No |
+| FUSE-DB tools (FusqlFS, DBFS) | No | No | Some | Yes |
+| Plan 9 / 9P | Yes | No | Yes | Yes |
+
+Plan 9's "everything is a file server" philosophy is the closest historical precedent — Mache applies that idea to structured data with modern AST awareness. FUSE-DB tools mirror database schemas directly as directories; Mache adds a projection layer that reshapes data into task-appropriate topologies.
+
+See [Prior Art](docs/PRIOR_ART.md) for a full landscape analysis with detailed comparisons and academic references.
+
 ## Documentation
 
 - [Architecture & Design](docs/ARCHITECTURE.md) - Deep dive into internals, pipelines, and abstractions.
+- [Prior Art & Landscape](docs/PRIOR_ART.md) - Comparison with related tools and academic context.
 - [Roadmap](docs/ROADMAP.md) - Future plans and known limitations.
 - [Example Schemas](examples/README.md) - Details on the included examples.
 - [ADRs](docs/adr/) - Architectural Decision Records.
