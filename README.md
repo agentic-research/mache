@@ -90,7 +90,7 @@ This isn't metaphorical. Mache literally treats both sides as graphs and uses SQ
 
 ## Status
 
-Mache is in **early development**. The core pipeline (schema + ingestion + FUSE mount) works end-to-end across multiple data sources.
+Mache is in **active development**. The core pipeline (schema + ingestion + mount) works end-to-end across multiple data sources.
 
 ## Feature Matrix
 
@@ -233,7 +233,26 @@ Mount 323K NVD CVE records as a browsable filesystem, sharded by year and month.
 
 ### Example: Projecting JSON Data
 
-Given a `data.json` with users, you can project it into a `users/` directory where each file contains specific fields.
+Given a `data.json` with an array of records, a schema maps fields to directories and files:
+
+```bash
+./mache --schema examples/users-schema.json --data users.json /tmp/users
+```
+
+```
+/tmp/users/
+  by-name/
+    alice/
+      email       # "alice@example.com"
+      role        # "admin"
+      raw.json    # Full JSON record
+    bob/
+      email       # "bob@example.com"
+      role        # "user"
+      raw.json
+```
+
+The schema controls which field becomes the directory name (`name`), which fields become leaf files (`email`, `role`), and how records are grouped.
 
 ### Example: Projecting Source Code
 
@@ -322,7 +341,7 @@ See [Architecture](docs/ARCHITECTURE.md) for details.
 
 ## Landscape
 
-Mache occupies a unique position: it's a **projection engine** that maps structured data into a real, mounted filesystem using declarative schemas. Most tools in the AI-agent ecosystem solve adjacent problems — context retrieval (RAG), protocol plumbing (MCP), or agent orchestration — but none combine schema-driven projection, AST decomposition, write-back, and a real POSIX mount.
+Mache occupies a unique position: it's a **projection engine** that maps structured data into a real, mounted filesystem. Schemas can be hand-authored or auto-inferred via FCA. Most tools in the AI-agent ecosystem solve adjacent problems — context retrieval (RAG), protocol plumbing (MCP), or agent orchestration — but none combine schema-driven projection, AST decomposition, write-back, and a real POSIX mount.
 
 | Tool | Schema-Driven | AST-Aware | Write-Back | Real FS Mount |
 |------|:---:|:---:|:---:|:---:|
