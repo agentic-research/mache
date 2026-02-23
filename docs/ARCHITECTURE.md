@@ -47,6 +47,8 @@ graph TD
     JW -->|Builds| MemoryStore
     SW -->|Builds| MemoryStore
     SL -->|Builds| MemoryStore
+    Engine -->|"Non-AST files"| ProjectFiles["_project_files/"]
+    ProjectFiles -->|Builds| MemoryStore
 
     SQLiteGraph -->|Graph Interface| NFS
     MemoryStore -->|Graph Interface| NFS
@@ -59,7 +61,7 @@ graph TD
 
 There are two data paths depending on the source:
 
-1. **SQLite direct (`.db` files)** — `SQLiteGraph` queries the source database directly. A one-pass scan builds the directory tree (~4s for 323K records), then content is resolved on demand via primary key lookup. No data is copied.
+1. **SQLite direct (`.db` files)** — `SQLiteGraph` queries the source database directly. A one-pass scan builds the directory tree (~12s for 323K records), then content is resolved on demand via primary key lookup. No data is copied.
 2. **Ingestion (`.json`, `.go`, `.py`, `.tf`, `.hcl`, `.yaml`, `.js`, `.ts`, `.sql`)** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`.
 
 Both paths are fronted by the same `Graph` interface and served via either an **NFS server** (macOS default, `go-nfs` + `billy`) or a **FUSE bridge** (Linux default, `cgofuse` + `fuse-t`). A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
@@ -75,6 +77,8 @@ With `--infer`, the schema itself can be derived automatically: the `lattice` pa
 - **`Engine`** — Drives ingestion: walks files, dispatches to walkers, renders templates, builds the graph. Tracks source file paths for origin-aware nodes. Deduplicates same-name constructs (e.g. multiple `init()`) by appending `.from_<filename>` suffixes.
 - **`GraphFS`** — NFS filesystem via `go-nfs`/`billy`. Adapts the `Graph` interface to `billy.Filesystem`. Default backend on macOS.
 - **`MacheFS`** — FUSE implementation via cgofuse. Handle-based readdir with auto-mode for fuse-t compatibility. Extended cache timeouts (300s) for NFS performance. Default backend on Linux.
+- **`_project_files/`** — Non-AST files (READMEs, configs, docs) encountered during tree-sitter ingestion are routed into a separate `_project_files/` tree via `ingestRawFileUnder()`. This preserves access to supporting files without polluting the AST-derived structure.
+- **Friendly-name grouping** — `ProjectAST` in the lattice package maps raw tree-sitter node types to intuitive container directory names: `function_declaration` → `functions/`, `class_definition` → `classes/`, `type_declaration` → `types/`, etc. Language-specific containment rules nest methods inside classes for Python/TypeScript.
 
 ## Write Pipeline
 
@@ -131,19 +135,40 @@ readlink /funcs/Bar/callers/funcs_Foo_source
 # → ../../../funcs/Foo/source
 ```
 
+### `callees/`
+Per-directory virtual subdirectory exposing outgoing cross-references — the inverse of `callers/`. For any construct directory, `callees/` lists functions and types that the construct calls or references. Self-gating: only appears when `GetCallees(id)` returns non-empty results.
+
+Resolution pipeline:
+1. Find the `source` child of the construct directory
+2. Extract qualified calls via tree-sitter (`CallExtractor` → `[]QualifiedCall`)
+3. Resolve each call against the `defs` index: qualified lookup (`auth.Validate`) → import-path fallback → bare token lookup
+
+- **NFS**: Entries are `graphFile`s — reading returns the callee's source content.
+- **FUSE**: Entries are symlinks pointing into the graph (mirrors `callers/` pattern).
+
+```bash
+# What does HandleRequest call?
+ls /functions/HandleRequest/callees/
+# → functions_ValidateToken_source  functions_WriteResponse_source
+
+# Read callee source directly (NFS)
+cat /functions/HandleRequest/callees/functions_ValidateToken_source
+# → func ValidateToken(tok string) error { ... }
+```
+
 ## Key File Reference
 
 | Concern | File | Key functions/types |
 |---------|------|-------------------|
 | CLI + mount wiring | `cmd/mount.go` | `rootCmd`, `--writable`, `--infer`, `--backend` flags |
 | Schema types | `api/schema.go` | `Topology`, `Node`, `Leaf` |
-| Ingestion orchestration | `internal/ingest/engine.go` | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `dedupSuffix` |
+| Ingestion orchestration | `internal/ingest/engine.go` | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `ingestRawFileUnder`, `dedupSuffix` |
 | JSON queries | `internal/ingest/json_walker.go` | `JsonWalker.Query` |
 | Tree-sitter queries | `internal/ingest/sitter_walker.go` | `SitterWalker.Query`, `sitterMatch.CaptureOrigin` |
 | Walker/Match contracts | `internal/ingest/interfaces.go` | `Walker`, `Match`, `OriginProvider` |
 | SQLite streaming | `internal/ingest/sqlite_loader.go` | `StreamSQLiteRaw` |
-| Graph (in-memory) | `internal/graph/graph.go` | `MemoryStore`, `Node`, `SourceOrigin`, `ContentRef` |
-| Graph (SQLite direct) | `internal/graph/sqlite_graph.go` | `SQLiteGraph`, `EagerScan`, `GetCallers` |
+| Graph (in-memory) | `internal/graph/graph.go` | `MemoryStore`, `Node`, `SourceOrigin`, `ContentRef`, `GetCallees`, `AddDef` |
+| Graph (SQLite direct) | `internal/graph/sqlite_graph.go` | `SQLiteGraph`, `EagerScan`, `GetCallers`, `GetCallees` |
 | NFS backend | `internal/nfsmount/graphfs.go` | `GraphFS`, `graphFile`, `writeFile`, `callers/` |
 | NFS server | `internal/nfsmount/server.go` | `NewServer`, NFS listener |
 | FUSE backend | `internal/fs/root.go` | `MacheFS`, `writeHandle`, `callers/`, `.query/` |
@@ -154,6 +179,7 @@ readlink /funcs/Bar/callers/funcs_Foo_source
 | Control block | `internal/control/` | HotSwapGraph, live schema reload |
 | Go schema | `examples/go-schema.json` | functions, methods, types, constants, variables, imports |
 | FCA inference | `internal/lattice/` | `FormalContext`, `NextClosure`, `Project`, `Inferrer` |
+| ProjectAST / friendly names | `internal/lattice/project_ast.go` | `ProjectAST`, `friendlyTypeNames`, containment rules |
 | Build/test | `Taskfile.yml` | `task build`, `task test`, `task check` |
 
 ## Architectural Decision Records (ADRs)
