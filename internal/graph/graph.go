@@ -161,6 +161,15 @@ func (s *MemoryStore) SetResolver(fn ContentResolverFunc) {
 	s.cache = newContentCache(1024)
 }
 
+// RootIDs returns a copy of the top-level root node IDs.
+func (s *MemoryStore) RootIDs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make([]string, len(s.roots))
+	copy(ids, s.roots)
+	return ids
+}
+
 // AddRoot registers a node as a top-level root and adds it to the store.
 // Callers must explicitly declare roots — there is no heuristic.
 func (s *MemoryStore) AddRoot(n *Node) {
