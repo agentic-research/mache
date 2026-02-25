@@ -33,6 +33,14 @@ jobs:
         with:
           version: 0.13.0
 
+      - name: Fetch Linux FUSE headers (for cross-compilation)
+        run: |
+          mkdir -p /tmp/linux-fuse-headers
+          cd /tmp/linux-fuse-headers
+          curl -sL -o libfuse-dev.deb "http://archive.ubuntu.com/ubuntu/pool/main/f/fuse/libfuse-dev_2.9.9-5ubuntu3_amd64.deb"
+          ar x libfuse-dev.deb
+          tar xf data.tar.*
+
       - name: Import Signing Certificate
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
