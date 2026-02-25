@@ -1,0 +1,49 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "{{.item.provider}}",
+      "selector": "$[*]",
+      "children": [
+        {
+          "name": "{{slice .item.created 0 7}}",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.item.model}}",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.item.id}}",
+                  "selector": "$",
+                  "files": [
+                    {
+                      "name": "title",
+                      "content_template": "{{.item.title}}"
+                    },
+                    {
+                      "name": "transcript",
+                      "content_template": "{{range .item.messages}}[{{.role}}] {{.content}}\n\n{{end}}"
+                    },
+                    {
+                      "name": "system-prompt",
+                      "content_template": "{{.item.system_prompt}}"
+                    },
+                    {
+                      "name": "token-usage",
+                      "content_template": "input: {{.item.usage.input_tokens}}\noutput: {{.item.usage.output_tokens}}\ntotal: {{.item.usage.total_tokens}}"
+                    },
+                    {
+                      "name": "raw.json",
+                      "content_template": "{{. | json}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
