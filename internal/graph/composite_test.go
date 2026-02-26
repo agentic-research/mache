@@ -165,8 +165,8 @@ func TestCompositeGraph_PathRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(children) != 1 || children[0] != "header/nav" {
-		t.Fatalf("expected [header/nav], got %v", children)
+	if len(children) != 1 || children[0] != "browser/header/nav" {
+		t.Fatalf("expected [browser/header/nav], got %v", children)
 	}
 
 	// GetNode through mount
@@ -206,8 +206,8 @@ func TestCompositeGraph_ListChildrenAtMountRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(children) != 1 || children[0] != "zone1" {
-		t.Fatalf("expected [zone1], got %v", children)
+	if len(children) != 1 || children[0] != "browser/zone1" {
+		t.Fatalf("expected [browser/zone1], got %v", children)
 	}
 }
 

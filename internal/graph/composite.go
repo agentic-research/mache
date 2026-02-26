@@ -74,7 +74,7 @@ func (c *CompositeGraph) GetNode(id string) (*Node, error) {
 		}, nil
 	}
 
-	_, subPath, g := c.resolve(id)
+	prefix, subPath, g := c.resolve(id)
 	if g == nil {
 		return nil, ErrNotFound
 	}
@@ -86,7 +86,11 @@ func (c *CompositeGraph) GetNode(id string) (*Node, error) {
 			ModTime: time.Now(),
 		}, nil
 	}
-	return g.GetNode(subPath)
+	n, err := g.GetNode(subPath)
+	if err != nil {
+		return nil, err
+	}
+	return c.reprefixNode(prefix, n), nil
 }
 
 // ListChildren implements Graph.
@@ -109,12 +113,21 @@ func (c *CompositeGraph) ListChildren(id string) ([]string, error) {
 	if g == nil {
 		return nil, ErrNotFound
 	}
-	_ = prefix
-	// Delegate to sub-graph's root or sub-path
+	var children []string
+	var err error
 	if subPath == "" {
-		return g.ListChildren("")
+		children, err = g.ListChildren("")
+	} else {
+		children, err = g.ListChildren(subPath)
 	}
-	return g.ListChildren(subPath)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]string, len(children))
+	for i, child := range children {
+		res[i] = prefix + "/" + strings.TrimPrefix(child, "/")
+	}
+	return res, nil
 }
 
 // ReadContent implements Graph.
@@ -135,12 +148,14 @@ func (c *CompositeGraph) GetCallers(token string) ([]*Node, error) {
 	defer c.mu.RUnlock()
 
 	var all []*Node
-	for _, g := range c.mounts {
+	for prefix, g := range c.mounts {
 		nodes, err := g.GetCallers(token)
 		if err != nil {
 			continue
 		}
-		all = append(all, nodes...)
+		for _, n := range nodes {
+			all = append(all, c.reprefixNode(prefix, n))
+		}
 	}
 	return all, nil
 }
@@ -150,11 +165,19 @@ func (c *CompositeGraph) GetCallees(id string) ([]*Node, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	_, subPath, g := c.resolve(id)
+	prefix, subPath, g := c.resolve(id)
 	if g == nil {
 		return nil, ErrNotFound
 	}
-	return g.GetCallees(subPath)
+	nodes, err := g.GetCallees(subPath)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]*Node, len(nodes))
+	for i, n := range nodes {
+		res[i] = c.reprefixNode(prefix, n)
+	}
+	return res, nil
 }
 
 // Invalidate implements Graph.
@@ -181,11 +204,29 @@ func (c *CompositeGraph) Act(id, action, payload string) (*ActionResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	// Re-prefix the path in the result so the caller sees full paths
-	if result != nil && result.Path != "" && !strings.HasPrefix(result.Path, prefix) {
-		result.Path = prefix + "/" + result.Path
+	// Re-prefix paths in the result so the caller sees full composite paths
+	if result != nil {
+		if result.Path != "" && !strings.HasPrefix(result.Path, prefix+"/") {
+			result.Path = prefix + "/" + strings.TrimPrefix(result.Path, "/")
+		}
+		if result.NodeID != "" && !strings.HasPrefix(result.NodeID, prefix+"/") {
+			result.NodeID = prefix + "/" + strings.TrimPrefix(result.NodeID, "/")
+		}
 	}
 	return result, nil
+}
+
+// reprefixNode returns a shallow copy of n with ID and Children prefixed by the mount point.
+func (c *CompositeGraph) reprefixNode(prefix string, n *Node) *Node {
+	nCopy := *n
+	nCopy.ID = prefix + "/" + nCopy.ID
+	if len(nCopy.Children) > 0 {
+		nCopy.Children = make([]string, len(n.Children))
+		for i, child := range n.Children {
+			nCopy.Children[i] = prefix + "/" + child
+		}
+	}
+	return &nCopy
 }
 
 // Verify interface compliance at compile time.
