@@ -57,7 +57,8 @@ archives:
       - LICENSE
 
 brews:
-  - repository:
+  - skip_upload: true
+    repository:
       owner: agentic-research
       name: homebrew-tap
       token: "{{ .Env.GITHUB_TOKEN }}"
