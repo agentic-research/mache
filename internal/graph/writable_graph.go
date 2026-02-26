@@ -348,5 +348,10 @@ func (g *WritableGraph) DBPath() string {
 	return g.dbPath
 }
 
+// Act returns ErrActNotSupported — WritableGraph is a code-editing graph, not an interactive UI.
+func (g *WritableGraph) Act(id, action, payload string) (*ActionResult, error) {
+	return nil, ErrActNotSupported
+}
+
 // Verify interface compliance at compile time.
 var _ Graph = (*WritableGraph)(nil)

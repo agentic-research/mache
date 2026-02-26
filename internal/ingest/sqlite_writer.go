@@ -302,5 +302,9 @@ func (w *SQLiteWriter) Invalidate(id string) {
 	// No-op
 }
 
+func (w *SQLiteWriter) Act(id, action, payload string) (*graph.ActionResult, error) {
+	return nil, graph.ErrActNotSupported
+}
+
 // Interface compliance
 var _ IngestionTarget = (*SQLiteWriter)(nil)
