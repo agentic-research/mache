@@ -68,3 +68,10 @@ func (h *HotSwapGraph) Invalidate(id string) {
 	defer h.mu.RUnlock()
 	h.current.Invalidate(id)
 }
+
+// Act delegates to current graph.
+func (h *HotSwapGraph) Act(id, action, payload string) (*ActionResult, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.current.Act(id, action, payload)
+}

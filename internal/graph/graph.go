@@ -20,6 +20,18 @@ import (
 
 var ErrNotFound = errors.New("node not found")
 
+// ErrActNotSupported is returned by Graph implementations that do not support actions.
+var ErrActNotSupported = errors.New("act not supported by this graph")
+
+// ActionResult is returned when an action is performed on a graph node.
+// Used by interactive graphs (browser DOM, iTerm2 sessions, macOS AX elements).
+type ActionResult struct {
+	NodeID  string `json:"node_id"`           // mache ID of the acted-upon node
+	Action  string `json:"action"`            // "click", "type", "enter", "focus"
+	Path    string `json:"path"`              // filesystem path
+	Payload string `json:"payload,omitempty"` // optional (e.g., typed text)
+}
+
 // ContentRef is a recipe for lazily resolving file content from a backing store.
 // Instead of storing the full byte content in RAM, we store enough info to re-fetch it on demand.
 type ContentRef struct {
@@ -92,6 +104,10 @@ type Graph interface {
 	// Invalidate evicts cached data for a node (size, content).
 	// Called after write-back to force re-render on next access.
 	Invalidate(id string)
+	// Act performs an action on the node at the given path.
+	// Interactive graphs (browser DOM, terminal sessions, macOS AX elements)
+	// implement real actions. Passive graphs (code, data) return ErrActNotSupported.
+	Act(id, action, payload string) (*ActionResult, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -590,6 +606,11 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 
 // Invalidate is a no-op for MemoryStore — nodes are updated in-place.
 func (s *MemoryStore) Invalidate(id string) {}
+
+// Act returns ErrActNotSupported — MemoryStore is a passive code graph.
+func (s *MemoryStore) Act(id, action, payload string) (*ActionResult, error) {
+	return nil, ErrActNotSupported
+}
 
 // GetNode implements Graph.
 func (s *MemoryStore) GetNode(id string) (*Node, error) {

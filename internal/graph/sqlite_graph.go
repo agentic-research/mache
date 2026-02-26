@@ -1348,6 +1348,11 @@ func (g *SQLiteGraph) resolveContent(filePath string, segments []string, leaf *a
 	return content, nil
 }
 
+// Act returns ErrActNotSupported — SQLiteGraph is a passive data graph.
+func (g *SQLiteGraph) Act(id, action, payload string) (*ActionResult, error) {
+	return nil, ErrActNotSupported
+}
+
 // Verify interface compliance at compile time.
 var _ Graph = (*SQLiteGraph)(nil)
 

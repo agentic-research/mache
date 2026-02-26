@@ -35,8 +35,21 @@ type CallExtractor = ig.CallExtractor
 // QualifiedCall represents a function call with optional package qualifier.
 type QualifiedCall = ig.QualifiedCall
 
+// CompositeGraph multiplexes multiple Graph backends under path prefixes.
+// Mount "browser" → /browser/... routes to that sub-graph.
+type CompositeGraph = ig.CompositeGraph
+
+// ActionResult is returned when an action is performed on a graph node.
+type ActionResult = ig.ActionResult
+
 // NewMemoryStore creates a new in-memory graph store.
 var NewMemoryStore = ig.NewMemoryStore
 
+// NewCompositeGraph creates an empty composite graph for multi-mount routing.
+var NewCompositeGraph = ig.NewCompositeGraph
+
 // ErrNotFound is returned when a node ID does not exist in the graph.
 var ErrNotFound = ig.ErrNotFound
+
+// ErrActNotSupported is returned by Graph implementations that do not support actions.
+var ErrActNotSupported = ig.ErrActNotSupported
