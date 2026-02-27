@@ -26,7 +26,7 @@ import (
 //	  1 MB  → ~5ms
 //	 10 MB  → ~10-25ms
 //
-// Future: page-level diff or CDC to avoid full-DB copy.
+// TODO: page-level diff or CDC to avoid full-DB copy.
 type ArenaFlusher struct {
 	arenaPath    string
 	masterDBPath string

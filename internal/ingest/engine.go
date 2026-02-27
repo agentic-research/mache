@@ -336,9 +336,7 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 		return err
 	}
 
-	// Use buffering target for atomic swap
-	// Note: We do NOT call DeleteFileNodes here anymore.
-	// ReplaceFileNodes will handle deletion + addition atomically.
+	// ReplaceFileNodes handles deletion + addition atomically.
 	bt := &bufferingTarget{IngestionTarget: e.Store}
 
 	parser := sitter.NewParser()

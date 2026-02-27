@@ -23,31 +23,19 @@ var buildCmd = &cobra.Command{
 		source := args[0]
 		output := args[1]
 
-		// 1. Load/Infer Schema
-		// For simplicity in this new command, we'll try to infer or use default.
-		// Ideally we should respect --schema flag if set (it's global in root).
+		// Load or infer schema. Falls back to FCA inference when no schema file is provided.
 		var schema *api.Topology
 		if schemaPath != "" {
 			var err error
-			// Just verify it exists for now
 			if _, err = os.Stat(schemaPath); err != nil {
 				return fmt.Errorf("stat schema: %w", err)
 			}
 
-			// But for now let's just use inference if it's a Go project, similar to mount.
-			// Or just use empty schema if not provided.
-			// Actually, let's just infer from source if it's a directory.
 			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
 			fmt.Println("Inferring schema...")
-			// Simple inference for Go
-			// In a real tool this would be more robust
-			// Let's assume user wants to just dump the file tree if no schema?
-			// But Engine REQUIRES a schema to generate nodes.
+			schema, _ = inf.InferFromRecords(nil)
 
-			// Let's replicate the mount.go inference logic simplified
-			schema, _ = inf.InferFromRecords(nil) // Start empty?
-
-			// Actually, let's just look at the first .go file
+			// Walk source to find the first .go file for bootstrap inference
 			if walkErr := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err

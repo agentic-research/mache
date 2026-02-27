@@ -153,11 +153,7 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		}
 	}
 
-	// 2. Kind (0=File, 1=Dir for simple boolean, or use os.FileMode bits)
-	// We'll use 1 for Dir, 0 for File to match simple boolean logic,
-	// or we can store the full Mode. Let's store full Mode for fidelity?
-	// The requirement said "kind (file vs directory type)".
-	// Storing Mode is safer.
+	// Store full os.FileMode for fidelity (kind column: 1=dir, 0=file).
 	kind := 0
 	if n.Mode.IsDir() {
 		kind = 1

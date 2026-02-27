@@ -70,7 +70,6 @@ func LoadGitCommits(repoPath string) ([]any, error) {
 
 		lines := strings.SplitN(text, "\n", 6)
 		if len(lines) < 6 {
-			// Maybe empty body?
 			if len(lines) >= 5 {
 				// Pad with empty body
 				lines = append(lines, "")
