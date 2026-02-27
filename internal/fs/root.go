@@ -132,31 +132,10 @@ func (fs *MacheFS) isQueryPath(path string) bool {
 	return fs.queryFn != nil && (path == "/.query" || strings.HasPrefix(path, "/.query/"))
 }
 
-// isDiagPath returns true if the path contains a _diagnostics/ segment.
+// isDiagPath returns true if writable and path contains /_diagnostics.
 func (fs *MacheFS) isDiagPath(path string) bool {
-	return fs.Writable && strings.Contains(path, "/_diagnostics")
+	return fs.Writable && graph.IsDiagPath(path)
 }
-
-// parseDiagPath splits a diagnostics path into (parentDir, fileName).
-func parseDiagPath(path string) (parentDir, fileName string) {
-	idx := strings.Index(path, "/_diagnostics")
-	if idx < 0 {
-		return "", ""
-	}
-	parentDir = path[:idx]
-	if parentDir == "" {
-		parentDir = "/"
-	}
-	rest := path[idx+len("/_diagnostics"):]
-	if rest == "" || rest == "/" {
-		return parentDir, ""
-	}
-	fileName = strings.TrimPrefix(rest, "/")
-	return parentDir, fileName
-}
-
-// callers/ and callees/ virtual directory path parsing uses shared helpers
-// from graph.IsCallersPath, graph.ParseCallersPath, graph.VDirSymlinkTarget, etc.
 
 // diagContent returns the content of a diagnostics virtual file.
 func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
@@ -165,13 +144,13 @@ func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 		return nil, false
 	}
 	switch fileName {
-	case "last-write-status":
+	case graph.DiagLastWrite:
 		val, found := store.WriteStatus.Load(parentDir)
 		if !found {
 			return []byte("no writes yet\n"), true
 		}
 		return []byte(val.(string) + "\n"), true
-	case "ast-errors":
+	case graph.DiagASTErrors:
 		val, found := store.WriteStatus.Load(parentDir)
 		if !found {
 			return []byte("no errors\n"), true
@@ -347,7 +326,7 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	}
 
 	if fs.isDiagPath(path) {
-		parentDir, fileName := parseDiagPath(path)
+		parentDir, fileName := graph.ParseDiagPath(path)
 		if fileName == "" {
 			stat.Mode = fuse.S_IFDIR | 0o555
 			stat.Nlink = 2
@@ -482,11 +461,11 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 
 	// _diagnostics/ virtual directory
 	if fs.isDiagPath(path) {
-		_, fileName := parseDiagPath(path)
+		_, fileName := graph.ParseDiagPath(path)
 		if fileName != "" {
 			return -fuse.ENOTDIR, 0
 		}
-		entries := []string{".", "..", "last-write-status", "ast-errors"}
+		entries := []string{".", "..", graph.DiagLastWrite, graph.DiagASTErrors}
 		fs.handleMu.Lock()
 		fh := fs.nextHandle
 		fs.nextHandle++
@@ -575,9 +554,9 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	entries := make([]string, 0, len(children)+6)
 	entries = append(entries, ".", "..")
 	if path == "/" {
-		entries = append(entries, "_schema.json")
+		entries = append(entries, graph.SchemaDotJSON)
 		if len(fs.promptContent) > 0 {
-			entries = append(entries, "PROMPT.txt")
+			entries = append(entries, graph.PromptFile)
 		}
 		if fs.queryFn != nil {
 			entries = append(entries, ".query")
@@ -585,23 +564,23 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	}
 	// Add _diagnostics/ to writable non-root dirs
 	if fs.Writable && path != "/" {
-		entries = append(entries, "_diagnostics")
+		entries = append(entries, graph.DiagnosticsDir)
 	}
 	// Add context if available
 	if node != nil && len(node.Context) > 0 {
-		entries = append(entries, "context")
+		entries = append(entries, graph.ContextFile)
 	}
 	// Add callers/ if token has callers (non-root dirs only)
 	if path != "/" {
 		token := filepath.Base(path)
 		if callers, err := fs.Graph.GetCallers(token); err == nil && len(callers) > 0 {
-			entries = append(entries, "callers")
+			entries = append(entries, graph.CallersDir)
 		}
 	}
 	// Add callees/ if construct has outgoing calls (self-gating)
 	if path != "/" {
 		if callees, err := fs.Graph.GetCallees(path); err == nil && len(callees) > 0 {
-			entries = append(entries, "callees")
+			entries = append(entries, graph.CalleesDir)
 		}
 	}
 	for _, c := range children {
@@ -649,9 +628,9 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		entries := make([]string, 0, len(children)+4)
 		entries = append(entries, ".", "..")
 		if path == "/" {
-			entries = append(entries, "_schema.json")
+			entries = append(entries, graph.SchemaDotJSON)
 			if len(fs.promptContent) > 0 {
-				entries = append(entries, "PROMPT.txt")
+				entries = append(entries, graph.PromptFile)
 			}
 			if fs.queryFn != nil {
 				entries = append(entries, ".query")
@@ -711,7 +690,7 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		fullPath = dirPath + "/" + name
 	}
 
-	if name == "_schema.json" {
+	if name == graph.SchemaDotJSON {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFREG | 0o444
 		stat.Nlink = 1
@@ -719,7 +698,7 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		return stat
 	}
 
-	if name == "PROMPT.txt" && len(fs.promptContent) > 0 {
+	if name == graph.PromptFile && len(fs.promptContent) > 0 {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFREG | 0o444
 		stat.Nlink = 1
@@ -734,7 +713,7 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		return stat
 	}
 
-	if name == "context" {
+	if name == graph.ContextFile {
 		// Parent path is dirPath
 		node, err := fs.Graph.GetNode(dirPath)
 		if err == nil && len(node.Context) > 0 {
@@ -746,14 +725,14 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		}
 	}
 
-	if name == "callers" && !graph.IsCallersPath(dirPath) {
+	if name == graph.CallersDir && !graph.IsCallersPath(dirPath) {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
 		return stat
 	}
 
-	if name == "callees" && !graph.IsCalleesPath(dirPath) {
+	if name == graph.CalleesDir && !graph.IsCalleesPath(dirPath) {
 		stat.Ino = pathIno(fullPath)
 		stat.Mode = fuse.S_IFDIR | 0o555
 		stat.Nlink = 2
@@ -815,7 +794,7 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 
 	// _diagnostics/ virtual files
 	if fs.isDiagPath(path) {
-		parentDir, fileName := parseDiagPath(path)
+		parentDir, fileName := graph.ParseDiagPath(path)
 		content, ok := fs.diagContent(parentDir, fileName)
 		if !ok {
 			return -fuse.ENOENT

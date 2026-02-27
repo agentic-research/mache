@@ -6,7 +6,21 @@ import (
 )
 
 // Virtual directory path helpers shared by FUSE (internal/fs) and NFS (internal/nfsmount).
-// These parse callers/ and callees/ virtual directory paths without any Graph dependency.
+// These parse callers/, callees/, and _diagnostics/ virtual directory paths
+// without any Graph dependency.
+
+// Well-known virtual directory and file names.
+const (
+	SchemaDotJSON  = "_schema.json"
+	DiagnosticsDir = "_diagnostics"
+	ContextFile    = "context"
+	PromptFile     = "PROMPT.txt"
+	CallersDir     = "callers"
+	CalleesDir     = "callees"
+	DiagLastWrite  = "last-write-status"
+	DiagASTErrors  = "ast-errors"
+	DiagLint       = "lint"
+)
 
 // IsCallersPath returns true if the path contains a /callers segment boundary.
 func IsCallersPath(path string) bool {
@@ -55,6 +69,18 @@ func FindSourceChild(g Graph, dirID string) string {
 		}
 	}
 	return ""
+}
+
+// IsDiagPath returns true if the path contains a /_diagnostics segment.
+func IsDiagPath(path string) bool {
+	return strings.Contains(path, "/"+DiagnosticsDir)
+}
+
+// ParseDiagPath splits a diagnostics path into (parentDir, fileName).
+// E.g. "/vulns/func_a/_diagnostics/last-write-status" → ("/vulns/func_a", "last-write-status")
+// Returns ("", "") if not a valid diagnostics path.
+func ParseDiagPath(path string) (parentDir, fileName string) {
+	return parseVDirPath(path, "/"+DiagnosticsDir)
 }
 
 // parseVDirPath is the generic implementation for parsing virtual directory paths.
