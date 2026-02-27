@@ -255,9 +255,9 @@ func selectBestAttribute(records []any, candidates []string, stats map[string]*F
 
 	for _, attr := range candidates {
 
-		partitions := partitionByAttribute(records, attr)
+		idxPartitions := partitionIndicesByAttribute(records, attr)
 
-		distinctValues := len(partitions)
+		distinctValues := len(idxPartitions)
 
 		// 1. Calculate Structural Gain
 
@@ -265,15 +265,15 @@ func selectBestAttribute(records []any, candidates []string, stats map[string]*F
 
 		total := float64(len(records))
 
-		for _, subset := range partitions {
+		for _, indices := range idxPartitions {
 
-			subSigs := make([]string, len(subset))
+			subSigs := make([]string, len(indices))
 
-			for k, rec := range subset {
-				subSigs[k] = getSchemaSignature(rec)
+			for k, idx := range indices {
+				subSigs[k] = signatures[idx]
 			}
 
-			weight := float64(len(subset)) / total
+			weight := float64(len(indices)) / total
 
 			weightedEntropy += weight * calculateEntropyFromSignatures(subSigs)
 
@@ -285,9 +285,9 @@ func selectBestAttribute(records []any, candidates []string, stats map[string]*F
 
 		intrinsicEntropy := 0.0
 
-		for _, subset := range partitions {
+		for _, indices := range idxPartitions {
 
-			p := float64(len(subset)) / total
+			p := float64(len(indices)) / total
 
 			if p > 0 {
 				intrinsicEntropy -= p * math.Log2(p)
@@ -384,10 +384,23 @@ func parseAttribute(attr string) (string, string) {
 }
 
 func partitionByAttribute(records []any, attr string) map[string][]any {
-	field, modifier := parseAttribute(attr)
-	partitions := make(map[string][]any)
+	idxPartitions := partitionIndicesByAttribute(records, attr)
+	partitions := make(map[string][]any, len(idxPartitions))
+	for key, indices := range idxPartitions {
+		subset := make([]any, len(indices))
+		for i, idx := range indices {
+			subset[i] = records[idx]
+		}
+		partitions[key] = subset
+	}
+	return partitions
+}
 
-	for _, rec := range records {
+func partitionIndicesByAttribute(records []any, attr string) map[string][]int {
+	field, modifier := parseAttribute(attr)
+	partitions := make(map[string][]int)
+
+	for i, rec := range records {
 		val, ok := getFieldValue(rec, field)
 		key := "__MACHE_MISSING__"
 
@@ -416,7 +429,7 @@ func partitionByAttribute(records []any, attr string) map[string][]any {
 				key = s
 			}
 		}
-		partitions[key] = append(partitions[key], rec)
+		partitions[key] = append(partitions[key], i)
 	}
 	return partitions
 }
