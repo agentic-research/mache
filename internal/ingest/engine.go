@@ -900,6 +900,10 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Properties: currentProps,
 		}
 		store.AddNode(node)
+
+		// Pre-compute doc comments from backward scan (available to all file templates)
+		docText, extStart, extEnd, hasScope := extractDocComments(match)
+
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
@@ -909,9 +913,20 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			filePath := filepath.Join(currentPath, fileName)
 			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
 
-			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
+			// Augment template values with doc comment text
+			vals := match.Values()
+			if docText != "" {
+				vals["doc"] = docText
+			}
+
+			content, err := RenderTemplate(fileSchema.ContentTemplate, vals)
 			if err != nil {
 				log.Printf("processNode: skip file content render %q: %v", fileId, err)
+				continue
+			}
+
+			// Skip empty optional files (e.g. "doc" when no doc comments exist)
+			if content == "" && fileSchema.Name != "source" {
 				continue
 			}
 
@@ -922,53 +937,25 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				Data:    []byte(content),
 			}
 
-			// Populate Origin from tree-sitter captures for write-back
-			if op, ok := match.(OriginProvider); ok && e.sourceFile != "" {
-				// Extend Backward to capture preceding comments (Doc Comments)
-				// Access raw node via sitterMatch if possible
-				if sm, ok := match.(interface{ GetCaptureNode(string) *sitter.Node }); ok {
-					if node := sm.GetCaptureNode("scope"); node != nil {
-						startByte := node.StartByte()
-
-						// Walk backward to find contiguous comments
-						prev := node.PrevSibling()
-						for prev != nil && prev.Type() == "comment" {
-							// Check adjacency: <= 2 bytes gap (allow \n or \n\n)
-							// Note: Tree-sitter byte ranges are accurate.
-							if int(node.StartByte())-int(prev.EndByte()) <= 2 {
-								startByte = prev.StartByte()
-								// Update node to prev to keep walking back
-								node = prev // Just for loop logic, we use startByte
-								prev = prev.PrevSibling()
-							} else {
-								break
-							}
-						}
-
-						// If we extended the range, we must also update the CONTENT (Data)
-						// because the current 'content' (from RenderTemplate) only includes the original scope.
-						// We need to re-read from the source file in memory.
-						if startByte < sm.GetCaptureNode("scope").StartByte() {
-							// We need the source content.
-							// Fortunately, match.Context() is SitterRoot which has Source!
-							if root, ok := match.Context().(SitterRoot); ok {
-								// Re-slice content
-								endByte := sm.GetCaptureNode("scope").EndByte()
-								if endByte <= uint32(len(root.Source)) {
-									extendedContent := root.Source[startByte:endByte]
-									fileNode.Data = []byte(extendedContent)
-								}
-							}
-						}
-
-						fileNode.Origin = &graph.SourceOrigin{
-							FilePath:  e.sourceFile,
-							StartByte: startByte,
-							EndByte:   sm.GetCaptureNode("scope").EndByte(),
-						}
+			// Extend source file content to include preceding doc comments
+			if hasScope && docText != "" && fileSchema.Name == "source" {
+				if root, ok := match.Context().(SitterRoot); ok {
+					if extEnd <= uint32(len(root.Source)) {
+						fileNode.Data = root.Source[extStart:extEnd]
 					}
-				} else if start, end, ok := op.CaptureOrigin("scope"); ok {
-					// Fallback for non-sitter matches (shouldn't happen here but safe)
+				}
+			}
+
+			// Set write-back origin from backward scan
+			if hasScope && e.sourceFile != "" {
+				fileNode.Origin = &graph.SourceOrigin{
+					FilePath:  e.sourceFile,
+					StartByte: extStart,
+					EndByte:   extEnd,
+				}
+			} else if op, ok := match.(OriginProvider); ok && e.sourceFile != "" {
+				// Fallback for non-sitter matches
+				if start, end, ok := op.CaptureOrigin("scope"); ok {
 					fileNode.Origin = &graph.SourceOrigin{
 						FilePath:  e.sourceFile,
 						StartByte: start,
@@ -992,6 +979,50 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		}
 	}
 	return nil
+}
+
+// extractDocComments walks backward from a tree-sitter @scope capture to find
+// contiguous preceding comment nodes. Returns the doc comment text (just the
+// comments) and the extended byte range for write-back origin tracking.
+func extractDocComments(match Match) (docText string, startByte, endByte uint32, hasScope bool) {
+	sm, ok := match.(interface{ GetCaptureNode(string) *sitter.Node })
+	if !ok {
+		return docText, startByte, endByte, hasScope
+	}
+	scopeNode := sm.GetCaptureNode("scope")
+	if scopeNode == nil {
+		return docText, startByte, endByte, hasScope
+	}
+	hasScope = true
+	startByte = scopeNode.StartByte()
+	endByte = scopeNode.EndByte()
+
+	// Walk backward to find contiguous comment siblings
+	n := scopeNode
+	prev := n.PrevSibling()
+	for prev != nil && prev.Type() == "comment" {
+		// Check adjacency: <= 2 bytes gap (allow \n or \n\n)
+		if int(n.StartByte())-int(prev.EndByte()) <= 2 {
+			startByte = prev.StartByte()
+			n = prev
+			prev = prev.PrevSibling()
+		} else {
+			break
+		}
+	}
+
+	// Extract doc comment text (just the comments, not the scope body)
+	if startByte < scopeNode.StartByte() {
+		if root, ok := match.Context().(SitterRoot); ok {
+			if scopeNode.StartByte() <= uint32(len(root.Source)) {
+				docText = strings.TrimRight(
+					string(root.Source[startByte:scopeNode.StartByte()]),
+					"\n\r\t ",
+				)
+			}
+		}
+	}
+	return docText, startByte, endByte, hasScope
 }
 
 // --- Go package name extraction for qualified defs ---
