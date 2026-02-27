@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 
@@ -36,6 +37,11 @@ type Controller struct {
 
 // OpenOrCreate opens or creates a control file at the given path.
 func OpenOrCreate(path string) (*Controller, error) {
+	// Validate path security
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir: %w", err)
@@ -128,4 +134,35 @@ func (c *Controller) Close() error {
 		return err
 	}
 	return c.file.Close()
+}
+
+func validatePath(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		safeHome := filepath.Join(home, ".mache")
+		if isUnder(abs, safeHome) {
+			return nil
+		}
+	}
+
+	if isUnder(abs, os.TempDir()) {
+		return nil
+	}
+
+	return fmt.Errorf("security violation: control file path %q must be under ~/.mache or %s", abs, os.TempDir())
+}
+
+func isUnder(path, base string) bool {
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
