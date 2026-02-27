@@ -546,6 +546,93 @@ func TestContextQueryRegistry_UnsupportedReturnsNil(t *testing.T) {
 	assert.Nil(t, ctx)
 }
 
+func TestExtractDocComments_WithComments(t *testing.T) {
+	code := []byte(`package main
+
+// Hello is a greeting function.
+// It prints "hello world".
+func Hello() {
+	println("hello world")
+}
+`)
+	root := parseSitterRoot(t, code)
+	w := NewSitterWalker()
+
+	matches, err := w.Query(root, `(function_declaration name: (identifier) @name) @scope`)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	docText, startByte, endByte, hasScope := extractDocComments(matches[0])
+	require.True(t, hasScope)
+	assert.Contains(t, docText, "// Hello is a greeting function.")
+	assert.Contains(t, docText, "// It prints \"hello world\".")
+	// startByte should point to the first comment, before the scope node
+	assert.Less(t, startByte, endByte)
+}
+
+func TestExtractDocComments_NoComments(t *testing.T) {
+	code := []byte(`package main
+
+func Hello() {}
+`)
+	root := parseSitterRoot(t, code)
+	w := NewSitterWalker()
+
+	matches, err := w.Query(root, `(function_declaration name: (identifier) @name) @scope`)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	docText, _, _, hasScope := extractDocComments(matches[0])
+	require.True(t, hasScope)
+	assert.Empty(t, docText)
+}
+
+func TestExtractDocComments_NonAdjacentComment(t *testing.T) {
+	code := []byte(`package main
+
+// This comment is far away.
+
+
+func Hello() {}
+`)
+	root := parseSitterRoot(t, code)
+	w := NewSitterWalker()
+
+	matches, err := w.Query(root, `(function_declaration name: (identifier) @name) @scope`)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	docText, _, _, hasScope := extractDocComments(matches[0])
+	require.True(t, hasScope)
+	// Gap > 2 bytes (multiple blank lines), so comment is not captured
+	assert.Empty(t, docText)
+}
+
+func TestExtractDocComments_MultipleFunctions(t *testing.T) {
+	code := []byte(`package main
+
+// DocA describes FuncA.
+func FuncA() {}
+
+// DocB describes FuncB.
+func FuncB() {}
+`)
+	root := parseSitterRoot(t, code)
+	w := NewSitterWalker()
+
+	matches, err := w.Query(root, `(function_declaration name: (identifier) @name) @scope`)
+	require.NoError(t, err)
+	require.Len(t, matches, 2)
+
+	docA, _, _, _ := extractDocComments(matches[0])
+	assert.Contains(t, docA, "DocA")
+	assert.NotContains(t, docA, "DocB")
+
+	docB, _, _, _ := extractDocComments(matches[1])
+	assert.Contains(t, docB, "DocB")
+	assert.NotContains(t, docB, "DocA")
+}
+
 func TestSitterWalkerGo_PredicateFiltering(t *testing.T) {
 	root := parseSitterRoot(t, []byte(cobraSource))
 	w := NewSitterWalker()

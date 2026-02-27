@@ -66,6 +66,14 @@ func TestProjectAST_GoFlat(t *testing.T) {
 	assert.Contains(t, funcNode.Selector, "function_definition")
 	// Go is flat — no nested children
 	assert.Empty(t, funcNode.Children, "Go functions should have no children (flat)")
+
+	// Verify leaf files: source, ast.json, doc
+	require.Len(t, funcNode.Files, 3)
+	assert.Equal(t, "source", funcNode.Files[0].Name)
+	assert.Equal(t, "{{.scope}}", funcNode.Files[0].ContentTemplate)
+	assert.Equal(t, "ast.json", funcNode.Files[1].Name)
+	assert.Equal(t, "doc", funcNode.Files[2].Name)
+	assert.Equal(t, "{{.doc}}", funcNode.Files[2].ContentTemplate)
 }
 
 func TestProjectAST_PythonNested(t *testing.T) {
