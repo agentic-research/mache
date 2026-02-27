@@ -11,7 +11,7 @@ graph TD
     subgraph "Data Sources"
         SQLiteFile[".db (SQLite)"]
         FlatFile[".json"]
-        SourceCode[".go / .py / .tf / .yaml / ..."]
+        SourceCode[".go / .py / .js / .ts / .rs / .sql / .tf / .yaml"]
     end
 
     subgraph "Mache Core"
@@ -62,7 +62,10 @@ graph TD
 There are two data paths depending on the source:
 
 1. **SQLite direct (`.db` files)** — `SQLiteGraph` queries the source database directly. A one-pass scan builds the directory tree (~12s for 323K records), then content is resolved on demand via primary key lookup. No data is copied.
-2. **Ingestion (`.json`, `.go`, `.py`, `.tf`, `.hcl`, `.yaml`, `.js`, `.ts`, `.sql`)** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`.
+2. **Ingestion** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`. Supported formats include:
+    - **Data**: `.json`, `.db` (SQLite)
+    - **Code**: `.go`, `.py`, `.js`, `.ts`, `.tsx`, `.rs`, `.sql`
+    - **Config**: `.tf`, `.hcl`, `.yaml`, `.yml`
 
 Both paths are fronted by the same `Graph` interface and served via either an **NFS server** (macOS default, `go-nfs` + `billy`) or a **FUSE bridge** (Linux default, `cgofuse` + `fuse-t`). A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
 
