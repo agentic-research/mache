@@ -121,18 +121,18 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 	}
 
 	// Virtual: _schema.json
-	if filename == "/_schema.json" {
-		return &bytesFile{name: "_schema.json", data: fs.schemaJSON}, nil
+	if filename == "/"+graph.SchemaDotJSON {
+		return &bytesFile{name: graph.SchemaDotJSON, data: fs.schemaJSON}, nil
 	}
 
 	// Virtual: PROMPT.txt (agent mode)
-	if filename == "/PROMPT.txt" && len(fs.promptContent) > 0 {
-		return &bytesFile{name: "PROMPT.txt", data: fs.promptContent}, nil
+	if filename == "/"+graph.PromptFile && len(fs.promptContent) > 0 {
+		return &bytesFile{name: graph.PromptFile, data: fs.promptContent}, nil
 	}
 
 	// Virtual: _diagnostics/ files
-	if fs.writable && isDiagPath(filename) {
-		parentDir, diagFile := parseDiagPath(filename)
+	if fs.writable && graph.IsDiagPath(filename) {
+		parentDir, diagFile := graph.ParseDiagPath(filename)
 		if diagFile == "" {
 			return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("is a directory")}
 		}
@@ -144,11 +144,11 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 	}
 
 	// Virtual: context file
-	if strings.HasSuffix(filename, "/context") {
+	if strings.HasSuffix(filename, "/"+graph.ContextFile) {
 		parentDir := filepath.Dir(filename)
 		node, err := fs.graph.GetNode(parentDir)
 		if err == nil && len(node.Context) > 0 {
-			return &bytesFile{name: "context", data: node.Context}, nil
+			return &bytesFile{name: graph.ContextFile, data: node.Context}, nil
 		}
 	}
 
@@ -236,7 +236,7 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 
 // openWritable returns a writeFile for nodes that have a SourceOrigin.
 func (fs *GraphFS) openWritable(filename string, flag int) (billy.File, error) {
-	if filename == "/_schema.json" {
+	if filename == "/"+graph.SchemaDotJSON {
 		return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("read-only virtual file")}
 	}
 
@@ -325,14 +325,14 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 	path = cleanPath(path)
 
 	// Virtual: _diagnostics/ directory listing
-	if fs.writable && isDiagPath(path) {
-		_, fileName := parseDiagPath(path)
+	if fs.writable && graph.IsDiagPath(path) {
+		_, fileName := graph.ParseDiagPath(path)
 		if fileName == "" {
 			// List diagnostics dir contents
 			return []os.FileInfo{
-				&staticFileInfo{name: "last-write-status", mode: 0o444, modTime: fs.mountTime},
-				&staticFileInfo{name: "ast-errors", mode: 0o444, modTime: fs.mountTime},
-				&staticFileInfo{name: "lint", mode: 0o444, modTime: fs.mountTime},
+				&staticFileInfo{name: graph.DiagLastWrite, mode: 0o444, modTime: fs.mountTime},
+				&staticFileInfo{name: graph.DiagASTErrors, mode: 0o444, modTime: fs.mountTime},
+				&staticFileInfo{name: graph.DiagLint, mode: 0o444, modTime: fs.mountTime},
 			}, nil
 		}
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
@@ -430,14 +430,14 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 	// Virtual files at root
 	if path == "/" {
 		infos = append(infos, &staticFileInfo{
-			name:    "_schema.json",
+			name:    graph.SchemaDotJSON,
 			size:    int64(len(fs.schemaJSON)),
 			mode:    0o444,
 			modTime: fs.mountTime,
 		})
 		if len(fs.promptContent) > 0 {
 			infos = append(infos, &staticFileInfo{
-				name:    "PROMPT.txt",
+				name:    graph.PromptFile,
 				size:    int64(len(fs.promptContent)),
 				mode:    0o444,
 				modTime: fs.mountTime,
@@ -448,7 +448,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 	// Add _diagnostics/ virtual dir to writable node directories
 	if fs.writable && path != "/" {
 		infos = append(infos, &staticFileInfo{
-			name:    "_diagnostics",
+			name:    graph.DiagnosticsDir,
 			mode:    os.ModeDir | 0o555,
 			modTime: fs.mountTime,
 		})
@@ -457,7 +457,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 	// Add context virtual file if available
 	if node != nil && len(node.Context) > 0 {
 		infos = append(infos, &staticFileInfo{
-			name:    "context",
+			name:    graph.ContextFile,
 			size:    int64(len(node.Context)),
 			mode:    0o444,
 			modTime: fs.mountTime,
@@ -469,7 +469,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		token := filepath.Base(path)
 		if callers, err := fs.graph.GetCallers(token); err == nil && len(callers) > 0 {
 			infos = append(infos, &staticFileInfo{
-				name:    "callers",
+				name:    graph.CallersDir,
 				mode:    os.ModeDir | 0o555,
 				modTime: fs.mountTime,
 			})
@@ -480,7 +480,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 	if path != "/" {
 		if callees, err := fs.graph.GetCallees(path); err == nil && len(callees) > 0 {
 			infos = append(infos, &staticFileInfo{
-				name:    "callees",
+				name:    graph.CalleesDir,
 				mode:    os.ModeDir | 0o555,
 				modTime: fs.mountTime,
 			})
@@ -517,9 +517,9 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 	}
 
 	// Virtual: _schema.json
-	if filename == "/_schema.json" {
+	if filename == "/"+graph.SchemaDotJSON {
 		return &staticFileInfo{
-			name:    "_schema.json",
+			name:    graph.SchemaDotJSON,
 			size:    int64(len(fs.schemaJSON)),
 			mode:    0o444,
 			modTime: fs.mountTime,
@@ -527,9 +527,9 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 	}
 
 	// Virtual: PROMPT.txt (agent mode)
-	if filename == "/PROMPT.txt" && len(fs.promptContent) > 0 {
+	if filename == "/"+graph.PromptFile && len(fs.promptContent) > 0 {
 		return &staticFileInfo{
-			name:    "PROMPT.txt",
+			name:    graph.PromptFile,
 			size:    int64(len(fs.promptContent)),
 			mode:    0o444,
 			modTime: fs.mountTime,
@@ -537,12 +537,12 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 	}
 
 	// Virtual: _diagnostics/
-	if fs.writable && isDiagPath(filename) {
-		parentDir, fileName := parseDiagPath(filename)
+	if fs.writable && graph.IsDiagPath(filename) {
+		parentDir, fileName := graph.ParseDiagPath(filename)
 		if fileName == "" {
 			// The _diagnostics directory itself
 			return &staticFileInfo{
-				name:    "_diagnostics",
+				name:    graph.DiagnosticsDir,
 				mode:    os.ModeDir | 0o555,
 				modTime: time.Now(), // Force refresh
 			}, nil
@@ -560,12 +560,12 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 	}
 
 	// Virtual: context
-	if strings.HasSuffix(filename, "/context") {
+	if strings.HasSuffix(filename, "/"+graph.ContextFile) {
 		parentDir := filepath.Dir(filename)
 		node, err := fs.graph.GetNode(parentDir)
 		if err == nil && len(node.Context) > 0 {
 			return &staticFileInfo{
-				name:    "context",
+				name:    graph.ContextFile,
 				size:    int64(len(node.Context)),
 				mode:    0o444,
 				modTime: fs.mountTime,
@@ -589,7 +589,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		}
 		if entryName == "" {
 			return &staticFileInfo{
-				name:    "callers",
+				name:    graph.CallersDir,
 				mode:    os.ModeDir | 0o555,
 				modTime: fs.mountTime,
 			}, nil
@@ -627,7 +627,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		}
 		if entryName == "" {
 			return &staticFileInfo{
-				name:    "callees",
+				name:    graph.CalleesDir,
 				mode:    os.ModeDir | 0o555,
 				modTime: fs.mountTime,
 			}, nil
@@ -688,42 +688,17 @@ func (fs *GraphFS) Capabilities() billy.Capability {
 
 // --- _diagnostics/ virtual directory ---
 
-// isDiagPath returns true if the path contains a _diagnostics/ segment.
-func isDiagPath(path string) bool {
-	return strings.Contains(path, "/_diagnostics")
-}
-
-// parseDiagPath splits a diagnostics path into (parentDir, fileName).
-// E.g. "/vulns/func_a/_diagnostics/last-write-status" → ("/vulns/func_a", "last-write-status")
-// Returns ("", "") if not a valid diagnostics path.
-func parseDiagPath(path string) (parentDir, fileName string) {
-	idx := strings.Index(path, "/_diagnostics")
-	if idx < 0 {
-		return "", ""
-	}
-	parentDir = path[:idx]
-	if parentDir == "" {
-		parentDir = "/"
-	}
-	rest := path[idx+len("/_diagnostics"):]
-	if rest == "" || rest == "/" {
-		return parentDir, "" // the _diagnostics dir itself
-	}
-	fileName = strings.TrimPrefix(rest, "/")
-	return parentDir, fileName
-}
-
 // diagContent returns the content of a diagnostics virtual file.
 func (fs *GraphFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 	switch fileName {
-	case "last-write-status":
+	case graph.DiagLastWrite:
 		// Look up status for any child node of parentDir
 		val, ok := fs.diagStatus.Load(parentDir)
 		if !ok {
 			return []byte("no writes yet\n"), true
 		}
 		return []byte(val.(string) + "\n"), true
-	case "ast-errors":
+	case graph.DiagASTErrors:
 		val, ok := fs.diagStatus.Load(parentDir)
 		if !ok {
 			return []byte("no errors\n"), true
@@ -733,8 +708,8 @@ func (fs *GraphFS) diagContent(parentDir, fileName string) ([]byte, bool) {
 			return []byte("no errors\n"), true
 		}
 		return []byte(msg + "\n"), true
-	case "lint":
-		val, ok := fs.diagStatus.Load(parentDir + "/lint")
+	case graph.DiagLint:
+		val, ok := fs.diagStatus.Load(parentDir + "/" + graph.DiagLint)
 		if !ok {
 			return []byte("clean\n"), true
 		}
