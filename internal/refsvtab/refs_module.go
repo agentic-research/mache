@@ -67,17 +67,8 @@ func (m *RefsModule) Create(ctx vtab.Context, args []string) (vtab.Table, error)
 	if len(args) == 0 {
 		return nil, fmt.Errorf("mache_refs: missing DB ID argument")
 	}
-	// args[0] is module name, args[1] is table name, args[2]... are arguments.
-	// But modernc.org/sqlite passes arguments differently?
-	// According to docs/source, args includes module name etc?
-	// Actually, standard SQLite xCreate(db, pAux, argc, argv).
-	// modernc adapter passes args as []string.
-	// argv[0] = module name
-	// argv[1] = database name
-	// argv[2] = table name
-	// argv[3]... = arguments inside ()
-	//
-	// So if we do USING mache_refs(my_id), args[3] should be "my_id".
+	// argv: [0]=module, [1]=database, [2]=table, [3+]=CREATE VIRTUAL TABLE args.
+	// USING mache_refs(my_id) → args[3] = "my_id".
 	if len(args) < 4 {
 		return nil, fmt.Errorf("mache_refs: missing DB ID argument (expected USING mache_refs(id))")
 	}

@@ -76,11 +76,6 @@ var containmentRules = map[string]map[string][]string{
 func ProjectAST(concepts []Concept, ctx *FormalContext, config ProjectConfig) *api.Topology {
 	containerTypes := make(map[string]string) // type -> name_type (e.g. identifier, property_identifier)
 
-	// Scan attributes to find types that have "has_name" and "has_body"
-	// We look for concepts that have these attributes.
-	// Actually, easier: scan the attributes themselves to find the types.
-	// The context attributes look like: "type=function_definition", "has_name", "has_body"
-
 	// Find all unique types present in the data
 	types := make(map[string]bool)
 	for _, attr := range ctx.Attributes {
@@ -91,16 +86,7 @@ func ProjectAST(concepts []Concept, ctx *FormalContext, config ProjectConfig) *a
 		}
 	}
 
-	// For each type, check if the data supports "has_name" and "has_body"
-	// We check the ctx.Stats to see if "has_name" co-occurs with "type=X".
-	// But `ctx.Stats` is keyed by field path, e.g. "has_name".
-	// Wait, FlattenAST produces flat records.
-	// records = [{"type": "func", "has_name": true}, ...]
-	//
-	// We need to know: Does "type=func" implies "has_name"?
-	// We can use the lattice for this!
-	// Find the concept for "type=func". Check if its Intent contains "has_name".
-
+	// Use lattice closure to check if type=X implies has_name+has_body.
 	for t := range types {
 		// Find the attribute index for "type=t"
 		typeAttrIdx := -1
@@ -187,30 +173,8 @@ func ProjectAST(concepts []Concept, ctx *FormalContext, config ProjectConfig) *a
 		children = append(children, node)
 	}
 
-	// Assign the full list as children to each node (Recursive Structure)
-	// We need to copy the slice to avoid circular reference issues if we modify it later,
-	// but here we can just share the reference or copy.
-	// API Node is a struct, so assignment copies the struct but slices share backing array.
-	// We want the *structure* to be recursive.
-	//
-	// Node A -> Children [Node A, Node B]
-	// Node B -> Children [Node A, Node B]
-
-	// Since api.Node is a value type, we need to be careful.
-	// We can't make an infinite struct.
-	// But `children` is a slice of Nodes.
-	//
-	// Strategy: Create 1 level of recursion.
-	// Root -> [Func, Class]
-	// Func -> [Func, Class]
-	// Class -> [Func, Class]
-	// (Stop there to avoid infinite depth in schema JSON, although Mache engine handles it fine?
-	//  Actually Mache engine handles recursion if the schema graph has cycles.
-	//  But JSON marshalling of a cyclic Go struct will crash!)
-
-	// The Mache `ingest` engine walks the schema. If the schema is a tree, it terminates.
-	// If we want "Infinite recursion" (arbitrary depth), we need the schema to be a DAG or contain a self-reference.
-	// JSON doesn't support references.
+	// 1 level of nesting via containmentRules. Go structs can't be cyclic and
+	// JSON can't encode references, so we stop at depth 1.
 
 	// Language-aware containment: only assign children that the language permits.
 	// Unknown languages default to flat (safe — misses nesting but never generates garbage).

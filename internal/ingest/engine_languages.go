@@ -1,8 +1,7 @@
 package ingest
 
 func init() {
-	// Register Go context query.
-	// Note: context extraction is Go-only for now; other languages return nil.
+	// Context extraction is Go-only; other languages return nil.
 	RegisterContextQuery("go", `
 		(import_declaration) @ctx
 		(const_declaration) @ctx

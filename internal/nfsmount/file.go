@@ -213,9 +213,7 @@ func (f *writeFile) Truncate(size int64) error {
 		copy(grown, f.buf)
 		f.buf = grown
 	}
-	// Note: Truncate alone does NOT mark written. NFS SETATTR(size=0) causes
-	// a Truncate+Close cycle before WRITE — splicing on truncate-only would
-	// delete source content. Only Write() sets written=true.
+	// Truncate alone does NOT set written — see Close() comment.
 	return nil
 }
 

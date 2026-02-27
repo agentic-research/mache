@@ -398,10 +398,7 @@ func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
 
 	// Fast Path: Nodes Table
 	if g.useNodesTable {
-		// Root handling: if id is empty, parent_id should be NULL or empty depending on writer.
-		// My SQLiteWriter uses "" for root parent.
-		// Actually, top level nodes have parent_id = "".
-		// Let's assume parent_id is stored as is.
+		// Top-level nodes have parent_id = empty string.
 		var rows *sql.Rows
 		var err error
 		if id == "" {
@@ -505,9 +502,8 @@ func (g *SQLiteGraph) AddRef(token, nodeID string) error {
 }
 
 // FlushRefs writes all accumulated refs to the sidecar database in a single
-// transaction. Call once after ingestion is complete. This replaces the old
-// per-call AddRef write path, reducing N*M SQL round-trips to exactly
-// len(fileIDMap) + len(pendingRefs) inserts in one transaction.
+// transaction. Call once after ingestion is complete. Batches all inserts
+// (len(fileIDMap) + len(pendingRefs)) into one transaction.
 //
 // Guarded by sync.Once — safe to call multiple times; only the first call
 // performs the flush. This prevents the double-call bug where a second flush
