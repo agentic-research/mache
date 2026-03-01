@@ -42,11 +42,19 @@ type CompositeGraph = ig.CompositeGraph
 // ActionResult is returned when an action is performed on a graph node.
 type ActionResult = ig.ActionResult
 
+// HotSwapGraph is a thread-safe wrapper that allows atomically swapping the
+// underlying graph. Readers hold an RLock during each call; Swap acquires a
+// write lock. Use this instead of hand-rolled mutex+pointer patterns.
+type HotSwapGraph = ig.HotSwapGraph
+
 // NewMemoryStore creates a new in-memory graph store.
 var NewMemoryStore = ig.NewMemoryStore
 
 // NewCompositeGraph creates an empty composite graph for multi-mount routing.
 var NewCompositeGraph = ig.NewCompositeGraph
+
+// NewHotSwapGraph creates a thread-safe graph wrapper that supports atomic Swap.
+var NewHotSwapGraph = ig.NewHotSwapGraph
 
 // ErrNotFound is returned when a node ID does not exist in the graph.
 var ErrNotFound = ig.ErrNotFound
