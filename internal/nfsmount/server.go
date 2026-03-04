@@ -52,7 +52,9 @@ func Mount(port int, mountpoint string, writable bool) error {
 
 	switch runtime.GOOS {
 	case "darwin":
-		opts := fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,locallocks,noresvport", port, port)
+		// noac: disable attribute caching so dynamic graph changes (new tabs, schema updates)
+		// are visible immediately. Without this, macOS NFS client caches empty dir listings.
+		opts := fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,locallocks,noresvport,noac", port, port)
 		if !writable {
 			opts += ",rdonly"
 		}
@@ -61,7 +63,7 @@ func Mount(port int, mountpoint string, writable bool) error {
 			"localhost:/", mountpoint)
 
 	case "linux":
-		opts := fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,local_lock=all,nolock", port, port)
+		opts := fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,local_lock=all,nolock,noac", port, port)
 		if !writable {
 			opts += ",ro"
 		}
