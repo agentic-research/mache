@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/api"
@@ -608,6 +609,59 @@ func TestCallers_OpenDir_ReturnsError(t *testing.T) {
 
 	_, err := gfs.Open("/funcs/Bar/callers")
 	assert.Error(t, err)
+}
+
+// TestUniqueFileids verifies every entry from ReadDir and Lstat has a unique,
+// non-zero inode (NFS Fileid). Fileid=0 or duplicates break macOS NFS client.
+func TestUniqueFileids(t *testing.T) {
+	store := newTestGraphWithCallers()
+	gfs := NewGraphFS(store, newTestSchema())
+	gfs.SetWriteBack(func(string, graph.SourceOrigin, []byte) error { return nil })
+
+	// Collect inodes from ReadDir at multiple levels.
+	seen := map[uint64]string{}
+	normalize := func(p string) string { return filepath.Clean(p) }
+	checkEntries := func(dir string, entries []os.FileInfo) {
+		for _, e := range entries {
+			fi, ok := e.(*staticFileInfo)
+			require.True(t, ok, "entry %s should be *staticFileInfo", e.Name())
+			assert.NotZero(t, fi.ino, "entry %s in %s has ino=0", e.Name(), dir)
+			key := normalize(dir + "/" + e.Name())
+			if prev, dup := seen[fi.ino]; dup && prev != key {
+				t.Errorf("duplicate ino %d: %s and %s", fi.ino, key, prev)
+			}
+			seen[fi.ino] = key
+		}
+	}
+
+	entries, err := gfs.ReadDir("/")
+	require.NoError(t, err)
+	checkEntries("/", entries)
+
+	entries, err = gfs.ReadDir("/funcs")
+	require.NoError(t, err)
+	checkEntries("/funcs", entries)
+
+	entries, err = gfs.ReadDir("/funcs/Bar")
+	require.NoError(t, err)
+	checkEntries("/funcs/Bar", entries)
+
+	entries, err = gfs.ReadDir("/funcs/Bar/callers")
+	require.NoError(t, err)
+	checkEntries("/funcs/Bar/callers", entries)
+
+	// Also check Lstat returns unique inodes.
+	for _, p := range []string{"/", "/_schema.json", "/funcs", "/funcs/Bar", "/funcs/Bar/callers"} {
+		info, err := gfs.Lstat(p)
+		require.NoError(t, err)
+		fi, ok := info.(*staticFileInfo)
+		require.True(t, ok)
+		assert.NotZero(t, fi.ino, "Lstat %s has ino=0", p)
+		key := normalize(p)
+		if prev, dup := seen[fi.ino]; dup && prev != key {
+			t.Errorf("Lstat ino %d for %s duplicates entry %s", fi.ino, p, prev)
+		}
+	}
 }
 
 // TestHotSwapGraphFS reproduces the x-ray NFS scenario:
