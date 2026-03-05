@@ -395,26 +395,41 @@ var rootCmd = &cobra.Command{
 			return mountControl(controlPath, schema, mountPoint, backend)
 		}
 
-		if _, err := os.Stat(dataPath); err == nil {
-			if filepath.Ext(dataPath) == ".db" {
-				dbSource := dataPath
-				if snapshot {
-					tmpDir := filepath.Join(os.TempDir(), "mache", "snapshots")
-					if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-						return fmt.Errorf("create snapshot dir: %w", err)
+		// Snapshot: copy data source to temp before mounting for isolation.
+		if snapshot {
+			if info, err := os.Stat(dataPath); err == nil {
+				snapDir := filepath.Join(os.TempDir(), "mache", "snapshots")
+				if err := os.MkdirAll(snapDir, 0o755); err != nil {
+					return fmt.Errorf("create snapshot dir: %w", err)
+				}
+				if info.IsDir() {
+					snapshotPath := filepath.Join(snapDir, fmt.Sprintf("snap-%d-%s", os.Getpid(), filepath.Base(dataPath)))
+					fmt.Printf("Snapshot: copying %s → %s...\n", dataPath, snapshotPath)
+					start := time.Now()
+					n, err := copyDir(dataPath, snapshotPath)
+					if err != nil {
+						return fmt.Errorf("snapshot copy dir: %w", err)
 					}
-					snapshotPath := filepath.Join(tmpDir, fmt.Sprintf("snap-%d-%s", os.Getpid(), filepath.Base(dataPath)))
+					fmt.Printf("Snapshot: copied %d files in %v\n", n, time.Since(start))
+					dataPath = snapshotPath
+					defer func() { _ = os.RemoveAll(snapshotPath) }()
+				} else {
+					snapshotPath := filepath.Join(snapDir, fmt.Sprintf("snap-%d-%s", os.Getpid(), filepath.Base(dataPath)))
 					fmt.Printf("Snapshot: copying %s → %s\n", dataPath, snapshotPath)
 					if err := copyFile(dataPath, snapshotPath); err != nil {
 						return fmt.Errorf("snapshot copy: %w", err)
 					}
-					dbSource = snapshotPath
+					dataPath = snapshotPath
 					defer func() { _ = os.Remove(snapshotPath) }()
 				}
+			}
+		}
 
+		if _, err := os.Stat(dataPath); err == nil {
+			if filepath.Ext(dataPath) == ".db" {
 				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
-				fmt.Printf("Opening %s (direct SQL backend)...\n", dbSource)
-				sg, err := graph.OpenSQLiteGraph(dbSource, schema, ingest.RenderTemplate)
+				fmt.Printf("Opening %s (direct SQL backend)...\n", dataPath)
+				sg, err := graph.OpenSQLiteGraph(dataPath, schema, ingest.RenderTemplate)
 				if err != nil {
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}

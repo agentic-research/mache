@@ -80,3 +80,72 @@ func TestSnapshotPath_Format(t *testing.T) {
 	assert.Contains(t, snapshotName, "snapshots")
 	assert.Contains(t, snapshotName, "test.db")
 }
+
+func TestCopyDir_BasicTree(t *testing.T) {
+	src := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "snapshot")
+
+	// Create a small source tree
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "pkg", "auth"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "pkg", "auth", "auth.go"), []byte("package auth"), 0o644))
+
+	n, err := copyDir(src, dst)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	// Verify content
+	got, err := os.ReadFile(filepath.Join(dst, "main.go"))
+	require.NoError(t, err)
+	assert.Equal(t, "package main", string(got))
+
+	got, err = os.ReadFile(filepath.Join(dst, "pkg", "auth", "auth.go"))
+	require.NoError(t, err)
+	assert.Equal(t, "package auth", string(got))
+}
+
+func TestCopyDir_SkipsHiddenAndBuildDirs(t *testing.T) {
+	src := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "snapshot")
+
+	// Create dirs that should be skipped
+	for _, skip := range []string{".git", "node_modules", "target", "__pycache__"} {
+		dir := filepath.Join(src, skip)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "junk.txt"), []byte("skip me"), 0o644))
+	}
+	// Create a real file
+	require.NoError(t, os.WriteFile(filepath.Join(src, "real.go"), []byte("package real"), 0o644))
+
+	n, err := copyDir(src, dst)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// Real file exists
+	_, err = os.Stat(filepath.Join(dst, "real.go"))
+	assert.NoError(t, err)
+
+	// Skipped dirs don't exist
+	for _, skip := range []string{".git", "node_modules", "target", "__pycache__"} {
+		_, err = os.Stat(filepath.Join(dst, skip))
+		assert.True(t, os.IsNotExist(err), "expected %s to be skipped", skip)
+	}
+}
+
+func TestCopyDir_Isolation(t *testing.T) {
+	src := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "snapshot")
+
+	require.NoError(t, os.WriteFile(filepath.Join(src, "file.go"), []byte("original"), 0o644))
+
+	_, err := copyDir(src, dst)
+	require.NoError(t, err)
+
+	// Modify source after copy
+	require.NoError(t, os.WriteFile(filepath.Join(src, "file.go"), []byte("modified"), 0o644))
+
+	// Snapshot retains original
+	got, err := os.ReadFile(filepath.Join(dst, "file.go"))
+	require.NoError(t, err)
+	assert.Equal(t, "original", string(got))
+}

@@ -298,12 +298,16 @@ func runAgentMode() error {
 		return fmt.Errorf("--data/-d required in agent mode")
 	}
 
-	// Auto-enable inference and writable in agent mode
+	// Auto-enable inference, writable, and snapshot in agent mode.
+	// Snapshot ensures the agent operates on a copy, not the live source.
 	if !inferSchema && schemaPath == "" {
 		inferSchema = true
 	}
 	if !writable {
 		writable = true
+	}
+	if !snapshot {
+		snapshot = true
 	}
 
 	// Resolve data path
