@@ -8,6 +8,18 @@ import (
 	"strings"
 )
 
+// shouldSkipDir returns true for hidden dirs and common build artifact directories.
+func shouldSkipDir(base string) bool {
+	if strings.HasPrefix(base, ".") {
+		return true
+	}
+	switch base {
+	case "node_modules", "target", "dist", "build", "__pycache__":
+		return true
+	}
+	return false
+}
+
 // copyFile copies src to dst, creating dst if it doesn't exist.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
@@ -44,16 +56,12 @@ func copyDir(srcDir, dstDir string) (int, error) {
 		dst := filepath.Join(dstDir, rel)
 
 		if info.IsDir() {
-			base := filepath.Base(path)
-			if path != srcDir && (strings.HasPrefix(base, ".") ||
-				base == "node_modules" || base == "target" ||
-				base == "dist" || base == "build" || base == "__pycache__") {
+			if path != srcDir && shouldSkipDir(filepath.Base(path)) {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(dst, info.Mode())
 		}
 
-		// Skip non-regular files (symlinks, devices, etc.)
 		if !info.Mode().IsRegular() {
 			return nil
 		}
@@ -65,4 +73,26 @@ func copyDir(srcDir, dstDir string) (int, error) {
 		return nil
 	})
 	return copied, err
+}
+
+// dirSize walks dir and returns the total size of regular files in bytes,
+// skipping the same hidden/build directories as copyDir.
+func dirSize(dir string) (int64, error) {
+	var total int64
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if path != dir && shouldSkipDir(filepath.Base(path)) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Mode().IsRegular() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
 }

@@ -66,7 +66,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
 	rootCmd.Flags().StringVar(&outPath, "out", "", "Write .db to path instead of mounting (for leyline load); not compatible with --agent")
 	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
-	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; default is zero-copy)")
+	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; copy is not atomic; default is zero-copy)")
 
 	defaultBackend := "fuse"
 	if runtime.GOOS == "darwin" {
@@ -108,7 +108,7 @@ var rootCmd = &cobra.Command{
 
 		// Agent mode: auto-generate mount point and configure
 		if agentMode {
-			if err := runAgentMode(); err != nil {
+			if err := runAgentMode(cmd); err != nil {
 				return err
 			}
 			// agentMetadata is now set, including the mount point
@@ -396,14 +396,20 @@ var rootCmd = &cobra.Command{
 		}
 
 		// Snapshot: copy data source to temp before mounting for isolation.
+		var snapshotPath string // set if snapshot is active, for cleanup decision
+		originalDataPath := dataPath
 		if snapshot {
 			if info, err := os.Stat(dataPath); err == nil {
 				snapDir := filepath.Join(os.TempDir(), "mache", "snapshots")
 				if err := os.MkdirAll(snapDir, 0o755); err != nil {
 					return fmt.Errorf("create snapshot dir: %w", err)
 				}
+				snapshotPath = filepath.Join(snapDir, fmt.Sprintf("snap-%d-%s", os.Getpid(), filepath.Base(dataPath)))
 				if info.IsDir() {
-					snapshotPath := filepath.Join(snapDir, fmt.Sprintf("snap-%d-%s", os.Getpid(), filepath.Base(dataPath)))
+					// Size warning for large directories
+					if size, sizeErr := dirSize(dataPath); sizeErr == nil && size > 1<<30 {
+						fmt.Printf("Warning: source directory is %d MB — snapshot copy may take a while\n", size>>20)
+					}
 					fmt.Printf("Snapshot: copying %s → %s...\n", dataPath, snapshotPath)
 					start := time.Now()
 					n, err := copyDir(dataPath, snapshotPath)
@@ -411,18 +417,32 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("snapshot copy dir: %w", err)
 					}
 					fmt.Printf("Snapshot: copied %d files in %v\n", n, time.Since(start))
-					dataPath = snapshotPath
-					defer func() { _ = os.RemoveAll(snapshotPath) }()
 				} else {
-					snapshotPath := filepath.Join(snapDir, fmt.Sprintf("snap-%d-%s", os.Getpid(), filepath.Base(dataPath)))
 					fmt.Printf("Snapshot: copying %s → %s\n", dataPath, snapshotPath)
 					if err := copyFile(dataPath, snapshotPath); err != nil {
 						return fmt.Errorf("snapshot copy: %w", err)
 					}
-					dataPath = snapshotPath
-					defer func() { _ = os.Remove(snapshotPath) }()
+				}
+				dataPath = snapshotPath
+
+				// Writable snapshots are preserved so the agent's edits survive.
+				// Read-only snapshots are disposable and cleaned up on unmount.
+				if writable {
+					defer func() {
+						fmt.Printf("\nSnapshot preserved at: %s\n", snapshotPath)
+						fmt.Printf("Review changes:  diff -r %s %s\n", snapshotPath, originalDataPath)
+						fmt.Printf("Apply changes:   rsync -av %s/ %s/\n", snapshotPath, originalDataPath)
+						fmt.Printf("Discard:         rm -rf %s\n", snapshotPath)
+					}()
+				} else {
+					defer func() { _ = os.RemoveAll(snapshotPath) }()
 				}
 			}
+		}
+
+		// Update agent metadata source to point at snapshot (not original)
+		if agentMode && agentMetadata != nil && snapshotPath != "" {
+			agentMetadata.Source = snapshotPath
 		}
 
 		if _, err := os.Stat(dataPath); err == nil {
@@ -1056,7 +1076,7 @@ var unmountCmd = &cobra.Command{
 
 var cleanCmd = &cobra.Command{
 	Use:   "clean",
-	Short: "Remove stale mache mounts (where process has died)",
+	Short: "Remove stale mache mounts and orphaned snapshots",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mounts, err := listActiveMounts()
 		if err != nil {
@@ -1077,10 +1097,39 @@ var cleanCmd = &cobra.Command{
 			}
 		}
 
+		// Clean orphaned snapshots (snap-<PID>-* where PID is dead)
+		snapDir := filepath.Join(os.TempDir(), "mache", "snapshots")
+		if entries, err := os.ReadDir(snapDir); err == nil {
+			for _, entry := range entries {
+				name := entry.Name()
+				if !strings.HasPrefix(name, "snap-") {
+					continue
+				}
+				// Parse PID from snap-<PID>-<name>
+				parts := strings.SplitN(strings.TrimPrefix(name, "snap-"), "-", 2)
+				if len(parts) < 2 {
+					continue
+				}
+				var pid int
+				if _, err := fmt.Sscanf(parts[0], "%d", &pid); err != nil {
+					continue
+				}
+				if !isProcessRunning(pid) {
+					snapPath := filepath.Join(snapDir, name)
+					fmt.Printf("Removing orphaned snapshot: %s (PID %d was not running)\n", name, pid)
+					if err := os.RemoveAll(snapPath); err != nil {
+						fmt.Printf("Warning: failed to remove %s: %v\n", snapPath, err)
+					} else {
+						cleaned++
+					}
+				}
+			}
+		}
+
 		if cleaned == 0 {
-			fmt.Println("No stale mounts found.")
+			fmt.Println("No stale mounts or orphaned snapshots found.")
 		} else {
-			fmt.Printf("Cleaned %d stale mount(s).\n", cleaned)
+			fmt.Printf("Cleaned %d stale item(s).\n", cleaned)
 		}
 
 		return nil

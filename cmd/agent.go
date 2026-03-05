@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // agentMetadata holds metadata for agent mode mounts (set by runAgentMode).
@@ -292,7 +294,7 @@ func isProcessRunning(pid int) bool {
 
 // runAgentMode handles the --agent flag workflow.
 // Returns the mount point and metadata that should be used.
-func runAgentMode() error {
+func runAgentMode(cmd *cobra.Command) error {
 	// Validate data path
 	if dataPath == "" {
 		return fmt.Errorf("--data/-d required in agent mode")
@@ -300,13 +302,14 @@ func runAgentMode() error {
 
 	// Auto-enable inference, writable, and snapshot in agent mode.
 	// Snapshot ensures the agent operates on a copy, not the live source.
+	// User can override with explicit --snapshot=false.
 	if !inferSchema && schemaPath == "" {
 		inferSchema = true
 	}
 	if !writable {
 		writable = true
 	}
-	if !snapshot {
+	if !snapshot && !cmd.Flags().Changed("snapshot") {
 		snapshot = true
 	}
 

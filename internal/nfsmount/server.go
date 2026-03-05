@@ -19,7 +19,7 @@ type Server struct {
 
 // NewServer starts an NFS server on an ephemeral port backed by the given filesystem.
 func NewServer(fs billy.Filesystem) (*Server, error) {
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("nfs listen: %w", err)
 	}
