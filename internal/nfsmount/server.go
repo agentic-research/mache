@@ -19,7 +19,7 @@ type Server struct {
 
 // NewServer starts an NFS server on an ephemeral port backed by the given filesystem.
 func NewServer(fs billy.Filesystem) (*Server, error) {
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("nfs listen: %w", err)
 	}
@@ -45,36 +45,43 @@ func (s *Server) Close() error {
 	return s.listener.Close()
 }
 
-// Mount calls the system mount command to mount the NFS server at mountpoint.
-// Requires sudo on macOS. The writable flag controls read-only vs read-write.
-func Mount(port int, mountpoint string, writable bool) error {
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
+// BuildMountOpts returns the NFS mount options string for the given OS.
+func BuildMountOpts(goos string, port int, writable bool, extraOpts string) (string, error) {
+	var opts string
+	switch goos {
 	case "darwin":
 		// noac: disable attribute caching so dynamic graph changes (new tabs, schema updates)
 		// are visible immediately. Without this, macOS NFS client caches empty dir listings.
-		opts := fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,locallocks,noresvport,noac", port, port)
+		opts = fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,locallocks,noresvport,noac", port, port)
 		if !writable {
 			opts += ",rdonly"
 		}
-		cmd = exec.Command("sudo", "mount", "-t", "nfs",
-			"-o", opts,
-			"localhost:/", mountpoint)
-
 	case "linux":
-		opts := fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,local_lock=all,nolock,noac", port, port)
+		opts = fmt.Sprintf("port=%d,mountport=%d,vers=3,tcp,local_lock=all,nolock,noac", port, port)
 		if !writable {
 			opts += ",ro"
 		}
-		cmd = exec.Command("sudo", "mount", "-t", "nfs",
-			"-o", opts,
-			"localhost:/", mountpoint)
-
 	default:
-		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+		return "", fmt.Errorf("unsupported OS: %s", goos)
+	}
+	if extraOpts != "" {
+		opts += "," + extraOpts
+	}
+	return opts, nil
+}
+
+// Mount calls the system mount command to mount the NFS server at mountpoint.
+// Requires sudo on macOS. The writable flag controls read-only vs read-write.
+// extraOpts is appended verbatim to the mount options string (comma-separated).
+func Mount(port int, mountpoint string, writable bool, extraOpts string) error {
+	opts, err := BuildMountOpts(runtime.GOOS, port, writable, extraOpts)
+	if err != nil {
+		return err
 	}
 
+	cmd := exec.Command("sudo", "mount", "-t", "nfs",
+		"-o", opts,
+		"localhost:/", mountpoint)
 	cmd.Stdin = nil // sudo may need terminal for password
 	output, err := cmd.CombinedOutput()
 	if err != nil {

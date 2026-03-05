@@ -10,8 +10,24 @@ We will acknowledge receipt within 72 hours and aim to provide a fix or mitigati
 
 ## Scope
 
-Mache mounts read-only FUSE filesystems. Security concerns include:
+Mache mounts read-only filesystems (NFS or FUSE). Security concerns include:
 
 - Path traversal in schema template rendering
 - Unintended data exposure through mounted filesystems
 - Denial of service via malformed schemas or data sources
+
+## NFS Backend
+
+The NFS server binds to `127.0.0.1` (localhost only) on an ephemeral port with
+no authentication (`NullAuthHandler`). Any local process can connect to the port
+and read the mounted data. This is standard for local NFS mounts but means
+**mache should not be used on shared multi-tenant hosts** without additional
+network isolation (e.g. containers, network namespaces).
+
+## Snapshot Mode
+
+`--snapshot` copies the data source to a temporary directory before mounting.
+The copy is **not atomic** — if interrupted mid-copy, a partial snapshot may
+remain in `$TMPDIR/mache/snapshots/`. Use `mache clean` to remove orphaned
+snapshots. Writable snapshots are preserved on clean unmount so agent edits
+survive; read-only snapshots are automatically deleted.

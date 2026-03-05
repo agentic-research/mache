@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // agentMetadata holds metadata for agent mode mounts (set by runAgentMode).
@@ -31,74 +33,88 @@ type MountMetadata struct {
 // agentPromptTemplate is the instruction file generated for LLM agents.
 const agentPromptTemplate = `# Mache Agent Environment
 
-This is a Mache-mounted filesystem. Your codebase has been projected as a semantic graph.
+This filesystem is a **semantic projection** of your codebase. Every function,
+type, and class is a directory. You navigate code by meaning, not by file path.
 
-## What You're Looking At
+**This is how you should read and write code in this environment.**
+
+## Mount Info
 
 **Source:** %s
 **Git:** %s
 **Mount:** %s
-**Writable:** %v
+**Mode:** %s
+%s
 
-## Key Concepts
+## How This Filesystem Works
 
-### 1. Structure Mirrors Semantics
+Each code construct (function, type, method, class) is a **directory** containing:
 
-Navigate by semantic meaning, not file paths:
-- cd functions/HandleRequest/     # Go to a specific function
-- cd types/User/                  # Go to a type definition
-- cd packages/auth/               # Go to a package
+| File | What it contains | Writable? |
+|------|-----------------|-----------|
+| source | The actual code — just this construct, nothing else | Yes (if writable mode) |
+| context | Imports, types, globals visible to this scope | No |
+| callers/ | Directory of functions that **call** this one | No |
+| callees/ | Directory of functions this one **calls** | No |
+| _diagnostics/ | Write status, AST errors, lint output | No |
 
-### 2. Virtual Files (Read-Only)
+## Do This, Not That
 
-Each construct has special files:
-- **source** — The actual code for this function/type/class
-- **context** — Imports, globals, types visible to this scope (critical for understanding dependencies)
-- **callers/** — Directory of functions that call this one (cross-references)
-- **callees/** — Directory of functions this one calls
-- **_diagnostics/** — Write status, AST errors, lint output
+**Do:** Read individual constructs via their source file.
+` + "```" + `
+ls                           # See top-level categories
+ls functions/                # List all functions
+cat functions/HandleRequest/source   # Read just this function
+cat functions/HandleRequest/context  # See its imports and types
+` + "```" + `
 
-### 3. Writing Code
+**Don't:** Try to cat entire .go/.py files — they don't exist here. The
+codebase has been decomposed into semantic units. Each source file contains
+exactly the code for one construct.
+
+**Do:** Use callers/ and callees/ to understand relationships.
+` + "```" + `
+ls functions/HandleRequest/callers/  # Who calls this?
+ls functions/HandleRequest/callees/  # What does it call?
+cat functions/HandleRequest/callers/* # Read all calling code
+` + "```" + `
+
+**Do:** Start with ls at the root to understand the structure.
+` + "```" + `
+ls /            # Top-level: _schema.json, PROMPT.txt, and category dirs
+cat _schema.json   # See the full schema driving this projection
+` + "```" + `
+
+## Writing Code
 
 %s
 
-### 4. Standard File Operations
+## Editing Workflow
 
-Use normal Read/Write/Edit tools:
-- Read: cat, Read tool
-- Write: Edit tool, vim, etc.
-- Navigate: cd, ls, find
+1. Read the function: ` + "`cat functions/Foo/source`" + `
+2. Read its context: ` + "`cat functions/Foo/context`" + ` (imports, types it uses)
+3. Edit the source file (only the function body — not a full file)
+4. Check the result: ` + "`cat functions/Foo/_diagnostics/last-write-status`" + `
+5. If it failed: ` + "`cat functions/Foo/_diagnostics/ast-errors`" + ` to see why
 
-No special bash commands needed — this is a real POSIX filesystem.
+Writes are validated by tree-sitter before they touch any file. If your edit
+has a syntax error, it saves as a draft and the original code is untouched.
+The path to the construct never changes — no re-navigation needed after edits.
 
-## Common Workflows
+## Quick Reference
 
-**Explore a function:**
-  cd functions/HandleRequest
-  cat source              # Read the function body
-  cat context             # See what imports/types are available
-  ls callers/             # Who calls this?
-  cat callers/*           # Read the calling code
+| Task | Command |
+|------|---------|
+| List all functions | ` + "`ls functions/`" + ` |
+| Read a function | ` + "`cat functions/Foo/source`" + ` |
+| See what it imports | ` + "`cat functions/Foo/context`" + ` |
+| Find callers | ` + "`ls functions/Foo/callers/`" + ` |
+| Find callees | ` + "`ls functions/Foo/callees/`" + ` |
+| Check write status | ` + "`cat functions/Foo/_diagnostics/last-write-status`" + ` |
+| View schema | ` + "`cat _schema.json`" + ` |
 
-**Edit a function:**
-  cd functions/HandleRequest
-  <edit source file>      # Your changes splice back to the original file
-  cat _diagnostics/last-write-status   # Check if it succeeded
-
-**Find all references:**
-  cd functions/SomeFunc
-  ls callers/             # Every function that calls SomeFunc
-
-## Important Notes
-
-- Only **source** files backed by AST nodes are writable
-- Virtual files (context, callers/, etc.) are read-only
-- Invalid writes save as drafts in _diagnostics/ast-errors
-- Node paths stay stable across writes (no re-ingest)
-
----
-
-Start exploring! Use cd/ls to navigate the semantic graph.
+This is a real POSIX filesystem. Use cd, ls, cat, find, grep — whatever you
+normally use. No SDK, no special commands.
 `
 
 // generateMountName creates a human-readable mount directory name.
@@ -218,22 +234,38 @@ func generatePromptContent(meta *MountMetadata) []byte {
 		gitInfo = fmt.Sprintf("%s (branch: %s)", meta.GitRepo, meta.GitBranch)
 	}
 
-	writeInfo := "**Read-only mode.** This mount is not writable."
+	mode := "Read-only"
 	if meta.Writable {
-		writeInfo = `**Write-back enabled.** Edit 'source' files and your changes will:
-  1. Validate via tree-sitter (syntax check)
-  2. Format automatically (gofumpt for Go, hclwrite for HCL)
-  3. Splice back into the original source file
-  4. Update the graph without re-ingesting
+		mode = "Writable (snapshot sandbox)"
+	}
 
-Invalid writes save as drafts — check _diagnostics/ast-errors`
+	snapshotInfo := ""
+	if meta.Writable {
+		snapshotInfo = `
+**Sandbox:** You are working on an isolated snapshot copy. Edits here do NOT
+touch the original source. On unmount, you will be shown how to apply or
+discard your changes.`
+	}
+
+	writeInfo := `**Read-only mode.** This mount is not writable. You can read and navigate
+but cannot edit source files.`
+	if meta.Writable {
+		writeInfo = `**Write-back enabled.** Edit source files and your changes will:
+1. Validate via tree-sitter (syntax check — broken code never lands)
+2. Format automatically (gofumpt for Go, hclwrite for HCL/Terraform)
+3. Splice into the source file (only the changed construct, not the whole file)
+4. Update the graph immediately (no re-ingestion, path stays stable)
+
+If your edit has a syntax error, it saves as a draft. Check
+_diagnostics/ast-errors to see the parse error, fix it, and retry.`
 	}
 
 	content := fmt.Sprintf(agentPromptTemplate,
 		meta.Source,
 		gitInfo,
 		meta.MountPoint,
-		meta.Writable,
+		mode,
+		snapshotInfo,
 		writeInfo,
 	)
 
@@ -292,18 +324,23 @@ func isProcessRunning(pid int) bool {
 
 // runAgentMode handles the --agent flag workflow.
 // Returns the mount point and metadata that should be used.
-func runAgentMode() error {
+func runAgentMode(cmd *cobra.Command) error {
 	// Validate data path
 	if dataPath == "" {
 		return fmt.Errorf("--data/-d required in agent mode")
 	}
 
-	// Auto-enable inference and writable in agent mode
+	// Auto-enable inference, writable, and snapshot in agent mode.
+	// Snapshot ensures the agent operates on a copy, not the live source.
+	// User can override with explicit --snapshot=false.
 	if !inferSchema && schemaPath == "" {
 		inferSchema = true
 	}
 	if !writable {
 		writable = true
+	}
+	if !snapshot && !cmd.Flags().Changed("snapshot") {
+		snapshot = true
 	}
 
 	// Resolve data path
