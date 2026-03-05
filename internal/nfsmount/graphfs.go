@@ -6,6 +6,7 @@ package nfsmount
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -329,10 +330,11 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		_, fileName := graph.ParseDiagPath(path)
 		if fileName == "" {
 			// List diagnostics dir contents
+			d := path + "/"
 			return []os.FileInfo{
-				&staticFileInfo{name: graph.DiagLastWrite, mode: 0o444, modTime: fs.mountTime},
-				&staticFileInfo{name: graph.DiagASTErrors, mode: 0o444, modTime: fs.mountTime},
-				&staticFileInfo{name: graph.DiagLint, mode: 0o444, modTime: fs.mountTime},
+				newFileInfo(d+graph.DiagLastWrite, 0, 0o444, fs.mountTime),
+				newFileInfo(d+graph.DiagASTErrors, 0, 0o444, fs.mountTime),
+				newFileInfo(d+graph.DiagLint, 0, 0o444, fs.mountTime),
 			}, nil
 		}
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
@@ -362,13 +364,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 			if err != nil {
 				continue
 			}
-			size := callerNode.ContentSize()
-			infos = append(infos, &staticFileInfo{
-				name:    flatName,
-				size:    size,
-				mode:    0o444,
-				modTime: fs.mountTime,
-			})
+			infos = append(infos, newFileInfo(path+"/"+flatName, callerNode.ContentSize(), 0o444, fs.mountTime))
 		}
 		if len(infos) == 0 {
 			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
@@ -399,12 +395,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 				continue
 			}
 			flatName := strings.ReplaceAll(sourceID, "/", "_")
-			infos = append(infos, &staticFileInfo{
-				name:    flatName,
-				size:    srcNode.ContentSize(),
-				mode:    0o444,
-				modTime: fs.mountTime,
-			})
+			infos = append(infos, newFileInfo(path+"/"+flatName, srcNode.ContentSize(), 0o444, fs.mountTime))
 		}
 		if len(infos) == 0 {
 			return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
@@ -429,61 +420,34 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 
 	// Virtual files at root
 	if path == "/" {
-		infos = append(infos, &staticFileInfo{
-			name:    graph.SchemaDotJSON,
-			size:    int64(len(fs.schemaJSON)),
-			mode:    0o444,
-			modTime: fs.mountTime,
-		})
+		infos = append(infos, newFileInfo("/"+graph.SchemaDotJSON, int64(len(fs.schemaJSON)), 0o444, fs.mountTime))
 		if len(fs.promptContent) > 0 {
-			infos = append(infos, &staticFileInfo{
-				name:    graph.PromptFile,
-				size:    int64(len(fs.promptContent)),
-				mode:    0o444,
-				modTime: fs.mountTime,
-			})
+			infos = append(infos, newFileInfo("/"+graph.PromptFile, int64(len(fs.promptContent)), 0o444, fs.mountTime))
 		}
 	}
 
 	// Add _diagnostics/ virtual dir to writable node directories
 	if fs.writable && path != "/" {
-		infos = append(infos, &staticFileInfo{
-			name:    graph.DiagnosticsDir,
-			mode:    os.ModeDir | 0o555,
-			modTime: fs.mountTime,
-		})
+		infos = append(infos, newFileInfo(path+"/"+graph.DiagnosticsDir, 0, os.ModeDir|0o555, fs.mountTime))
 	}
 
 	// Add context virtual file if available
 	if node != nil && len(node.Context) > 0 {
-		infos = append(infos, &staticFileInfo{
-			name:    graph.ContextFile,
-			size:    int64(len(node.Context)),
-			mode:    0o444,
-			modTime: fs.mountTime,
-		})
+		infos = append(infos, newFileInfo(path+"/"+graph.ContextFile, int64(len(node.Context)), 0o444, fs.mountTime))
 	}
 
 	// Add callers/ virtual dir if token has callers
 	if path != "/" {
 		token := filepath.Base(path)
 		if callers, err := fs.graph.GetCallers(token); err == nil && len(callers) > 0 {
-			infos = append(infos, &staticFileInfo{
-				name:    graph.CallersDir,
-				mode:    os.ModeDir | 0o555,
-				modTime: fs.mountTime,
-			})
+			infos = append(infos, newFileInfo(path+"/"+graph.CallersDir, 0, os.ModeDir|0o555, fs.mountTime))
 		}
 	}
 
 	// Add callees/ virtual dir if construct has outgoing calls (self-gating)
 	if path != "/" {
 		if callees, err := fs.graph.GetCallees(path); err == nil && len(callees) > 0 {
-			infos = append(infos, &staticFileInfo{
-				name:    graph.CalleesDir,
-				mode:    os.ModeDir | 0o555,
-				modTime: fs.mountTime,
-			})
+			infos = append(infos, newFileInfo(path+"/"+graph.CalleesDir, 0, os.ModeDir|0o555, fs.mountTime))
 		}
 	}
 
@@ -507,33 +471,24 @@ func (fs *GraphFS) MkdirAll(filename string, perm os.FileMode) error {
 func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 	filename = cleanPath(filename)
 
-	// Root
+	// Root — use dynamic ModTime from graph so NFS clients invalidate
+	// cached directory listings when the underlying graph changes (e.g., HotSwapGraph.Swap).
 	if filename == "/" {
-		return &staticFileInfo{
-			name:    "/",
-			mode:    os.ModeDir | 0o555,
-			modTime: fs.mountTime,
-		}, nil
+		modTime := fs.mountTime
+		if n, err := fs.graph.GetNode("/"); err == nil && !n.ModTime.IsZero() {
+			modTime = n.ModTime
+		}
+		return newFileInfo("/", 0, os.ModeDir|0o555, modTime), nil
 	}
 
 	// Virtual: _schema.json
 	if filename == "/"+graph.SchemaDotJSON {
-		return &staticFileInfo{
-			name:    graph.SchemaDotJSON,
-			size:    int64(len(fs.schemaJSON)),
-			mode:    0o444,
-			modTime: fs.mountTime,
-		}, nil
+		return newFileInfo(filename, int64(len(fs.schemaJSON)), 0o444, fs.mountTime), nil
 	}
 
 	// Virtual: PROMPT.txt (agent mode)
 	if filename == "/"+graph.PromptFile && len(fs.promptContent) > 0 {
-		return &staticFileInfo{
-			name:    graph.PromptFile,
-			size:    int64(len(fs.promptContent)),
-			mode:    0o444,
-			modTime: fs.mountTime,
-		}, nil
+		return newFileInfo(filename, int64(len(fs.promptContent)), 0o444, fs.mountTime), nil
 	}
 
 	// Virtual: _diagnostics/
@@ -541,22 +496,13 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		parentDir, fileName := graph.ParseDiagPath(filename)
 		if fileName == "" {
 			// The _diagnostics directory itself
-			return &staticFileInfo{
-				name:    graph.DiagnosticsDir,
-				mode:    os.ModeDir | 0o555,
-				modTime: time.Now(), // Force refresh
-			}, nil
+			return newFileInfo(filename, 0, os.ModeDir|0o555, time.Now()), nil
 		}
 		content, ok := fs.diagContent(parentDir, fileName)
 		if !ok {
 			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 		}
-		return &staticFileInfo{
-			name:    fileName,
-			size:    int64(len(content)),
-			mode:    0o444,
-			modTime: time.Now(), // Force refresh
-		}, nil
+		return newFileInfo(filename, int64(len(content)), 0o444, time.Now()), nil
 	}
 
 	// Virtual: context
@@ -564,12 +510,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		parentDir := filepath.Dir(filename)
 		node, err := fs.graph.GetNode(parentDir)
 		if err == nil && len(node.Context) > 0 {
-			return &staticFileInfo{
-				name:    graph.ContextFile,
-				size:    int64(len(node.Context)),
-				mode:    0o444,
-				modTime: fs.mountTime,
-			}, nil
+			return newFileInfo(filename, int64(len(node.Context)), 0o444, fs.mountTime), nil
 		}
 	}
 
@@ -588,11 +529,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 		}
 		if entryName == "" {
-			return &staticFileInfo{
-				name:    graph.CallersDir,
-				mode:    os.ModeDir | 0o555,
-				modTime: fs.mountTime,
-			}, nil
+			return newFileInfo(filename, 0, os.ModeDir|0o555, fs.mountTime), nil
 		}
 		for _, caller := range callers {
 			flatName := strings.ReplaceAll(caller.ID, "/", "_")
@@ -601,12 +538,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 				if err != nil {
 					return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 				}
-				return &staticFileInfo{
-					name:    entryName,
-					size:    callerNode.ContentSize(),
-					mode:    0o444,
-					modTime: fs.mountTime,
-				}, nil
+				return newFileInfo(filename, callerNode.ContentSize(), 0o444, fs.mountTime), nil
 			}
 		}
 		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
@@ -626,11 +558,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 		}
 		if entryName == "" {
-			return &staticFileInfo{
-				name:    graph.CalleesDir,
-				mode:    os.ModeDir | 0o555,
-				modTime: fs.mountTime,
-			}, nil
+			return newFileInfo(filename, 0, os.ModeDir|0o555, fs.mountTime), nil
 		}
 		for _, callee := range callees {
 			sourceID, srcNode := fs.calleesSourceChild(callee.ID)
@@ -639,12 +567,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 			}
 			flatName := strings.ReplaceAll(sourceID, "/", "_")
 			if flatName == entryName {
-				return &staticFileInfo{
-					name:    entryName,
-					size:    srcNode.ContentSize(),
-					mode:    0o444,
-					modTime: fs.mountTime,
-				}, nil
+				return newFileInfo(filename, srcNode.ContentSize(), 0o444, fs.mountTime), nil
 			}
 		}
 		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
@@ -778,22 +701,31 @@ func (fs *GraphFS) nodeToFileInfo(n *graph.Node) os.FileInfo {
 		modTime = fs.mountTime
 	}
 
-	return &staticFileInfo{
-		name:    filepath.Base(n.ID),
-		size:    size,
-		mode:    mode,
-		modTime: modTime,
-	}
+	return newFileInfo(n.ID, size, mode, modTime)
 }
 
 // staticFileInfo implements os.FileInfo with static values.
-// Sys() returns a *syscall.Stat_t with the current user's uid/gid so that
-// go-nfs reports correct ownership instead of defaulting to root.
+// Sys() returns *syscall.Stat_t with user uid/gid and a unique Ino derived
+// from FNV hash of the full path. Setting Ino=0 caused all NFS entries to
+// share Fileid=0, breaking macOS NFS client directory listings.
 type staticFileInfo struct {
 	name    string
 	size    int64
 	mode    os.FileMode
 	modTime time.Time
+	ino     uint64 // FNV hash of full path — unique Fileid for NFS
+}
+
+// newFileInfo creates a staticFileInfo with ino automatically derived from fullPath.
+// Use this everywhere instead of &staticFileInfo{} to guarantee unique NFS Fileids.
+func newFileInfo(fullPath string, size int64, mode os.FileMode, modTime time.Time) *staticFileInfo {
+	return &staticFileInfo{
+		name:    filepath.Base(fullPath),
+		size:    size,
+		mode:    mode,
+		modTime: modTime,
+		ino:     pathIno(fullPath),
+	}
 }
 
 func (fi *staticFileInfo) Name() string       { return fi.name }
@@ -803,9 +735,21 @@ func (fi *staticFileInfo) ModTime() time.Time { return fi.modTime }
 func (fi *staticFileInfo) IsDir() bool        { return fi.mode.IsDir() }
 func (fi *staticFileInfo) Sys() interface{} {
 	return &syscall.Stat_t{
+		Ino: fi.ino,
 		Uid: uint32(os.Getuid()),
 		Gid: uint32(os.Getgid()),
 	}
+}
+
+// pathIno computes a stable unique inode number from a full path.
+func pathIno(fullPath string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(fullPath))
+	v := h.Sum64()
+	if v == 0 {
+		v = 1 // avoid zero — NFS clients treat Fileid=0 as invalid
+	}
+	return v
 }
 
 // Compile-time interface checks.

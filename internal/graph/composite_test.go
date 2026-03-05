@@ -235,6 +235,46 @@ func TestCompositeGraph_InvalidateRoutes(t *testing.T) {
 	c.Invalidate("nonexistent/path") // no-op for unknown mount
 }
 
+// delegatingGraph wraps a Graph and delegates GetCallers/GetCallees back to it,
+// simulating the cycle that caused a stack overflow in production (x-ray focus.Router).
+type delegatingGraph struct {
+	Graph
+	delegate Graph
+}
+
+func (d *delegatingGraph) GetCallers(token string) ([]*Node, error) {
+	return d.delegate.GetCallers(token)
+}
+
+func (d *delegatingGraph) GetCallees(id string) ([]*Node, error) {
+	return d.delegate.GetCallees(id)
+}
+
+// TestCompositeGraph_GetCallers_CycleProtection verifies that mounting a graph
+// which delegates GetCallers back to the CompositeGraph does not stack-overflow.
+func TestCompositeGraph_GetCallers_CycleProtection(t *testing.T) {
+	c := NewCompositeGraph()
+	store := testStore("zone", nil, map[string][]byte{"zone/desc": []byte("hi")})
+	_ = c.Mount("browser", store)
+
+	// Mount a delegating graph that points back to the composite — this is the cycle.
+	_ = c.Mount("focus", &delegatingGraph{Graph: NewMemoryStore(), delegate: c})
+
+	// This would stack-overflow without the recursion guard.
+	callers, err := c.GetCallers("zone")
+	if err != nil {
+		t.Fatalf("GetCallers should not error: %v", err)
+	}
+	// Should return results from browser (the real store), not crash.
+	_ = callers
+
+	callees, err := c.GetCallees("/browser/zone")
+	if err != nil {
+		t.Fatalf("GetCallees should not error: %v", err)
+	}
+	_ = callees
+}
+
 func TestCompositeGraph_LeadingSlash(t *testing.T) {
 	s := testStore("zone", nil, map[string][]byte{
 		"zone/desc": []byte("hello"),
