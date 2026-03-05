@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,6 +16,10 @@ import (
 type CompositeGraph struct {
 	mu     sync.RWMutex
 	mounts map[string]Graph // prefix → sub-graph
+
+	// callerDepth guards against infinite recursion in GetCallers/GetCallees
+	// when a mounted sub-graph delegates back to this CompositeGraph.
+	callerDepth atomic.Int32
 }
 
 // NewCompositeGraph creates an empty composite graph.
@@ -142,8 +147,19 @@ func (c *CompositeGraph) ReadContent(id string, buf []byte, offset int64) (int, 
 	return g.ReadContent(subPath, buf, offset)
 }
 
+// maxCallerDepth caps recursion when a mounted sub-graph delegates back
+// to this CompositeGraph (e.g. a focus router). Without this, GetCallers
+// would stack-overflow.
+const maxCallerDepth = 2
+
 // GetCallers implements Graph. Searches all mounted sub-graphs.
 func (c *CompositeGraph) GetCallers(token string) ([]*Node, error) {
+	if c.callerDepth.Add(1) > maxCallerDepth {
+		c.callerDepth.Add(-1)
+		return nil, nil
+	}
+	defer c.callerDepth.Add(-1)
+
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -162,6 +178,12 @@ func (c *CompositeGraph) GetCallers(token string) ([]*Node, error) {
 
 // GetCallees implements Graph.
 func (c *CompositeGraph) GetCallees(id string) ([]*Node, error) {
+	if c.callerDepth.Add(1) > maxCallerDepth {
+		c.callerDepth.Add(-1)
+		return nil, nil
+	}
+	defer c.callerDepth.Add(-1)
+
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
