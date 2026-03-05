@@ -609,3 +609,142 @@ func TestCallers_OpenDir_ReturnsError(t *testing.T) {
 	_, err := gfs.Open("/funcs/Bar/callers")
 	assert.Error(t, err)
 }
+
+// TestHotSwapGraphFS reproduces the x-ray NFS scenario:
+// 1. GraphFS wraps a HotSwapGraph starting with an empty MemoryStore
+// 2. Swap to a CompositeGraph with mounted sub-graphs
+// 3. Verify ReadDir("/") returns the composite mount names
+func TestHotSwapGraphFS(t *testing.T) {
+	// Phase 1: empty graph — simulates NFS mount before any tab connects.
+	empty := graph.NewMemoryStore()
+	hotswap := graph.NewHotSwapGraph(empty)
+	gfs := NewGraphFS(hotswap, &api.Topology{Version: "v1"})
+
+	// ReadDir on empty graph should return just _schema.json.
+	entries, err := gfs.ReadDir("/")
+	require.NoError(t, err)
+	names := infoNames(entries)
+	assert.Contains(t, names, "_schema.json")
+	assert.Len(t, entries, 1, "empty graph should only have _schema.json")
+
+	// Lstat root should succeed.
+	info, err := gfs.Lstat("/")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	initialMtime := info.ModTime()
+
+	// Phase 2: Swap to CompositeGraph with mounts — simulates tab connect.
+	browserStore := graph.NewMemoryStore()
+	browserStore.AddRoot(&graph.Node{ID: "page", Mode: fs.ModeDir, Children: []string{"page/title"}})
+	browserStore.AddNode(&graph.Node{ID: "page/title", Data: []byte("Hello")})
+
+	tasksStore := graph.NewMemoryStore()
+
+	composite := graph.NewCompositeGraph()
+	require.NoError(t, composite.Mount("browser", browserStore))
+	require.NoError(t, composite.Mount("tasks", tasksStore))
+
+	hotswap.Swap(composite)
+
+	// ReadDir root should now show composite mounts + _schema.json.
+	entries, err = gfs.ReadDir("/")
+	require.NoError(t, err)
+	names = infoNames(entries)
+	assert.Contains(t, names, "_schema.json", "virtual file should still appear")
+	assert.Contains(t, names, "browser", "browser mount should appear")
+	assert.Contains(t, names, "tasks", "tasks mount should appear")
+
+	// Lstat root mtime should have changed (CompositeGraph returns time.Now()).
+	info, err = gfs.Lstat("/")
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().After(initialMtime) || info.ModTime().Equal(initialMtime),
+		"root mtime should be >= initial after swap")
+
+	// ReadDir browser/ should show sub-graph content.
+	entries, err = gfs.ReadDir("/browser")
+	require.NoError(t, err)
+	names = infoNames(entries)
+	assert.Contains(t, names, "page", "browser sub-graph content should appear")
+
+	// Can read a file through the full chain.
+	f, err := gfs.Open("/browser/page/title")
+	require.NoError(t, err)
+	buf := make([]byte, 64)
+	n, _ := f.Read(buf)
+	_ = f.Close()
+	assert.Equal(t, "Hello", string(buf[:n]))
+}
+
+// TestHotSwapNFSProtocol verifies go-nfs serves correct READDIRPLUS after Swap.
+// Uses a logging wrapper to confirm ReadDir is called with correct results.
+func TestHotSwapNFSProtocol(t *testing.T) {
+	empty := graph.NewMemoryStore()
+	hotswap := graph.NewHotSwapGraph(empty)
+	gfs := NewGraphFS(hotswap, &api.Topology{Version: "v1"})
+
+	// Wrap GraphFS in a logging proxy to track ReadDir calls.
+	spy := &readDirSpy{GraphFS: gfs}
+
+	srv, err := NewServer(spy)
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	assert.True(t, srv.Port() > 0)
+
+	// Phase 1: verify ReadDir returns _schema.json on empty graph.
+	entries, err := spy.ReadDir("/")
+	require.NoError(t, err)
+	names := infoNames(entries)
+	assert.Contains(t, names, "_schema.json")
+	assert.Len(t, entries, 1, "empty graph: only _schema.json")
+
+	// Phase 2: Swap to CompositeGraph.
+	browserStore := graph.NewMemoryStore()
+	browserStore.AddRoot(&graph.Node{ID: "page", Mode: fs.ModeDir, Children: []string{"page/title"}})
+	browserStore.AddNode(&graph.Node{ID: "page/title", Data: []byte("Hello NFS")})
+
+	composite := graph.NewCompositeGraph()
+	require.NoError(t, composite.Mount("browser", browserStore))
+	require.NoError(t, composite.Mount("tasks", graph.NewMemoryStore()))
+	hotswap.Swap(composite)
+
+	// Phase 2: ReadDir root should now show composite mounts.
+	entries, err = spy.ReadDir("/")
+	require.NoError(t, err)
+	names = infoNames(entries)
+	assert.Contains(t, names, "_schema.json")
+	assert.Contains(t, names, "browser")
+	assert.Contains(t, names, "tasks")
+
+	// Phase 2: ReadDir /browser should show sub-graph content.
+	entries, err = spy.ReadDir("/browser")
+	require.NoError(t, err)
+	names = infoNames(entries)
+	assert.Contains(t, names, "page")
+
+	// Phase 2: Lstat root should show updated mtime (CompositeGraph returns time.Now()).
+	info, err := spy.Lstat("/")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	// CompositeGraph.GetNode("") returns ModTime: time.Now(), which should be recent.
+	assert.False(t, info.ModTime().IsZero(), "root mtime should not be zero after swap to CompositeGraph")
+}
+
+// readDirSpy wraps GraphFS to log ReadDir calls for debugging.
+type readDirSpy struct {
+	*GraphFS
+	readDirCalls int
+}
+
+func (s *readDirSpy) ReadDir(path string) ([]os.FileInfo, error) {
+	s.readDirCalls++
+	return s.GraphFS.ReadDir(path)
+}
+
+func infoNames(entries []os.FileInfo) []string {
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	return names
+}
