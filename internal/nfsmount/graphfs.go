@@ -507,12 +507,17 @@ func (fs *GraphFS) MkdirAll(filename string, perm os.FileMode) error {
 func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 	filename = cleanPath(filename)
 
-	// Root
+	// Root — use dynamic ModTime from graph so NFS clients invalidate
+	// cached directory listings when the underlying graph changes (e.g., HotSwapGraph.Swap).
 	if filename == "/" {
+		modTime := fs.mountTime
+		if n, err := fs.graph.GetNode("/"); err == nil && !n.ModTime.IsZero() {
+			modTime = n.ModTime
+		}
 		return &staticFileInfo{
 			name:    "/",
 			mode:    os.ModeDir | 0o555,
-			modTime: fs.mountTime,
+			modTime: modTime,
 		}, nil
 	}
 
