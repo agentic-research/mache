@@ -52,6 +52,8 @@ var (
 	backend     string
 	agentMode   bool
 	outPath     string
+	nfsOpts     string
+	snapshot    bool
 )
 
 func init() {
@@ -63,6 +65,8 @@ func init() {
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
 	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
 	rootCmd.Flags().StringVar(&outPath, "out", "", "Write .db to path instead of mounting (for leyline load); not compatible with --agent")
+	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
+	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; default is zero-copy)")
 
 	defaultBackend := "fuse"
 	if runtime.GOOS == "darwin" {
@@ -393,9 +397,24 @@ var rootCmd = &cobra.Command{
 
 		if _, err := os.Stat(dataPath); err == nil {
 			if filepath.Ext(dataPath) == ".db" {
+				dbSource := dataPath
+				if snapshot {
+					tmpDir := filepath.Join(os.TempDir(), "mache", "snapshots")
+					if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+						return fmt.Errorf("create snapshot dir: %w", err)
+					}
+					snapshotPath := filepath.Join(tmpDir, fmt.Sprintf("snap-%d-%s", os.Getpid(), filepath.Base(dataPath)))
+					fmt.Printf("Snapshot: copying %s → %s\n", dataPath, snapshotPath)
+					if err := copyFile(dataPath, snapshotPath); err != nil {
+						return fmt.Errorf("snapshot copy: %w", err)
+					}
+					dbSource = snapshotPath
+					defer func() { _ = os.Remove(snapshotPath) }()
+				}
+
 				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
-				fmt.Printf("Opening %s (direct SQL backend)...\n", dataPath)
-				sg, err := graph.OpenSQLiteGraph(dataPath, schema, ingest.RenderTemplate)
+				fmt.Printf("Opening %s (direct SQL backend)...\n", dbSource)
+				sg, err := graph.OpenSQLiteGraph(dbSource, schema, ingest.RenderTemplate)
 				if err != nil {
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}
@@ -706,7 +725,7 @@ func mountWritableNFS(schema *api.Topology, wg *graph.WritableGraph, mountPoint 
 
 	fmt.Printf("Mounting mache at %s (NFS on localhost:%d)...\n", mountPoint, srv.Port())
 
-	if err := nfsmount.Mount(srv.Port(), mountPoint, true); err != nil {
+	if err := nfsmount.Mount(srv.Port(), mountPoint, true, nfsOpts); err != nil {
 		return err
 	}
 	fmt.Printf("Mounted (writable). Press Ctrl-C to unmount.\n")
@@ -813,7 +832,7 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 
 	fmt.Printf("Mounting mache at %s (NFS on localhost:%d)...\n", mountPoint, srv.Port())
 
-	if err := nfsmount.Mount(srv.Port(), mountPoint, writable); err != nil {
+	if err := nfsmount.Mount(srv.Port(), mountPoint, writable, nfsOpts); err != nil {
 		return err
 	}
 	fmt.Printf("Mounted. Press Ctrl-C to unmount.\n")
