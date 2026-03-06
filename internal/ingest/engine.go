@@ -74,6 +74,63 @@ type parentLink struct {
 // isBinaryFile returns true if the file appears to contain binary content.
 // Uses the same heuristic as git: if the first 512 bytes contain a null byte,
 // the file is binary. SQLite files (.db) are handled before this is called.
+// MaxIngestFileSize is the largest file we'll read into memory during
+// ingestion or schema inference. Files above this are silently skipped.
+// Set to 0 to disable the size limit. Configurable via --max-file-size.
+var MaxIngestFileSize int64 = 100 << 20 // 100 MB
+
+// ParseSize parses a human-readable size string (e.g. "100MB", "1GB", "0").
+// Returns bytes. Supported suffixes: KB, MB, GB (case-insensitive).
+func ParseSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "0" {
+		return 0, nil
+	}
+	upper := strings.ToUpper(s)
+	var multiplier int64 = 1
+	numStr := s
+	switch {
+	case strings.HasSuffix(upper, "GB"):
+		multiplier = 1 << 30
+		numStr = s[:len(s)-2]
+	case strings.HasSuffix(upper, "MB"):
+		multiplier = 1 << 20
+		numStr = s[:len(s)-2]
+	case strings.HasSuffix(upper, "KB"):
+		multiplier = 1 << 10
+		numStr = s[:len(s)-2]
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(numStr), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size %q: %w", s, err)
+	}
+	return n * multiplier, nil
+}
+
+// skipExts are file extensions that are always skipped during directory walks.
+var skipExts = map[string]bool{
+	".o": true, ".a": true,
+	".db": true, ".sqlite": true, ".sqlite3": true,
+	".exe": true, ".dll": true, ".so": true, ".dylib": true,
+	".zip": true, ".tar": true, ".gz": true, ".bz2": true, ".xz": true,
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".ico": true,
+	".woff": true, ".woff2": true, ".ttf": true, ".eot": true,
+	".pdf": true, ".mp3": true, ".mp4": true, ".wav": true,
+}
+
+// ShouldSkipFile returns true if the file should not be ingested.
+// Checks extension blocklist, size limit, and binary content.
+func ShouldSkipFile(path string, size int64) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if skipExts[ext] {
+		return true
+	}
+	if MaxIngestFileSize > 0 && size > MaxIngestFileSize {
+		return true
+	}
+	return false
+}
+
 func isBinaryFile(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -185,8 +242,8 @@ func (e *Engine) Ingest(path string) error {
 			}
 			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
-			if ext == ".o" || ext == ".a" {
-				return nil // Skip binary artifacts
+			if ShouldSkipFile(p, d.Size()) {
+				return nil
 			}
 			shouldParse := false
 			if treeSitter {
@@ -494,6 +551,9 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 	}
 	if info.IsDir() {
 		return fmt.Errorf("%s is a directory, cannot ingest as raw file", path)
+	}
+	if ShouldSkipFile(path, info.Size()) {
+		return nil
 	}
 
 	content, err := os.ReadFile(path)
