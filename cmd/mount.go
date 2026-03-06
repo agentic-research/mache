@@ -54,6 +54,7 @@ var (
 	outPath     string
 	nfsOpts     string
 	snapshot    bool
+	maxFileSize string
 )
 
 func init() {
@@ -67,6 +68,7 @@ func init() {
 	rootCmd.Flags().StringVar(&outPath, "out", "", "Write .db to path instead of mounting (for leyline load); not compatible with --agent")
 	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
 	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; copy is not atomic; default is zero-copy)")
+	rootCmd.Flags().StringVar(&maxFileSize, "max-file-size", "100MB", "Skip files larger than this during ingestion (e.g. 100MB, 1GB, 0 to disable)")
 
 	defaultBackend := "fuse"
 	if runtime.GOOS == "darwin" {
@@ -99,6 +101,15 @@ var rootCmd = &cobra.Command{
 			if err == nil {
 				os.Stdout = f
 			}
+		}
+
+		// Apply --max-file-size
+		if maxFileSize != "" {
+			mfs, err := ingest.ParseSize(maxFileSize)
+			if err != nil {
+				return fmt.Errorf("--max-file-size: %w", err)
+			}
+			ingest.MaxIngestFileSize = mfs
 		}
 
 		// Validate flag combinations
@@ -267,12 +278,11 @@ var rootCmd = &cobra.Command{
 										return nil
 									}
 
-									ext := filepath.Ext(path)
-									if ext == ".o" || ext == ".a" {
+									if ingest.ShouldSkipFile(path, info.Size()) {
 										return nil
 									}
 
-									langName, treeLang, ok := ingest.DetectLanguageFromExt(ext)
+									langName, treeLang, ok := ingest.DetectLanguageFromExt(filepath.Ext(path))
 									if !ok || langName != lang {
 										return nil // Skip files not for this language
 									}

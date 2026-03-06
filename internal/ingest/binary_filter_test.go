@@ -10,6 +10,71 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestShouldSkipFile(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		size int64
+		want bool
+	}{
+		{"small go file", "main.go", 1000, false},
+		{"db file", "data.db", 100, true},
+		{"sqlite file", "data.sqlite", 100, true},
+		{"huge file", "big.txt", 200 << 20, true},
+		{"at limit", "ok.txt", 100 << 20, false},
+		{"over limit", "over.txt", 100<<20 + 1, true},
+		{"object file", "foo.o", 100, true},
+		{"archive", "lib.a", 100, true},
+		{"zip", "bundle.zip", 100, true},
+		{"image", "logo.png", 100, true},
+		{"normal text", "readme.txt", 5000, false},
+		{"yaml", "config.yaml", 2000, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ShouldSkipFile(tt.path, tt.size)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	t.Run("zero disables size limit", func(t *testing.T) {
+		old := MaxIngestFileSize
+		MaxIngestFileSize = 0
+		defer func() { MaxIngestFileSize = old }()
+		// 10GB txt file should NOT be skipped when limit is disabled
+		assert.False(t, ShouldSkipFile("huge.txt", 10<<30))
+		// But extension blocklist still applies
+		assert.True(t, ShouldSkipFile("huge.db", 10<<30))
+	})
+}
+
+func TestParseSize(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+		err   bool
+	}{
+		{"100MB", 100 << 20, false},
+		{"1GB", 1 << 30, false},
+		{"512KB", 512 << 10, false},
+		{"0", 0, false},
+		{"100mb", 100 << 20, false},
+		{"50", 50, false},
+		{"garbage", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseSize(tt.input)
+			if tt.err {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
 func TestIsBinaryFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
