@@ -18,6 +18,10 @@ type Node struct {
 	Name string `json:"name"`
 	// Selector is a query (e.g., JSONPath) to select data for this node context.
 	Selector string `json:"selector,omitempty"`
+	// Refs are template strings that generate cross-reference tokens.
+	// Each rendered token is added to the ref index, enabling callers/ virtual
+	// directories for JSON-projected data (e.g., tool names across MCP servers).
+	Refs []string `json:"refs,omitempty"`
 	// SkipSelfMatch prevents the selector from matching the current context node itself.
 	// Useful for recursive schemas to avoid infinite loops.
 	SkipSelfMatch bool `json:"skip_self_match,omitempty"`

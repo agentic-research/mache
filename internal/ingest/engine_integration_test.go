@@ -127,3 +127,79 @@ func TestEngine_IngestSQLite_NVD(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "A null pointer dereference in Quux.", string(desc2023.Data))
 }
+
+func TestEngine_SchemaRefs(t *testing.T) {
+	// Schema with refs: each tool node emits a ref token for its tool name.
+	// This tests the cross-reference feature for JSON-projected data.
+	schema := &api.Topology{
+		Version: "v1",
+		Nodes: []api.Node{
+			{
+				Name:     "servers",
+				Selector: "$",
+				Children: []api.Node{
+					{
+						Name:     "{{.item.name}}",
+						Selector: "$[*]",
+						Children: []api.Node{
+							{
+								Name:     "tools",
+								Selector: "$",
+								Children: []api.Node{
+									{
+										Name:     "{{.name}}",
+										Selector: "$.item.tools[*]",
+										Refs:     []string{"{{.name}}"},
+										Files: []api.Leaf{
+											{Name: "description", ContentTemplate: "{{.description}}"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dbPath := createTestDB(t, []string{
+		`{"schema":"mcp","identifier":"server-a","item":{"name":"server-a","tools":[{"name":"search","description":"Search things"},{"name":"create","description":"Create things"}]}}`,
+		`{"schema":"mcp","identifier":"server-b","item":{"name":"server-b","tools":[{"name":"search","description":"Search other things"},{"name":"delete","description":"Delete things"}]}}`,
+	})
+
+	store := graph.NewMemoryStore()
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+	engine := NewEngine(schema, store)
+
+	require.NoError(t, engine.Ingest(dbPath))
+	require.NoError(t, store.FlushRefs())
+
+	// Both servers ingested
+	_, err := store.GetNode("servers/server-a")
+	require.NoError(t, err)
+	_, err = store.GetNode("servers/server-b")
+	require.NoError(t, err)
+
+	// Tool nodes exist under each server
+	_, err = store.GetNode("servers/server-a/tools/search")
+	require.NoError(t, err)
+	_, err = store.GetNode("servers/server-b/tools/search")
+	require.NoError(t, err)
+
+	// Refs: "search" token should have callers from both servers
+	callers, err := store.GetCallers("search")
+	require.NoError(t, err)
+	assert.Len(t, callers, 2, "search should have callers from 2 servers")
+
+	// Refs: "create" token should have 1 caller
+	callers, err = store.GetCallers("create")
+	require.NoError(t, err)
+	assert.Len(t, callers, 1, "create should have 1 caller")
+
+	// Refs: "delete" token should have 1 caller
+	callers, err = store.GetCallers("delete")
+	require.NoError(t, err)
+	assert.Len(t, callers, 1, "delete should have 1 caller")
+}

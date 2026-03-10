@@ -1,0 +1,123 @@
+{
+  "tools": [
+    {
+      "name": "search-issues",
+      "description": "Search for issues in a GitHub repository by query string",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "The owner/repo identifier (e.g. anthropics/claude-code)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query string"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["open", "closed", "all"],
+            "description": "Filter by issue state"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results to return",
+            "default": 25
+          }
+        },
+        "required": ["repository", "query"]
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "create-issue",
+      "description": "Create a new issue in a GitHub repository",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "The owner/repo identifier"
+          },
+          "title": {
+            "type": "string",
+            "description": "Issue title"
+          },
+          "body": {
+            "type": "string",
+            "description": "Issue body in markdown"
+          },
+          "labels": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Labels to apply"
+          }
+        },
+        "required": ["repository", "title"]
+      },
+      "annotations": {
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "read-file",
+      "description": "Read the contents of a file from a GitHub repository",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "The owner/repo identifier"
+          },
+          "path": {
+            "type": "string",
+            "description": "File path within the repository"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Git ref (branch, tag, or SHA)",
+            "default": "main"
+          }
+        },
+        "required": ["repository", "path"]
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    }
+  ],
+  "resources": [
+    {
+      "name": "repository-readme",
+      "uri": "github://{owner}/{repo}/readme",
+      "description": "The README file of a GitHub repository",
+      "mimeType": "text/markdown"
+    },
+    {
+      "name": "issue-detail",
+      "uri": "github://{owner}/{repo}/issues/{number}",
+      "description": "Detailed view of a single GitHub issue",
+      "mimeType": "application/json"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "summarize-repo",
+      "description": "Generate a summary of a GitHub repository's purpose and structure",
+      "arguments": [
+        {
+          "name": "repository",
+          "description": "The owner/repo identifier",
+          "required": true
+        },
+        {
+          "name": "depth",
+          "description": "How detailed the summary should be (brief, standard, comprehensive)",
+          "required": false
+        }
+      ]
+    }
+  ]
+}
