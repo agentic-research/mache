@@ -63,12 +63,18 @@ type recordJob struct {
 type recordResult struct {
 	nodes       []*graph.Node
 	parentLinks []parentLink
+	refLinks    []refLink
 	err         error
 }
 
 type parentLink struct {
 	childID  string
 	parentID string
+}
+
+type refLink struct {
+	token  string
+	nodeID string
 }
 
 // isBinaryFile returns true if the file appears to contain binary content.
@@ -671,6 +677,13 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 					}
 				}
 			}
+			for _, ref := range res.refLinks {
+				if err := e.Store.AddRef(ref.token, ref.nodeID); err != nil {
+					if collectErr == nil {
+						collectErr = fmt.Errorf("add ref %s -> %s: %w", ref.token, ref.nodeID, err)
+					}
+				}
+			}
 		}
 		fmt.Printf("\rProcessed %d records... Done.\n", count)
 	}()
@@ -791,6 +804,18 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 
 		result.nodes = append(result.nodes, node)
 
+		// Collect schema-declared refs (cross-reference tokens for callers/)
+		for _, refTmpl := range schema.Refs {
+			token, err := RenderTemplate(refTmpl, match.Values())
+			if err != nil {
+				result.err = fmt.Errorf("failed to render ref %s: %w", refTmpl, err)
+				return
+			}
+			if token != "" {
+				result.refLinks = append(result.refLinks, refLink{token: token, nodeID: id})
+			}
+		}
+
 		// Link to parent (collector will apply this)
 		parentID := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
 		result.parentLinks = append(result.parentLinks, parentLink{childID: id, parentID: parentID})
@@ -894,6 +919,19 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 					if err := store.AddDef(qualKey, id); err != nil {
 						return fmt.Errorf("add qualified def %s -> %s: %w", qualKey, id, err)
 					}
+				}
+			}
+		}
+
+		// Register schema-declared refs (cross-reference tokens for callers/)
+		for _, refTmpl := range schema.Refs {
+			token, err := RenderTemplate(refTmpl, match.Values())
+			if err != nil {
+				return fmt.Errorf("failed to render ref %s: %w", refTmpl, err)
+			}
+			if token != "" {
+				if err := store.AddRef(token, id); err != nil {
+					return fmt.Errorf("add ref %s -> %s: %w", token, id, err)
 				}
 			}
 		}

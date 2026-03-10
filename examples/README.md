@@ -8,6 +8,9 @@ This directory contains example topologies (schemas) for Mache, demonstrating ho
   - [NVD Schema (`nvd-schema.json`)](#nvd-schema)
   - [KEV Schema (`kev-schema.json`)](#kev-schema)
   - [LLM Conversations (`llm-conversations-schema.json`)](#llm-conversations)
+- [MCP (Model Context Protocol)](#mcp-model-context-protocol)
+  - [MCP Server Manifest (`mcp-schema.json`)](#mcp-server-manifest)
+  - [MCP Registry (`mcp-registry-schema.json`)](#mcp-registry)
 - [Source Code (Tree-sitter)](#source-code-tree-sitter)
   - [Go Schema (`go-schema.json`)](#go-schema)
   - [Python Schema (`python-schema.json`)](#python-schema)
@@ -52,6 +55,41 @@ These schemas map structured JSON data into navigable directory trees. They use 
       - `/:model` (e.g., `claude-sonnet-4`)
         - `/:conversation_id`
           - `title`, `transcript`, `system-prompt`, `token-usage`, `raw.json`
+
+## MCP (Model Context Protocol)
+
+These schemas project MCP server capabilities into browsable filesystem trees. MCP is a JSON-RPC 2.0 protocol for connecting AI agents to external tools, resources, and prompts.
+
+### MCP Server Manifest
+
+[`mcp-schema.json`](mcp-schema.json) — Projects a single MCP server's `tools/list` response into a navigable tree of tools, resources, and prompts.
+
+- **Sample Data:** [`mcp-sample-manifest.json`](mcp-sample-manifest.json)
+- **Structure:**
+  - `/tools`
+    - `/:tool_name` (e.g., `search-issues`)
+      - `description`, `input-schema.json`, `raw.json`
+  - `/resources`
+    - `/:resource_name` (e.g., `repository-readme`)
+      - `description`, `uri`, `mime-type`, `raw.json`
+  - `/prompts`
+    - `/:prompt_name` (e.g., `summarize-repo`)
+      - `description`, `raw.json`
+
+The `input-schema.json` file is the key artifact — it contains the JSON Schema for a tool's parameters, making the capability space greppable without loading everything into context.
+
+### MCP Registry
+
+[`mcp-registry-schema.json`](mcp-registry-schema.json) — Projects the MCP server registry (thousands of servers) into a namespace/server hierarchy.
+
+- **Source:** MCP registry SQLite database (fetched via `tools/mcp-fetch`)
+- **Structure:**
+  - `/servers`
+    - `/:namespace` (e.g., `anthropic`)
+      - `/:server_name` (e.g., `claude-code`)
+        - `description`, `version`, `status`, `repository`, `raw.json`
+
+This schema uses `Refs` cross-references on server names, enabling the `callers/` virtual directory to answer "which namespaces provide servers with similar names."
 
 ## Source Code (Tree-sitter)
 

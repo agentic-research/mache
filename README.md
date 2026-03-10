@@ -105,6 +105,8 @@ Mache is in **active development**. The core pipeline (schema + ingestion + moun
 | **Cross-References** | **Stable** | `callers/` and `callees/` virtual dirs for bidirectional call-chain navigation. |
 | **`_project_files/`** | **Stable** | Non-AST files (READMEs, configs, docs) preserved in separate tree during source mounts. |
 | **Schema Inference** | **Beta** | Auto-infer schema from data via Formal Concept Analysis (FCA). Friendly-name grouping (`functions/`, `types/`, `classes/`). |
+| **MCP Server** | **Beta** | `mache serve` exposes any graph as an MCP server over stdio. 6 tools: list, read, callers, callees, search, communities. |
+| **Community Detection** | **Beta** | Louvain modularity optimization discovers densely co-referencing node clusters from the refs graph. |
 
 ## Quick Start
 
@@ -147,6 +149,23 @@ task test
 # Explicitly select backend (default: nfs on macOS, fuse on Linux)
 ./mache --backend nfs --infer --data results.db /tmp/nvd
 ```
+
+### MCP Server Mode
+
+`mache serve` exposes any mache graph as an [MCP](https://modelcontextprotocol.io/) server over stdio, usable by Claude Code, Claude Desktop, Cursor, or any MCP client:
+
+```bash
+# Serve source code as MCP tools
+mache serve -s examples/go-schema.json ./internal/
+
+# Serve a SQLite database
+mache serve -s examples/nvd-schema.json results.db
+
+# Serve the MCP registry itself (9,400+ servers)
+mache serve -s examples/mcp-registry-schema.json mcp-registry.db
+```
+
+Six tools are exposed: `list_directory`, `read_file`, `find_callers`, `find_callees`, `search`, and `get_communities` (Louvain cluster detection). No filesystem mount needed — the graph is queried directly over JSON-RPC.
 
 ### Using with LLMs and Agents
 
@@ -343,15 +362,16 @@ See [Architecture](docs/ARCHITECTURE.md) for details.
 
 Mache occupies a unique position: it's a **projection engine** that maps structured data into a real, mounted filesystem. Schemas can be hand-authored or auto-inferred via FCA. Most tools in the AI-agent ecosystem solve adjacent problems — context retrieval (RAG), protocol plumbing (MCP), or agent orchestration — but none combine schema-driven projection, AST decomposition, write-back, and a real POSIX mount.
 
-| Tool | Schema-Driven | AST-Aware | Write-Back | Real FS Mount |
-|------|:---:|:---:|:---:|:---:|
-| **Mache** | Yes | Yes | Yes | Yes |
-| AgentFS (Turso) | No | No | Yes | No |
-| Dust | No | No | No | No (synthetic) |
-| MCP | No | No | Varies | No (protocol) |
-| LlamaIndex / LangChain | No | No | No | No |
-| FUSE-DB tools (FusqlFS, DBFS) | No | No | Some | Yes |
-| Plan 9 / 9P | Yes | No | Yes | Yes |
+| Tool | Schema-Driven | AST-Aware | Write-Back | Real FS Mount | MCP Server |
+|------|:---:|:---:|:---:|:---:|:---:|
+| **Mache** | Yes | Yes | Yes | Yes | Yes |
+| codebase-memory-mcp | No | Yes (64 langs) | No | No | Yes (14 tools) |
+| AgentFS (Turso) | No | No | Yes | No | No |
+| Dust | No | No | No | No (synthetic) | No |
+| MCP | No | No | Varies | No (protocol) | — |
+| LlamaIndex / LangChain | No | No | No | No | No |
+| FUSE-DB tools (FusqlFS, DBFS) | No | No | Some | Yes | No |
+| Plan 9 / 9P | Yes | No | Yes | Yes | No |
 
 Plan 9's "everything is a file server" philosophy is the closest historical precedent — Mache applies that idea to structured data with modern AST awareness. FUSE-DB tools mirror database schemas directly as directories; Mache adds a projection layer that reshapes data into task-appropriate topologies.
 

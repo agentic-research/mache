@@ -31,6 +31,59 @@ func TestSchemasParse(t *testing.T) {
 	}
 }
 
+func TestMCPSchemaIngest(t *testing.T) {
+	schemaBytes, err := os.ReadFile("mcp-schema.json")
+	require.NoError(t, err)
+
+	var schema api.Topology
+	require.NoError(t, json.Unmarshal(schemaBytes, &schema))
+
+	store := graph.NewMemoryStore()
+	engine := ingest.NewEngine(&schema, store)
+
+	absPath, err := filepath.Abs("mcp-sample-manifest.json")
+	require.NoError(t, err)
+
+	err = engine.Ingest(absPath)
+	require.NoError(t, err, "MCP manifest ingestion failed")
+
+	expectedNodes := []string{
+		"tools",
+		"tools/search-issues",
+		"tools/create-issue",
+		"tools/read-file",
+		"resources",
+		"resources/repository-readme",
+		"resources/issue-detail",
+		"prompts",
+		"prompts/summarize-repo",
+	}
+	for _, path := range expectedNodes {
+		_, err := store.GetNode(path)
+		assert.NoError(t, err, "node %s not found", path)
+	}
+
+	// Verify tool leaf files exist
+	toolNode, err := store.GetNode("tools/search-issues")
+	require.NoError(t, err)
+	assert.Contains(t, toolNode.Children, "tools/search-issues/description")
+	assert.Contains(t, toolNode.Children, "tools/search-issues/input-schema.json")
+	assert.Contains(t, toolNode.Children, "tools/search-issues/raw.json")
+
+	// Verify input-schema.json content is valid JSON
+	buf := make([]byte, 8192)
+	n, err := store.ReadContent("tools/search-issues/input-schema.json", buf, 0)
+	require.NoError(t, err)
+	var inputSchema map[string]any
+	require.NoError(t, json.Unmarshal(buf[:n], &inputSchema), "input-schema.json should be valid JSON")
+	assert.Equal(t, "object", inputSchema["type"])
+
+	// Verify resource leaf files
+	resNode, err := store.GetNode("resources/repository-readme")
+	require.NoError(t, err)
+	assert.Contains(t, resNode.Children, "resources/repository-readme/uri")
+}
+
 func TestTreeSitterExamples(t *testing.T) {
 	tests := []struct {
 		name          string

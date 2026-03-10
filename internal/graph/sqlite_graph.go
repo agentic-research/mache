@@ -836,6 +836,82 @@ func (g *SQLiteGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return g.refsDB.Query(query, args...)
 }
 
+// RefsMap returns a token→nodeIDs map for community detection.
+// For the nodes-table path, queries node_refs (token, node_id).
+// For the legacy bitmap path, decodes bitmaps and resolves file IDs.
+func (g *SQLiteGraph) RefsMap() map[string][]string {
+	if g.useNodesTable {
+		return g.refsMapFromNodesTable()
+	}
+	return g.refsMapFromBitmaps()
+}
+
+func (g *SQLiteGraph) refsMapFromNodesTable() map[string][]string {
+	rows, err := g.db.Query("SELECT token, node_id FROM node_refs")
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	refs := map[string][]string{}
+	for rows.Next() {
+		var token, nodeID string
+		if err := rows.Scan(&token, &nodeID); err != nil {
+			continue
+		}
+		refs[token] = append(refs[token], nodeID)
+	}
+	return refs
+}
+
+func (g *SQLiteGraph) refsMapFromBitmaps() map[string][]string {
+	if g.refsDB == nil {
+		return nil
+	}
+
+	// Build reverse file ID lookup
+	fileRows, err := g.refsDB.Query("SELECT id, path FROM file_ids")
+	if err != nil {
+		return nil
+	}
+	idToPath := map[uint32]string{}
+	for fileRows.Next() {
+		var id uint32
+		var path string
+		if err := fileRows.Scan(&id, &path); err != nil {
+			continue
+		}
+		idToPath[id] = path
+	}
+	_ = fileRows.Close()
+
+	// Read bitmaps
+	refRows, err := g.refsDB.Query("SELECT token, bitmap FROM node_refs")
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = refRows.Close() }()
+
+	refs := map[string][]string{}
+	for refRows.Next() {
+		var token string
+		var blob []byte
+		if err := refRows.Scan(&token, &blob); err != nil {
+			continue
+		}
+		bm := roaring.New()
+		if _, err := bm.ReadFrom(bytes.NewReader(blob)); err != nil {
+			continue
+		}
+		for _, id := range bm.ToArray() {
+			if path, ok := idToPath[id]; ok {
+				refs[token] = append(refs[token], path)
+			}
+		}
+	}
+	return refs
+}
+
 // Close closes both the source and sidecar database connections.
 func (g *SQLiteGraph) Close() error {
 	// Unregister from vtab module to prevent leaks/races (sidecar path only)

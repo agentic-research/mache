@@ -30,7 +30,8 @@ graph TD
     subgraph "System Interface"
         NFS["NFS Server<br/>(go-nfs / billy)"]
         FUSE["FUSE Bridge<br/>(cgofuse / fuse-t)"]
-        Tools["User Tools<br/>ls, cat, grep"]
+        MCP["MCP Server<br/>(stdio JSON-RPC)"]
+        Tools["User Tools<br/>ls, cat, grep, MCP clients"]
     end
 
     Schema -->|Configures| SQLiteGraph
@@ -54,9 +55,12 @@ graph TD
     MemoryStore -->|Graph Interface| NFS
     SQLiteGraph -->|Graph Interface| FUSE
     MemoryStore -->|Graph Interface| FUSE
+    SQLiteGraph -->|Graph Interface| MCP
+    MemoryStore -->|Graph Interface| MCP
 
     NFS --- Tools
     FUSE --- Tools
+    MCP --- Tools
 ```
 
 There are two data paths depending on the source:
@@ -82,6 +86,8 @@ With `--infer`, the schema itself can be derived automatically: the `lattice` pa
 - **`MacheFS`** — FUSE implementation via cgofuse. Handle-based readdir with auto-mode for fuse-t compatibility. Extended cache timeouts (300s) for NFS performance. Default backend on Linux.
 - **`_project_files/`** — Non-AST files (READMEs, configs, docs) encountered during tree-sitter ingestion are routed into a separate `_project_files/` tree via `ingestRawFileUnder()`. This preserves access to supporting files without polluting the AST-derived structure.
 - **Friendly-name grouping** — `ProjectAST` in the lattice package maps raw tree-sitter node types to intuitive container directory names: `function_declaration` → `functions/`, `class_definition` → `classes/`, `type_declaration` → `types/`, etc. Language-specific containment rules nest methods inside classes for Python/TypeScript.
+- **MCP Server** (`cmd/serve.go`) — `mache serve` exposes any graph as an MCP (Model Context Protocol) server over stdio JSON-RPC. Six tools wrap the `Graph` interface: `list_directory`, `read_file`, `find_callers`, `find_callees`, `search` (conditional on `QueryRefs` support), and `get_communities` (conditional on `RefsMap` support). Uses `mark3labs/mcp-go`. No filesystem mount needed.
+- **Community Detection** (`internal/graph/community.go`) — Louvain modularity optimization on the refs graph. Projects the bipartite token→nodeID refs into a unipartite co-reference graph (edge weight = shared tokens), then iteratively moves nodes between communities to maximize modularity. Also provides `ConnectedComponents` as a simpler baseline. Exposed via the `get_communities` MCP tool.
 
 ## Write Pipeline
 
@@ -164,6 +170,8 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 | Concern | File | Key functions/types |
 |---------|------|-------------------|
 | CLI + mount wiring | `cmd/mount.go` | `rootCmd`, `--writable`, `--infer`, `--backend` flags |
+| MCP server | `cmd/serve.go` | `mache serve`, `registerMCPTools`, `buildServeGraph`, 6 tool handlers |
+| Community detection | `internal/graph/community.go` | `DetectCommunities` (Louvain), `ConnectedComponents`, `buildProjection` |
 | Schema types | `api/schema.go` | `Topology`, `Node`, `Leaf` |
 | Ingestion orchestration | `internal/ingest/engine.go` | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `ingestRawFileUnder`, `dedupSuffix` |
 | JSON queries | `internal/ingest/json_walker.go` | `JsonWalker.Query` |
@@ -181,6 +189,7 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 | Cross-ref vtab | `internal/refsvtab/refs_module.go` | `mache_refs` virtual table |
 | Control block | `internal/control/` | HotSwapGraph, live schema reload |
 | Go schema | `examples/go-schema.json` | functions, methods, types, constants, variables, imports |
+| MCP schemas | `examples/mcp-schema.json`, `mcp-registry-schema.json` | MCP server manifest and registry projection |
 | FCA inference | `internal/lattice/` | `FormalContext`, `NextClosure`, `Project`, `Inferrer` |
 | ProjectAST / friendly names | `internal/lattice/project_ast.go` | `ProjectAST`, `friendlyTypeNames`, containment rules |
 | Build/test | `Taskfile.yml` | `task build`, `task test`, `task check` |
