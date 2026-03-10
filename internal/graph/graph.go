@@ -292,6 +292,18 @@ func (s *MemoryStore) AddDef(token, dirID string) error {
 	return nil
 }
 
+// RefsMap returns a snapshot of the token→nodeIDs reference map.
+// Used by community detection to build the co-reference graph.
+func (s *MemoryStore) RefsMap() map[string][]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cp := make(map[string][]string, len(s.refs))
+	for k, v := range s.refs {
+		cp[k] = append([]string(nil), v...)
+	}
+	return cp
+}
+
 // DeleteFileNodes removes all nodes that originated from the given source file.
 // Uses the roaring bitmap index for O(k) lookup instead of O(N) full scan.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {

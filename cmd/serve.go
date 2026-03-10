@@ -118,6 +118,12 @@ type refsQuerier interface {
 	QueryRefs(query string, args ...any) (*sql.Rows, error)
 }
 
+// refsMapProvider is the subset of Graph backends that expose their refs map
+// for community detection (Louvain).
+type refsMapProvider interface {
+	RefsMap() map[string][]string
+}
+
 func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 	s.AddTool(
 		mcp.NewTool("list_directory",
@@ -160,6 +166,17 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 				mcp.WithNumber("limit", mcp.Description("Max results (default 100)")),
 			),
 			makeSearchHandler(g),
+		)
+	}
+
+	// Only add get_communities if the backend exposes its refs map
+	if _, ok := g.(refsMapProvider); ok {
+		s.AddTool(
+			mcp.NewTool("get_communities",
+				mcp.WithDescription("Detect communities of densely co-referencing nodes using Louvain modularity optimization. Returns clusters of nodes that share symbols."),
+				mcp.WithNumber("min_size", mcp.Description("Minimum community size (default 2)")),
+			),
+			makeGetCommunitiesHandler(g),
 		)
 	}
 }
@@ -317,6 +334,23 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		data, _ := json.MarshalIndent(results, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		minSize := request.GetInt("min_size", 2)
+
+		rp := g.(refsMapProvider)
+		refs := rp.RefsMap()
+		if len(refs) == 0 {
+			return mcp.NewToolResultText("[]"), nil
+		}
+
+		result := graph.DetectCommunities(refs, minSize)
+
+		data, _ := json.MarshalIndent(result, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }
