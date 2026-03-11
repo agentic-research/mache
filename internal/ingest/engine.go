@@ -43,12 +43,13 @@ type IngestionTarget interface {
 
 // Engine drives the ingestion process.
 type Engine struct {
-	Schema      *api.Topology
-	Store       IngestionTarget
-	RootPath    string // absolute path to the root of the ingestion
-	sourceFile  string // absolute path, set during ingestTreeSitter for origin tracking
-	routedFiles map[string]int
-	mu          sync.Mutex
+	Schema           *api.Topology
+	Store            IngestionTarget
+	RootPath         string // absolute path to the root of the ingestion
+	RespectGitignore bool   // when true, skip files matching .gitignore patterns (default: true)
+	routedFiles      map[string]int
+	gitignore        *gitignoreMatcher // loaded from .gitignore when RespectGitignore is true
+	mu               sync.Mutex
 }
 
 // --- Parallel ingestion types ---
@@ -154,9 +155,10 @@ func isBinaryFile(path string) bool {
 
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 	return &Engine{
-		Schema:      schema,
-		Store:       store,
-		routedFiles: make(map[string]int),
+		Schema:           schema,
+		Store:            store,
+		RespectGitignore: true,
+		routedFiles:      make(map[string]int),
 	}
 }
 
@@ -213,6 +215,11 @@ func (e *Engine) Ingest(path string) error {
 	}
 
 	if info.IsDir() {
+		// Load .gitignore patterns when enabled (default: true).
+		if e.RespectGitignore {
+			e.gitignore = loadGitignore(realPath)
+		}
+
 		// Determine which file types this schema can process.
 		// Tree-sitter schemas operate on source code (.go, .py);
 		// JSONPath schemas operate on data files (.json, .db).
@@ -235,7 +242,27 @@ func (e *Engine) Ingest(path string) error {
 						return filepath.SkipDir
 					}
 				}
+				// Check gitignore for directories
+				if e.gitignore != nil && p != realPath {
+					rel, relErr := filepath.Rel(realPath, p)
+					if relErr == nil {
+						rel = filepath.ToSlash(rel)
+						if e.gitignore.Match(rel, true) {
+							return filepath.SkipDir
+						}
+					}
+				}
 				return nil
+			}
+			// Check gitignore for files
+			if e.gitignore != nil {
+				rel, relErr := filepath.Rel(realPath, p)
+				if relErr == nil {
+					rel = filepath.ToSlash(rel)
+					if e.gitignore.Match(rel, false) {
+						return nil
+					}
+				}
 			}
 			// Skip symlinks to directories (e.g., kodata/templates -> ../templates)
 			// filepath.Walk doesn't follow symlinks, so d.IsDir() is false for them,
@@ -349,7 +376,7 @@ func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", "", modTime, e.Store, nil); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -413,8 +440,6 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 		walker := NewSitterWalker()
 		root := SitterRoot{Node: tree.RootNode(), FileRoot: tree.RootNode(), Source: content, Lang: lang, LangName: langName}
 		sourceFile := filepath.Base(path)
-		e.sourceFile = realPath
-		defer func() { e.sourceFile = "" }()
 
 		// Extract context (imports, globals) ONCE per file — shared across all constructs.
 		// This avoids N duplicate allocations where N = number of constructs in the file.
@@ -427,7 +452,7 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 		applicableNodes := filterNodesByLanguage(e.Schema.Nodes, langName)
 
 		for _, nodeSchema := range applicableNodes {
-			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, modTime, bt, fileContext); err != nil {
+			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, realPath, modTime, bt, fileContext); err != nil {
 				// Tree-sitter query compilation fails when a schema selector
 				// uses node types from a different language (e.g. Go's
 				// "function_declaration" applied to a Python file). This is
@@ -830,7 +855,7 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -961,7 +986,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, modTime, store, fileContext); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext); err != nil {
 					return err
 				}
 			}
@@ -987,6 +1012,9 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			currentProps = current.Properties
 		}
 
+		// Pre-compute doc comments from backward scan (available to all file templates)
+		docText, extStart, extEnd, hasScope := extractDocComments(match)
+
 		node = &graph.Node{
 			ID:         id,
 			Mode:       os.ModeDir | 0o555, // Read-only dir
@@ -995,10 +1023,22 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Context:    fileContext,
 			Properties: currentProps,
 		}
-		store.AddNode(node)
 
-		// Pre-compute doc comments from backward scan (available to all file templates)
-		docText, extStart, extEnd, hasScope := extractDocComments(match)
+		// Set location property on directory node from source file's origin
+		if hasScope && absSourceFile != "" {
+			if root, ok := match.Context().(SitterRoot); ok {
+				if node.Properties == nil {
+					node.Properties = make(map[string][]byte)
+				}
+				relPath, err := filepath.Rel(e.RootPath, absSourceFile)
+				if err == nil {
+					startLine := byteOffsetToLine(root.Source, extStart)
+					endLine := byteOffsetToLine(root.Source, extEnd)
+					node.Properties["location"] = []byte(fmt.Sprintf("%s:%d:%d", relPath, startLine, endLine))
+				}
+			}
+		}
+		store.AddNode(node)
 
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
@@ -1043,17 +1083,17 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			}
 
 			// Set write-back origin from backward scan
-			if hasScope && e.sourceFile != "" {
+			if hasScope && absSourceFile != "" {
 				fileNode.Origin = &graph.SourceOrigin{
-					FilePath:  e.sourceFile,
+					FilePath:  absSourceFile,
 					StartByte: extStart,
 					EndByte:   extEnd,
 				}
-			} else if op, ok := match.(OriginProvider); ok && e.sourceFile != "" {
+			} else if op, ok := match.(OriginProvider); ok && absSourceFile != "" {
 				// Fallback for non-sitter matches
 				if start, end, ok := op.CaptureOrigin("scope"); ok {
 					fileNode.Origin = &graph.SourceOrigin{
-						FilePath:  e.sourceFile,
+						FilePath:  absSourceFile,
 						StartByte: start,
 						EndByte:   end,
 					}
@@ -1075,6 +1115,17 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		}
 	}
 	return nil
+}
+
+// byteOffsetToLine converts a byte offset to a 1-based line number in content.
+func byteOffsetToLine(content []byte, offset uint32) int {
+	line := 1
+	for i := 0; i < int(offset) && i < len(content); i++ {
+		if content[i] == '\n' {
+			line++
+		}
+	}
+	return line
 }
 
 // extractDocComments walks backward from a tree-sitter @scope capture to find
@@ -1245,6 +1296,37 @@ func RenderTemplate(tmpl string, values map[string]any) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// ReIngestFile re-ingests a single file, preserving the existing RootPath.
+// Used by the live graph refresher to update stale nodes without a full walk.
+// After re-ingestion, the store's file mtime is updated.
+func (e *Engine) ReIngestFile(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		realPath = absPath
+	}
+
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return err
+	}
+
+	// Re-ingest the single file using the existing schema and store
+	if err := e.ingestFile(realPath, info.ModTime()); err != nil {
+		return err
+	}
+
+	// Update the tracked mtime in the store
+	if ms, ok := e.Store.(*graph.MemoryStore); ok {
+		ms.RecordFileMtime(realPath, info.ModTime())
+	}
+
+	return nil
 }
 
 // PrintRoutingSummary outputs a summary of files routed to _project_files/.

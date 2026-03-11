@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -144,6 +145,11 @@ type MemoryStore struct {
 	flushErr   error
 
 	extractor CallExtractor
+
+	// Live graph: file mtime tracking and on-demand refresh.
+	fileMtimes map[string]time.Time        // source file → mtime at index time
+	refresher  func(filePath string) error // called when a source file is stale
+	refreshMu  sync.Map                    // filePath → *sync.Mutex (per-file refresh serialization)
 }
 
 // normalizeID strips a leading slash from node IDs.
@@ -163,6 +169,7 @@ func NewMemoryStore() *MemoryStore {
 		defs:        make(map[string][]string),
 		fileToNodes: make(map[string]*roaring.Bitmap),
 		nodeIntID:   make(map[string]uint32),
+		fileMtimes:  make(map[string]time.Time),
 	}
 }
 
@@ -275,6 +282,53 @@ func (s *MemoryStore) indexNode(n *Node) {
 		s.fileToNodes[n.Origin.FilePath] = bm
 	}
 	bm.Add(intID)
+
+	// Auto-record file mtime when indexing a node with Origin
+	if n.Origin.FilePath != "" {
+		if _, tracked := s.fileMtimes[n.Origin.FilePath]; !tracked {
+			if info, err := os.Stat(n.Origin.FilePath); err == nil {
+				s.fileMtimes[n.Origin.FilePath] = info.ModTime()
+			}
+		}
+	}
+}
+
+// SetRefresher configures a callback invoked when a source file is stale.
+// The callback should re-ingest the file and update the store.
+func (s *MemoryStore) SetRefresher(fn func(filePath string) error) {
+	s.refresher = fn
+}
+
+// RecordFileMtime explicitly records the mtime for a source file.
+// Called after re-ingestion to update the tracked mtime.
+func (s *MemoryStore) RecordFileMtime(filePath string, mtime time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fileMtimes[filePath] = mtime
+}
+
+// FileMtime returns the tracked mtime for a source file.
+// Returns zero time if the file is not tracked.
+func (s *MemoryStore) FileMtime(filePath string) time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.fileMtimes[filePath]
+}
+
+// IsFileStale returns true if the source file's current mtime differs
+// from the tracked mtime (i.e., the file has been modified since indexing).
+func (s *MemoryStore) IsFileStale(filePath string) bool {
+	s.mu.RLock()
+	tracked, ok := s.fileMtimes[filePath]
+	s.mu.RUnlock()
+	if !ok {
+		return false // not tracked → not stale
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return true // can't stat (deleted?) → treat as stale
+	}
+	return !info.ModTime().Equal(tracked)
 }
 
 // AddRef records a reference from a file (nodeID) to a token.
@@ -664,10 +718,35 @@ func (s *MemoryStore) ListChildren(id string) ([]string, error) {
 }
 
 // ReadContent implements Graph. It handles both inline and lazy content.
+// If the node has a SourceOrigin and the source file's mtime has changed,
+// the refresher callback is invoked to re-ingest the file before reading.
 func (s *MemoryStore) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	node, err := s.GetNode(id)
 	if err != nil {
 		return 0, err
+	}
+
+	// Live graph: check staleness for nodes with source origins
+	if node.Origin != nil && node.Origin.FilePath != "" && s.refresher != nil {
+		if s.IsFileStale(node.Origin.FilePath) {
+			filePath := node.Origin.FilePath
+			// Per-file mutex allows parallel refreshes of different files
+			muI, _ := s.refreshMu.LoadOrStore(filePath, &sync.Mutex{})
+			fileMu := muI.(*sync.Mutex)
+			fileMu.Lock()
+			// Double-check after acquiring lock (another goroutine may have refreshed)
+			if s.IsFileStale(filePath) {
+				if err := s.refresher(filePath); err != nil {
+					log.Printf("live graph: refresh failed for %s: %v", filePath, err)
+				}
+			}
+			fileMu.Unlock()
+			// Re-fetch node after refresh (content may have changed)
+			node, err = s.GetNode(id)
+			if err != nil {
+				return 0, err
+			}
+		}
 	}
 
 	var data []byte

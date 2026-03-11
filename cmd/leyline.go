@@ -61,6 +61,11 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 		return fmt.Errorf("materialize callers: %w", err)
 	}
 
+	// 4. Materialize callees
+	if err := materializeCallees(tx, now); err != nil {
+		return fmt.Errorf("materialize callees: %w", err)
+	}
+
 	return tx.Commit()
 }
 
@@ -152,6 +157,155 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 	}
 
 	return nil
+}
+
+// materializeCallees reads node_refs and creates callees/ directory nodes
+// for each function directory that calls other functions.
+// This is the inverse of materializeCallers: callers/ shows "who calls me",
+// callees/ shows "who do I call".
+//
+// For a ref (token="FuncB", node_id="pkg/functions/FuncA"),
+// with a def (token="FuncB", dir_id="pkg/functions/FuncB"),
+// this creates:
+//   - pkg/functions/FuncA/callees       (dir)
+//   - pkg/functions/FuncA/callees/FuncB (file, content = dir_id of the callee)
+func materializeCallees(tx *sql.Tx, now int64) error {
+	// Check if required tables exist
+	var count int
+	err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_refs'`).Scan(&count)
+	if err != nil || count == 0 {
+		return nil
+	}
+	err = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_defs'`).Scan(&count)
+	if err != nil || count == 0 {
+		return nil
+	}
+
+	// Pre-load all defs: token → dir_id (eliminates N+1 queries and avoids
+	// nested cursors which are fragile with modernc.org/sqlite).
+	defsMap := make(map[string]string)
+	defRows, err := tx.Query(`SELECT token, dir_id FROM node_defs`)
+	if err != nil {
+		return fmt.Errorf("query node_defs: %w", err)
+	}
+	for defRows.Next() {
+		var token, dirID string
+		if err := defRows.Scan(&token, &dirID); err != nil {
+			_ = defRows.Close()
+			return err
+		}
+		defsMap[token] = dirID
+	}
+	_ = defRows.Close()
+	if err := defRows.Err(); err != nil {
+		return err
+	}
+
+	// Read all refs and resolve callees via the pre-loaded defs map.
+	rows, err := tx.Query(`SELECT token, node_id FROM node_refs`)
+	if err != nil {
+		return fmt.Errorf("query node_refs: %w", err)
+	}
+
+	// Group by caller dir: callerDir -> list of (token, callee dir_id)
+	type calleeInfo struct {
+		token string
+		dirID string
+	}
+	callerCallees := make(map[string][]calleeInfo) // callerDir -> callees
+
+	for rows.Next() {
+		var token, nodeID string
+		if err := rows.Scan(&token, &nodeID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+
+		// Find the caller's directory (parent of the referencing node)
+		callerDir := extractCallerDir(nodeID)
+		if callerDir == "" {
+			continue
+		}
+
+		// Look up in pre-loaded map instead of per-row query
+		calleeDirID, ok := defsMap[token]
+		if !ok {
+			continue // no definition found
+		}
+
+		callerCallees[callerDir] = append(callerCallees[callerDir], calleeInfo{token: token, dirID: calleeDirID})
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Create callees/ directories and entries
+	for callerDir, callees := range callerCallees {
+		// Verify caller dir exists in nodes
+		var exists int
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, callerDir).Scan(&exists)
+		if exists == 0 {
+			continue
+		}
+
+		calleesID := callerDir + "/callees"
+
+		// Create callees/ directory
+		var dirExists int
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, calleesID).Scan(&dirExists)
+		if dirExists == 0 {
+			if _, err := tx.Exec(
+				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				calleesID, callerDir, "callees", 1, 0, now, nil,
+			); err != nil {
+				return fmt.Errorf("insert callees dir %s: %w", calleesID, err)
+			}
+		}
+
+		// Create entry for each callee
+		for _, callee := range callees {
+			calleeName := callee.token
+
+			entryID := calleesID + "/" + calleeName
+			var entryExists int
+			_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, entryID).Scan(&entryExists)
+			if entryExists > 0 {
+				continue
+			}
+
+			content := callee.dirID
+			if _, err := tx.Exec(
+				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				entryID, calleesID, calleeName, 0, len(content), now, content,
+			); err != nil {
+				return fmt.Errorf("insert callee entry %s: %w", entryID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractCallerDir gets the construct directory from a node_id.
+// "pkg/functions/FuncA/source" -> "pkg/functions/FuncA"
+// "pkg/functions/FuncA" -> "pkg/functions/FuncA"
+//
+// NOTE: The set of leaf names checked here (source, context, doc, callers,
+// callees) is coupled to the leaf naming conventions used by the schema and
+// the virtual directory materializers. If new leaf types are added, this
+// function must be updated to match.
+func extractCallerDir(nodeID string) string {
+	parts := strings.Split(nodeID, "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	// If last part looks like a file (source, context, doc), go up one level
+	last := parts[len(parts)-1]
+	if last == "source" || last == "context" || last == "doc" || last == "callers" || last == "callees" {
+		return strings.Join(parts[:len(parts)-1], "/")
+	}
+	return nodeID
 }
 
 // extractFuncName pulls the function name from a node path like "functions/Foo/source".
