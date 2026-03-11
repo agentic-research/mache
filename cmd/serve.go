@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
@@ -36,85 +37,209 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	var dataSource string
-	var schema *api.Topology
+	// Create a lazy graph that defers schema detection + graph building
+	// to the first tool call. This lets the MCP server respond to
+	// initialize immediately instead of blocking on auto-detection.
+	lg := &lazyGraph{args: args}
 
-	if len(args) == 0 {
-		// Zero-arg mode: load from .mache.json, fall back to auto-detect
-		cfg, err := loadProjectConfig(".")
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return err
-			}
-			// No .mache.json — hybrid auto-detect: presets + inference
-			log.Printf("No %s found; auto-detecting project languages...", ConfigFileName)
-			dataSource = "."
-			schema, err = inferDirSchema(".")
+	// Create MCP server IMMEDIATELY — respond to health checks fast
+	s := server.NewMCPServer("mache", Version,
+		server.WithToolCapabilities(false),
+	)
+	registerMCPTools(s, lg)
+
+	log.Println("mache MCP server ready on stdio")
+	return server.ServeStdio(s)
+}
+
+// lazyGraph wraps a Graph that is built on first access.
+// This allows the MCP server to start and respond to initialize/tools/list
+// before the potentially slow schema detection + ingestion completes.
+type lazyGraph struct {
+	args    []string
+	once    sync.Once
+	inner   graph.Graph
+	cleanup func()
+	err     error
+}
+
+func (lg *lazyGraph) init() {
+	lg.once.Do(func() {
+		var dataSource string
+		var schema *api.Topology
+
+		if len(lg.args) == 0 {
+			cfg, err := loadProjectConfig(".")
 			if err != nil {
-				return fmt.Errorf("auto-detect schema: %w", err)
+				if !os.IsNotExist(err) {
+					lg.err = err
+					return
+				}
+				log.Printf("No %s found; auto-detecting project languages...", ConfigFileName)
+				dataSource = "."
+				schema, err = inferDirSchema(".")
+				if err != nil {
+					lg.err = fmt.Errorf("auto-detect schema: %w", err)
+					return
+				}
+			} else {
+				if len(cfg.Sources) > 1 {
+					log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
+				}
+				src := cfg.Sources[0]
+				dataSource, err = resolveDataSource(src.Path, ".")
+				if err != nil {
+					lg.err = fmt.Errorf("resolve data source: %w", err)
+					return
+				}
+				schema, err = resolveSchema(src.Schema, ".")
+				if err != nil {
+					lg.err = fmt.Errorf("resolve schema: %w", err)
+					return
+				}
+				if schema == nil {
+					schema = &api.Topology{Version: api.SchemaVersion}
+				}
+				log.Printf("Loaded config from %s (source: %s)", ConfigFileName, dataSource)
 			}
 		} else {
-			if len(cfg.Sources) > 1 {
-				log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
-			}
-			src := cfg.Sources[0]
-			dataSource, err = resolveDataSource(src.Path, ".")
-			if err != nil {
-				return fmt.Errorf("resolve data source: %w", err)
-			}
-			schema, err = resolveSchema(src.Schema, ".")
-			if err != nil {
-				return fmt.Errorf("resolve schema: %w", err)
-			}
-			if schema == nil {
-				schema = &api.Topology{Version: api.SchemaVersion}
-			}
-			log.Printf("Loaded config from %s (source: %s)", ConfigFileName, dataSource)
-		}
-	} else {
-		dataSource = args[0]
+			dataSource = lg.args[0]
 
-		// Explicit --schema flag
-		if serveSchema != "" {
-			data, err := os.ReadFile(serveSchema)
-			if err != nil {
-				return fmt.Errorf("read schema: %w", err)
-			}
-			schema = &api.Topology{}
-			if err := json.Unmarshal(data, schema); err != nil {
-				return fmt.Errorf("parse schema: %w", err)
-			}
-		} else if filepath.Ext(dataSource) != ".db" {
-			// Directory without explicit schema — hybrid auto-detect
-			info, err := os.Stat(dataSource)
-			if err == nil && info.IsDir() {
-				schema, err = inferDirSchema(dataSource)
+			if serveSchema != "" {
+				data, err := os.ReadFile(serveSchema)
 				if err != nil {
-					return fmt.Errorf("auto-detect schema: %w", err)
+					lg.err = fmt.Errorf("read schema: %w", err)
+					return
+				}
+				schema = &api.Topology{}
+				if err := json.Unmarshal(data, schema); err != nil {
+					lg.err = fmt.Errorf("parse schema: %w", err)
+					return
+				}
+			} else if filepath.Ext(dataSource) != ".db" {
+				info, err := os.Stat(dataSource)
+				if err == nil && info.IsDir() {
+					schema, err = inferDirSchema(dataSource)
+					if err != nil {
+						lg.err = fmt.Errorf("auto-detect schema: %w", err)
+						return
+					}
+				} else {
+					schema = &api.Topology{Version: api.SchemaVersion}
 				}
 			} else {
 				schema = &api.Topology{Version: api.SchemaVersion}
 			}
-		} else {
-			schema = &api.Topology{Version: api.SchemaVersion}
 		}
-	}
 
-	// Build graph
-	g, cleanup, err := buildServeGraph(dataSource, schema)
+		g, cleanup, err := buildServeGraph(dataSource, schema)
+		if err != nil {
+			lg.err = err
+			return
+		}
+		lg.inner = g
+		lg.cleanup = cleanup
+		log.Println("graph ready")
+	})
+}
+
+func (lg *lazyGraph) get() (graph.Graph, error) {
+	lg.init()
+	if lg.err != nil {
+		return nil, lg.err
+	}
+	return lg.inner, nil
+}
+
+func (lg *lazyGraph) GetNode(id string) (*graph.Node, error) {
+	g, err := lg.get()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer cleanup()
+	return g.GetNode(id)
+}
 
-	// Create MCP server
-	s := server.NewMCPServer("mache", Version,
-		server.WithToolCapabilities(false),
-	)
-	registerMCPTools(s, g)
+func (lg *lazyGraph) ListChildren(id string) ([]string, error) {
+	g, err := lg.get()
+	if err != nil {
+		return nil, err
+	}
+	return g.ListChildren(id)
+}
 
-	log.Println("mache MCP server ready on stdio")
-	return server.ServeStdio(s)
+func (lg *lazyGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
+	g, err := lg.get()
+	if err != nil {
+		return 0, err
+	}
+	return g.ReadContent(id, buf, offset)
+}
+
+func (lg *lazyGraph) GetCallers(token string) ([]*graph.Node, error) {
+	g, err := lg.get()
+	if err != nil {
+		return nil, err
+	}
+	return g.GetCallers(token)
+}
+
+func (lg *lazyGraph) GetCallees(id string) ([]*graph.Node, error) {
+	g, err := lg.get()
+	if err != nil {
+		return nil, err
+	}
+	return g.GetCallees(id)
+}
+
+func (lg *lazyGraph) Invalidate(id string) {
+	g, _ := lg.get()
+	if g != nil {
+		g.Invalidate(id)
+	}
+}
+
+func (lg *lazyGraph) Act(id, action, payload string) (*graph.ActionResult, error) {
+	g, err := lg.get()
+	if err != nil {
+		return nil, err
+	}
+	return g.Act(id, action, payload)
+}
+
+// lazyGraph also implements refsQuerier, refsMapProvider, and defsMapProvider
+// by delegating to the inner graph if it supports those interfaces.
+
+func (lg *lazyGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
+	g, err := lg.get()
+	if err != nil {
+		return nil, err
+	}
+	if qg, ok := g.(refsQuerier); ok {
+		return qg.QueryRefs(query, args...)
+	}
+	return nil, fmt.Errorf("backend does not support QueryRefs")
+}
+
+func (lg *lazyGraph) RefsMap() map[string][]string {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil
+	}
+	if rp, ok := g.(refsMapProvider); ok {
+		return rp.RefsMap()
+	}
+	return nil
+}
+
+func (lg *lazyGraph) DefsMap() map[string][]string {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil
+	}
+	if dp, ok := g.(defsMapProvider); ok {
+		return dp.DefsMap()
+	}
+	return nil
 }
 
 // buildServeGraph constructs a read-only Graph from the data source.
