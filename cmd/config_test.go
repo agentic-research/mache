@@ -195,6 +195,29 @@ func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
 	assert.Equal(t, "/usr/local/bin/mache", entry.Command)
 }
 
+func TestWriteClaudeMD_Fresh(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, writeClaudeMD(dir, "go"))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
+	require.NoError(t, err)
+	content := string(data)
+	assert.Contains(t, content, "## Mache")
+	assert.Contains(t, content, "list_directory")
+	assert.Contains(t, content, "find_callers")
+	assert.Contains(t, content, "search")
+	assert.Contains(t, content, "**go**")
+}
+
+func TestWriteClaudeMD_NoSchema(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, writeClaudeMD(dir, ""))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "Schema preset:")
+}
+
 func TestPresetNames(t *testing.T) {
 	names := PresetNames()
 	assert.Contains(t, names, "go")

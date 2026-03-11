@@ -136,6 +136,57 @@ func writeClaudeMCPConfig(projectDir, macheCommand string) error {
 	return nil
 }
 
+// writeClaudeMD writes a .claude/CLAUDE.md that describes the mache MCP tools
+// so Claude Code automatically knows how to use them.
+func writeClaudeMD(projectDir, schemaPreset string) error {
+	claudeDir := filepath.Join(projectDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return fmt.Errorf("create .claude dir: %w", err)
+	}
+
+	mdPath := filepath.Join(claudeDir, "CLAUDE.md")
+
+	// If file exists, check if it already has mache section
+	if existing, err := os.ReadFile(mdPath); err == nil {
+		if strings.Contains(string(existing), "## Mache") {
+			// Already has mache section, don't duplicate
+			return nil
+		}
+		// Append to existing file
+		content := string(existing) + "\n" + generateMacheCLAUDESection(schemaPreset)
+		return os.WriteFile(mdPath, []byte(content), 0o644)
+	}
+
+	// Create new file
+	return os.WriteFile(mdPath, []byte(generateMacheCLAUDESection(schemaPreset)), 0o644)
+}
+
+func generateMacheCLAUDESection(schemaPreset string) string {
+	var sb strings.Builder
+	sb.WriteString("## Mache — Structured Code Index\n\n")
+	sb.WriteString("This project has a mache MCP server configured. ")
+	sb.WriteString("Use the mache tools to explore the codebase structure without reading raw files.\n\n")
+	sb.WriteString("### Available Tools\n\n")
+	sb.WriteString("| Tool | Purpose |\n")
+	sb.WriteString("|------|--------|\n")
+	sb.WriteString("| `list_directory` | Browse the projected directory tree (empty path = root) |\n")
+	sb.WriteString("| `read_file` | Read content of a projected file node |\n")
+	sb.WriteString("| `find_callers` | Find all nodes referencing a symbol/token |\n")
+	sb.WriteString("| `find_callees` | Find all symbols called by a construct |\n")
+	sb.WriteString("| `search` | Search symbols by pattern (SQL LIKE: `%auth%`) |\n")
+	sb.WriteString("| `get_communities` | Detect clusters of co-referencing nodes |\n")
+	sb.WriteString("\n### Workflow\n\n")
+	sb.WriteString("1. Start with `list_directory` (empty path) to see top-level structure\n")
+	sb.WriteString("2. Drill into directories of interest with `list_directory`\n")
+	sb.WriteString("3. Read specific files with `read_file`\n")
+	sb.WriteString("4. Use `search` to find symbols across the codebase\n")
+	sb.WriteString("5. Use `find_callers`/`find_callees` to trace dependencies\n")
+	if schemaPreset != "" {
+		sb.WriteString(fmt.Sprintf("\nSchema preset: **%s**\n", schemaPreset))
+	}
+	return sb.String()
+}
+
 // detectProjectType scans a directory and returns the best-fit schema preset name.
 // Returns empty string if no preset matches (caller should omit schema).
 func detectProjectType(dir string) string {

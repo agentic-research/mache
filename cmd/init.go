@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -20,18 +21,52 @@ registers mache as an MCP server for Claude Code.`,
 
 var (
 	initForce  bool
+	initGlobal bool
 	initSchema string
 	initSource string
 )
 
 func init() {
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing .mache.json")
+	initCmd.Flags().BoolVar(&initGlobal, "global", false, "Install mache MCP server globally in ~/.claude/")
 	initCmd.Flags().StringVar(&initSchema, "schema", "", "Schema preset or path (auto-detected if omitted)")
 	initCmd.Flags().StringVar(&initSource, "source", ".", "Data source path")
 	rootCmd.AddCommand(initCmd)
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
+	// Resolve mache binary path (needed for both modes)
+	macheCmd, err := os.Executable()
+	if err != nil {
+		macheCmd = "mache"
+	}
+
+	w := cmd.OutOrStdout()
+
+	if initGlobal {
+		return runInitGlobal(w, macheCmd)
+	}
+	return runInitProject(w, macheCmd)
+}
+
+func runInitGlobal(w io.Writer, macheCmd string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("home dir: %w", err)
+	}
+
+	// Write to ~/.claude/mcp.json
+	if err := writeClaudeMCPConfig(home, macheCmd); err != nil {
+		return fmt.Errorf("write global mcp config: %w", err)
+	}
+	_, _ = fmt.Fprintf(w, "Updated ~/.claude/mcp.json\n")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "mache is now available as an MCP server in all Claude Code sessions.")
+	_, _ = fmt.Fprintln(w, "Run 'mache init' (without --global) in a project to configure what it serves.")
+	return nil
+}
+
+func runInitProject(w io.Writer, macheCmd string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
@@ -64,20 +99,19 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	if err := os.WriteFile(configPath, append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", configPath, err)
 	}
-	w := cmd.OutOrStdout()
 	_, _ = fmt.Fprintf(w, "Created %s\n", configPath)
-
-	// Resolve mache binary path
-	macheCmd, err := os.Executable()
-	if err != nil {
-		macheCmd = "mache"
-	}
 
 	// Write/merge .claude/mcp.json
 	if err := writeClaudeMCPConfig(cwd, macheCmd); err != nil {
 		return fmt.Errorf("write claude mcp config: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "Updated .claude/mcp.json\n")
+
+	// Write/merge .claude/CLAUDE.md
+	if err := writeClaudeMD(cwd, schema); err != nil {
+		return fmt.Errorf("write CLAUDE.md: %w", err)
+	}
+	_, _ = fmt.Fprintf(w, "Updated .claude/CLAUDE.md\n")
 
 	// Summary
 	_, _ = fmt.Fprintln(w)
