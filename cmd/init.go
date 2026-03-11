@@ -19,18 +19,21 @@ registers mache as an MCP server for Claude Code.`,
 	RunE: runInit,
 }
 
-var (
-	initForce  bool
-	initGlobal bool
-	initSchema string
-	initSource string
-)
+// initOpts holds all init configuration, avoiding package-level flag state.
+type initOpts struct {
+	Force  bool
+	Global bool
+	Schema string
+	Source string
+}
+
+var initFlags initOpts
 
 func init() {
-	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing .mache.json")
-	initCmd.Flags().BoolVar(&initGlobal, "global", false, "Install mache MCP server globally in ~/.claude/")
-	initCmd.Flags().StringVar(&initSchema, "schema", "", "Schema preset or path (auto-detected if omitted)")
-	initCmd.Flags().StringVar(&initSource, "source", ".", "Data source path")
+	initCmd.Flags().BoolVar(&initFlags.Force, "force", false, "Overwrite existing .mache.json")
+	initCmd.Flags().BoolVar(&initFlags.Global, "global", false, "Install mache MCP server globally in ~/.claude/")
+	initCmd.Flags().StringVar(&initFlags.Schema, "schema", "", "Schema preset or path (auto-detected if omitted)")
+	initCmd.Flags().StringVar(&initFlags.Source, "source", ".", "Data source path")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -42,14 +45,17 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	}
 
 	w := cmd.OutOrStdout()
-
-	if initGlobal {
-		return runInitGlobal(w, macheCmd)
-	}
-	return runInitProject(w, macheCmd)
+	return execInit(w, macheCmd, initFlags)
 }
 
-func runInitGlobal(w io.Writer, macheCmd string) error {
+func execInit(w io.Writer, macheCmd string, opts initOpts) error {
+	if opts.Global {
+		return execInitGlobal(w, macheCmd)
+	}
+	return execInitProject(w, macheCmd, opts)
+}
+
+func execInitGlobal(w io.Writer, macheCmd string) error {
 	_, _ = fmt.Fprintln(w, "Registering mache MCP server with detected editors...")
 	_, _ = fmt.Fprintln(w)
 
@@ -61,7 +67,7 @@ func runInitGlobal(w io.Writer, macheCmd string) error {
 	return nil
 }
 
-func runInitProject(w io.Writer, macheCmd string) error {
+func execInitProject(w io.Writer, macheCmd string, opts initOpts) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
@@ -69,18 +75,18 @@ func runInitProject(w io.Writer, macheCmd string) error {
 
 	// Check for existing config
 	configPath := ConfigFileName
-	if _, err := os.Stat(configPath); err == nil && !initForce {
+	if _, err := os.Stat(configPath); err == nil && !opts.Force {
 		return fmt.Errorf("%s already exists (use --force to overwrite)", configPath)
 	}
 
 	// Auto-detect schema if not provided
-	schema := initSchema
+	schema := opts.Schema
 	if schema == "" {
 		schema = detectProjectType(cwd)
 	}
 
 	// Build config
-	src := SourceConfig{Path: initSource}
+	src := SourceConfig{Path: opts.Source}
 	if schema != "" {
 		src.Schema = schema
 	}
@@ -115,7 +121,7 @@ func runInitProject(w io.Writer, macheCmd string) error {
 	} else {
 		_, _ = fmt.Fprintf(w, "  Schema: (none — will use default)\n")
 	}
-	_, _ = fmt.Fprintf(w, "  Source: %s\n", initSource)
+	_, _ = fmt.Fprintf(w, "  Source: %s\n", opts.Source)
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Run 'mache serve' to start the MCP server.")
 

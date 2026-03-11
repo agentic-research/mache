@@ -20,14 +20,7 @@ func TestInit_CreatesFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644))
 
 	buf := new(bytes.Buffer)
-
-	// Reset flags for test isolation
-	initForce = false
-	initSchema = ""
-	initSource = "."
-
-	initCmd.SetOut(buf)
-	err := runInit(initCmd, nil)
+	err := execInit(buf, "mache", initOpts{Source: "."})
 	require.NoError(t, err)
 
 	// Check .mache.json
@@ -65,11 +58,7 @@ func TestInit_ExistingConfigNoForce(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("{}"), 0o644))
 
-	initForce = false
-	initSchema = ""
-	initSource = "."
-
-	err := runInit(initCmd, nil)
+	err := execInit(new(bytes.Buffer), "mache", initOpts{Source: "."})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 }
@@ -79,14 +68,7 @@ func TestInit_ExistingConfigWithForce(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("{}"), 0o644))
 
-	buf := new(bytes.Buffer)
-	initCmd.SetOut(buf)
-
-	initForce = true
-	initSchema = ""
-	initSource = "."
-
-	err := runInit(initCmd, nil)
+	err := execInit(new(bytes.Buffer), "mache", initOpts{Force: true, Source: "."})
 	require.NoError(t, err)
 }
 
@@ -94,14 +76,7 @@ func TestInit_ExplicitSchema(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Chdir(dir))
 
-	buf := new(bytes.Buffer)
-	initCmd.SetOut(buf)
-
-	initForce = false
-	initSchema = "python"
-	initSource = "."
-
-	err := runInit(initCmd, nil)
+	err := execInit(new(bytes.Buffer), "mache", initOpts{Schema: "python", Source: "."})
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(dir, ConfigFileName))
@@ -117,18 +92,16 @@ func TestInit_Global(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
+	// Mock Claude CLI to avoid real exec side effects
+	orig := claudeCLIRegister
+	claudeCLIRegister = func(string) bool { return false }
+	t.Cleanup(func() { claudeCLIRegister = orig })
+
 	// Create a fake .cursor dir so registerEditorMCP finds it
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".cursor"), 0o755))
 
 	buf := new(bytes.Buffer)
-	initGlobal = true
-	initForce = false
-	initSchema = ""
-	initSource = "."
-
-	initCmd.SetOut(buf)
-	err := runInit(initCmd, nil)
-	initGlobal = false // reset
+	err := execInit(buf, "mache", initOpts{Global: true, Source: "."})
 	require.NoError(t, err)
 
 	// Check Cursor's mcp.json was created
@@ -157,13 +130,7 @@ func TestInit_CLAUDEmd_AppendToExisting(t *testing.T) {
 		0o644,
 	))
 
-	buf := new(bytes.Buffer)
-	initCmd.SetOut(buf)
-	initForce = false
-	initSchema = "go"
-	initSource = "."
-
-	err := runInit(initCmd, nil)
+	err := execInit(new(bytes.Buffer), "mache", initOpts{Schema: "go", Source: "."})
 	require.NoError(t, err)
 
 	claudeMD, err := os.ReadFile(filepath.Join(claudeDir, "CLAUDE.md"))
@@ -177,15 +144,11 @@ func TestInit_CLAUDEmd_NoDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Chdir(dir))
 
-	buf := new(bytes.Buffer)
-	initCmd.SetOut(buf)
-	initForce = true
-	initSchema = "go"
-	initSource = "."
+	opts := initOpts{Force: true, Schema: "go", Source: "."}
 
 	// Run init twice
-	require.NoError(t, runInit(initCmd, nil))
-	require.NoError(t, runInit(initCmd, nil))
+	require.NoError(t, execInit(new(bytes.Buffer), "mache", opts))
+	require.NoError(t, execInit(new(bytes.Buffer), "mache", opts))
 
 	claudeMD, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
 	require.NoError(t, err)
@@ -197,14 +160,7 @@ func TestInit_CustomSource(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Chdir(dir))
 
-	buf := new(bytes.Buffer)
-	initCmd.SetOut(buf)
-
-	initForce = false
-	initSchema = ""
-	initSource = "./data/mydb.db"
-
-	err := runInit(initCmd, nil)
+	err := execInit(new(bytes.Buffer), "mache", initOpts{Source: "./data/mydb.db"})
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(dir, ConfigFileName))

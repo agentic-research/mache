@@ -66,6 +66,10 @@ func resolveSchema(schemaRef, configDir string) (*api.Topology, error) {
 	schemaPath := schemaRef
 	if !filepath.IsAbs(schemaPath) {
 		schemaPath = filepath.Join(configDir, schemaPath)
+		// Containment check: relative paths must stay within configDir
+		if err := checkPathContainment(schemaPath, configDir); err != nil {
+			return nil, err
+		}
 	}
 
 	data, err := os.ReadFile(schemaPath)
@@ -80,24 +84,49 @@ func resolveSchema(schemaRef, configDir string) (*api.Topology, error) {
 }
 
 // resolveDataSource resolves a data source path relative to configDir.
-func resolveDataSource(sourcePath, configDir string) string {
+// Absolute paths are returned as-is. Relative paths are checked for
+// containment within configDir to prevent path traversal.
+func resolveDataSource(sourcePath, configDir string) (string, error) {
 	if filepath.IsAbs(sourcePath) {
-		return sourcePath
+		return sourcePath, nil
 	}
-	return filepath.Join(configDir, sourcePath)
+	resolved := filepath.Join(configDir, sourcePath)
+	if err := checkPathContainment(resolved, configDir); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
-// claudeMCPConfig represents the .claude/mcp.json structure.
-type claudeMCPConfig struct {
-	MCPServers map[string]json.RawMessage `json:"mcpServers"`
+// checkPathContainment verifies that resolved is within or equal to base.
+// Prevents path traversal attacks from untrusted .mache.json files.
+func checkPathContainment(resolved, base string) error {
+	absResolved, err := filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("resolve absolute path %q: %w", resolved, err)
+	}
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return fmt.Errorf("resolve absolute path %q: %w", base, err)
+	}
+	// Check that resolved path starts with base path
+	rel, err := filepath.Rel(absBase, absResolved)
+	if err != nil {
+		return fmt.Errorf("path %q escapes project directory %q", resolved, base)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("path %q escapes project directory %q", resolved, base)
+	}
+	return nil
 }
 
+// mcpServerEntry is the mache entry written into MCP config files.
 type mcpServerEntry struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
 }
 
 // writeClaudeMCPConfig writes or merges a mache entry into .claude/mcp.json.
+// Uses map[string]any as root type to preserve unknown top-level keys.
 func writeClaudeMCPConfig(projectDir, macheCommand string) error {
 	claudeDir := filepath.Join(projectDir, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -106,30 +135,27 @@ func writeClaudeMCPConfig(projectDir, macheCommand string) error {
 
 	mcpPath := filepath.Join(claudeDir, "mcp.json")
 
-	var cfg claudeMCPConfig
+	root := make(map[string]any)
 	if data, err := os.ReadFile(mcpPath); err == nil {
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		if err := json.Unmarshal(data, &root); err != nil {
 			return fmt.Errorf("parse existing %s: %w", mcpPath, err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", mcpPath, err)
 	}
 
-	if cfg.MCPServers == nil {
-		cfg.MCPServers = make(map[string]json.RawMessage)
+	servers, _ := root["mcpServers"].(map[string]any)
+	if servers == nil {
+		servers = make(map[string]any)
 	}
 
-	entry := mcpServerEntry{
+	servers["mache"] = mcpServerEntry{
 		Command: macheCommand,
 		Args:    []string{"serve"},
 	}
-	entryJSON, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal mache entry: %w", err)
-	}
-	cfg.MCPServers["mache"] = entryJSON
+	root["mcpServers"] = servers
 
-	out, err := json.MarshalIndent(cfg, "", "  ")
+	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal mcp config: %w", err)
 	}
@@ -192,10 +218,11 @@ func generateMacheCLAUDESection(schemaPreset string) string {
 
 // editorConfig describes how to register an MCP server with a specific editor.
 type editorConfig struct {
-	Name       string // e.g. "Cursor"
-	ConfigPath string // absolute path to config file
-	ServerKey  string // JSON key holding server map ("mcpServers", "servers", "context_servers")
-	EntryFunc  func(binaryPath string) map[string]any
+	Name         string // e.g. "Cursor"
+	ConfigPath   string // absolute path to config file
+	ServerKey    string // JSON key holding server map ("mcpServers", "servers", "context_servers")
+	EntryFunc    func(binaryPath string) map[string]any
+	SharedConfig bool // true if config file is shared with other settings (may contain comments)
 }
 
 // detectEditors returns configs for all editors found on the system.
@@ -219,15 +246,17 @@ func detectEditors(binaryPath string) []editorConfig {
 			EntryFunc:  mcpServersEntry,
 		},
 		{
-			Name:       "Gemini CLI",
-			ConfigPath: filepath.Join(home, ".gemini", "settings.json"),
-			ServerKey:  "mcpServers",
-			EntryFunc:  mcpServersEntry,
+			Name:         "Gemini CLI",
+			ConfigPath:   filepath.Join(home, ".gemini", "settings.json"),
+			ServerKey:    "mcpServers",
+			EntryFunc:    mcpServersEntry,
+			SharedConfig: true,
 		},
 		{
-			Name:       "Zed",
-			ConfigPath: filepath.Join(home, ".config", "zed", "settings.json"),
-			ServerKey:  "context_servers",
+			Name:         "Zed",
+			ConfigPath:   filepath.Join(home, ".config", "zed", "settings.json"),
+			ServerKey:    "context_servers",
+			SharedConfig: true,
 			EntryFunc: func(bp string) map[string]any {
 				return map[string]any{"source": "custom", "command": bp, "args": []string{"serve"}}
 			},
@@ -263,20 +292,22 @@ func mcpServersEntry(binaryPath string) map[string]any {
 // registerEditorMCP upserts mache into an editor's MCP config file.
 // Only writes if the config file's parent directory already exists
 // (i.e. the editor is installed). Returns true if registration was performed.
-func registerEditorMCP(ec editorConfig, binaryPath string) bool {
+// For shared config files (may contain JSONC comments), invalid JSON causes
+// a skip rather than overwrite, and a warning is returned via the second value.
+func registerEditorMCP(ec editorConfig, binaryPath string) (ok bool, warning string) {
 	// Only register if the editor's config directory exists
 	configDir := filepath.Dir(ec.ConfigPath)
 	if _, err := os.Stat(configDir); os.IsNotExist(err) {
-		return false
+		return false, ""
 	}
 
 	root := make(map[string]any)
 	if data, err := os.ReadFile(ec.ConfigPath); err == nil {
 		if jsonErr := json.Unmarshal(data, &root); jsonErr != nil {
 			// Invalid JSON — start fresh for dedicated config files,
-			// skip for shared settings files (Zed, Gemini)
-			if ec.Name == "Zed" || ec.Name == "Gemini CLI" {
-				return false
+			// skip for shared settings files (may contain // comments)
+			if ec.SharedConfig {
+				return false, fmt.Sprintf("%s has non-standard JSON (comments?) — add mache manually", ec.ConfigPath)
 			}
 			root = make(map[string]any)
 		}
@@ -292,16 +323,24 @@ func registerEditorMCP(ec editorConfig, binaryPath string) bool {
 
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
-		return false
+		return false, ""
 	}
 	if err := os.WriteFile(ec.ConfigPath, append(out, '\n'), 0o644); err != nil {
-		return false
+		return false, ""
 	}
-	return true
+	return true, ""
 }
+
+// claudeCLIRegister is the function that performs Claude Code CLI registration.
+// Replaced in tests to avoid real side effects.
+var claudeCLIRegister = registerClaudeCodeCLIImpl
 
 // registerClaudeCodeCLI registers mache via `claude mcp add` if the CLI is available.
 func registerClaudeCodeCLI(binaryPath string) bool {
+	return claudeCLIRegister(binaryPath)
+}
+
+func registerClaudeCodeCLIImpl(binaryPath string) bool {
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		return false
@@ -322,13 +361,30 @@ func registerAllEditors(w io.Writer, binaryPath string) {
 
 	// File-based editors
 	for _, ec := range detectEditors(binaryPath) {
-		if registerEditorMCP(ec, binaryPath) {
+		ok, warn := registerEditorMCP(ec, binaryPath)
+		if ok {
 			_, _ = fmt.Fprintf(w, "  [%s] updated %s\n", ec.Name, ec.ConfigPath)
+		} else if warn != "" {
+			_, _ = fmt.Fprintf(w, "  [%s] skipped: %s\n", ec.Name, warn)
 		}
 	}
 }
 
+// sentinelFiles maps sentinel filenames to their language preset.
+// These are checked before extension counting so that projects with
+// code in subdirectories (e.g. cmd/, internal/) are detected correctly.
+var sentinelFiles = map[string]string{
+	"go.mod":           "go",
+	"go.sum":           "go",
+	"pyproject.toml":   "python",
+	"requirements.txt": "python",
+	"setup.py":         "python",
+	"Cargo.toml":       "rust",
+}
+
 // detectProjectType scans a directory and returns the best-fit schema preset name.
+// Checks sentinel files first (go.mod, pyproject.toml, etc.), then falls back
+// to counting file extensions in the top-level directory.
 // Returns empty string if no preset matches (caller should omit schema).
 func detectProjectType(dir string) string {
 	entries, err := os.ReadDir(dir)
@@ -341,7 +397,14 @@ func detectProjectType(dir string) string {
 		if e.IsDir() {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(e.Name()))
+		name := e.Name()
+
+		// Sentinel files take priority
+		if lang, ok := sentinelFiles[name]; ok {
+			return lang
+		}
+
+		ext := strings.ToLower(filepath.Ext(name))
 		switch ext {
 		case ".go":
 			counts["go"]++

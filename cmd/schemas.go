@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/agentic-research/mache/api"
 )
@@ -26,6 +27,7 @@ func PresetNames() []string {
 	for k := range presetSchemas {
 		names = append(names, k)
 	}
+	sort.Strings(names)
 	return names
 }
 

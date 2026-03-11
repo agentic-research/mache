@@ -47,8 +47,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 			}
 			return err
 		}
+		if len(cfg.Sources) > 1 {
+			log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
+		}
 		src := cfg.Sources[0]
-		dataSource = resolveDataSource(src.Path, ".")
+		dataSource, err = resolveDataSource(src.Path, ".")
+		if err != nil {
+			return fmt.Errorf("resolve data source: %w", err)
+		}
 		schema, err = resolveSchema(src.Schema, ".")
 		if err != nil {
 			return fmt.Errorf("resolve schema: %w", err)

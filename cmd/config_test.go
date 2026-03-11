@@ -110,18 +110,33 @@ func TestResolveSchema_UnknownPreset(t *testing.T) {
 }
 
 func TestResolveDataSource_Relative(t *testing.T) {
-	got := resolveDataSource(".", "/home/user/project")
+	got, err := resolveDataSource(".", "/home/user/project")
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/project", got)
 }
 
 func TestResolveDataSource_RelativeSubdir(t *testing.T) {
-	got := resolveDataSource("./data", "/home/user/project")
+	got, err := resolveDataSource("./data", "/home/user/project")
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/project/data", got)
 }
 
 func TestResolveDataSource_Absolute(t *testing.T) {
-	got := resolveDataSource("/opt/data.db", "/home/user/project")
+	got, err := resolveDataSource("/opt/data.db", "/home/user/project")
+	require.NoError(t, err)
 	assert.Equal(t, "/opt/data.db", got)
+}
+
+func TestResolveDataSource_Traversal(t *testing.T) {
+	_, err := resolveDataSource("../../etc/passwd", "/home/user/project")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes")
+}
+
+func TestResolveSchema_Traversal(t *testing.T) {
+	_, err := resolveSchema("../../etc/passwd", "/home/user/project")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes")
 }
 
 func TestDetectProjectType_GoProject(t *testing.T) {
@@ -154,6 +169,26 @@ func TestDetectProjectType_NoMatch(t *testing.T) {
 	assert.Equal(t, "", detectProjectType(dir))
 }
 
+func TestDetectProjectType_GoMod(t *testing.T) {
+	// go.mod sentinel should detect Go even without .go files in root
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte(""), 0o644))
+	assert.Equal(t, "go", detectProjectType(dir))
+}
+
+func TestDetectProjectType_PyprojectToml(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]"), 0o644))
+	assert.Equal(t, "python", detectProjectType(dir))
+}
+
+func TestDetectProjectType_RequirementsTxt(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644))
+	assert.Equal(t, "python", detectProjectType(dir))
+}
+
 func TestWriteClaudeMCPConfig_Fresh(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, writeClaudeMCPConfig(dir, "mache"))
@@ -161,14 +196,13 @@ func TestWriteClaudeMCPConfig_Fresh(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
 	require.NoError(t, err)
 
-	var cfg claudeMCPConfig
-	require.NoError(t, json.Unmarshal(data, &cfg))
-	require.Contains(t, cfg.MCPServers, "mache")
-
-	var entry mcpServerEntry
-	require.NoError(t, json.Unmarshal(cfg.MCPServers["mache"], &entry))
-	assert.Equal(t, "mache", entry.Command)
-	assert.Equal(t, []string{"serve"}, entry.Args)
+	var root map[string]any
+	require.NoError(t, json.Unmarshal(data, &root))
+	servers := root["mcpServers"].(map[string]any)
+	mache := servers["mache"].(map[string]any)
+	assert.Equal(t, "mache", mache["command"])
+	args := mache["args"].([]any)
+	assert.Equal(t, "serve", args[0])
 }
 
 func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
@@ -184,16 +218,37 @@ func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(claudeDir, "mcp.json"))
 	require.NoError(t, err)
 
-	var cfg claudeMCPConfig
-	require.NoError(t, json.Unmarshal(data, &cfg))
+	var root map[string]any
+	require.NoError(t, json.Unmarshal(data, &root))
+	servers := root["mcpServers"].(map[string]any)
 
 	// Both entries should exist
-	assert.Contains(t, cfg.MCPServers, "github")
-	assert.Contains(t, cfg.MCPServers, "mache")
+	assert.Contains(t, servers, "github")
+	assert.Contains(t, servers, "mache")
 
-	var entry mcpServerEntry
-	require.NoError(t, json.Unmarshal(cfg.MCPServers["mache"], &entry))
-	assert.Equal(t, "/usr/local/bin/mache", entry.Command)
+	mache := servers["mache"].(map[string]any)
+	assert.Equal(t, "/usr/local/bin/mache", mache["command"])
+}
+
+func TestWriteClaudeMCPConfig_PreservesUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	claudeDir := filepath.Join(dir, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+
+	// Config with extra top-level keys that must survive round-trip
+	existing := `{"mcpServers": {}, "customSetting": true, "version": 2}`
+	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "mcp.json"), []byte(existing), 0o644))
+
+	require.NoError(t, writeClaudeMCPConfig(dir, "mache"))
+
+	data, err := os.ReadFile(filepath.Join(claudeDir, "mcp.json"))
+	require.NoError(t, err)
+
+	var root map[string]any
+	require.NoError(t, json.Unmarshal(data, &root))
+	assert.Equal(t, true, root["customSetting"])
+	assert.Equal(t, float64(2), root["version"])
+	assert.Contains(t, root["mcpServers"].(map[string]any), "mache")
 }
 
 func TestWriteClaudeMD_Fresh(t *testing.T) {
@@ -225,6 +280,8 @@ func TestPresetNames(t *testing.T) {
 	assert.Contains(t, names, "python")
 	assert.Contains(t, names, "sql")
 	assert.Len(t, names, len(presetSchemas))
+	// Must be sorted (doc contract)
+	assert.IsNonDecreasing(t, names)
 }
 
 func TestRegisterEditorMCP_Fresh(t *testing.T) {
@@ -239,7 +296,7 @@ func TestRegisterEditorMCP_Fresh(t *testing.T) {
 		EntryFunc:  mcpServersEntry,
 	}
 
-	ok := registerEditorMCP(ec, "/usr/local/bin/mache")
+	ok, _ := registerEditorMCP(ec, "/usr/local/bin/mache")
 	assert.True(t, ok)
 
 	data, err := os.ReadFile(ec.ConfigPath)
@@ -268,7 +325,7 @@ func TestRegisterEditorMCP_MergeExisting(t *testing.T) {
 		EntryFunc:  mcpServersEntry,
 	}
 
-	ok := registerEditorMCP(ec, "/usr/local/bin/mache")
+	ok, _ := registerEditorMCP(ec, "/usr/local/bin/mache")
 	assert.True(t, ok)
 
 	data, err := os.ReadFile(configPath)
@@ -288,7 +345,8 @@ func TestRegisterEditorMCP_MissingDir(t *testing.T) {
 		ServerKey:  "mcpServers",
 		EntryFunc:  mcpServersEntry,
 	}
-	assert.False(t, registerEditorMCP(ec, "mache"))
+	ok, _ := registerEditorMCP(ec, "mache")
+	assert.False(t, ok)
 }
 
 func TestRegisterEditorMCP_CustomServerKey(t *testing.T) {
@@ -305,7 +363,7 @@ func TestRegisterEditorMCP_CustomServerKey(t *testing.T) {
 		},
 	}
 
-	ok := registerEditorMCP(ec, "/usr/local/bin/mache")
+	ok, _ := registerEditorMCP(ec, "/usr/local/bin/mache")
 	assert.True(t, ok)
 
 	data, err := os.ReadFile(ec.ConfigPath)
@@ -327,13 +385,16 @@ func TestRegisterEditorMCP_InvalidJSON_SharedSettings(t *testing.T) {
 	require.NoError(t, os.WriteFile(configPath, []byte("{invalid"), 0o644))
 
 	ec := editorConfig{
-		Name:       "Zed",
-		ConfigPath: configPath,
-		ServerKey:  "context_servers",
-		EntryFunc:  mcpServersEntry,
+		Name:         "Zed",
+		ConfigPath:   configPath,
+		ServerKey:    "context_servers",
+		EntryFunc:    mcpServersEntry,
+		SharedConfig: true,
 	}
-	// Zed skips on invalid JSON (shared settings file)
-	assert.False(t, registerEditorMCP(ec, "mache"))
+	// Shared config skips on invalid JSON and returns warning
+	ok, warn := registerEditorMCP(ec, "mache")
+	assert.False(t, ok)
+	assert.Contains(t, warn, "non-standard JSON")
 }
 
 func TestRegisterEditorMCP_InvalidJSON_DedicatedConfig(t *testing.T) {
@@ -350,7 +411,7 @@ func TestRegisterEditorMCP_InvalidJSON_DedicatedConfig(t *testing.T) {
 		EntryFunc:  mcpServersEntry,
 	}
 	// Cursor starts fresh on invalid JSON (dedicated config file)
-	ok := registerEditorMCP(ec, "/usr/bin/mache")
+	ok, _ := registerEditorMCP(ec, "/usr/bin/mache")
 	assert.True(t, ok)
 
 	data, err := os.ReadFile(configPath)
@@ -375,6 +436,11 @@ func TestDetectEditors_ReturnsKnownEditors(t *testing.T) {
 func TestRegisterAllEditors_Output(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+
+	// Mock Claude CLI to avoid real exec side effects
+	orig := claudeCLIRegister
+	claudeCLIRegister = func(string) bool { return false }
+	t.Cleanup(func() { claudeCLIRegister = orig })
 
 	// Create a fake Cursor dir
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".cursor"), 0o755))
