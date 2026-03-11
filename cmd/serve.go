@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/writeback"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
@@ -242,6 +244,26 @@ func (lg *lazyGraph) DefsMap() map[string][]string {
 	return nil
 }
 
+func (lg *lazyGraph) UpdateNodeContent(id string, data []byte, origin *graph.SourceOrigin, modTime time.Time) error {
+	g, err := lg.get()
+	if err != nil {
+		return err
+	}
+	if wb, ok := g.(writeBacker); ok {
+		return wb.UpdateNodeContent(id, data, origin, modTime)
+	}
+	return fmt.Errorf("backend does not support write-back")
+}
+
+func (lg *lazyGraph) ShiftOrigins(filePath string, afterByte uint32, delta int32) {
+	g, _ := lg.get()
+	if g != nil {
+		if wb, ok := g.(writeBacker); ok {
+			wb.ShiftOrigins(filePath, afterByte, delta)
+		}
+	}
+}
+
 // buildServeGraph constructs a read-only Graph from the data source.
 // Returns the graph, a cleanup function, and any error.
 func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func(), error) {
@@ -301,6 +323,13 @@ type refsMapProvider interface {
 // for find_definition (symbol → where it's defined).
 type defsMapProvider interface {
 	DefsMap() map[string][]string
+}
+
+// writeBacker is the subset of Graph backends that support surgical write-back
+// (validate → format → splice → update node).
+type writeBacker interface {
+	UpdateNodeContent(id string, data []byte, origin *graph.SourceOrigin, modTime time.Time) error
+	ShiftOrigins(filePath string, afterByte uint32, delta int32)
 }
 
 func registerMCPTools(s *server.MCPServer, g graph.Graph) {
@@ -382,6 +411,18 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 		),
 		makeGetOverviewHandler(g),
 	)
+
+	// Only add write_file if the backend supports write-back
+	if _, ok := g.(writeBacker); ok {
+		s.AddTool(
+			mcp.NewTool("write_file",
+				mcp.WithDescription("Write new content to a source file node. Uses the splice pipeline: validate (tree-sitter) → format (gofumpt/hclwrite) → atomic splice into source file → update graph. The node must have a source origin (i.e., was ingested from a real file). Returns the result including any validation errors."),
+				mcp.WithString("path", mcp.Required(), mcp.Description("File node path (e.g. 'go/graph/methods/MemoryStore.GetCallees/source')")),
+				mcp.WithString("content", mcp.Required(), mcp.Description("New content to write")),
+			),
+			makeWriteFileHandler(g),
+		)
+	}
 }
 
 type nodeEntry struct {
@@ -447,24 +488,29 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
-func readOneFile(g graph.Graph, path string) (string, error) {
+type fileReadResult struct {
+	Content string              `json:"content"`
+	Origin  *graph.SourceOrigin `json:"origin,omitempty"`
+}
+
+func readOneFileWithOrigin(g graph.Graph, path string) (*fileReadResult, error) {
 	node, err := g.GetNode(path)
 	if err != nil {
-		return "", fmt.Errorf("not found: %s", path)
+		return nil, fmt.Errorf("not found: %s", path)
 	}
 	if node.Mode.IsDir() {
-		return "", fmt.Errorf("%s is a directory — use list_directory", path)
+		return nil, fmt.Errorf("%s is a directory — use list_directory", path)
 	}
 	size := node.ContentSize()
 	if size == 0 {
-		return "", nil
+		return &fileReadResult{Origin: node.Origin}, nil
 	}
 	buf := make([]byte, size)
 	n, err := g.ReadContent(path, buf, 0)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %v", path, err)
+		return nil, fmt.Errorf("read %s: %v", path, err)
 	}
-	return string(buf[:n]), nil
+	return &fileReadResult{Content: string(buf[:n]), Origin: node.Origin}, nil
 }
 
 func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
@@ -480,17 +526,18 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 
 			type fileResult struct {
-				Path    string `json:"path"`
-				Content string `json:"content,omitempty"`
-				Error   string `json:"error,omitempty"`
+				Path    string              `json:"path"`
+				Content string              `json:"content,omitempty"`
+				Origin  *graph.SourceOrigin `json:"origin,omitempty"`
+				Error   string              `json:"error,omitempty"`
 			}
 			results := make([]fileResult, 0, len(paths))
 			for _, p := range paths {
-				content, err := readOneFile(g, p)
+				r, err := readOneFileWithOrigin(g, p)
 				if err != nil {
 					results = append(results, fileResult{Path: p, Error: err.Error()})
 				} else {
-					results = append(results, fileResult{Path: p, Content: content})
+					results = append(results, fileResult{Path: p, Content: r.Content, Origin: r.Origin})
 				}
 			}
 			data, _ := json.MarshalIndent(results, "", "  ")
@@ -501,11 +548,17 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		if path == "" {
 			return mcp.NewToolResultError("path or paths is required"), nil
 		}
-		content, err := readOneFile(g, path)
+		r, err := readOneFileWithOrigin(g, path)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultText(content), nil
+		// If there's an origin, return it as structured JSON so the consumer
+		// knows exactly where to edit in the real filesystem.
+		if r.Origin != nil {
+			data, _ := json.MarshalIndent(r, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		}
+		return mcp.NewToolResultText(r.Content), nil
 	}
 }
 
@@ -890,6 +943,94 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		data, _ := json.MarshalIndent(ov, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		path := request.GetString("path", "")
+		if path == "" {
+			return mcp.NewToolResultError("path is required"), nil
+		}
+		content := request.GetString("content", "")
+		if content == "" {
+			return mcp.NewToolResultError("content is required"), nil
+		}
+
+		node, err := g.GetNode(path)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("not found: %s", path)), nil
+		}
+		if node.Mode.IsDir() {
+			return mcp.NewToolResultError(fmt.Sprintf("%s is a directory — write to a file node like /source", path)), nil
+		}
+		if node.Origin == nil {
+			return mcp.NewToolResultError(fmt.Sprintf("%s has no source origin — only source-code nodes support write-back", path)), nil
+		}
+
+		origin := *node.Origin
+		newContent := []byte(content)
+
+		// 1. Validate syntax
+		if err := writeback.Validate(newContent, origin.FilePath); err != nil {
+			type valResult struct {
+				Status string `json:"status"`
+				Error  string `json:"error"`
+				Path   string `json:"path"`
+				File   string `json:"file"`
+			}
+			data, _ := json.MarshalIndent(valResult{
+				Status: "validation_error",
+				Error:  err.Error(),
+				Path:   path,
+				File:   origin.FilePath,
+			}, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		}
+
+		// 2. Format (gofumpt for Go, hclwrite for HCL)
+		formatted := writeback.FormatBuffer(newContent, origin.FilePath)
+
+		// 3. Splice into source file
+		oldLen := origin.EndByte - origin.StartByte
+		if err := writeback.Splice(origin, formatted); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("splice failed: %v", err)), nil
+		}
+
+		// 4. Surgical node update
+		wb := g.(writeBacker)
+		newOrigin := &graph.SourceOrigin{
+			FilePath:  origin.FilePath,
+			StartByte: origin.StartByte,
+			EndByte:   origin.StartByte + uint32(len(formatted)),
+		}
+		delta := int32(len(formatted)) - int32(oldLen)
+		if delta != 0 {
+			wb.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
+		}
+
+		modTime := time.Now()
+		if fi, err := os.Stat(origin.FilePath); err == nil {
+			modTime = fi.ModTime()
+		}
+		_ = wb.UpdateNodeContent(path, formatted, newOrigin, modTime)
+		g.Invalidate(path)
+
+		type writeResult struct {
+			Status     string              `json:"status"`
+			Path       string              `json:"path"`
+			Origin     *graph.SourceOrigin `json:"origin"`
+			Formatted  bool                `json:"formatted"`
+			BytesDelta int32               `json:"bytes_delta"`
+		}
+		data, _ := json.MarshalIndent(writeResult{
+			Status:     "ok",
+			Path:       path,
+			Origin:     newOrigin,
+			Formatted:  string(formatted) != content,
+			BytesDelta: delta,
+		}, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }

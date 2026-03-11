@@ -45,9 +45,9 @@ type ContentRef struct {
 // SourceOrigin tracks the byte range of a construct in its source file.
 // Used by write-back to splice edits into the original source.
 type SourceOrigin struct {
-	FilePath  string
-	StartByte uint32
-	EndByte   uint32
+	FilePath  string `json:"file"`
+	StartByte uint32 `json:"start_byte"`
+	EndByte   uint32 `json:"end_byte"`
 }
 
 // Node is the universal primitive.
