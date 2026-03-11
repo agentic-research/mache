@@ -21,12 +21,14 @@ Always try MCP tools first. Fall back to FUSE only if MCP is unavailable.
 
 | Tool | Purpose |
 |------|---------|
+| `get_overview` | Structural overview: top-level dirs, node counts, ref/def stats. **Call first.** |
 | `list_directory` | Browse the projected directory tree (empty path = root) |
 | `read_file` | Read content of a projected file node |
+| `find_definition` | Find where a symbol is defined (construct directory paths) |
 | `find_callers` | Find all nodes referencing a symbol/token |
 | `find_callees` | Find all symbols called by a construct |
 | `search` | Search symbols by pattern (SQL LIKE: `%auth%`) |
-| `get_communities` | Detect clusters of co-referencing nodes |
+| `get_communities` | Detect clusters of co-referencing nodes. Use `summary=true` for large codebases. |
 
 ## Exploration Strategy
 
@@ -34,9 +36,9 @@ Always try MCP tools first. Fall back to FUSE only if MCP is unavailable.
 
 Start broad. Map the top-level structure:
 
-1. `list_directory` with empty path to see the root
-2. Drill into each top-level directory to understand the hierarchy
-3. Note directory naming conventions and what each level represents
+1. `get_overview` — instant orientation: top-level dirs, node counts, cross-ref stats
+2. `list_directory` with empty path to see the root if you need more detail
+3. Drill into interesting top-level directories to understand the hierarchy
 
 ### Phase 2: Sample
 
@@ -50,11 +52,12 @@ Read representative nodes to understand data shape:
 
 Follow the user's questions using the right tools:
 
+- **"Where is X defined?"** → `find_definition` with the symbol name
 - **"What calls X?"** → `find_callers` with the symbol name
 - **"What does X call?"** → `find_callees` with the construct path
 - **"Find all auth-related code"** → `search` with `%auth%`
-- **"What are the main modules?"** → `get_communities` to find clusters
-- **"Show me function X"** → `search` to find it, then `read_file`
+- **"What are the main modules?"** → `get_communities` with `summary=true`
+- **"Show me function X"** → `find_definition` to locate it, then `read_file`
 
 ### Phase 4: Report
 

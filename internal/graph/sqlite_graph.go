@@ -289,6 +289,17 @@ func (g *SQLiteGraph) AddDef(token, dirID string) error {
 	return nil
 }
 
+// DefsMap returns a snapshot of the token→dirIDs definition map.
+func (g *SQLiteGraph) DefsMap() map[string][]string {
+	g.pendingMu.Lock()
+	defer g.pendingMu.Unlock()
+	cp := make(map[string][]string, len(g.defs))
+	for k, v := range g.defs {
+		cp[k] = append([]string(nil), v...)
+	}
+	return cp
+}
+
 func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 	if len(id) > 0 && id[0] == '/' {
 		id = id[1:]

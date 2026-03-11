@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
@@ -171,6 +172,12 @@ type refsMapProvider interface {
 	RefsMap() map[string][]string
 }
 
+// defsMapProvider is the subset of Graph backends that expose their defs map
+// for find_definition (symbol → where it's defined).
+type defsMapProvider interface {
+	DefsMap() map[string][]string
+}
+
 func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 	s.AddTool(
 		mcp.NewTool("list_directory",
@@ -220,12 +227,32 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 	if _, ok := g.(refsMapProvider); ok {
 		s.AddTool(
 			mcp.NewTool("get_communities",
-				mcp.WithDescription("Detect communities of densely co-referencing nodes using Louvain modularity optimization. Returns clusters of nodes that share symbols."),
+				mcp.WithDescription("Detect communities of densely co-referencing nodes using Louvain modularity optimization. Returns clusters of nodes that share symbols. Use summary=true for large codebases to get community sizes and top members without full member lists."),
 				mcp.WithNumber("min_size", mcp.Description("Minimum community size (default 2)")),
+				mcp.WithBoolean("summary", mcp.Description("Return summary only (ID, size, top 5 members per community) instead of full member lists. Recommended for large codebases.")),
 			),
 			makeGetCommunitiesHandler(g),
 		)
 	}
+
+	// Only add find_definition if the backend exposes its defs map
+	if _, ok := g.(defsMapProvider); ok {
+		s.AddTool(
+			mcp.NewTool("find_definition",
+				mcp.WithDescription("Find where a symbol is defined. Returns the construct directory path(s) where the symbol is declared. Complements find_callers (who uses it) and find_callees (what it calls)."),
+				mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to find definition for (e.g. 'GetCallers' or 'auth.Validate')")),
+			),
+			makeFindDefinitionHandler(g),
+		)
+	}
+
+	// get_overview: aggregate first-contact orientation tool
+	s.AddTool(
+		mcp.NewTool("get_overview",
+			mcp.WithDescription("Get a structural overview of the projected data: top-level directories, node counts, available cross-reference stats. Call this first when exploring an unfamiliar codebase."),
+		),
+		makeGetOverviewHandler(g),
+	)
 }
 
 type nodeEntry struct {
@@ -388,6 +415,7 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		minSize := request.GetInt("min_size", 2)
+		summary := request.GetBool("summary", false)
 
 		rp := g.(refsMapProvider)
 		refs := rp.RefsMap()
@@ -397,7 +425,174 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		result := graph.DetectCommunities(refs, minSize)
 
+		if summary {
+			type communitySummary struct {
+				ID         int      `json:"id"`
+				Size       int      `json:"size"`
+				TopMembers []string `json:"top_members"`
+			}
+			type summaryResult struct {
+				NumCommunities int                `json:"num_communities"`
+				NumNodes       int                `json:"num_nodes"`
+				NumEdges       int                `json:"num_edges"`
+				Modularity     float64            `json:"modularity"`
+				Communities    []communitySummary `json:"communities"`
+			}
+			sr := summaryResult{
+				NumCommunities: len(result.Communities),
+				NumNodes:       result.NumNodes,
+				NumEdges:       result.NumEdges,
+				Modularity:     result.Modularity,
+			}
+			for _, c := range result.Communities {
+				top := c.Members
+				if len(top) > 5 {
+					top = top[:5]
+				}
+				sr.Communities = append(sr.Communities, communitySummary{
+					ID:         c.ID,
+					Size:       len(c.Members),
+					TopMembers: top,
+				})
+			}
+			data, _ := json.MarshalIndent(sr, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		}
+
 		data, _ := json.MarshalIndent(result, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		symbol := request.GetString("symbol", "")
+		if symbol == "" {
+			return mcp.NewToolResultError("symbol is required"), nil
+		}
+
+		dp := g.(defsMapProvider)
+		defs := dp.DefsMap()
+
+		// Try exact match first
+		dirIDs, ok := defs[symbol]
+		if !ok {
+			// Try case-insensitive prefix/suffix matching
+			var matches []string
+			symbolLower := strings.ToLower(symbol)
+			for token, ids := range defs {
+				if strings.ToLower(token) == symbolLower {
+					dirIDs = ids
+					ok = true
+					break
+				}
+				// Also collect partial matches for suggestions
+				tokenLower := strings.ToLower(token)
+				if strings.Contains(tokenLower, symbolLower) || strings.Contains(symbolLower, tokenLower) {
+					for _, id := range ids {
+						matches = append(matches, token+" → "+id)
+					}
+				}
+			}
+			if !ok {
+				if len(matches) > 0 {
+					if len(matches) > 20 {
+						matches = matches[:20]
+					}
+					type suggestion struct {
+						Message     string   `json:"message"`
+						Suggestions []string `json:"suggestions"`
+					}
+					data, _ := json.MarshalIndent(suggestion{
+						Message:     fmt.Sprintf("no exact definition for %q, but found similar symbols", symbol),
+						Suggestions: matches,
+					}, "", "  ")
+					return mcp.NewToolResultText(string(data)), nil
+				}
+				return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q", symbol)), nil
+			}
+		}
+
+		type defResult struct {
+			Symbol      string   `json:"symbol"`
+			Definitions []string `json:"definitions"`
+		}
+		data, _ := json.MarshalIndent(defResult{
+			Symbol:      symbol,
+			Definitions: dirIDs,
+		}, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		type dirInfo struct {
+			Name     string `json:"name"`
+			Path     string `json:"path"`
+			Children int    `json:"children"`
+		}
+		type overview struct {
+			TopLevel   []dirInfo `json:"top_level"`
+			TotalDirs  int       `json:"total_dirs"`
+			TotalFiles int       `json:"total_files"`
+			RefTokens  int       `json:"ref_tokens,omitempty"`
+			DefTokens  int       `json:"def_tokens,omitempty"`
+		}
+
+		ov := overview{}
+
+		// Top-level structure
+		children, err := g.ListChildren("")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("list root: %v", err)), nil
+		}
+
+		for _, childID := range children {
+			node, err := g.GetNode(childID)
+			if err != nil {
+				continue
+			}
+			if node.Mode.IsDir() {
+				ov.TotalDirs++
+				subChildren, _ := g.ListChildren(childID)
+				ov.TopLevel = append(ov.TopLevel, dirInfo{
+					Name:     filepath.Base(childID),
+					Path:     childID,
+					Children: len(subChildren),
+				})
+			} else {
+				ov.TotalFiles++
+			}
+		}
+
+		// Count refs/defs if available
+		if rp, ok := g.(refsMapProvider); ok {
+			ov.RefTokens = len(rp.RefsMap())
+		}
+		if dp, ok := g.(defsMapProvider); ok {
+			ov.DefTokens = len(dp.DefsMap())
+		}
+
+		// Walk one level deeper to count total dirs/files
+		for _, childID := range children {
+			node, _ := g.GetNode(childID)
+			if node != nil && node.Mode.IsDir() {
+				subChildren, _ := g.ListChildren(childID)
+				for _, subID := range subChildren {
+					subNode, _ := g.GetNode(subID)
+					if subNode != nil {
+						if subNode.Mode.IsDir() {
+							ov.TotalDirs++
+						} else {
+							ov.TotalFiles++
+						}
+					}
+				}
+			}
+		}
+
+		data, _ := json.MarshalIndent(ov, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }

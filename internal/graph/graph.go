@@ -366,6 +366,18 @@ func (s *MemoryStore) RefsMap() map[string][]string {
 	return cp
 }
 
+// DefsMap returns a snapshot of the token→dirIDs definition map.
+// Used by find_definition to locate where symbols are defined.
+func (s *MemoryStore) DefsMap() map[string][]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cp := make(map[string][]string, len(s.defs))
+	for k, v := range s.defs {
+		cp[k] = append([]string(nil), v...)
+	}
+	return cp
+}
+
 // DeleteFileNodes removes all nodes that originated from the given source file.
 // Uses the roaring bitmap index for O(k) lookup instead of O(N) full scan.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {
