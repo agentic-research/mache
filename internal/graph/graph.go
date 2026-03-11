@@ -45,9 +45,9 @@ type ContentRef struct {
 // SourceOrigin tracks the byte range of a construct in its source file.
 // Used by write-back to splice edits into the original source.
 type SourceOrigin struct {
-	FilePath  string
-	StartByte uint32
-	EndByte   uint32
+	FilePath  string `json:"file"`
+	StartByte uint32 `json:"start_byte"`
+	EndByte   uint32 `json:"end_byte"`
 }
 
 // Node is the universal primitive.
@@ -179,9 +179,17 @@ func (s *MemoryStore) SetCallExtractor(fn CallExtractor) {
 }
 
 // SetResolver configures lazy content resolution for nodes with ContentRef.
+// Cache size scales with node count: 25% of nodes, floor 1024, ceiling 16384.
 func (s *MemoryStore) SetResolver(fn ContentResolverFunc) {
 	s.resolver = fn
-	s.cache = newContentCache(1024)
+	size := len(s.nodes) / 4
+	if size < 1024 {
+		size = 1024
+	}
+	if size > 16384 {
+		size = 16384
+	}
+	s.cache = newContentCache(size)
 }
 
 // RootIDs returns a copy of the top-level root node IDs.
@@ -358,6 +366,18 @@ func (s *MemoryStore) RefsMap() map[string][]string {
 	return cp
 }
 
+// DefsMap returns a snapshot of the token→dirIDs definition map.
+// Used by find_definition to locate where symbols are defined.
+func (s *MemoryStore) DefsMap() map[string][]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cp := make(map[string][]string, len(s.defs))
+	for k, v := range s.defs {
+		cp[k] = append([]string(nil), v...)
+	}
+	return cp
+}
+
 // DeleteFileNodes removes all nodes that originated from the given source file.
 // Uses the roaring bitmap index for O(k) lookup instead of O(N) full scan.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {
@@ -447,6 +467,38 @@ func (s *MemoryStore) deleteFileNodes(filePath string) {
 			if changed {
 				n.Children = newChildren
 			}
+		}
+	}
+
+	// 4. Clean stale refs: remove deleted node IDs from token→[]nodeID map.
+	// Without this, renamed/deleted functions persist as phantom callers.
+	for token, nodeIDs := range s.refs {
+		filtered := nodeIDs[:0]
+		for _, nid := range nodeIDs {
+			if _, del := deleteSet[nid]; !del {
+				filtered = append(filtered, nid)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.refs, token)
+		} else if len(filtered) < len(nodeIDs) {
+			s.refs[token] = filtered
+		}
+	}
+
+	// 5. Clean stale defs: remove deleted dir IDs from token→[]dirID map.
+	// Without this, renamed functions persist as phantom callees.
+	for token, dirIDs := range s.defs {
+		filtered := dirIDs[:0]
+		for _, did := range dirIDs {
+			if _, del := deleteSet[did]; !del {
+				filtered = append(filtered, did)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.defs, token)
+		} else if len(filtered) < len(dirIDs) {
+			s.defs[token] = filtered
 		}
 	}
 }

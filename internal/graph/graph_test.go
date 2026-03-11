@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"io/fs"
 	"testing"
 	"time"
@@ -434,6 +435,60 @@ func TestMemoryStore_DeleteFileNodes_UsesBitmap(t *testing.T) {
 	assert.Equal(t, []string{"pkg/FuncC"}, parent.Children)
 }
 
+func TestMemoryStore_DeleteFileNodes_CleansRefsAndDefs(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddRoot(&Node{
+		ID:       "pkg",
+		Mode:     fs.ModeDir,
+		Children: []string{"pkg/FuncA", "pkg/FuncB"},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncA",
+		Mode: 0,
+		Data: []byte("func A"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 0,
+			EndByte:   6,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncB",
+		Mode: 0,
+		Data: []byte("func B"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/other.go",
+			StartByte: 0,
+			EndByte:   6,
+		},
+	})
+
+	// Add refs: FuncA references "Validate", FuncB references "Validate"
+	require.NoError(t, store.AddRef("Validate", "pkg/FuncA"))
+	require.NoError(t, store.AddRef("Validate", "pkg/FuncB"))
+	require.NoError(t, store.AddRef("OnlyA", "pkg/FuncA"))
+
+	// Add defs: FuncA defines "FuncA"
+	require.NoError(t, store.AddDef("FuncA", "pkg/FuncA"))
+	require.NoError(t, store.AddDef("FuncB", "pkg/FuncB"))
+
+	// Delete nodes from main.go (FuncA)
+	store.DeleteFileNodes("/src/main.go")
+
+	// Refs for "Validate" should only contain FuncB
+	store.mu.RLock()
+	assert.Equal(t, []string{"pkg/FuncB"}, store.refs["Validate"])
+	// "OnlyA" should be entirely removed
+	_, hasOnlyA := store.refs["OnlyA"]
+	assert.False(t, hasOnlyA, "OnlyA ref should be deleted when its only node is removed")
+	// FuncA def should be removed, FuncB should remain
+	_, hasFuncADef := store.defs["FuncA"]
+	assert.False(t, hasFuncADef, "FuncA def should be deleted")
+	assert.Equal(t, []string{"pkg/FuncB"}, store.defs["FuncB"])
+	store.mu.RUnlock()
+}
+
 func TestMemoryStore_ShiftOrigins_PositiveDelta(t *testing.T) {
 	store := NewMemoryStore()
 
@@ -667,4 +722,33 @@ func TestMemoryStore_ShiftOrigins_NoOpDifferentFile(t *testing.T) {
 	nodeX, _ := store.GetNode("pkg/FuncX")
 	assert.Equal(t, uint32(10), nodeX.Origin.StartByte)
 	assert.Equal(t, uint32(16), nodeX.Origin.EndByte)
+}
+
+func TestSetResolver_CacheScalesWithNodes(t *testing.T) {
+	resolver := func(_ *ContentRef) ([]byte, error) { return nil, nil }
+
+	tests := []struct {
+		name     string
+		numNodes int
+		wantMin  int
+		wantMax  int
+	}{
+		{"small project", 100, 1024, 1024},     // floor
+		{"medium project", 8000, 2000, 2000},   // 8000/4 = 2000
+		{"large project", 40000, 10000, 10000}, // 40000/4 = 10000
+		{"huge project", 100000, 16384, 16384}, // ceiling
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			for i := range tt.numNodes {
+				store.AddNode(&Node{ID: fmt.Sprintf("node/%d", i)})
+			}
+			store.SetResolver(resolver)
+			require.NotNil(t, store.cache)
+			assert.GreaterOrEqual(t, store.cache.maxSize, tt.wantMin)
+			assert.LessOrEqual(t, store.cache.maxSize, tt.wantMax)
+		})
+	}
 }

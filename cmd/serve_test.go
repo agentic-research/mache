@@ -204,6 +204,45 @@ func TestListDir_DefaultEmptyPath(t *testing.T) {
 	assert.Len(t, entries, 2)
 }
 
+func TestListDir_ExcludeTests(t *testing.T) {
+	store := graph.NewMemoryStore()
+
+	// Create a package with test and non-test constructs
+	store.AddRoot(&graph.Node{
+		ID:       "go/graph/functions",
+		Mode:     fs.ModeDir,
+		Children: []string{"go/graph/functions/NewMemoryStore", "go/graph/functions/TestMemoryStore_AddRoot", "go/graph/functions/BenchmarkScan", "go/graph/functions/compileLevels"},
+	})
+	for _, name := range []string{"NewMemoryStore", "TestMemoryStore_AddRoot", "BenchmarkScan", "compileLevels"} {
+		store.AddNode(&graph.Node{
+			ID:   "go/graph/functions/" + name,
+			Mode: fs.ModeDir,
+		})
+	}
+
+	handler := makeListDirHandler(store)
+
+	// Without filter: all 4
+	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "go/graph/functions"}))
+	require.NoError(t, err)
+	var all []nodeEntry
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &all))
+	assert.Len(t, all, 4)
+
+	// With exclude_tests: only NewMemoryStore and compileLevels
+	result, err = handler(context.Background(), makeRequest(map[string]any{"path": "go/graph/functions", "exclude_tests": true}))
+	require.NoError(t, err)
+	var filtered []nodeEntry
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &filtered))
+	assert.Len(t, filtered, 2)
+	names := make([]string, len(filtered))
+	for i, e := range filtered {
+		names[i] = e.Name
+	}
+	assert.Contains(t, names, "NewMemoryStore")
+	assert.Contains(t, names, "compileLevels")
+}
+
 // ---------------------------------------------------------------------------
 // read_file handler tests
 // ---------------------------------------------------------------------------
@@ -314,11 +353,12 @@ func TestFindCallees_EmptyWithoutExtractor(t *testing.T) {
 	store := buildTestGraph(t)
 	handler := makeFindCalleesHandler(store)
 
-	// Without a CallExtractor set, GetCallees returns nil
+	// Without a CallExtractor set, GetCallees returns nil — handler returns JSON with hint
 	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/main"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "[]", resultText(t, result))
+	assert.Contains(t, resultText(t, result), `"callees"`)
+	assert.Contains(t, resultText(t, result), `"hint"`)
 }
 
 func TestFindCallees_RequiredPath(t *testing.T) {
@@ -438,6 +478,34 @@ func TestSearch_WildcardPattern(t *testing.T) {
 	var results []searchResult
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
 	assert.Len(t, results, 2)
+}
+
+func TestSearch_DefinitionDedup(t *testing.T) {
+	store := graph.NewMemoryStore()
+	// Simulate how tree-sitter ingestion adds both bare and pkg-qualified defs
+	// for the same construct — they should be deduped by path.
+	require.NoError(t, store.AddDef("GetCallers", "go/graph/methods/MemoryStore.GetCallers"))
+	require.NoError(t, store.AddDef("graph.MemoryStore.GetCallers", "go/graph/methods/MemoryStore.GetCallers"))
+	require.NoError(t, store.AddDef("MemoryStore.GetCallers", "go/graph/methods/MemoryStore.GetCallers"))
+
+	handler := makeSearchHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"pattern": "%GetCallers%",
+		"role":    "definition",
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	type searchResult struct {
+		Token string `json:"token"`
+		Path  string `json:"path"`
+	}
+	var results []searchResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	// All three tokens point to the same path — should be deduped to 1 result
+	assert.Len(t, results, 1)
+	assert.Equal(t, "go/graph/methods/MemoryStore.GetCallers", results[0].Path)
 }
 
 // ---------------------------------------------------------------------------
