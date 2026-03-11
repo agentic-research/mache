@@ -341,9 +341,10 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 	if _, ok := g.(refsQuerier); ok {
 		s.AddTool(
 			mcp.NewTool("search",
-				mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard). Optionally filter by construct type."),
+				mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard). Optionally filter by construct type or role."),
 				mcp.WithString("pattern", mcp.Required(), mcp.Description("Search pattern, e.g. 'Login%' or '%auth%'")),
 				mcp.WithString("type", mcp.Description("Filter by construct type in path, e.g. 'functions', 'methods', 'types', 'structs'")),
+				mcp.WithString("role", mcp.Description("Filter by role: 'definition' (where symbol is declared), 'reference' (where symbol is used). Default: returns references.")),
 				mcp.WithNumber("limit", mcp.Description("Max results (default 100)")),
 			),
 			makeSearchHandler(g),
@@ -538,7 +539,26 @@ func makeFindCalleesHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("get callees: %v", err)), nil
 		}
 		if len(callees) == 0 {
-			return mcp.NewToolResultText("[]"), nil
+			// Provide a helpful hint about why callees might be empty
+			node, nodeErr := g.GetNode(path)
+			if nodeErr != nil {
+				return mcp.NewToolResultText(`{"callees":[],"hint":"construct not found — check the path"}`), nil
+			}
+			if !node.Mode.IsDir() {
+				return mcp.NewToolResultText(`{"callees":[],"hint":"path is a file, not a construct directory — use the parent directory path"}`), nil
+			}
+			hint := "no resolved callees"
+			if node.Properties != nil {
+				if _, hasLang := node.Properties["lang"]; hasLang {
+					hint = "no resolved callees — the construct may call unexported methods or use dynamic dispatch that the static extractor cannot resolve. Try find_callers with the method name instead."
+				}
+			}
+			type emptyResult struct {
+				Callees []string `json:"callees"`
+				Hint    string   `json:"hint"`
+			}
+			data, _ := json.MarshalIndent(emptyResult{Callees: []string{}, Hint: hint}, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
 		}
 
 		paths := make([]string, 0, len(callees))
@@ -558,8 +578,48 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		typeFilter := request.GetString("type", "")
+		role := request.GetString("role", "")
 		limit := request.GetInt("limit", 100)
 
+		type searchResult struct {
+			Token string `json:"token"`
+			Path  string `json:"path"`
+			Role  string `json:"role,omitempty"`
+		}
+
+		// Definition search: scan the defs map with LIKE-style matching
+		if role == "definition" {
+			dp, ok := g.(defsMapProvider)
+			if !ok {
+				return mcp.NewToolResultError("backend does not support definition search"), nil
+			}
+			defs := dp.DefsMap()
+			var results []searchResult
+			for token, ids := range defs {
+				if !sqlLikeMatch(pattern, token) {
+					continue
+				}
+				for _, id := range ids {
+					if typeFilter != "" && !strings.Contains(id, "/"+typeFilter+"/") {
+						continue
+					}
+					results = append(results, searchResult{Token: token, Path: id, Role: "definition"})
+					if len(results) >= limit {
+						break
+					}
+				}
+				if len(results) >= limit {
+					break
+				}
+			}
+			if results == nil {
+				results = []searchResult{}
+			}
+			data, _ := json.MarshalIndent(results, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		}
+
+		// Reference search (default): query mache_refs
 		qg := g.(refsQuerier)
 		var rows *sql.Rows
 		var err error
@@ -579,11 +639,6 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		defer func() { _ = rows.Close() }()
 
-		type searchResult struct {
-			Token string `json:"token"`
-			Path  string `json:"path"`
-		}
-
 		var results []searchResult
 		for rows.Next() {
 			var r searchResult
@@ -599,6 +654,42 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		data, _ := json.MarshalIndent(results, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
+}
+
+// sqlLikeMatch performs a simple SQL LIKE pattern match (% = wildcard).
+func sqlLikeMatch(pattern, value string) bool {
+	pattern = strings.ToLower(pattern)
+	value = strings.ToLower(value)
+
+	// Fast paths for common patterns
+	if pattern == "%" {
+		return true
+	}
+	if !strings.Contains(pattern, "%") {
+		return pattern == value
+	}
+
+	parts := strings.Split(pattern, "%")
+	pos := 0
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		idx := strings.Index(value[pos:], part)
+		if idx < 0 {
+			return false
+		}
+		if i == 0 && idx != 0 {
+			// First part must match start if pattern doesn't begin with %
+			return false
+		}
+		pos += idx + len(part)
+	}
+	// If pattern doesn't end with %, value must end at pos
+	if !strings.HasSuffix(pattern, "%") && pos != len(value) {
+		return false
+	}
+	return true
 }
 
 func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {

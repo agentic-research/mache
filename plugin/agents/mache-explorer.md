@@ -22,12 +22,12 @@ Always try MCP tools first. Fall back to FUSE only if MCP is unavailable.
 | Tool | Purpose |
 |------|---------|
 | `get_overview` | Structural overview: top-level dirs, node counts, ref/def stats. **Call first.** |
-| `list_directory` | Browse the projected directory tree (empty path = root) |
-| `read_file` | Read content of a projected file node |
-| `find_definition` | Find where a symbol is defined (construct directory paths) |
-| `find_callers` | Find all nodes referencing a symbol/token |
-| `find_callees` | Find all symbols called by a construct |
-| `search` | Search symbols by pattern (SQL LIKE: `%auth%`) |
+| `list_directory` | Browse the projected directory tree (empty path = root). Shows `callers/` and `callees/` virtual dirs when present. |
+| `read_file` | Read content of one or more file nodes. Pass `path` for one, or `paths` (JSON array) for batch reads. |
+| `find_definition` | Find where a symbol is defined. **Use this first** when you know a symbol name — it returns the construct directory path(s) directly. |
+| `find_callers` | Find all nodes that reference/call a given symbol. |
+| `find_callees` | Find all symbols called by a construct. Returns hints when empty (e.g., unexported methods). |
+| `search` | Search symbols by pattern (SQL LIKE: `%auth%`). Filter with `type` (e.g., `methods`, `functions`) and `role` (`definition` or `reference`). |
 | `get_communities` | Detect clusters of co-referencing nodes. Use `summary=true` for large codebases. |
 
 ## Exploration Strategy
@@ -56,8 +56,10 @@ Follow the user's questions using the right tools:
 - **"What calls X?"** → `find_callers` with the symbol name
 - **"What does X call?"** → `find_callees` with the construct path
 - **"Find all auth-related code"** → `search` with `%auth%`
+- **"Find only auth method definitions"** → `search` with `%auth%`, `type: "methods"`, `role: "definition"`
 - **"What are the main modules?"** → `get_communities` with `summary=true`
 - **"Show me function X"** → `find_definition` to locate it, then `read_file`
+- **"Read these 5 functions"** → `read_file` with `paths: '["path/a/source", "path/b/source", ...]'`
 
 ### Phase 4: Report
 
