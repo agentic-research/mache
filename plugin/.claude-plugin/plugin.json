@@ -1,0 +1,12 @@
+{
+  "name": "mache",
+  "version": "0.1.0",
+  "description": "Structured code index — browse, search, and trace dependencies via MCP tools powered by mache",
+  "author": {
+    "name": "Agentic Research",
+    "url": "https://github.com/agentic-research"
+  },
+  "repository": "https://github.com/agentic-research/mache",
+  "license": "Apache-2.0",
+  "keywords": ["code-index", "mcp", "tree-sitter", "code-graph", "dependencies"]
+}

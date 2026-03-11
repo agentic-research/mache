@@ -39,30 +39,37 @@ func runServe(cmd *cobra.Command, args []string) error {
 	var schema *api.Topology
 
 	if len(args) == 0 {
-		// Zero-arg mode: load from .mache.json
+		// Zero-arg mode: load from .mache.json, fall back to auto-detect
 		cfg, err := loadProjectConfig(".")
 		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("no data source specified and no %s found\n\nRun 'mache init' to create one, or specify a data source: mache serve <path>", ConfigFileName)
+			if !os.IsNotExist(err) {
+				return err
 			}
-			return err
+			// No .mache.json — hybrid auto-detect: presets + inference
+			log.Printf("No %s found; auto-detecting project languages...", ConfigFileName)
+			dataSource = "."
+			schema, err = inferDirSchema(".")
+			if err != nil {
+				return fmt.Errorf("auto-detect schema: %w", err)
+			}
+		} else {
+			if len(cfg.Sources) > 1 {
+				log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
+			}
+			src := cfg.Sources[0]
+			dataSource, err = resolveDataSource(src.Path, ".")
+			if err != nil {
+				return fmt.Errorf("resolve data source: %w", err)
+			}
+			schema, err = resolveSchema(src.Schema, ".")
+			if err != nil {
+				return fmt.Errorf("resolve schema: %w", err)
+			}
+			if schema == nil {
+				schema = &api.Topology{Version: api.SchemaVersion}
+			}
+			log.Printf("Loaded config from %s (source: %s)", ConfigFileName, dataSource)
 		}
-		if len(cfg.Sources) > 1 {
-			log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
-		}
-		src := cfg.Sources[0]
-		dataSource, err = resolveDataSource(src.Path, ".")
-		if err != nil {
-			return fmt.Errorf("resolve data source: %w", err)
-		}
-		schema, err = resolveSchema(src.Schema, ".")
-		if err != nil {
-			return fmt.Errorf("resolve schema: %w", err)
-		}
-		if schema == nil {
-			schema = &api.Topology{Version: api.SchemaVersion}
-		}
-		log.Printf("Loaded config from %s (source: %s)", ConfigFileName, dataSource)
 	} else {
 		dataSource = args[0]
 
@@ -75,6 +82,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 			schema = &api.Topology{}
 			if err := json.Unmarshal(data, schema); err != nil {
 				return fmt.Errorf("parse schema: %w", err)
+			}
+		} else if filepath.Ext(dataSource) != ".db" {
+			// Directory without explicit schema — hybrid auto-detect
+			info, err := os.Stat(dataSource)
+			if err == nil && info.IsDir() {
+				schema, err = inferDirSchema(dataSource)
+				if err != nil {
+					return fmt.Errorf("auto-detect schema: %w", err)
+				}
+			} else {
+				schema = &api.Topology{Version: api.SchemaVersion}
 			}
 		} else {
 			schema = &api.Topology{Version: api.SchemaVersion}

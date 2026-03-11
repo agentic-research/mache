@@ -1,0 +1,6 @@
+{
+  "mache": {
+    "command": "mache",
+    "args": ["serve"]
+  }
+}
