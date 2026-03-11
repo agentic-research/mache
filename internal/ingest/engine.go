@@ -1302,6 +1302,37 @@ func RenderTemplate(tmpl string, values map[string]any) (string, error) {
 	return buf.String(), nil
 }
 
+// ReIngestFile re-ingests a single file, preserving the existing RootPath.
+// Used by the live graph refresher to update stale nodes without a full walk.
+// After re-ingestion, the store's file mtime is updated.
+func (e *Engine) ReIngestFile(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		realPath = absPath
+	}
+
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return err
+	}
+
+	// Re-ingest the single file using the existing schema and store
+	if err := e.ingestFile(realPath, info.ModTime()); err != nil {
+		return err
+	}
+
+	// Update the tracked mtime in the store
+	if ms, ok := e.Store.(*graph.MemoryStore); ok {
+		ms.RecordFileMtime(realPath, info.ModTime())
+	}
+
+	return nil
+}
+
 // PrintRoutingSummary outputs a summary of files routed to _project_files/.
 func (e *Engine) PrintRoutingSummary() {
 	e.mu.Lock()
