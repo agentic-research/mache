@@ -185,7 +185,7 @@ func generateMacheCLAUDESection(schemaPreset string) string {
 	sb.WriteString("4. Use `search` to find symbols across the codebase\n")
 	sb.WriteString("5. Use `find_callers`/`find_callees` to trace dependencies\n")
 	if schemaPreset != "" {
-		sb.WriteString(fmt.Sprintf("\nSchema preset: **%s**\n", schemaPreset))
+		fmt.Fprintf(&sb, "\nSchema preset: **%s**\n", schemaPreset)
 	}
 	return sb.String()
 }
