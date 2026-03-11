@@ -31,90 +31,137 @@ type MountMetadata struct {
 }
 
 // agentPromptTemplate is the instruction file generated for LLM agents.
-const agentPromptTemplate = `# Mache Agent Environment
+const agentPromptTemplate = `# Mache — Semantic Filesystem
 
-This filesystem is a **semantic projection** of your codebase. Every function,
-type, and class is a directory. You navigate code by meaning, not by file path.
-
-**This is how you should read and write code in this environment.**
-
-## Mount Info
-
-**Source:** %s
-**Git:** %s
-**Mount:** %s
-**Mode:** %s
+Source: %s | Git: %s | Mount: %s | Mode: %s
 %s
 
-## How This Filesystem Works
+## What This Is
 
-Each code construct (function, type, method, class) is a **directory** containing:
+Your codebase has been projected into a **semantic filesystem**. Source files
+do not exist here. Instead, every function, method, type, constant, and
+variable is a directory you can ls, cat, and write to by name.
 
-| File | What it contains | Writable? |
-|------|-----------------|-----------|
-| source | The actual code — just this construct, nothing else | Yes (if writable mode) |
-| context | Imports, types, globals visible to this scope | No |
-| callers/ | Directory of functions that **call** this one | No |
-| callees/ | Directory of functions this one **calls** | No |
-| _diagnostics/ | Write status, AST errors, lint output | No |
+You do NOT need to know file paths. Navigate by symbol name.
 
-## Do This, Not That
+## Filesystem Layout
 
-**Do:** Read individual constructs via their source file.
+Root directories are **packages** (Go) or **languages** (inferred schema):
 ` + "```" + `
-ls                           # See top-level categories
-ls functions/                # List all functions
-cat functions/HandleRequest/source   # Read just this function
-cat functions/HandleRequest/context  # See its imports and types
+ls /
+# api/  cartographer/  navigator/  iterm/  _project_files/  _schema.json  PROMPT.txt
 ` + "```" + `
 
-**Don't:** Try to cat entire .go/.py files — they don't exist here. The
-codebase has been decomposed into semantic units. Each source file contains
-exactly the code for one construct.
-
-**Do:** Use callers/ and callees/ to understand relationships.
+Each package contains these subdirectories:
 ` + "```" + `
-ls functions/HandleRequest/callers/  # Who calls this?
-ls functions/HandleRequest/callees/  # What does it call?
-cat functions/HandleRequest/callers/* # Read all calling code
+ls api/
+# constants/  functions/  methods/  types/  variables/  imports/  _diagnostics/
 ` + "```" + `
 
-**Do:** Start with ls at the root to understand the structure.
+Each symbol is a directory with these files:
+
+| File | Contents | Use |
+|------|----------|-----|
+| source | The code for this ONE construct | Read and write |
+| context | Imports, surrounding types, and globals from the same file | Read to understand dependencies |
+| callers/ | Directory listing functions that call this one | Read to trace usage |
+| callees/ | Directory listing functions this one calls | Read to trace dependencies |
+| _diagnostics/ | lint, ast-errors, last-write-status | Read after writes |
+
+## Discovery (finding what you need)
+
+**Step 1: Understand the codebase structure.**
 ` + "```" + `
-ls /            # Top-level: _schema.json, PROMPT.txt, and category dirs
-cat _schema.json   # See the full schema driving this projection
+ls /                       # List packages (or languages)
+ls api/                    # List symbol categories in a package
+ls api/types/              # List all types in the api package
 ` + "```" + `
+
+**Step 2: Find a specific symbol.** Use find or grep across the mount:
+` + "```" + `
+find . -maxdepth 3 -name "HandleRequest" -type d    # Find by exact name
+find . -path "*/methods/*" -name "*.Execute" -type d # Find all Execute methods
+grep -rl "somePattern" --include="source" .          # Search inside source code
+` + "```" + `
+
+**Step 3: Understand a symbol.**
+` + "```" + `
+cat api/methods/Doer.executeInteraction/source    # Read the code
+cat api/methods/Doer.executeInteraction/context   # See imports, types, struct definition
+ls  api/methods/Doer.executeInteraction/callers/  # Who calls this?
+ls  api/methods/Doer.executeInteraction/callees/  # What does this call?
+` + "```" + `
+
+**Step 4: Cross-reference.** Callers and callees link to other symbols:
+` + "```" + `
+ls api/functions/NewDoer/callers/
+# Handler.getOrCreateDoer  TestBug_DoerTeleportationTab0  newDoerTestHarness  ...
+# These are names you can look up in their own package:
+cat api/methods/Handler.getOrCreateDoer/source
+` + "```" + `
+
+## Anti-Patterns (things that waste your iterations)
+
+- **Do NOT cat a directory.** Use ls. Directories are symbol containers, not files.
+- **Do NOT look for .go/.py/.ts files.** They do not exist. Code is in source files inside symbol directories.
+- **Do NOT re-read context if you already have it.** The context file can be large. Read it once per symbol.
+- **Do NOT ignore _project_files/.** Non-code files (configs, scripts, YAML) land here. If you need a config file, check _project_files/.
+- **Do NOT guess paths.** Always ls a directory before cat-ing into it. Symbol names are case-sensitive and may include dots (e.g., Doer.Run).
+- **Do NOT read _schema.json unless you need to understand the projection rules.** It describes HOW the filesystem was built, not WHAT is in it.
 
 ## Writing Code
 
 %s
 
-## Editing Workflow
+## Write-Back Workflow
 
-1. Read the function: ` + "`cat functions/Foo/source`" + `
-2. Read its context: ` + "`cat functions/Foo/context`" + ` (imports, types it uses)
-3. Edit the source file (only the function body — not a full file)
-4. Check the result: ` + "`cat functions/Foo/_diagnostics/last-write-status`" + `
-5. If it failed: ` + "`cat functions/Foo/_diagnostics/ast-errors`" + ` to see why
+1. **Read** the symbol: ` + "`cat {pkg}/functions/Foo/source`" + `
+2. **Read context** if you need imports/types: ` + "`cat {pkg}/functions/Foo/context`" + `
+3. **Write** the new source (the ENTIRE construct, not a diff):
+   ` + "```" + `
+   cat > {pkg}/functions/Foo/source << 'EOF'
+   func Foo(ctx context.Context) error {
+       // your new implementation
+       return nil
+   }
+   EOF
+   ` + "```" + `
+4. **Check result**: ` + "`cat {pkg}/functions/Foo/_diagnostics/last-write-status`" + `
+5. **If failed**: ` + "`cat {pkg}/functions/Foo/_diagnostics/ast-errors`" + ` — fix the syntax error and retry step 3.
 
-Writes are validated by tree-sitter before they touch any file. If your edit
-has a syntax error, it saves as a draft and the original code is untouched.
-The path to the construct never changes — no re-navigation needed after edits.
+**Key rules:**
+- Write the COMPLETE construct (full function/method/type), not a partial diff.
+- Tree-sitter validates syntax before the write lands. Bad syntax = draft saved, original untouched.
+- The path never changes after a write. No need to re-navigate.
+- Use printf or heredoc (cat << 'EOF') to avoid shell escaping issues with backticks and dollar signs.
+- Trailing newlines in your write are normal — the splice handles them.
+
+## Package-Level Diagnostics
+
+Each package has a _diagnostics/ directory:
+` + "```" + `
+cat api/_diagnostics/lint        # "clean" or lint warnings
+cat api/_diagnostics/ast-errors  # "no errors" or parse failures
+` + "```" + `
 
 ## Quick Reference
 
 | Task | Command |
 |------|---------|
-| List all functions | ` + "`ls functions/`" + ` |
-| Read a function | ` + "`cat functions/Foo/source`" + ` |
-| See what it imports | ` + "`cat functions/Foo/context`" + ` |
-| Find callers | ` + "`ls functions/Foo/callers/`" + ` |
-| Find callees | ` + "`ls functions/Foo/callees/`" + ` |
-| Check write status | ` + "`cat functions/Foo/_diagnostics/last-write-status`" + ` |
-| View schema | ` + "`cat _schema.json`" + ` |
+| List packages | ` + "`ls /`" + ` |
+| List functions in a package | ` + "`ls {pkg}/functions/`" + ` |
+| List methods in a package | ` + "`ls {pkg}/methods/`" + ` |
+| List types in a package | ` + "`ls {pkg}/types/`" + ` |
+| Read a function | ` + "`cat {pkg}/functions/Foo/source`" + ` |
+| Read its imports and context | ` + "`cat {pkg}/functions/Foo/context`" + ` |
+| Find who calls it | ` + "`ls {pkg}/functions/Foo/callers/`" + ` |
+| Find what it calls | ` + "`ls {pkg}/functions/Foo/callees/`" + ` |
+| Search all source code | ` + "`grep -rl 'pattern' --include=source .`" + ` |
+| Find a symbol by name | ` + "`find . -maxdepth 3 -name 'SymbolName' -type d`" + ` |
+| Check write status | ` + "`cat {pkg}/functions/Foo/_diagnostics/last-write-status`" + ` |
+| View projection schema | ` + "`cat _schema.json`" + ` |
 
-This is a real POSIX filesystem. Use cd, ls, cat, find, grep — whatever you
-normally use. No SDK, no special commands.
+This is a POSIX filesystem. ls, cat, find, grep, and standard redirects all work.
 `
 
 // generateMountName creates a human-readable mount directory name.

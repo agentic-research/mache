@@ -1,6 +1,7 @@
 package writeback
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,15 @@ func Splice(origin graph.SourceOrigin, newContent []byte) error {
 
 	if int(start) > len(src) || int(end) > len(src) || start > end {
 		return fmt.Errorf("invalid byte range [%d:%d] for file of length %d", start, end, len(src))
+	}
+
+	// Normalize trailing newlines: match the original region's pattern.
+	// Agents often write via echo/heredoc which appends a trailing \n that
+	// wasn't present in the original source region. Strip it to avoid
+	// introducing blank-line artifacts.
+	originalRegion := src[start:end]
+	if len(originalRegion) > 0 && originalRegion[len(originalRegion)-1] != '\n' {
+		newContent = bytes.TrimRight(newContent, "\n")
 	}
 
 	// result = prefix + newContent + suffix

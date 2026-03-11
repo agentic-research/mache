@@ -562,6 +562,9 @@ var rootCmd = &cobra.Command{
 					engine.PrintRoutingSummary()
 				}
 
+				// Wire live graph refresher: re-ingest stale files on read
+				store.SetRefresher(engine.ReIngestFile)
+
 				// Enable SQL query support for MemoryStore
 				if err := store.InitRefsDB(); err != nil {
 					return fmt.Errorf("init refs db: %w", err)
@@ -857,6 +860,7 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 					modTime = fi.ModTime()
 				}
 				_ = store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime)
+				store.RecordFileMtime(origin.FilePath, modTime)
 				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
 			}
 
