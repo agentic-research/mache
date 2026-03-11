@@ -50,18 +50,13 @@ func runInit(cmd *cobra.Command, _ []string) error {
 }
 
 func runInitGlobal(w io.Writer, macheCmd string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("home dir: %w", err)
-	}
-
-	// Write to ~/.claude/mcp.json
-	if err := writeClaudeMCPConfig(home, macheCmd); err != nil {
-		return fmt.Errorf("write global mcp config: %w", err)
-	}
-	_, _ = fmt.Fprintf(w, "Updated ~/.claude/mcp.json\n")
+	_, _ = fmt.Fprintln(w, "Registering mache MCP server with detected editors...")
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "mache is now available as an MCP server in all Claude Code sessions.")
+
+	registerAllEditors(w, macheCmd)
+
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "mache is now available as an MCP server. Restart your editor to activate.")
 	_, _ = fmt.Fprintln(w, "Run 'mache init' (without --global) in a project to configure what it serves.")
 	return nil
 }

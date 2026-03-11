@@ -113,9 +113,12 @@ func TestInit_ExplicitSchema(t *testing.T) {
 }
 
 func TestInit_Global(t *testing.T) {
-	// Override HOME so we don't touch real ~/.claude/
+	// Override HOME so we don't touch real config
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+
+	// Create a fake .cursor dir so registerEditorMCP finds it
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".cursor"), 0o755))
 
 	buf := new(bytes.Buffer)
 	initGlobal = true
@@ -128,8 +131,8 @@ func TestInit_Global(t *testing.T) {
 	initGlobal = false // reset
 	require.NoError(t, err)
 
-	// Check ~/.claude/mcp.json was created
-	mcpData, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
+	// Check Cursor's mcp.json was created
+	mcpData, err := os.ReadFile(filepath.Join(dir, ".cursor", "mcp.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(mcpData), "mache")
 	assert.Contains(t, string(mcpData), "serve")
@@ -138,7 +141,7 @@ func TestInit_Global(t *testing.T) {
 	_, err = os.Stat(filepath.Join(dir, ConfigFileName))
 	assert.True(t, os.IsNotExist(err))
 
-	assert.Contains(t, buf.String(), "all Claude Code sessions")
+	assert.Contains(t, buf.String(), "Restart your editor")
 }
 
 func TestInit_CLAUDEmd_AppendToExisting(t *testing.T) {

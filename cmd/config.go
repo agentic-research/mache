@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/agentic-research/mache/api"
@@ -185,6 +188,144 @@ func generateMacheCLAUDESection(schemaPreset string) string {
 		sb.WriteString(fmt.Sprintf("\nSchema preset: **%s**\n", schemaPreset))
 	}
 	return sb.String()
+}
+
+// editorConfig describes how to register an MCP server with a specific editor.
+type editorConfig struct {
+	Name       string // e.g. "Cursor"
+	ConfigPath string // absolute path to config file
+	ServerKey  string // JSON key holding server map ("mcpServers", "servers", "context_servers")
+	EntryFunc  func(binaryPath string) map[string]any
+}
+
+// detectEditors returns configs for all editors found on the system.
+func detectEditors(binaryPath string) []editorConfig {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	editors := []editorConfig{
+		{
+			Name:       "Cursor",
+			ConfigPath: filepath.Join(home, ".cursor", "mcp.json"),
+			ServerKey:  "mcpServers",
+			EntryFunc:  mcpServersEntry,
+		},
+		{
+			Name:       "Windsurf",
+			ConfigPath: filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"),
+			ServerKey:  "mcpServers",
+			EntryFunc:  mcpServersEntry,
+		},
+		{
+			Name:       "Gemini CLI",
+			ConfigPath: filepath.Join(home, ".gemini", "settings.json"),
+			ServerKey:  "mcpServers",
+			EntryFunc:  mcpServersEntry,
+		},
+		{
+			Name:       "Zed",
+			ConfigPath: filepath.Join(home, ".config", "zed", "settings.json"),
+			ServerKey:  "context_servers",
+			EntryFunc: func(bp string) map[string]any {
+				return map[string]any{"source": "custom", "command": bp, "args": []string{"serve"}}
+			},
+		},
+	}
+
+	// VS Code path is OS-dependent
+	vscodePath := ""
+	switch runtime.GOOS {
+	case "darwin":
+		vscodePath = filepath.Join(home, "Library", "Application Support", "Code", "User", "mcp.json")
+	case "linux":
+		vscodePath = filepath.Join(home, ".config", "Code", "User", "mcp.json")
+	}
+	if vscodePath != "" {
+		editors = append(editors, editorConfig{
+			Name:       "VS Code",
+			ConfigPath: vscodePath,
+			ServerKey:  "servers",
+			EntryFunc: func(bp string) map[string]any {
+				return map[string]any{"type": "stdio", "command": bp, "args": []string{"serve"}}
+			},
+		})
+	}
+
+	return editors
+}
+
+func mcpServersEntry(binaryPath string) map[string]any {
+	return map[string]any{"command": binaryPath, "args": []string{"serve"}}
+}
+
+// registerEditorMCP upserts mache into an editor's MCP config file.
+// Only writes if the config file's parent directory already exists
+// (i.e. the editor is installed). Returns true if registration was performed.
+func registerEditorMCP(ec editorConfig, binaryPath string) bool {
+	// Only register if the editor's config directory exists
+	configDir := filepath.Dir(ec.ConfigPath)
+	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+		return false
+	}
+
+	root := make(map[string]any)
+	if data, err := os.ReadFile(ec.ConfigPath); err == nil {
+		if jsonErr := json.Unmarshal(data, &root); jsonErr != nil {
+			// Invalid JSON — start fresh for dedicated config files,
+			// skip for shared settings files (Zed, Gemini)
+			if ec.Name == "Zed" || ec.Name == "Gemini CLI" {
+				return false
+			}
+			root = make(map[string]any)
+		}
+	}
+
+	servers, _ := root[ec.ServerKey].(map[string]any)
+	if servers == nil {
+		servers = make(map[string]any)
+	}
+
+	servers["mache"] = ec.EntryFunc(binaryPath)
+	root[ec.ServerKey] = servers
+
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false
+	}
+	if err := os.WriteFile(ec.ConfigPath, append(out, '\n'), 0o644); err != nil {
+		return false
+	}
+	return true
+}
+
+// registerClaudeCodeCLI registers mache via `claude mcp add` if the CLI is available.
+func registerClaudeCodeCLI(binaryPath string) bool {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return false
+	}
+	// Remove first (may fail if not registered — that's fine)
+	_ = exec.Command(claudePath, "mcp", "remove", "-s", "user", "mache").Run()
+	err = exec.Command(claudePath, "mcp", "add", "--scope", "user", "mache", "--", binaryPath, "serve").Run()
+	return err == nil
+}
+
+// registerAllEditors registers mache with all detected editors.
+// Returns the names of editors that were successfully registered.
+func registerAllEditors(w io.Writer, binaryPath string) {
+	// Claude Code via CLI
+	if registerClaudeCodeCLI(binaryPath) {
+		_, _ = fmt.Fprintln(w, "  [Claude Code] registered via CLI (scope: user)")
+	}
+
+	// File-based editors
+	for _, ec := range detectEditors(binaryPath) {
+		if registerEditorMCP(ec, binaryPath) {
+			_, _ = fmt.Fprintf(w, "  [%s] updated %s\n", ec.Name, ec.ConfigPath)
+		}
+	}
 }
 
 // detectProjectType scans a directory and returns the best-fit schema preset name.
