@@ -308,6 +308,7 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 		mcp.NewTool("list_directory",
 			mcp.WithDescription("List children of a directory node. Use empty path for root."),
 			mcp.WithString("path", mcp.Description("Directory path (empty for root)")),
+			mcp.WithBoolean("exclude_tests", mcp.Description("Exclude Test* and Benchmark* entries (default false). Recommended for large packages.")),
 		),
 		makeListDirHandler(g),
 	)
@@ -393,6 +394,7 @@ type nodeEntry struct {
 func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		path := request.GetString("path", "")
+		excludeTests := request.GetBool("exclude_tests", false)
 
 		children, err := g.ListChildren(path)
 		if err != nil {
@@ -401,6 +403,10 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		entries := make([]nodeEntry, 0, len(children))
 		for _, childID := range children {
+			name := filepath.Base(childID)
+			if excludeTests && (strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark")) {
+				continue
+			}
 			node, err := g.GetNode(childID)
 			if err != nil {
 				continue
@@ -410,7 +416,7 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 				typ = "dir"
 			}
 			entries = append(entries, nodeEntry{
-				Name: filepath.Base(childID),
+				Name: name,
 				Path: childID,
 				Type: typ,
 				Size: node.ContentSize(),
@@ -595,6 +601,7 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 			defs := dp.DefsMap()
 			var results []searchResult
+			seenPaths := make(map[string]bool)
 			for token, ids := range defs {
 				if !sqlLikeMatch(pattern, token) {
 					continue
@@ -603,6 +610,11 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 					if typeFilter != "" && !strings.Contains(id, "/"+typeFilter+"/") {
 						continue
 					}
+					// Dedup: both "Foo.Bar" and "pkg.Foo.Bar" map to the same path
+					if seenPaths[id] {
+						continue
+					}
+					seenPaths[id] = true
 					results = append(results, searchResult{Token: token, Path: id, Role: "definition"})
 					if len(results) >= limit {
 						break
@@ -729,10 +741,15 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 				if len(top) > 5 {
 					top = top[:5]
 				}
+				// Strip trailing /source from member paths — it's noise in summaries
+				cleaned := make([]string, len(top))
+				for i, m := range top {
+					cleaned[i] = strings.TrimSuffix(m, "/source")
+				}
 				sr.Communities = append(sr.Communities, communitySummary{
 					ID:         c.ID,
 					Size:       len(c.Members),
-					TopMembers: top,
+					TopMembers: cleaned,
 				})
 			}
 			data, _ := json.MarshalIndent(sr, "", "  ")
