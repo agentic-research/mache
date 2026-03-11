@@ -43,12 +43,14 @@ type IngestionTarget interface {
 
 // Engine drives the ingestion process.
 type Engine struct {
-	Schema      *api.Topology
-	Store       IngestionTarget
-	RootPath    string // absolute path to the root of the ingestion
-	sourceFile  string // absolute path, set during ingestTreeSitter for origin tracking
-	routedFiles map[string]int
-	mu          sync.Mutex
+	Schema           *api.Topology
+	Store            IngestionTarget
+	RootPath         string // absolute path to the root of the ingestion
+	RespectGitignore bool   // when true, skip files matching .gitignore patterns (default: true)
+	sourceFile       string // absolute path, set during ingestTreeSitter for origin tracking
+	routedFiles      map[string]int
+	gitignore        *gitignoreMatcher // loaded from .gitignore when RespectGitignore is true
+	mu               sync.Mutex
 }
 
 // --- Parallel ingestion types ---
@@ -154,9 +156,10 @@ func isBinaryFile(path string) bool {
 
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 	return &Engine{
-		Schema:      schema,
-		Store:       store,
-		routedFiles: make(map[string]int),
+		Schema:           schema,
+		Store:            store,
+		RespectGitignore: true,
+		routedFiles:      make(map[string]int),
 	}
 }
 
@@ -213,6 +216,11 @@ func (e *Engine) Ingest(path string) error {
 	}
 
 	if info.IsDir() {
+		// Load .gitignore patterns when enabled (default: true).
+		if e.RespectGitignore {
+			e.gitignore = loadGitignore(realPath)
+		}
+
 		// Determine which file types this schema can process.
 		// Tree-sitter schemas operate on source code (.go, .py);
 		// JSONPath schemas operate on data files (.json, .db).
@@ -235,7 +243,27 @@ func (e *Engine) Ingest(path string) error {
 						return filepath.SkipDir
 					}
 				}
+				// Check gitignore for directories
+				if e.gitignore != nil && p != realPath {
+					rel, relErr := filepath.Rel(realPath, p)
+					if relErr == nil {
+						rel = filepath.ToSlash(rel)
+						if e.gitignore.Match(rel, true) {
+							return filepath.SkipDir
+						}
+					}
+				}
 				return nil
+			}
+			// Check gitignore for files
+			if e.gitignore != nil {
+				rel, relErr := filepath.Rel(realPath, p)
+				if relErr == nil {
+					rel = filepath.ToSlash(rel)
+					if e.gitignore.Match(rel, false) {
+						return nil
+					}
+				}
 			}
 			// Skip symlinks to directories (e.g., kodata/templates -> ../templates)
 			// filepath.Walk doesn't follow symlinks, so d.IsDir() is false for them,
@@ -1073,8 +1101,35 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				}
 			}
 		}
+
+		// Set location property on directory node from source file's origin
+		if hasScope && e.sourceFile != "" {
+			if root, ok := match.Context().(SitterRoot); ok {
+				if node.Properties == nil {
+					node.Properties = make(map[string][]byte)
+				}
+				relPath, err := filepath.Rel(e.RootPath, e.sourceFile)
+				if err == nil {
+					startLine := byteOffsetToLine(root.Source, extStart)
+					endLine := byteOffsetToLine(root.Source, extEnd)
+					node.Properties["location"] = []byte(fmt.Sprintf("%s:%d:%d", relPath, startLine, endLine))
+					store.AddNode(node)
+				}
+			}
+		}
 	}
 	return nil
+}
+
+// byteOffsetToLine converts a byte offset to a 1-based line number in content.
+func byteOffsetToLine(content []byte, offset uint32) int {
+	line := 1
+	for i := 0; i < int(offset) && i < len(content); i++ {
+		if content[i] == '\n' {
+			line++
+		}
+	}
+	return line
 }
 
 // extractDocComments walks backward from a tree-sitter @scope capture to find
