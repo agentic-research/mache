@@ -1,0 +1,43 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "servers",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.item.namespace}}",
+          "selector": "$[*]",
+          "children": [
+            {
+              "name": "{{.item.shortName}}",
+              "selector": "$",
+              "files": [
+                {
+                  "name": "description",
+                  "content_template": "{{.item.description}}"
+                },
+                {
+                  "name": "version",
+                  "content_template": "{{.item.version}}"
+                },
+                {
+                  "name": "status",
+                  "content_template": "{{.item.status}}"
+                },
+                {
+                  "name": "repository",
+                  "content_template": "{{.item.repository}}"
+                },
+                {
+                  "name": "raw.json",
+                  "content_template": "{{. | json}}"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

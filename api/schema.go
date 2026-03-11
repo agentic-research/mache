@@ -1,5 +1,8 @@
 package api
 
+// SchemaVersion is the current schema version string.
+const SchemaVersion = "v1"
+
 // Topology represents the root configuration of the semantic overlay.
 // It maps the input data source to a directory structure.
 type Topology struct {

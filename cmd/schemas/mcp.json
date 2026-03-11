@@ -1,0 +1,77 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "tools",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "$.tools[*]",
+          "files": [
+            {
+              "name": "description",
+              "content_template": "{{.description}}"
+            },
+            {
+              "name": "input-schema.json",
+              "content_template": "{{.inputSchema | json}}"
+            },
+            {
+              "name": "raw.json",
+              "content_template": "{{. | json}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "resources",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "$.resources[*]",
+          "files": [
+            {
+              "name": "description",
+              "content_template": "{{.description}}"
+            },
+            {
+              "name": "uri",
+              "content_template": "{{.uri}}"
+            },
+            {
+              "name": "mime-type",
+              "content_template": "{{.mimeType}}"
+            },
+            {
+              "name": "raw.json",
+              "content_template": "{{. | json}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "prompts",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "$.prompts[*]",
+          "files": [
+            {
+              "name": "description",
+              "content_template": "{{.description}}"
+            },
+            {
+              "name": "raw.json",
+              "content_template": "{{. | json}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

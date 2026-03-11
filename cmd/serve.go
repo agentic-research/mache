@@ -23,7 +23,7 @@ var serveCmd = &cobra.Command{
 	Long: `Starts an MCP (Model Context Protocol) server that exposes the graph
 as tools over stdin/stdout JSON-RPC. Any MCP client (Claude Code, Claude Desktop,
 etc.) can connect to browse and query the projected data.`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: runServe,
 }
 
@@ -35,21 +35,44 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	dataSource := args[0]
-
-	// Load schema
+	var dataSource string
 	var schema *api.Topology
-	if serveSchema != "" {
-		data, err := os.ReadFile(serveSchema)
+
+	if len(args) == 0 {
+		// Zero-arg mode: load from .mache.json
+		cfg, err := loadProjectConfig(".")
 		if err != nil {
-			return fmt.Errorf("read schema: %w", err)
+			if os.IsNotExist(err) {
+				return fmt.Errorf("no data source specified and no %s found\n\nRun 'mache init' to create one, or specify a data source: mache serve <path>", ConfigFileName)
+			}
+			return err
 		}
-		schema = &api.Topology{}
-		if err := json.Unmarshal(data, schema); err != nil {
-			return fmt.Errorf("parse schema: %w", err)
+		src := cfg.Sources[0]
+		dataSource = resolveDataSource(src.Path, ".")
+		schema, err = resolveSchema(src.Schema, ".")
+		if err != nil {
+			return fmt.Errorf("resolve schema: %w", err)
 		}
+		if schema == nil {
+			schema = &api.Topology{Version: api.SchemaVersion}
+		}
+		log.Printf("Loaded config from %s (source: %s)", ConfigFileName, dataSource)
 	} else {
-		schema = &api.Topology{Version: "v1"}
+		dataSource = args[0]
+
+		// Explicit --schema flag
+		if serveSchema != "" {
+			data, err := os.ReadFile(serveSchema)
+			if err != nil {
+				return fmt.Errorf("read schema: %w", err)
+			}
+			schema = &api.Topology{}
+			if err := json.Unmarshal(data, schema); err != nil {
+				return fmt.Errorf("parse schema: %w", err)
+			}
+		} else {
+			schema = &api.Topology{Version: api.SchemaVersion}
+		}
 	}
 
 	// Build graph
