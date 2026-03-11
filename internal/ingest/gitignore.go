@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -123,44 +124,54 @@ func (m *gitignoreMatcher) Match(relPath string, isDir bool) bool {
 	}
 
 	// Evaluate root patterns
-	ignored := evalPatterns(m.patterns, relPath, isDir)
+	ignored, _ := evalPatterns(m.patterns, relPath, isDir)
+
+	// Sort nested dirs by depth (shallowest first) for deterministic evaluation.
+	// Git evaluates from shallowest to deepest — closer .gitignore wins over parent.
+	dirs := make([]string, 0, len(m.nested))
+	for dir := range m.nested {
+		dirs = append(dirs, dir)
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return strings.Count(dirs[i], "/") < strings.Count(dirs[j], "/")
+	})
 
 	// Evaluate nested patterns — each nested .gitignore only applies to paths
 	// within its directory.
-	for dir, patterns := range m.nested {
+	for _, dir := range dirs {
+		patterns := m.nested[dir]
 		prefix := dir + "/"
 		if strings.HasPrefix(relPath, prefix) || relPath == dir {
 			subRel := strings.TrimPrefix(relPath, prefix)
 			if subRel == "" {
 				continue // the directory itself — matched by parent
 			}
-			result := evalPatterns(patterns, subRel, isDir)
-			if result {
-				ignored = true
+			result, matched := evalPatterns(patterns, subRel, isDir)
+			if matched {
+				ignored = result
 			}
-			// A negation in nested can un-ignore only if the path was not
-			// force-ignored at root level, but for simplicity we let the last
-			// match win (matching git behavior within a scope).
 		}
 	}
 
 	return ignored
 }
 
-// evalPatterns applies a list of patterns against relPath. Returns the final
-// ignored state: true = ignored, false = not ignored. If no pattern matches,
-// returns false.
-func evalPatterns(patterns []gitignorePattern, relPath string, isDir bool) bool {
+// evalPatterns applies a list of patterns against relPath. Returns (ignored, matched).
+// ignored is the final ignored state (true = ignored, false = not ignored).
+// matched is true if any pattern in the list matched the path.
+func evalPatterns(patterns []gitignorePattern, relPath string, isDir bool) (bool, bool) {
 	ignored := false
+	matched := false
 	for _, p := range patterns {
 		if p.dirOnly && !isDir {
 			continue
 		}
 		if matchPattern(p.pattern, relPath) {
 			ignored = !p.negate
+			matched = true
 		}
 	}
-	return ignored
+	return ignored, matched
 }
 
 // matchPattern checks if a gitignore pattern matches a relative path.
@@ -169,6 +180,11 @@ func evalPatterns(patterns []gitignorePattern, relPath string, isDir bool) bool 
 // depth (e.g. "*.log" matches "a/b/debug.log"). If the pattern contains a
 // slash, it is anchored and matched against the full relative path.
 func matchPattern(pattern, relPath string) bool {
+	// Handle ** (double-star) patterns — filepath.Match doesn't support these
+	if strings.Contains(pattern, "**") {
+		return matchDoublestar(pattern, relPath)
+	}
+
 	if strings.Contains(pattern, "/") {
 		// Anchored pattern — match against full path
 		ok, _ := filepath.Match(pattern, relPath)
@@ -188,6 +204,57 @@ func matchPattern(pattern, relPath string) bool {
 		if ok, _ := filepath.Match(pattern, part); ok {
 			return true
 		}
+	}
+
+	return false
+}
+
+// matchDoublestar handles gitignore ** patterns:
+//
+//	**/foo  — matches "foo" at any depth
+//	foo/**  — matches anything inside "foo"
+//	a/**/b  — matches "a/b", "a/x/b", "a/x/y/b", etc.
+func matchDoublestar(pattern, relPath string) bool {
+	// "**/rest" — match "rest" at any depth
+	if strings.HasPrefix(pattern, "**/") {
+		suffix := pattern[3:]
+		// Try matching against the full path and each sub-path
+		if matchPattern(suffix, relPath) {
+			return true
+		}
+		parts := strings.Split(relPath, "/")
+		for i := 1; i < len(parts); i++ {
+			sub := strings.Join(parts[i:], "/")
+			if matchPattern(suffix, sub) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// "prefix/**" — match anything inside prefix
+	if strings.HasSuffix(pattern, "/**") {
+		prefix := pattern[:len(pattern)-3]
+		return strings.HasPrefix(relPath, prefix+"/") || relPath == prefix
+	}
+
+	// "a/**/b" — match with any number of intermediate directories
+	parts := strings.SplitN(pattern, "/**/", 2)
+	if len(parts) == 2 {
+		prefix, suffix := parts[0], parts[1]
+		if !strings.HasPrefix(relPath, prefix+"/") {
+			return false
+		}
+		rest := relPath[len(prefix)+1:]
+		// Try matching suffix at each depth
+		relParts := strings.Split(rest, "/")
+		for i := 0; i < len(relParts); i++ {
+			sub := strings.Join(relParts[i:], "/")
+			if matchPattern(suffix, sub) {
+				return true
+			}
+		}
+		return false
 	}
 
 	return false

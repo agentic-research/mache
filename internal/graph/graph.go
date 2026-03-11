@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -148,7 +149,7 @@ type MemoryStore struct {
 	// Live graph: file mtime tracking and on-demand refresh.
 	fileMtimes map[string]time.Time        // source file → mtime at index time
 	refresher  func(filePath string) error // called when a source file is stale
-	refreshMu  sync.Mutex                  // serializes refresh calls per file
+	refreshMu  sync.Map                    // filePath → *sync.Mutex (per-file refresh serialization)
 }
 
 // normalizeID strips a leading slash from node IDs.
@@ -275,7 +276,7 @@ func (s *MemoryStore) indexNode(n *Node) {
 	bm.Add(intID)
 
 	// Auto-record file mtime when indexing a node with Origin
-	if n.Origin != nil && n.Origin.FilePath != "" {
+	if n.Origin.FilePath != "" {
 		if _, tracked := s.fileMtimes[n.Origin.FilePath]; !tracked {
 			if info, err := os.Stat(n.Origin.FilePath); err == nil {
 				s.fileMtimes[n.Origin.FilePath] = info.ModTime()
@@ -317,7 +318,7 @@ func (s *MemoryStore) IsFileStale(filePath string) bool {
 	}
 	info, err := os.Stat(filePath)
 	if err != nil {
-		return false // can't stat → treat as fresh
+		return true // can't stat (deleted?) → treat as stale
 	}
 	return !info.ModTime().Equal(tracked)
 }
@@ -721,12 +722,17 @@ func (s *MemoryStore) ReadContent(id string, buf []byte, offset int64) (int, err
 	if node.Origin != nil && node.Origin.FilePath != "" && s.refresher != nil {
 		if s.IsFileStale(node.Origin.FilePath) {
 			filePath := node.Origin.FilePath
-			s.refreshMu.Lock()
+			// Per-file mutex allows parallel refreshes of different files
+			muI, _ := s.refreshMu.LoadOrStore(filePath, &sync.Mutex{})
+			fileMu := muI.(*sync.Mutex)
+			fileMu.Lock()
 			// Double-check after acquiring lock (another goroutine may have refreshed)
 			if s.IsFileStale(filePath) {
-				_ = s.refresher(filePath)
+				if err := s.refresher(filePath); err != nil {
+					log.Printf("live graph: refresh failed for %s: %v", filePath, err)
+				}
 			}
-			s.refreshMu.Unlock()
+			fileMu.Unlock()
 			// Re-fetch node after refresh (content may have changed)
 			node, err = s.GetNode(id)
 			if err != nil {

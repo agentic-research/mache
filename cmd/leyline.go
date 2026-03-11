@@ -181,12 +181,31 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 		return nil
 	}
 
-	// Read all refs: token -> list of calling node IDs
+	// Pre-load all defs: token → dir_id (eliminates N+1 queries and avoids
+	// nested cursors which are fragile with modernc.org/sqlite).
+	defsMap := make(map[string]string)
+	defRows, err := tx.Query(`SELECT token, dir_id FROM node_defs`)
+	if err != nil {
+		return fmt.Errorf("query node_defs: %w", err)
+	}
+	for defRows.Next() {
+		var token, dirID string
+		if err := defRows.Scan(&token, &dirID); err != nil {
+			_ = defRows.Close()
+			return err
+		}
+		defsMap[token] = dirID
+	}
+	_ = defRows.Close()
+	if err := defRows.Err(); err != nil {
+		return err
+	}
+
+	// Read all refs and resolve callees via the pre-loaded defs map.
 	rows, err := tx.Query(`SELECT token, node_id FROM node_refs`)
 	if err != nil {
 		return fmt.Errorf("query node_refs: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	// Group by caller dir: callerDir -> list of (token, callee dir_id)
 	type calleeInfo struct {
@@ -198,6 +217,7 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	for rows.Next() {
 		var token, nodeID string
 		if err := rows.Scan(&token, &nodeID); err != nil {
+			_ = rows.Close()
 			return err
 		}
 
@@ -207,15 +227,15 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 			continue
 		}
 
-		// Look up where the callee token is defined
-		var calleeDirID string
-		err := tx.QueryRow(`SELECT dir_id FROM node_defs WHERE token = ?`, token).Scan(&calleeDirID)
-		if err != nil {
+		// Look up in pre-loaded map instead of per-row query
+		calleeDirID, ok := defsMap[token]
+		if !ok {
 			continue // no definition found
 		}
 
 		callerCallees[callerDir] = append(callerCallees[callerDir], calleeInfo{token: token, dirID: calleeDirID})
 	}
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -270,6 +290,11 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 // extractCallerDir gets the construct directory from a node_id.
 // "pkg/functions/FuncA/source" -> "pkg/functions/FuncA"
 // "pkg/functions/FuncA" -> "pkg/functions/FuncA"
+//
+// NOTE: The set of leaf names checked here (source, context, doc, callers,
+// callees) is coupled to the leaf naming conventions used by the schema and
+// the virtual directory materializers. If new leaf types are added, this
+// function must be updated to match.
 func extractCallerDir(nodeID string) string {
 	parts := strings.Split(nodeID, "/")
 	if len(parts) < 2 {

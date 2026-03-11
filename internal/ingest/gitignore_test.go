@@ -139,6 +139,104 @@ func TestEngine_GitignoreNestedDirectories(t *testing.T) {
 	require.NoError(t, err, "pkg/util.go should be processed")
 }
 
+func TestEngine_GitignoreNestedNegation(t *testing.T) {
+	schema := loadGoSchema(t)
+	tmpDir := t.TempDir()
+
+	// Root .gitignore ignores all .generated.go files
+	err := os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("*.generated.go\n"), 0o644)
+	require.NoError(t, err)
+
+	// Nested .gitignore in pkg/ un-ignores .generated.go files (negation)
+	subDir := filepath.Join(tmpDir, "pkg")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	err = os.WriteFile(filepath.Join(subDir, ".gitignore"), []byte("!*.generated.go\n"), 0o644)
+	require.NoError(t, err)
+
+	// Root-level generated file (should be ignored by root .gitignore)
+	err = os.WriteFile(filepath.Join(tmpDir, "root.generated.go"), []byte("package main\nfunc RootGen() {}\n"), 0o644)
+	require.NoError(t, err)
+
+	// pkg/ generated file (should be UN-ignored by nested negation)
+	err = os.WriteFile(filepath.Join(subDir, "model.generated.go"), []byte("package pkg\nfunc ModelGen() {}\n"), 0o644)
+	require.NoError(t, err)
+
+	// A normal Go file in root (should be ingested)
+	err = os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\nfunc Main() {}\n"), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(tmpDir))
+
+	// main.go should be processed
+	_, err = store.GetNode("main/functions/Main/source")
+	require.NoError(t, err, "main.go should be processed")
+
+	// root.generated.go should be excluded (root .gitignore: *.generated.go)
+	_, err = store.GetNode("root.generated/functions/RootGen/source")
+	assert.Error(t, err, "root.generated.go should be excluded by root .gitignore")
+
+	// pkg/model.generated.go should be UN-ignored (nested negation: !*.generated.go)
+	_, err = store.GetNode("pkg/functions/ModelGen/source")
+	require.NoError(t, err, "pkg/model.generated.go should be un-ignored by nested negation")
+}
+
+func TestGitignoreMatcher_DoublestarPatterns(t *testing.T) {
+	// Unit test for ** pattern matching without full engine
+	m := &gitignoreMatcher{
+		rootDir: "/tmp/test",
+		patterns: []gitignorePattern{
+			{pattern: "**/vendor", dirOnly: true},
+			{pattern: "docs/**", dirOnly: false},
+			{pattern: "src/**/test_*.go", dirOnly: false},
+		},
+		nested: make(map[string][]gitignorePattern),
+	}
+
+	// **/vendor should match vendor dirs at any depth
+	assert.True(t, m.Match("vendor", true), "**/vendor should match top-level vendor dir")
+	assert.True(t, m.Match("a/vendor", true), "**/vendor should match nested vendor dir")
+	assert.True(t, m.Match("a/b/vendor", true), "**/vendor should match deeply nested vendor dir")
+	assert.False(t, m.Match("vendor", false), "**/vendor with dirOnly should not match files")
+
+	// docs/** should match anything inside docs
+	assert.True(t, m.Match("docs/readme.md", false), "docs/** should match file in docs")
+	assert.True(t, m.Match("docs/api/v1.md", false), "docs/** should match nested file in docs")
+	assert.False(t, m.Match("other/readme.md", false), "docs/** should not match file outside docs")
+
+	// src/**/test_*.go should match test files at any depth under src
+	assert.True(t, m.Match("src/test_foo.go", false), "src/**/test_*.go should match direct child")
+	assert.True(t, m.Match("src/pkg/test_bar.go", false), "src/**/test_*.go should match nested child")
+	assert.True(t, m.Match("src/a/b/test_baz.go", false), "src/**/test_*.go should match deep child")
+	assert.False(t, m.Match("src/pkg/main.go", false), "src/**/test_*.go should not match non-test file")
+}
+
+func TestGitignoreMatcher_NestedDeterministicOrder(t *testing.T) {
+	// Verify that nested gitignore evaluation is deterministic: deeper dirs
+	// override shallower ones, evaluated shallowest-first so deeper wins.
+	m := &gitignoreMatcher{
+		rootDir: "/tmp/test",
+		patterns: []gitignorePattern{
+			{pattern: "*.txt"},
+		},
+		nested: map[string][]gitignorePattern{
+			"a": {
+				{pattern: "*.txt", negate: false}, // a/.gitignore: ignore .txt
+			},
+			"a/b": {
+				{pattern: "*.txt", negate: true}, // a/b/.gitignore: un-ignore .txt
+			},
+		},
+	}
+
+	// a/foo.txt — ignored by root AND by a/.gitignore
+	assert.True(t, m.Match("a/foo.txt", false), "a/foo.txt should be ignored")
+
+	// a/b/bar.txt — ignored by root, but a/b/.gitignore negates it (deeper wins)
+	assert.False(t, m.Match("a/b/bar.txt", false), "a/b/bar.txt should be un-ignored by deeper nested negation")
+}
+
 func TestEngine_NoGitignoreOptOut(t *testing.T) {
 	// When --no-gitignore is set, .gitignore should be ignored
 	schema := loadGoSchema(t)

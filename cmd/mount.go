@@ -860,6 +860,7 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 					modTime = fi.ModTime()
 				}
 				_ = store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime)
+				store.RecordFileMtime(origin.FilePath, modTime)
 				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
 			}
 
