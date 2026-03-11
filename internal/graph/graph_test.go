@@ -435,6 +435,60 @@ func TestMemoryStore_DeleteFileNodes_UsesBitmap(t *testing.T) {
 	assert.Equal(t, []string{"pkg/FuncC"}, parent.Children)
 }
 
+func TestMemoryStore_DeleteFileNodes_CleansRefsAndDefs(t *testing.T) {
+	store := NewMemoryStore()
+
+	store.AddRoot(&Node{
+		ID:       "pkg",
+		Mode:     fs.ModeDir,
+		Children: []string{"pkg/FuncA", "pkg/FuncB"},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncA",
+		Mode: 0,
+		Data: []byte("func A"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/main.go",
+			StartByte: 0,
+			EndByte:   6,
+		},
+	})
+	store.AddNode(&Node{
+		ID:   "pkg/FuncB",
+		Mode: 0,
+		Data: []byte("func B"),
+		Origin: &SourceOrigin{
+			FilePath:  "/src/other.go",
+			StartByte: 0,
+			EndByte:   6,
+		},
+	})
+
+	// Add refs: FuncA references "Validate", FuncB references "Validate"
+	require.NoError(t, store.AddRef("Validate", "pkg/FuncA"))
+	require.NoError(t, store.AddRef("Validate", "pkg/FuncB"))
+	require.NoError(t, store.AddRef("OnlyA", "pkg/FuncA"))
+
+	// Add defs: FuncA defines "FuncA"
+	require.NoError(t, store.AddDef("FuncA", "pkg/FuncA"))
+	require.NoError(t, store.AddDef("FuncB", "pkg/FuncB"))
+
+	// Delete nodes from main.go (FuncA)
+	store.DeleteFileNodes("/src/main.go")
+
+	// Refs for "Validate" should only contain FuncB
+	store.mu.RLock()
+	assert.Equal(t, []string{"pkg/FuncB"}, store.refs["Validate"])
+	// "OnlyA" should be entirely removed
+	_, hasOnlyA := store.refs["OnlyA"]
+	assert.False(t, hasOnlyA, "OnlyA ref should be deleted when its only node is removed")
+	// FuncA def should be removed, FuncB should remain
+	_, hasFuncADef := store.defs["FuncA"]
+	assert.False(t, hasFuncADef, "FuncA def should be deleted")
+	assert.Equal(t, []string{"pkg/FuncB"}, store.defs["FuncB"])
+	store.mu.RUnlock()
+}
+
 func TestMemoryStore_ShiftOrigins_PositiveDelta(t *testing.T) {
 	store := NewMemoryStore()
 

@@ -163,6 +163,14 @@ func TestDetectProjectType_DBProject(t *testing.T) {
 	assert.Equal(t, "", detectProjectType(dir))
 }
 
+func TestDetectProjectType_TieBreaking(t *testing.T) {
+	dir := t.TempDir()
+	// 1 .go + 1 .py → tied count → deterministic alphabetical pick ("go" < "python")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(""), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.py"), []byte(""), 0o644))
+	assert.Equal(t, "go", detectProjectType(dir))
+}
+
 func TestDetectProjectType_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte(""), 0o644))

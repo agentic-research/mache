@@ -425,7 +425,7 @@ func detectProjectType(dir string) string {
 	best := ""
 	bestCount := 0
 	for lang, count := range counts {
-		if count > bestCount {
+		if count > bestCount || (count == bestCount && lang < best) {
 			best = lang
 			bestCount = count
 		}

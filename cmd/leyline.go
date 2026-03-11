@@ -181,9 +181,9 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 		return nil
 	}
 
-	// Pre-load all defs: token → dir_id (eliminates N+1 queries and avoids
-	// nested cursors which are fragile with modernc.org/sqlite).
-	defsMap := make(map[string]string)
+	// Pre-load all defs: token → []dir_id (multiple constructs may define
+	// the same token, e.g. Init in different packages).
+	defsMap := make(map[string][]string)
 	defRows, err := tx.Query(`SELECT token, dir_id FROM node_defs`)
 	if err != nil {
 		return fmt.Errorf("query node_defs: %w", err)
@@ -194,7 +194,7 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 			_ = defRows.Close()
 			return err
 		}
-		defsMap[token] = dirID
+		defsMap[token] = append(defsMap[token], dirID)
 	}
 	_ = defRows.Close()
 	if err := defRows.Err(); err != nil {
@@ -227,13 +227,14 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 			continue
 		}
 
-		// Look up in pre-loaded map instead of per-row query
-		calleeDirID, ok := defsMap[token]
+		// Look up in pre-loaded map — emit one edge per definition
+		dirIDs, ok := defsMap[token]
 		if !ok {
 			continue // no definition found
 		}
-
-		callerCallees[callerDir] = append(callerCallees[callerDir], calleeInfo{token: token, dirID: calleeDirID})
+		for _, calleeDirID := range dirIDs {
+			callerCallees[callerDir] = append(callerCallees[callerDir], calleeInfo{token: token, dirID: calleeDirID})
+		}
 	}
 	_ = rows.Close()
 	if err := rows.Err(); err != nil {

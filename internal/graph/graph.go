@@ -457,6 +457,38 @@ func (s *MemoryStore) deleteFileNodes(filePath string) {
 			}
 		}
 	}
+
+	// 4. Clean stale refs: remove deleted node IDs from token→[]nodeID map.
+	// Without this, renamed/deleted functions persist as phantom callers.
+	for token, nodeIDs := range s.refs {
+		filtered := nodeIDs[:0]
+		for _, nid := range nodeIDs {
+			if _, del := deleteSet[nid]; !del {
+				filtered = append(filtered, nid)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.refs, token)
+		} else if len(filtered) < len(nodeIDs) {
+			s.refs[token] = filtered
+		}
+	}
+
+	// 5. Clean stale defs: remove deleted dir IDs from token→[]dirID map.
+	// Without this, renamed functions persist as phantom callees.
+	for token, dirIDs := range s.defs {
+		filtered := dirIDs[:0]
+		for _, did := range dirIDs {
+			if _, del := deleteSet[did]; !del {
+				filtered = append(filtered, did)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.defs, token)
+		} else if len(filtered) < len(dirIDs) {
+			s.defs[token] = filtered
+		}
+	}
 }
 
 // ShiftOrigins adjusts StartByte/EndByte for all nodes from filePath whose
