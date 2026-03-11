@@ -47,10 +47,13 @@ tasks:
         fi
 
   install:
-    desc: Install mache binary to $GOPATH/bin
-    deps: [check-fuse-t]
+    desc: Build, codesign, and install mache to ~/.local/bin
+    deps: [build]
     cmds:
-      - go install .
+      - mkdir -p ~/.local/bin
+      - cp {{.BINARY_NAME}} ~/.local/bin/mache
+      - cmd: codesign -s - --force --deep --entitlements entitlements.plist ~/.local/bin/mache
+        platforms: [darwin]
 
   build:
     desc: Build and codesign mache (with FUSE-T network entitlements)

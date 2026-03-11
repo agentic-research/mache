@@ -314,8 +314,9 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 
 	s.AddTool(
 		mcp.NewTool("read_file",
-			mcp.WithDescription("Read the text content of a file node."),
-			mcp.WithString("path", mcp.Required(), mcp.Description("File node path")),
+			mcp.WithDescription("Read the text content of one or more file nodes. Pass a single path or a JSON array of paths for batch reads."),
+			mcp.WithString("path", mcp.Description("Single file node path")),
+			mcp.WithString("paths", mcp.Description("JSON array of file node paths for batch read, e.g. [\"path/a\", \"path/b\"]")),
 		),
 		makeReadFileHandler(g),
 	)
@@ -340,8 +341,9 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 	if _, ok := g.(refsQuerier); ok {
 		s.AddTool(
 			mcp.NewTool("search",
-				mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard)."),
+				mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard). Optionally filter by construct type."),
 				mcp.WithString("pattern", mcp.Required(), mcp.Description("Search pattern, e.g. 'Login%' or '%auth%'")),
+				mcp.WithString("type", mcp.Description("Filter by construct type in path, e.g. 'functions', 'methods', 'types', 'structs'")),
 				mcp.WithNumber("limit", mcp.Description("Max results (default 100)")),
 			),
 			makeSearchHandler(g),
@@ -414,37 +416,89 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 			})
 		}
 
+		// Surface callers/ and callees/ virtual dirs on construct directories
+		if path != "" {
+			token := filepath.Base(path)
+			if callers, err := g.GetCallers(token); err == nil && len(callers) > 0 {
+				entries = append(entries, nodeEntry{
+					Name: "callers",
+					Path: path + "/callers",
+					Type: "virtual",
+				})
+			}
+			if callees, err := g.GetCallees(path); err == nil && len(callees) > 0 {
+				entries = append(entries, nodeEntry{
+					Name: "callees",
+					Path: path + "/callees",
+					Type: "virtual",
+				})
+			}
+		}
+
 		data, _ := json.MarshalIndent(entries, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }
 
+func readOneFile(g graph.Graph, path string) (string, error) {
+	node, err := g.GetNode(path)
+	if err != nil {
+		return "", fmt.Errorf("not found: %s", path)
+	}
+	if node.Mode.IsDir() {
+		return "", fmt.Errorf("%s is a directory — use list_directory", path)
+	}
+	size := node.ContentSize()
+	if size == 0 {
+		return "", nil
+	}
+	buf := make([]byte, size)
+	n, err := g.ReadContent(path, buf, 0)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %v", path, err)
+	}
+	return string(buf[:n]), nil
+}
+
 func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		path := request.GetString("path", "")
+		pathsRaw := request.GetString("paths", "")
+
+		// Batch mode
+		if pathsRaw != "" {
+			var paths []string
+			if err := json.Unmarshal([]byte(pathsRaw), &paths); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid paths array: %v", err)), nil
+			}
+
+			type fileResult struct {
+				Path    string `json:"path"`
+				Content string `json:"content,omitempty"`
+				Error   string `json:"error,omitempty"`
+			}
+			results := make([]fileResult, 0, len(paths))
+			for _, p := range paths {
+				content, err := readOneFile(g, p)
+				if err != nil {
+					results = append(results, fileResult{Path: p, Error: err.Error()})
+				} else {
+					results = append(results, fileResult{Path: p, Content: content})
+				}
+			}
+			data, _ := json.MarshalIndent(results, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
+		}
+
+		// Single mode
 		if path == "" {
-			return mcp.NewToolResultError("path is required"), nil
+			return mcp.NewToolResultError("path or paths is required"), nil
 		}
-
-		node, err := g.GetNode(path)
+		content, err := readOneFile(g, path)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("not found: %s", path)), nil
+			return mcp.NewToolResultError(err.Error()), nil
 		}
-		if node.Mode.IsDir() {
-			return mcp.NewToolResultError(fmt.Sprintf("%s is a directory — use list_directory", path)), nil
-		}
-
-		size := node.ContentSize()
-		if size == 0 {
-			return mcp.NewToolResultText(""), nil
-		}
-
-		buf := make([]byte, size)
-		n, err := g.ReadContent(path, buf, 0)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("read %s: %v", path, err)), nil
-		}
-		return mcp.NewToolResultText(string(buf[:n])), nil
+		return mcp.NewToolResultText(content), nil
 	}
 }
 
@@ -503,13 +557,23 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("pattern is required"), nil
 		}
 
+		typeFilter := request.GetString("type", "")
 		limit := request.GetInt("limit", 100)
 
 		qg := g.(refsQuerier)
-		rows, err := qg.QueryRefs(
-			"SELECT token, path FROM mache_refs WHERE token LIKE ? LIMIT ?",
-			pattern, limit,
-		)
+		var rows *sql.Rows
+		var err error
+		if typeFilter != "" {
+			rows, err = qg.QueryRefs(
+				"SELECT token, path FROM mache_refs WHERE token LIKE ? AND path LIKE ? LIMIT ?",
+				pattern, "%/"+typeFilter+"/%", limit,
+			)
+		} else {
+			rows, err = qg.QueryRefs(
+				"SELECT token, path FROM mache_refs WHERE token LIKE ? LIMIT ?",
+				pattern, limit,
+			)
+		}
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("query: %v", err)), nil
 		}
