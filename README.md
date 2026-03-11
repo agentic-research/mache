@@ -77,6 +77,7 @@ This isn't metaphorical. Mache literally treats both sides as graphs and uses SQ
 - [Feature Matrix](#feature-matrix)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
+  - [MCP Server Mode](#mcp-server-mode)
   - [Example: NVD Vulnerability Database](#example-nvd-vulnerability-database)
   - [Example: Projecting JSON Data](#example-projecting-json-data)
   - [Example: Projecting Source Code](#example-projecting-source-code)
@@ -152,7 +153,7 @@ task test
 
 ### MCP Server Mode
 
-`mache serve` exposes any mache graph as an [MCP](https://modelcontextprotocol.io/) server over stdio, usable by Claude Code, Claude Desktop, Cursor, or any MCP client:
+`mache serve` exposes any mache graph as an [MCP](https://modelcontextprotocol.io/) server over stdio, usable by Claude Code, Claude Desktop, Cursor, or any MCP client.
 
 ```bash
 # Serve source code as MCP tools
@@ -166,6 +167,62 @@ mache serve -s examples/mcp-registry-schema.json mcp-registry.db
 ```
 
 Six tools are exposed: `list_directory`, `read_file`, `find_callers`, `find_callees`, `search`, and `get_communities` (Louvain cluster detection). No filesystem mount needed — the graph is queried directly over JSON-RPC.
+
+#### Installing in Claude Code
+
+Add to your project's `.mcp.json` (or `~/.claude/settings.json` for global access):
+
+```json
+{
+  "mcpServers": {
+    "mache": {
+      "command": "/path/to/mache",
+      "args": ["serve", "-s", "/path/to/schema.json", "/path/to/data"]
+    }
+  }
+}
+```
+
+Example — serve your own Go codebase to Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "my-project": {
+      "command": "/path/to/mache",
+      "args": ["serve", "-s", "examples/go-schema.json", "./src"]
+    }
+  }
+}
+```
+
+#### Installing in Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "mache": {
+      "command": "/path/to/mache",
+      "args": ["serve", "-s", "/path/to/schema.json", "/path/to/data"]
+    }
+  }
+}
+```
+
+#### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_directory` | List children of a directory node (empty path for root) |
+| `read_file` | Read text content of a file node |
+| `find_callers` | Find all nodes referencing a given symbol or token |
+| `find_callees` | Find all symbols called by a given construct |
+| `search` | Search for symbols matching a SQL LIKE pattern (e.g., `%auth%`) |
+| `get_communities` | Detect clusters of densely co-referencing nodes (Louvain modularity) |
+
+`search` and `get_communities` are conditionally available depending on backend support (both available for SQLite and MemoryStore with refs).
 
 ### Using with LLMs and Agents
 
