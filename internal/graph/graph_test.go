@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"io/fs"
 	"testing"
 	"time"
@@ -667,4 +668,33 @@ func TestMemoryStore_ShiftOrigins_NoOpDifferentFile(t *testing.T) {
 	nodeX, _ := store.GetNode("pkg/FuncX")
 	assert.Equal(t, uint32(10), nodeX.Origin.StartByte)
 	assert.Equal(t, uint32(16), nodeX.Origin.EndByte)
+}
+
+func TestSetResolver_CacheScalesWithNodes(t *testing.T) {
+	resolver := func(_ *ContentRef) ([]byte, error) { return nil, nil }
+
+	tests := []struct {
+		name     string
+		numNodes int
+		wantMin  int
+		wantMax  int
+	}{
+		{"small project", 100, 1024, 1024},     // floor
+		{"medium project", 8000, 2000, 2000},   // 8000/4 = 2000
+		{"large project", 40000, 10000, 10000}, // 40000/4 = 10000
+		{"huge project", 100000, 16384, 16384}, // ceiling
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			for i := range tt.numNodes {
+				store.AddNode(&Node{ID: fmt.Sprintf("node/%d", i)})
+			}
+			store.SetResolver(resolver)
+			require.NotNil(t, store.cache)
+			assert.GreaterOrEqual(t, store.cache.maxSize, tt.wantMin)
+			assert.LessOrEqual(t, store.cache.maxSize, tt.wantMax)
+		})
+	}
 }

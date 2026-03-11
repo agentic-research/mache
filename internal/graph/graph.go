@@ -172,9 +172,17 @@ func (s *MemoryStore) SetCallExtractor(fn CallExtractor) {
 }
 
 // SetResolver configures lazy content resolution for nodes with ContentRef.
+// Cache size scales with node count: 25% of nodes, floor 1024, ceiling 16384.
 func (s *MemoryStore) SetResolver(fn ContentResolverFunc) {
 	s.resolver = fn
-	s.cache = newContentCache(1024)
+	size := len(s.nodes) / 4
+	if size < 1024 {
+		size = 1024
+	}
+	if size > 16384 {
+		size = 16384
+	}
+	s.cache = newContentCache(size)
 }
 
 // RootIDs returns a copy of the top-level root node IDs.
