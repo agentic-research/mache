@@ -41,6 +41,20 @@ jobs:
       - name: Test
         run: task test
 
+  # Trigger kiln to rebuild the fat binary when mache merges to main
+  notify-kiln:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger kiln rebuild
+        run: |
+          gh api repos/agentic-research/kiln/dispatches \
+            -f event_type=upstream-update \
+            -f 'client_payload[repo]=agentic-research/mache'
+        env:
+          GH_TOKEN: ${{ secrets.LEYLINE_PAT }}
+
   lint:
     runs-on: ubuntu-latest
     steps:
