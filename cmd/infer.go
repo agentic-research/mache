@@ -21,9 +21,11 @@ import (
 // data-format presets (cli, mcp, mcp-registry) are excluded because they
 // don't correspond to detected file extensions.
 var sourceCodePresets = map[string]string{
-	"go":     "go",
-	"python": "python",
-	"sql":    "sql",
+	"go":        "go",
+	"python":    "python",
+	"rust":      "rust",
+	"terraform": "terraform",
+	"sql":       "sql",
 }
 
 // detectProjectLanguages walks a directory tree and returns a map of

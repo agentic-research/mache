@@ -15,6 +15,8 @@ var embeddedSchemas embed.FS
 var presetSchemas = map[string]string{
 	"go":           "schemas/go.json",
 	"python":       "schemas/python.json",
+	"rust":         "schemas/rust.json",
+	"terraform":    "schemas/terraform.json",
 	"sql":          "schemas/sql.json",
 	"cli":          "schemas/cli.json",
 	"mcp":          "schemas/mcp.json",
