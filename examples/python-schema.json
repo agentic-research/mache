@@ -1,5 +1,11 @@
 {
   "version": "v1",
+  "file_sets": {
+    "lsp": [
+      {"name": "hover", "content_source": "lsp_hover"},
+      {"name": "diagnostics", "content_source": "lsp_diagnostics"}
+    ]
+  },
   "nodes": [
     {
       "name": "imports",
@@ -34,6 +40,7 @@
         {
           "name": "{{.name}}",
           "selector": "(class_definition name: (identifier) @name) @scope",
+          "include": ["lsp"],
           "files": [
             {
               "name": "source",
@@ -48,6 +55,7 @@
                 {
                   "name": "{{.name}}",
                   "selector": "(function_definition name: (identifier) @name) @scope",
+                  "include": ["lsp"],
                   "files": [
                     {
                       "name": "source",
@@ -68,6 +76,7 @@
         {
           "name": "{{.name}}",
           "selector": "(function_definition name: (identifier) @name) @scope",
+          "include": ["lsp"],
           "files": [
             {
               "name": "source",

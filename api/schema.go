@@ -10,6 +10,10 @@ type Topology struct {
 	Version string `json:"version"`
 	// Table is the SQLite table name to query (default: "results").
 	Table string `json:"table,omitempty"`
+	// FileSets defines reusable groups of file definitions that can be
+	// included by nodes via the Include field. Avoids duplicating file
+	// entries across many construct types.
+	FileSets map[string][]Leaf `json:"file_sets,omitempty"`
 	// Root nodes of the filesystem.
 	Nodes []Node `json:"nodes,omitempty"`
 }
@@ -31,10 +35,35 @@ type Node struct {
 	// Language hint for multi-language schemas (e.g., "go", "terraform", "python").
 	// Used to filter nodes during ingestion to prevent cross-language query errors.
 	Language string `json:"language,omitempty"`
+	// Include references named file sets from Topology.FileSets.
+	// The referenced leaves are appended to this node's Files during
+	// schema resolution.
+	Include []string `json:"include,omitempty"`
 	// Children directories.
 	Children []Node `json:"children,omitempty"`
 	// Files within this directory.
 	Files []Leaf `json:"files,omitempty"`
+}
+
+// ResolveIncludes expands all Include references in the schema tree,
+// appending the referenced FileSets leaves to each node's Files.
+// Call this once after parsing the schema, before ingestion or materialization.
+func (t *Topology) ResolveIncludes() {
+	if len(t.FileSets) == 0 {
+		return
+	}
+	resolveNodes(t.Nodes, t.FileSets)
+}
+
+func resolveNodes(nodes []Node, sets map[string][]Leaf) {
+	for i := range nodes {
+		for _, ref := range nodes[i].Include {
+			if leaves, ok := sets[ref]; ok {
+				nodes[i].Files = append(nodes[i].Files, leaves...)
+			}
+		}
+		resolveNodes(nodes[i].Children, sets)
+	}
 }
 
 // Leaf represents a file in the filesystem.
@@ -42,7 +71,14 @@ type Leaf struct {
 	// Name of the file. Can be a template string.
 	Name string `json:"name"`
 	// ContentTemplate is the template string used to generate the file content.
-	ContentTemplate string `json:"content_template"`
+	// Mutually exclusive with ContentSource.
+	ContentTemplate string `json:"content_template,omitempty"`
+	// ContentSource names an auxiliary table that provides file content.
+	// The materializer joins the aux table with construct directories by
+	// symbol name to create files. Supported sources: "lsp_hover",
+	// "lsp_diagnostics", "lsp_defs", "lsp_refs".
+	// Mutually exclusive with ContentTemplate.
+	ContentSource string `json:"content_source,omitempty"`
 	// Attributes defines file permissions/metadata (optional).
 	Attributes *Attributes `json:"attributes,omitempty"`
 }

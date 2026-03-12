@@ -414,9 +414,9 @@ func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
 		var err error
 		if id == "" {
 			// Root children (top level dirs)
-			rows, err = g.db.Query("SELECT name FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+			rows, err = g.db.Query("SELECT id FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
 		} else {
-			rows, err = g.db.Query("SELECT name FROM nodes WHERE parent_id = ? ORDER BY name", id)
+			rows, err = g.db.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
 		}
 		if err != nil {
 			return nil, err
@@ -425,11 +425,11 @@ func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
 
 		var children []string
 		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
+			var childID string
+			if err := rows.Scan(&childID); err != nil {
 				return nil, err
 			}
-			children = append(children, name)
+			children = append(children, childID)
 		}
 		return children, nil
 	}

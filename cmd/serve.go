@@ -270,6 +270,11 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 	noop := func() {}
 
 	if filepath.Ext(dataSource) == ".db" {
+		// Materialize virtual nodes (callers, callees, content sources)
+		// into the .db before opening it as a graph.
+		if err := materializeVirtuals(dataSource, schema, false); err != nil {
+			return nil, noop, fmt.Errorf("materialize virtuals: %w", err)
+		}
 		sg, err := graph.OpenSQLiteGraph(dataSource, schema, ingest.RenderTemplate)
 		if err != nil {
 			return nil, noop, fmt.Errorf("open sqlite graph: %w", err)
@@ -485,21 +490,30 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Surface callers/ and callees/ virtual dirs on construct directories
+		// (skip if already materialized in the db)
 		if path != "" {
-			token := filepath.Base(path)
-			if callers, err := g.GetCallers(token); err == nil && len(callers) > 0 {
-				entries = append(entries, nodeEntry{
-					Name: "callers",
-					Path: path + "/callers",
-					Type: "virtual",
-				})
+			seen := make(map[string]bool, len(entries))
+			for _, e := range entries {
+				seen[e.Name] = true
 			}
-			if callees, err := g.GetCallees(path); err == nil && len(callees) > 0 {
-				entries = append(entries, nodeEntry{
-					Name: "callees",
-					Path: path + "/callees",
-					Type: "virtual",
-				})
+			token := filepath.Base(path)
+			if !seen["callers"] {
+				if callers, err := g.GetCallers(token); err == nil && len(callers) > 0 {
+					entries = append(entries, nodeEntry{
+						Name: "callers",
+						Path: path + "/callers",
+						Type: "virtual",
+					})
+				}
+			}
+			if !seen["callees"] {
+				if callees, err := g.GetCallees(path); err == nil && len(callees) > 0 {
+					entries = append(entries, nodeEntry{
+						Name: "callees",
+						Path: path + "/callees",
+						Type: "virtual",
+					})
+				}
 			}
 		}
 

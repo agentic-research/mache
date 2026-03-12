@@ -19,6 +19,9 @@ import (
 //   - PROMPT.txt    (if agentMode)
 //   - callers/ dirs (from node_refs cross-references)
 func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) error {
+	// Expand file_sets/include references before materialization.
+	schema.ResolveIncludes()
+
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -66,9 +69,9 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 		return fmt.Errorf("materialize callees: %w", err)
 	}
 
-	// 5. Materialize LSP data (hover, diagnostics) if _lsp_* tables exist
-	if err := materializeLSP(tx, now); err != nil {
-		return fmt.Errorf("materialize lsp: %w", err)
+	// 5. Materialize content-source files declared in the schema
+	if err := materializeContentSources(tx, schema, now); err != nil {
+		return fmt.Errorf("materialize content sources: %w", err)
 	}
 
 	return tx.Commit()
@@ -293,161 +296,258 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	return nil
 }
 
-// materializeLSP reads leyline's _lsp_hover and _lsp tables (if present)
-// and creates materialized files in construct directories:
-//   - {construct}/hover   (type signature / documentation from LSP hover)
-//   - {construct}/diagnostics (LSP diagnostics as JSON, if any)
+// materializeContentSources walks the schema tree, finds all Leaf entries with
+// ContentSource set, and creates file nodes by joining auxiliary tables with
+// existing construct directories.
 //
-// The _lsp tables are produced by `leyline lsp --merge-db` or standalone projection.
-// node_ids in _lsp use "symbols/{name}" format; we map them to existing construct
-// directories by matching the symbol name to directory names in the nodes table.
+// Supported content sources:
+//   - "lsp_hover"       → _lsp_hover table, hover_text column
+//   - "lsp_diagnostics" → _lsp table, diagnostics column (non-null only)
+//   - "lsp_defs"        → _lsp_defs table, grouped as JSON array per symbol
+//   - "lsp_refs"        → _lsp_refs table, grouped as JSON array per symbol
 //
-// TODO: Replace this hardcoded materializer with a schema-driven approach.
-// LSP files (hover, diagnostics, refs) should be declarable in the topology
-// schema alongside tree-sitter files, e.g.:
-//
-//	"files": [
-//	  {"name": "source", "content_template": "{{.scope}}"},
-//	  {"name": "hover", "content_source": "lsp_hover"},
-//	  {"name": "diagnostics", "content_source": "lsp_diagnostics"}
-//	]
-//
-// This separates the "rules" (what each construct gets) from the "parsing"
-// (how LSP/tree-sitter data is produced), matching the existing schema pattern.
-func materializeLSP(tx *sql.Tx, now int64) error {
-	// Check if _lsp_hover table exists
-	var hoverCount int
-	err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_hover'`).Scan(&hoverCount)
-	if err != nil || hoverCount == 0 {
-		// No LSP data, nothing to do
+// The matching logic: LSP node_ids use "symbols/{name}" format. We extract the
+// leaf name and match it against directory names in the nodes table.
+func materializeContentSources(tx *sql.Tx, schema *api.Topology, now int64) error {
+	// Collect all unique content_source values from the schema.
+	sources := collectContentSources(schema)
+	if len(sources) == 0 {
 		return nil
 	}
 
-	// Materialize hover text as files.
-	// _lsp_hover has (node_id TEXT PK, hover_text TEXT).
-	// node_ids are like "symbols/Model", "symbols/Model/memory_gb", etc.
-	rows, err := tx.Query(`SELECT node_id, hover_text FROM _lsp_hover WHERE hover_text != ''`)
+	// Build name→dirID index for matching LSP symbols to construct directories.
+	nameToDir, err := buildNameToDirIndex(tx)
 	if err != nil {
-		return fmt.Errorf("query _lsp_hover: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	// Build a set of known directory node IDs for matching
-	dirRows, err := tx.Query(`SELECT id FROM nodes WHERE kind = 1`)
-	if err != nil {
-		return fmt.Errorf("query dirs: %w", err)
-	}
-	dirSet := make(map[string]bool)
-	for dirRows.Next() {
-		var id string
-		if err := dirRows.Scan(&id); err != nil {
-			_ = dirRows.Close()
-			return err
-		}
-		dirSet[id] = true
-	}
-	_ = dirRows.Close()
-
-	// Build a name→dirID index for fuzzy matching (last path component)
-	nameToDir := make(map[string][]string)
-	for id := range dirSet {
-		parts := strings.Split(id, "/")
-		name := parts[len(parts)-1]
-		nameToDir[name] = append(nameToDir[name], id)
-	}
-
-	for rows.Next() {
-		var nodeID, hoverText string
-		if err := rows.Scan(&nodeID, &hoverText); err != nil {
-			return err
-		}
-
-		// Extract the symbol name from the LSP node_id
-		// "symbols/Model/memory_gb" → "memory_gb"
-		symbolName := nodeID
-		if strings.HasPrefix(nodeID, "symbols/") {
-			symbolName = strings.TrimPrefix(nodeID, "symbols/")
-		}
-		parts := strings.Split(symbolName, "/")
-		leafName := parts[len(parts)-1]
-
-		// Find matching construct directory
-		var targetDirs []string
-		if dirs, ok := nameToDir[leafName]; ok {
-			targetDirs = dirs
-		}
-
-		for _, dirID := range targetDirs {
-			hoverID := dirID + "/hover"
-
-			// Check if already exists
-			var exists int
-			_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, hoverID).Scan(&exists)
-			if exists > 0 {
-				continue
-			}
-
-			if _, err := tx.Exec(
-				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				hoverID, dirID, "hover", 0, len(hoverText), now, hoverText,
-			); err != nil {
-				return fmt.Errorf("insert hover %s: %w", hoverID, err)
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	// Materialize diagnostics from _lsp table (if it has diagnostics column)
-	var lspCount int
-	err = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`).Scan(&lspCount)
-	if err != nil || lspCount == 0 {
-		return nil
-	}
-
-	diagRows, err := tx.Query(`SELECT node_id, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != ''`)
-	if err != nil {
-		return nil // column might not exist in older schemas
-	}
-	defer func() { _ = diagRows.Close() }()
-
-	for diagRows.Next() {
-		var nodeID, diagnosticsJSON string
-		if err := diagRows.Scan(&nodeID, &diagnosticsJSON); err != nil {
-			continue
+	// For each content source, load data and create file nodes.
+	for source, fileName := range sources {
+		data, err := loadContentSource(tx, source)
+		if err != nil {
+			return fmt.Errorf("load content source %q: %w", source, err)
 		}
-		// Parse diagnostics JSON to verify it's valid (and not just a string error message)
-		symbolName := nodeID
-		if strings.HasPrefix(nodeID, "symbols/") {
-			symbolName = strings.TrimPrefix(nodeID, "symbols/")
-		}
-		parts := strings.Split(symbolName, "/")
-		leafName := parts[len(parts)-1]
-
-		var targetDirs []string
-		if dirs, ok := nameToDir[leafName]; ok {
-			targetDirs = dirs
+		if data == nil {
+			continue // table doesn't exist, skip
 		}
 
-		for _, dirID := range targetDirs {
-			diagID := dirID + "/diagnostics"
-			var exists int
-			_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, diagID).Scan(&exists)
-			if exists > 0 {
+		for symbolName, content := range data {
+			dirs, ok := nameToDir[symbolName]
+			if !ok {
 				continue
 			}
-			// TODO: We should make this query
-			if _, err := tx.Exec(
-				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				diagID, dirID, "diagnostics", 0, len(diagnosticsJSON), now, diagnosticsJSON,
-			); err != nil {
-				return fmt.Errorf("insert diagnostics %s: %w", diagID, err)
+			for _, dirID := range dirs {
+				fileID := dirID + "/" + fileName
+				var exists int
+				_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, fileID).Scan(&exists)
+				if exists > 0 {
+					continue
+				}
+				if _, err := tx.Exec(
+					`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					fileID, dirID, fileName, 0, len(content), now, content,
+				); err != nil {
+					return fmt.Errorf("insert %s: %w", fileID, err)
+				}
 			}
 		}
 	}
 
 	return nil
+}
+
+// collectContentSources walks the schema tree and returns a map of
+// content_source value → file name for all Leaf entries that use ContentSource.
+func collectContentSources(schema *api.Topology) map[string]string {
+	result := make(map[string]string)
+	var walk func(nodes []api.Node)
+	walk = func(nodes []api.Node) {
+		for _, n := range nodes {
+			for _, f := range n.Files {
+				if f.ContentSource != "" {
+					result[f.ContentSource] = f.Name
+				}
+			}
+			walk(n.Children)
+		}
+	}
+	walk(schema.Nodes)
+	return result
+}
+
+// buildNameToDirIndex builds a map from directory leaf name to directory IDs.
+func buildNameToDirIndex(tx *sql.Tx) (map[string][]string, error) {
+	rows, err := tx.Query(`SELECT id FROM nodes WHERE kind = 1`)
+	if err != nil {
+		return nil, fmt.Errorf("query dirs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	nameToDir := make(map[string][]string)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		parts := strings.Split(id, "/")
+		name := parts[len(parts)-1]
+		nameToDir[name] = append(nameToDir[name], id)
+	}
+	return nameToDir, rows.Err()
+}
+
+// lspSymbolLeafName extracts the leaf symbol name from an LSP node_id.
+// "symbols/Model/memory_gb" → "memory_gb"
+// "symbols/HandleRequest" → "HandleRequest"
+func lspSymbolLeafName(nodeID string) string {
+	s := strings.TrimPrefix(nodeID, "symbols/")
+	parts := strings.Split(s, "/")
+	return parts[len(parts)-1]
+}
+
+// loadContentSource queries the appropriate auxiliary table and returns
+// a map of symbol leaf name → content string. Returns nil map (not error)
+// if the backing table doesn't exist.
+func loadContentSource(tx *sql.Tx, source string) (map[string]string, error) {
+	switch source {
+	case "lsp_hover":
+		return loadLSPHover(tx)
+	case "lsp_diagnostics":
+		return loadLSPDiagnostics(tx)
+	case "lsp_defs":
+		return loadLSPDefs(tx)
+	case "lsp_refs":
+		return loadLSPRefs(tx)
+	default:
+		return nil, fmt.Errorf("unknown content source: %s", source)
+	}
+}
+
+// tableExists checks if a table exists in the database.
+func tableExists(tx *sql.Tx, name string) bool {
+	var count int
+	_ = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&count)
+	return count > 0
+}
+
+func loadLSPHover(tx *sql.Tx) (map[string]string, error) {
+	if !tableExists(tx, "_lsp_hover") {
+		return nil, nil
+	}
+	rows, err := tx.Query(`SELECT node_id, hover_text FROM _lsp_hover WHERE hover_text != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var nodeID, text string
+		if err := rows.Scan(&nodeID, &text); err != nil {
+			return nil, err
+		}
+		result[lspSymbolLeafName(nodeID)] = text
+	}
+	return result, rows.Err()
+}
+
+func loadLSPDiagnostics(tx *sql.Tx) (map[string]string, error) {
+	if !tableExists(tx, "_lsp") {
+		return nil, nil
+	}
+	rows, err := tx.Query(`SELECT node_id, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != ''`)
+	if err != nil {
+		return nil, nil // column might not exist in older schemas
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var nodeID, diag string
+		if err := rows.Scan(&nodeID, &diag); err != nil {
+			continue
+		}
+		result[lspSymbolLeafName(nodeID)] = diag
+	}
+	return result, rows.Err()
+}
+
+func loadLSPDefs(tx *sql.Tx) (map[string]string, error) {
+	if !tableExists(tx, "_lsp_defs") {
+		return nil, nil
+	}
+	rows, err := tx.Query(`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col FROM _lsp_defs`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type defLoc struct {
+		URI       string `json:"uri"`
+		StartLine int    `json:"start_line"`
+		StartCol  int    `json:"start_col"`
+		EndLine   int    `json:"end_line"`
+		EndCol    int    `json:"end_col"`
+	}
+	grouped := make(map[string][]defLoc)
+	for rows.Next() {
+		var nodeID, uri string
+		var sl, sc, el, ec int
+		if err := rows.Scan(&nodeID, &uri, &sl, &sc, &el, &ec); err != nil {
+			return nil, err
+		}
+		name := lspSymbolLeafName(nodeID)
+		grouped[name] = append(grouped[name], defLoc{URI: uri, StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string)
+	for name, locs := range grouped {
+		data, _ := json.Marshal(locs)
+		result[name] = string(data)
+	}
+	return result, nil
+}
+
+func loadLSPRefs(tx *sql.Tx) (map[string]string, error) {
+	if !tableExists(tx, "_lsp_refs") {
+		return nil, nil
+	}
+	rows, err := tx.Query(`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col FROM _lsp_refs`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type refLoc struct {
+		URI       string `json:"uri"`
+		StartLine int    `json:"start_line"`
+		StartCol  int    `json:"start_col"`
+		EndLine   int    `json:"end_line"`
+		EndCol    int    `json:"end_col"`
+	}
+	grouped := make(map[string][]refLoc)
+	for rows.Next() {
+		var nodeID, uri string
+		var sl, sc, el, ec int
+		if err := rows.Scan(&nodeID, &uri, &sl, &sc, &el, &ec); err != nil {
+			return nil, err
+		}
+		name := lspSymbolLeafName(nodeID)
+		grouped[name] = append(grouped[name], refLoc{URI: uri, StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string)
+	for name, locs := range grouped {
+		data, _ := json.Marshal(locs)
+		result[name] = string(data)
+	}
+	return result, nil
 }
 
 // extractCallerDir gets the construct directory from a node_id.
@@ -468,7 +568,7 @@ func extractCallerDir(nodeID string) (dirID string) {
 
 	// Use a switch for a clean, readable multi-match
 	switch last := nodeID[idx+1:]; last {
-	case "source", "context", "doc", "callers", "callees", "hover", "diagnostics":
+	case "source", "context", "doc", "callers", "callees", "hover", "diagnostics", "definitions", "references":
 		// Return the string up to (but not including) the last slash
 		dirID = nodeID[:idx]
 	default:
