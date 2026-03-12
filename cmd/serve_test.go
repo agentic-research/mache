@@ -1097,74 +1097,10 @@ func addMacheTools(srv *mcptest.Server, store *graph.MemoryStore) {
 	)
 }
 
-// addMacheToolsFromGraph registers tools using a generic Graph (no search).
-func addMacheToolsFromGraph(srv *mcptest.Server, g graph.Graph) {
-	srv.AddTool(
-		mcp.NewTool("list_directory",
-			mcp.WithDescription("List children."),
-			mcp.WithString("path", mcp.Description("Path")),
-		),
-		makeListDirHandler(g),
-	)
-	srv.AddTool(
-		mcp.NewTool("read_file",
-			mcp.WithDescription("Read file."),
-			mcp.WithString("path", mcp.Required(), mcp.Description("Path")),
-		),
-		makeReadFileHandler(g),
-	)
-	srv.AddTool(
-		mcp.NewTool("find_callers",
-			mcp.WithDescription("Find callers."),
-			mcp.WithString("token", mcp.Required(), mcp.Description("Token")),
-		),
-		makeFindCallersHandler(g),
-	)
-	srv.AddTool(
-		mcp.NewTool("find_callees",
-			mcp.WithDescription("Find callees."),
-			mcp.WithString("path", mcp.Required(), mcp.Description("Path")),
-		),
-		makeFindCalleesHandler(g),
-	)
-}
-
 // newTestLazyGraph creates a lazyGraph that is already initialized with the given graph.
 // This avoids triggering real filesystem detection in tests.
 func newTestLazyGraph(g graph.Graph, basePath string) *lazyGraph {
 	lg := &lazyGraph{inner: g, basePath: basePath}
 	lg.once.Do(func() {}) // mark as initialized
 	return lg
-}
-
-// mockGraph is a minimal Graph implementation that does NOT support QueryRefs.
-type mockGraph struct{}
-
-func (m *mockGraph) GetNode(id string) (*graph.Node, error) {
-	if id == "" || id == "/" {
-		return &graph.Node{ID: "", Mode: fs.ModeDir}, nil
-	}
-	return nil, graph.ErrNotFound
-}
-
-func (m *mockGraph) ListChildren(id string) ([]string, error) {
-	return nil, nil
-}
-
-func (m *mockGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
-	return 0, graph.ErrNotFound
-}
-
-func (m *mockGraph) GetCallers(token string) ([]*graph.Node, error) {
-	return nil, nil
-}
-
-func (m *mockGraph) GetCallees(id string) ([]*graph.Node, error) {
-	return nil, nil
-}
-
-func (m *mockGraph) Invalidate(id string) {}
-
-func (m *mockGraph) Act(id, action, payload string) (*graph.ActionResult, error) {
-	return nil, graph.ErrActNotSupported
 }
