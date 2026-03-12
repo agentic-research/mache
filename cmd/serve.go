@@ -23,18 +23,27 @@ import (
 
 var serveCmd = &cobra.Command{
 	Use:   "serve [data-source]",
-	Short: "Serve a Mache graph as an MCP server over stdio",
+	Short: "Serve a Mache graph as an MCP server",
 	Long: `Starts an MCP (Model Context Protocol) server that exposes the graph
-as tools over stdin/stdout JSON-RPC. Any MCP client (Claude Code, Claude Desktop,
-etc.) can connect to browse and query the projected data.`,
+as tools. By default uses stdin/stdout JSON-RPC (stdio transport).
+With --http, starts a Streamable HTTP server for always-on use (e.g. brew service).
+
+Examples:
+  mache serve ./data.db              # stdio (Claude Code subprocess)
+  mache serve --http :7532 ./data.db # Streamable HTTP (always-on service)
+  claude mcp add --transport http mache http://localhost:7532/mcp`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runServe,
 }
 
-var serveSchema string
+var (
+	serveSchema string
+	serveHTTP   string
+)
 
 func init() {
 	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Path to topology schema")
+	serveCmd.Flags().StringVar(&serveHTTP, "http", "", "Listen address for Streamable HTTP transport (e.g. :7532)")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -49,6 +58,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		server.WithToolCapabilities(false),
 	)
 	registerMCPTools(s, lg)
+
+	if serveHTTP != "" {
+		httpServer := server.NewStreamableHTTPServer(s)
+		log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
+		return httpServer.Start(serveHTTP)
+	}
 
 	log.Println("mache MCP server ready on stdio")
 	return server.ServeStdio(s)
