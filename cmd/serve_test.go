@@ -574,66 +574,53 @@ func TestGetCommunities_CustomMinSize(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// registerMCPTools tests
+// registerMCPTools tests (multi-tenant: all tools registered unconditionally)
 // ---------------------------------------------------------------------------
 
-func TestRegisterMCPTools_WithQueryRefs(t *testing.T) {
+func TestRegisterMCPTools_AllToolsRegistered(t *testing.T) {
 	store := buildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
 
+	registry := newGraphRegistry(".", nil)
+	registry.graphs.Store(".", &lazyGraph{inner: store})
+
 	s := server.NewMCPServer("test", "1.0.0", server.WithToolCapabilities(false))
-	registerMCPTools(s, store)
+	registerMCPTools(s, registry)
 
-	// List tools via mcptest roundtrip
-	srv := mcptest.NewUnstartedServer(t)
-	addMacheTools(srv, store)
-	require.NoError(t, srv.Start(context.Background()))
-	defer srv.Close()
-
-	listResult, err := srv.Client().ListTools(context.Background(), mcp.ListToolsRequest{})
+	// Use HandleMessage to list tools (avoids mcptest transport)
+	reqJSON := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	resp := s.HandleMessage(context.Background(), reqJSON)
+	respJSON, err := json.Marshal(resp)
 	require.NoError(t, err)
 
+	var result struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(respJSON, &result))
+
 	toolNames := map[string]bool{}
-	for _, tool := range listResult.Tools {
+	for _, tool := range result.Result.Tools {
 		toolNames[tool.Name] = true
 	}
 
+	// In multi-tenant mode, all tools are registered unconditionally
 	assert.True(t, toolNames["list_directory"])
 	assert.True(t, toolNames["read_file"])
 	assert.True(t, toolNames["find_callers"])
 	assert.True(t, toolNames["find_callees"])
-	assert.True(t, toolNames["search"], "search should be registered when backend supports QueryRefs")
-	assert.True(t, toolNames["get_communities"], "get_communities should be registered when backend supports RefsMap")
-}
-
-func TestRegisterMCPTools_WithoutQueryRefs(t *testing.T) {
-	// Use a mock graph that does NOT implement refsQuerier
-	mock := &mockGraph{}
-
-	s := server.NewMCPServer("test", "1.0.0", server.WithToolCapabilities(false))
-	registerMCPTools(s, mock)
-
-	srv := mcptest.NewUnstartedServer(t)
-	addMacheToolsFromGraph(srv, mock)
-	require.NoError(t, srv.Start(context.Background()))
-	defer srv.Close()
-
-	listResult, err := srv.Client().ListTools(context.Background(), mcp.ListToolsRequest{})
-	require.NoError(t, err)
-
-	toolNames := map[string]bool{}
-	for _, tool := range listResult.Tools {
-		toolNames[tool.Name] = true
-	}
-
-	assert.True(t, toolNames["list_directory"])
-	assert.True(t, toolNames["read_file"])
-	assert.True(t, toolNames["find_callers"])
-	assert.True(t, toolNames["find_callees"])
-	assert.False(t, toolNames["search"], "search should NOT be registered without QueryRefs")
-	assert.False(t, toolNames["get_communities"], "get_communities should NOT be registered without RefsMap")
+	assert.True(t, toolNames["search"], "all tools registered in multi-tenant mode")
+	assert.True(t, toolNames["get_communities"], "all tools registered in multi-tenant mode")
+	assert.True(t, toolNames["get_overview"])
+	assert.True(t, toolNames["find_definition"])
+	assert.True(t, toolNames["get_type_info"])
+	assert.True(t, toolNames["get_diagnostics"])
+	assert.True(t, toolNames["write_file"])
 }
 
 // ---------------------------------------------------------------------------
@@ -949,6 +936,117 @@ func TestListActiveMounts_IncludesMCPServers(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// graphRegistry tests
+// ---------------------------------------------------------------------------
+
+func TestGraphRegistry_CachesPerRoot(t *testing.T) {
+	registry := newGraphRegistry(".", nil)
+
+	g1 := registry.getOrCreateGraph("/project/a")
+	g2 := registry.getOrCreateGraph("/project/a")
+
+	// Same root should return the same lazyGraph instance (pointer equality)
+	assert.Same(t, g1, g2)
+}
+
+func TestGraphRegistry_DifferentRoots(t *testing.T) {
+	registry := newGraphRegistry(".", nil)
+
+	g1 := registry.getOrCreateGraph("/project/a")
+	g2 := registry.getOrCreateGraph("/project/b")
+
+	// Different roots should return different graphs
+	assert.NotSame(t, g1, g2)
+}
+
+func TestGraphRegistry_FallbackToBasePath(t *testing.T) {
+	registry := newGraphRegistry("/default/path", nil)
+
+	// Unregistered session should fall back to basePath
+	g := registry.graphForSession("unknown-session")
+	assert.Equal(t, "/default/path", g.basePath)
+}
+
+func TestGraphRegistry_SessionRouting(t *testing.T) {
+	registry := newGraphRegistry("/default", nil)
+
+	registry.registerSession("sess-1", "/project/alpha")
+	registry.registerSession("sess-2", "/project/beta")
+
+	g1 := registry.graphForSession("sess-1")
+	g2 := registry.graphForSession("sess-2")
+	gDefault := registry.graphForSession("unknown")
+
+	assert.Equal(t, "/project/alpha", g1.basePath)
+	assert.Equal(t, "/project/beta", g2.basePath)
+	assert.Equal(t, "/default", gDefault.basePath)
+}
+
+func TestGraphRegistry_UnregisterSession(t *testing.T) {
+	registry := newGraphRegistry("/default", nil)
+
+	registry.registerSession("sess-1", "/project/alpha")
+	g1 := registry.graphForSession("sess-1")
+	assert.Equal(t, "/project/alpha", g1.basePath)
+
+	registry.unregisterSession("sess-1")
+	// After unregister, session falls back to default
+	g2 := registry.graphForSession("sess-1")
+	assert.Equal(t, "/default", g2.basePath)
+
+	// But the graph for /project/alpha is still cached (reusable by other sessions)
+	g3 := registry.getOrCreateGraph("/project/alpha")
+	assert.Same(t, g1, g3)
+}
+
+func TestGraphRegistry_WrapHandler_RoutesToSessionGraph(t *testing.T) {
+	// Pre-populate stores for two projects and the default
+	storeA := graph.NewMemoryStore()
+	storeA.AddRoot(&graph.Node{ID: "project-a", Mode: fs.ModeDir, Children: []string{}})
+	storeB := graph.NewMemoryStore()
+	storeB.AddRoot(&graph.Node{ID: "project-b", Mode: fs.ModeDir, Children: []string{}})
+	storeDefault := graph.NewMemoryStore()
+	storeDefault.AddRoot(&graph.Node{ID: "default-root", Mode: fs.ModeDir, Children: []string{}})
+
+	registry := newGraphRegistry("/default", nil)
+	registry.graphs.Store("/project/a", newTestLazyGraph(storeA, "/project/a"))
+	registry.graphs.Store("/project/b", newTestLazyGraph(storeB, "/project/b"))
+	registry.graphs.Store("/default", newTestLazyGraph(storeDefault, "/default"))
+	registry.registerSession("sess-a", "/project/a")
+	registry.registerSession("sess-b", "/project/b")
+
+	handler := registry.wrapHandler(makeGetOverviewHandler)
+
+	// Without session in context, falls back to default graph
+	ctx := context.Background()
+	result, err := handler(ctx, makeRequest(nil))
+	require.NoError(t, err)
+	text := resultText(t, result)
+	require.False(t, result.IsError, "unexpected error: %s", text)
+
+	// Default graph has "default-root" as top-level
+	assert.Contains(t, text, "default-root")
+}
+
+func TestRootURIToPath(t *testing.T) {
+	tests := []struct {
+		uri  string
+		want string
+	}{
+		{"file:///home/user/project", "/home/user/project"},
+		{"file:///Users/james/code", "/Users/james/code"},
+		{"file:///tmp/test/../real", "/tmp/real"},
+		{"https://example.com", ""},
+		{"not-a-uri", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.uri, func(t *testing.T) {
+			assert.Equal(t, tt.want, rootURIToPath(tt.uri))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1029,6 +1127,14 @@ func addMacheToolsFromGraph(srv *mcptest.Server, g graph.Graph) {
 		),
 		makeFindCalleesHandler(g),
 	)
+}
+
+// newTestLazyGraph creates a lazyGraph that is already initialized with the given graph.
+// This avoids triggering real filesystem detection in tests.
+func newTestLazyGraph(g graph.Graph, basePath string) *lazyGraph {
+	lg := &lazyGraph{inner: g, basePath: basePath}
+	lg.once.Do(func() {}) // mark as initialized
+	return lg
 }
 
 // mockGraph is a minimal Graph implementation that does NOT support QueryRefs.
