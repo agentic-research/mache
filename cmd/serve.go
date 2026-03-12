@@ -108,16 +108,12 @@ func (lg *lazyGraph) init() {
 			dataSource = lg.args[0]
 
 			if serveSchema != "" {
-				data, err := os.ReadFile(serveSchema)
+				resolved, err := resolveSchema(serveSchema, ".")
 				if err != nil {
-					lg.err = fmt.Errorf("read schema: %w", err)
+					lg.err = fmt.Errorf("resolve schema: %w", err)
 					return
 				}
-				schema = &api.Topology{}
-				if err := json.Unmarshal(data, schema); err != nil {
-					lg.err = fmt.Errorf("parse schema: %w", err)
-					return
-				}
+				schema = resolved
 			} else if filepath.Ext(dataSource) != ".db" {
 				info, err := os.Stat(dataSource)
 				if err == nil && info.IsDir() {
