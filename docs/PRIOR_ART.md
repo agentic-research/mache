@@ -10,7 +10,8 @@ This positions Mache at the intersection of several traditions — filesystem-as
 
 | Tool | Schema-Driven Projection | AST-Aware Decomposition | Identity-Preserving Write-Back | On-Demand Content | Cross-References | Real FS Mount |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Mache** | Yes | Yes | Yes | Yes | Yes (`callers/`, `callees/`) | Yes (NFS/FUSE) |
+| **Mache** | Yes | Yes (8 langs) | Yes | Yes | Yes (`callers/`, `callees/`) | Yes (NFS/FUSE) |
+| **codebase-memory-mcp** | No | Yes (64 langs) | No | No | Yes (call graph) | No |
 | **AgentFS** (Turso) | No | No | Yes (KV store) | No | No | No |
 | **Dust** | No | No | No | No | No | No (synthetic FS via tool calls) |
 | **Vercel bash-tool** | No | No | No | No | No | No (manual file staging) |
@@ -21,6 +22,21 @@ This positions Mache at the intersection of several traditions — filesystem-as
 | **Plan 9 / 9P** | Yes (per-server) | No | Yes | Yes | No | Yes |
 
 ## Detailed Analysis
+
+### codebase-memory-mcp (DeusData)
+
+[codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) is a persistent knowledge graph MCP server for codebases. It indexes source code via tree-sitter into a SQLite-backed graph (nodes: Function, Class, Module, Route, etc.; edges: CALLS, HTTP_CALLS, IMPORTS, etc.) and exposes 12 MCP tools for structural queries. Key capabilities include Cypher-like query syntax, Louvain community detection, call-path tracing with risk classification, git diff impact analysis, and cross-service HTTP link discovery. It supports 64 languages, auto-syncs on file changes, and claims 99.2% token reduction vs. file-by-file exploration.
+
+**Relationship to Mache:** codebase-memory-mcp is the closest tool in the landscape. Both use tree-sitter for AST parsing, SQLite for persistence, Louvain for community detection, and MCP for agent integration. Mache's `get_communities`, `get_overview`, and `find_definition` tools were directly inspired by codebase-memory-mcp's feature set.
+
+**Key differences:**
+
+- **Projection vs. indexing.** codebase-memory-mcp indexes code into a fixed graph schema (Function → CALLS → Function). Mache projects data through a user-defined topology schema — the same engine handles JSON, SQLite, and source code, and the directory structure is configurable rather than predetermined.
+- **Write-back.** codebase-memory-mcp is read-only. Mache supports identity-preserving write-back: validate → format → splice → surgical node update, all through the MCP `write_file` tool or the mounted filesystem.
+- **Real filesystem mount.** codebase-memory-mcp is MCP-only. Mache mounts as a real NFS/FUSE filesystem — agents can use standard `ls`/`cat`/`echo` without any MCP client.
+- **Language breadth vs. depth.** codebase-memory-mcp supports 64 languages with a uniform graph schema. Mache supports 8 languages but provides deeper structural features: context files (imports/globals per scope), doc comment extraction, write-back formatting, and configurable AST queries per language.
+- **Data generality.** codebase-memory-mcp is code-only. Mache handles JSON, SQLite databases, and source code through the same schema-driven pipeline — e.g., projecting 323K NVD vulnerability records or 9.4K MCP registry entries alongside source code.
+- **Query language.** codebase-memory-mcp offers Cypher-like queries over its graph. Mache uses SQL via the `mache_refs` virtual table and `.query/` magic directory.
 
 ### AgentFS (Turso)
 
@@ -74,6 +90,7 @@ Based on 9,649 experiments across multiple LLMs, this paper demonstrates that do
 
 ## Sources
 
+- codebase-memory-mcp (DeusData): https://github.com/DeusData/codebase-memory-mcp
 - AgentFS (Turso): https://github.com/tursodatabase/agentfs
 - "FUSE is All You Need": https://blog.philipmemmerling.com/fuse-is-all-you-need/
 - Dust: https://dust.tt/
