@@ -16,6 +16,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/vfs"
 	"github.com/agentic-research/mache/internal/writeback"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -77,8 +78,13 @@ type MacheFS struct {
 	Graph     graph.Graph
 	mountTime fuse.Timespec
 
-	// Virtual _schema.json content (serialized once at mount time)
-	schemaJSON []byte
+	// Virtual path resolver — handles _schema.json, PROMPT.txt,
+	// _diagnostics/, context, callers/, callees/, .query/.
+	resolver   *vfs.Resolver
+	promptH    *vfs.PromptHandler
+	queryH     *vfs.QueryHandler
+	diagH      *vfs.DiagnosticsHandler
+	schemaJSON []byte // kept for backward compat (tests that read it directly)
 
 	// Write-back support (nil Engine = read-only)
 	Writable bool
@@ -104,10 +110,28 @@ type MacheFS struct {
 func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 	sj, _ := json.MarshalIndent(schema, "", "  ")
 	sj = append(sj, '\n')
+
+	promptH := &vfs.PromptHandler{}
+	queryH := &vfs.QueryHandler{}
+	diagH := &vfs.DiagnosticsHandler{DiagStatus: &sync.Map{}}
+	schemaH := &vfs.SchemaHandler{Content: sj}
+	contextH := &vfs.ContextHandler{Graph: g}
+	callersH := &vfs.CallersHandler{Graph: g}
+	calleesH := &vfs.CalleesHandler{Graph: g}
+
+	// Order matters: query before callers/callees (both can have "/" paths).
+	resolver := vfs.NewResolver(
+		schemaH, promptH, queryH, diagH, contextH, callersH, calleesH,
+	)
+
 	return &MacheFS{
 		Schema:            schema,
 		Graph:             g,
 		schemaJSON:        sj,
+		resolver:          resolver,
+		promptH:           promptH,
+		queryH:            queryH,
+		diagH:             diagH,
 		mountTime:         fuse.NewTimespec(time.Now()),
 		handles:           make(map[uint64]*dirHandle),
 		writeHandles:      make(map[uint64]*writeHandle),
@@ -118,6 +142,7 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 // SetPromptContent sets the content for the /PROMPT.txt virtual file (agent mode).
 func (fs *MacheFS) SetPromptContent(content []byte) {
 	fs.promptContent = content
+	fs.promptH.Content = content
 }
 
 // SetQueryFunc enables the /.query/ magic directory. Pass the SQLiteGraph's
@@ -125,6 +150,16 @@ func (fs *MacheFS) SetPromptContent(content []byte) {
 func (fs *MacheFS) SetQueryFunc(fn func(string, ...any) (*sql.Rows, error)) {
 	fs.queryFn = fn
 	fs.queries = make(map[string]*queryResult)
+	fs.queryH.Enabled = true
+}
+
+// SetWritable enables write-back mode and wires the diagnostics handler.
+func (fs *MacheFS) SetWritable(writable bool, diagStatus *sync.Map) {
+	fs.Writable = writable
+	fs.diagH.Writable = writable
+	if diagStatus != nil {
+		fs.diagH.DiagStatus = diagStatus
+	}
 }
 
 // isQueryPath returns true if the path is under /.query.
@@ -132,75 +167,34 @@ func (fs *MacheFS) isQueryPath(path string) bool {
 	return fs.queryFn != nil && (path == "/.query" || strings.HasPrefix(path, "/.query/"))
 }
 
-// isDiagPath returns true if writable and path contains /_diagnostics.
-func (fs *MacheFS) isDiagPath(path string) bool {
-	return fs.Writable && graph.IsDiagPath(path)
-}
-
-// diagContent returns the content of a diagnostics virtual file.
-func (fs *MacheFS) diagContent(parentDir, fileName string) ([]byte, bool) {
-	store, ok := fs.Graph.(*graph.MemoryStore)
-	if !ok {
-		return nil, false
-	}
-	switch fileName {
-	case graph.DiagLastWrite:
-		val, found := store.WriteStatus.Load(parentDir)
-		if !found {
-			return []byte("no writes yet\n"), true
-		}
-		return []byte(val.(string) + "\n"), true
-	case graph.DiagASTErrors:
-		val, found := store.WriteStatus.Load(parentDir)
-		if !found {
-			return []byte("no errors\n"), true
-		}
-		msg := val.(string)
-		if msg == "ok" {
-			return []byte("no errors\n"), true
-		}
-		return []byte(msg + "\n"), true
-	default:
-		return nil, false
+// fillStatFromVEntry populates a fuse.Stat_t from a VEntry.
+func fillStatFromVEntry(stat *fuse.Stat_t, e *vfs.VEntry) {
+	stat.Nlink = 1
+	switch e.Kind {
+	case vfs.KindDir:
+		stat.Mode = fuse.S_IFDIR | e.Perm
+		stat.Nlink = 2
+	case vfs.KindFile:
+		stat.Mode = fuse.S_IFREG | e.Perm
+		stat.Size = e.Size
+	case vfs.KindSymlink:
+		stat.Mode = fuse.S_IFLNK | e.Perm
+		stat.Size = e.Size
 	}
 }
 
 // Open validates that the path is a file node. For writable mounts,
 // write flags allocate a writeHandle backed by the node's current content.
 func (fs *MacheFS) Open(path string, flags int) (int, uint64) {
-	if path == "/_schema.json" {
+	// Virtual read-only files (schema, prompt, diagnostics, context, callers, callees)
+	if entry := fs.resolver.Resolve(path); entry != nil {
+		if entry.Kind == vfs.KindDir {
+			return -fuse.EISDIR, 0
+		}
 		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
 			return -fuse.EACCES, 0
 		}
 		return 0, 0
-	}
-
-	if path == "/PROMPT.txt" && len(fs.promptContent) > 0 {
-		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
-			return -fuse.EACCES, 0
-		}
-		return 0, 0
-	}
-
-	// _diagnostics/ files are read-only virtual files
-	if fs.isDiagPath(path) {
-		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
-			return -fuse.EACCES, 0
-		}
-		return 0, 0
-	}
-
-	// Virtual: context file
-	if strings.HasSuffix(path, "/context") {
-		if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
-			return -fuse.EACCES, 0
-		}
-		parentDir := filepath.Dir(path)
-		node, err := fs.Graph.GetNode(parentDir)
-		if err == nil && len(node.Context) > 0 {
-			return 0, 0
-		}
-		return -fuse.ENOENT, 0
 	}
 
 	if fs.isQueryPath(path) {
@@ -307,123 +301,16 @@ func (fs *MacheFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return 0
 	}
 
-	if path == "/_schema.json" {
-		stat.Mode = fuse.S_IFREG | 0o444
-		stat.Nlink = 1
-		stat.Size = int64(len(fs.schemaJSON))
-		return 0
-	}
-
-	if path == "/PROMPT.txt" && len(fs.promptContent) > 0 {
-		stat.Mode = fuse.S_IFREG | 0o444
-		stat.Nlink = 1
-		stat.Size = int64(len(fs.promptContent))
-		return 0
-	}
-
+	// .query/ has its own stateful Getattr (handles, ctl files, result symlinks)
 	if fs.isQueryPath(path) {
 		return fs.queryGetattr(path, stat)
 	}
 
-	if fs.isDiagPath(path) {
-		parentDir, fileName := graph.ParseDiagPath(path)
-		if fileName == "" {
-			stat.Mode = fuse.S_IFDIR | 0o555
-			stat.Nlink = 2
-			return 0
-		}
-		content, ok := fs.diagContent(parentDir, fileName)
-		if !ok {
-			return -fuse.ENOENT
-		}
-		stat.Mode = fuse.S_IFREG | 0o444
-		stat.Nlink = 1
-		stat.Size = int64(len(content))
+	// Delegate to VHandler chain for all other virtual paths
+	if entry := fs.resolver.Resolve(path); entry != nil {
+		stat.Ino = pathIno(path)
+		fillStatFromVEntry(stat, entry)
 		return 0
-	}
-
-	// Virtual: context file
-	if strings.HasSuffix(path, "/context") {
-		parentDir := filepath.Dir(path)
-		node, err := fs.Graph.GetNode(parentDir)
-		if err == nil && len(node.Context) > 0 {
-			stat.Mode = fuse.S_IFREG | 0o444
-			stat.Nlink = 1
-			stat.Size = int64(len(node.Context))
-			return 0
-		}
-		return -fuse.ENOENT
-	}
-
-	// Virtual: callers/
-	if graph.IsCallersPath(path) {
-		parentDir, entryName := graph.ParseCallersPath(path)
-		if parentDir == "/" {
-			return -fuse.ENOENT
-		}
-		if _, err := fs.Graph.GetNode(parentDir); err != nil {
-			return -fuse.ENOENT
-		}
-		token := filepath.Base(parentDir)
-		callers, err := fs.Graph.GetCallers(token)
-		if err != nil || len(callers) == 0 {
-			return -fuse.ENOENT
-		}
-		if entryName == "" {
-			stat.Ino = pathIno(path)
-			stat.Mode = fuse.S_IFDIR | 0o555
-			stat.Nlink = 2
-			return 0
-		}
-		for _, caller := range callers {
-			flatName := strings.ReplaceAll(caller.ID, "/", "_")
-			if flatName == entryName {
-				stat.Ino = pathIno(path)
-				stat.Mode = fuse.S_IFLNK | 0o777
-				stat.Nlink = 1
-				target := graph.VDirSymlinkTarget(parentDir, caller.ID)
-				stat.Size = int64(len(target))
-				return 0
-			}
-		}
-		return -fuse.ENOENT
-	}
-
-	// Virtual: callees/
-	if graph.IsCalleesPath(path) {
-		parentDir, entryName := graph.ParseCalleesPath(path)
-		if parentDir == "/" {
-			return -fuse.ENOENT
-		}
-		if _, err := fs.Graph.GetNode(parentDir); err != nil {
-			return -fuse.ENOENT
-		}
-		callees, err := fs.Graph.GetCallees(parentDir)
-		if err != nil || len(callees) == 0 {
-			return -fuse.ENOENT
-		}
-		if entryName == "" {
-			stat.Ino = pathIno(path)
-			stat.Mode = fuse.S_IFDIR | 0o555
-			stat.Nlink = 2
-			return 0
-		}
-		for _, callee := range callees {
-			sourceID := graph.FindSourceChild(fs.Graph, callee.ID)
-			if sourceID == "" {
-				continue
-			}
-			flatName := strings.ReplaceAll(sourceID, "/", "_")
-			if flatName == entryName {
-				stat.Ino = pathIno(path)
-				stat.Mode = fuse.S_IFLNK | 0o777
-				stat.Nlink = 1
-				target := graph.VDirSymlinkTarget(parentDir, sourceID)
-				stat.Size = int64(len(target))
-				return 0
-			}
-		}
-		return -fuse.ENOENT
 	}
 
 	node, err := fs.Graph.GetNode(path)
@@ -459,72 +346,11 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		return fs.queryOpendir(path)
 	}
 
-	// _diagnostics/ virtual directory
-	if fs.isDiagPath(path) {
-		_, fileName := graph.ParseDiagPath(path)
-		if fileName != "" {
-			return -fuse.ENOTDIR, 0
-		}
-		entries := []string{".", "..", graph.DiagLastWrite, graph.DiagASTErrors}
-		fs.handleMu.Lock()
-		fh := fs.nextHandle
-		fs.nextHandle++
-		fs.handles[fh] = &dirHandle{path: path, entries: entries}
-		fs.handleMu.Unlock()
-		return 0, fh
-	}
-
-	// Virtual: callers/ directory
-	if graph.IsCallersPath(path) {
-		parentDir, entryName := graph.ParseCallersPath(path)
-		if entryName != "" {
-			return -fuse.ENOTDIR, 0
-		}
-		if parentDir == "/" {
-			return -fuse.ENOENT, 0
-		}
-		if _, err := fs.Graph.GetNode(parentDir); err != nil {
-			return -fuse.ENOENT, 0
-		}
-		token := filepath.Base(parentDir)
-		callers, err := fs.Graph.GetCallers(token)
-		if err != nil || len(callers) == 0 {
-			return -fuse.ENOENT, 0
-		}
+	// Virtual directories (diagnostics, callers, callees)
+	if dirEntries, ok := fs.resolver.ListDir(path); ok {
 		entries := []string{".", ".."}
-		for _, c := range callers {
-			entries = append(entries, strings.ReplaceAll(c.ID, "/", "_"))
-		}
-		fs.handleMu.Lock()
-		fh := fs.nextHandle
-		fs.nextHandle++
-		fs.handles[fh] = &dirHandle{path: path, entries: entries}
-		fs.handleMu.Unlock()
-		return 0, fh
-	}
-
-	// Virtual: callees/ directory
-	if graph.IsCalleesPath(path) {
-		parentDir, entryName := graph.ParseCalleesPath(path)
-		if entryName != "" {
-			return -fuse.ENOTDIR, 0
-		}
-		if parentDir == "/" {
-			return -fuse.ENOENT, 0
-		}
-		if _, err := fs.Graph.GetNode(parentDir); err != nil {
-			return -fuse.ENOENT, 0
-		}
-		callees, err := fs.Graph.GetCallees(parentDir)
-		if err != nil || len(callees) == 0 {
-			return -fuse.ENOENT, 0
-		}
-		entries := []string{".", ".."}
-		for _, c := range callees {
-			sourceID := graph.FindSourceChild(fs.Graph, c.ID)
-			if sourceID != "" {
-				entries = append(entries, strings.ReplaceAll(sourceID, "/", "_"))
-			}
+		for _, de := range dirEntries {
+			entries = append(entries, de.Name)
 		}
 		fs.handleMu.Lock()
 		fh := fs.nextHandle
@@ -553,35 +379,9 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 
 	entries := make([]string, 0, len(children)+6)
 	entries = append(entries, ".", "..")
-	if path == "/" {
-		entries = append(entries, graph.SchemaDotJSON)
-		if len(fs.promptContent) > 0 {
-			entries = append(entries, graph.PromptFile)
-		}
-		if fs.queryFn != nil {
-			entries = append(entries, ".query")
-		}
-	}
-	// Add _diagnostics/ to writable non-root dirs
-	if fs.Writable && path != "/" {
-		entries = append(entries, graph.DiagnosticsDir)
-	}
-	// Add context if available
-	if node != nil && len(node.Context) > 0 {
-		entries = append(entries, graph.ContextFile)
-	}
-	// Add callers/ if token has callers (non-root dirs only)
-	if path != "/" {
-		token := filepath.Base(path)
-		if callers, err := fs.Graph.GetCallers(token); err == nil && len(callers) > 0 {
-			entries = append(entries, graph.CallersDir)
-		}
-	}
-	// Add callees/ if construct has outgoing calls (self-gating)
-	if path != "/" {
-		if callees, err := fs.Graph.GetCallees(path); err == nil && len(callees) > 0 {
-			entries = append(entries, graph.CalleesDir)
-		}
+	// Inject virtual entries from all handlers
+	for _, extra := range fs.resolver.DirExtras(path, node) {
+		entries = append(entries, extra.Name)
 	}
 	for _, c := range children {
 		entries = append(entries, filepath.Base(c))
@@ -627,14 +427,8 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 		}
 		entries := make([]string, 0, len(children)+4)
 		entries = append(entries, ".", "..")
-		if path == "/" {
-			entries = append(entries, graph.SchemaDotJSON)
-			if len(fs.promptContent) > 0 {
-				entries = append(entries, graph.PromptFile)
-			}
-			if fs.queryFn != nil {
-				entries = append(entries, ".query")
-			}
+		for _, extra := range fs.resolver.DirExtras(path, nil) {
+			entries = append(entries, extra.Name)
 		}
 		for _, c := range children {
 			entries = append(entries, filepath.Base(c))
@@ -690,52 +484,10 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		fullPath = dirPath + "/" + name
 	}
 
-	if name == graph.SchemaDotJSON {
+	// Virtual entries: delegate to resolver
+	if entry := fs.resolver.Resolve(fullPath); entry != nil {
 		stat.Ino = pathIno(fullPath)
-		stat.Mode = fuse.S_IFREG | 0o444
-		stat.Nlink = 1
-		stat.Size = int64(len(fs.schemaJSON))
-		return stat
-	}
-
-	if name == graph.PromptFile && len(fs.promptContent) > 0 {
-		stat.Ino = pathIno(fullPath)
-		stat.Mode = fuse.S_IFREG | 0o444
-		stat.Nlink = 1
-		stat.Size = int64(len(fs.promptContent))
-		return stat
-	}
-
-	if name == ".query" && fs.queryFn != nil {
-		stat.Ino = pathIno(fullPath)
-		stat.Mode = fuse.S_IFDIR | 0o777
-		stat.Nlink = 2
-		return stat
-	}
-
-	if name == graph.ContextFile {
-		// Parent path is dirPath
-		node, err := fs.Graph.GetNode(dirPath)
-		if err == nil && len(node.Context) > 0 {
-			stat.Ino = pathIno(fullPath)
-			stat.Mode = fuse.S_IFREG | 0o444
-			stat.Nlink = 1
-			stat.Size = int64(len(node.Context))
-			return stat
-		}
-	}
-
-	if name == graph.CallersDir && !graph.IsCallersPath(dirPath) {
-		stat.Ino = pathIno(fullPath)
-		stat.Mode = fuse.S_IFDIR | 0o555
-		stat.Nlink = 2
-		return stat
-	}
-
-	if name == graph.CalleesDir && !graph.IsCalleesPath(dirPath) {
-		stat.Ino = pathIno(fullPath)
-		stat.Mode = fuse.S_IFDIR | 0o555
-		stat.Nlink = 2
+		fillStatFromVEntry(stat, entry)
 		return stat
 	}
 
@@ -776,48 +528,13 @@ func (fs *MacheFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 		return n
 	}
 
-	if path == "/_schema.json" {
-		if ofst >= int64(len(fs.schemaJSON)) {
-			return 0
-		}
-		n := copy(buff, fs.schemaJSON[ofst:])
-		return n
-	}
-
-	if path == "/PROMPT.txt" && len(fs.promptContent) > 0 {
-		if ofst >= int64(len(fs.promptContent)) {
-			return 0
-		}
-		n := copy(buff, fs.promptContent[ofst:])
-		return n
-	}
-
-	// _diagnostics/ virtual files
-	if fs.isDiagPath(path) {
-		parentDir, fileName := graph.ParseDiagPath(path)
-		content, ok := fs.diagContent(parentDir, fileName)
-		if !ok {
-			return -fuse.ENOENT
-		}
+	// Virtual files: delegate to resolver
+	if content, ok := fs.resolver.ReadContent(path); ok {
 		if ofst >= int64(len(content)) {
 			return 0
 		}
 		n := copy(buff, content[ofst:])
 		return n
-	}
-
-	// Virtual: context file
-	if strings.HasSuffix(path, "/context") {
-		parentDir := filepath.Dir(path)
-		node, err := fs.Graph.GetNode(parentDir)
-		if err == nil && len(node.Context) > 0 {
-			if ofst >= int64(len(node.Context)) {
-				return 0
-			}
-			n := copy(buff, node.Context[ofst:])
-			return n
-		}
-		return -fuse.ENOENT
 	}
 
 	node, err := fs.Graph.GetNode(path)
@@ -1281,59 +998,12 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 
 // Readlink returns the symlink target for callers/, callees/ entries and /.query/<name>/<entry>.
 func (fs *MacheFS) Readlink(path string) (int, string) {
-	// Virtual: callers/ symlinks
-	if graph.IsCallersPath(path) {
-		parentDir, entryName := graph.ParseCallersPath(path)
-		if entryName == "" {
-			return -fuse.EINVAL, ""
+	// Virtual symlinks (callers/, callees/)
+	if entry := fs.resolver.Resolve(path); entry != nil {
+		if entry.Kind == vfs.KindSymlink {
+			return 0, string(entry.Content)
 		}
-		if parentDir == "/" {
-			return -fuse.ENOENT, ""
-		}
-		if _, err := fs.Graph.GetNode(parentDir); err != nil {
-			return -fuse.ENOENT, ""
-		}
-		token := filepath.Base(parentDir)
-		callers, err := fs.Graph.GetCallers(token)
-		if err != nil || len(callers) == 0 {
-			return -fuse.ENOENT, ""
-		}
-		for _, caller := range callers {
-			flatName := strings.ReplaceAll(caller.ID, "/", "_")
-			if flatName == entryName {
-				return 0, graph.VDirSymlinkTarget(parentDir, caller.ID)
-			}
-		}
-		return -fuse.ENOENT, ""
-	}
-
-	// Virtual: callees/ symlinks
-	if graph.IsCalleesPath(path) {
-		parentDir, entryName := graph.ParseCalleesPath(path)
-		if entryName == "" {
-			return -fuse.EINVAL, ""
-		}
-		if parentDir == "/" {
-			return -fuse.ENOENT, ""
-		}
-		if _, err := fs.Graph.GetNode(parentDir); err != nil {
-			return -fuse.ENOENT, ""
-		}
-		callees, err := fs.Graph.GetCallees(parentDir)
-		if err != nil || len(callees) == 0 {
-			return -fuse.ENOENT, ""
-		}
-		for _, callee := range callees {
-			sourceID := graph.FindSourceChild(fs.Graph, callee.ID)
-			if sourceID == "" {
-				continue
-			}
-			flatName := strings.ReplaceAll(sourceID, "/", "_")
-			if flatName == entryName {
-				return 0, graph.VDirSymlinkTarget(parentDir, sourceID)
-			}
-		}
-		return -fuse.ENOENT, ""
+		return -fuse.EINVAL, ""
 	}
 
 	if !fs.isQueryPath(path) {

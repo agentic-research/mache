@@ -915,8 +915,13 @@ func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mount
 
 	// Wire up write-back if requested (only for MemoryStore + tree-sitter sources)
 	if writable && engine != nil {
-		macheFs.Writable = true
 		macheFs.Engine = engine
+		// Wire both the exported field and the VFS diagnostics handler
+		var diagStatus *sync.Map
+		if ms, ok := g.(*graph.MemoryStore); ok {
+			diagStatus = &ms.WriteStatus
+		}
+		macheFs.SetWritable(true, diagStatus)
 		fmt.Println("Write-back enabled: edits will splice into source files.")
 	} else if writable {
 		fmt.Println("Warning: --writable ignored (only supported for non-.db sources)")
