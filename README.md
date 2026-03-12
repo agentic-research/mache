@@ -106,7 +106,7 @@ Mache is in **active development**. The core pipeline (schema + ingestion + moun
 | **Cross-References** | **Stable** | `callers/` and `callees/` virtual dirs for bidirectional call-chain navigation. |
 | **`_project_files/`** | **Stable** | Non-AST files (READMEs, configs, docs) preserved in separate tree during source mounts. |
 | **Schema Inference** | **Beta** | Auto-infer schema from data via Formal Concept Analysis (FCA). Friendly-name grouping (`functions/`, `types/`, `classes/`). |
-| **MCP Server** | **Beta** | `mache serve` exposes any graph as an MCP server over stdio. 6 tools: list, read, callers, callees, search, communities. |
+| **MCP Server** | **Beta** | `mache serve` exposes any graph as an MCP server over stdio. 9 tools: list, read, callers, callees, definition, search, communities, overview, write. |
 | **Community Detection** | **Beta** | Louvain modularity optimization discovers densely co-referencing node clusters from the refs graph. |
 
 ## Quick Start
@@ -166,7 +166,7 @@ mache serve -s examples/nvd-schema.json results.db
 mache serve -s examples/mcp-registry-schema.json mcp-registry.db
 ```
 
-Six tools are exposed: `list_directory`, `read_file`, `find_callers`, `find_callees`, `search`, and `get_communities` (Louvain cluster detection). No filesystem mount needed — the graph is queried directly over JSON-RPC.
+Nine tools are exposed: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, and `write_file`. No filesystem mount needed — the graph is queried directly over JSON-RPC.
 
 #### Installing in Claude Code
 
@@ -215,14 +215,17 @@ Add to your `claude_desktop_config.json`:
 
 | Tool | Description |
 |------|-------------|
-| `list_directory` | List children of a directory node (empty path for root) |
-| `read_file` | Read text content of a file node |
+| `list_directory` | List children of a directory node (empty path for root). Supports `exclude_tests` filter. |
+| `read_file` | Read text content of a file node. Returns source origin metadata (file, byte range) for source-backed nodes. Supports batch reads via `paths` array. |
 | `find_callers` | Find all nodes referencing a given symbol or token |
 | `find_callees` | Find all symbols called by a given construct |
-| `search` | Search for symbols matching a SQL LIKE pattern (e.g., `%auth%`) |
-| `get_communities` | Detect clusters of densely co-referencing nodes (Louvain modularity) |
+| `find_definition` | Look up the definition site of a symbol by name |
+| `search` | Search for symbols matching a SQL LIKE pattern (e.g., `%auth%`). Supports `role` filter (caller/definition). |
+| `get_communities` | Detect clusters of densely co-referencing nodes (Louvain modularity). Paginated. |
+| `get_overview` | Architecture overview: top-level structure, node counts, and key entry points |
+| `write_file` | Write new content via the splice pipeline: validate (tree-sitter) → format → atomic splice → update graph |
 
-`search` and `get_communities` are conditionally available depending on backend support (both available for SQLite and MemoryStore with refs).
+`search`, `get_communities`, `find_definition`, and `write_file` are conditionally available depending on backend capabilities.
 
 ### Using with LLMs and Agents
 
@@ -421,8 +424,8 @@ Mache occupies a unique position: it's a **projection engine** that maps structu
 
 | Tool | Schema-Driven | AST-Aware | Write-Back | Real FS Mount | MCP Server |
 |------|:---:|:---:|:---:|:---:|:---:|
-| **Mache** | Yes | Yes | Yes | Yes | Yes |
-| codebase-memory-mcp | No | Yes (64 langs) | No | No | Yes (14 tools) |
+| **Mache** | Yes | Yes (8 langs) | Yes | Yes (NFS/FUSE) | Yes (9 tools) |
+| codebase-memory-mcp | No | Yes (64 langs) | No | No | Yes (12 tools) |
 | AgentFS (Turso) | No | No | Yes | No | No |
 | Dust | No | No | No | No (synthetic) | No |
 | MCP | No | No | Varies | No (protocol) | — |
