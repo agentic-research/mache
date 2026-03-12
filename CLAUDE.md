@@ -28,12 +28,17 @@ Integration tests require real SQLite databases and are gated behind env vars (`
 
 Mache projects structured data (JSON, SQLite, source code) as a filesystem driven by declarative JSON schemas.
 
-### Two Data Paths
+### Three Presentation Paths
 
 ```
 .db files  →  SQLiteGraph (zero-copy, lazy scan, direct SQL)  →  GraphFS (NFS) or MacheFS (FUSE)
 other files →  Engine (walkers + loaders)  →  MemoryStore       →  GraphFS (NFS) or MacheFS (FUSE)
+any source →  Engine → MemoryStore/SQLiteGraph                 →  MCP (stdio or Streamable HTTP)
 ```
+
+The `mache serve` command exposes the graph as MCP tools without mounting a filesystem.
+Two transports: stdio (default, client spawns mache) and Streamable HTTP (`--http :PORT`, always-on).
+HTTP mode uses stateful sessions — each client gets its own session ID mapped to the projected graph.
 
 The mount wiring in `cmd/mount.go` selects the data path based on file extension and the backend based on `--backend` flag (default: NFS on macOS, FUSE on Linux).
 

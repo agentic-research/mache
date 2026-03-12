@@ -153,22 +153,29 @@ task test
 
 ### MCP Server Mode
 
-`mache serve` exposes any mache graph as an [MCP](https://modelcontextprotocol.io/) server over stdio, usable by Claude Code, Claude Desktop, Cursor, or any MCP client.
+`mache serve` exposes any mache graph as an [MCP](https://modelcontextprotocol.io/) server, usable by Claude Code, Claude Desktop, Cursor, or any MCP client.
+
+Two transport modes:
+
+- **Streamable HTTP** (default, `:7532`) — mache runs as an independent process. Supports stateful sessions and multiple clients. Best for always-on services (e.g. `brew services`, `launchd`).
+- **stdio** (`--stdio`) — client spawns mache as a subprocess. For direct piping or legacy MCP clients.
 
 ```bash
-# Serve source code as MCP tools
+# Streamable HTTP on :7532 (default)
 mache serve -s examples/go-schema.json ./internal/
 
-# Serve a SQLite database
-mache serve -s examples/nvd-schema.json results.db
+# HTTP on custom port
+mache serve --http :9000 -s examples/nvd-schema.json results.db
 
-# Serve the MCP registry itself (9,400+ servers)
-mache serve -s examples/mcp-registry-schema.json mcp-registry.db
+# stdio (subprocess mode)
+mache serve --stdio -s examples/go-schema.json ./internal/
 ```
 
 Nine tools are exposed: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, and `write_file`. No filesystem mount needed — the graph is queried directly over JSON-RPC.
 
 #### Installing in Claude Code
+
+**Option A: stdio (per-project)**
 
 Add to your project's `.mcp.json` (or `~/.claude/settings.json` for global access):
 
@@ -178,6 +185,28 @@ Add to your project's `.mcp.json` (or `~/.claude/settings.json` for global acces
     "mache": {
       "command": "/path/to/mache",
       "args": ["serve", "-s", "/path/to/schema.json", "/path/to/data"]
+    }
+  }
+}
+```
+
+**Option B: Streamable HTTP (always-on)**
+
+Start the server, then register it:
+
+```bash
+mache serve --http :7532 /path/to/data &
+claude mcp add --transport http mache http://localhost:7532/mcp
+```
+
+Or add to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mache": {
+      "type": "http",
+      "url": "http://localhost:7532/mcp"
     }
   }
 }
