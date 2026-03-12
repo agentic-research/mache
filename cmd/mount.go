@@ -1007,7 +1007,7 @@ func newCallExtractor() graph.CallExtractor {
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List active mache mounts",
+	Short: "List active mache instances (mounts and MCP servers)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mounts, err := listActiveMounts()
 		if err != nil {
@@ -1015,11 +1015,11 @@ var listCmd = &cobra.Command{
 		}
 
 		if len(mounts) == 0 {
-			fmt.Println("No active mache mounts found.")
+			fmt.Println("No active mache instances found.")
 			return nil
 		}
 
-		fmt.Printf("%-20s %-10s %-50s %s\n", "MOUNT", "PID", "SOURCE", "STATUS")
+		fmt.Printf("%-20s %-12s %-10s %-40s %s\n", "NAME", "TYPE", "PID", "SOURCE", "STATUS")
 		fmt.Println(strings.Repeat("-", 100))
 
 		for _, meta := range mounts {
@@ -1028,7 +1028,15 @@ var listCmd = &cobra.Command{
 			if !isProcessRunning(meta.PID) {
 				status = "stale"
 			}
-			fmt.Printf("%-20s %-10d %-50s %s\n", name, meta.PID, meta.Source, status)
+			typ := meta.Type
+			if typ == "" {
+				typ = "mount" // backwards compat for old sidecars
+			}
+			source := meta.Source
+			if meta.Addr != "" {
+				source = meta.Addr + " " + source
+			}
+			fmt.Printf("%-20s %-12s %-10d %-40s %s\n", name, typ, meta.PID, source, status)
 		}
 
 		return nil

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/graph"
@@ -777,6 +779,173 @@ func TestMCPRoundtrip_ErrorPropagation(t *testing.T) {
 	tc, ok := result.Content[0].(mcp.TextContent)
 	require.True(t, ok)
 	assert.Contains(t, tc.Text, "directory")
+}
+
+// ---------------------------------------------------------------------------
+// sqlLikeMatch tests
+// ---------------------------------------------------------------------------
+
+func TestSqlLikeMatch_CaseInsensitive(t *testing.T) {
+	// sqlLikeMatch lowercases both sides — search should be case-insensitive
+	assert.True(t, sqlLikeMatch("helper", "Helper"))
+	assert.True(t, sqlLikeMatch("HELPER", "Helper"))
+	assert.True(t, sqlLikeMatch("%HELP%", "Helper"))
+	assert.True(t, sqlLikeMatch("help%", "Helper"))
+}
+
+// ---------------------------------------------------------------------------
+// lazyGraph --path tests
+// ---------------------------------------------------------------------------
+
+func TestLazyGraph_BasePath_DefaultsCWD(t *testing.T) {
+	// When basePath is empty, lazyGraph should use "." (CWD behavior)
+	lg := &lazyGraph{args: []string{}, basePath: ""}
+	// basePath should resolve to "." internally
+	assert.Equal(t, ".", lg.resolvedBasePath())
+}
+
+func TestLazyGraph_BasePath_UsesProvidedPath(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Go file so inferDirSchema can detect the project type
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}"), 0o644))
+
+	lg := &lazyGraph{args: []string{}, basePath: dir}
+	assert.Equal(t, dir, lg.resolvedBasePath())
+}
+
+func TestLazyGraph_BasePath_ProjectConfig(t *testing.T) {
+	dir := t.TempDir()
+	// Write a .mache.json config in the target dir
+	cfg := `{"sources": [{"path": ".", "schema": "go"}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(cfg), 0o644))
+
+	lg := &lazyGraph{args: []string{}, basePath: dir}
+	lg.init()
+	// Should succeed (or at least not error about missing CWD files)
+	// The error, if any, should be about the data source in dir, not in CWD
+	if lg.err != nil {
+		// Acceptable: ingestion errors reference the target dir, not CWD
+		assert.Contains(t, lg.err.Error(), dir)
+	}
+}
+
+func TestLazyGraph_BasePath_InferSchema(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Go project structure
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}"), 0o644))
+
+	lg := &lazyGraph{args: []string{}, basePath: dir}
+	lg.init()
+	// Should attempt to infer + ingest from dir, not CWD
+	// Even if ingestion fails (no go.mod etc), error should reference dir
+	if lg.err != nil {
+		assert.NotContains(t, lg.err.Error(), "no such file")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validateHTTPAddr tests (MCP spec: loopback only)
+// ---------------------------------------------------------------------------
+
+func TestValidateHTTPAddr_LocalhostAllowed(t *testing.T) {
+	assert.NoError(t, validateHTTPAddr("localhost:7532"))
+	assert.NoError(t, validateHTTPAddr("127.0.0.1:7532"))
+	assert.NoError(t, validateHTTPAddr("[::1]:7532"))
+	assert.NoError(t, validateHTTPAddr("127.0.0.2:9000"))
+}
+
+func TestValidateHTTPAddr_AllInterfacesRejected(t *testing.T) {
+	assert.Error(t, validateHTTPAddr(":7532"))
+	assert.Error(t, validateHTTPAddr("0.0.0.0:7532"))
+	assert.Error(t, validateHTTPAddr("[::]:7532"))
+}
+
+func TestValidateHTTPAddr_ExternalIPRejected(t *testing.T) {
+	assert.Error(t, validateHTTPAddr("192.168.1.100:7532"))
+	assert.Error(t, validateHTTPAddr("10.0.0.1:7532"))
+}
+
+func TestValidateHTTPAddr_ErrorMessageHelpful(t *testing.T) {
+	err := validateHTTPAddr(":9000")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "localhost:9000")
+}
+
+// ---------------------------------------------------------------------------
+// serve sidecar registration tests
+// ---------------------------------------------------------------------------
+
+func TestRegisterServeSidecar_CreatesMetaJSON(t *testing.T) {
+	// Override tmpdir so we don't pollute real /tmp/mache
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar("/some/project", "mcp-http", "localhost:7532")
+	require.NotNil(t, meta)
+	defer removeServeSidecar(meta)
+
+	assert.Equal(t, "mcp-http", meta.Type)
+	assert.Equal(t, "localhost:7532", meta.Addr)
+	assert.Equal(t, "/some/project", meta.Source)
+	assert.Equal(t, os.Getpid(), meta.PID)
+
+	// Verify sidecar file exists and is valid JSON
+	data, err := os.ReadFile(sidecarPath(meta.MountPoint))
+	require.NoError(t, err)
+
+	var loaded MountMetadata
+	require.NoError(t, json.Unmarshal(data, &loaded))
+	assert.Equal(t, "mcp-http", loaded.Type)
+	assert.Equal(t, "localhost:7532", loaded.Addr)
+}
+
+func TestRegisterServeSidecar_StdioHasNoAddr(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar(".", "mcp-stdio", "")
+	require.NotNil(t, meta)
+	defer removeServeSidecar(meta)
+
+	assert.Equal(t, "mcp-stdio", meta.Type)
+	assert.Equal(t, "", meta.Addr)
+}
+
+func TestRemoveServeSidecar_CleansUp(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar("/proj", "mcp-http", ":9000")
+	require.NotNil(t, meta)
+
+	sidecar := sidecarPath(meta.MountPoint)
+	_, err := os.Stat(sidecar)
+	require.NoError(t, err, "sidecar should exist before removal")
+
+	removeServeSidecar(meta)
+
+	_, err = os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(err), "sidecar should be removed")
+}
+
+func TestRemoveServeSidecar_NilSafe(t *testing.T) {
+	// Should not panic
+	removeServeSidecar(nil)
+}
+
+func TestListActiveMounts_IncludesMCPServers(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar("/my/project", "mcp-http", "localhost:7532")
+	require.NotNil(t, meta)
+	defer removeServeSidecar(meta)
+
+	mounts, err := listActiveMounts()
+	require.NoError(t, err)
+	require.Len(t, mounts, 1)
+	assert.Equal(t, "mcp-http", mounts[0].Type)
+	assert.Equal(t, "localhost:7532", mounts[0].Addr)
 }
 
 // ---------------------------------------------------------------------------

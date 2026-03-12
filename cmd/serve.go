@@ -41,12 +41,14 @@ var (
 	serveSchema string
 	serveHTTP   string
 	serveStdio  bool
+	servePath   string
 )
 
 func init() {
 	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Path to topology schema")
 	serveCmd.Flags().StringVar(&serveHTTP, "http", "localhost:7532", "Listen address for Streamable HTTP transport")
 	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Use stdio transport instead of HTTP (for subprocess mode)")
+	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -54,7 +56,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Create a lazy graph that defers schema detection + graph building
 	// to the first tool call. This lets the MCP server respond to
 	// initialize immediately instead of blocking on auto-detection.
-	lg := &lazyGraph{args: args}
+	lg := &lazyGraph{args: args, basePath: servePath}
 
 	// Create MCP server IMMEDIATELY — respond to health checks fast
 	s := server.NewMCPServer("mache", Version,
@@ -69,42 +71,121 @@ Call get_overview first when exploring a new codebase.`),
 	)
 	registerMCPTools(s, lg)
 
+	// Resolve source label for sidecar metadata
+	source := lg.resolvedBasePath()
+	if len(args) > 0 {
+		source = args[0]
+	}
+
 	if serveStdio {
+		meta := registerServeSidecar(source, "mcp-stdio", "")
+		defer removeServeSidecar(meta)
 		log.Println("mache MCP server ready on stdio")
 		return server.ServeStdio(s)
 	}
+
+	// MCP spec: servers MUST NOT bind to 0.0.0.0 — loopback only.
+	if err := validateHTTPAddr(serveHTTP); err != nil {
+		return err
+	}
+
+	meta := registerServeSidecar(source, "mcp-http", serveHTTP)
+	defer removeServeSidecar(meta)
 
 	httpServer := server.NewStreamableHTTPServer(s)
 	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
 	return httpServer.Start(serveHTTP)
 }
 
+// registerServeSidecar writes a sidecar metadata file so `mache list` can discover
+// running MCP servers alongside FUSE/NFS mounts.
+func registerServeSidecar(source, typ, addr string) *MountMetadata {
+	mountsDir, err := getAgentMountsDir()
+	if err != nil {
+		log.Printf("Warning: could not register serve instance: %v", err)
+		return nil
+	}
+	// Use a stable name derived from type + addr/pid
+	name := fmt.Sprintf("serve-%d", os.Getpid())
+	mountPoint := filepath.Join(mountsDir, name)
+
+	meta := &MountMetadata{
+		PID:        os.Getpid(),
+		Source:     source,
+		MountPoint: mountPoint,
+		Type:       typ,
+		Addr:       addr,
+		Timestamp:  time.Now(),
+	}
+	if err := saveMountMetadata(mountPoint, meta); err != nil {
+		log.Printf("Warning: could not save serve metadata: %v", err)
+		return nil
+	}
+	return meta
+}
+
+// validateHTTPAddr rejects non-loopback bind addresses per MCP spec:
+// "servers MUST only bind to localhost and MUST NOT bind to 0.0.0.0".
+func validateHTTPAddr(addr string) error {
+	host := addr
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		host = addr[:i]
+	}
+	// Empty host (e.g. ":7532") means all interfaces in Go — reject it.
+	if host == "" || host == "0.0.0.0" || host == "[::]" {
+		return fmt.Errorf("MCP spec prohibits binding to all interfaces (%q); use localhost:%s instead", addr, addr[strings.LastIndex(addr, ":")+1:])
+	}
+	// Allow localhost, 127.x.x.x, ::1
+	if host == "localhost" || host == "127.0.0.1" || host == "[::1]" || strings.HasPrefix(host, "127.") {
+		return nil
+	}
+	return fmt.Errorf("MCP spec requires loopback binding; %q is not localhost — use localhost:<port> instead", addr)
+}
+
+// removeServeSidecar cleans up the sidecar file on shutdown.
+func removeServeSidecar(meta *MountMetadata) {
+	if meta == nil {
+		return
+	}
+	_ = os.Remove(sidecarPath(meta.MountPoint))
+}
+
 // lazyGraph wraps a Graph that is built on first access.
 // This allows the MCP server to start and respond to initialize/tools/list
 // before the potentially slow schema detection + ingestion completes.
 type lazyGraph struct {
-	args    []string
-	once    sync.Once
-	inner   graph.Graph
-	cleanup func()
-	err     error
+	args     []string
+	basePath string // optional; defaults to "." (CWD) when empty
+	once     sync.Once
+	inner    graph.Graph
+	cleanup  func()
+	err      error
+}
+
+// resolvedBasePath returns basePath if set, otherwise ".".
+func (lg *lazyGraph) resolvedBasePath() string {
+	if lg.basePath != "" {
+		return lg.basePath
+	}
+	return "."
 }
 
 func (lg *lazyGraph) init() {
 	lg.once.Do(func() {
 		var dataSource string
 		var schema *api.Topology
+		base := lg.resolvedBasePath()
 
 		if len(lg.args) == 0 {
-			cfg, err := loadProjectConfig(".")
+			cfg, err := loadProjectConfig(base)
 			if err != nil {
 				if !os.IsNotExist(err) {
 					lg.err = err
 					return
 				}
 				log.Printf("No %s found; auto-detecting project languages...", ConfigFileName)
-				dataSource = "."
-				schema, err = inferDirSchema(".")
+				dataSource = base
+				schema, err = inferDirSchema(base)
 				if err != nil {
 					lg.err = fmt.Errorf("auto-detect schema: %w", err)
 					return
@@ -114,12 +195,12 @@ func (lg *lazyGraph) init() {
 					log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
 				}
 				src := cfg.Sources[0]
-				dataSource, err = resolveDataSource(src.Path, ".")
+				dataSource, err = resolveDataSource(src.Path, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve data source: %w", err)
 					return
 				}
-				schema, err = resolveSchema(src.Schema, ".")
+				schema, err = resolveSchema(src.Schema, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve schema: %w", err)
 					return
@@ -133,7 +214,7 @@ func (lg *lazyGraph) init() {
 			dataSource = lg.args[0]
 
 			if serveSchema != "" {
-				resolved, err := resolveSchema(serveSchema, ".")
+				resolved, err := resolveSchema(serveSchema, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve schema: %w", err)
 					return
@@ -397,7 +478,7 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 	if _, ok := g.(refsQuerier); ok {
 		s.AddTool(
 			mcp.NewTool("search",
-				mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard). Optionally filter by construct type or role."),
+				mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard, case-insensitive). Optionally filter by construct type or role."),
 				mcp.WithString("pattern", mcp.Required(), mcp.Description("Search pattern, e.g. 'Login%' or '%auth%'")),
 				mcp.WithString("type", mcp.Description("Filter by construct type in path, e.g. 'functions', 'methods', 'types', 'structs'")),
 				mcp.WithString("role", mcp.Description("Filter by role: 'definition' (where symbol is declared), 'reference' (where symbol is used). Default: returns references.")),
