@@ -3,7 +3,9 @@
   "file_sets": {
     "lsp": [
       {"name": "hover", "content_source": "lsp_hover"},
-      {"name": "diagnostics", "content_source": "lsp_diagnostics"}
+      {"name": "diagnostics", "content_source": "lsp_diagnostics"},
+      {"name": "definitions", "content_source": "lsp_defs"},
+      {"name": "references", "content_source": "lsp_refs"}
     ]
   },
   "nodes": [

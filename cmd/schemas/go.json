@@ -1,5 +1,13 @@
 {
   "version": "v1",
+  "file_sets": {
+    "lsp": [
+      {"name": "hover", "content_source": "lsp_hover"},
+      {"name": "diagnostics", "content_source": "lsp_diagnostics"},
+      {"name": "definitions", "content_source": "lsp_defs"},
+      {"name": "references", "content_source": "lsp_refs"}
+    ]
+  },
   "nodes": [
     {
       "name": "{{.pkg}}",
@@ -28,6 +36,7 @@
             {
               "name": "{{.name}}",
               "selector": "(function_declaration name: (identifier) @name) @scope",
+              "include": ["lsp"],
               "files": [
                 {
                   "name": "source",
@@ -44,6 +53,7 @@
             {
               "name": "{{.receiver}}.{{.name}}",
               "selector": "(method_declaration receiver: (parameter_list (parameter_declaration type: (pointer_type (type_identifier) @receiver))) name: (field_identifier) @name) @scope",
+              "include": ["lsp"],
               "files": [
                 {
                   "name": "source",
@@ -54,6 +64,7 @@
             {
               "name": "{{.receiver}}.{{.name}}",
               "selector": "(method_declaration receiver: (parameter_list (parameter_declaration type: (type_identifier) @receiver)) name: (field_identifier) @name) @scope",
+              "include": ["lsp"],
               "files": [
                 {
                   "name": "source",
@@ -70,6 +81,7 @@
             {
               "name": "{{.name}}",
               "selector": "(type_declaration (type_spec name: (type_identifier) @name) @scope)",
+              "include": ["lsp"],
               "files": [
                 {
                   "name": "source",
