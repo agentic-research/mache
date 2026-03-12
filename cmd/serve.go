@@ -404,6 +404,26 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 		)
 	}
 
+	// get_type_info: LSP hover data for a symbol (type signatures, docs)
+	if _, ok := g.(refsQuerier); ok {
+		s.AddTool(
+			mcp.NewTool("get_type_info",
+				mcp.WithDescription("Get type signature and documentation for a symbol from LSP hover data. Returns the language server's type information (e.g. function signatures, struct definitions). Requires LSP enrichment via `leyline lsp`."),
+				mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to look up (e.g. 'NewEncoder', 'Model')")),
+			),
+			makeGetTypeInfoHandler(g),
+		)
+
+		s.AddTool(
+			mcp.NewTool("get_diagnostics",
+				mcp.WithDescription("Get LSP diagnostics (errors, warnings) for symbols. Returns diagnostics from the language server. Requires LSP enrichment via `leyline lsp`."),
+				mcp.WithString("symbol", mcp.Description("Symbol name to filter by (optional, returns all if empty)")),
+				mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
+			),
+			makeGetDiagnosticsHandler(g),
+		)
+	}
+
 	// get_overview: aggregate first-contact orientation tool
 	s.AddTool(
 		mcp.NewTool("get_overview",
@@ -943,6 +963,144 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		data, _ := json.MarshalIndent(ov, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		symbol := request.GetString("symbol", "")
+		if symbol == "" {
+			return mcp.NewToolResultError("symbol is required"), nil
+		}
+
+		qg := g.(refsQuerier)
+
+		// Check if _lsp_hover table exists
+		rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_hover'`)
+		if err != nil {
+			return mcp.NewToolResultError("LSP data not available — run `leyline lsp` to enrich the database"), nil
+		}
+		var tableExists int
+		if rows.Next() {
+			_ = rows.Scan(&tableExists)
+		}
+		_ = rows.Close()
+		if tableExists == 0 {
+			return mcp.NewToolResultError("no _lsp_hover table — run `leyline lsp` to enrich the database"), nil
+		}
+
+		// Search for matching hovers — try exact suffix match then LIKE
+		type hoverResult struct {
+			NodeID    string `json:"node_id"`
+			HoverText string `json:"hover_text"`
+		}
+
+		rows, err = qg.QueryRefs(
+			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ?`,
+			"%/"+symbol,
+		)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("query _lsp_hover: %v", err)), nil
+		}
+
+		var results []hoverResult
+		for rows.Next() {
+			var r hoverResult
+			if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
+				continue
+			}
+			results = append(results, r)
+		}
+		_ = rows.Close()
+
+		// Fallback: broader LIKE search
+		if len(results) == 0 {
+			rows, err = qg.QueryRefs(
+				`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ?`,
+				"%"+symbol+"%",
+			)
+			if err == nil {
+				for rows.Next() {
+					var r hoverResult
+					if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
+						continue
+					}
+					results = append(results, r)
+				}
+				_ = rows.Close()
+			}
+		}
+
+		if len(results) == 0 {
+			return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q", symbol)), nil
+		}
+
+		data, _ := json.MarshalIndent(results, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		symbol := request.GetString("symbol", "")
+		limit := request.GetInt("limit", 50)
+
+		qg := g.(refsQuerier)
+
+		// Check if _lsp table exists
+		rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`)
+		if err != nil {
+			return mcp.NewToolResultError("LSP data not available — run `leyline lsp` to enrich the database"), nil
+		}
+		var tableExists int
+		if rows.Next() {
+			_ = rows.Scan(&tableExists)
+		}
+		_ = rows.Close()
+		if tableExists == 0 {
+			return mcp.NewToolResultError("no _lsp table — run `leyline lsp` to enrich the database"), nil
+		}
+
+		type diagResult struct {
+			NodeID      string `json:"node_id"`
+			SymbolKind  string `json:"symbol_kind"`
+			Diagnostics string `json:"diagnostics"`
+		}
+
+		var query string
+		var args []any
+		if symbol != "" {
+			query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE ? LIMIT ?`
+			args = []any{"%" + symbol + "%", limit}
+		} else {
+			query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT ?`
+			args = []any{limit}
+		}
+
+		rows, err = qg.QueryRefs(query, args...)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("query _lsp: %v", err)), nil
+		}
+
+		var results []diagResult
+		for rows.Next() {
+			var r diagResult
+			if err := rows.Scan(&r.NodeID, &r.SymbolKind, &r.Diagnostics); err != nil {
+				continue
+			}
+			results = append(results, r)
+		}
+		_ = rows.Close()
+
+		if len(results) == 0 {
+			if symbol != "" {
+				return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
+			}
+			return mcp.NewToolResultText("no diagnostics found"), nil
+		}
+
+		data, _ := json.MarshalIndent(results, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }

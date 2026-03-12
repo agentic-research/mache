@@ -66,6 +66,11 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 		return fmt.Errorf("materialize callees: %w", err)
 	}
 
+	// 5. Materialize LSP data (hover, diagnostics) if _lsp_* tables exist
+	if err := materializeLSP(tx, now); err != nil {
+		return fmt.Errorf("materialize lsp: %w", err)
+	}
+
 	return tx.Commit()
 }
 
@@ -288,6 +293,150 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	return nil
 }
 
+// materializeLSP reads leyline's _lsp_hover and _lsp tables (if present)
+// and creates materialized files in construct directories:
+//   - {construct}/hover   (type signature / documentation from LSP hover)
+//   - {construct}/diagnostics (LSP diagnostics as JSON, if any)
+//
+// The _lsp tables are produced by `leyline lsp --merge-db` or standalone projection.
+// node_ids in _lsp use "symbols/{name}" format; we map them to existing construct
+// directories by matching the symbol name to directory names in the nodes table.
+func materializeLSP(tx *sql.Tx, now int64) error {
+	// Check if _lsp_hover table exists
+	var hoverCount int
+	err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_hover'`).Scan(&hoverCount)
+	if err != nil || hoverCount == 0 {
+		// No LSP data, nothing to do
+		return nil
+	}
+
+	// Materialize hover text as files.
+	// _lsp_hover has (node_id TEXT PK, hover_text TEXT).
+	// node_ids are like "symbols/Model", "symbols/Model/memory_gb", etc.
+	rows, err := tx.Query(`SELECT node_id, hover_text FROM _lsp_hover WHERE hover_text != ''`)
+	if err != nil {
+		return fmt.Errorf("query _lsp_hover: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Build a set of known directory node IDs for matching
+	dirRows, err := tx.Query(`SELECT id FROM nodes WHERE kind = 1`)
+	if err != nil {
+		return fmt.Errorf("query dirs: %w", err)
+	}
+	dirSet := make(map[string]bool)
+	for dirRows.Next() {
+		var id string
+		if err := dirRows.Scan(&id); err != nil {
+			_ = dirRows.Close()
+			return err
+		}
+		dirSet[id] = true
+	}
+	_ = dirRows.Close()
+
+	// Build a name→dirID index for fuzzy matching (last path component)
+	nameToDir := make(map[string][]string)
+	for id := range dirSet {
+		parts := strings.Split(id, "/")
+		name := parts[len(parts)-1]
+		nameToDir[name] = append(nameToDir[name], id)
+	}
+
+	for rows.Next() {
+		var nodeID, hoverText string
+		if err := rows.Scan(&nodeID, &hoverText); err != nil {
+			return err
+		}
+
+		// Extract the symbol name from the LSP node_id
+		// "symbols/Model/memory_gb" → "memory_gb"
+		symbolName := nodeID
+		if strings.HasPrefix(nodeID, "symbols/") {
+			symbolName = strings.TrimPrefix(nodeID, "symbols/")
+		}
+		parts := strings.Split(symbolName, "/")
+		leafName := parts[len(parts)-1]
+
+		// Find matching construct directory
+		var targetDirs []string
+		if dirs, ok := nameToDir[leafName]; ok {
+			targetDirs = dirs
+		}
+
+		for _, dirID := range targetDirs {
+			hoverID := dirID + "/hover"
+
+			// Check if already exists
+			var exists int
+			_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, hoverID).Scan(&exists)
+			if exists > 0 {
+				continue
+			}
+
+			if _, err := tx.Exec(
+				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				hoverID, dirID, "hover", 0, len(hoverText), now, hoverText,
+			); err != nil {
+				return fmt.Errorf("insert hover %s: %w", hoverID, err)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Materialize diagnostics from _lsp table (if it has diagnostics column)
+	var lspCount int
+	err = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`).Scan(&lspCount)
+	if err != nil || lspCount == 0 {
+		return nil
+	}
+
+	diagRows, err := tx.Query(`SELECT node_id, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != ''`)
+	if err != nil {
+		return nil // column might not exist in older schemas
+	}
+	defer func() { _ = diagRows.Close() }()
+
+	for diagRows.Next() {
+		var nodeID, diagnosticsJSON string
+		if err := diagRows.Scan(&nodeID, &diagnosticsJSON); err != nil {
+			continue
+		}
+		// Parse diagnostics JSON to verify it's valid (and not just a string error message)
+		symbolName := nodeID
+		if strings.HasPrefix(nodeID, "symbols/") {
+			symbolName = strings.TrimPrefix(nodeID, "symbols/")
+		}
+		parts := strings.Split(symbolName, "/")
+		leafName := parts[len(parts)-1]
+
+		var targetDirs []string
+		if dirs, ok := nameToDir[leafName]; ok {
+			targetDirs = dirs
+		}
+
+		for _, dirID := range targetDirs {
+			diagID := dirID + "/diagnostics"
+			var exists int
+			_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, diagID).Scan(&exists)
+			if exists > 0 {
+				continue
+			}
+			// TODO: We should make this query
+			if _, err := tx.Exec(
+				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				diagID, dirID, "diagnostics", 0, len(diagnosticsJSON), now, diagnosticsJSON,
+			); err != nil {
+				return fmt.Errorf("insert diagnostics %s: %w", diagID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // extractCallerDir gets the construct directory from a node_id.
 // "pkg/functions/FuncA/source" -> "pkg/functions/FuncA"
 // "pkg/functions/FuncA" -> "pkg/functions/FuncA"
@@ -296,17 +445,23 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 // callees) is coupled to the leaf naming conventions used by the schema and
 // the virtual directory materializers. If new leaf types are added, this
 // function must be updated to match.
-func extractCallerDir(nodeID string) string {
-	parts := strings.Split(nodeID, "/")
-	if len(parts) < 2 {
-		return ""
+func extractCallerDir(nodeID string) (dirID string) {
+	// Find the last slash. If there isn't one, mimic the original behavior
+	// of returning an empty string.
+	idx := strings.LastIndexByte(nodeID, '/')
+	if idx < 0 {
+		return dirID
 	}
-	// If last part looks like a file (source, context, doc), go up one level
-	last := parts[len(parts)-1]
-	if last == "source" || last == "context" || last == "doc" || last == "callers" || last == "callees" {
-		return strings.Join(parts[:len(parts)-1], "/")
+
+	// Use a switch for a clean, readable multi-match
+	switch last := nodeID[idx+1:]; last {
+	case "source", "context", "doc", "callers", "callees", "hover", "diagnostics":
+		// Return the string up to (but not including) the last slash
+		dirID = nodeID[:idx]
+	default:
+		dirID = nodeID
 	}
-	return nodeID
+	return dirID
 }
 
 // extractFuncName pulls the function name from a node path like "functions/Foo/source".
