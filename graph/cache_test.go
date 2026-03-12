@@ -280,6 +280,84 @@ func TestGraphCache_ConcurrentAccess(t *testing.T) {
 	}
 }
 
+func TestGraphCache_Batch_Atomic(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "batch.db")
+	c := graph.NewGraphCache(dbPath)
+
+	// Batch: multiple mutations, one persist, atomic to readers.
+	err := c.Batch(func(store *graph.MemoryStore) {
+		store.AddRoot(&graph.Node{
+			ID:       "url-key",
+			Mode:     fs.ModeDir,
+			Children: []string{"url-key/zones"},
+		})
+		store.AddNode(&graph.Node{
+			ID:       "url-key/zones",
+			Mode:     fs.ModeDir,
+			Children: []string{"url-key/zones/header"},
+		})
+		store.AddNode(&graph.Node{
+			ID:   "url-key/zones/header",
+			Mode: fs.ModeDir,
+			Children: []string{
+				"url-key/zones/header/fingerprint",
+				"url-key/zones/header/mount_json",
+			},
+		})
+		store.AddNode(&graph.Node{
+			ID:   "url-key/zones/header/fingerprint",
+			Data: []byte("abc123"),
+		})
+		store.AddNode(&graph.Node{
+			ID:   "url-key/zones/header/mount_json",
+			Data: []byte(`{"path":"/header"}`),
+		})
+	})
+	if err != nil {
+		t.Fatalf("Batch() = %v", err)
+	}
+
+	// Reload from disk — verify all nodes persisted in one shot.
+	c2 := graph.NewGraphCache(dbPath)
+
+	fp, ok := c2.GetData("url-key/zones/header/fingerprint")
+	if !ok || string(fp) != "abc123" {
+		t.Errorf("fingerprint = %q, want %q", fp, "abc123")
+	}
+
+	mj, ok := c2.GetData("url-key/zones/header/mount_json")
+	if !ok || string(mj) != `{"path":"/header"}` {
+		t.Errorf("mount_json = %q, want %q", mj, `{"path":"/header"}`)
+	}
+
+	children, ok := c2.ListChildren("url-key/zones")
+	if !ok || len(children) != 1 || children[0] != "url-key/zones/header" {
+		t.Errorf("zones children = %v, want [url-key/zones/header]", children)
+	}
+}
+
+func TestGraphCache_Batch_InMemory(t *testing.T) {
+	c := graph.NewGraphCache("")
+
+	// Batch on in-memory cache should not error.
+	err := c.Batch(func(store *graph.MemoryStore) {
+		store.AddRoot(&graph.Node{
+			ID:       "root",
+			Mode:     fs.ModeDir,
+			Children: []string{"root/file"},
+		})
+		store.AddNode(&graph.Node{ID: "root/file", Data: []byte("hello")})
+	})
+	if err != nil {
+		t.Fatalf("Batch() = %v, want nil for in-memory", err)
+	}
+
+	data, ok := c.GetData("root/file")
+	if !ok || string(data) != "hello" {
+		t.Errorf("data = %q, want %q", data, "hello")
+	}
+}
+
 func TestGraphCache_StoreEscapeHatch(t *testing.T) {
 	c := graph.NewGraphCache("")
 

@@ -217,10 +217,30 @@ func (c *GraphCache) RootIDs() []string {
 	return c.store.RootIDs()
 }
 
-// --- Persistence ---
+// --- Batch & Persistence ---
+
+// Batch acquires the write lock, calls fn with the underlying MemoryStore,
+// then persists once. Use this for multi-step mutations that must be atomic
+// (no concurrent readers see intermediate state) and persist as a single
+// SQLite write instead of N individual writes.
+//
+// This is the correct way to implement complex operations like "backup
+// sections, clear zones, rebuild zones, restore matching sections" —
+// the entire sequence runs under one lock with one persist at the end.
+func (c *GraphCache) Batch(fn func(*MemoryStore)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	fn(c.store)
+
+	if c.dbPath == "" {
+		return nil
+	}
+	return ExportSQLite(c.store, c.dbPath)
+}
 
 // Persist flushes the entire graph to SQLite. Called automatically by mutation
-// methods. Use explicitly after batch operations via Store().
+// methods. Use explicitly after direct Store() access.
 func (c *GraphCache) Persist() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
