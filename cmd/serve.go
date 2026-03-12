@@ -25,12 +25,13 @@ var serveCmd = &cobra.Command{
 	Use:   "serve [data-source]",
 	Short: "Serve a Mache graph as an MCP server",
 	Long: `Starts an MCP (Model Context Protocol) server that exposes the graph
-as tools. By default uses stdin/stdout JSON-RPC (stdio transport).
-With --http, starts a Streamable HTTP server for always-on use (e.g. brew service).
+as tools. By default starts a Streamable HTTP server on :7532.
+Use --stdio for subprocess mode (client manages lifecycle).
 
 Examples:
-  mache serve ./data.db              # stdio (Claude Code subprocess)
-  mache serve --http :7532 ./data.db # Streamable HTTP (always-on service)
+  mache serve ./data.db                  # HTTP on :7532 (default)
+  mache serve --http :9000 ./data.db     # HTTP on custom port
+  mache serve --stdio ./data.db          # stdio (subprocess mode)
   claude mcp add --transport http mache http://localhost:7532/mcp`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runServe,
@@ -39,11 +40,13 @@ Examples:
 var (
 	serveSchema string
 	serveHTTP   string
+	serveStdio  bool
 )
 
 func init() {
 	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Path to topology schema")
-	serveCmd.Flags().StringVar(&serveHTTP, "http", "", "Listen address for Streamable HTTP transport (e.g. :7532)")
+	serveCmd.Flags().StringVar(&serveHTTP, "http", ":7532", "Listen address for Streamable HTTP transport")
+	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Use stdio transport instead of HTTP (for subprocess mode)")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -59,14 +62,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	)
 	registerMCPTools(s, lg)
 
-	if serveHTTP != "" {
-		httpServer := server.NewStreamableHTTPServer(s)
-		log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
-		return httpServer.Start(serveHTTP)
+	if serveStdio {
+		log.Println("mache MCP server ready on stdio")
+		return server.ServeStdio(s)
 	}
 
-	log.Println("mache MCP server ready on stdio")
-	return server.ServeStdio(s)
+	httpServer := server.NewStreamableHTTPServer(s)
+	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
+	return httpServer.Start(serveHTTP)
 }
 
 // lazyGraph wraps a Graph that is built on first access.
