@@ -53,3 +53,10 @@ experiments/
 .task/
 .mache-mount/
 bin/
+cmd/KNOWN_ISSUES.md
+internal/KNOWN_ISSUES.md
+tools/KNOWN_ISSUES.md
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db

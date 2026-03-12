@@ -58,8 +58,20 @@ tasks:
   build:
     desc: Build and codesign mache (with FUSE-T network entitlements)
     deps: [check-fuse-t]
+    vars:
+      GIT_COMMIT:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "none"
+      BUILD_DATE:
+        sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
+      GIT_TAG:
+        sh: git describe --tags --abbrev=0 2>/dev/null || echo "dev"
     cmds:
-      - go build -o {{.BINARY_NAME}} .
+      - >-
+        go build
+        -ldflags "-X github.com/agentic-research/mache/cmd.Version={{.GIT_TAG}}
+        -X github.com/agentic-research/mache/cmd.Commit={{.GIT_COMMIT}}
+        -X github.com/agentic-research/mache/cmd.Date={{.BUILD_DATE}}"
+        -o {{.BINARY_NAME}} .
       - cmd: codesign -s - --force --deep --entitlements entitlements.plist ./{{.BINARY_NAME}}
         platforms: [darwin]
     sources:

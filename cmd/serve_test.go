@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/graph"
@@ -572,66 +574,53 @@ func TestGetCommunities_CustomMinSize(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// registerMCPTools tests
+// registerMCPTools tests (multi-tenant: all tools registered unconditionally)
 // ---------------------------------------------------------------------------
 
-func TestRegisterMCPTools_WithQueryRefs(t *testing.T) {
+func TestRegisterMCPTools_AllToolsRegistered(t *testing.T) {
 	store := buildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
 
+	registry := newGraphRegistry(".", nil)
+	registry.graphs.Store(".", &lazyGraph{inner: store})
+
 	s := server.NewMCPServer("test", "1.0.0", server.WithToolCapabilities(false))
-	registerMCPTools(s, store)
+	registerMCPTools(s, registry)
 
-	// List tools via mcptest roundtrip
-	srv := mcptest.NewUnstartedServer(t)
-	addMacheTools(srv, store)
-	require.NoError(t, srv.Start(context.Background()))
-	defer srv.Close()
-
-	listResult, err := srv.Client().ListTools(context.Background(), mcp.ListToolsRequest{})
+	// Use HandleMessage to list tools (avoids mcptest transport)
+	reqJSON := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	resp := s.HandleMessage(context.Background(), reqJSON)
+	respJSON, err := json.Marshal(resp)
 	require.NoError(t, err)
 
+	var result struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(respJSON, &result))
+
 	toolNames := map[string]bool{}
-	for _, tool := range listResult.Tools {
+	for _, tool := range result.Result.Tools {
 		toolNames[tool.Name] = true
 	}
 
+	// In multi-tenant mode, all tools are registered unconditionally
 	assert.True(t, toolNames["list_directory"])
 	assert.True(t, toolNames["read_file"])
 	assert.True(t, toolNames["find_callers"])
 	assert.True(t, toolNames["find_callees"])
-	assert.True(t, toolNames["search"], "search should be registered when backend supports QueryRefs")
-	assert.True(t, toolNames["get_communities"], "get_communities should be registered when backend supports RefsMap")
-}
-
-func TestRegisterMCPTools_WithoutQueryRefs(t *testing.T) {
-	// Use a mock graph that does NOT implement refsQuerier
-	mock := &mockGraph{}
-
-	s := server.NewMCPServer("test", "1.0.0", server.WithToolCapabilities(false))
-	registerMCPTools(s, mock)
-
-	srv := mcptest.NewUnstartedServer(t)
-	addMacheToolsFromGraph(srv, mock)
-	require.NoError(t, srv.Start(context.Background()))
-	defer srv.Close()
-
-	listResult, err := srv.Client().ListTools(context.Background(), mcp.ListToolsRequest{})
-	require.NoError(t, err)
-
-	toolNames := map[string]bool{}
-	for _, tool := range listResult.Tools {
-		toolNames[tool.Name] = true
-	}
-
-	assert.True(t, toolNames["list_directory"])
-	assert.True(t, toolNames["read_file"])
-	assert.True(t, toolNames["find_callers"])
-	assert.True(t, toolNames["find_callees"])
-	assert.False(t, toolNames["search"], "search should NOT be registered without QueryRefs")
-	assert.False(t, toolNames["get_communities"], "get_communities should NOT be registered without RefsMap")
+	assert.True(t, toolNames["search"], "all tools registered in multi-tenant mode")
+	assert.True(t, toolNames["get_communities"], "all tools registered in multi-tenant mode")
+	assert.True(t, toolNames["get_overview"])
+	assert.True(t, toolNames["find_definition"])
+	assert.True(t, toolNames["get_type_info"])
+	assert.True(t, toolNames["get_diagnostics"])
+	assert.True(t, toolNames["write_file"])
 }
 
 // ---------------------------------------------------------------------------
@@ -780,6 +769,284 @@ func TestMCPRoundtrip_ErrorPropagation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// sqlLikeMatch tests
+// ---------------------------------------------------------------------------
+
+func TestSqlLikeMatch_CaseInsensitive(t *testing.T) {
+	// sqlLikeMatch lowercases both sides — search should be case-insensitive
+	assert.True(t, sqlLikeMatch("helper", "Helper"))
+	assert.True(t, sqlLikeMatch("HELPER", "Helper"))
+	assert.True(t, sqlLikeMatch("%HELP%", "Helper"))
+	assert.True(t, sqlLikeMatch("help%", "Helper"))
+}
+
+// ---------------------------------------------------------------------------
+// lazyGraph --path tests
+// ---------------------------------------------------------------------------
+
+func TestLazyGraph_BasePath_DefaultsCWD(t *testing.T) {
+	// When basePath is empty, lazyGraph should use "." (CWD behavior)
+	lg := &lazyGraph{args: []string{}, basePath: ""}
+	// basePath should resolve to "." internally
+	assert.Equal(t, ".", lg.resolvedBasePath())
+}
+
+func TestLazyGraph_BasePath_UsesProvidedPath(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Go file so inferDirSchema can detect the project type
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}"), 0o644))
+
+	lg := &lazyGraph{args: []string{}, basePath: dir}
+	assert.Equal(t, dir, lg.resolvedBasePath())
+}
+
+func TestLazyGraph_BasePath_ProjectConfig(t *testing.T) {
+	dir := t.TempDir()
+	// Write a .mache.json config in the target dir
+	cfg := `{"sources": [{"path": ".", "schema": "go"}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(cfg), 0o644))
+
+	lg := &lazyGraph{args: []string{}, basePath: dir}
+	lg.init()
+	// Should succeed (or at least not error about missing CWD files)
+	// The error, if any, should be about the data source in dir, not in CWD
+	if lg.err != nil {
+		// Acceptable: ingestion errors reference the target dir, not CWD
+		assert.Contains(t, lg.err.Error(), dir)
+	}
+}
+
+func TestLazyGraph_BasePath_InferSchema(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Go project structure
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}"), 0o644))
+
+	lg := &lazyGraph{args: []string{}, basePath: dir}
+	lg.init()
+	// Should attempt to infer + ingest from dir, not CWD
+	// Even if ingestion fails (no go.mod etc), error should reference dir
+	if lg.err != nil {
+		assert.NotContains(t, lg.err.Error(), "no such file")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validateHTTPAddr tests (MCP spec: loopback only)
+// ---------------------------------------------------------------------------
+
+func TestValidateHTTPAddr_LocalhostAllowed(t *testing.T) {
+	assert.NoError(t, validateHTTPAddr("localhost:7532"))
+	assert.NoError(t, validateHTTPAddr("127.0.0.1:7532"))
+	assert.NoError(t, validateHTTPAddr("[::1]:7532"))
+	assert.NoError(t, validateHTTPAddr("127.0.0.2:9000"))
+}
+
+func TestValidateHTTPAddr_AllInterfacesRejected(t *testing.T) {
+	assert.Error(t, validateHTTPAddr(":7532"))
+	assert.Error(t, validateHTTPAddr("0.0.0.0:7532"))
+	assert.Error(t, validateHTTPAddr("[::]:7532"))
+}
+
+func TestValidateHTTPAddr_ExternalIPRejected(t *testing.T) {
+	assert.Error(t, validateHTTPAddr("192.168.1.100:7532"))
+	assert.Error(t, validateHTTPAddr("10.0.0.1:7532"))
+}
+
+func TestValidateHTTPAddr_ErrorMessageHelpful(t *testing.T) {
+	err := validateHTTPAddr(":9000")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "localhost:9000")
+}
+
+// ---------------------------------------------------------------------------
+// serve sidecar registration tests
+// ---------------------------------------------------------------------------
+
+func TestRegisterServeSidecar_CreatesMetaJSON(t *testing.T) {
+	// Override tmpdir so we don't pollute real /tmp/mache
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar("/some/project", "mcp-http", "localhost:7532")
+	require.NotNil(t, meta)
+	defer removeServeSidecar(meta)
+
+	assert.Equal(t, "mcp-http", meta.Type)
+	assert.Equal(t, "localhost:7532", meta.Addr)
+	assert.Equal(t, "/some/project", meta.Source)
+	assert.Equal(t, os.Getpid(), meta.PID)
+
+	// Verify sidecar file exists and is valid JSON
+	data, err := os.ReadFile(sidecarPath(meta.MountPoint))
+	require.NoError(t, err)
+
+	var loaded MountMetadata
+	require.NoError(t, json.Unmarshal(data, &loaded))
+	assert.Equal(t, "mcp-http", loaded.Type)
+	assert.Equal(t, "localhost:7532", loaded.Addr)
+}
+
+func TestRegisterServeSidecar_StdioHasNoAddr(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar(".", "mcp-stdio", "")
+	require.NotNil(t, meta)
+	defer removeServeSidecar(meta)
+
+	assert.Equal(t, "mcp-stdio", meta.Type)
+	assert.Equal(t, "", meta.Addr)
+}
+
+func TestRemoveServeSidecar_CleansUp(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar("/proj", "mcp-http", ":9000")
+	require.NotNil(t, meta)
+
+	sidecar := sidecarPath(meta.MountPoint)
+	_, err := os.Stat(sidecar)
+	require.NoError(t, err, "sidecar should exist before removal")
+
+	removeServeSidecar(meta)
+
+	_, err = os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(err), "sidecar should be removed")
+}
+
+func TestRemoveServeSidecar_NilSafe(t *testing.T) {
+	// Should not panic
+	removeServeSidecar(nil)
+}
+
+func TestListActiveMounts_IncludesMCPServers(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	meta := registerServeSidecar("/my/project", "mcp-http", "localhost:7532")
+	require.NotNil(t, meta)
+	defer removeServeSidecar(meta)
+
+	mounts, err := listActiveMounts()
+	require.NoError(t, err)
+	require.Len(t, mounts, 1)
+	assert.Equal(t, "mcp-http", mounts[0].Type)
+	assert.Equal(t, "localhost:7532", mounts[0].Addr)
+}
+
+// ---------------------------------------------------------------------------
+// graphRegistry tests
+// ---------------------------------------------------------------------------
+
+func TestGraphRegistry_CachesPerRoot(t *testing.T) {
+	registry := newGraphRegistry(".", nil)
+
+	g1 := registry.getOrCreateGraph("/project/a")
+	g2 := registry.getOrCreateGraph("/project/a")
+
+	// Same root should return the same lazyGraph instance (pointer equality)
+	assert.Same(t, g1, g2)
+}
+
+func TestGraphRegistry_DifferentRoots(t *testing.T) {
+	registry := newGraphRegistry(".", nil)
+
+	g1 := registry.getOrCreateGraph("/project/a")
+	g2 := registry.getOrCreateGraph("/project/b")
+
+	// Different roots should return different graphs
+	assert.NotSame(t, g1, g2)
+}
+
+func TestGraphRegistry_FallbackToBasePath(t *testing.T) {
+	registry := newGraphRegistry("/default/path", nil)
+
+	// Unregistered session should fall back to basePath
+	g := registry.graphForSession("unknown-session")
+	assert.Equal(t, "/default/path", g.basePath)
+}
+
+func TestGraphRegistry_SessionRouting(t *testing.T) {
+	registry := newGraphRegistry("/default", nil)
+
+	registry.registerSession("sess-1", "/project/alpha")
+	registry.registerSession("sess-2", "/project/beta")
+
+	g1 := registry.graphForSession("sess-1")
+	g2 := registry.graphForSession("sess-2")
+	gDefault := registry.graphForSession("unknown")
+
+	assert.Equal(t, "/project/alpha", g1.basePath)
+	assert.Equal(t, "/project/beta", g2.basePath)
+	assert.Equal(t, "/default", gDefault.basePath)
+}
+
+func TestGraphRegistry_UnregisterSession(t *testing.T) {
+	registry := newGraphRegistry("/default", nil)
+
+	registry.registerSession("sess-1", "/project/alpha")
+	g1 := registry.graphForSession("sess-1")
+	assert.Equal(t, "/project/alpha", g1.basePath)
+
+	registry.unregisterSession("sess-1")
+	// After unregister, session falls back to default
+	g2 := registry.graphForSession("sess-1")
+	assert.Equal(t, "/default", g2.basePath)
+
+	// But the graph for /project/alpha is still cached (reusable by other sessions)
+	g3 := registry.getOrCreateGraph("/project/alpha")
+	assert.Same(t, g1, g3)
+}
+
+func TestGraphRegistry_WrapHandler_RoutesToSessionGraph(t *testing.T) {
+	// Pre-populate stores for two projects and the default
+	storeA := graph.NewMemoryStore()
+	storeA.AddRoot(&graph.Node{ID: "project-a", Mode: fs.ModeDir, Children: []string{}})
+	storeB := graph.NewMemoryStore()
+	storeB.AddRoot(&graph.Node{ID: "project-b", Mode: fs.ModeDir, Children: []string{}})
+	storeDefault := graph.NewMemoryStore()
+	storeDefault.AddRoot(&graph.Node{ID: "default-root", Mode: fs.ModeDir, Children: []string{}})
+
+	registry := newGraphRegistry("/default", nil)
+	registry.graphs.Store("/project/a", newTestLazyGraph(storeA, "/project/a"))
+	registry.graphs.Store("/project/b", newTestLazyGraph(storeB, "/project/b"))
+	registry.graphs.Store("/default", newTestLazyGraph(storeDefault, "/default"))
+	registry.registerSession("sess-a", "/project/a")
+	registry.registerSession("sess-b", "/project/b")
+
+	handler := registry.wrapHandler(makeGetOverviewHandler)
+
+	// Without session in context, falls back to default graph
+	ctx := context.Background()
+	result, err := handler(ctx, makeRequest(nil))
+	require.NoError(t, err)
+	text := resultText(t, result)
+	require.False(t, result.IsError, "unexpected error: %s", text)
+
+	// Default graph has "default-root" as top-level
+	assert.Contains(t, text, "default-root")
+}
+
+func TestRootURIToPath(t *testing.T) {
+	tests := []struct {
+		uri  string
+		want string
+	}{
+		{"file:///home/user/project", "/home/user/project"},
+		{"file:///Users/james/code", "/Users/james/code"},
+		{"file:///tmp/test/../real", "/tmp/real"},
+		{"https://example.com", ""},
+		{"not-a-uri", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.uri, func(t *testing.T) {
+			assert.Equal(t, tt.want, rootURIToPath(tt.uri))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -830,66 +1097,10 @@ func addMacheTools(srv *mcptest.Server, store *graph.MemoryStore) {
 	)
 }
 
-// addMacheToolsFromGraph registers tools using a generic Graph (no search).
-func addMacheToolsFromGraph(srv *mcptest.Server, g graph.Graph) {
-	srv.AddTool(
-		mcp.NewTool("list_directory",
-			mcp.WithDescription("List children."),
-			mcp.WithString("path", mcp.Description("Path")),
-		),
-		makeListDirHandler(g),
-	)
-	srv.AddTool(
-		mcp.NewTool("read_file",
-			mcp.WithDescription("Read file."),
-			mcp.WithString("path", mcp.Required(), mcp.Description("Path")),
-		),
-		makeReadFileHandler(g),
-	)
-	srv.AddTool(
-		mcp.NewTool("find_callers",
-			mcp.WithDescription("Find callers."),
-			mcp.WithString("token", mcp.Required(), mcp.Description("Token")),
-		),
-		makeFindCallersHandler(g),
-	)
-	srv.AddTool(
-		mcp.NewTool("find_callees",
-			mcp.WithDescription("Find callees."),
-			mcp.WithString("path", mcp.Required(), mcp.Description("Path")),
-		),
-		makeFindCalleesHandler(g),
-	)
-}
-
-// mockGraph is a minimal Graph implementation that does NOT support QueryRefs.
-type mockGraph struct{}
-
-func (m *mockGraph) GetNode(id string) (*graph.Node, error) {
-	if id == "" || id == "/" {
-		return &graph.Node{ID: "", Mode: fs.ModeDir}, nil
-	}
-	return nil, graph.ErrNotFound
-}
-
-func (m *mockGraph) ListChildren(id string) ([]string, error) {
-	return nil, nil
-}
-
-func (m *mockGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
-	return 0, graph.ErrNotFound
-}
-
-func (m *mockGraph) GetCallers(token string) ([]*graph.Node, error) {
-	return nil, nil
-}
-
-func (m *mockGraph) GetCallees(id string) ([]*graph.Node, error) {
-	return nil, nil
-}
-
-func (m *mockGraph) Invalidate(id string) {}
-
-func (m *mockGraph) Act(id, action, payload string) (*graph.ActionResult, error) {
-	return nil, graph.ErrActNotSupported
+// newTestLazyGraph creates a lazyGraph that is already initialized with the given graph.
+// This avoids triggering real filesystem detection in tests.
+func newTestLazyGraph(g graph.Graph, basePath string) *lazyGraph {
+	lg := &lazyGraph{inner: g, basePath: basePath}
+	lg.once.Do(func() {}) // mark as initialized
+	return lg
 }

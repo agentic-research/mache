@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,12 +26,12 @@ var serveCmd = &cobra.Command{
 	Use:   "serve [data-source]",
 	Short: "Serve a Mache graph as an MCP server",
 	Long: `Starts an MCP (Model Context Protocol) server that exposes the graph
-as tools. By default starts a Streamable HTTP server on :7532.
+as tools. By default starts a Streamable HTTP server on localhost:7532.
 Use --stdio for subprocess mode (client manages lifecycle).
 
 Examples:
-  mache serve ./data.db                  # HTTP on :7532 (default)
-  mache serve --http :9000 ./data.db     # HTTP on custom port
+  mache serve ./data.db                  # HTTP on localhost:7532 (default)
+  mache serve --http :9000 ./data.db     # HTTP on custom port (all interfaces)
   mache serve --stdio ./data.db          # stdio (subprocess mode)
   claude mcp add --transport http mache http://localhost:7532/mcp`,
 	Args: cobra.MaximumNArgs(1),
@@ -41,63 +42,260 @@ var (
 	serveSchema string
 	serveHTTP   string
 	serveStdio  bool
+	servePath   string
 )
 
 func init() {
 	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Path to topology schema")
-	serveCmd.Flags().StringVar(&serveHTTP, "http", ":7532", "Listen address for Streamable HTTP transport")
+	serveCmd.Flags().StringVar(&serveHTTP, "http", "localhost:7532", "Listen address for Streamable HTTP transport")
 	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Use stdio transport instead of HTTP (for subprocess mode)")
+	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
 	rootCmd.AddCommand(serveCmd)
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	// Create a lazy graph that defers schema detection + graph building
-	// to the first tool call. This lets the MCP server respond to
-	// initialize immediately instead of blocking on auto-detection.
-	lg := &lazyGraph{args: args}
+	registry := newGraphRegistry(servePath, args)
+
+	// Set up session lifecycle hooks for multi-tenant graph routing.
+	// OnAfterInitialize: ask the client for its workspace roots (ListRoots),
+	// then map the session to the appropriate graph.
+	hooks := &server.Hooks{}
+	hooks.AddAfterInitialize(func(ctx context.Context, _ any, _ *mcp.InitializeRequest, _ *mcp.InitializeResult) {
+		session := server.ClientSessionFromContext(ctx)
+		if session == nil {
+			return
+		}
+		rootsSession, ok := session.(server.SessionWithRoots)
+		if !ok {
+			return
+		}
+		result, err := rootsSession.ListRoots(ctx, mcp.ListRootsRequest{})
+		if err != nil {
+			log.Printf("ListRoots for session %s: %v (using default path)", session.SessionID(), err)
+			return
+		}
+		if len(result.Roots) == 0 {
+			return
+		}
+		// Use the first root's URI as the workspace path.
+		rootPath := rootURIToPath(result.Roots[0].URI)
+		if rootPath == "" {
+			return
+		}
+		registry.registerSession(session.SessionID(), rootPath)
+		log.Printf("session %s → %s", session.SessionID(), rootPath)
+	})
+	hooks.AddOnUnregisterSession(func(_ context.Context, session server.ClientSession) {
+		registry.unregisterSession(session.SessionID())
+		log.Printf("session %s unregistered", session.SessionID())
+	})
 
 	// Create MCP server IMMEDIATELY — respond to health checks fast
 	s := server.NewMCPServer("mache", Version,
 		server.WithToolCapabilities(false),
+		server.WithHooks(hooks),
+		server.WithRoots(),
+		server.WithInstructions(`Mache provides structural code intelligence tools. Use mache when you need to:
+- Explore unfamiliar codebases (get_overview, list_directory, read_file)
+- Find where symbols are defined or used (find_definition, find_callers, find_callees)
+- Search for code by pattern (search)
+- Understand code structure and communities (get_communities)
+- Get type information and diagnostics from LSP (get_type_info, get_diagnostics)
+Call get_overview first when exploring a new codebase.`),
 	)
-	registerMCPTools(s, lg)
+	registerMCPTools(s, registry)
+
+	// Resolve source label for sidecar metadata
+	source := registry.resolvedBasePath()
+	if len(args) > 0 {
+		source = args[0]
+	}
 
 	if serveStdio {
+		meta := registerServeSidecar(source, "mcp-stdio", "")
+		defer removeServeSidecar(meta)
 		log.Println("mache MCP server ready on stdio")
 		return server.ServeStdio(s)
 	}
+
+	// MCP spec: servers MUST NOT bind to 0.0.0.0 — loopback only.
+	if err := validateHTTPAddr(serveHTTP); err != nil {
+		return err
+	}
+
+	meta := registerServeSidecar(source, "mcp-http", serveHTTP)
+	defer removeServeSidecar(meta)
 
 	httpServer := server.NewStreamableHTTPServer(s)
 	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
 	return httpServer.Start(serveHTTP)
 }
 
+// registerServeSidecar writes a sidecar metadata file so `mache list` can discover
+// running MCP servers alongside FUSE/NFS mounts.
+func registerServeSidecar(source, typ, addr string) *MountMetadata {
+	mountsDir, err := getAgentMountsDir()
+	if err != nil {
+		log.Printf("Warning: could not register serve instance: %v", err)
+		return nil
+	}
+	// Use a stable name derived from type + addr/pid
+	name := fmt.Sprintf("serve-%d", os.Getpid())
+	mountPoint := filepath.Join(mountsDir, name)
+
+	meta := &MountMetadata{
+		PID:        os.Getpid(),
+		Source:     source,
+		MountPoint: mountPoint,
+		Type:       typ,
+		Addr:       addr,
+		Timestamp:  time.Now(),
+	}
+	if err := saveMountMetadata(mountPoint, meta); err != nil {
+		log.Printf("Warning: could not save serve metadata: %v", err)
+		return nil
+	}
+	return meta
+}
+
+// validateHTTPAddr rejects non-loopback bind addresses per MCP spec:
+// "servers MUST only bind to localhost and MUST NOT bind to 0.0.0.0".
+func validateHTTPAddr(addr string) error {
+	host := addr
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		host = addr[:i]
+	}
+	// Empty host (e.g. ":7532") means all interfaces in Go — reject it.
+	if host == "" || host == "0.0.0.0" || host == "[::]" {
+		return fmt.Errorf("MCP spec prohibits binding to all interfaces (%q); use localhost:%s instead", addr, addr[strings.LastIndex(addr, ":")+1:])
+	}
+	// Allow localhost, 127.x.x.x, ::1
+	if host == "localhost" || host == "127.0.0.1" || host == "[::1]" || strings.HasPrefix(host, "127.") {
+		return nil
+	}
+	return fmt.Errorf("MCP spec requires loopback binding; %q is not localhost — use localhost:<port> instead", addr)
+}
+
+// removeServeSidecar cleans up the sidecar file on shutdown.
+func removeServeSidecar(meta *MountMetadata) {
+	if meta == nil {
+		return
+	}
+	_ = os.Remove(sidecarPath(meta.MountPoint))
+}
+
+// ---------------------------------------------------------------------------
+// graphRegistry: multi-tenant session → graph routing
+// ---------------------------------------------------------------------------
+
+// graphRegistry maps MCP sessions to per-workspace graphs.
+// Each session's workspace root (from ListRoots) gets its own lazily-built
+// graph. Sessions without roots fall back to basePath (--path flag or CWD).
+type graphRegistry struct {
+	basePath string   // --path flag default
+	args     []string // positional args from command line
+	graphs   sync.Map // rootPath -> *lazyGraph
+	sessions sync.Map // sessionID -> rootPath
+}
+
+func newGraphRegistry(basePath string, args []string) *graphRegistry {
+	return &graphRegistry{basePath: basePath, args: args}
+}
+
+// resolvedBasePath returns basePath if set, otherwise ".".
+func (r *graphRegistry) resolvedBasePath() string {
+	if r.basePath != "" {
+		return r.basePath
+	}
+	return "."
+}
+
+func (r *graphRegistry) registerSession(sessionID, rootPath string) {
+	r.sessions.Store(sessionID, rootPath)
+}
+
+func (r *graphRegistry) unregisterSession(sessionID string) {
+	r.sessions.Delete(sessionID)
+}
+
+// getOrCreateGraph returns an existing graph for rootPath or creates a new one.
+func (r *graphRegistry) getOrCreateGraph(rootPath string) *lazyGraph {
+	if v, ok := r.graphs.Load(rootPath); ok {
+		return v.(*lazyGraph)
+	}
+	lg := &lazyGraph{args: r.args, basePath: rootPath}
+	actual, _ := r.graphs.LoadOrStore(rootPath, lg)
+	return actual.(*lazyGraph)
+}
+
+// graphForSession returns the graph for a session, falling back to basePath.
+func (r *graphRegistry) graphForSession(sessionID string) *lazyGraph {
+	if rootPath, ok := r.sessions.Load(sessionID); ok {
+		return r.getOrCreateGraph(rootPath.(string))
+	}
+	return r.getOrCreateGraph(r.resolvedBasePath())
+}
+
+// wrapHandler turns a handler factory (graph → handler) into a session-aware
+// handler that resolves the correct graph per-session at call time.
+func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		session := server.ClientSessionFromContext(ctx)
+		var lg *lazyGraph
+		if session != nil {
+			lg = r.graphForSession(session.SessionID())
+		} else {
+			lg = r.getOrCreateGraph(r.resolvedBasePath())
+		}
+		return handlerFactory(lg)(ctx, req)
+	}
+}
+
+// rootURIToPath converts a file:// URI to a filesystem path.
+func rootURIToPath(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil || u.Scheme != "file" {
+		return ""
+	}
+	return filepath.Clean(u.Path)
+}
+
 // lazyGraph wraps a Graph that is built on first access.
 // This allows the MCP server to start and respond to initialize/tools/list
 // before the potentially slow schema detection + ingestion completes.
 type lazyGraph struct {
-	args    []string
-	once    sync.Once
-	inner   graph.Graph
-	cleanup func()
-	err     error
+	args     []string
+	basePath string // optional; defaults to "." (CWD) when empty
+	once     sync.Once
+	inner    graph.Graph
+	cleanup  func()
+	err      error
+}
+
+// resolvedBasePath returns basePath if set, otherwise ".".
+func (lg *lazyGraph) resolvedBasePath() string {
+	if lg.basePath != "" {
+		return lg.basePath
+	}
+	return "."
 }
 
 func (lg *lazyGraph) init() {
 	lg.once.Do(func() {
 		var dataSource string
 		var schema *api.Topology
+		base := lg.resolvedBasePath()
 
 		if len(lg.args) == 0 {
-			cfg, err := loadProjectConfig(".")
+			cfg, err := loadProjectConfig(base)
 			if err != nil {
 				if !os.IsNotExist(err) {
 					lg.err = err
 					return
 				}
 				log.Printf("No %s found; auto-detecting project languages...", ConfigFileName)
-				dataSource = "."
-				schema, err = inferDirSchema(".")
+				dataSource = base
+				schema, err = inferDirSchema(base)
 				if err != nil {
 					lg.err = fmt.Errorf("auto-detect schema: %w", err)
 					return
@@ -107,12 +305,12 @@ func (lg *lazyGraph) init() {
 					log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
 				}
 				src := cfg.Sources[0]
-				dataSource, err = resolveDataSource(src.Path, ".")
+				dataSource, err = resolveDataSource(src.Path, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve data source: %w", err)
 					return
 				}
-				schema, err = resolveSchema(src.Schema, ".")
+				schema, err = resolveSchema(src.Schema, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve schema: %w", err)
 					return
@@ -126,7 +324,7 @@ func (lg *lazyGraph) init() {
 			dataSource = lg.args[0]
 
 			if serveSchema != "" {
-				resolved, err := resolveSchema(serveSchema, ".")
+				resolved, err := resolveSchema(serveSchema, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve schema: %w", err)
 					return
@@ -351,14 +549,18 @@ type writeBacker interface {
 	ShiftOrigins(filePath string, afterByte uint32, delta int32)
 }
 
-func registerMCPTools(s *server.MCPServer, g graph.Graph) {
+// registerMCPTools registers all tool definitions with session-aware handlers.
+// All tools are registered unconditionally — lazyGraph delegates to the inner
+// graph and returns errors for unsupported operations at call time. This lets
+// different sessions (with different graph backends) coexist on one server.
+func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	s.AddTool(
 		mcp.NewTool("list_directory",
 			mcp.WithDescription("List children of a directory node. Use empty path for root."),
 			mcp.WithString("path", mcp.Description("Directory path (empty for root)")),
 			mcp.WithBoolean("exclude_tests", mcp.Description("Exclude Test* and Benchmark* entries (default false). Recommended for large packages.")),
 		),
-		makeListDirHandler(g),
+		r.wrapHandler(makeListDirHandler),
 	)
 
 	s.AddTool(
@@ -367,7 +569,7 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 			mcp.WithString("path", mcp.Description("Single file node path")),
 			mcp.WithString("paths", mcp.Description("JSON array of file node paths for batch read, e.g. [\"path/a\", \"path/b\"]")),
 		),
-		makeReadFileHandler(g),
+		r.wrapHandler(makeReadFileHandler),
 	)
 
 	s.AddTool(
@@ -375,7 +577,7 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 			mcp.WithDescription("Find all nodes that reference a given symbol or token."),
 			mcp.WithString("token", mcp.Required(), mcp.Description("Symbol or token name")),
 		),
-		makeFindCallersHandler(g),
+		r.wrapHandler(makeFindCallersHandler),
 	)
 
 	s.AddTool(
@@ -383,85 +585,69 @@ func registerMCPTools(s *server.MCPServer, g graph.Graph) {
 			mcp.WithDescription("Find all symbols called by a given construct."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("Construct directory path")),
 		),
-		makeFindCalleesHandler(g),
+		r.wrapHandler(makeFindCalleesHandler),
 	)
 
-	// Only add search if the backend supports QueryRefs
-	if _, ok := g.(refsQuerier); ok {
-		s.AddTool(
-			mcp.NewTool("search",
-				mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard). Optionally filter by construct type or role."),
-				mcp.WithString("pattern", mcp.Required(), mcp.Description("Search pattern, e.g. 'Login%' or '%auth%'")),
-				mcp.WithString("type", mcp.Description("Filter by construct type in path, e.g. 'functions', 'methods', 'types', 'structs'")),
-				mcp.WithString("role", mcp.Description("Filter by role: 'definition' (where symbol is declared), 'reference' (where symbol is used). Default: returns references.")),
-				mcp.WithNumber("limit", mcp.Description("Max results (default 100)")),
-			),
-			makeSearchHandler(g),
-		)
-	}
+	s.AddTool(
+		mcp.NewTool("search",
+			mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard, case-insensitive). Optionally filter by construct type or role."),
+			mcp.WithString("pattern", mcp.Required(), mcp.Description("Search pattern, e.g. 'Login%' or '%auth%'")),
+			mcp.WithString("type", mcp.Description("Filter by construct type in path, e.g. 'functions', 'methods', 'types', 'structs'")),
+			mcp.WithString("role", mcp.Description("Filter by role: 'definition' (where symbol is declared), 'reference' (where symbol is used). Default: returns references.")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 100)")),
+		),
+		r.wrapHandler(makeSearchHandler),
+	)
 
-	// Only add get_communities if the backend exposes its refs map
-	if _, ok := g.(refsMapProvider); ok {
-		s.AddTool(
-			mcp.NewTool("get_communities",
-				mcp.WithDescription("Detect communities of densely co-referencing nodes using Louvain modularity optimization. Returns clusters of nodes that share symbols. Use summary=true for large codebases to get community sizes and top members without full member lists."),
-				mcp.WithNumber("min_size", mcp.Description("Minimum community size (default 2)")),
-				mcp.WithBoolean("summary", mcp.Description("Return summary only (ID, size, top 5 members per community) instead of full member lists. Recommended for large codebases.")),
-			),
-			makeGetCommunitiesHandler(g),
-		)
-	}
+	s.AddTool(
+		mcp.NewTool("get_communities",
+			mcp.WithDescription("Detect communities of densely co-referencing nodes using Louvain modularity optimization. Returns clusters of nodes that share symbols. Use summary=true for large codebases to get community sizes and top members without full member lists."),
+			mcp.WithNumber("min_size", mcp.Description("Minimum community size (default 2)")),
+			mcp.WithBoolean("summary", mcp.Description("Return summary only (ID, size, top 5 members per community) instead of full member lists. Recommended for large codebases.")),
+		),
+		r.wrapHandler(makeGetCommunitiesHandler),
+	)
 
-	// Only add find_definition if the backend exposes its defs map
-	if _, ok := g.(defsMapProvider); ok {
-		s.AddTool(
-			mcp.NewTool("find_definition",
-				mcp.WithDescription("Find where a symbol is defined. Returns the construct directory path(s) where the symbol is declared. Complements find_callers (who uses it) and find_callees (what it calls)."),
-				mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to find definition for (e.g. 'GetCallers' or 'auth.Validate')")),
-			),
-			makeFindDefinitionHandler(g),
-		)
-	}
+	s.AddTool(
+		mcp.NewTool("find_definition",
+			mcp.WithDescription("Find where a symbol is defined. Returns the construct directory path(s) where the symbol is declared. Complements find_callers (who uses it) and find_callees (what it calls)."),
+			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to find definition for (e.g. 'GetCallers' or 'auth.Validate')")),
+		),
+		r.wrapHandler(makeFindDefinitionHandler),
+	)
 
-	// get_type_info: LSP hover data for a symbol (type signatures, docs)
-	if _, ok := g.(refsQuerier); ok {
-		s.AddTool(
-			mcp.NewTool("get_type_info",
-				mcp.WithDescription("Get type signature and documentation for a symbol from LSP hover data. Returns the language server's type information (e.g. function signatures, struct definitions). Requires LSP enrichment via `leyline lsp`."),
-				mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to look up (e.g. 'NewEncoder', 'Model')")),
-			),
-			makeGetTypeInfoHandler(g),
-		)
+	s.AddTool(
+		mcp.NewTool("get_type_info",
+			mcp.WithDescription("Get type signature and documentation for a symbol from LSP hover data. Returns the language server's type information (e.g. function signatures, struct definitions). Requires LSP enrichment via `leyline lsp`."),
+			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to look up (e.g. 'NewEncoder', 'Model')")),
+		),
+		r.wrapHandler(makeGetTypeInfoHandler),
+	)
 
-		s.AddTool(
-			mcp.NewTool("get_diagnostics",
-				mcp.WithDescription("Get LSP diagnostics (errors, warnings) for symbols. Returns diagnostics from the language server. Requires LSP enrichment via `leyline lsp`."),
-				mcp.WithString("symbol", mcp.Description("Symbol name to filter by (optional, returns all if empty)")),
-				mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
-			),
-			makeGetDiagnosticsHandler(g),
-		)
-	}
+	s.AddTool(
+		mcp.NewTool("get_diagnostics",
+			mcp.WithDescription("Get LSP diagnostics (errors, warnings) for symbols. Returns diagnostics from the language server. Requires LSP enrichment via `leyline lsp`."),
+			mcp.WithString("symbol", mcp.Description("Symbol name to filter by (optional, returns all if empty)")),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
+		),
+		r.wrapHandler(makeGetDiagnosticsHandler),
+	)
 
-	// get_overview: aggregate first-contact orientation tool
 	s.AddTool(
 		mcp.NewTool("get_overview",
 			mcp.WithDescription("Get a structural overview of the projected data: top-level directories, node counts, available cross-reference stats. Call this first when exploring an unfamiliar codebase."),
 		),
-		makeGetOverviewHandler(g),
+		r.wrapHandler(makeGetOverviewHandler),
 	)
 
-	// Only add write_file if the backend supports write-back
-	if _, ok := g.(writeBacker); ok {
-		s.AddTool(
-			mcp.NewTool("write_file",
-				mcp.WithDescription("Write new content to a source file node. Uses the splice pipeline: validate (tree-sitter) → format (gofumpt/hclwrite) → atomic splice into source file → update graph. The node must have a source origin (i.e., was ingested from a real file). Returns the result including any validation errors."),
-				mcp.WithString("path", mcp.Required(), mcp.Description("File node path (e.g. 'go/graph/methods/MemoryStore.GetCallees/source')")),
-				mcp.WithString("content", mcp.Required(), mcp.Description("New content to write")),
-			),
-			makeWriteFileHandler(g),
-		)
-	}
+	s.AddTool(
+		mcp.NewTool("write_file",
+			mcp.WithDescription("Write new content to a source file node. Uses the splice pipeline: validate (tree-sitter) → format (gofumpt/hclwrite) → atomic splice into source file → update graph. The node must have a source origin (i.e., was ingested from a real file). Returns the result including any validation errors."),
+			mcp.WithString("path", mcp.Required(), mcp.Description("File node path (e.g. 'go/graph/methods/MemoryStore.GetCallees/source')")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("New content to write")),
+		),
+		r.wrapHandler(makeWriteFileHandler),
+	)
 }
 
 type nodeEntry struct {

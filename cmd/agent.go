@@ -23,11 +23,13 @@ type MountMetadata struct {
 	PID        int       `json:"pid"`
 	Source     string    `json:"source"`
 	MountPoint string    `json:"mount_point"`
+	Type       string    `json:"type,omitempty"`       // "nfs", "fuse", "mcp-http", "mcp-stdio"
 	GitRepo    string    `json:"git_repo,omitempty"`   // org/repo
 	GitBranch  string    `json:"git_branch,omitempty"` // branch name
 	GitRemote  string    `json:"git_remote,omitempty"` // full remote URL
 	Timestamp  time.Time `json:"timestamp"`
 	Writable   bool      `json:"writable"`
+	Addr       string    `json:"addr,omitempty"` // listen address for MCP HTTP servers
 }
 
 // agentPromptTemplate is the instruction file generated for LLM agents.
