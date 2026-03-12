@@ -301,6 +301,19 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 // The _lsp tables are produced by `leyline lsp --merge-db` or standalone projection.
 // node_ids in _lsp use "symbols/{name}" format; we map them to existing construct
 // directories by matching the symbol name to directory names in the nodes table.
+//
+// TODO: Replace this hardcoded materializer with a schema-driven approach.
+// LSP files (hover, diagnostics, refs) should be declarable in the topology
+// schema alongside tree-sitter files, e.g.:
+//
+//	"files": [
+//	  {"name": "source", "content_template": "{{.scope}}"},
+//	  {"name": "hover", "content_source": "lsp_hover"},
+//	  {"name": "diagnostics", "content_source": "lsp_diagnostics"}
+//	]
+//
+// This separates the "rules" (what each construct gets) from the "parsing"
+// (how LSP/tree-sitter data is produced), matching the existing schema pattern.
 func materializeLSP(tx *sql.Tx, now int64) error {
 	// Check if _lsp_hover table exists
 	var hoverCount int
