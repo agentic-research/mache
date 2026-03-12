@@ -157,11 +157,11 @@ task test
 
 Two transport modes:
 
-- **Streamable HTTP** (default, `:7532`) — mache runs as an independent process. Supports stateful sessions and multiple clients. Best for always-on services (e.g. `brew services`, `launchd`).
+- **Streamable HTTP** (default, `localhost:7532`) — mache runs as an independent process. Supports stateful sessions and multiple clients. Best for always-on services (e.g. `brew services`, `launchd`).
 - **stdio** (`--stdio`) — client spawns mache as a subprocess. For direct piping or legacy MCP clients.
 
 ```bash
-# Streamable HTTP on :7532 (default)
+# Streamable HTTP on localhost:7532 (default)
 mache serve -s examples/go-schema.json ./internal/
 
 # HTTP on custom port
@@ -195,7 +195,7 @@ Add to your project's `.mcp.json` (or `~/.claude/settings.json` for global acces
 Start the server, then register it:
 
 ```bash
-mache serve --http :7532 /path/to/data &
+mache serve /path/to/data &
 claude mcp add --transport http mache http://localhost:7532/mcp
 ```
 

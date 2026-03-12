@@ -25,12 +25,12 @@ var serveCmd = &cobra.Command{
 	Use:   "serve [data-source]",
 	Short: "Serve a Mache graph as an MCP server",
 	Long: `Starts an MCP (Model Context Protocol) server that exposes the graph
-as tools. By default starts a Streamable HTTP server on :7532.
+as tools. By default starts a Streamable HTTP server on localhost:7532.
 Use --stdio for subprocess mode (client manages lifecycle).
 
 Examples:
-  mache serve ./data.db                  # HTTP on :7532 (default)
-  mache serve --http :9000 ./data.db     # HTTP on custom port
+  mache serve ./data.db                  # HTTP on localhost:7532 (default)
+  mache serve --http :9000 ./data.db     # HTTP on custom port (all interfaces)
   mache serve --stdio ./data.db          # stdio (subprocess mode)
   claude mcp add --transport http mache http://localhost:7532/mcp`,
 	Args: cobra.MaximumNArgs(1),
@@ -45,7 +45,7 @@ var (
 
 func init() {
 	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Path to topology schema")
-	serveCmd.Flags().StringVar(&serveHTTP, "http", ":7532", "Listen address for Streamable HTTP transport")
+	serveCmd.Flags().StringVar(&serveHTTP, "http", "localhost:7532", "Listen address for Streamable HTTP transport")
 	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Use stdio transport instead of HTTP (for subprocess mode)")
 	rootCmd.AddCommand(serveCmd)
 }
@@ -59,6 +59,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Create MCP server IMMEDIATELY — respond to health checks fast
 	s := server.NewMCPServer("mache", Version,
 		server.WithToolCapabilities(false),
+		server.WithInstructions(`Mache provides structural code intelligence tools. Use mache when you need to:
+- Explore unfamiliar codebases (get_overview, list_directory, read_file)
+- Find where symbols are defined or used (find_definition, find_callers, find_callees)
+- Search for code by pattern (search)
+- Understand code structure and communities (get_communities)
+- Get type information and diagnostics from LSP (get_type_info, get_diagnostics)
+Call get_overview first when exploring a new codebase.`),
 	)
 	registerMCPTools(s, lg)
 
