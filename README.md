@@ -3,17 +3,21 @@
 [![CI](https://github.com/agentic-research/mache/actions/workflows/ci.yml/badge.svg)](https://github.com/agentic-research/mache/actions/workflows/ci.yml)
 [![Integration](https://github.com/agentic-research/mache/actions/workflows/integration.yml/badge.svg)](https://github.com/agentic-research/mache/actions/workflows/integration.yml)
 
-**Structural code intelligence for AI agents.** Mache parses your codebase into a navigable graph — functions, types, cross-references, call chains — and exposes it as an MCP server or a real mounted filesystem. Your agent stops grepping through flat files and starts traversing structure.
+An agent-computer interface for code and structured data.
 
-> *Mache* (/mɑʃe/ *mah-shay*): From the French *mâché* — "crushed and ground," as in *papier-mâché*. Raw data, remolded into shape.
+Agents operate in environments without topology. They see flat files, grep for strings, and rebuild context every turn. Mache gives them the structure that's missing — a graph of functions, types, cross-references, and call chains, exposed over MCP or as a mounted filesystem. Agents navigate structure instead of searching for it. Outputs stay human-discernible; it's just directories and SQL.
+
+> *Mache* (/mɑʃe/ *mah-shay*): from *papier-mâché* — raw material, crushed and remolded into shape.
 
 ![Mache Demo](demo.gif)
 
-## Quick Start
+## Install
 
 ```bash
 brew install agentic-research/tap/mache
 ```
+
+## Use with Claude Code
 
 Add to your project's `.mcp.json`:
 
@@ -28,86 +32,154 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-That's it. Your AI assistant now has 11 structural code intelligence tools. No schema, no config, no mount — mache auto-infers the structure from your codebase.
+That's it. Mache auto-infers the schema from your codebase. No config files, no mount, no daemon.
 
-<details>
-<summary>Build from source</summary>
-
-```bash
-git clone https://github.com/agentic-research/mache.git
-cd mache
-task build            # requires: go-task, Go 1.23+
-task install          # copies to ~/.local/bin
-```
-
-Prerequisites:
-- **macOS:** `brew install go-task` (NFS backend is built-in)
-- **macOS (FUSE backend):** `brew install --cask fuse-t` (only if using `--backend fuse`)
-- **Linux:** `apt-get install libfuse-dev` and [install Task](https://taskfile.dev/installation/)
-</details>
-
-## What You Get
-
-Point mache at a Go project and ask your agent to call `get_overview`:
-
-```
-Source: ./internal/ (Go)
-Nodes: 847 (312 functions, 89 types, 44 methods, ...)
-Languages: go
-
-Top-level structure:
-  functions/    312 nodes
-  types/         89 nodes
-  methods/       44 nodes
-  _project_files/ 23 files (README.md, go.mod, ...)
-
-Key entry points:
-  functions/main, functions/HandleRequest, functions/NewServer
-```
-
-Then `find_callers "HandleRequest"` to see who calls it. `find_callees "HandleRequest"` to see what it calls. `read_file "functions/HandleRequest"` to read the source. `get_type_info` for LSP hover data. `search "%auth%"` to find anything auth-related. All structural — no regex, no grep, no line numbers.
-
-### Available Tools
+Your agent gets 11 tools:
 
 | Tool | What it does |
 |------|-------------|
-| `get_overview` | Architecture snapshot: languages, node counts, entry points |
-| `list_directory` | Browse the graph by path. Supports `exclude_tests` filter |
-| `read_file` | Read source content. Supports batch reads via `paths` array |
+| `get_overview` | Top-level structure, node counts, entry points |
+| `list_directory` | Browse the graph by path |
+| `read_file` | Read source content (supports batch reads) |
 | `find_definition` | Jump to where a symbol is defined |
-| `find_callers` | Who calls this function? (incoming references) |
-| `find_callees` | What does this function call? (outgoing references) |
-| `search` | SQL LIKE pattern matching across symbols. Filter by `role` |
-| `get_communities` | Discover clusters of tightly-coupled code (Louvain modularity) |
-| `get_type_info` | LSP type info and hover data for a symbol |
-| `get_diagnostics` | LSP errors and warnings for a file or symbol |
-| `write_file` | Edit code through the splice pipeline: validate, format, splice, update |
+| `find_callers` | Who calls this? |
+| `find_callees` | What does this call? |
+| `search` | Pattern match across symbols |
+| `get_communities` | Find clusters of tightly-coupled code |
+| `get_type_info` | LSP type info and hover data |
+| `get_diagnostics` | LSP errors and warnings |
+| `write_file` | Edit through the splice pipeline: validate, format, splice |
 
-## How It Works
+## Why this exists
 
-Mache treats source code, JSON, YAML, and filesystems as the same thing: **graphs**. A function has children (parameters, body). A JSON object has children (keys, arrays). A directory has children (files, subdirectories). Same structure, different notation.
+Agents operate without topology. They see flat files, grep for strings, build a mental model, forget it next turn, rebuild it. The structure is *in* the data — functions call other functions, types reference types, configs depend on configs — but nothing exposes it.
 
-Mache bridges them:
-- **Tree-sitter** parses source into AST nodes (8 languages: Go, Python, JS, TS, Rust, SQL, HCL, YAML)
-- **Schema inference** (via Formal Concept Analysis) groups nodes into intuitive containers — `functions/`, `types/`, `classes/`
-- **Cross-reference extraction** builds a call graph from identifiers and imports
-- **SQL projection** maps the graph into a navigable tree (filesystem or MCP)
+Mache does. Point it at data, it figures out the shape. Source code gets parsed by tree-sitter. JSON and YAML get walked. Schema inference (via Formal Concept Analysis) discovers the natural groupings — `functions/`, `types/`, `classes/` — without you writing config. The agent can then explore the topology directly: follow call chains, find definitions, read context, write back.
 
-Three modes of operation:
+The workflow: **point your agent at data → mache discovers the shape → agent explores structure instead of searching for it.**
 
-1. **MCP Server** (`mache serve --stdio .`) — graph queried over JSON-RPC, no mount needed
-2. **Filesystem Mount** (`mache --infer -d ./src /tmp/mount`) — browse code as directories via NFS/FUSE
-3. **Direct SQLite** (`mache --schema schema.json --data results.db /tmp/data`) — zero-copy, instant mount
+This is built for agents first. The design choices — stable node paths across edits, POSIX as the universal interface, identity-preserving write-back — exist because agents need to reference things reliably across turns. The outputs are human-discernible because the representations are filesystems and SQL, but the topology is the point.
+
+## Mount as a filesystem
+
+Mache can also mount your data as a real directory tree. This works with any tool — `cat`, `ls`, `cd`, shell scripts, other agents.
+
+```bash
+# Mount source code (zero-config, writable)
+mache --infer -d ./src --writable /tmp/mache-src
+
+# Mount with agent mode (generates PROMPT.txt for LLMs)
+mache --agent -d ~/my-project
+
+# Mount a SQLite database (zero-copy)
+mache --schema examples/nvd-schema.json --data results.db /tmp/nvd
+```
+
+What the mount looks like:
+
+```
+/tmp/mache-src/
+  functions/
+    HandleRequest/
+      source        # the function body
+      context       # imports, types visible to this scope
+      callers/      # who calls this function
+      callees/      # what this function calls
+    ValidateToken/
+      source
+  types/
+    Config/
+      source        # type Config struct { ... }
+  _project_files/
+    README.md
+    go.mod
+```
+
+Navigate by function name, not file path. `callers/` and `callees/` are virtual directories that appear only when references exist.
+
+### Write-back
+
+With `--writable`, edits to `source` files go through a pipeline before touching your actual source:
+
+1. **Validate** — tree-sitter checks syntax
+2. **Format** — gofumpt (Go), hclwrite (HCL)
+3. **Splice** — atomic byte-range replacement in the source file
+4. **Update** — node content updated in-place, no re-ingest
+
+If the syntax is wrong, the write is saved as a draft. The node path stays stable. Errors show up in `_diagnostics/`. The agent can read what it broke and try again without losing its place.
+
+## MCP server options
+
+```bash
+# stdio — Claude Code spawns mache as a subprocess (recommended)
+mache serve --stdio .
+
+# HTTP — runs independently, multiple clients
+mache serve .
+mache serve --http :9000 -s examples/nvd-schema.json results.db
+```
 
 <details>
-<summary>The graph isomorphism insight</summary>
+<summary>Claude Code setup (detailed)</summary>
 
-Both structured data and filesystems are graphs. Your JSON object has nodes (keys, arrays) and edges (containment). Your filesystem has nodes (files, directories) and edges (parent-child). They're isomorphic.
+**Per-project (stdio)** — `.mcp.json`:
 
-The gap exists because operating systems never formalized this mapping. Mache does:
-- **SQL is the graph operator.** Queries define projections from one topology to another.
-- **Schema defines topology.** It's the formal specification of how source nodes map to filesystem nodes.
-- **The filesystem exposes traversal primitives** (via NFS or FUSE): `cd` traverses an edge, `ls` enumerates children, `cat` reads node data.
+```json
+{
+  "mcpServers": {
+    "mache": {
+      "command": "mache",
+      "args": ["serve", "--stdio", "."]
+    }
+  }
+}
+```
+
+**Global** — `~/.claude/settings.json` with same format.
+
+**HTTP (always-on)**:
+
+```bash
+mache serve /path/to/data &
+claude mcp add --transport http mache http://localhost:7532/mcp
+```
+</details>
+
+<details>
+<summary>Claude Desktop setup</summary>
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "mache": {
+      "command": "/path/to/mache",
+      "args": ["serve", "--stdio", "/path/to/code"]
+    }
+  }
+}
+```
+</details>
+
+## How it works
+
+- **Tree-sitter** parses source into AST nodes (Go, Python, JS, TS, Rust, SQL, HCL, YAML)
+- **Schema inference** (Formal Concept Analysis) groups nodes into containers — `functions/`, `types/`, `classes/`
+- **Cross-reference extraction** builds a call graph from identifiers and imports
+- **SQL projection** maps the graph into a navigable tree
+
+Three backends: MCP server (JSON-RPC), NFS mount (macOS default), FUSE mount (Linux default).
+
+<details>
+<summary>The graph isomorphism argument</summary>
+
+Both structured data and filesystems are graphs. Your JSON object has nodes and edges (containment). Your filesystem has nodes and edges (parent-child). They're isomorphic.
+
+Operating systems never formalized this mapping. Mache does:
+- SQL is the graph operator — queries define projections from one topology to another
+- Schema defines topology — the formal specification of how source nodes map to filesystem nodes
+- The filesystem exposes traversal primitives: `cd` traverses an edge, `ls` enumerates children, `cat` reads node data
 
 ```mermaid
 graph TD
@@ -148,185 +220,51 @@ graph TD
 
 ```
 
-See [Architecture](docs/ARCHITECTURE.md) for the full deep dive.
+See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 </details>
 
-## MCP Server Configuration
+## What's stable, what's not
 
-`mache serve` supports two transport modes:
-
-- **stdio** (`--stdio`) — client spawns mache as a subprocess. Simplest setup.
-- **Streamable HTTP** (default, `localhost:7532`) — mache runs independently. Supports multiple clients.
-
-```bash
-# stdio (recommended for Claude Code / Cursor)
-mache serve --stdio .
-
-# HTTP on default port
-mache serve .
-
-# HTTP on custom port
-mache serve --http :9000 -s examples/nvd-schema.json results.db
-```
-
-<details>
-<summary>Claude Code setup options</summary>
-
-**Per-project (stdio)** — add to `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "mache": {
-      "command": "mache",
-      "args": ["serve", "--stdio", "."]
-    }
-  }
-}
-```
-
-**Global (stdio)** — add to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "mache": {
-      "command": "/path/to/mache",
-      "args": ["serve", "-s", "/path/to/schema.json", "/path/to/data"]
-    }
-  }
-}
-```
-
-**Always-on (HTTP)**:
-
-```bash
-mache serve /path/to/data &
-claude mcp add --transport http mache http://localhost:7532/mcp
-```
-</details>
-
-<details>
-<summary>Claude Desktop setup</summary>
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "mache": {
-      "command": "/path/to/mache",
-      "args": ["serve", "-s", "/path/to/schema.json", "/path/to/data"]
-    }
-  }
-}
-```
-</details>
-
-## Filesystem Mount
-
-Mache can also mount your data as a real POSIX filesystem. This is useful for agents that work best with standard file tools, or for interactive exploration.
-
-```bash
-# Mount source code (zero-config, writable)
-mache --infer -d ./src --writable /tmp/mache-src
-
-# Mount with agent mode (auto-generates PROMPT.txt for LLMs)
-mache --agent -d ~/my-project
-
-# Mount a SQLite database (instant, zero-copy)
-mache --schema examples/nvd-schema.json --data results.db /tmp/nvd
-
-# Mount a JSON file
-mache --schema schema.json --data data.json /tmp/mount
-```
-
-When mounted, your codebase becomes a directory tree organized by structure:
-
-```
-/tmp/mache-src/
-  functions/
-    HandleRequest/
-      source        # func HandleRequest(w http.ResponseWriter, r *http.Request) { ... }
-      context       # imports, types visible to this scope
-      callers/      # who calls this function
-      callees/      # what this function calls
-    ValidateToken/
-      source
-  types/
-    Config/
-      source        # type Config struct { ... }
-  _project_files/
-    README.md       # non-AST files preserved here
-    go.mod
-```
-
-### Write-Back
-
-With `--writable`, edits to `source` files splice back into your original source:
-
-1. **Validate** — tree-sitter checks syntax
-2. **Format** — gofumpt (Go), hclwrite (HCL) applied in-memory
-3. **Splice** — atomic byte-range replacement in the source file
-4. **Update** — node content updated in-place, no re-ingest
-5. **Shift** — sibling node offsets adjusted automatically
-
-Invalid writes are saved as **drafts** — the node path stays stable and errors appear in `_diagnostics/`. The agent can read its broken code and retry without losing the file path.
-
-### Cross-Reference Navigation
-
-Every function gets virtual `callers/` and `callees/` directories:
-
-```bash
-ls functions/HandleRequest/callers/
-# → functions_Main_source  functions_Router_source
-
-cat functions/HandleRequest/callees/functions_ValidateToken_source
-# → func ValidateToken(tok string) error { ... }
-```
-
-Full bidirectional call-chain tracing through filesystem paths — no grep, no LSP, no IDE.
-
-## Feature Status
-
-| Capability | Status | Notes |
-| --- | --- | --- |
-| Tree-sitter Parsing | Stable | Go, Python, JS, TS, SQL, Rust, HCL/Terraform, YAML |
-| Graph Filesystem | Stable | NFS (macOS) and FUSE (Linux) backends |
-| Write-Back | Stable | Validate, format, splice. Go and HCL formatters |
-| Cross-References | Stable | `callers/` and `callees/` virtual directories |
-| Context Awareness | Stable | Virtual `context` files (imports, types, globals) |
-| MCP Server | Stable | 11 tools over stdio or streamable HTTP |
-| Schema Inference | Beta | Auto-infer via Formal Concept Analysis |
-| Community Detection | Beta | Louvain modularity for discovering code clusters |
-| LSP Enrichment | Beta | Type info and diagnostics via language servers |
+| Capability | Status |
+| --- | --- |
+| Tree-sitter parsing (8 langs) | Stable |
+| NFS/FUSE mount | Stable |
+| Write-back (validate, format, splice) | Stable |
+| Cross-references (callers/callees) | Stable |
+| Context files (imports, types, globals) | Stable |
+| MCP server (11 tools, stdio + HTTP) | Stable |
+| Schema inference (FCA) | Beta |
+| Community detection (Louvain) | Beta |
+| LSP enrichment (type info, diagnostics) | Beta |
 
 ## Landscape
 
-| Tool | AST-Aware | Write-Back | Real FS Mount | MCP Server | Schema-Driven |
-|------|:---:|:---:|:---:|:---:|:---:|
-| **Mache** | 8 langs | Yes | NFS/FUSE | 11 tools | Yes |
-| codebase-memory-mcp | 64 langs | No | No | 12 tools | No |
-| AgentFS (Turso) | No | Yes | No | No | No |
-| FUSE-DB tools | No | Some | Yes | No | No |
-| Plan 9 / 9P | No | Yes | Yes | No | Yes |
+See [Prior Art](docs/PRIOR_ART.md) for detailed comparisons with related tools.
 
-Mache's differentiator: it's the only tool that combines AST decomposition, write-back, and a real mountable filesystem with an MCP interface. Where codebase-memory-mcp builds a persistent knowledge graph for token-efficient exploration, mache builds a live projection that you can write through.
+<details>
+<summary>Build from source</summary>
 
-See [Prior Art](docs/PRIOR_ART.md) for detailed comparisons.
+```bash
+git clone https://github.com/agentic-research/mache.git
+cd mache
+task build            # requires: go-task, Go 1.23+
+task install          # copies to ~/.local/bin
+```
 
-## Documentation
+- **macOS:** `brew install go-task`
+- **macOS (FUSE):** `brew install --cask fuse-t` (only if using `--backend fuse`)
+- **Linux:** `apt-get install libfuse-dev` and [install Task](https://taskfile.dev/installation/)
+</details>
 
-- [Architecture & Design](docs/ARCHITECTURE.md)
-- [Prior Art & Landscape](docs/PRIOR_ART.md)
+## Docs
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Prior Art](docs/PRIOR_ART.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Example Schemas](examples/README.md)
 - [ADRs](docs/adr/)
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+- [Contributing](CONTRIBUTING.md)
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache 2.0
