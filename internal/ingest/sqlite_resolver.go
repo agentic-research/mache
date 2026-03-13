@@ -41,7 +41,10 @@ func (r *SQLiteResolver) Resolve(ref *graph.ContentRef) ([]byte, error) {
 		return nil, fmt.Errorf("parse record %s: %w", ref.RecordID, err)
 	}
 
-	values, _ := parsed.(map[string]any)
+	values, ok := parsed.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("record %s is not a JSON object (got %T)", ref.RecordID, parsed)
+	}
 	content, err := RenderTemplate(ref.Template, values)
 	if err != nil {
 		return nil, fmt.Errorf("render template for %s: %w", ref.RecordID, err)
