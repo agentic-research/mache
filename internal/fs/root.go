@@ -116,12 +116,13 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 	diagH := &vfs.DiagnosticsHandler{DiagStatus: &sync.Map{}}
 	schemaH := &vfs.SchemaHandler{Content: sj}
 	contextH := &vfs.ContextHandler{Graph: g}
+	locationH := &vfs.LocationHandler{Graph: g}
 	callersH := &vfs.CallersHandler{Graph: g}
 	calleesH := &vfs.CalleesHandler{Graph: g}
 
 	// Order matters: query before callers/callees (both can have "/" paths).
 	resolver := vfs.NewResolver(
-		schemaH, promptH, queryH, diagH, contextH, callersH, calleesH,
+		schemaH, promptH, queryH, diagH, contextH, locationH, callersH, calleesH,
 	)
 
 	return &MacheFS{

@@ -14,6 +14,7 @@ const (
 	SchemaDotJSON  = "_schema.json"
 	DiagnosticsDir = "_diagnostics"
 	ContextFile    = "context"
+	LocationFile   = "location"
 	PromptFile     = "PROMPT.txt"
 	CallersDir     = "callers"
 	CalleesDir     = "callees"
