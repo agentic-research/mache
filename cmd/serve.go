@@ -16,6 +16,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/writeback"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -85,6 +86,9 @@ Call get_overview first when exploring a new codebase.`),
 	if len(args) > 0 {
 		source = args[0]
 	}
+
+	// Clean up any auto-spawned leyline daemon on exit
+	defer leyline.StopManaged()
 
 	if serveStdio {
 		meta := registerServeSidecar(source, "mcp-stdio", "")
@@ -632,17 +636,19 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 
 	s.AddTool(
 		mcp.NewTool("get_type_info",
-			mcp.WithDescription("Get type signature and documentation for a symbol from LSP hover data. Returns the language server's type information (e.g. function signatures, struct definitions). Requires LSP enrichment via `leyline lsp`."),
+			mcp.WithDescription("Get type signature and documentation for a symbol from LSP hover data. Returns the language server's type information (e.g. function signatures, struct definitions). If LSP data is missing and 'file' is provided, auto-enriches via ley-line daemon."),
 			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to look up (e.g. 'NewEncoder', 'Model')")),
+			mcp.WithString("file", mcp.Description("Source file path — triggers automatic LSP enrichment if _lsp_hover table is missing")),
 		),
 		r.wrapHandler(makeGetTypeInfoHandler),
 	)
 
 	s.AddTool(
 		mcp.NewTool("get_diagnostics",
-			mcp.WithDescription("Get LSP diagnostics (errors, warnings) for symbols. Returns diagnostics from the language server. Requires LSP enrichment via `leyline lsp`."),
+			mcp.WithDescription("Get LSP diagnostics (errors, warnings) for symbols. Returns diagnostics from the language server. If LSP data is missing and 'file' is provided, auto-enriches via ley-line daemon."),
 			mcp.WithString("symbol", mcp.Description("Symbol name to filter by (optional, returns all if empty)")),
 			mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
+			mcp.WithString("file", mcp.Description("Source file path — triggers automatic LSP enrichment if _lsp table is missing")),
 		),
 		r.wrapHandler(makeGetDiagnosticsHandler),
 	)
@@ -1241,7 +1247,28 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		_ = rows.Close()
 		if tableExists == 0 {
-			return mcp.NewToolResultError("no _lsp_hover table — run `leyline lsp` to enrich the database"), nil
+			// Auto-enrichment: if file param is provided, trigger LSP via ley-line daemon
+			filePath := request.GetString("file", "")
+			if filePath != "" {
+				if enrichErr := triggerLSPEnrichment(filePath); enrichErr != nil {
+					log.Printf("LSP auto-enrichment failed: %v", enrichErr)
+					return mcp.NewToolResultError(fmt.Sprintf("no _lsp_hover table — auto-enrichment failed: %v", enrichErr)), nil
+				}
+				// Re-check after enrichment — the daemon reloads the arena
+				rows, err = qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_hover'`)
+				if err == nil {
+					tableExists = 0
+					if rows.Next() {
+						_ = rows.Scan(&tableExists)
+					}
+					_ = rows.Close()
+				}
+				if tableExists == 0 {
+					return mcp.NewToolResultError("LSP enrichment completed but _lsp_hover table still missing — the daemon may need to reload"), nil
+				}
+			} else {
+				return mcp.NewToolResultError("no _lsp_hover table — pass 'file' param to auto-enrich or run `leyline lsp`"), nil
+			}
 		}
 
 		// Search for matching hovers — try exact suffix match then LIKE
@@ -1313,7 +1340,28 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		_ = rows.Close()
 		if tableExists == 0 {
-			return mcp.NewToolResultError("no _lsp table — run `leyline lsp` to enrich the database"), nil
+			// Auto-enrichment: if file param is provided, trigger LSP via ley-line daemon
+			filePath := request.GetString("file", "")
+			if filePath != "" {
+				if enrichErr := triggerLSPEnrichment(filePath); enrichErr != nil {
+					log.Printf("LSP auto-enrichment failed: %v", enrichErr)
+					return mcp.NewToolResultError(fmt.Sprintf("no _lsp table — auto-enrichment failed: %v", enrichErr)), nil
+				}
+				// Re-check after enrichment
+				rows, err = qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`)
+				if err == nil {
+					tableExists = 0
+					if rows.Next() {
+						_ = rows.Scan(&tableExists)
+					}
+					_ = rows.Close()
+				}
+				if tableExists == 0 {
+					return mcp.NewToolResultError("LSP enrichment completed but _lsp table still missing — the daemon may need to reload"), nil
+				}
+			} else {
+				return mcp.NewToolResultError("no _lsp table — pass 'file' param to auto-enrich or run `leyline lsp`"), nil
+			}
 		}
 
 		type diagResult struct {
@@ -1357,6 +1405,36 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		data, _ := json.MarshalIndent(results, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
+}
+
+// triggerLSPEnrichment connects to the ley-line daemon and invokes the
+// "lsp" tool op for the given file. The daemon runs the language server,
+// enriches the arena with _lsp* tables, and bumps the generation.
+// Blocks until the tool op completes (up to 30s timeout).
+func triggerLSPEnrichment(filePath string) error {
+	sockPath, err := leyline.DiscoverOrStart()
+	if err != nil {
+		return fmt.Errorf("discover/start leyline: %w", err)
+	}
+
+	client, err := leyline.DialSocket(sockPath)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// LSP enrichment takes 2-15s typically; 30s timeout for safety
+	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return fmt.Errorf("set deadline: %w", err)
+	}
+
+	resp, err := client.Tool("lsp", map[string]any{"file": filePath})
+	if err != nil {
+		return err
+	}
+
+	log.Printf("LSP enrichment via ley-line daemon: %v", resp)
+	return nil
 }
 
 func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
