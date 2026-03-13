@@ -205,25 +205,6 @@ func buildProjection(refs map[string][]string) ([]map[int]float64, map[string]in
 	return adj, nodeIndex, indexToNode
 }
 
-// nodeDegree returns the weighted degree of a node.
-func nodeDegree(adj []map[int]float64, node int) float64 {
-	sum := 0.0
-	for _, w := range adj[node] {
-		sum += w
-	}
-	return sum
-}
-
-// communityDegree returns the sum of weighted degrees of all nodes in a community.
-func communityDegree(adj []map[int]float64, community []int, comm, n int) float64 {
-	sum := 0.0
-	for i := 0; i < n; i++ {
-		if community[i] == comm {
-			sum += nodeDegree(adj, i)
-		}
-	}
-	return sum
-}
 
 // deltaModularity computes the change in modularity from moving a node into a community.
 // kiIn: sum of weights from node to nodes in target community
