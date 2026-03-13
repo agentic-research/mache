@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -105,12 +106,13 @@ func (c *CompositeGraph) ListChildren(id string) ([]string, error) {
 
 	id = strings.TrimPrefix(id, "/")
 
-	// Root: return mount point names
+	// Root: return mount point names (sorted for deterministic readdir)
 	if id == "" {
 		names := make([]string, 0, len(c.mounts))
 		for prefix := range c.mounts {
 			names = append(names, prefix)
 		}
+		sort.Strings(names)
 		return names, nil
 	}
 

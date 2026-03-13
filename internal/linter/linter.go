@@ -52,6 +52,7 @@ func Lint(content []byte, lang string) ([]Diagnostic, error) {
 	`
 	q, _ := sitter.NewQuery([]byte(query), golang.GetLanguage())
 	qc := sitter.NewQueryCursor()
+	defer qc.Close()
 	qc.Exec(q, tree.RootNode())
 
 	for {
