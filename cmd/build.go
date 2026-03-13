@@ -26,14 +26,16 @@ var buildCmd = &cobra.Command{
 		// Load or infer schema. Falls back to FCA inference when no schema file is provided.
 		var schema *api.Topology
 		if schemaPath != "" {
-			var err error
-			if _, err = os.Stat(schemaPath); err != nil {
-				return fmt.Errorf("stat schema: %w", err)
+			// Explicit schema file — load it
+			loaded, err := resolveSchema(schemaPath, filepath.Dir(schemaPath))
+			if err != nil {
+				return fmt.Errorf("load schema: %w", err)
 			}
-
+			schema = loaded
+		} else {
+			// No schema — infer via FCA from source tree
 			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
 			fmt.Println("Inferring schema...")
-			schema, _ = inf.InferFromRecords(nil)
 
 			// Walk source to find the first .go file for bootstrap inference
 			if walkErr := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
@@ -41,7 +43,6 @@ var buildCmd = &cobra.Command{
 					return err
 				}
 				if filepath.Ext(path) == ".go" {
-					// Inlined inference
 					content, _ := os.ReadFile(path)
 					parser := sitter.NewParser()
 					parser.SetLanguage(golang.GetLanguage())
@@ -57,12 +58,8 @@ var buildCmd = &cobra.Command{
 			}
 
 			if schema == nil {
-				// Fallback generic
 				schema = &api.Topology{Version: "v1alpha1"}
 			}
-		} else {
-			// Basic schema if none provided
-			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
 		// 2. Setup Writer

@@ -1249,76 +1249,20 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		if tableExists == 0 {
 			// Auto-enrichment: if file param is provided, trigger LSP via ley-line daemon
 			filePath := request.GetString("file", "")
-			if filePath != "" {
-				if enrichErr := triggerLSPEnrichment(filePath); enrichErr != nil {
-					log.Printf("LSP auto-enrichment failed: %v", enrichErr)
-					return mcp.NewToolResultError(fmt.Sprintf("no _lsp_hover table — auto-enrichment failed: %v", enrichErr)), nil
-				}
-				// Re-check after enrichment — the daemon reloads the arena
-				rows, err = qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_hover'`)
-				if err == nil {
-					tableExists = 0
-					if rows.Next() {
-						_ = rows.Scan(&tableExists)
-					}
-					_ = rows.Close()
-				}
-				if tableExists == 0 {
-					return mcp.NewToolResultError("LSP enrichment completed but _lsp_hover table still missing — the daemon may need to reload"), nil
-				}
-			} else {
+			if filePath == "" {
 				return mcp.NewToolResultError("no _lsp_hover table — pass 'file' param to auto-enrich or run `leyline lsp`"), nil
 			}
-		}
 
-		// Search for matching hovers — try exact suffix match then LIKE
-		type hoverResult struct {
-			NodeID    string `json:"node_id"`
-			HoverText string `json:"hover_text"`
-		}
-
-		rows, err = qg.QueryRefs(
-			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ?`,
-			"%/"+symbol,
-		)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("query _lsp_hover: %v", err)), nil
-		}
-
-		var results []hoverResult
-		for rows.Next() {
-			var r hoverResult
-			if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
-				continue
+			result, err := enrichAndQueryTypeInfo(filePath, symbol)
+			if err != nil {
+				log.Printf("LSP auto-enrichment failed: %v", err)
+				return mcp.NewToolResultError(fmt.Sprintf("no _lsp_hover table — auto-enrichment failed: %v", err)), nil
 			}
-			results = append(results, r)
-		}
-		_ = rows.Close()
-
-		// Fallback: broader LIKE search
-		if len(results) == 0 {
-			rows, err = qg.QueryRefs(
-				`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ?`,
-				"%"+symbol+"%",
-			)
-			if err == nil {
-				for rows.Next() {
-					var r hoverResult
-					if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
-						continue
-					}
-					results = append(results, r)
-				}
-				_ = rows.Close()
-			}
+			return result, nil
 		}
 
-		if len(results) == 0 {
-			return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q", symbol)), nil
-		}
-
-		data, _ := json.MarshalIndent(results, "", "  ")
-		return mcp.NewToolResultText(string(data)), nil
+		// LSP tables exist in mache's graph — query directly
+		return queryTypeInfoFromGraph(qg, symbol)
 	}
 }
 
@@ -1340,101 +1284,263 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		_ = rows.Close()
 		if tableExists == 0 {
-			// Auto-enrichment: if file param is provided, trigger LSP via ley-line daemon
 			filePath := request.GetString("file", "")
-			if filePath != "" {
-				if enrichErr := triggerLSPEnrichment(filePath); enrichErr != nil {
-					log.Printf("LSP auto-enrichment failed: %v", enrichErr)
-					return mcp.NewToolResultError(fmt.Sprintf("no _lsp table — auto-enrichment failed: %v", enrichErr)), nil
-				}
-				// Re-check after enrichment
-				rows, err = qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`)
-				if err == nil {
-					tableExists = 0
-					if rows.Next() {
-						_ = rows.Scan(&tableExists)
-					}
-					_ = rows.Close()
-				}
-				if tableExists == 0 {
-					return mcp.NewToolResultError("LSP enrichment completed but _lsp table still missing — the daemon may need to reload"), nil
-				}
-			} else {
+			if filePath == "" {
 				return mcp.NewToolResultError("no _lsp table — pass 'file' param to auto-enrich or run `leyline lsp`"), nil
 			}
-		}
 
-		type diagResult struct {
-			NodeID      string `json:"node_id"`
-			SymbolKind  string `json:"symbol_kind"`
-			Diagnostics string `json:"diagnostics"`
-		}
-
-		var query string
-		var args []any
-		if symbol != "" {
-			query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE ? LIMIT ?`
-			args = []any{"%" + symbol + "%", limit}
-		} else {
-			query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT ?`
-			args = []any{limit}
-		}
-
-		rows, err = qg.QueryRefs(query, args...)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("query _lsp: %v", err)), nil
-		}
-
-		var results []diagResult
-		for rows.Next() {
-			var r diagResult
-			if err := rows.Scan(&r.NodeID, &r.SymbolKind, &r.Diagnostics); err != nil {
-				continue
+			result, err := enrichAndQueryDiagnostics(filePath, symbol, limit)
+			if err != nil {
+				log.Printf("LSP auto-enrichment failed: %v", err)
+				return mcp.NewToolResultError(fmt.Sprintf("no _lsp table — auto-enrichment failed: %v", err)), nil
 			}
-			results = append(results, r)
-		}
-		_ = rows.Close()
-
-		if len(results) == 0 {
-			if symbol != "" {
-				return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
-			}
-			return mcp.NewToolResultText("no diagnostics found"), nil
+			return result, nil
 		}
 
-		data, _ := json.MarshalIndent(results, "", "  ")
-		return mcp.NewToolResultText(string(data)), nil
+		return queryDiagnosticsFromGraph(qg, symbol, limit)
 	}
 }
 
-// triggerLSPEnrichment connects to the ley-line daemon and invokes the
-// "lsp" tool op for the given file. The daemon runs the language server,
-// enriches the arena with _lsp* tables, and bumps the generation.
-// Blocks until the tool op completes (up to 30s timeout).
-func triggerLSPEnrichment(filePath string) error {
+
+// enrichAndQueryTypeInfo triggers LSP enrichment and queries hover data
+// directly from the ley-line daemon's arena via UDS, bypassing mache's
+// in-memory graph (which doesn't have _lsp* tables).
+// Uses a single connection for both enrichment and query.
+func enrichAndQueryTypeInfo(filePath, symbol string) (*mcp.CallToolResult, error) {
 	sockPath, err := leyline.DiscoverOrStart()
 	if err != nil {
-		return fmt.Errorf("discover/start leyline: %w", err)
+		return nil, fmt.Errorf("discover/start leyline: %w", err)
 	}
-
 	client, err := leyline.DialSocket(sockPath)
 	if err != nil {
-		return fmt.Errorf("dial: %w", err)
+		return nil, fmt.Errorf("dial: %w", err)
 	}
 	defer func() { _ = client.Close() }()
 
-	// LSP enrichment takes 2-15s typically; 30s timeout for safety
+	// Enrichment phase — 30s timeout for LSP
 	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return fmt.Errorf("set deadline: %w", err)
+		return nil, fmt.Errorf("set deadline: %w", err)
 	}
-
 	resp, err := client.Tool("lsp", map[string]any{"file": filePath})
 	if err != nil {
-		return err
+		return nil, err
+	}
+	log.Printf("LSP enrichment via ley-line daemon: %v", resp)
+
+	// Query phase — reuse same connection, reset deadline
+	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return nil, fmt.Errorf("set query deadline: %w", err)
 	}
 
+	rows, err := client.Query(fmt.Sprintf(
+		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s'`, symbol))
+	if err != nil {
+		return nil, fmt.Errorf("query _lsp_hover via daemon: %w", err)
+	}
+
+	type hoverResult struct {
+		NodeID    string `json:"node_id"`
+		HoverText string `json:"hover_text"`
+	}
+
+	var results []hoverResult
+	for _, row := range rows {
+		if len(row) >= 2 {
+			results = append(results, hoverResult{
+				NodeID:    fmt.Sprint(row[0]),
+				HoverText: fmt.Sprint(row[1]),
+			})
+		}
+	}
+
+	// Fallback: broader match
+	if len(results) == 0 {
+		rows, err = client.Query(fmt.Sprintf(
+			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s%%'`, symbol))
+		if err == nil {
+			for _, row := range rows {
+				if len(row) >= 2 {
+					results = append(results, hoverResult{
+						NodeID:    fmt.Sprint(row[0]),
+						HoverText: fmt.Sprint(row[1]),
+					})
+				}
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q", symbol)), nil
+	}
+
+	data, _ := json.MarshalIndent(results, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// queryTypeInfoFromGraph queries _lsp_hover from mache's in-memory graph
+// (used when LSP tables already exist in the graph, e.g. from leyline lsp CLI).
+func queryTypeInfoFromGraph(qg refsQuerier, symbol string) (*mcp.CallToolResult, error) {
+	type hoverResult struct {
+		NodeID    string `json:"node_id"`
+		HoverText string `json:"hover_text"`
+	}
+
+	rows, err := qg.QueryRefs(
+		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ?`,
+		"%/"+symbol,
+	)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("query _lsp_hover: %v", err)), nil
+	}
+
+	var results []hoverResult
+	for rows.Next() {
+		var r hoverResult
+		if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	_ = rows.Close()
+
+	if len(results) == 0 {
+		rows, err = qg.QueryRefs(
+			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ?`,
+			"%"+symbol+"%",
+		)
+		if err == nil {
+			for rows.Next() {
+				var r hoverResult
+				if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
+					continue
+				}
+				results = append(results, r)
+			}
+			_ = rows.Close()
+		}
+	}
+
+	if len(results) == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q", symbol)), nil
+	}
+
+	data, _ := json.MarshalIndent(results, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// enrichAndQueryDiagnostics triggers LSP enrichment and queries diagnostics
+// directly from the ley-line daemon's arena via UDS.
+// Uses a single connection for both enrichment and query.
+func enrichAndQueryDiagnostics(filePath, symbol string, limit int) (*mcp.CallToolResult, error) {
+	sockPath, err := leyline.DiscoverOrStart()
+	if err != nil {
+		return nil, fmt.Errorf("discover/start leyline: %w", err)
+	}
+	client, err := leyline.DialSocket(sockPath)
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+	resp, err := client.Tool("lsp", map[string]any{"file": filePath})
+	if err != nil {
+		return nil, err
+	}
 	log.Printf("LSP enrichment via ley-line daemon: %v", resp)
-	return nil
+
+	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return nil, fmt.Errorf("set query deadline: %w", err)
+	}
+
+	var query string
+	if symbol != "" {
+		query = fmt.Sprintf(
+			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE '%%%s%%' LIMIT %d`,
+			symbol, limit)
+	} else {
+		query = fmt.Sprintf(
+			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT %d`,
+			limit)
+	}
+
+	rows, err := client.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("query _lsp via daemon: %w", err)
+	}
+
+	type diagResult struct {
+		NodeID      string `json:"node_id"`
+		SymbolKind  string `json:"symbol_kind"`
+		Diagnostics string `json:"diagnostics"`
+	}
+
+	var results []diagResult
+	for _, row := range rows {
+		if len(row) >= 3 {
+			results = append(results, diagResult{
+				NodeID:      fmt.Sprint(row[0]),
+				SymbolKind:  fmt.Sprint(row[1]),
+				Diagnostics: fmt.Sprint(row[2]),
+			})
+		}
+	}
+
+	if len(results) == 0 {
+		if symbol != "" {
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
+		}
+		return mcp.NewToolResultText("no diagnostics found"), nil
+	}
+
+	data, _ := json.MarshalIndent(results, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph.
+func queryDiagnosticsFromGraph(qg refsQuerier, symbol string, limit int) (*mcp.CallToolResult, error) {
+	type diagResult struct {
+		NodeID      string `json:"node_id"`
+		SymbolKind  string `json:"symbol_kind"`
+		Diagnostics string `json:"diagnostics"`
+	}
+
+	var query string
+	var args []any
+	if symbol != "" {
+		query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE ? LIMIT ?`
+		args = []any{"%" + symbol + "%", limit}
+	} else {
+		query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT ?`
+		args = []any{limit}
+	}
+
+	rows, err := qg.QueryRefs(query, args...)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("query _lsp: %v", err)), nil
+	}
+
+	var results []diagResult
+	for rows.Next() {
+		var r diagResult
+		if err := rows.Scan(&r.NodeID, &r.SymbolKind, &r.Diagnostics); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	_ = rows.Close()
+
+	if len(results) == 0 {
+		if symbol != "" {
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
+		}
+		return mcp.NewToolResultText("no diagnostics found"), nil
+	}
+
+	data, _ := json.MarshalIndent(results, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
 }
 
 func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
