@@ -2,6 +2,10 @@
 //
 // socket.go implements a pure-Go UDS socket client for the ley-line
 // control socket (line-delimited JSON). No CGo or build tags required.
+//
+// Auto-spawn: when no running daemon is found but the leyline binary is
+// on PATH, DiscoverOrStart transparently launches a daemon subprocess.
+// The subprocess is cleaned up when the mache process exits.
 
 package leyline
 
@@ -9,10 +13,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +28,14 @@ import (
 type SocketClient struct {
 	conn net.Conn
 	rd   *bufio.Reader
+}
+
+// managed holds state for a leyline daemon subprocess auto-spawned by mache.
+// At most one managed daemon per process. Cleaned up on process exit.
+var managed struct {
+	mu   sync.Mutex
+	proc *os.Process
+	sock string
 }
 
 // DialSocket connects to the ley-line control socket at sockPath.
@@ -42,8 +57,124 @@ func DialSocket(sockPath string) (*SocketClient, error) {
 //  2. ~/.mache/default.sock (well-known kiln deployment path)
 //
 // Returns the path and nil error if a socket file exists, or an error if
-// no socket can be found.
+// no socket can be found. Does NOT auto-start a daemon.
 func DiscoverSocket() (string, error) {
+	if sock, err := findExistingSocket(); err == nil {
+		return sock, nil
+	}
+	return "", fmt.Errorf("no ley-line socket found (set LEYLINE_SOCKET or start leyline daemon)")
+}
+
+// DiscoverOrStart finds a running ley-line daemon socket, or auto-starts
+// a managed daemon subprocess if the leyline binary is on PATH.
+//
+// The managed daemon uses ~/.mache/ as its data directory:
+//
+//	~/.mache/default.arena  — arena file
+//	~/.mache/default.ctrl   — control block
+//	~/.mache/default.sock   — UDS socket (what we connect to)
+//	~/.mache/mount/         — FUSE/NFS mount point
+//
+// The subprocess is killed when the mache process exits (via atexit cleanup
+// registered on first spawn). Only one managed daemon per process.
+func DiscoverOrStart() (string, error) {
+	// Fast path: socket already exists (running daemon or env var)
+	if sock, err := findExistingSocket(); err == nil {
+		return sock, nil
+	}
+
+	// Check for previously spawned managed daemon
+	managed.mu.Lock()
+	defer managed.mu.Unlock()
+	if managed.sock != "" {
+		if _, err := os.Stat(managed.sock); err == nil {
+			return managed.sock, nil
+		}
+		// Stale — previous daemon died, clear state and try again
+		managed.proc = nil
+		managed.sock = ""
+	}
+
+	// Find the leyline binary
+	leylineBin, err := exec.LookPath("leyline")
+	if err != nil {
+		return "", fmt.Errorf("no ley-line socket found and leyline binary not on PATH")
+	}
+
+	// Prepare ~/.mache/ data directory
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	dataDir := filepath.Join(home, ".mache")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return "", fmt.Errorf("create %s: %w", dataDir, err)
+	}
+	mountDir := filepath.Join(dataDir, "mount")
+	if err := os.MkdirAll(mountDir, 0o755); err != nil {
+		return "", fmt.Errorf("create %s: %w", mountDir, err)
+	}
+
+	arenaPath := filepath.Join(dataDir, "default.arena")
+	ctrlPath := filepath.Join(dataDir, "default.ctrl")
+	sockPath := filepath.Join(dataDir, "default.sock")
+
+	// Start leyline serve as a background subprocess
+	cmd := exec.Command(leylineBin, "serve",
+		"--arena", arenaPath,
+		"--arena-size-mib", "64",
+		"--control", ctrlPath,
+		"--mount", mountDir,
+	)
+	// Detach from our stdio so it doesn't interfere with MCP transport
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+
+	log.Printf("auto-starting leyline daemon: %s", strings.Join(cmd.Args, " "))
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start leyline: %w", err)
+	}
+
+	managed.proc = cmd.Process
+	managed.sock = sockPath
+
+	// Background goroutine to wait on the process (prevent zombie)
+	go func() { _ = cmd.Wait() }()
+
+	// Poll for socket to appear (daemon needs a moment to bind)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sockPath); err == nil {
+			log.Printf("leyline daemon ready (pid=%d, socket=%s)", cmd.Process.Pid, sockPath)
+			return sockPath, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Timed out — kill the process and report
+	_ = cmd.Process.Kill()
+	managed.proc = nil
+	managed.sock = ""
+	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within 5s", sockPath)
+}
+
+// StopManaged kills the auto-spawned leyline daemon, if any.
+// Safe to call multiple times. Called automatically by cleanup hooks.
+func StopManaged() {
+	managed.mu.Lock()
+	defer managed.mu.Unlock()
+	if managed.proc != nil {
+		log.Printf("stopping managed leyline daemon (pid=%d)", managed.proc.Pid)
+		_ = managed.proc.Kill()
+		_ = managed.proc.Release()
+		managed.proc = nil
+		managed.sock = ""
+	}
+}
+
+// findExistingSocket checks env var and well-known path for an existing socket.
+func findExistingSocket() (string, error) {
 	if env := os.Getenv("LEYLINE_SOCKET"); env != "" {
 		if _, err := os.Stat(env); err == nil {
 			return env, nil
@@ -59,7 +190,7 @@ func DiscoverSocket() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no ley-line socket found (set LEYLINE_SOCKET or start leyline daemon)")
+	return "", fmt.Errorf("no socket found")
 }
 
 // Close closes the underlying connection. Safe to call multiple times.

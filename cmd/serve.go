@@ -112,6 +112,9 @@ Call get_overview first when exploring a new codebase.`),
 		source = args[0]
 	}
 
+	// Clean up any auto-spawned leyline daemon on exit
+	defer leyline.StopManaged()
+
 	if serveStdio {
 		meta := registerServeSidecar(source, "mcp-stdio", "")
 		defer removeServeSidecar(meta)
@@ -1395,9 +1398,9 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 // enriches the arena with _lsp* tables, and bumps the generation.
 // Blocks until the tool op completes (up to 30s timeout).
 func triggerLSPEnrichment(filePath string) error {
-	sockPath, err := leyline.DiscoverSocket()
+	sockPath, err := leyline.DiscoverOrStart()
 	if err != nil {
-		return fmt.Errorf("discover socket: %w", err)
+		return fmt.Errorf("discover/start leyline: %w", err)
 	}
 
 	client, err := leyline.DialSocket(sockPath)

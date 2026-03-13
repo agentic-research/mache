@@ -234,3 +234,38 @@ func TestDiscoverSocket_EnvVarMissing(t *testing.T) {
 		t.Fatal("expected error for missing socket")
 	}
 }
+
+func TestDiscoverOrStart_UsesExistingSocket(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	f, _ := os.Create(sockPath)
+	_ = f.Close()
+
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+	found, err := DiscoverOrStart()
+	if err != nil {
+		t.Fatalf("DiscoverOrStart: %v", err)
+	}
+	if found != sockPath {
+		t.Errorf("expected %s, got %s", sockPath, found)
+	}
+}
+
+func TestDiscoverOrStart_NoBinaryOnPath(t *testing.T) {
+	// Clear env so no existing socket is found
+	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
+	// Ensure leyline binary is not on PATH
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+
+	_, err := DiscoverOrStart()
+	if err == nil {
+		t.Fatal("expected error when no socket and no binary")
+	}
+	if !strings.Contains(err.Error(), "not on PATH") {
+		t.Errorf("expected 'not on PATH' in error, got: %v", err)
+	}
+}
+
+func TestStopManaged_SafeWhenNoDaemon(t *testing.T) {
+	// Should not panic when no managed daemon exists
+	StopManaged()
+}
