@@ -1094,7 +1094,14 @@ func setNestedField(m map[string]any, dottedPath, value string) {
 			current[part] = value
 		} else {
 			if v, ok := current[part]; ok {
-				current = v.(map[string]any)
+				if nested, isMap := v.(map[string]any); isMap {
+					current = nested
+				} else {
+					// Path conflict: intermediate value is not a map; overwrite it
+					next := make(map[string]any)
+					current[part] = next
+					current = next
+				}
 			} else {
 				next := make(map[string]any)
 				current[part] = next

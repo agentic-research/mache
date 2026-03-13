@@ -700,7 +700,9 @@ func (fs *MacheFS) Release(path string, fh uint64) int {
 		if fi, err := os.Stat(node.Origin.FilePath); err == nil {
 			modTime = fi.ModTime()
 		}
-		_ = store.UpdateNodeContent(wh.nodeID, formatted, newOrigin, modTime)
+		if err := store.UpdateNodeContent(wh.nodeID, formatted, newOrigin, modTime); err != nil {
+			log.Printf("writeback: UpdateNodeContent(%s) failed: %v", wh.nodeID, err)
+		}
 		store.WriteStatus.Store(filepath.Dir(wh.path), "ok")
 	}
 

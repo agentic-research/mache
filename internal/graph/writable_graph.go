@@ -156,7 +156,7 @@ func (g *WritableGraph) ListChildren(id string) ([]string, error) {
 		}
 		children = append(children, name)
 	}
-	return children, nil
+	return children, rows.Err()
 }
 
 func (g *WritableGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
@@ -219,13 +219,15 @@ func (g *WritableGraph) resolveContent(id string) ([]byte, error) {
 
 	// Cache (FIFO eviction)
 	g.contentMu.Lock()
-	if len(g.contentCache) >= g.maxContent {
-		evict := g.contentKeys[0]
-		g.contentKeys = g.contentKeys[1:]
-		delete(g.contentCache, evict)
+	if _, ok := g.contentCache[id]; !ok {
+		if len(g.contentCache) >= g.maxContent {
+			evict := g.contentKeys[0]
+			g.contentKeys = g.contentKeys[1:]
+			delete(g.contentCache, evict)
+		}
+		g.contentCache[id] = content
+		g.contentKeys = append(g.contentKeys, id)
 	}
-	g.contentCache[id] = content
-	g.contentKeys = append(g.contentKeys, id)
 	g.contentMu.Unlock()
 
 	return content, nil
