@@ -39,21 +39,28 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 		return &CommunityResult{}
 	}
 
-	// Step 2: Compute total edge weight (2*m in modularity formula)
+	// Step 2: Pre-compute node degrees (static — adjacency never changes)
+	// and total edge weight (2*m in modularity formula).
+	degree := make([]float64, n)
 	totalWeight := 0.0
-	for _, neighbors := range adj {
+	for i, neighbors := range adj {
 		for _, w := range neighbors {
-			totalWeight += w
+			degree[i] += w
 		}
+		totalWeight += degree[i]
 	}
 	if totalWeight == 0 {
 		return &CommunityResult{}
 	}
 
-	// Step 3: Initialize — each node in its own community
+	// Step 3: Initialize — each node in its own community.
+	// Also build commDegree: sum of degrees for each community,
+	// maintained incrementally to avoid O(n) scans per candidate.
 	community := make([]int, n)
+	commDegree := make(map[int]float64, n)
 	for i := range community {
 		community[i] = i
+		commDegree[i] = degree[i]
 	}
 
 	// Step 4: Louvain phase 1 — local modularity optimization
@@ -63,13 +70,12 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 		for node := 0; node < n; node++ {
 			bestComm := community[node]
 			bestDelta := 0.0
-
-			// Degree of this node (sum of edge weights)
-			ki := nodeDegree(adj, node)
+			ki := degree[node]
 
 			// Remove node from its community temporarily
 			oldComm := community[node]
 			community[node] = -1
+			commDegree[oldComm] -= ki
 
 			// Try each neighboring community
 			neighborComms := make(map[int]float64) // community → sum of edge weights to that community
@@ -86,8 +92,7 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 			}
 
 			for c, kiIn := range neighborComms {
-				// Sum of weights of edges to nodes in community c
-				sigmaTotal := communityDegree(adj, community, c, n)
+				sigmaTotal := commDegree[c]
 				delta := deltaModularity(kiIn, sigmaTotal, ki, totalWeight)
 				if delta > bestDelta {
 					bestDelta = delta
@@ -96,6 +101,7 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 			}
 
 			community[node] = bestComm
+			commDegree[bestComm] += ki
 			if bestComm != oldComm {
 				improved = true
 			}
@@ -138,7 +144,7 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 	}
 
 	// Compute final modularity
-	mod := computeModularity(adj, community, totalWeight, n)
+	mod := computeModularity(adj, community, degree, totalWeight, n)
 
 	numEdges := 0
 	for _, neighbors := range adj {
@@ -230,18 +236,19 @@ func deltaModularity(kiIn, sigmaTotal, ki, m2 float64) float64 {
 
 // computeModularity calculates the modularity of a partition.
 // Q = (1/2m) * sum_ij [ A_ij - (ki*kj)/(2m) ] * delta(ci, cj)
-func computeModularity(adj []map[int]float64, community []int, m2 float64, n int) float64 {
+// degree is a pre-computed slice of weighted node degrees.
+func computeModularity(adj []map[int]float64, community []int, degree []float64, m2 float64, n int) float64 {
 	if m2 == 0 {
 		return 0
 	}
 	q := 0.0
 	for i := 0; i < n; i++ {
-		ki := nodeDegree(adj, i)
+		ki := degree[i]
 		for j := 0; j < n; j++ {
 			if community[i] != community[j] {
 				continue
 			}
-			kj := nodeDegree(adj, j)
+			kj := degree[j]
 			aij := adj[i][j] // 0 if no edge
 			q += aij - (ki*kj)/m2
 		}

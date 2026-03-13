@@ -353,14 +353,16 @@ func TestModularity_PerfectPartition(t *testing.T) {
 	community[nodeIndex["c"]] = 1
 	community[nodeIndex["d"]] = 1
 
+	degree := make([]float64, n)
 	totalWeight := 0.0
-	for _, neighbors := range adj {
+	for i, neighbors := range adj {
 		for _, w := range neighbors {
-			totalWeight += w
+			degree[i] += w
 		}
+		totalWeight += degree[i]
 	}
 
-	mod := computeModularity(adj, community, totalWeight, n)
+	mod := computeModularity(adj, community, degree, totalWeight, n)
 	assert.Greater(t, mod, 0.4, "perfect partition of disjoint cliques should have high modularity")
 }
 
@@ -376,13 +378,15 @@ func TestModularity_AllSameCommunity(t *testing.T) {
 	// All in same community
 	community := make([]int, n) // all zeros
 
+	degree := make([]float64, n)
 	totalWeight := 0.0
-	for _, neighbors := range adj {
+	for i, neighbors := range adj {
 		for _, w := range neighbors {
-			totalWeight += w
+			degree[i] += w
 		}
+		totalWeight += degree[i]
 	}
 
-	mod := computeModularity(adj, community, totalWeight, n)
+	mod := computeModularity(adj, community, degree, totalWeight, n)
 	assert.Equal(t, 0.0, mod, "all nodes in same community should have modularity 0")
 }
