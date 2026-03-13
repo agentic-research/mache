@@ -111,24 +111,49 @@ Mache is in **active development**. The core pipeline (schema + ingestion + moun
 
 ## Quick Start
 
-### Prerequisites
+### Install
 
-- **macOS:** `brew install go-task` (NFS backend is built-in, no fuse-t needed)
-- **macOS (FUSE backend):** `brew install --cask fuse-t` (only if using `--backend fuse`)
-- **Linux:** `apt-get install libfuse-dev` and [install Task](https://taskfile.dev/installation/)
+```bash
+brew install agentic-research/tap/mache
+```
 
-### Building
+Or build from source:
 
 ```bash
 git clone https://github.com/agentic-research/mache.git
 cd mache
-
-# Build (checks for fuse-t on macOS, builds and codesigns)
-task build
-
-# Run tests
-task test
+task build            # requires: go-task, Go 1.23+
+task install          # copies to ~/.local/bin
 ```
+
+<details>
+<summary>Build prerequisites</summary>
+
+- **macOS:** `brew install go-task` (NFS backend is built-in, no fuse-t needed)
+- **macOS (FUSE backend):** `brew install --cask fuse-t` (only if using `--backend fuse`)
+- **Linux:** `apt-get install libfuse-dev` and [install Task](https://taskfile.dev/installation/)
+</details>
+
+### Use as an MCP Server (recommended)
+
+The fastest way to use mache is as an MCP server for Claude Code, Cursor, or any MCP client. No filesystem mount needed.
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mache": {
+      "command": "mache",
+      "args": ["serve", "--stdio", "."]
+    }
+  }
+}
+```
+
+This gives your AI assistant 11 structural code intelligence tools — `get_overview`, `list_directory`, `read_file`, `find_definition`, `find_callers`, `find_callees`, `search`, `get_communities`, `get_type_info`, `get_diagnostics`, and `write_file` — without any schema authoring. Mache auto-infers the schema from your codebase.
+
+See [MCP Server Mode](#mcp-server-mode) for advanced configuration (HTTP transport, custom schemas, Claude Desktop).
 
 ## Usage
 
