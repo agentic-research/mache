@@ -177,6 +177,50 @@ func TestQueryHandler(t *testing.T) {
 	assert.Nil(t, h.DirExtras("/sub", nil))
 }
 
+func TestLocationHandler(t *testing.T) {
+	store := graph.NewMemoryStore()
+	store.AddNode(&graph.Node{
+		ID:   "pkg/Foo",
+		Mode: 0o40000,
+		Properties: map[string][]byte{
+			"location": []byte("internal/pkg/foo.go:10:25"),
+		},
+	})
+
+	h := &LocationHandler{Graph: store}
+
+	assert.True(t, h.Match("/pkg/Foo/location"))
+	assert.False(t, h.Match("/pkg/Foo/source"))
+
+	e := h.Stat("/pkg/Foo/location")
+	require.NotNil(t, e)
+	assert.Equal(t, KindFile, e.Kind)
+	assert.Equal(t, []byte("internal/pkg/foo.go:10:25"), e.Content)
+
+	data, ok := h.ReadContent("/pkg/Foo/location")
+	assert.True(t, ok)
+	assert.Equal(t, []byte("internal/pkg/foo.go:10:25"), data)
+
+	// No location → nil
+	store.AddNode(&graph.Node{ID: "pkg/Bar", Mode: 0o40000})
+	assert.Nil(t, h.Stat("/pkg/Bar/location"))
+
+	_, ok = h.ReadContent("/pkg/Bar/location")
+	assert.False(t, ok)
+}
+
+func TestLocationHandler_DirExtras(t *testing.T) {
+	h := &LocationHandler{Graph: graph.NewMemoryStore()}
+
+	node := &graph.Node{Properties: map[string][]byte{"location": []byte("foo.go:1:5")}}
+	extras := h.DirExtras("/pkg/Foo", node)
+	require.Len(t, extras, 1)
+	assert.Equal(t, "location", extras[0].Name)
+
+	assert.Nil(t, h.DirExtras("/pkg/Foo", &graph.Node{}))
+	assert.Nil(t, h.DirExtras("/pkg/Foo", nil))
+}
+
 func TestCallersHandler(t *testing.T) {
 	store := graph.NewMemoryStore()
 	store.AddNode(&graph.Node{ID: "funcs/Foo", Mode: 0o40000})

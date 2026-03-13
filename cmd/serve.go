@@ -689,13 +689,28 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 			})
 		}
 
-		// Surface callers/ and callees/ virtual dirs on construct directories
+		// Surface virtual entries on construct directories
 		// (skip if already materialized in the db)
 		if path != "" {
 			seen := make(map[string]bool, len(entries))
 			for _, e := range entries {
 				seen[e.Name] = true
 			}
+
+			// Location: source file coordinates for orientation
+			if !seen["location"] {
+				if node, err := g.GetNode(path); err == nil && node.Properties != nil {
+					if loc, ok := node.Properties["location"]; ok && len(loc) > 0 {
+						entries = append(entries, nodeEntry{
+							Name: "location",
+							Path: path + "/location",
+							Type: "virtual",
+							Size: int64(len(loc)),
+						})
+					}
+				}
+			}
+
 			token := filepath.Base(path)
 			if !seen["callers"] {
 				if callers, err := g.GetCallers(token); err == nil && len(callers) > 0 {
@@ -728,6 +743,17 @@ type fileReadResult struct {
 }
 
 func readOneFileWithOrigin(g graph.Graph, path string) (*fileReadResult, error) {
+	// Handle virtual location file
+	if filepath.Base(path) == graph.LocationFile {
+		parentDir := filepath.Dir(path)
+		if parent, err := g.GetNode(parentDir); err == nil && parent.Properties != nil {
+			if loc, ok := parent.Properties["location"]; ok && len(loc) > 0 {
+				return &fileReadResult{Content: string(loc)}, nil
+			}
+		}
+		return nil, fmt.Errorf("not found: %s", path)
+	}
+
 	node, err := g.GetNode(path)
 	if err != nil {
 		return nil, fmt.Errorf("not found: %s", path)

@@ -60,11 +60,12 @@ func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 	diagH := &vfs.DiagnosticsHandler{DiagStatus: diagStatus}
 	schemaH := &vfs.SchemaHandler{Content: sj}
 	contextH := &vfs.ContextHandler{Graph: g}
+	locationH := &vfs.LocationHandler{Graph: g}
 	callersH := &vfs.CallersHandler{Graph: g}
 	calleesH := &vfs.CalleesHandler{Graph: g}
 
 	resolver := vfs.NewResolver(
-		schemaH, promptH, diagH, contextH, callersH, calleesH,
+		schemaH, promptH, diagH, contextH, locationH, callersH, calleesH,
 	)
 
 	return &GraphFS{
