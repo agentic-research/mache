@@ -1404,10 +1404,12 @@ func triggerLSPEnrichment(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// LSP enrichment takes 2-15s typically; 30s timeout for safety
-	client.SetDeadline(time.Now().Add(30 * time.Second))
+	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return fmt.Errorf("set deadline: %w", err)
+	}
 
 	resp, err := client.Tool("lsp", map[string]any{"file": filePath})
 	if err != nil {

@@ -20,14 +20,14 @@ func mockServer(t *testing.T, handler func(map[string]any) map[string]any) strin
 	if err != nil {
 		t.Fatalf("mkdirtemp: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sockPath := filepath.Join(dir, "t.sock")
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	go func() {
 		for {
@@ -36,7 +36,7 @@ func mockServer(t *testing.T, handler func(map[string]any) map[string]any) strin
 				return // listener closed
 			}
 			go func(c net.Conn) {
-				defer c.Close()
+				defer c.Close() //nolint:errcheck
 				rd := bufio.NewReader(c)
 				for {
 					line, err := rd.ReadString('\n')
@@ -46,12 +46,12 @@ func mockServer(t *testing.T, handler func(map[string]any) map[string]any) strin
 					var req map[string]any
 					if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &req); err != nil {
 						resp, _ := json.Marshal(map[string]any{"error": "bad json"})
-						c.Write(append(resp, '\n'))
+						_, _ = c.Write(append(resp, '\n'))
 						continue
 					}
 					resp := handler(req)
 					data, _ := json.Marshal(resp)
-					c.Write(append(data, '\n'))
+					_, _ = c.Write(append(data, '\n'))
 				}
 			}(conn)
 		}
@@ -88,7 +88,7 @@ func TestSendOp_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialSocket: %v", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	resp, err := client.SendOp(map[string]any{"op": "status"})
 	if err != nil {
@@ -117,7 +117,7 @@ func TestTool_FormatsCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialSocket: %v", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	resp, err := client.Tool("lsp", map[string]any{"file": "/tmp/main.go"})
 	if err != nil {
@@ -144,7 +144,7 @@ func TestTool_ReturnsErrorOnToolFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialSocket: %v", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	_, err = client.Tool("bad", nil)
 	if err == nil {
@@ -169,7 +169,7 @@ func TestQuery_ParsesRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialSocket: %v", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	rows, err := client.Query("SELECT node_id, hover_text FROM _lsp_hover")
 	if err != nil {
@@ -201,10 +201,10 @@ func TestSetDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialSocket: %v", err)
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	// Set a very short deadline
-	client.SetDeadline(time.Now().Add(10 * time.Millisecond))
+	_ = client.SetDeadline(time.Now().Add(10 * time.Millisecond))
 	_, err = client.SendOp(map[string]any{"op": "status"})
 	if err == nil {
 		t.Fatal("expected timeout error")
@@ -215,7 +215,7 @@ func TestDiscoverSocket_EnvVar(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
 	// Create the file so Stat succeeds
 	f, _ := os.Create(sockPath)
-	f.Close()
+	_ = f.Close()
 
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 	found, err := DiscoverSocket()
