@@ -106,7 +106,7 @@ Mache is in **active development**. The core pipeline (schema + ingestion + moun
 | **Cross-References** | **Stable** | `callers/` and `callees/` virtual dirs for bidirectional call-chain navigation. |
 | **`_project_files/`** | **Stable** | Non-AST files (READMEs, configs, docs) preserved in separate tree during source mounts. |
 | **Schema Inference** | **Beta** | Auto-infer schema from data via Formal Concept Analysis (FCA). Friendly-name grouping (`functions/`, `types/`, `classes/`). |
-| **MCP Server** | **Beta** | `mache serve` exposes any graph as an MCP server over stdio. 9 tools: list, read, callers, callees, definition, search, communities, overview, write. |
+| **MCP Server** | **Beta** | `mache serve` exposes any graph as an MCP server over stdio. 11 tools: list, read, callers, callees, definition, search, communities, overview, type info, diagnostics, write. |
 | **Community Detection** | **Beta** | Louvain modularity optimization discovers densely co-referencing node clusters from the refs graph. |
 
 ## Quick Start
@@ -196,7 +196,7 @@ mache serve --http :9000 -s examples/nvd-schema.json results.db
 mache serve --stdio -s examples/go-schema.json ./internal/
 ```
 
-Nine tools are exposed: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, and `write_file`. No filesystem mount needed — the graph is queried directly over JSON-RPC.
+Eleven tools are exposed: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, `get_type_info`, `get_diagnostics`, and `write_file`. No filesystem mount needed — the graph is queried directly over JSON-RPC.
 
 #### Installing in Claude Code
 
@@ -277,9 +277,11 @@ Add to your `claude_desktop_config.json`:
 | `search` | Search for symbols matching a SQL LIKE pattern (e.g., `%auth%`). Supports `role` filter (caller/definition). |
 | `get_communities` | Detect clusters of densely co-referencing nodes (Louvain modularity). Paginated. |
 | `get_overview` | Architecture overview: top-level structure, node counts, and key entry points |
+| `get_type_info` | LSP type information (hover, signatures) for a symbol. Auto-triggers LSP enrichment via ley-line daemon when `file` param is provided. |
+| `get_diagnostics` | LSP diagnostics (errors, warnings) for a file or symbol. Auto-triggers LSP enrichment via ley-line daemon when `file` param is provided. |
 | `write_file` | Write new content via the splice pipeline: validate (tree-sitter) → format → atomic splice → update graph |
 
-`search`, `get_communities`, `find_definition`, and `write_file` are conditionally available depending on backend capabilities.
+`search`, `get_communities`, `find_definition`, `get_type_info`, `get_diagnostics`, and `write_file` are conditionally available depending on backend capabilities.
 
 ### Using with LLMs and Agents
 
@@ -478,7 +480,7 @@ Mache occupies a unique position: it's a **projection engine** that maps structu
 
 | Tool | Schema-Driven | AST-Aware | Write-Back | Real FS Mount | MCP Server |
 |------|:---:|:---:|:---:|:---:|:---:|
-| **Mache** | Yes | Yes (8 langs) | Yes | Yes (NFS/FUSE) | Yes (9 tools) |
+| **Mache** | Yes | Yes (8 langs) | Yes | Yes (NFS/FUSE) | Yes (11 tools) |
 | codebase-memory-mcp | No | Yes (64 langs) | No | No | Yes (12 tools) |
 | AgentFS (Turso) | No | No | Yes | No | No |
 | Dust | No | No | No | No (synthetic) | No |
