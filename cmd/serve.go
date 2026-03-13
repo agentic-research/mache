@@ -56,35 +56,11 @@ func init() {
 func runServe(cmd *cobra.Command, args []string) error {
 	registry := newGraphRegistry(servePath, args)
 
-	// Set up session lifecycle hooks for multi-tenant graph routing.
-	// OnAfterInitialize: ask the client for its workspace roots (ListRoots),
-	// then map the session to the appropriate graph.
+	// Clean up session → root mapping on disconnect.
+	// Root discovery happens lazily on the first tool call (see wrapHandler)
+	// because ListRoots deadlocks inside OnAfterInitialize — the client
+	// can't respond until the initialize response is sent.
 	hooks := &server.Hooks{}
-	hooks.AddAfterInitialize(func(ctx context.Context, _ any, _ *mcp.InitializeRequest, _ *mcp.InitializeResult) {
-		session := server.ClientSessionFromContext(ctx)
-		if session == nil {
-			return
-		}
-		rootsSession, ok := session.(server.SessionWithRoots)
-		if !ok {
-			return
-		}
-		result, err := rootsSession.ListRoots(ctx, mcp.ListRootsRequest{})
-		if err != nil {
-			log.Printf("ListRoots for session %s: %v (using default path)", session.SessionID(), err)
-			return
-		}
-		if len(result.Roots) == 0 {
-			return
-		}
-		// Use the first root's URI as the workspace path.
-		rootPath := rootURIToPath(result.Roots[0].URI)
-		if rootPath == "" {
-			return
-		}
-		registry.registerSession(session.SessionID(), rootPath)
-		log.Printf("session %s → %s", session.SessionID(), rootPath)
-	})
 	hooks.AddOnUnregisterSession(func(_ context.Context, session server.ClientSession) {
 		registry.unregisterSession(session.SessionID())
 		log.Printf("session %s unregistered", session.SessionID())
@@ -94,7 +70,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	s := server.NewMCPServer("mache", Version,
 		server.WithToolCapabilities(false),
 		server.WithHooks(hooks),
-		server.WithRoots(),
 		server.WithInstructions(`Mache provides structural code intelligence tools. Use mache when you need to:
 - Explore unfamiliar codebases (get_overview, list_directory, read_file)
 - Find where symbols are defined or used (find_definition, find_callers, find_callees)
@@ -238,17 +213,56 @@ func (r *graphRegistry) graphForSession(sessionID string) *lazyGraph {
 
 // wrapHandler turns a handler factory (graph → handler) into a session-aware
 // handler that resolves the correct graph per-session at call time.
+//
+// On the first tool call for an unmapped session, it calls ListRoots to
+// discover the client's workspace root and caches the mapping. This is done
+// here (not in OnAfterInitialize) because ListRoots deadlocks during the
+// initialize handshake — the client can't respond until initialize completes.
 func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		session := server.ClientSessionFromContext(ctx)
 		var lg *lazyGraph
 		if session != nil {
-			lg = r.graphForSession(session.SessionID())
+			lg = r.resolveSession(ctx, session)
 		} else {
 			lg = r.getOrCreateGraph(r.resolvedBasePath())
 		}
 		return handlerFactory(lg)(ctx, req)
 	}
+}
+
+// resolveSession returns the graph for a session, calling ListRoots on first
+// access to discover the client's workspace root.
+func (r *graphRegistry) resolveSession(ctx context.Context, session server.ClientSession) *lazyGraph {
+	sid := session.SessionID()
+
+	// Fast path: already mapped
+	if rootPath, ok := r.sessions.Load(sid); ok {
+		return r.getOrCreateGraph(rootPath.(string))
+	}
+
+	// Slow path: ask the client for its workspace roots.
+	// Use a short timeout — if the client doesn't support roots or can't
+	// respond, fall back immediately rather than blocking the tool call.
+	if rootsSession, ok := session.(server.SessionWithRoots); ok {
+		rootsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		result, err := rootsSession.ListRoots(rootsCtx, mcp.ListRootsRequest{})
+		if err == nil && len(result.Roots) > 0 {
+			if rootPath := rootURIToPath(result.Roots[0].URI); rootPath != "" {
+				r.registerSession(sid, rootPath)
+				log.Printf("session %s → %s", sid, rootPath)
+				return r.getOrCreateGraph(rootPath)
+			}
+		} else if err != nil {
+			log.Printf("ListRoots for session %s: %v (using default path)", sid, err)
+		}
+	}
+
+	// Fallback: use --path or CWD, and cache so we don't retry ListRoots
+	fallback := r.resolvedBasePath()
+	r.registerSession(sid, fallback)
+	return r.getOrCreateGraph(fallback)
 }
 
 // rootURIToPath converts a file:// URI to a filesystem path.
