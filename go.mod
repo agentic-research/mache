@@ -13,7 +13,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/willscott/go-nfs v0.0.3
 	github.com/winfsp/cgofuse v1.6.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.42.0
 	modernc.org/sqlite v1.46.1
 	mvdan.cc/gofumpt v0.9.2
 )
