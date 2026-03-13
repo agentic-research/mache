@@ -1,0 +1,147 @@
+{
+  "version": "v1",
+  "file_sets": {
+    "finding_files": [
+      {"name": "title", "content_template": "{{.title}}"},
+      {"name": "severity", "content_template": "{{.severity}}"},
+      {"name": "status", "content_template": "{{.status}}"},
+      {"name": "dimension", "content_template": "{{.dimension}}"},
+      {"name": "description", "content_template": "{{.description}}"},
+      {"name": "source_file", "content_template": "{{.source_file}}"},
+      {"name": "raw.json", "content_template": "{{. | json}}"}
+    ],
+    "score_files": [
+      {"name": "score", "content_template": "{{.score}}"},
+      {"name": "weight", "content_template": "{{.weight}}"},
+      {"name": "rubric", "content_template": "{{.rubric}}"},
+      {"name": "raw.json", "content_template": "{{. | json}}"}
+    ],
+    "bead_files": [
+      {"name": "title", "content_template": "{{.title}}"},
+      {"name": "tier", "content_template": "{{.tier}}"},
+      {"name": "dimension", "content_template": "{{.dimension}}"},
+      {"name": "description", "content_template": "{{.description}}"},
+      {"name": "raw.json", "content_template": "{{. | json}}"}
+    ]
+  },
+  "nodes": [
+    {
+      "name": "findings",
+      "selector": "$",
+      "children": [
+        {
+          "name": "by-severity",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.severity}}",
+              "selector": "$.findings[*]",
+              "children": [
+                {
+                  "name": "{{.id}}",
+                  "selector": "$",
+                  "include": ["finding_files"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "by-dimension",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.dimension}}",
+              "selector": "$.findings[*]",
+              "children": [
+                {
+                  "name": "{{.id}}",
+                  "selector": "$",
+                  "include": ["finding_files"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "by-status",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.status}}",
+              "selector": "$.findings[*]",
+              "children": [
+                {
+                  "name": "{{.id}}",
+                  "selector": "$",
+                  "include": ["finding_files"]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "scores",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.dimension}}",
+          "selector": "$.scores[*]",
+          "include": ["score_files"]
+        }
+      ]
+    },
+    {
+      "name": "agents",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "$.agents[*]",
+          "files": [
+            {"name": "role", "content_template": "{{.role}}"},
+            {"name": "status", "content_template": "{{.status}}"},
+            {"name": "owned_files", "content_template": "{{.owned_files}}"},
+            {"name": "raw.json", "content_template": "{{. | json}}"}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "beads",
+      "selector": "$",
+      "children": [
+        {
+          "name": "by-tier",
+          "selector": "$",
+          "children": [
+            {
+              "name": "{{.tier}}",
+              "selector": "$.beads[*]",
+              "include": ["bead_files"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "timeline",
+      "selector": "$",
+      "children": [
+        {
+          "name": "cycle-{{.number}}",
+          "selector": "$.cycles[*]",
+          "files": [
+            {"name": "timestamp", "content_template": "{{.timestamp}}"},
+            {"name": "composite_score", "content_template": "{{.composite_score}}"},
+            {"name": "delta", "content_template": "{{.delta}}"},
+            {"name": "notes", "content_template": "{{.notes}}"},
+            {"name": "raw.json", "content_template": "{{. | json}}"}
+          ]
+        }
+      ]
+    }
+  ]
+}

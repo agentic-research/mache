@@ -397,6 +397,9 @@ var rootCmd = &cobra.Command{
 			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
+		// 2b. Expand file_set includes before ingestion/mount.
+		schema.ResolveIncludes()
+
 		// 3. Create the Graph backend
 		var g graph.Graph
 		var engine *ingest.Engine // non-nil for MemoryStore paths (needed for write-back)

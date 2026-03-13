@@ -1,0 +1,128 @@
+{
+  "findings": [
+    {
+      "id": "C1",
+      "title": "Unsanitized user input in SQL queries",
+      "severity": "critical",
+      "status": "OPEN",
+      "dimension": "security",
+      "description": "Raw SQL string concatenation in auth handler allows injection.",
+      "source_file": "MASTER-TRIAGE.md"
+    },
+    {
+      "id": "H1",
+      "title": "No test coverage for payment processing",
+      "severity": "high",
+      "status": "OPEN",
+      "dimension": "testing",
+      "description": "Payment module has 0% test coverage. Critical business logic untested.",
+      "source_file": "MASTER-TRIAGE.md"
+    },
+    {
+      "id": "H2",
+      "title": "API endpoints missing rate limiting",
+      "severity": "high",
+      "status": "FIXED",
+      "dimension": "security",
+      "description": "All public endpoints lack rate limiting, vulnerable to abuse.",
+      "source_file": "MASTER-TRIAGE.md"
+    },
+    {
+      "id": "M1",
+      "title": "Inconsistent error response format",
+      "severity": "medium",
+      "status": "OPEN",
+      "dimension": "architecture",
+      "description": "Some endpoints return {error: string}, others return {message: string, code: int}.",
+      "source_file": "MASTER-TRIAGE.md"
+    },
+    {
+      "id": "L1",
+      "title": "Console.log statements in production code",
+      "severity": "low",
+      "status": "DEFERRED",
+      "dimension": "dx",
+      "description": "12 console.log statements found across 5 files.",
+      "source_file": "MASTER-TRIAGE.md"
+    }
+  ],
+  "scores": [
+    {
+      "dimension": "security",
+      "score": 2.0,
+      "weight": 1.5,
+      "rubric": "SQL injection, no rate limiting"
+    },
+    {
+      "dimension": "testing",
+      "score": 1.5,
+      "weight": 1.3,
+      "rubric": "Payment module untested"
+    },
+    {
+      "dimension": "architecture",
+      "score": 3.0,
+      "weight": 1.2,
+      "rubric": "Mostly clean, error format inconsistent"
+    },
+    {
+      "dimension": "dx",
+      "score": 4.0,
+      "weight": 0.8,
+      "rubric": "Good overall, minor cleanup needed"
+    },
+    {
+      "dimension": "documentation",
+      "score": 3.5,
+      "weight": 0.7,
+      "rubric": "README exists but API docs missing"
+    }
+  ],
+  "agents": [
+    {
+      "name": "lead",
+      "role": "lead",
+      "status": "active",
+      "owned_files": ""
+    }
+  ],
+  "beads": [
+    {
+      "id": "fix-sql-injection",
+      "title": "Fix Sql Injection",
+      "tier": "T2",
+      "dimension": "security",
+      "description": "Parameterize all SQL queries in auth handler. Replace string concatenation with prepared statements."
+    },
+    {
+      "id": "add-payment-tests",
+      "title": "Add Payment Tests",
+      "tier": "T3",
+      "dimension": "testing",
+      "description": "Write comprehensive test suite for payment processing module. Cover happy path, edge cases, and error scenarios."
+    },
+    {
+      "id": "add-rate-limiting",
+      "title": "Add Rate Limiting",
+      "tier": "T1",
+      "dimension": "security",
+      "description": "Add express-rate-limit middleware to all public API endpoints. Configure per-endpoint limits."
+    },
+    {
+      "id": "standardize-errors",
+      "title": "Standardize Errors",
+      "tier": "T2",
+      "dimension": "architecture",
+      "description": "Create unified error response class. Migrate all endpoints to consistent format."
+    }
+  ],
+  "cycles": [
+    {
+      "number": 1,
+      "timestamp": "2026-03-12",
+      "composite_score": 0.0,
+      "delta": 0.0,
+      "notes": ""
+    }
+  ]
+}
