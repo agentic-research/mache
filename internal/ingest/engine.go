@@ -779,7 +779,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		}
 
 		currentPath := filepath.Join(parentPath, name)
-		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+		id := toNodeID(currentPath)
 
 		node := &graph.Node{
 			ID:      id,
@@ -806,7 +806,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
-			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
+			fileId := toNodeID(filePath)
 
 			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
@@ -851,9 +851,15 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		}
 
 		// Link to parent (collector will apply this)
-		parentID := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
+		parentID := toNodeID(parentPath)
 		result.parentLinks = append(result.parentLinks, parentLink{childID: id, parentID: parentID})
 	}
+}
+
+// toNodeID converts a filesystem path to a graph node ID by normalizing
+// separators and stripping the leading slash.
+func toNodeID(p string) string {
+	return strings.TrimPrefix(filepath.ToSlash(p), "/")
 }
 
 // dedupSuffix returns a ".from_<sanitized>" suffix derived from the source filename.
@@ -892,7 +898,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Normalize path
 		currentPath := filepath.Join(parentPath, name)
-		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+		id := toNodeID(currentPath)
 
 		// Dedup: when this node has files and a node with the same ID
 		// already exists with file children (i.e., from a different source file),
@@ -903,7 +909,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				suffix := dedupSuffix(sourceFile)
 				name = name + suffix
 				currentPath = filepath.Join(parentPath, name)
-				id = strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+				id = toNodeID(currentPath)
 			}
 		}
 
@@ -974,7 +980,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		if parentPath == "" {
 			store.AddRoot(node)
 		} else {
-			parentId := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
+			parentId := toNodeID(parentPath)
 			parent, err := store.GetNode(parentId)
 			if err == nil {
 				if e.childSeen[parentId] == nil {
@@ -1056,7 +1062,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
-			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
+			fileId := toNodeID(filePath)
 
 			// Augment template values with doc comment text
 			vals := match.Values()
