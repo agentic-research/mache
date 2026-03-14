@@ -25,6 +25,7 @@ import (
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/toml"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
 )
@@ -281,7 +282,7 @@ func (e *Engine) Ingest(path string) error {
 			shouldParse := false
 			if treeSitter {
 				switch ext {
-				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml":
+				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml", ".toml":
 					shouldParse = true
 				}
 			} else {
@@ -338,6 +339,8 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 		return e.ingestTreeSitter(path, yaml.GetLanguage(), "yaml", modTime)
 	case ".rs":
 		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust", modTime)
+	case ".toml":
+		return e.ingestTreeSitter(path, toml.GetLanguage(), "toml", modTime)
 	default:
 		if isBinaryFile(path) {
 			return nil
@@ -1226,6 +1229,8 @@ func GetLanguage(langName string) *sitter.Language {
 		return yaml.GetLanguage()
 	case "rust":
 		return rust.GetLanguage()
+	case "toml":
+		return toml.GetLanguage()
 	default:
 		return nil
 	}
