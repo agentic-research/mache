@@ -74,6 +74,11 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 		return fmt.Errorf("materialize content sources: %w", err)
 	}
 
+	// 6. Strip full content from _project_files/ (metadata-only in --out mode)
+	if err := stripProjectFileContent(tx); err != nil {
+		return fmt.Errorf("strip project file content: %w", err)
+	}
+
 	return tx.Commit()
 }
 
@@ -575,6 +580,14 @@ func extractCallerDir(nodeID string) (dirID string) {
 		dirID = nodeID
 	}
 	return dirID
+}
+
+// stripProjectFileContent removes full file content from _project_files/ file
+// nodes, keeping only the directory structure and metadata (name, mtime).
+// This prevents raw project files from bloating the --out DB.
+func stripProjectFileContent(tx *sql.Tx) error {
+	_, err := tx.Exec(`UPDATE nodes SET record = NULL, size = 0 WHERE kind = 0 AND id LIKE '_project_files/%'`)
+	return err
 }
 
 // extractFuncName pulls the function name from a node path like "functions/Foo/source".
