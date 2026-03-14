@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -36,8 +35,6 @@ type GraphFS struct {
 
 	// Virtual path resolver — shared with FUSE backend.
 	resolver *vfs.Resolver
-	promptH  *vfs.PromptHandler
-	diagH    *vfs.DiagnosticsHandler
 
 	// Optional prompt content served as /PROMPT.txt virtual file (agent mode).
 	promptContent []byte
@@ -48,25 +45,12 @@ func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 	sj, _ := json.MarshalIndent(schema, "", "  ")
 	sj = append(sj, '\n')
 
+	resolver := vfs.NewDefaultResolver(g, sj)
+
 	// Share diagnostics map with MemoryStore if available
-	var diagStatus *sync.Map
 	if ms, ok := g.(*graph.MemoryStore); ok {
-		diagStatus = &ms.WriteStatus
-	} else {
-		diagStatus = &sync.Map{}
+		resolver.SetWritable(false, &ms.WriteStatus)
 	}
-
-	promptH := &vfs.PromptHandler{}
-	diagH := &vfs.DiagnosticsHandler{DiagStatus: diagStatus}
-	schemaH := &vfs.SchemaHandler{Content: sj}
-	contextH := &vfs.ContextHandler{Graph: g}
-	locationH := &vfs.LocationHandler{Graph: g}
-	callersH := &vfs.CallersHandler{Graph: g}
-	calleesH := &vfs.CalleesHandler{Graph: g}
-
-	resolver := vfs.NewResolver(
-		schemaH, promptH, diagH, contextH, locationH, callersH, calleesH,
-	)
 
 	return &GraphFS{
 		graph:      g,
@@ -74,15 +58,13 @@ func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 		schemaJSON: sj,
 		mountTime:  time.Now(),
 		resolver:   resolver,
-		promptH:    promptH,
-		diagH:      diagH,
 	}
 }
 
 // SetPromptContent sets the content for the /PROMPT.txt virtual file.
 func (fs *GraphFS) SetPromptContent(content []byte) {
 	fs.promptContent = content
-	fs.promptH.Content = content
+	fs.resolver.SetPromptContent(content)
 }
 
 // SetWriteBack enables write support. The callback is invoked when a
@@ -90,7 +72,7 @@ func (fs *GraphFS) SetPromptContent(content []byte) {
 func (fs *GraphFS) SetWriteBack(fn WriteBackFunc) {
 	fs.writable = true
 	fs.writeBack = fn
-	fs.diagH.Writable = true
+	fs.resolver.SetWritable(true, nil)
 }
 
 // --- billy.Basic ---
