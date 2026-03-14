@@ -36,7 +36,7 @@ var buildCmd = &cobra.Command{
 		} else {
 			// No schema — infer via FCA from source tree
 			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
-			fmt.Println("Inferring schema...")
+			log.Println("Inferring schema...")
 
 			// Walk source to find the first .go file for bootstrap inference
 			if walkErr := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
@@ -91,11 +91,11 @@ var buildCmd = &cobra.Command{
 
 		// 4. Ingest
 		start := time.Now()
-		fmt.Printf("Building %s from %s...\n", output, source)
+		log.Printf("Building %s from %s...", output, source)
 		if err := engine.Ingest(source); err != nil {
 			return err
 		}
-		fmt.Printf("Done in %v.\n", time.Since(start))
+		log.Printf("Done in %v.", time.Since(start))
 		return nil
 	},
 }
