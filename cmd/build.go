@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -43,14 +44,29 @@ var buildCmd = &cobra.Command{
 					return err
 				}
 				if filepath.Ext(path) == ".go" {
-					content, _ := os.ReadFile(path)
+					content, readErr := os.ReadFile(path)
+					if readErr != nil {
+						log.Printf("schema inference: read %s: %v", path, readErr)
+						return nil // try next file
+					}
 					parser := sitter.NewParser()
 					parser.SetLanguage(golang.GetLanguage())
-					tree, _ := parser.ParseCtx(context.Background(), nil, content)
-					if tree != nil {
-						schema, _ = inf.InferFromTreeSitter(tree.RootNode())
+					tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+					if parseErr != nil {
+						log.Printf("schema inference: parse %s: %v", path, parseErr)
+						return nil // try next file
 					}
-					return filepath.SkipDir // Stop after first
+					if tree != nil {
+						var inferErr error
+						schema, inferErr = inf.InferFromTreeSitter(tree.RootNode())
+						if inferErr != nil {
+							log.Printf("schema inference: infer from %s: %v", path, inferErr)
+						}
+					}
+					if schema != nil {
+						return filepath.SkipDir // Stop after first success
+					}
+					return nil
 				}
 				return nil
 			}); walkErr != nil && walkErr != filepath.SkipDir {
