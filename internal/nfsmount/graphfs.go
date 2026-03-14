@@ -272,7 +272,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		return infos, nil
 	}
 
-	node, err := fs.resolveNode(path)
+	node, err := fs.graph.GetNode(path)
 	if err != nil && path != "/" {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
 	}
@@ -337,7 +337,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		return fs.vEntryToFileInfo(filename, entry, fs.mountTime), nil
 	}
 
-	node, err := fs.resolveNode(filename)
+	node, err := fs.graph.GetNode(filename)
 	if err != nil {
 		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 	}
@@ -394,15 +394,6 @@ func (fs *GraphFS) vEntryToFileInfo(fullPath string, e *vfs.VEntry, modTime time
 }
 
 // --- internals ---
-
-// resolveNode looks up a graph node, handling path normalization.
-func (fs *GraphFS) resolveNode(path string) (*graph.Node, error) {
-	node, err := fs.graph.GetNode(path)
-	if err != nil {
-		return nil, err
-	}
-	return node, nil
-}
 
 // cleanPath normalizes a billy path to a clean absolute path.
 func cleanPath(path string) string {
