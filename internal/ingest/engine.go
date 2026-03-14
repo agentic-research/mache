@@ -673,7 +673,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 		for res := range results {
 			count++
 			if count%50000 == 0 {
-				fmt.Printf("\rProcessed %d records...", count)
+				log.Printf("Processed %d records...", count)
 			}
 			if res.err != nil {
 				if collectErr == nil {
@@ -713,7 +713,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 				}
 			}
 		}
-		fmt.Printf("\rProcessed %d records... Done.\n", count)
+		log.Printf("Processed %d records total.", count)
 	}()
 
 	// Reader: stream raw rows from SQLite (I/O bound, single goroutine)
