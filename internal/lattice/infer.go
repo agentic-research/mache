@@ -3,6 +3,7 @@ package lattice
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 
 	"github.com/agentic-research/mache/api"
@@ -237,7 +238,7 @@ func (inf *Inferrer) InferMultiLanguage(recordsByLang map[string][]any) (*api.To
 
 		// Skip languages where FCA produced no useful schema
 		if len(subSchema.Nodes) == 0 {
-			fmt.Printf("  Warning: %s FCA produced empty schema, files will go to _project_files/\n", langName)
+			log.Printf("infer: %s FCA produced empty schema, files will go to _project_files/", langName)
 			continue
 		}
 
