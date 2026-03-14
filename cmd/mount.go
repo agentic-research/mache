@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -97,6 +98,7 @@ var rootCmd = &cobra.Command{
 	Version: fmt.Sprintf("%s (commit %s, built %s)", Version, Commit, Date),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if quiet {
+			log.SetOutput(io.Discard)
 			f, err := os.Open(os.DevNull)
 			if err == nil {
 				os.Stdout = f
@@ -166,10 +168,10 @@ var rootCmd = &cobra.Command{
 
 			switch ext {
 			case ".db":
-				fmt.Print("Inferring schema from SQLite data via FCA...")
+				log.Print("Inferring schema from SQLite data via FCA...")
 				start := time.Now()
 				inferred, err = inf.InferFromSQLite(dataPath)
-				fmt.Printf(" done in %v\n", time.Since(start))
+				log.Printf("Schema inference done in %v", time.Since(start))
 			case ".js":
 				inferred, err = inferFromTreeSitterFile(inf, dataPath, javascript.GetLanguage(), "JavaScript")
 			case ".ts", ".tsx":
@@ -187,30 +189,30 @@ var rootCmd = &cobra.Command{
 			case ".rs":
 				inferred, err = inferFromTreeSitterFile(inf, dataPath, rust.GetLanguage(), "Rust")
 			case ".git":
-				fmt.Print("Loading git commits...")
+				log.Print("Loading git commits...")
 				start := time.Now()
 				recs, readErr := ingest.LoadGitCommits(dataPath)
 				if readErr != nil {
 					err = readErr
-					fmt.Printf(" failed in %v\n", time.Since(start))
+					log.Printf("Loading git commits failed in %v", time.Since(start))
 				} else {
-					fmt.Printf(" done (%d commits) in %v\n", len(recs), time.Since(start))
-					fmt.Print("Inferring schema from Git history (Greedy)...")
+					log.Printf("Loaded %d commits in %v", len(recs), time.Since(start))
+					log.Print("Inferring schema from Git history (Greedy)...")
 					start = time.Now()
 					// Enable Git hints
 					inf.Config.Hints = ingest.GetGitHints()
 					inferred, err = inf.InferFromRecords(recs)
 				}
-				fmt.Printf(" done in %v\n", time.Since(start))
+				log.Printf("Schema inference done in %v", time.Since(start))
 			default:
 				// Check if it's a directory
 				info, errStat := os.Stat(dataPath)
 				if errStat == nil && info.IsDir() {
-					fmt.Printf("Inferring schema from directory %s...\n", dataPath)
+					log.Printf("Inferring schema from directory %s...", dataPath)
 					start := time.Now()
 					inferred, err = inferDirSchema(dataPath)
 					if err == nil {
-						fmt.Printf("Schema inferred in %v\n", time.Since(start))
+						log.Printf("Schema inferred in %v", time.Since(start))
 					}
 				} else {
 					err = fmt.Errorf("automatic inference not supported for %s", ext)
@@ -228,10 +230,10 @@ var rootCmd = &cobra.Command{
 				if err := os.WriteFile(schemaPath, data, 0o644); err != nil {
 					return fmt.Errorf("write inferred schema: %w", err)
 				}
-				fmt.Printf("Inferred schema written to %s\n", schemaPath)
+				log.Printf("Inferred schema written to %s", schemaPath)
 			}
 		} else if s, err := os.ReadFile(schemaPath); err == nil {
-			fmt.Printf("Loaded schema from %s\n", schemaPath)
+			log.Printf("Loaded schema from %s", schemaPath)
 			schema = &api.Topology{}
 			if err := json.Unmarshal(s, schema); err != nil {
 				return fmt.Errorf("failed to parse schema: %w", err)
@@ -240,7 +242,7 @@ var rootCmd = &cobra.Command{
 			if cmd.Flags().Changed("schema") {
 				return fmt.Errorf("failed to read schema file: %w", err)
 			}
-			fmt.Println("No schema found, using default empty schema.")
+			log.Println("No schema found, using default empty schema.")
 			schema = &api.Topology{Version: "v1alpha1"}
 		}
 
@@ -268,17 +270,17 @@ var rootCmd = &cobra.Command{
 				if info.IsDir() {
 					// Size warning for large directories
 					if size, sizeErr := dirSize(dataPath); sizeErr == nil && size > 1<<30 {
-						fmt.Printf("Warning: source directory is %d MB — snapshot copy may take a while\n", size>>20)
+						log.Printf("Warning: source directory is %d MB — snapshot copy may take a while", size>>20)
 					}
-					fmt.Printf("Snapshot: copying %s → %s...\n", dataPath, snapshotPath)
+					log.Printf("Snapshot: copying %s → %s...", dataPath, snapshotPath)
 					start := time.Now()
 					n, err := copyDir(dataPath, snapshotPath)
 					if err != nil {
 						return fmt.Errorf("snapshot copy dir: %w", err)
 					}
-					fmt.Printf("Snapshot: copied %d files in %v\n", n, time.Since(start))
+					log.Printf("Snapshot: copied %d files in %v", n, time.Since(start))
 				} else {
-					fmt.Printf("Snapshot: copying %s → %s\n", dataPath, snapshotPath)
+					log.Printf("Snapshot: copying %s → %s", dataPath, snapshotPath)
 					if err := copyFile(dataPath, snapshotPath); err != nil {
 						return fmt.Errorf("snapshot copy: %w", err)
 					}
@@ -289,10 +291,10 @@ var rootCmd = &cobra.Command{
 				// Read-only snapshots are disposable and cleaned up on unmount.
 				if writable {
 					defer func() {
-						fmt.Printf("\nSnapshot preserved at: %s\n", snapshotPath)
-						fmt.Printf("Review changes:  diff -r %s %s\n", snapshotPath, originalDataPath)
-						fmt.Printf("Apply changes:   rsync -av %s/ %s/\n", snapshotPath, originalDataPath)
-						fmt.Printf("Discard:         rm -rf %s\n", snapshotPath)
+						log.Printf("Snapshot preserved at: %s", snapshotPath)
+						log.Printf("Review changes:  diff -r %s %s", snapshotPath, originalDataPath)
+						log.Printf("Apply changes:   rsync -av %s/ %s/", snapshotPath, originalDataPath)
+						log.Printf("Discard:         rm -rf %s", snapshotPath)
 					}()
 				} else {
 					defer func() { _ = os.RemoveAll(snapshotPath) }()
@@ -308,7 +310,7 @@ var rootCmd = &cobra.Command{
 		if _, err := os.Stat(dataPath); err == nil {
 			if filepath.Ext(dataPath) == ".db" {
 				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
-				fmt.Printf("Opening %s (direct SQL backend)...\n", dataPath)
+				log.Printf("Opening %s (direct SQL backend)...", dataPath)
 				sg, err := graph.OpenSQLiteGraph(dataPath, schema, ingest.RenderTemplate)
 				if err != nil {
 					return fmt.Errorf("open sqlite graph: %w", err)
@@ -319,11 +321,11 @@ var rootCmd = &cobra.Command{
 				sg.SetCallExtractor(newCallExtractor())
 
 				start := time.Now()
-				fmt.Print("Scanning records...")
+				log.Print("Scanning records...")
 				if err := sg.EagerScan(); err != nil {
 					return fmt.Errorf("scan failed: %w", err)
 				}
-				fmt.Printf(" done in %v\n", time.Since(start))
+				log.Printf("Scanning records done in %v", time.Since(start))
 				g = sg
 			} else if !writable && ingest.SchemaUsesTreeSitter(schema) {
 				// Read-only source: ingest to SQLite index, mount via SQLiteGraph (fast path).
@@ -334,7 +336,7 @@ var rootCmd = &cobra.Command{
 				}
 				indexPath := filepath.Join(tmpDir, mountName+"-index.db")
 
-				fmt.Printf("Indexing source to %s...\n", indexPath)
+				log.Printf("Indexing source to %s...", indexPath)
 				start := time.Now()
 
 				writer, err := ingest.NewSQLiteWriter(indexPath)
@@ -350,7 +352,7 @@ var rootCmd = &cobra.Command{
 				if err := writer.Close(); err != nil {
 					return fmt.Errorf("close sqlite writer: %w", err)
 				}
-				fmt.Printf("Indexing complete in %v\n", time.Since(start))
+				log.Printf("Indexing complete in %v", time.Since(start))
 				eng.PrintRoutingSummary()
 
 				// --out: materialize virtuals, copy .db, exit (no mount)
@@ -362,8 +364,8 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("copy db: %w", err)
 					}
 					_ = os.Remove(indexPath)
-					fmt.Printf("Wrote %s\n", outPath)
-					fmt.Printf("Load into leyline: leyline load --db %s --control /tmp/ll.ctrl\n", outPath)
+					log.Printf("Wrote %s", outPath)
+					log.Printf("Load into leyline: leyline load --db %s --control /tmp/ll.ctrl", outPath)
 					return nil
 				}
 
@@ -391,7 +393,7 @@ var rootCmd = &cobra.Command{
 				engine = ingest.NewEngine(schema, store)
 
 				if filepath.Ext(dataPath) == ".git" {
-					fmt.Printf("Ingesting git history from %s...\n", dataPath)
+					log.Printf("Ingesting git history from %s...", dataPath)
 					start := time.Now()
 					recs, err := ingest.LoadGitCommits(dataPath)
 					if err != nil {
@@ -400,15 +402,15 @@ var rootCmd = &cobra.Command{
 					if err := engine.IngestRecords(recs); err != nil {
 						return fmt.Errorf("ingest git records: %w", err)
 					}
-					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+					log.Printf("Ingestion complete in %v", time.Since(start))
 					engine.PrintRoutingSummary()
 				} else {
-					fmt.Printf("Ingesting data from %s...\n", dataPath)
+					log.Printf("Ingesting data from %s...", dataPath)
 					start := time.Now()
 					if err := engine.Ingest(dataPath); err != nil {
 						return fmt.Errorf("ingestion failed: %w", err)
 					}
-					fmt.Printf("Ingestion complete in %v\n", time.Since(start))
+					log.Printf("Ingestion complete in %v", time.Since(start))
 					engine.PrintRoutingSummary()
 				}
 
@@ -421,7 +423,7 @@ var rootCmd = &cobra.Command{
 				}
 				defer func() { _ = store.Close() }() // safe to ignore
 				if err := store.FlushRefs(); err != nil {
-					fmt.Printf("Warning: refs flush failed: %v\n", err)
+					log.Printf("Warning: refs flush failed: %v", err)
 				}
 
 				g = store
@@ -430,7 +432,7 @@ var rootCmd = &cobra.Command{
 			if cmd.Flags().Changed("data") {
 				return fmt.Errorf("data path not found: %s", dataPath)
 			}
-			fmt.Printf("No data found at %s, starting empty.\n", dataPath)
+			log.Printf("No data found at %s, starting empty.", dataPath)
 			g = graph.NewMemoryStore()
 		}
 
@@ -438,17 +440,17 @@ var rootCmd = &cobra.Command{
 		var promptContent []byte
 		if agentMode && agentMetadata != nil {
 			if err := saveMountMetadata(mountPoint, agentMetadata); err != nil {
-				fmt.Printf("Warning: failed to save mount metadata: %v\n", err)
+				log.Printf("Warning: failed to save mount metadata: %v", err)
 			}
 			promptContent = generatePromptContent(agentMetadata)
-			fmt.Printf("\nAgent instructions: %s/PROMPT.txt\n", mountPoint)
-			fmt.Printf("\nTo start:\n")
-			fmt.Printf("  cd %s\n", mountPoint)
-			fmt.Printf("  cat PROMPT.txt\n")
-			fmt.Printf("  claude  # or your preferred LLM\n")
-			fmt.Printf("\nTo stop:\n")
-			fmt.Printf("  mache unmount %s\n", filepath.Base(mountPoint))
-			fmt.Printf("  # or press Ctrl+C in this terminal\n\n")
+			log.Printf("Agent instructions: %s/PROMPT.txt", mountPoint)
+			log.Print("To start:")
+			log.Printf("  cd %s", mountPoint)
+			log.Print("  cat PROMPT.txt")
+			log.Print("  claude  # or your preferred LLM")
+			log.Print("To stop:")
+			log.Printf("  mache unmount %s", filepath.Base(mountPoint))
+			log.Print("  # or press Ctrl+C in this terminal")
 		}
 
 		// 4. Mount via selected backend
@@ -474,11 +476,11 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	// Initial Load
 	gen := ctrl.GetGeneration()
 	arenaPath := ctrl.GetArenaPath()
-	fmt.Printf("Control Block: Gen %d -> %s\n", gen, arenaPath)
+	log.Printf("Control Block: Gen %d -> %s", gen, arenaPath)
 
 	// Wait for first valid generation if empty
 	if arenaPath == "" {
-		fmt.Println("Waiting for initial arena...")
+		log.Println("Waiting for initial arena...")
 		deadline := time.After(30 * time.Second)
 		for {
 			select {
@@ -496,7 +498,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	}
 
 	// Wait for valid arena header
-	fmt.Println("Waiting for valid arena header...")
+	log.Println("Waiting for valid arena header...")
 	var dbPath string
 	deadline := time.After(30 * time.Second)
 	for {
@@ -512,7 +514,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 		// Retry until header is valid (written by Leyline atomic swap)
 		time.Sleep(500 * time.Millisecond)
 	}
-	fmt.Println("Arena header valid. Initializing graph.")
+	log.Println("Arena header valid. Initializing graph.")
 
 	// Writable arena mode: mache IS the writer, no hot-swap watcher.
 	if writable {
@@ -536,19 +538,19 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 			currentGen := ctrl.GetGeneration()
 			if currentGen > lastGen {
 				newPath := ctrl.GetArenaPath()
-				fmt.Printf("Hot Swap Detected: Gen %d -> %d (%s)\n", lastGen, currentGen, newPath)
+				log.Printf("Hot Swap Detected: Gen %d -> %d (%s)", lastGen, currentGen, newPath)
 
 				// Extract new DB from arena
 				newDBPath, err := graph.ExtractActiveDB(newPath)
 				if err != nil {
-					fmt.Printf("Error extracting new db: %v\n", err)
+					log.Printf("Error extracting new db: %v", err)
 					continue
 				}
 
 				// Open new graph
 				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, ingest.RenderTemplate)
 				if err != nil {
-					fmt.Printf("Error opening new graph %s: %v\n", newDBPath, err)
+					log.Printf("Error opening new graph %s: %v", newDBPath, err)
 					_ = os.Remove(newDBPath)
 					continue
 				}
@@ -590,7 +592,7 @@ func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, 
 	}
 	defer func() { _ = wg.Close() }()
 
-	fmt.Println("Writable arena mode: edits write to master DB and flush to arena (100ms coalesce).")
+	log.Println("Writable arena mode: edits write to master DB and flush to arena (100ms coalesce).")
 
 	switch backend {
 	case "nfs":
@@ -621,21 +623,21 @@ func mountWritableNFS(schema *api.Topology, wg *graph.WritableGraph, mountPoint 
 	}
 	defer func() { _ = srv.Close() }()
 
-	fmt.Printf("Mounting mache at %s (NFS on localhost:%d)...\n", mountPoint, srv.Port())
+	log.Printf("Mounting mache at %s (NFS on localhost:%d)...", mountPoint, srv.Port())
 
 	if err := nfsmount.Mount(srv.Port(), mountPoint, true, nfsOpts); err != nil {
 		return err
 	}
-	fmt.Printf("Mounted (writable). Press Ctrl-C to unmount.\n")
+	log.Print("Mounted (writable). Press Ctrl-C to unmount.")
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	fmt.Printf("\nUnmounting %s...\n", mountPoint)
+	log.Printf("Unmounting %s...", mountPoint)
 	if err := nfsmount.Unmount(mountPoint); err != nil {
-		fmt.Printf("Warning: unmount failed: %v\n", err)
-		fmt.Printf("Run manually: sudo umount %s\n", mountPoint)
+		log.Printf("Warning: unmount failed: %v", err)
+		log.Printf("Run manually: sudo umount %s", mountPoint)
 	}
 	return nil
 }
@@ -718,9 +720,9 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 			g.Invalidate(nodeID)
 			return nil
 		})
-		fmt.Println("Write-back enabled: edits will splice into source files.")
+		log.Println("Write-back enabled: edits will splice into source files.")
 	} else if writable {
-		fmt.Println("Warning: --writable ignored (only supported for non-.db sources)")
+		log.Println("Warning: --writable ignored (only supported for non-.db sources)")
 	}
 
 	srv, err := nfsmount.NewServer(graphFs)
@@ -729,22 +731,22 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 	}
 	defer func() { _ = srv.Close() }()
 
-	fmt.Printf("Mounting mache at %s (NFS on localhost:%d)...\n", mountPoint, srv.Port())
+	log.Printf("Mounting mache at %s (NFS on localhost:%d)...", mountPoint, srv.Port())
 
 	if err := nfsmount.Mount(srv.Port(), mountPoint, writable, nfsOpts); err != nil {
 		return err
 	}
-	fmt.Printf("Mounted. Press Ctrl-C to unmount.\n")
+	log.Print("Mounted. Press Ctrl-C to unmount.")
 
 	// Block until signal
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	fmt.Printf("\nUnmounting %s...\n", mountPoint)
+	log.Printf("Unmounting %s...", mountPoint)
 	if err := nfsmount.Unmount(mountPoint); err != nil {
-		fmt.Printf("Warning: unmount failed: %v\n", err)
-		fmt.Printf("Run manually: sudo umount %s\n", mountPoint)
+		log.Printf("Warning: unmount failed: %v", err)
+		log.Printf("Run manually: sudo umount %s", mountPoint)
 	}
 	return nil
 }
@@ -772,15 +774,15 @@ func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mount
 			diagStatus = &ms.WriteStatus
 		}
 		macheFs.SetWritable(true, diagStatus)
-		fmt.Println("Write-back enabled: edits will splice into source files.")
+		log.Println("Write-back enabled: edits will splice into source files.")
 	} else if writable {
-		fmt.Println("Warning: --writable ignored (only supported for non-.db sources)")
+		log.Println("Warning: --writable ignored (only supported for non-.db sources)")
 	}
 
 	host := fuse.NewFileSystemHost(macheFs)
 	host.SetCapReaddirPlus(true)
 
-	fmt.Printf("Mounting mache at %s (using fuse-t/cgofuse)...\n", mountPoint)
+	log.Printf("Mounting mache at %s (using fuse-t/cgofuse)...", mountPoint)
 
 	opts := []string{
 		"-o", fmt.Sprintf("uid=%d", os.Getuid()),
@@ -812,9 +814,9 @@ func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mount
 // inferFromTreeSitterFile reads a source file, parses it with tree-sitter,
 // and infers a topology schema. Returns an error if parsing fails.
 func inferFromTreeSitterFile(inf *lattice.Inferrer, path string, lang *sitter.Language, label string) (*api.Topology, error) {
-	fmt.Printf("Inferring schema from %s source via Tree-sitter...", label)
+	log.Printf("Inferring schema from %s source via Tree-sitter...", label)
 	start := time.Now()
-	defer func() { fmt.Printf(" done in %v\n", time.Since(start)) }()
+	defer func() { log.Printf("Schema inference done in %v", time.Since(start)) }()
 
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -925,7 +927,7 @@ var unmountCmd = &cobra.Command{
 				return fmt.Errorf("failed to find process %d: %w", meta.PID, err)
 			}
 
-			fmt.Printf("Stopping mache process (PID %d)...\n", meta.PID)
+			log.Printf("Stopping mache process (PID %d)...", meta.PID)
 			if err := process.Signal(syscall.SIGTERM); err != nil {
 				return fmt.Errorf("failed to send SIGTERM: %w", err)
 			}
@@ -934,19 +936,19 @@ var unmountCmd = &cobra.Command{
 			time.Sleep(2 * time.Second)
 
 			if isProcessRunning(meta.PID) {
-				fmt.Printf("Process still running, sending SIGKILL...\n")
+				log.Printf("Process still running, sending SIGKILL...")
 				_ = process.Signal(syscall.SIGKILL)
 			}
 		}
 
 		// Clean up mount directory and sidecar
-		fmt.Printf("Removing mount directory: %s\n", mountPoint)
+		log.Printf("Removing mount directory: %s", mountPoint)
 		if err := os.RemoveAll(mountPoint); err != nil {
 			return fmt.Errorf("failed to remove mount directory: %w", err)
 		}
 		_ = os.Remove(sidecarPath(mountPoint))
 
-		fmt.Println("Mount stopped successfully.")
+		log.Println("Mount stopped successfully.")
 		return nil
 	},
 }
@@ -963,10 +965,10 @@ var cleanCmd = &cobra.Command{
 		cleaned := 0
 		for _, meta := range mounts {
 			if !isProcessRunning(meta.PID) {
-				fmt.Printf("Removing stale mount: %s (PID %d was not running)\n",
+				log.Printf("Removing stale mount: %s (PID %d was not running)",
 					filepath.Base(meta.MountPoint), meta.PID)
 				if err := os.RemoveAll(meta.MountPoint); err != nil {
-					fmt.Printf("Warning: failed to remove %s: %v\n", meta.MountPoint, err)
+					log.Printf("Warning: failed to remove %s: %v", meta.MountPoint, err)
 				} else {
 					_ = os.Remove(sidecarPath(meta.MountPoint))
 					cleaned++
@@ -993,9 +995,9 @@ var cleanCmd = &cobra.Command{
 				}
 				if !isProcessRunning(pid) {
 					snapPath := filepath.Join(snapDir, name)
-					fmt.Printf("Removing orphaned snapshot: %s (PID %d was not running)\n", name, pid)
+					log.Printf("Removing orphaned snapshot: %s (PID %d was not running)", name, pid)
 					if err := os.RemoveAll(snapPath); err != nil {
-						fmt.Printf("Warning: failed to remove %s: %v\n", snapPath, err)
+						log.Printf("Warning: failed to remove %s: %v", snapPath, err)
 					} else {
 						cleaned++
 					}
@@ -1004,9 +1006,9 @@ var cleanCmd = &cobra.Command{
 		}
 
 		if cleaned == 0 {
-			fmt.Println("No stale mounts or orphaned snapshots found.")
+			log.Println("No stale mounts or orphaned snapshots found.")
 		} else {
-			fmt.Printf("Cleaned %d stale item(s).\n", cleaned)
+			log.Printf("Cleaned %d stale item(s).", cleaned)
 		}
 
 		return nil
