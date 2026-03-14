@@ -43,14 +43,8 @@ func loadGitignore(rootDir string) *gitignoreMatcher {
 			return nil // best-effort
 		}
 		if d.IsDir() {
-			base := filepath.Base(p)
-			if p != rootDir {
-				if len(base) > 0 && base[0] == '.' {
-					return filepath.SkipDir
-				}
-				if base == "node_modules" || base == "target" || base == "dist" || base == "build" {
-					return filepath.SkipDir
-				}
+			if p != rootDir && ShouldSkipDir(filepath.Base(p)) {
+				return filepath.SkipDir
 			}
 			// Check for nested .gitignore (skip root, already loaded)
 			if p != rootDir {

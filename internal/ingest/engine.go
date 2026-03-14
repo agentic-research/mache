@@ -127,6 +127,18 @@ var skipExts = map[string]bool{
 	".pdf": true, ".mp3": true, ".mp4": true, ".wav": true,
 }
 
+// ShouldSkipDir returns true for hidden dirs and common build artifact directories.
+func ShouldSkipDir(base string) bool {
+	if strings.HasPrefix(base, ".") {
+		return true
+	}
+	switch base {
+	case "node_modules", "target", "dist", "build", "__pycache__":
+		return true
+	}
+	return false
+}
+
 // ShouldSkipFile returns true if the file should not be ingested.
 // Checks extension blocklist, size limit, and binary content.
 func ShouldSkipFile(path string, size int64) bool {
@@ -235,15 +247,8 @@ func (e *Engine) Ingest(path string) error {
 				return err
 			}
 			if d.IsDir() {
-				// Skip hidden directories (.git, .mache, etc.) and build artifacts
-				base := filepath.Base(p)
-				if p != realPath {
-					if len(base) > 0 && base[0] == '.' {
-						return filepath.SkipDir
-					}
-					if base == "target" || base == "node_modules" || base == "dist" || base == "build" {
-						return filepath.SkipDir
-					}
+				if p != realPath && ShouldSkipDir(filepath.Base(p)) {
+					return filepath.SkipDir
 				}
 				// Check gitignore for directories
 				if e.gitignore != nil && p != realPath {

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/agentic-research/mache/api"
@@ -38,10 +37,7 @@ func detectProjectLanguages(dir string) (map[string]int, error) {
 			return err
 		}
 		if info.IsDir() {
-			base := filepath.Base(path)
-			if (strings.HasPrefix(base, ".") && path != dir) ||
-				base == "target" || base == "node_modules" ||
-				base == "dist" || base == "build" {
+			if path != dir && ingest.ShouldSkipDir(filepath.Base(path)) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -159,10 +155,7 @@ func inferLanguages(dataPath string, langs []string, languageCounts map[string]i
 					return err
 				}
 				if info.IsDir() {
-					base := filepath.Base(path)
-					if (strings.HasPrefix(base, ".") && path != dataPath) ||
-						base == "target" || base == "node_modules" ||
-						base == "dist" || base == "build" {
+					if path != dataPath && ingest.ShouldSkipDir(filepath.Base(path)) {
 						return filepath.SkipDir
 					}
 					return nil
