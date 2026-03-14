@@ -2,12 +2,19 @@ package writeback
 
 import (
 	"bytes"
+	"context"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"mvdan.cc/gofumpt/format"
 )
+
+// formatterTimeout is the maximum time an external formatter process may run
+// before being killed. Prevents hung prettier/ruff/black from blocking the
+// write-back pipeline indefinitely.
+const formatterTimeout = 10 * time.Second
 
 // FormatBuffer formats source code in-memory based on file extension.
 // Go files use gofumpt; HCL/Terraform files use hclwrite.Format.
@@ -59,7 +66,13 @@ func formatPrettier(content []byte, filePath string) []byte {
 	if err != nil {
 		return content
 	}
-	out, err := runFormatter(path, []string{"--stdin-filepath", filePath}, content)
+	// Prefix relative paths with "./" to prevent filenames starting with
+	// "--" from being interpreted as flags by prettier.
+	safePath := filePath
+	if !strings.HasPrefix(safePath, "/") && !strings.HasPrefix(safePath, "./") {
+		safePath = "./" + safePath
+	}
+	out, err := runFormatter(path, []string{"--stdin-filepath", safePath}, content)
 	if err != nil {
 		return content
 	}
@@ -67,9 +80,12 @@ func formatPrettier(content []byte, filePath string) []byte {
 }
 
 // runFormatter executes an external formatter, piping content via stdin and
-// returning stdout. Returns an error if the command fails.
+// returning stdout. The process is killed after formatterTimeout to prevent
+// hung formatters from blocking the write-back pipeline.
 func runFormatter(path string, args []string, content []byte) ([]byte, error) {
-	cmd := exec.Command(path, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), formatterTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Stdin = bytes.NewReader(content)
 	return cmd.Output()
 }

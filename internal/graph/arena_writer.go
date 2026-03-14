@@ -178,35 +178,54 @@ func (f *ArenaFlusher) flushInternal() error {
 
 	pageSize := dbPageSize(dbBytes)
 
-	// Read existing inactive buffer for comparison
-	oldBuf := make([]byte, bufferSize)
-	if _, err := af.ReadAt(oldBuf, inactiveOffset); err != nil {
-		return fmt.Errorf("read inactive buffer: %w", err)
-	}
-
-	// Write only changed pages within DB content
-	for off := int64(0); off < int64(len(dbBytes)); off += int64(pageSize) {
-		end := off + int64(pageSize)
-		if end > int64(len(dbBytes)) {
-			end = int64(len(dbBytes))
+	// For small DBs (<=1MB), skip the page-level diff and do a full write.
+	// The page-diff trades memory (reading the entire inactive buffer) for
+	// reduced I/O. On SSDs with small DBs the read overhead isn't worth it.
+	const pageDiffThreshold = 1 << 20 // 1 MB
+	if int64(len(dbBytes)) <= pageDiffThreshold {
+		if _, err := af.WriteAt(dbBytes, inactiveOffset); err != nil {
+			return fmt.Errorf("write db: %w", err)
 		}
-		if !bytes.Equal(dbBytes[off:end], oldBuf[off:end]) {
-			if _, err := af.WriteAt(dbBytes[off:end], inactiveOffset+off); err != nil {
-				return fmt.Errorf("write page at offset %d: %w", off, err)
+		// Zero-fill remainder
+		remainder := bufferSize - int64(len(dbBytes))
+		if remainder > 0 {
+			zeros := make([]byte, remainder)
+			if _, err := af.WriteAt(zeros, inactiveOffset+int64(len(dbBytes))); err != nil {
+				return fmt.Errorf("zero-pad: %w", err)
 			}
 		}
-	}
-
-	// Zero-fill only non-zero pages in the remainder (beyond DB content)
-	for off := int64(len(dbBytes)); off < bufferSize; off += int64(pageSize) {
-		end := off + int64(pageSize)
-		if end > bufferSize {
-			end = bufferSize
+	} else {
+		// Read existing inactive buffer for comparison
+		oldBuf := make([]byte, bufferSize)
+		if _, err := af.ReadAt(oldBuf, inactiveOffset); err != nil {
+			return fmt.Errorf("read inactive buffer: %w", err)
 		}
-		if !isZeroPage(oldBuf[off:end]) {
-			zeros := make([]byte, end-off)
-			if _, err := af.WriteAt(zeros, inactiveOffset+off); err != nil {
-				return fmt.Errorf("zero-pad at offset %d: %w", off, err)
+
+		// Write only changed pages within DB content
+		for off := int64(0); off < int64(len(dbBytes)); off += int64(pageSize) {
+			end := off + int64(pageSize)
+			if end > int64(len(dbBytes)) {
+				end = int64(len(dbBytes))
+			}
+			if !bytes.Equal(dbBytes[off:end], oldBuf[off:end]) {
+				if _, err := af.WriteAt(dbBytes[off:end], inactiveOffset+off); err != nil {
+					return fmt.Errorf("write page at offset %d: %w", off, err)
+				}
+			}
+		}
+
+		// Zero-fill only non-zero pages in the remainder (beyond DB content).
+		// Allocate the zero page once and reuse for each write.
+		zeroPage := make([]byte, pageSize)
+		for off := int64(len(dbBytes)); off < bufferSize; off += int64(pageSize) {
+			end := off + int64(pageSize)
+			if end > bufferSize {
+				end = bufferSize
+			}
+			if !isZeroPage(oldBuf[off:end]) {
+				if _, err := af.WriteAt(zeroPage[:end-off], inactiveOffset+off); err != nil {
+					return fmt.Errorf("zero-pad at offset %d: %w", off, err)
+				}
 			}
 		}
 	}
@@ -232,28 +251,27 @@ func (f *ArenaFlusher) flushInternal() error {
 	return nil
 }
 
+// defaultSQLitePageSize is the fallback when the DB header is missing or invalid.
+const defaultSQLitePageSize = 4096
+
 // dbPageSize extracts the SQLite page size from the database file header.
-// Returns 4096 if the header is missing or invalid.
+// Returns defaultSQLitePageSize if the header is missing or invalid.
 func dbPageSize(db []byte) int {
 	if len(db) < 100 {
-		return 4096
+		return defaultSQLitePageSize
 	}
 	ps := int(binary.BigEndian.Uint16(db[16:18]))
 	if ps == 1 {
 		return 65536 // SQLite convention: 1 means 65536
 	}
 	if ps < 512 || ps > 65536 || ps&(ps-1) != 0 {
-		return 4096
+		return defaultSQLitePageSize
 	}
 	return ps
 }
 
 // isZeroPage reports whether all bytes in b are zero.
+// Uses bytes.Count which is SIMD-optimized internally.
 func isZeroPage(b []byte) bool {
-	for _, v := range b {
-		if v != 0 {
-			return false
-		}
-	}
-	return true
+	return bytes.Count(b, []byte{0}) == len(b)
 }

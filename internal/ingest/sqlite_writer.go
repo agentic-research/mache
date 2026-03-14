@@ -14,6 +14,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// defaultBatchSize is the number of inserts per transaction batch.
+// Larger batches reduce commit overhead; 10K balances throughput vs memory.
+const defaultBatchSize = 10_000
+
 // SQLiteWriter implements IngestionTarget for the new high-performance schema.
 type SQLiteWriter struct {
 	db        *sql.DB
@@ -77,7 +81,7 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 
 	w := &SQLiteWriter{
 		db:        db,
-		batchSize: 10000,
+		batchSize: defaultBatchSize,
 	}
 
 	if err := w.beginTx(); err != nil {

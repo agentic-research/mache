@@ -39,34 +39,37 @@ var buildCmd = &cobra.Command{
 			log.Println("Inferring schema...")
 
 			// Walk source to find the first .go file for bootstrap inference
-			if walkErr := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+			if walkErr := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
 				if err != nil {
 					return err
 				}
-				if filepath.Ext(path) == ".go" {
-					content, readErr := os.ReadFile(path)
-					if readErr != nil {
-						log.Printf("schema inference: read %s: %v", path, readErr)
-						return nil // try next file
-					}
-					parser := sitter.NewParser()
-					parser.SetLanguage(golang.GetLanguage())
-					tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
-					if parseErr != nil {
-						log.Printf("schema inference: parse %s: %v", path, parseErr)
-						return nil // try next file
-					}
-					if tree != nil {
-						var inferErr error
-						schema, inferErr = inf.InferFromTreeSitter(tree.RootNode())
-						if inferErr != nil {
-							log.Printf("schema inference: infer from %s: %v", path, inferErr)
-						}
-					}
-					if schema != nil {
-						return filepath.SkipDir // Stop after first success
-					}
+				if d.IsDir() && path != source && ingest.ShouldSkipDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				if d.IsDir() || filepath.Ext(path) != ".go" {
 					return nil
+				}
+				content, readErr := os.ReadFile(path)
+				if readErr != nil {
+					log.Printf("schema inference: read %s: %v", path, readErr)
+					return nil // try next file
+				}
+				parser := sitter.NewParser()
+				parser.SetLanguage(golang.GetLanguage())
+				tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+				if parseErr != nil {
+					log.Printf("schema inference: parse %s: %v", path, parseErr)
+					return nil // try next file
+				}
+				if tree != nil {
+					var inferErr error
+					schema, inferErr = inf.InferFromTreeSitter(tree.RootNode())
+					if inferErr != nil {
+						log.Printf("schema inference: infer from %s: %v", path, inferErr)
+					}
+				}
+				if schema != nil {
+					return filepath.SkipDir // Stop after first success
 				}
 				return nil
 			}); walkErr != nil && walkErr != filepath.SkipDir {

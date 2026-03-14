@@ -32,6 +32,10 @@ import (
 
 const inlineThreshold = 4096
 
+// binarySniffSize is the number of bytes read from the start of a file
+// to detect binary content (same heuristic as git).
+const binarySniffSize = 512
+
 // IngestionTarget combines Graph reading with writing capabilities.
 type IngestionTarget interface {
 	graph.Graph
@@ -159,7 +163,7 @@ func isBinaryFile(path string) bool {
 	}
 	defer func() { _ = f.Close() }()
 
-	buf := make([]byte, 512)
+	buf := make([]byte, binarySniffSize)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
 		return false
@@ -213,7 +217,11 @@ func filterNodesByLanguage(nodes []api.Node, langName string) []api.Node {
 }
 
 // Ingest processes a file or directory.
+// Safe to call multiple times — internal dedup state is reset on each call.
 func (e *Engine) Ingest(path string) error {
+	// Reset dedup state so stale entries from a prior Ingest don't persist.
+	e.childSeen = make(map[string]map[string]bool)
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -242,12 +250,12 @@ func (e *Engine) Ingest(path string) error {
 		// can produce confusing errors (e.g. S-expression as JSONPath).
 		treeSitter := SchemaUsesTreeSitter(e.Schema)
 
-		return filepath.Walk(realPath, func(p string, d os.FileInfo, err error) error {
+		return filepath.WalkDir(realPath, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if d.IsDir() {
-				if p != realPath && ShouldSkipDir(filepath.Base(p)) {
+				if p != realPath && ShouldSkipDir(d.Name()) {
 					return filepath.SkipDir
 				}
 				// Check gitignore for directories
@@ -273,9 +281,9 @@ func (e *Engine) Ingest(path string) error {
 				}
 			}
 			// Skip symlinks to directories (e.g., kodata/templates -> ../templates)
-			// filepath.Walk doesn't follow symlinks, so d.IsDir() is false for them,
+			// WalkDir doesn't follow symlinks, so d.IsDir() is false for them,
 			// but os.ReadFile will follow and fail with "is a directory".
-			if d.Mode()&os.ModeSymlink != 0 {
+			if d.Type()&os.ModeSymlink != 0 {
 				target, err := os.Stat(p)
 				if err == nil && target.IsDir() {
 					return nil
@@ -283,7 +291,11 @@ func (e *Engine) Ingest(path string) error {
 			}
 			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
-			if ShouldSkipFile(p, d.Size()) {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if ShouldSkipFile(p, info.Size()) {
 				return nil
 			}
 			shouldParse := false
@@ -300,16 +312,16 @@ func (e *Engine) Ingest(path string) error {
 			}
 
 			if shouldParse {
-				return e.ingestFile(p, d.ModTime())
+				return e.ingestFile(p, info.ModTime())
 			}
 			// Skip binary files (executables, object files, images, etc.)
 			if isBinaryFile(p) {
 				return nil
 			}
 			if treeSitter {
-				return e.ingestRawFileUnder(p, "_project_files", d.ModTime())
+				return e.ingestRawFileUnder(p, "_project_files", info.ModTime())
 			}
-			return e.ingestRawFile(p, d.ModTime())
+			return e.ingestRawFile(p, info.ModTime())
 		})
 	}
 	info, err = os.Stat(realPath)
