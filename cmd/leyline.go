@@ -477,24 +477,25 @@ func loadLSPDiagnostics(tx *sql.Tx) (map[string]string, error) {
 	return result, rows.Err()
 }
 
-func loadLSPDefs(tx *sql.Tx) (map[string]string, error) {
-	if !tableExists(tx, "_lsp_defs") {
+type lspLocation struct {
+	URI       string `json:"uri"`
+	StartLine int    `json:"start_line"`
+	StartCol  int    `json:"start_col"`
+	EndLine   int    `json:"end_line"`
+	EndCol    int    `json:"end_col"`
+}
+
+func loadLSPLocations(tx *sql.Tx, table, query string) (map[string]string, error) {
+	if !tableExists(tx, table) {
 		return nil, nil
 	}
-	rows, err := tx.Query(`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col FROM _lsp_defs`)
+	rows, err := tx.Query(query)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	type defLoc struct {
-		URI       string `json:"uri"`
-		StartLine int    `json:"start_line"`
-		StartCol  int    `json:"start_col"`
-		EndLine   int    `json:"end_line"`
-		EndCol    int    `json:"end_col"`
-	}
-	grouped := make(map[string][]defLoc)
+	grouped := make(map[string][]lspLocation)
 	for rows.Next() {
 		var nodeID, uri string
 		var sl, sc, el, ec int
@@ -502,7 +503,7 @@ func loadLSPDefs(tx *sql.Tx) (map[string]string, error) {
 			return nil, err
 		}
 		name := lspSymbolLeafName(nodeID)
-		grouped[name] = append(grouped[name], defLoc{URI: uri, StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec})
+		grouped[name] = append(grouped[name], lspLocation{URI: uri, StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -516,43 +517,14 @@ func loadLSPDefs(tx *sql.Tx) (map[string]string, error) {
 	return result, nil
 }
 
+func loadLSPDefs(tx *sql.Tx) (map[string]string, error) {
+	return loadLSPLocations(tx, "_lsp_defs",
+		`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col FROM _lsp_defs`)
+}
+
 func loadLSPRefs(tx *sql.Tx) (map[string]string, error) {
-	if !tableExists(tx, "_lsp_refs") {
-		return nil, nil
-	}
-	rows, err := tx.Query(`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col FROM _lsp_refs`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	type refLoc struct {
-		URI       string `json:"uri"`
-		StartLine int    `json:"start_line"`
-		StartCol  int    `json:"start_col"`
-		EndLine   int    `json:"end_line"`
-		EndCol    int    `json:"end_col"`
-	}
-	grouped := make(map[string][]refLoc)
-	for rows.Next() {
-		var nodeID, uri string
-		var sl, sc, el, ec int
-		if err := rows.Scan(&nodeID, &uri, &sl, &sc, &el, &ec); err != nil {
-			return nil, err
-		}
-		name := lspSymbolLeafName(nodeID)
-		grouped[name] = append(grouped[name], refLoc{URI: uri, StartLine: sl, StartCol: sc, EndLine: el, EndCol: ec})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	result := make(map[string]string)
-	for name, locs := range grouped {
-		data, _ := json.Marshal(locs)
-		result[name] = string(data)
-	}
-	return result, nil
+	return loadLSPLocations(tx, "_lsp_refs",
+		`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col FROM _lsp_refs`)
 }
 
 // extractCallerDir gets the construct directory from a node_id.
