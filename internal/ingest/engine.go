@@ -49,7 +49,8 @@ type Engine struct {
 	RootPath         string // absolute path to the root of the ingestion
 	RespectGitignore bool   // when true, skip files matching .gitignore patterns (default: true)
 	routedFiles      map[string]int
-	gitignore        *gitignoreMatcher // loaded from .gitignore when RespectGitignore is true
+	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
+	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
 	mu               sync.Mutex
 }
 
@@ -160,6 +161,7 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 		Store:            store,
 		RespectGitignore: true,
 		routedFiles:      make(map[string]int),
+		childSeen:        make(map[string]map[string]bool),
 	}
 }
 
@@ -552,15 +554,14 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 			} else {
 				parent, err := e.Store.GetNode(parentID)
 				if err == nil {
-					// Check if child already linked (dedup)
-					exists := false
-					for _, c := range parent.Children {
-						if c == currentID {
-							exists = true
-							break
+					if e.childSeen[parentID] == nil {
+						e.childSeen[parentID] = make(map[string]bool, len(parent.Children))
+						for _, c := range parent.Children {
+							e.childSeen[parentID][c] = true
 						}
 					}
-					if !exists {
+					if !e.childSeen[parentID][currentID] {
+						e.childSeen[parentID][currentID] = true
 						parent.Children = append(parent.Children, currentID)
 						e.Store.AddNode(parent)
 					}
@@ -971,14 +972,14 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			parentId := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
 			parent, err := store.GetNode(parentId)
 			if err == nil {
-				exists := false
-				for _, c := range parent.Children {
-					if c == id {
-						exists = true
-						break
+				if e.childSeen[parentId] == nil {
+					e.childSeen[parentId] = make(map[string]bool, len(parent.Children))
+					for _, c := range parent.Children {
+						e.childSeen[parentId][c] = true
 					}
 				}
-				if !exists {
+				if !e.childSeen[parentId][id] {
+					e.childSeen[parentId][id] = true
 					parent.Children = append(parent.Children, id)
 					store.AddNode(parent)
 				}
