@@ -20,7 +20,7 @@ func TestJsonWalker(t *testing.T) {
   }
 }
 `
-	var data interface{}
+	var data any
 	err := json.Unmarshal([]byte(input), &data)
 	require.NoError(t, err)
 
