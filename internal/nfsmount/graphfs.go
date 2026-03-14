@@ -485,7 +485,7 @@ func (fi *staticFileInfo) Size() int64        { return fi.size }
 func (fi *staticFileInfo) Mode() os.FileMode  { return fi.mode }
 func (fi *staticFileInfo) ModTime() time.Time { return fi.modTime }
 func (fi *staticFileInfo) IsDir() bool        { return fi.mode.IsDir() }
-func (fi *staticFileInfo) Sys() interface{} {
+func (fi *staticFileInfo) Sys() any {
 	return &syscall.Stat_t{
 		Ino: fi.ino,
 		Uid: uint32(os.Getuid()),
