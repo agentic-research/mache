@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bufio"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -36,12 +37,12 @@ func loadGitignore(rootDir string) *gitignoreMatcher {
 
 	// Walk the tree to find nested .gitignore files.
 	// This is lightweight — we only stat .gitignore in each directory, not read
-	// every file. filepath.Walk is fine since we skip hidden/build dirs just like Ingest.
-	_ = filepath.Walk(rootDir, func(p string, info os.FileInfo, err error) error {
+	// every file. fs.WalkDir avoids extra Lstat calls since DirEntry carries the type.
+	_ = filepath.WalkDir(rootDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // best-effort
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			base := filepath.Base(p)
 			if p != rootDir {
 				if len(base) > 0 && base[0] == '.' {
