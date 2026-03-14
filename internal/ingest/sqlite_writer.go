@@ -23,6 +23,7 @@ type SQLiteWriter struct {
 	stmtDef   *sql.Stmt // For adding defs
 	batchSize int
 	count     int
+	firstErr  error // first insert/batch error, surfaced by Close
 	mu        sync.Mutex
 }
 
@@ -188,15 +189,25 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 	)
 	if err != nil {
 		log.Printf("SQLiteWriter: insert failed for %s: %v", n.ID, err)
+		if w.firstErr == nil {
+			w.firstErr = fmt.Errorf("insert %s: %w", n.ID, err)
+		}
+		return
 	}
 
 	w.count++
 	if w.count >= w.batchSize {
 		if err := w.commitTx(); err != nil {
 			log.Printf("SQLiteWriter: commit failed: %v", err)
+			if w.firstErr == nil {
+				w.firstErr = fmt.Errorf("commit batch: %w", err)
+			}
 		}
 		if err := w.beginTx(); err != nil {
 			log.Printf("SQLiteWriter: begin failed: %v", err)
+			if w.firstErr == nil {
+				w.firstErr = fmt.Errorf("begin batch: %w", err)
+			}
 		}
 		w.count = 0
 	}
@@ -237,12 +248,11 @@ func (w *SQLiteWriter) Close() error {
 		return err
 	}
 
-	// Create indices after bulk load for speed
-	if _, err := w.db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_name ON nodes(parent_id, name)`); err != nil {
-		log.Printf("SQLiteWriter: index creation failed: %v", err)
+	if err := w.db.Close(); err != nil {
+		return err
 	}
 
-	return w.db.Close()
+	return w.firstErr
 }
 
 // --- Graph Interface Implementation (for IngestionTarget) ---
