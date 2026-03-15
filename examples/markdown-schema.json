@@ -1,0 +1,89 @@
+{
+  "version": "v1",
+  "file_sets": {
+    "block_files": [
+      {"name": "source", "content_template": "{{.record}}"}
+    ]
+  },
+  "nodes": [
+    {
+      "name": "sections",
+      "selector": "$",
+      "language": "markdown",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(section (atx_heading (inline) @name))",
+          "language": "markdown",
+          "refs": ["heading-{{.name}}"],
+          "children": [
+            {
+              "name": "{{.name}}",
+              "selector": "(section (atx_heading (inline) @name))",
+              "language": "markdown",
+              "refs": ["heading-{{.name}}"],
+              "include": ["block_files"]
+            },
+            {
+              "name": "lists",
+              "selector": "(list)",
+              "language": "markdown",
+              "children": [
+                {
+                  "name": "item-{{.index}}",
+                  "selector": "(list_item)",
+                  "language": "markdown",
+                  "include": ["block_files"]
+                }
+              ]
+            },
+            {
+              "name": "code-blocks",
+              "selector": "(fenced_code_block)",
+              "language": "markdown",
+              "include": ["block_files"]
+            }
+          ],
+          "include": ["block_files"]
+        }
+      ]
+    },
+    {
+      "name": "blocks",
+      "selector": "$",
+      "language": "markdown",
+      "children": [
+        {
+          "name": "paragraphs",
+          "selector": "(paragraph)",
+          "language": "markdown",
+          "include": ["block_files"]
+        },
+        {
+          "name": "code",
+          "selector": "(fenced_code_block (info_string) @name)",
+          "language": "markdown",
+          "include": ["block_files"]
+        },
+        {
+          "name": "quotes",
+          "selector": "(block_quote)",
+          "language": "markdown",
+          "include": ["block_files"]
+        },
+        {
+          "name": "tables",
+          "selector": "(pipe_table)",
+          "language": "markdown",
+          "include": ["block_files"]
+        },
+        {
+          "name": "html",
+          "selector": "(html_block)",
+          "language": "markdown",
+          "include": ["block_files"]
+        }
+      ]
+    }
+  ]
+}

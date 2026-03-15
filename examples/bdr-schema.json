@@ -1,0 +1,112 @@
+{
+  "version": "v1",
+  "table": "issues",
+  "file_sets": {
+    "bead_core": [
+      {"name": "title", "content_template": "{{.title}}"},
+      {"name": "description", "content_template": "{{.description}}"},
+      {"name": "status", "content_template": "{{.status}}"},
+      {"name": "priority", "content_template": "{{.priority}}"},
+      {"name": "issue_type", "content_template": "{{.issue_type}}"},
+      {"name": "owner", "content_template": "{{.owner}}"},
+      {"name": "created_at", "content_template": "{{.created_at}}"},
+      {"name": "raw.json", "content_template": "{{. | json}}"}
+    ],
+    "bead_refs": [
+      {"name": "external_ref", "content_template": "{{.external_ref}}"},
+      {"name": "branch", "content_template": "{{.branch}}"},
+      {"name": "pr_url", "content_template": "{{.pr_url}}"}
+    ]
+  },
+  "nodes": [
+    {
+      "name": "by-status",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.status}}",
+          "selector": "$[*]",
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["status-{{.status}}", "type-{{.issue_type}}"],
+              "include": ["bead_core", "bead_refs"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "by-type",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.issue_type}}",
+          "selector": "$[*]",
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["type-{{.issue_type}}"],
+              "include": ["bead_core"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "by-priority",
+      "selector": "$",
+      "children": [
+        {
+          "name": "P{{.priority}}",
+          "selector": "$[*]",
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "include": ["bead_core"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "by-repo",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.source_repo}}",
+          "selector": "$[*]",
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["repo-{{.source_repo}}", "xref-{{.external_ref}}"],
+              "include": ["bead_core", "bead_refs"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "threads",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.external_ref}}",
+          "selector": "$[?(@.external_ref)]",
+          "refs": ["thread-{{.external_ref}}"],
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "include": ["bead_core"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
