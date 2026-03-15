@@ -14,6 +14,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// defaultBatchSize is the number of inserts per transaction batch.
+// Larger batches reduce commit overhead; 10K balances throughput vs memory.
+const defaultBatchSize = 10_000
+
 // SQLiteWriter implements IngestionTarget for the new high-performance schema.
 type SQLiteWriter struct {
 	db        *sql.DB
@@ -23,6 +27,7 @@ type SQLiteWriter struct {
 	stmtDef   *sql.Stmt // For adding defs
 	batchSize int
 	count     int
+	firstErr  error // first insert/batch error, surfaced by Close
 	mu        sync.Mutex
 }
 
@@ -76,7 +81,7 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 
 	w := &SQLiteWriter{
 		db:        db,
-		batchSize: 10000,
+		batchSize: defaultBatchSize,
 	}
 
 	if err := w.beginTx(); err != nil {
@@ -188,15 +193,25 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 	)
 	if err != nil {
 		log.Printf("SQLiteWriter: insert failed for %s: %v", n.ID, err)
+		if w.firstErr == nil {
+			w.firstErr = fmt.Errorf("insert %s: %w", n.ID, err)
+		}
+		return
 	}
 
 	w.count++
 	if w.count >= w.batchSize {
 		if err := w.commitTx(); err != nil {
 			log.Printf("SQLiteWriter: commit failed: %v", err)
+			if w.firstErr == nil {
+				w.firstErr = fmt.Errorf("commit batch: %w", err)
+			}
 		}
 		if err := w.beginTx(); err != nil {
 			log.Printf("SQLiteWriter: begin failed: %v", err)
+			if w.firstErr == nil {
+				w.firstErr = fmt.Errorf("begin batch: %w", err)
+			}
 		}
 		w.count = 0
 	}
@@ -237,12 +252,11 @@ func (w *SQLiteWriter) Close() error {
 		return err
 	}
 
-	// Create indices after bulk load for speed
-	if _, err := w.db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_name ON nodes(parent_id, name)`); err != nil {
-		log.Printf("SQLiteWriter: index creation failed: %v", err)
+	if err := w.db.Close(); err != nil {
+		return err
 	}
 
-	return w.db.Close()
+	return w.firstErr
 }
 
 // --- Graph Interface Implementation (for IngestionTarget) ---

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -35,22 +36,40 @@ var buildCmd = &cobra.Command{
 		} else {
 			// No schema — infer via FCA from source tree
 			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
-			fmt.Println("Inferring schema...")
+			log.Println("Inferring schema...")
 
 			// Walk source to find the first .go file for bootstrap inference
-			if walkErr := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+			if walkErr := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
 				if err != nil {
 					return err
 				}
-				if filepath.Ext(path) == ".go" {
-					content, _ := os.ReadFile(path)
-					parser := sitter.NewParser()
-					parser.SetLanguage(golang.GetLanguage())
-					tree, _ := parser.ParseCtx(context.Background(), nil, content)
-					if tree != nil {
-						schema, _ = inf.InferFromTreeSitter(tree.RootNode())
+				if d.IsDir() && path != source && ingest.ShouldSkipDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				if d.IsDir() || filepath.Ext(path) != ".go" {
+					return nil
+				}
+				content, readErr := os.ReadFile(path)
+				if readErr != nil {
+					log.Printf("schema inference: read %s: %v", path, readErr)
+					return nil // try next file
+				}
+				parser := sitter.NewParser()
+				parser.SetLanguage(golang.GetLanguage())
+				tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+				if parseErr != nil {
+					log.Printf("schema inference: parse %s: %v", path, parseErr)
+					return nil // try next file
+				}
+				if tree != nil {
+					var inferErr error
+					schema, inferErr = inf.InferFromTreeSitter(tree.RootNode())
+					if inferErr != nil {
+						log.Printf("schema inference: infer from %s: %v", path, inferErr)
 					}
-					return filepath.SkipDir // Stop after first
+				}
+				if schema != nil {
+					return filepath.SkipDir // Stop after first success
 				}
 				return nil
 			}); walkErr != nil && walkErr != filepath.SkipDir {
@@ -75,11 +94,11 @@ var buildCmd = &cobra.Command{
 
 		// 4. Ingest
 		start := time.Now()
-		fmt.Printf("Building %s from %s...\n", output, source)
+		log.Printf("Building %s from %s...", output, source)
 		if err := engine.Ingest(source); err != nil {
 			return err
 		}
-		fmt.Printf("Done in %v.\n", time.Since(start))
+		log.Printf("Done in %v.", time.Since(start))
 		return nil
 	},
 }

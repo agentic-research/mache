@@ -25,11 +25,16 @@ import (
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/toml"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
 )
 
 const inlineThreshold = 4096
+
+// binarySniffSize is the number of bytes read from the start of a file
+// to detect binary content (same heuristic as git).
+const binarySniffSize = 512
 
 // IngestionTarget combines Graph reading with writing capabilities.
 type IngestionTarget interface {
@@ -48,7 +53,8 @@ type Engine struct {
 	RootPath         string // absolute path to the root of the ingestion
 	RespectGitignore bool   // when true, skip files matching .gitignore patterns (default: true)
 	routedFiles      map[string]int
-	gitignore        *gitignoreMatcher // loaded from .gitignore when RespectGitignore is true
+	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
+	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
 	mu               sync.Mutex
 }
 
@@ -125,6 +131,18 @@ var skipExts = map[string]bool{
 	".pdf": true, ".mp3": true, ".mp4": true, ".wav": true,
 }
 
+// ShouldSkipDir returns true for hidden dirs and common build artifact directories.
+func ShouldSkipDir(base string) bool {
+	if strings.HasPrefix(base, ".") {
+		return true
+	}
+	switch base {
+	case "node_modules", "target", "dist", "build", "__pycache__":
+		return true
+	}
+	return false
+}
+
 // ShouldSkipFile returns true if the file should not be ingested.
 // Checks extension blocklist, size limit, and binary content.
 func ShouldSkipFile(path string, size int64) bool {
@@ -145,7 +163,7 @@ func isBinaryFile(path string) bool {
 	}
 	defer func() { _ = f.Close() }()
 
-	buf := make([]byte, 512)
+	buf := make([]byte, binarySniffSize)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
 		return false
@@ -159,6 +177,7 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 		Store:            store,
 		RespectGitignore: true,
 		routedFiles:      make(map[string]int),
+		childSeen:        make(map[string]map[string]bool),
 	}
 }
 
@@ -198,7 +217,11 @@ func filterNodesByLanguage(nodes []api.Node, langName string) []api.Node {
 }
 
 // Ingest processes a file or directory.
+// Safe to call multiple times — internal dedup state is reset on each call.
 func (e *Engine) Ingest(path string) error {
+	// Reset dedup state so stale entries from a prior Ingest don't persist.
+	e.childSeen = make(map[string]map[string]bool)
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -227,20 +250,13 @@ func (e *Engine) Ingest(path string) error {
 		// can produce confusing errors (e.g. S-expression as JSONPath).
 		treeSitter := SchemaUsesTreeSitter(e.Schema)
 
-		return filepath.Walk(realPath, func(p string, d os.FileInfo, err error) error {
+		return filepath.WalkDir(realPath, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if d.IsDir() {
-				// Skip hidden directories (.git, .mache, etc.) and build artifacts
-				base := filepath.Base(p)
-				if p != realPath {
-					if len(base) > 0 && base[0] == '.' {
-						return filepath.SkipDir
-					}
-					if base == "target" || base == "node_modules" || base == "dist" || base == "build" {
-						return filepath.SkipDir
-					}
+				if p != realPath && ShouldSkipDir(d.Name()) {
+					return filepath.SkipDir
 				}
 				// Check gitignore for directories
 				if e.gitignore != nil && p != realPath {
@@ -265,9 +281,9 @@ func (e *Engine) Ingest(path string) error {
 				}
 			}
 			// Skip symlinks to directories (e.g., kodata/templates -> ../templates)
-			// filepath.Walk doesn't follow symlinks, so d.IsDir() is false for them,
+			// WalkDir doesn't follow symlinks, so d.IsDir() is false for them,
 			// but os.ReadFile will follow and fail with "is a directory".
-			if d.Mode()&os.ModeSymlink != 0 {
+			if d.Type()&os.ModeSymlink != 0 {
 				target, err := os.Stat(p)
 				if err == nil && target.IsDir() {
 					return nil
@@ -275,13 +291,17 @@ func (e *Engine) Ingest(path string) error {
 			}
 			// Determine if we should parse or treat as raw based on schema type
 			ext := filepath.Ext(p)
-			if ShouldSkipFile(p, d.Size()) {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if ShouldSkipFile(p, info.Size()) {
 				return nil
 			}
 			shouldParse := false
 			if treeSitter {
 				switch ext {
-				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml":
+				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml", ".toml":
 					shouldParse = true
 				}
 			} else {
@@ -292,16 +312,16 @@ func (e *Engine) Ingest(path string) error {
 			}
 
 			if shouldParse {
-				return e.ingestFile(p, d.ModTime())
+				return e.ingestFile(p, info.ModTime())
 			}
 			// Skip binary files (executables, object files, images, etc.)
 			if isBinaryFile(p) {
 				return nil
 			}
 			if treeSitter {
-				return e.ingestRawFileUnder(p, "_project_files", d.ModTime())
+				return e.ingestRawFileUnder(p, "_project_files", info.ModTime())
 			}
-			return e.ingestRawFile(p, d.ModTime())
+			return e.ingestRawFile(p, info.ModTime())
 		})
 	}
 	info, err = os.Stat(realPath)
@@ -338,6 +358,8 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 		return e.ingestTreeSitter(path, yaml.GetLanguage(), "yaml", modTime)
 	case ".rs":
 		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust", modTime)
+	case ".toml":
+		return e.ingestTreeSitter(path, toml.GetLanguage(), "toml", modTime)
 	default:
 		if isBinaryFile(path) {
 			return nil
@@ -549,15 +571,14 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 			} else {
 				parent, err := e.Store.GetNode(parentID)
 				if err == nil {
-					// Check if child already linked (dedup)
-					exists := false
-					for _, c := range parent.Children {
-						if c == currentID {
-							exists = true
-							break
+					if e.childSeen[parentID] == nil {
+						e.childSeen[parentID] = make(map[string]bool, len(parent.Children))
+						for _, c := range parent.Children {
+							e.childSeen[parentID][c] = true
 						}
 					}
-					if !exists {
+					if !e.childSeen[parentID][currentID] {
+						e.childSeen[parentID][currentID] = true
 						parent.Children = append(parent.Children, currentID)
 						e.Store.AddNode(parent)
 					}
@@ -670,7 +691,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 		for res := range results {
 			count++
 			if count%50000 == 0 {
-				fmt.Printf("\rProcessed %d records...", count)
+				log.Printf("Processed %d records...", count)
 			}
 			if res.err != nil {
 				if collectErr == nil {
@@ -710,7 +731,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 				}
 			}
 		}
-		fmt.Printf("\rProcessed %d records... Done.\n", count)
+		log.Printf("Processed %d records total.", count)
 	}()
 
 	// Reader: stream raw rows from SQLite (I/O bound, single goroutine)
@@ -770,7 +791,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		}
 
 		currentPath := filepath.Join(parentPath, name)
-		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+		id := toNodeID(currentPath)
 
 		node := &graph.Node{
 			ID:      id,
@@ -797,7 +818,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
-			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
+			fileId := toNodeID(filePath)
 
 			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
 			if err != nil {
@@ -842,9 +863,15 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		}
 
 		// Link to parent (collector will apply this)
-		parentID := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
+		parentID := toNodeID(parentPath)
 		result.parentLinks = append(result.parentLinks, parentLink{childID: id, parentID: parentID})
 	}
+}
+
+// toNodeID converts a filesystem path to a graph node ID by normalizing
+// separators and stripping the leading slash.
+func toNodeID(p string) string {
+	return strings.TrimPrefix(filepath.ToSlash(p), "/")
 }
 
 // dedupSuffix returns a ".from_<sanitized>" suffix derived from the source filename.
@@ -883,7 +910,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Normalize path
 		currentPath := filepath.Join(parentPath, name)
-		id := strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+		id := toNodeID(currentPath)
 
 		// Dedup: when this node has files and a node with the same ID
 		// already exists with file children (i.e., from a different source file),
@@ -894,7 +921,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				suffix := dedupSuffix(sourceFile)
 				name = name + suffix
 				currentPath = filepath.Join(parentPath, name)
-				id = strings.TrimPrefix(filepath.ToSlash(currentPath), "/")
+				id = toNodeID(currentPath)
 			}
 		}
 
@@ -965,17 +992,17 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		if parentPath == "" {
 			store.AddRoot(node)
 		} else {
-			parentId := strings.TrimPrefix(filepath.ToSlash(parentPath), "/")
+			parentId := toNodeID(parentPath)
 			parent, err := store.GetNode(parentId)
 			if err == nil {
-				exists := false
-				for _, c := range parent.Children {
-					if c == id {
-						exists = true
-						break
+				if e.childSeen[parentId] == nil {
+					e.childSeen[parentId] = make(map[string]bool, len(parent.Children))
+					for _, c := range parent.Children {
+						e.childSeen[parentId][c] = true
 					}
 				}
-				if !exists {
+				if !e.childSeen[parentId][id] {
+					e.childSeen[parentId][id] = true
 					parent.Children = append(parent.Children, id)
 					store.AddNode(parent)
 				}
@@ -1047,7 +1074,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				continue
 			}
 			filePath := filepath.Join(currentPath, fileName)
-			fileId := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
+			fileId := toNodeID(filePath)
 
 			// Augment template values with doc comment text
 			vals := match.Values()
@@ -1226,6 +1253,8 @@ func GetLanguage(langName string) *sitter.Language {
 		return yaml.GetLanguage()
 	case "rust":
 		return rust.GetLanguage()
+	case "toml":
+		return toml.GetLanguage()
 	default:
 		return nil
 	}

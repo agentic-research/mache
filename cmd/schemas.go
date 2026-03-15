@@ -18,6 +18,7 @@ var presetSchemas = map[string]string{
 	"rust":         "schemas/rust.json",
 	"terraform":    "schemas/terraform.json",
 	"sql":          "schemas/sql.json",
+	"toml":         "schemas/toml.json",
 	"cli":          "schemas/cli.json",
 	"mcp":          "schemas/mcp.json",
 	"mcp-registry": "schemas/mcp-registry.json",

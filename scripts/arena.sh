@@ -109,6 +109,13 @@ func Threshold(frames [][4]byte, limit uint16) []int {
 }
 GOEOF
 
+    # go.mod so the repo is a valid Go module
+    cat > "$REPO/go.mod" <<'GOEOF'
+module sigwire
+
+go 1.22
+GOEOF
+
     # File 2: route_table.go — custom routing with priority queue
     cat > "$REPO/route_table.go" <<'GOEOF'
 package sigwire
@@ -481,13 +488,14 @@ if [ "$DEMO" = true ]; then
     pe "grep -A 1 'PackReading' $REPO/signal_codec.go"
     pe "grep -A 6 'PackReading' $REPO/signal_codec.go | tail -n 2"
 
-                echo ""
-
-                echo -e "${GREEN}Demo complete.${NC}"
-
-    fi
-
+    echo ""
+    echo -e "${GREEN}Demo complete.${NC}"
+    echo ""
+    verify
+elif [ "$VERIFY" = true ]; then
+    verify
+else
     echo "When done, press ENTER to run verification."
-read -r
-
-verify
+    read -r
+    verify
+fi

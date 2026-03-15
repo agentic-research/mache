@@ -5,19 +5,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/agentic-research/mache/internal/ingest"
 )
 
-// shouldSkipDir returns true for hidden dirs and common build artifact directories.
+// shouldSkipDir delegates to ingest.ShouldSkipDir.
 func shouldSkipDir(base string) bool {
-	if strings.HasPrefix(base, ".") {
-		return true
-	}
-	switch base {
-	case "node_modules", "target", "dist", "build", "__pycache__":
-		return true
-	}
-	return false
+	return ingest.ShouldSkipDir(base)
 }
 
 // copyFile copies src to dst, creating dst if it doesn't exist.

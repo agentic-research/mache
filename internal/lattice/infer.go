@@ -3,7 +3,9 @@ package lattice
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
+	"sort"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/ingest"
@@ -205,14 +207,7 @@ func (inf *Inferrer) InferMultiLanguage(recordsByLang map[string][]any) (*api.To
 	for lang := range recordsByLang {
 		languages = append(languages, lang)
 	}
-	// Sort to ensure deterministic schema generation
-	for i := 0; i < len(languages); i++ {
-		for j := i + 1; j < len(languages); j++ {
-			if languages[i] > languages[j] {
-				languages[i], languages[j] = languages[j], languages[i]
-			}
-		}
-	}
+	sort.Strings(languages)
 
 	// Infer schema for each language
 	var rootNodes []api.Node
@@ -237,7 +232,7 @@ func (inf *Inferrer) InferMultiLanguage(recordsByLang map[string][]any) (*api.To
 
 		// Skip languages where FCA produced no useful schema
 		if len(subSchema.Nodes) == 0 {
-			fmt.Printf("  Warning: %s FCA produced empty schema, files will go to _project_files/\n", langName)
+			log.Printf("infer: %s FCA produced empty schema, files will go to _project_files/", langName)
 			continue
 		}
 

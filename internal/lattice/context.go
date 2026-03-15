@@ -128,7 +128,7 @@ func DecideScaling(stats map[string]*FieldStats, totalRecords int) []Attribute {
 		switch {
 		case field == "type":
 			// Always scale "type" field for AST inference
-			sortedVals := sortedKeys(boolMap(fs.Values))
+			sortedVals := sortedKeys(fs.Values)
 			for _, val := range sortedVals {
 				attrs = append(attrs, Attribute{
 					Name:  field + "=" + val,
@@ -165,7 +165,7 @@ func DecideScaling(stats map[string]*FieldStats, totalRecords int) []Attribute {
 		case fs.Cardinality <= enumMaxDistinct && fs.Cardinality >= 2 &&
 			float64(fs.Cardinality)/float64(fs.Count) <= identifierRatioThres:
 			// Enum scaling: one attribute per distinct value
-			sortedVals := sortedKeys(boolMap(fs.Values))
+			sortedVals := sortedKeys(fs.Values)
 			for _, val := range sortedVals {
 				attrs = append(attrs, Attribute{
 					Name:  field + "=" + val,
@@ -368,19 +368,11 @@ func getFieldValue(v any, path string) (any, bool) {
 	return current, true
 }
 
-func sortedKeys(m map[string]bool) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func boolMap(m map[string]int) map[string]bool {
-	result := make(map[string]bool, len(m))
-	for k := range m {
-		result[k] = true
-	}
-	return result
 }

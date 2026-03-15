@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -430,12 +431,12 @@ func runAgentMode(cmd *cobra.Command) error {
 		gitInfo = fmt.Sprintf(" (%s@%s)", gitRepo, gitBranch)
 	}
 
-	fmt.Printf("Agent Mode\n")
-	fmt.Printf("----------\n")
-	fmt.Printf("Source: %s%s\n", absDataPath, gitInfo)
-	fmt.Printf("Mount: %s\n", agentMountPoint)
-	fmt.Printf("Writable: %v\n", writable)
-	fmt.Printf("PID: %d\n\n", os.Getpid())
+	log.Printf("Agent Mode")
+	log.Printf("----------")
+	log.Printf("Source: %s%s", absDataPath, gitInfo)
+	log.Printf("Mount: %s", agentMountPoint)
+	log.Printf("Writable: %v", writable)
+	log.Printf("PID: %d", os.Getpid())
 
 	// Return nil to continue with normal mount flow
 	// The actual mount will happen in rootCmd, and we'll save metadata after success

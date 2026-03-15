@@ -8,6 +8,7 @@ import (
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/toml"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
 )
@@ -32,6 +33,8 @@ func DetectLanguageFromExt(ext string) (langName string, lang *sitter.Language, 
 		return "sql", sql.GetLanguage(), true
 	case ".yaml", ".yml":
 		return "yaml", yaml.GetLanguage(), true
+	case ".toml":
+		return "toml", toml.GetLanguage(), true
 	default:
 		return "", nil, false
 	}

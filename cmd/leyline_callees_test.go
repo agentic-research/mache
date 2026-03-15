@@ -114,5 +114,81 @@ func TestMaterializeCallees(t *testing.T) {
 
 // Issue #12: _project_files stores full content in --out mode
 func TestMaterializeVirtuals_ProjectFilesMetadataOnly(t *testing.T) {
-	t.Skip("TODO: implement metadata-only project files in --out mode")
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT,
+			kind INTEGER,
+			size INTEGER,
+			mtime INTEGER,
+			record TEXT
+		);
+	`)
+	require.NoError(t, err)
+
+	now := time.Now().UnixNano()
+	bigContent := "This is a large config file with lots of content..."
+
+	// Insert _project_files directory and some file nodes with full content
+	inserts := []struct {
+		id, parentID, name string
+		kind               int
+		content            string
+	}{
+		{"_project_files", "", "_project_files", 1, ""},
+		{"_project_files/README.md", "_project_files", "README.md", 0, bigContent},
+		{"_project_files/docs", "_project_files", "docs", 1, ""},
+		{"_project_files/docs/config.yaml", "_project_files/docs", "config.yaml", 0, bigContent},
+		// Non-project-files node should NOT be stripped
+		{"functions", "", "functions", 1, ""},
+		{"functions/Foo", "functions", "Foo", 1, ""},
+		{"functions/Foo/source", "functions/Foo", "source", 0, "func Foo() {}"},
+	}
+
+	for _, ins := range inserts {
+		_, err := db.Exec(
+			"INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			ins.id, ins.parentID, ins.name, ins.kind, len(ins.content), now, ins.content,
+		)
+		require.NoError(t, err)
+	}
+
+	// Run stripProjectFileContent
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	err = stripProjectFileContent(tx)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// _project_files/ file nodes should have NULL record and size 0
+	var record sql.NullString
+	var size int
+	err = db.QueryRow("SELECT record, size FROM nodes WHERE id = ?", "_project_files/README.md").Scan(&record, &size)
+	require.NoError(t, err)
+	assert.False(t, record.Valid, "_project_files file record should be NULL")
+	assert.Equal(t, 0, size, "_project_files file size should be 0")
+
+	err = db.QueryRow("SELECT record, size FROM nodes WHERE id = ?", "_project_files/docs/config.yaml").Scan(&record, &size)
+	require.NoError(t, err)
+	assert.False(t, record.Valid, "nested _project_files file record should be NULL")
+	assert.Equal(t, 0, size, "nested _project_files file size should be 0")
+
+	// _project_files directory nodes should be untouched
+	var dirRecord sql.NullString
+	err = db.QueryRow("SELECT record FROM nodes WHERE id = ?", "_project_files").Scan(&dirRecord)
+	require.NoError(t, err)
+
+	// Non-_project_files nodes should be untouched
+	var sourceRecord string
+	err = db.QueryRow("SELECT record FROM nodes WHERE id = ?", "functions/Foo/source").Scan(&sourceRecord)
+	require.NoError(t, err)
+	assert.Equal(t, "func Foo() {}", sourceRecord, "non-project-files content should be preserved")
 }

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -36,8 +35,6 @@ type GraphFS struct {
 
 	// Virtual path resolver — shared with FUSE backend.
 	resolver *vfs.Resolver
-	promptH  *vfs.PromptHandler
-	diagH    *vfs.DiagnosticsHandler
 
 	// Optional prompt content served as /PROMPT.txt virtual file (agent mode).
 	promptContent []byte
@@ -48,25 +45,12 @@ func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 	sj, _ := json.MarshalIndent(schema, "", "  ")
 	sj = append(sj, '\n')
 
+	resolver := vfs.NewDefaultResolver(g, sj)
+
 	// Share diagnostics map with MemoryStore if available
-	var diagStatus *sync.Map
 	if ms, ok := g.(*graph.MemoryStore); ok {
-		diagStatus = &ms.WriteStatus
-	} else {
-		diagStatus = &sync.Map{}
+		resolver.SetWritable(false, &ms.WriteStatus)
 	}
-
-	promptH := &vfs.PromptHandler{}
-	diagH := &vfs.DiagnosticsHandler{DiagStatus: diagStatus}
-	schemaH := &vfs.SchemaHandler{Content: sj}
-	contextH := &vfs.ContextHandler{Graph: g}
-	locationH := &vfs.LocationHandler{Graph: g}
-	callersH := &vfs.CallersHandler{Graph: g}
-	calleesH := &vfs.CalleesHandler{Graph: g}
-
-	resolver := vfs.NewResolver(
-		schemaH, promptH, diagH, contextH, locationH, callersH, calleesH,
-	)
 
 	return &GraphFS{
 		graph:      g,
@@ -74,15 +58,13 @@ func NewGraphFS(g graph.Graph, schema *api.Topology) *GraphFS {
 		schemaJSON: sj,
 		mountTime:  time.Now(),
 		resolver:   resolver,
-		promptH:    promptH,
-		diagH:      diagH,
 	}
 }
 
 // SetPromptContent sets the content for the /PROMPT.txt virtual file.
 func (fs *GraphFS) SetPromptContent(content []byte) {
 	fs.promptContent = content
-	fs.promptH.Content = content
+	fs.resolver.SetPromptContent(content)
 }
 
 // SetWriteBack enables write support. The callback is invoked when a
@@ -90,7 +72,7 @@ func (fs *GraphFS) SetPromptContent(content []byte) {
 func (fs *GraphFS) SetWriteBack(fn WriteBackFunc) {
 	fs.writable = true
 	fs.writeBack = fn
-	fs.diagH.Writable = true
+	fs.resolver.SetWritable(true, nil)
 }
 
 // --- billy.Basic ---
@@ -290,7 +272,7 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		return infos, nil
 	}
 
-	node, err := fs.resolveNode(path)
+	node, err := fs.graph.GetNode(path)
 	if err != nil && path != "/" {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
 	}
@@ -355,7 +337,7 @@ func (fs *GraphFS) Lstat(filename string) (os.FileInfo, error) {
 		return fs.vEntryToFileInfo(filename, entry, fs.mountTime), nil
 	}
 
-	node, err := fs.resolveNode(filename)
+	node, err := fs.graph.GetNode(filename)
 	if err != nil {
 		return nil, &os.PathError{Op: "lstat", Path: filename, Err: os.ErrNotExist}
 	}
@@ -412,15 +394,6 @@ func (fs *GraphFS) vEntryToFileInfo(fullPath string, e *vfs.VEntry, modTime time
 }
 
 // --- internals ---
-
-// resolveNode looks up a graph node, handling path normalization.
-func (fs *GraphFS) resolveNode(path string) (*graph.Node, error) {
-	node, err := fs.graph.GetNode(path)
-	if err != nil {
-		return nil, err
-	}
-	return node, nil
-}
 
 // cleanPath normalizes a billy path to a clean absolute path.
 func cleanPath(path string) string {
@@ -485,7 +458,7 @@ func (fi *staticFileInfo) Size() int64        { return fi.size }
 func (fi *staticFileInfo) Mode() os.FileMode  { return fi.mode }
 func (fi *staticFileInfo) ModTime() time.Time { return fi.modTime }
 func (fi *staticFileInfo) IsDir() bool        { return fi.mode.IsDir() }
-func (fi *staticFileInfo) Sys() interface{} {
+func (fi *staticFileInfo) Sys() any {
 	return &syscall.Stat_t{
 		Ino: fi.ino,
 		Uid: uint32(os.Getuid()),

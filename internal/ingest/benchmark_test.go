@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"fmt"
 	"runtime"
 	"testing"
 
@@ -79,13 +78,14 @@ func BenchmarkEngine_Parallelism(b *testing.B) {
 	})
 }
 
-func PrintMemUsage() {
+func PrintMemUsage(tb testing.TB) {
+	tb.Helper()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	fmt.Printf("Alloc = %v MiB\n", bToMb(m.Alloc))
-	fmt.Printf("\tTotalAlloc = %v MiB\n", bToMb(m.TotalAlloc))
-	fmt.Printf("\tSys = %v MiB\n", bToMb(m.Sys))
-	fmt.Printf("\tNumGC = %v\n", m.NumGC)
+	tb.Logf("Alloc = %v MiB", bToMb(m.Alloc))
+	tb.Logf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+	tb.Logf("\tSys = %v MiB", bToMb(m.Sys))
+	tb.Logf("\tNumGC = %v", m.NumGC)
 }
 
 func bToMb(b uint64) uint64 {

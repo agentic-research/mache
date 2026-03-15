@@ -1220,7 +1220,7 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 
 		count++
 		if count%100000 == 0 {
-			fmt.Printf("\rScanning %d records...", count)
+			log.Printf("Scanning %d records...", count)
 		}
 
 		// Batch flush: merge accumulated data into sync.Map to bound memory
@@ -1236,7 +1236,7 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 		}
 	}
 	if count >= 100000 {
-		fmt.Printf("\rScanned %d records.\n", count)
+		log.Printf("Scanned %d records.", count)
 	}
 
 	if err := rows.Err(); err != nil {

@@ -81,9 +81,6 @@ type MacheFS struct {
 	// Virtual path resolver — handles _schema.json, PROMPT.txt,
 	// _diagnostics/, context, callers/, callees/, .query/.
 	resolver   *vfs.Resolver
-	promptH    *vfs.PromptHandler
-	queryH     *vfs.QueryHandler
-	diagH      *vfs.DiagnosticsHandler
 	schemaJSON []byte // kept for backward compat (tests that read it directly)
 
 	// Write-back support (nil Engine = read-only)
@@ -111,28 +108,13 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 	sj, _ := json.MarshalIndent(schema, "", "  ")
 	sj = append(sj, '\n')
 
-	promptH := &vfs.PromptHandler{}
-	queryH := &vfs.QueryHandler{}
-	diagH := &vfs.DiagnosticsHandler{DiagStatus: &sync.Map{}}
-	schemaH := &vfs.SchemaHandler{Content: sj}
-	contextH := &vfs.ContextHandler{Graph: g}
-	locationH := &vfs.LocationHandler{Graph: g}
-	callersH := &vfs.CallersHandler{Graph: g}
-	calleesH := &vfs.CalleesHandler{Graph: g}
-
-	// Order matters: query before callers/callees (both can have "/" paths).
-	resolver := vfs.NewResolver(
-		schemaH, promptH, queryH, diagH, contextH, locationH, callersH, calleesH,
-	)
+	resolver := vfs.NewDefaultResolver(g, sj)
 
 	return &MacheFS{
 		Schema:            schema,
 		Graph:             g,
 		schemaJSON:        sj,
 		resolver:          resolver,
-		promptH:           promptH,
-		queryH:            queryH,
-		diagH:             diagH,
 		mountTime:         fuse.NewTimespec(time.Now()),
 		handles:           make(map[uint64]*dirHandle),
 		writeHandles:      make(map[uint64]*writeHandle),
@@ -143,7 +125,7 @@ func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
 // SetPromptContent sets the content for the /PROMPT.txt virtual file (agent mode).
 func (fs *MacheFS) SetPromptContent(content []byte) {
 	fs.promptContent = content
-	fs.promptH.Content = content
+	fs.resolver.SetPromptContent(content)
 }
 
 // SetQueryFunc enables the /.query/ magic directory. Pass the SQLiteGraph's
@@ -151,16 +133,13 @@ func (fs *MacheFS) SetPromptContent(content []byte) {
 func (fs *MacheFS) SetQueryFunc(fn func(string, ...any) (*sql.Rows, error)) {
 	fs.queryFn = fn
 	fs.queries = make(map[string]*queryResult)
-	fs.queryH.Enabled = true
+	fs.resolver.EnableQuery()
 }
 
 // SetWritable enables write-back mode and wires the diagnostics handler.
 func (fs *MacheFS) SetWritable(writable bool, diagStatus *sync.Map) {
 	fs.Writable = writable
-	fs.diagH.Writable = writable
-	if diagStatus != nil {
-		fs.diagH.DiagStatus = diagStatus
-	}
+	fs.resolver.SetWritable(writable, diagStatus)
 }
 
 // isQueryPath returns true if the path is under /.query.
