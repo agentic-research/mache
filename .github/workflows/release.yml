@@ -1,58 +1,141 @@
-name: release
+name: Release
+
+# Build mache binaries linked against ley-line, publish GH release, notify kiln.
+# Golden path: use `task` commands, never raw go/cargo.
 
 on:
   push:
     tags:
       - 'v*'
+  repository_dispatch:
+    types: [leyline-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.2.0). Leave empty for dev build.'
+        type: string
 
 permissions:
   contents: write
 
+env:
+  TAG: ${{ inputs.tag || github.event.client_payload.tag || github.ref_name }}
+
 jobs:
-  goreleaser:
-    runs-on: macos-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: mache-darwin-arm64
+            leyline-lib: libleyline_fs-darwin-arm64.a
+            fuse_setup: brew install --cask fuse-t
+          - os: ubuntu-latest
+            artifact: mache-linux-amd64
+            leyline-lib: libleyline_fs-linux-amd64.a
+            fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev
+          - os: ubuntu-24.04-arm
+            artifact: mache-linux-arm64
+            leyline-lib: libleyline_fs-linux-arm64.a
+            fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev
+
+    runs-on: ${{ matrix.os }}
+
     steps:
-      - name: Checkout
+      - name: Checkout mache
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
-      - name: Install FUSE-T (macOS)
-        run: |
-          brew tap macos-fuse-t/homebrew-cask
-          brew install fuse-t
-          # No manual symlinking needed; we use -F /Library/Frameworks in CGO_LDFLAGS
+      - name: Install FUSE
+        run: ${{ matrix.fuse_setup }}
 
-      - name: Set up Zig (for Linux cross-compilation)
-        uses: goto-bus-stop/setup-zig@v2
+      - name: Install Task
+        uses: arduino/setup-task@v2
         with:
-          version: 0.13.0
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch Linux FUSE headers (for cross-compilation)
-        run: |
-          mkdir -p /tmp/linux-fuse-headers
-          cd /tmp/linux-fuse-headers
-          curl -sL -o libfuse-dev.deb "http://archive.ubuntu.com/ubuntu/pool/main/f/fuse/libfuse-dev_2.9.9-5ubuntu3_amd64.deb"
-          ar x libfuse-dev.deb
-          tar xf data.tar.*
-
-      - name: Import Signing Certificate
+      # Download pre-built ley-line artifacts (staticlib + header)
+      - name: Download ley-line release artifacts
         env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          GH_TOKEN: ${{ secrets.LEYLINE_PAT }}
         run: |
-          echo "Using ad-hoc signing for now."
+          mkdir -p leyline-artifacts
+          gh release download --repo agentic-research/ley-line \
+            -p '${{ matrix.leyline-lib }}' \
+            -p 'leyline_fs.h' \
+            -D leyline-artifacts/
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+      - name: Build mache (linked against ley-line)
+        env:
+          CGO_ENABLED: '1'
+          CGO_CFLAGS: >-
+            ${{ runner.os == 'macOS'
+              && '-I/Library/Frameworks/fuse_t.framework/Versions/Current/Headers'
+              || '' }}
+            -I${{ github.workspace }}/leyline-artifacts
+          CGO_LDFLAGS: >-
+            ${{ runner.os == 'macOS'
+              && '-F/Library/Frameworks -framework fuse_t -Wl,-rpath,/Library/Frameworks'
+              || '' }}
+            ${{ github.workspace }}/leyline-artifacts/${{ matrix.leyline-lib }}
+            -lm -ldl -lpthread
+        run: |
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          go build \
+            -ldflags "-s -w \
+              -X github.com/agentic-research/mache/cmd.Version=${TAG} \
+              -X github.com/agentic-research/mache/cmd.Commit=${GIT_COMMIT} \
+              -X github.com/agentic-research/mache/cmd.Date=${BUILD_DATE}" \
+            -o ${{ matrix.artifact }} .
+
+      - name: Codesign (macOS)
+        if: runner.os == 'macOS'
+        run: codesign -s - --force --deep --entitlements entitlements.plist ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          merge-multiple: true
+          path: dist/
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum mache-* > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          generate_release_notes: true
+          files: |
+            dist/mache-*
+            dist/checksums-sha256.txt
+
+      # Notify kiln to assemble the final distribution
+      - name: Dispatch to kiln
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.LEYLINE_PAT }}
+        run: |
+          gh api repos/agentic-research/kiln/dispatches \
+            -f event_type=mache-release \
+            -f "client_payload[tag]=${TAG}" \
+            -f 'client_payload[repo]=agentic-research/mache'
