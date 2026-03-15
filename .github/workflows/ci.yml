@@ -47,7 +47,8 @@ jobs:
       - name: Test
         run: task test
 
-  # Trigger kiln to rebuild the fat binary when mache merges to main
+  # Notify kiln on merge to main (triggers rebuild with latest HEAD).
+  # Tag-based releases are handled by release.yml instead.
   notify-kiln:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test, lint]
