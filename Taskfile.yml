@@ -1,5 +1,8 @@
 version: '3'
 
+# Golden path: CI and local dev both use these tasks.
+# Workflows (.github/workflows/) should call `task <name>`, never raw go/cargo.
+
 vars:
   BINARY_NAME: bin/mache
   # fuse-t configuration for macOS
