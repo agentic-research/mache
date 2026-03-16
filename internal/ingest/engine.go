@@ -18,6 +18,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/treesitter/elixir"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/hcl"
@@ -301,7 +302,7 @@ func (e *Engine) Ingest(path string) error {
 			shouldParse := false
 			if treeSitter {
 				switch ext {
-				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml", ".toml":
+				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml", ".toml", ".ex", ".exs":
 					shouldParse = true
 				}
 			} else {
@@ -360,6 +361,8 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust", modTime)
 	case ".toml":
 		return e.ingestTreeSitter(path, toml.GetLanguage(), "toml", modTime)
+	case ".ex", ".exs":
+		return e.ingestTreeSitter(path, elixir.GetLanguage(), "elixir", modTime)
 	default:
 		if isBinaryFile(path) {
 			return nil
@@ -1255,6 +1258,8 @@ func GetLanguage(langName string) *sitter.Language {
 		return rust.GetLanguage()
 	case "toml":
 		return toml.GetLanguage()
+	case "elixir":
+		return elixir.GetLanguage()
 	default:
 		return nil
 	}

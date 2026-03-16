@@ -27,6 +27,8 @@ var friendlyTypeNames = map[string]string{
 	"enum_item":     "enums",
 	"impl_item":     "implementations",
 	"trait_item":    "traits",
+	// Elixir
+	"call": "definitions",
 	// HCL/Terraform
 	"hcl_container": "blocks",
 	// SQL
@@ -51,6 +53,9 @@ var containmentRules = map[string]map[string][]string{
 	"hcl":       {}, // flat
 	"terraform": {}, // flat
 	"rust":      {}, // flat at top level
+	"elixir": {
+		"call": {"call"}, // modules contain function definitions
+	},
 	"python": {
 		"class_definition": {"function_definition"},
 	},

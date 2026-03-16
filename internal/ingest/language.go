@@ -11,6 +11,8 @@ import (
 	"github.com/smacker/go-tree-sitter/toml"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
+
+	"github.com/agentic-research/mache/internal/treesitter/elixir"
 )
 
 // DetectLanguageFromExt returns the language name and tree-sitter Language
@@ -35,6 +37,8 @@ func DetectLanguageFromExt(ext string) (langName string, lang *sitter.Language, 
 		return "yaml", yaml.GetLanguage(), true
 	case ".toml":
 		return "toml", toml.GetLanguage(), true
+	case ".ex", ".exs":
+		return "elixir", elixir.GetLanguage(), true
 	default:
 		return "", nil, false
 	}

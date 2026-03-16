@@ -46,4 +46,12 @@ func init() {
 		(call_expression function: (scoped_identifier name: (identifier) @call))
 		(call_expression function: (field_expression field: (field_identifier) @call))
 	`)
+
+	// Register Elixir queries — local and qualified function calls.
+	// Pattern 0: local calls like func_name(args)
+	// Pattern 1: qualified calls like Module.func_name(args)
+	RegisterRefQuery("elixir", `
+		(call target: (identifier) @call)
+		(call target: (dot right: (identifier) @call))
+	`)
 }
