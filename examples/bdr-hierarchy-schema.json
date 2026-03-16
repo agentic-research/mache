@@ -1,0 +1,282 @@
+{
+  "version": "v1",
+  "table": "issues",
+  "file_sets": {
+    "bead_core": [
+      {"name": "title", "content_template": "{{.title}}"},
+      {"name": "description", "content_template": "{{.description}}"},
+      {"name": "status", "content_template": "{{.status}}"},
+      {"name": "priority", "content_template": "{{.priority}}"},
+      {"name": "issue_type", "content_template": "{{.issue_type}}"},
+      {"name": "owner", "content_template": "{{.owner}}"},
+      {"name": "created_at", "content_template": "{{.created_at}}"},
+      {"name": "raw.json", "content_template": "{{. | json}}"}
+    ],
+    "bead_refs": [
+      {"name": "external_ref", "content_template": "{{.external_ref}}"},
+      {"name": "branch", "content_template": "{{.branch}}"},
+      {"name": "pr_url", "content_template": "{{.pr_url}}"}
+    ],
+    "bead_deps": [
+      {"name": "dependency_count", "content_template": "{{.dependency_count}}"},
+      {"name": "dependent_count", "content_template": "{{.dependent_count}}"}
+    ]
+  },
+  "nodes": [
+    {
+      "name": "decades",
+      "comment": "Top-level BDR grouping: each decade is one ADR decomposed. Beads grouped by source_adr field. Beads without an ADR prefix fall under _ungrouped.",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.source_adr}}",
+          "comment": "Decade node derived from source_adr field. Each decade represents one architectural decision record decomposed into threads and beads.",
+          "selector": "$[*]",
+          "refs": ["decade-{{.source_adr}}"],
+          "children": [
+            {
+              "name": "summary.md",
+              "comment": "Rendered overview of this decade: bead table and cross-references.",
+              "selector": "$",
+              "files": [
+                {
+                  "name": "summary.md",
+                  "content_template": "# Decade: {{.source_adr}}\n\n## Beads\n\n| ID | Title | Status | Priority | Type |\n|----|-------|--------|----------|------|\n{{range .beads}}| {{.id}} | {{.title}} | {{.status}} | P{{.priority}} | {{.issue_type}} |\n{{end}}\n\n## Cross-references\n\n{{range .beads}}{{if .external_ref}}- {{.id}} -> {{.external_ref}}\n{{end}}{{end}}"
+                }
+              ]
+            },
+            {
+              "name": "threads",
+              "comment": "Semantic groupings within this decade. Thread order follows THREAD_ORDER from bdr crate: context, decision, alternatives, implementation, validation, open-questions, consequences, general.",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "context",
+                  "comment": "Thread: friction points, constraints — decade-channel atoms that motivated the ADR.",
+                  "selector": "$[?(@.thread_group == 'context')]",
+                  "refs": ["thread-{{.source_adr}}/context"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-context"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                },
+                {
+                  "name": "decision",
+                  "comment": "Thread: the chosen direction with explicit tradeoffs.",
+                  "selector": "$[?(@.thread_group == 'decision')]",
+                  "refs": ["thread-{{.source_adr}}/decision"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-decision"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                },
+                {
+                  "name": "alternatives",
+                  "comment": "Thread: paths considered and rejected, with reasoning.",
+                  "selector": "$[?(@.thread_group == 'alternatives')]",
+                  "refs": ["thread-{{.source_adr}}/alternatives"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-alternatives"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                },
+                {
+                  "name": "implementation",
+                  "comment": "Thread: phases and milestones — thread-channel atoms routed to repos.",
+                  "selector": "$[?(@.thread_group == 'implementation')]",
+                  "refs": ["thread-{{.source_adr}}/implementation"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-implementation"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                },
+                {
+                  "name": "validation",
+                  "comment": "Thread: success criteria, acceptance tests — bead-channel atoms.",
+                  "selector": "$[?(@.thread_group == 'validation')]",
+                  "refs": ["thread-{{.source_adr}}/validation"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-validation"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                },
+                {
+                  "name": "open-questions",
+                  "comment": "Thread: explicit unknowns to address later.",
+                  "selector": "$[?(@.thread_group == 'open-questions')]",
+                  "refs": ["thread-{{.source_adr}}/open-questions"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-open-questions"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                },
+                {
+                  "name": "consequences",
+                  "comment": "Thread: positive or negative outcomes of the decision.",
+                  "selector": "$[?(@.thread_group == 'consequences')]",
+                  "refs": ["thread-{{.source_adr}}/consequences"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-consequences"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                },
+                {
+                  "name": "general",
+                  "comment": "Thread: atoms that don't fit a specific thread category.",
+                  "selector": "$[?(@.thread_group == 'general')]",
+                  "refs": ["thread-{{.source_adr}}/general"],
+                  "children": [
+                    {
+                      "name": "{{.id}}",
+                      "selector": "$",
+                      "refs": ["bead-{{.id}}", "decade-{{.source_adr}}", "thread-general"],
+                      "include": ["bead_core", "bead_refs", "bead_deps"]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "deps.mermaid",
+              "comment": "Per-decade mermaid dependency graph. Renders bead-to-bead edges via mache-ml2.",
+              "selector": "$",
+              "files": [
+                {
+                  "name": "deps.mermaid",
+                  "content_template": "graph TD\n{{range .beads}}    {{.id}}[\"{{.title}}\"]\n{{end}}{{range .dependencies}}    {{.issue_id}} --> {{.depends_on_id}}\n{{end}}"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "by-status",
+      "comment": "Flat view: beads grouped by lifecycle state (backlog, open, queued, dispatched, verifying, done, rejected, blocked, stale).",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.status}}",
+          "selector": "$[*]",
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["status-{{.status}}", "bead-{{.id}}"],
+              "include": ["bead_core", "bead_refs"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "by-channel",
+      "comment": "BDR lattice view: beads grouped by their BDR channel (decade=internal rationale, thread=routing/coordination, bead=atomic deliverable).",
+      "selector": "$",
+      "children": [
+        {
+          "name": "decade",
+          "comment": "Decade channel: ADR-level reasoning — friction points, constraints, alternatives.",
+          "selector": "$[?(@.channel == 'decade')]",
+          "refs": ["channel-decade"],
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["bead-{{.id}}"],
+              "include": ["bead_core"]
+            }
+          ]
+        },
+        {
+          "name": "thread",
+          "comment": "Thread channel: implementation routing — decisions, phases, open questions.",
+          "selector": "$[?(@.channel == 'thread')]",
+          "refs": ["channel-thread"],
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["bead-{{.id}}"],
+              "include": ["bead_core"]
+            }
+          ]
+        },
+        {
+          "name": "bead",
+          "comment": "Bead channel: atomic deliverables — validation points, technical specs.",
+          "selector": "$[?(@.channel == 'bead')]",
+          "refs": ["channel-bead"],
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["bead-{{.id}}"],
+              "include": ["bead_core"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cross-refs",
+      "comment": "Cross-repo dependency edges: beads that reference other repos (format: repo:label). Enables navigating the BDR lattice across repo boundaries.",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.external_ref}}",
+          "selector": "$[?(@.external_ref)]",
+          "refs": ["xref-{{.external_ref}}"],
+          "children": [
+            {
+              "name": "{{.id}}",
+              "selector": "$",
+              "refs": ["bead-{{.id}}"],
+              "include": ["bead_core", "bead_refs"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "deps.mermaid",
+      "comment": "Global mermaid dependency graph across all beads. Edges from the dependencies table. Rendered via mache-ml2.",
+      "selector": "$",
+      "files": [
+        {
+          "name": "deps.mermaid",
+          "content_template": "graph TD\n    %% BDR dependency graph — all beads across all decades\n{{range .}}    {{.id}}[\"{{.title}}\"]\n{{end}}{{range .dependencies}}    {{.issue_id}} --> {{.depends_on_id}}\n{{end}}"
+        }
+      ]
+    }
+  ]
+}
