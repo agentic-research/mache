@@ -73,30 +73,39 @@ func (r *Resolver) SetWritable(writable bool, diagStatus *sync.Map) {
 }
 
 // Resolve returns a VEntry for the path, or nil if no handler matches.
+// When a handler matches but Stat returns nil (e.g., a node named "context"
+// that has no virtual content), resolution continues to the next handler
+// so the path can fall through to the graph lookup.
 func (r *Resolver) Resolve(path string) *VEntry {
 	for _, h := range r.handlers {
 		if h.Match(path) {
-			return h.Stat(path)
+			if entry := h.Stat(path); entry != nil {
+				return entry
+			}
 		}
 	}
 	return nil
 }
 
-// ReadContent delegates to the first matching handler.
+// ReadContent delegates to the first matching handler that returns content.
 func (r *Resolver) ReadContent(path string) ([]byte, bool) {
 	for _, h := range r.handlers {
 		if h.Match(path) {
-			return h.ReadContent(path)
+			if data, ok := h.ReadContent(path); ok {
+				return data, true
+			}
 		}
 	}
 	return nil, false
 }
 
-// ListDir delegates to the first matching handler.
+// ListDir delegates to the first matching handler that returns entries.
 func (r *Resolver) ListDir(path string) ([]DirExtra, bool) {
 	for _, h := range r.handlers {
 		if h.Match(path) {
-			return h.ListDir(path)
+			if entries, ok := h.ListDir(path); ok {
+				return entries, true
+			}
 		}
 	}
 	return nil, false

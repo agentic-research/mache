@@ -139,9 +139,9 @@ func (g *WritableGraph) ListChildren(id string) ([]string, error) {
 	var rows *sql.Rows
 	var err error
 	if id == "" {
-		rows, err = g.db.Query("SELECT name FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		rows, err = g.db.Query("SELECT id FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
 	} else {
-		rows, err = g.db.Query("SELECT name FROM nodes WHERE parent_id = ? ORDER BY name", id)
+		rows, err = g.db.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
 	}
 	if err != nil {
 		return nil, err

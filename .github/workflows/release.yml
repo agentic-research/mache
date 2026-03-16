@@ -107,7 +107,7 @@ jobs:
           path: ${{ matrix.artifact }}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' || github.event.client_payload.tag != ''
     needs: build
     runs-on: ubuntu-latest
     steps:
