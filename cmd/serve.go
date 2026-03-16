@@ -8,9 +8,11 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/agentic-research/mache/api"
@@ -56,6 +58,7 @@ func init() {
 
 func runServe(cmd *cobra.Command, args []string) error {
 	registry := newGraphRegistry(servePath, args)
+	defer registry.Close()
 
 	// Clean up session → root mapping on disconnect.
 	// Root discovery happens lazily on the first tool call (see wrapHandler)
@@ -87,8 +90,17 @@ Call get_overview first when exploring a new codebase.`),
 		source = args[0]
 	}
 
-	// Clean up any auto-spawned leyline daemon on exit
+	// Clean up any auto-spawned leyline daemon on exit.
+	// Defer handles normal returns; signal handler covers SIGTERM/SIGINT.
 	defer leyline.StopManaged()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		leyline.StopManaged()
+		registry.Close()
+		os.Exit(0)
+	}()
 
 	if serveStdio {
 		meta := registerServeSidecar(source, "mcp-stdio", "")
@@ -195,6 +207,18 @@ func (r *graphRegistry) registerSession(sessionID, rootPath string) {
 
 func (r *graphRegistry) unregisterSession(sessionID string) {
 	r.sessions.Delete(sessionID)
+}
+
+// Close calls the cleanup function on every lazily-built graph.
+// Use on server shutdown to release SQLite connections and temp files.
+func (r *graphRegistry) Close() {
+	r.graphs.Range(func(_, v any) bool {
+		lg := v.(*lazyGraph)
+		if lg.cleanup != nil {
+			lg.cleanup()
+		}
+		return true
+	})
 }
 
 // getOrCreateGraph returns an existing graph for rootPath or creates a new one.
@@ -804,6 +828,10 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			if err := json.Unmarshal([]byte(pathsRaw), &paths); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid paths array: %v", err)), nil
 			}
+			const maxBatchPaths = 100
+			if len(paths) > maxBatchPaths {
+				return mcp.NewToolResultError(fmt.Sprintf("batch read limited to %d paths, got %d", maxBatchPaths, len(paths))), nil
+			}
 
 			type fileResult struct {
 				Path    string              `json:"path"`
@@ -1301,7 +1329,6 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
-
 // enrichAndQueryTypeInfo triggers LSP enrichment and queries hover data
 // directly from the ley-line daemon's arena via UDS, bypassing mache's
 // in-memory graph (which doesn't have _lsp* tables).
@@ -1332,8 +1359,9 @@ func enrichAndQueryTypeInfo(filePath, symbol string) (*mcp.CallToolResult, error
 		return nil, fmt.Errorf("set query deadline: %w", err)
 	}
 
+	sanitized := strings.ReplaceAll(symbol, "'", "''")
 	rows, err := client.Query(fmt.Sprintf(
-		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s'`, symbol))
+		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s'`, sanitized))
 	if err != nil {
 		return nil, fmt.Errorf("query _lsp_hover via daemon: %w", err)
 	}
@@ -1356,7 +1384,7 @@ func enrichAndQueryTypeInfo(filePath, symbol string) (*mcp.CallToolResult, error
 	// Fallback: broader match
 	if len(results) == 0 {
 		rows, err = client.Query(fmt.Sprintf(
-			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s%%'`, symbol))
+			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s%%'`, sanitized))
 		if err == nil {
 			for _, row := range rows {
 				if len(row) >= 2 {
@@ -1457,9 +1485,10 @@ func enrichAndQueryDiagnostics(filePath, symbol string, limit int) (*mcp.CallToo
 
 	var query string
 	if symbol != "" {
+		sanitized := strings.ReplaceAll(symbol, "'", "''")
 		query = fmt.Sprintf(
 			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE '%%%s%%' LIMIT %d`,
-			symbol, limit)
+			sanitized, limit)
 	} else {
 		query = fmt.Sprintf(
 			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT %d`,
