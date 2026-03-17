@@ -24,6 +24,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
@@ -107,7 +108,7 @@ jobs:
           path: ${{ matrix.artifact }}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' || github.event.client_payload.tag != ''
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' || github.event.client_payload.tag != '')
     needs: build
     runs-on: ubuntu-latest
     steps:
