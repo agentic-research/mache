@@ -25,6 +25,7 @@ type SQLiteWriter struct {
 	stmtNode  *sql.Stmt
 	stmtRef   *sql.Stmt // For adding refs
 	stmtDef   *sql.Stmt // For adding defs
+	stmtFile  *sql.Stmt // For recording file metadata (incremental index)
 	batchSize int
 	count     int
 	firstErr  error // first insert/batch error, surfaced by Close
@@ -58,9 +59,11 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		size INTEGER DEFAULT 0,
 		mtime INTEGER NOT NULL,
 		record_id TEXT,
-		record JSON
+		record JSON,
+		source_file TEXT
 	);
 	CREATE INDEX IF NOT EXISTS idx_parent_name ON nodes(parent_id, name);
+	CREATE INDEX IF NOT EXISTS idx_source_file ON nodes(source_file);
 
 	CREATE TABLE IF NOT EXISTS node_refs (
 		token TEXT,
@@ -73,6 +76,12 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		dir_id TEXT,
 		PRIMARY KEY (token, dir_id)
 	) WITHOUT ROWID;
+
+	CREATE TABLE IF NOT EXISTS file_index (
+		path TEXT PRIMARY KEY,
+		mod_time INTEGER NOT NULL,
+		size INTEGER NOT NULL
+	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -100,8 +109,8 @@ func (w *SQLiteWriter) beginTx() error {
 	}
 	// Prepare statement for fast inserts
 	w.stmtNode, err = w.tx.Prepare(`
-		INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -113,6 +122,11 @@ func (w *SQLiteWriter) beginTx() error {
 	}
 
 	w.stmtDef, err = w.tx.Prepare(`INSERT OR IGNORE INTO node_defs (token, dir_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+
+	w.stmtFile, err = w.tx.Prepare(`INSERT OR REPLACE INTO file_index (path, mod_time, size) VALUES (?, ?, ?)`)
 	return err
 }
 
@@ -126,10 +140,75 @@ func (w *SQLiteWriter) commitTx() error {
 	if w.stmtDef != nil {
 		_ = w.stmtDef.Close()
 	}
+	if w.stmtFile != nil {
+		_ = w.stmtFile.Close()
+	}
 	if err := w.tx.Commit(); err != nil {
 		return err
 	}
 	return nil
+}
+
+// RecordFile stores file metadata for incremental re-ingestion.
+// On subsequent mounts, files with matching (path, mod_time, size) are skipped.
+func (w *SQLiteWriter) RecordFile(path string, modTime time.Time, size int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	_, err := w.stmtFile.Exec(path, modTime.UnixNano(), size)
+	if err != nil {
+		log.Printf("SQLiteWriter: record file failed for %s: %v", path, err)
+		if w.firstErr == nil {
+			w.firstErr = fmt.Errorf("record file %s: %w", path, err)
+		}
+	}
+}
+
+// LoadFileIndex reads the file_index table from an existing index database.
+// Returns a map of path → (modTime, size) for incremental comparison.
+func LoadFileIndex(dbPath string) (map[string]FileIndexEntry, error) {
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = db.Close() }()
+
+	// Check if file_index table exists
+	var tableName string
+	err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='file_index'").Scan(&tableName)
+	if err == sql.ErrNoRows {
+		return nil, nil // Table doesn't exist, no cached index
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query("SELECT path, mod_time, size FROM file_index")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	index := make(map[string]FileIndexEntry)
+	for rows.Next() {
+		var path string
+		var modTimeNano int64
+		var size int64
+		if err := rows.Scan(&path, &modTimeNano, &size); err != nil {
+			return nil, err
+		}
+		index[path] = FileIndexEntry{
+			ModTime: time.Unix(0, modTimeNano),
+			Size:    size,
+		}
+	}
+	return index, rows.Err()
+}
+
+// FileIndexEntry stores cached file metadata for incremental comparison.
+type FileIndexEntry struct {
+	ModTime time.Time
+	Size    int64
 }
 
 // AddNode writes a node to the database.
@@ -180,7 +259,14 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		record, _ = json.Marshal(n.Properties)
 	}
 
-	// 5. Insert
+	// 5. Source file (for DeleteFileNodes support in incremental mode)
+	var sourceFile *string
+	if n.Origin != nil && n.Origin.FilePath != "" {
+		sf := n.Origin.FilePath
+		sourceFile = &sf
+	}
+
+	// 6. Insert
 	_, err := w.stmtNode.Exec(
 		n.ID,
 		parentID,
@@ -190,6 +276,7 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		n.ModTime.UnixNano(),
 		recordID,
 		record,
+		sourceFile,
 	)
 	if err != nil {
 		log.Printf("SQLiteWriter: insert failed for %s: %v", n.ID, err)
@@ -240,7 +327,18 @@ func (w *SQLiteWriter) AddDef(token, dirID string) error {
 }
 
 func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
-	// Not implemented for batch writer (usually used for fresh ingest)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Delete refs and defs for nodes originating from this file,
+	// then delete the nodes themselves using the indexed source_file column.
+	_, _ = w.tx.Exec(`DELETE FROM node_refs WHERE node_id IN (
+		SELECT id FROM nodes WHERE source_file = ?
+	)`, filePath)
+	_, _ = w.tx.Exec(`DELETE FROM node_defs WHERE dir_id IN (
+		SELECT id FROM nodes WHERE source_file = ?
+	)`, filePath)
+	_, _ = w.tx.Exec(`DELETE FROM nodes WHERE source_file = ?`, filePath)
 }
 
 func (w *SQLiteWriter) Close() error {
