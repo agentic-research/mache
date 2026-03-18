@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
@@ -452,7 +453,7 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 		path    string
 		modTime time.Time
 	}
-	fileCount := 0
+	var fileCount atomic.Int64
 	go func() {
 		defer close(jobs)
 		walkErr = filepath.WalkDir(rootPath, func(p string, d os.DirEntry, err error) error {
@@ -508,7 +509,7 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 						}
 					}
 				}
-				fileCount++
+				fileCount.Add(1)
 				jobs <- treeSitterJob{
 					path:     p,
 					lang:     lang,
@@ -542,7 +543,7 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 	for result := range parsed {
 		processed++
 		if processed%1000 == 0 {
-			log.Printf("Ingested %d/%d files...", processed, fileCount)
+			log.Printf("Ingested %d/%d files...", processed, fileCount.Load())
 		}
 
 		if result.readErr != nil {
@@ -642,7 +643,7 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 		}
 	}
 
-	if fileCount > 0 {
+	if fileCount.Load() > 0 {
 		log.Printf("Ingested %d source files total (%d workers).", processed, numWorkers)
 	}
 
