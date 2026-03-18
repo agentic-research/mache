@@ -56,6 +56,8 @@ type Engine struct {
 	routedFiles      map[string]int
 	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
 	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
+	sitterWalker     *SitterWalker              // shared across files for query cache reuse
+	fileIndex        map[string]FileIndexEntry   // cached file metadata for incremental re-ingestion
 	mu               sync.Mutex
 }
 
@@ -83,6 +85,57 @@ type parentLink struct {
 type refLink struct {
 	token  string
 	nodeID string
+}
+
+// --- Parallel tree-sitter ingestion types ---
+
+// treeSitterJob represents a source file to parse with tree-sitter.
+type treeSitterJob struct {
+	path    string
+	lang    *sitter.Language
+	langName string
+	modTime time.Time
+}
+
+// parsedTreeSitterFile is the result of parallel tree-sitter parsing.
+// Contains the pre-parsed AST and file content, ready for sequential processNode.
+type parsedTreeSitterFile struct {
+	job      treeSitterJob
+	realPath string
+	content  []byte
+	tree     *sitter.Tree
+	context  []byte // extracted imports/globals context
+	parseErr error  // non-nil if tree-sitter parsing failed
+	readErr  error  // non-nil if file read failed
+}
+
+// langForExt returns the tree-sitter language and name for a file extension.
+// Returns nil, "" for unsupported extensions.
+func langForExt(ext string) (*sitter.Language, string) {
+	switch ext {
+	case ".go":
+		return golang.GetLanguage(), "go"
+	case ".py":
+		return python.GetLanguage(), "python"
+	case ".js":
+		return javascript.GetLanguage(), "javascript"
+	case ".ts", ".tsx":
+		return typescript.GetLanguage(), "typescript"
+	case ".sql":
+		return sql.GetLanguage(), "sql"
+	case ".tf", ".hcl":
+		return hcl.GetLanguage(), "hcl"
+	case ".yaml", ".yml":
+		return yaml.GetLanguage(), "yaml"
+	case ".rs":
+		return rust.GetLanguage(), "rust"
+	case ".toml":
+		return toml.GetLanguage(), "toml"
+	case ".ex", ".exs":
+		return elixir.GetLanguage(), "elixir"
+	default:
+		return nil, ""
+	}
 }
 
 // isBinaryFile returns true if the file appears to contain binary content.
@@ -182,6 +235,12 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 	}
 }
 
+// SetFileIndex sets a cached file index for incremental re-ingestion.
+// Files matching (path, mtime, size) will be skipped during ingestion.
+func (e *Engine) SetFileIndex(index map[string]FileIndexEntry) {
+	e.fileIndex = index
+}
+
 // SchemaUsesTreeSitter returns true if the schema's selectors are tree-sitter
 // S-expressions rather than JSONPath. S-expressions always start with '('.
 func SchemaUsesTreeSitter(schema *api.Topology) bool {
@@ -223,6 +282,12 @@ func (e *Engine) Ingest(path string) error {
 	// Reset dedup state so stale entries from a prior Ingest don't persist.
 	e.childSeen = make(map[string]map[string]bool)
 
+	// Create a shared SitterWalker for query cache reuse across files.
+	// Compiled tree-sitter queries are identical for all files of the same
+	// language, so sharing avoids recompilation (e.g., 50K×20 → ~20).
+	e.sitterWalker = NewSitterWalker()
+	defer e.sitterWalker.Close()
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -250,6 +315,10 @@ func (e *Engine) Ingest(path string) error {
 		// Ingesting the wrong type is harmless but wastes time and
 		// can produce confusing errors (e.g. S-expression as JSONPath).
 		treeSitter := SchemaUsesTreeSitter(e.Schema)
+
+		if treeSitter {
+			return e.ingestTreeSitterParallel(realPath)
+		}
 
 		return filepath.WalkDir(realPath, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
@@ -300,16 +369,9 @@ func (e *Engine) Ingest(path string) error {
 				return nil
 			}
 			shouldParse := false
-			if treeSitter {
-				switch ext {
-				case ".go", ".py", ".js", ".ts", ".tsx", ".sql", ".rs", ".tf", ".hcl", ".yaml", ".yml", ".toml", ".ex", ".exs":
-					shouldParse = true
-				}
-			} else {
-				switch ext {
-				case ".json", ".db":
-					shouldParse = true
-				}
+			switch ext {
+			case ".json", ".db":
+				shouldParse = true
 			}
 
 			if shouldParse {
@@ -318,9 +380,6 @@ func (e *Engine) Ingest(path string) error {
 			// Skip binary files (executables, object files, images, etc.)
 			if isBinaryFile(p) {
 				return nil
-			}
-			if treeSitter {
-				return e.ingestRawFileUnder(p, "_project_files", info.ModTime())
 			}
 			return e.ingestRawFile(p, info.ModTime())
 		})
@@ -332,6 +391,264 @@ func (e *Engine) Ingest(path string) error {
 	return e.ingestFile(path, info.ModTime())
 }
 
+// ingestTreeSitterParallel processes a tree-sitter source directory using
+// parallel file parsing. Phase 1 walks the directory and sends file jobs to
+// a worker pool that performs the CPU-heavy tree-sitter parsing in parallel.
+// Phase 2 applies the parsed results sequentially (processNode + store mutations).
+func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
+	numWorkers := runtime.NumCPU()
+	jobs := make(chan treeSitterJob, numWorkers*4)
+	parsed := make(chan parsedTreeSitterFile, numWorkers*4)
+
+	// Phase 1: Workers parse files in parallel (CPU-bound tree-sitter parsing).
+	var workerWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go func() {
+			defer workerWg.Done()
+			parser := sitter.NewParser()
+			for job := range jobs {
+				result := parsedTreeSitterFile{job: job}
+				absPath, err := filepath.Abs(job.path)
+				if err != nil {
+					result.readErr = err
+					parsed <- result
+					continue
+				}
+				result.realPath, err = filepath.EvalSymlinks(absPath)
+				if err != nil {
+					result.realPath = absPath
+				}
+
+				result.content, err = os.ReadFile(result.realPath)
+				if err != nil {
+					result.readErr = err
+					parsed <- result
+					continue
+				}
+
+				parser.SetLanguage(job.lang)
+				tree, err := parser.ParseCtx(context.Background(), nil, result.content)
+				if err != nil {
+					result.parseErr = err
+				} else {
+					result.tree = tree
+					// Extract context (imports, globals) — CPU-bound query execution.
+					if ctxBytes, err := e.sitterWalker.ExtractContext(
+						tree.RootNode(), result.content, job.lang, job.langName,
+					); err == nil {
+						result.context = ctxBytes
+					}
+				}
+				parsed <- result
+			}
+		}()
+	}
+
+	// Walk directory and send jobs. Non-tree-sitter files (raw files) are
+	// processed inline since they're cheap (just file copy, no parsing).
+	var walkErr error
+	var rawFiles []struct {
+		path    string
+		modTime time.Time
+	}
+	fileCount := 0
+	go func() {
+		defer close(jobs)
+		walkErr = filepath.WalkDir(rootPath, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if p != rootPath && ShouldSkipDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				if e.gitignore != nil && p != rootPath {
+					rel, relErr := filepath.Rel(rootPath, p)
+					if relErr == nil {
+						rel = filepath.ToSlash(rel)
+						if e.gitignore.Match(rel, true) {
+							return filepath.SkipDir
+						}
+					}
+				}
+				return nil
+			}
+			if e.gitignore != nil {
+				rel, relErr := filepath.Rel(rootPath, p)
+				if relErr == nil {
+					rel = filepath.ToSlash(rel)
+					if e.gitignore.Match(rel, false) {
+						return nil
+					}
+				}
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				target, err := os.Stat(p)
+				if err == nil && target.IsDir() {
+					return nil
+				}
+			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if ShouldSkipFile(p, info.Size()) {
+				return nil
+			}
+
+			ext := filepath.Ext(p)
+			lang, langName := langForExt(ext)
+			if lang != nil {
+				// Skip unchanged files when an index is available.
+				if e.fileIndex != nil {
+					if entry, ok := e.fileIndex[p]; ok {
+						if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() {
+							return nil // unchanged, skip re-parsing
+						}
+					}
+				}
+				fileCount++
+				jobs <- treeSitterJob{
+					path:     p,
+					lang:     lang,
+					langName: langName,
+					modTime:  info.ModTime(),
+				}
+			} else {
+				if !isBinaryFile(p) {
+					rawFiles = append(rawFiles, struct {
+						path    string
+						modTime time.Time
+					}{p, info.ModTime()})
+				}
+			}
+			return nil
+		})
+	}()
+
+	// Phase 2: Collect parsed results and apply sequentially.
+	// processNode reads/writes shared state (childSeen, store) so must be serial.
+	var firstErr error
+	processed := 0
+	// Wait for workers to finish in a separate goroutine so we can collect results.
+	doneCh := make(chan struct{})
+	go func() {
+		workerWg.Wait()
+		close(parsed)
+		close(doneCh)
+	}()
+
+	for result := range parsed {
+		processed++
+		if processed%1000 == 0 {
+			log.Printf("Ingested %d/%d files...", processed, fileCount)
+		}
+
+		if result.readErr != nil {
+			if firstErr == nil {
+				firstErr = result.readErr
+			}
+			continue
+		}
+
+		if result.parseErr != nil {
+			log.Printf("ingest: parse failed for %s (using raw fallback): %v", result.job.path, result.parseErr)
+			// Fallback: ingest as broken file
+			baseName := filepath.Base(result.job.path)
+			fallbackID := "BROKEN_" + baseName
+			fileNode := &graph.Node{
+				ID:      fallbackID,
+				Mode:    0o444,
+				ModTime: result.job.modTime,
+				Data:    result.content,
+				Origin: &graph.SourceOrigin{
+					FilePath:  result.realPath,
+					StartByte: 0,
+					EndByte:   uint32(len(result.content)),
+				},
+			}
+			e.Store.AddNode(fileNode)
+			e.Store.AddRoot(fileNode)
+			continue
+		}
+
+		// Apply parsed tree using processNode (sequential, touches shared state).
+		bt := &bufferingTarget{IngestionTarget: e.Store}
+		walker := e.sitterWalker
+		root := SitterRoot{
+			Node:     result.tree.RootNode(),
+			FileRoot: result.tree.RootNode(),
+			Source:   result.content,
+			Lang:     result.job.lang,
+			LangName: result.job.langName,
+		}
+		sourceFile := filepath.Base(result.job.path)
+		applicableNodes := filterNodesByLanguage(e.Schema.Nodes, result.job.langName)
+
+		var processErr error
+		for _, nodeSchema := range applicableNodes {
+			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context); err != nil {
+				if strings.Contains(err.Error(), "invalid query") {
+					e.mu.Lock()
+					e.routedFiles[result.job.langName]++
+					e.mu.Unlock()
+					processErr = e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
+					break
+				}
+				processErr = fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
+				break
+			}
+		}
+
+		if processErr != nil {
+			if firstErr == nil {
+				firstErr = processErr
+			}
+			continue
+		}
+
+		// Atomic swap of file nodes.
+		if ms, ok := e.Store.(*graph.MemoryStore); ok {
+			ms.ReplaceFileNodes(result.realPath, bt.bufferedNodes)
+		} else {
+			e.Store.DeleteFileNodes(result.realPath)
+			for _, n := range bt.bufferedNodes {
+				e.Store.AddNode(n)
+			}
+		}
+
+		// Record file metadata for incremental re-ingestion.
+		if sw, ok := e.Store.(*SQLiteWriter); ok {
+			info, err := os.Stat(result.realPath)
+			if err == nil {
+				sw.RecordFile(result.realPath, info.ModTime(), info.Size())
+			}
+		}
+	}
+
+	// Wait for walk to complete.
+	<-doneCh
+	if walkErr != nil {
+		return walkErr
+	}
+
+	// Process raw (non-tree-sitter) files sequentially (cheap, no parsing).
+	for _, rf := range rawFiles {
+		if err := e.ingestRawFileUnder(rf.path, "_project_files", rf.modTime); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+
+	if fileCount > 0 {
+		log.Printf("Ingested %d source files total (%d workers).", processed, numWorkers)
+	}
+
+	return firstErr
+}
+
 func (e *Engine) ingestFile(path string, modTime time.Time) error {
 	ext := filepath.Ext(path)
 
@@ -340,30 +657,10 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 		return e.ingestSQLiteStreaming(path)
 	case ".json":
 		return e.ingestJSON(path, modTime)
-	case ".py":
-		return e.ingestTreeSitter(path, python.GetLanguage(), "python", modTime)
-	case ".js":
-		return e.ingestTreeSitter(path, javascript.GetLanguage(), "javascript", modTime)
-	case ".ts", ".tsx":
-		// Use Typescript grammar for both .ts and .tsx (it handles JSX mostly, or use tsx grammar if strictly needed)
-		// go-tree-sitter/typescript usually has typescript and tsx subpackages.
-		// For now, use typescript.
-		return e.ingestTreeSitter(path, typescript.GetLanguage(), "typescript", modTime)
-	case ".sql":
-		return e.ingestTreeSitter(path, sql.GetLanguage(), "sql", modTime)
-	case ".go":
-		return e.ingestTreeSitter(path, golang.GetLanguage(), "go", modTime)
-	case ".tf", ".hcl":
-		return e.ingestTreeSitter(path, hcl.GetLanguage(), "hcl", modTime)
-	case ".yaml", ".yml":
-		return e.ingestTreeSitter(path, yaml.GetLanguage(), "yaml", modTime)
-	case ".rs":
-		return e.ingestTreeSitter(path, rust.GetLanguage(), "rust", modTime)
-	case ".toml":
-		return e.ingestTreeSitter(path, toml.GetLanguage(), "toml", modTime)
-	case ".ex", ".exs":
-		return e.ingestTreeSitter(path, elixir.GetLanguage(), "elixir", modTime)
 	default:
+		if lang, langName := langForExt(ext); lang != nil {
+			return e.ingestTreeSitter(path, lang, langName, modTime)
+		}
 		if isBinaryFile(path) {
 			return nil
 		}
@@ -462,7 +759,13 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 	}
 
 	if err == nil {
-		walker := NewSitterWalker()
+		// Use the shared walker if available (set during Ingest), otherwise
+		// create a temporary one (e.g., during ReIngestFile).
+		walker := e.sitterWalker
+		if walker == nil {
+			walker = NewSitterWalker()
+			defer walker.Close()
+		}
 		root := SitterRoot{Node: tree.RootNode(), FileRoot: tree.RootNode(), Source: content, Lang: lang, LangName: langName}
 		sourceFile := filepath.Base(path)
 

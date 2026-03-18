@@ -329,12 +329,22 @@ var rootCmd = &cobra.Command{
 				g = sg
 			} else if !writable && ingest.SchemaUsesTreeSitter(schema) {
 				// Read-only source: ingest to SQLite index, mount via SQLiteGraph (fast path).
+				// Uses persistent cache so re-mounts can skip unchanged files.
 				mountName := filepath.Base(mountPoint)
-				tmpDir := filepath.Join(os.TempDir(), "mache")
-				if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-					return fmt.Errorf("create temp dir: %w", err)
+				cacheDir := filepath.Join(os.TempDir(), "mache")
+				if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+					return fmt.Errorf("create cache dir: %w", err)
 				}
-				indexPath := filepath.Join(tmpDir, mountName+"-index.db")
+				indexPath := filepath.Join(cacheDir, mountName+"-index.db")
+
+				// Load existing file index for incremental re-ingestion.
+				var fileIndex map[string]ingest.FileIndexEntry
+				if _, err := os.Stat(indexPath); err == nil {
+					if idx, err := ingest.LoadFileIndex(indexPath); err == nil && len(idx) > 0 {
+						fileIndex = idx
+						log.Printf("Loaded file index with %d entries (incremental mode)", len(idx))
+					}
+				}
 
 				log.Printf("Indexing source to %s...", indexPath)
 				start := time.Now()
@@ -345,6 +355,9 @@ var rootCmd = &cobra.Command{
 				}
 
 				eng := ingest.NewEngine(schema, writer)
+				if fileIndex != nil {
+					eng.SetFileIndex(fileIndex)
+				}
 				if err := eng.Ingest(dataPath); err != nil {
 					_ = writer.Close()
 					return fmt.Errorf("ingestion failed: %w", err)
@@ -375,7 +388,7 @@ var rootCmd = &cobra.Command{
 				}
 				defer func() {
 					_ = sg.Close()
-					_ = os.Remove(indexPath)
+					// Keep the index file for incremental re-ingestion on next mount.
 				}()
 
 				sg.SetCallExtractor(newCallExtractor())
