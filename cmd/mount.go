@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -335,7 +336,15 @@ var rootCmd = &cobra.Command{
 				if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 					return fmt.Errorf("create cache dir: %w", err)
 				}
-				indexPath := filepath.Join(cacheDir, mountName+"-index.db")
+				// Include hash of resolved data path to avoid collisions when
+				// different source directories are mounted to the same mount name.
+				absDataPath, err := filepath.Abs(dataPath)
+				if err != nil {
+					return fmt.Errorf("resolve data path: %w", err)
+				}
+				sum := sha256.Sum256([]byte(absDataPath))
+				hashSuffix := fmt.Sprintf("%x", sum[:8])
+				indexPath := filepath.Join(cacheDir, fmt.Sprintf("%s-%s-index.db", mountName, hashSuffix))
 
 				// Load existing file index for incremental re-ingestion.
 				var fileIndex map[string]ingest.FileIndexEntry

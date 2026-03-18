@@ -3,6 +3,8 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -502,8 +504,14 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 			lang, langName := langForExt(ext)
 			if lang != nil {
 				// Skip unchanged files when an index is available.
+				// Use resolved (symlink-evaluated) path for consistent cache key,
+				// matching RecordFile which stores result.realPath.
 				if e.fileIndex != nil {
-					if entry, ok := e.fileIndex[p]; ok {
+					lookupPath := p
+					if resolved, err := filepath.EvalSymlinks(p); err == nil {
+						lookupPath = resolved
+					}
+					if entry, ok := e.fileIndex[lookupPath]; ok {
 						if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() {
 							return nil // unchanged, skip re-parsing
 						}
@@ -555,9 +563,14 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 
 		if result.parseErr != nil {
 			log.Printf("ingest: parse failed for %s (using raw fallback): %v", result.job.path, result.parseErr)
-			// Fallback: ingest as broken file
-			baseName := filepath.Base(result.job.path)
-			fallbackID := "BROKEN_" + baseName
+			// Fallback: ingest as broken file — use path hash to avoid ID collisions
+			// when two broken files share the same basename in different directories.
+			pathForID := result.realPath
+			if pathForID == "" {
+				pathForID = result.job.path
+			}
+			sum := sha256.Sum256([]byte(pathForID))
+			fallbackID := "BROKEN_" + hex.EncodeToString(sum[:8])
 			fileNode := &graph.Node{
 				ID:      fallbackID,
 				Mode:    0o444,
