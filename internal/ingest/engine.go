@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -536,10 +537,11 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 		})
 	}()
 
-	// Phase 2: Collect parsed results and apply sequentially.
-	// processNode reads/writes shared state (childSeen, store) so must be serial.
+	// Phase 2: Collect all parsed results, then sort by path for deterministic
+	// processing order. Dedup suffixes (e.g., init.from_b_go) depend on the
+	// order files are processed — alphabetical matches filepath.WalkDir behavior.
 	var firstErr error
-	processed := 0
+	var results []parsedTreeSitterFile
 	// Wait for workers to finish in a separate goroutine so we can collect results.
 	doneCh := make(chan struct{})
 	go func() {
@@ -549,6 +551,16 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 	}()
 
 	for result := range parsed {
+		results = append(results, result)
+	}
+
+	// Sort by walk path to match filepath.WalkDir's lexical order.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].job.path < results[j].job.path
+	})
+
+	processed := 0
+	for _, result := range results {
 		processed++
 		if processed%1000 == 0 {
 			log.Printf("Ingested %d/%d files...", processed, fileCount.Load())
@@ -600,6 +612,16 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 		sourceFile := filepath.Base(result.job.path)
 		applicableNodes := filterNodesByLanguage(e.Schema.Nodes, result.job.langName)
 
+		// No applicable schema nodes for this language — route to _project_files/.
+		if len(applicableNodes) == 0 {
+			if err := e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+			continue
+		}
+
 		var processErr error
 		for _, nodeSchema := range applicableNodes {
 			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context); err != nil {
@@ -618,6 +640,17 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 		if processErr != nil {
 			if firstErr == nil {
 				firstErr = processErr
+			}
+			continue
+		}
+
+		// No nodes produced — schema selectors didn't match anything in this
+		// language. Route to _project_files/ so the file isn't silently lost.
+		if len(bt.bufferedNodes) == 0 {
+			if err := e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 			continue
 		}
