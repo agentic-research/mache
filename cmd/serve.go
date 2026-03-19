@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -222,12 +223,33 @@ func (r *graphRegistry) Close() {
 }
 
 // getOrCreateGraph returns an existing graph for rootPath or creates a new one.
+// The cache key includes the current git HEAD commit hash so that switching
+// branches at the same path produces a fresh graph instead of a stale one.
 func (r *graphRegistry) getOrCreateGraph(rootPath string) *lazyGraph {
-	if v, ok := r.graphs.Load(rootPath); ok {
+	cacheKey := rootPath
+	if commit := getGitHead(rootPath); commit != "" {
+		cacheKey = rootPath + "@" + commit
+	}
+	// Fast path: return an existing graph if present for this exact cache key.
+	if v, ok := r.graphs.Load(cacheKey); ok {
 		return v.(*lazyGraph)
 	}
+	// Evict any prior graphs for the same rootPath but a different commit hash.
+	// This prevents unbounded accumulation of *lazyGraph instances (and their
+	// associated SQLite connections/temp files) across branch switches.
+	prefix := rootPath + "@"
+	r.graphs.Range(func(k, v any) bool {
+		keyStr := k.(string)
+		if keyStr != cacheKey && (keyStr == rootPath || strings.HasPrefix(keyStr, prefix)) {
+			if oldLg, ok := v.(*lazyGraph); ok && oldLg.cleanup != nil {
+				oldLg.cleanup()
+			}
+			r.graphs.Delete(k)
+		}
+		return true
+	})
 	lg := &lazyGraph{args: r.args, basePath: rootPath}
-	actual, _ := r.graphs.LoadOrStore(rootPath, lg)
+	actual, _ := r.graphs.LoadOrStore(cacheKey, lg)
 	return actual.(*lazyGraph)
 }
 
@@ -291,6 +313,88 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 	fallback := r.resolvedBasePath()
 	r.registerSession(sid, fallback)
 	return r.getOrCreateGraph(fallback)
+}
+
+// getGitHead returns the current git commit hash (first 12 chars) for the
+// repository at rootPath, by reading git metadata and resolving any ref pointer.
+// Supports worktrees and submodules (where .git is a file with a gitdir pointer)
+// and falls back to packed-refs when loose refs are missing.
+// Returns empty string if rootPath is not a git repository or the ref cannot
+// be resolved to an actual commit hash.
+func getGitHead(rootPath string) string {
+	gitPath := filepath.Join(rootPath, ".git")
+	fi, err := os.Stat(gitPath)
+	if err != nil {
+		return ""
+	}
+	gitDir := gitPath
+
+	// Handle worktrees/submodules where .git is a file containing "gitdir: <path>".
+	if !fi.IsDir() {
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return ""
+		}
+		line := strings.TrimSpace(string(data))
+		if !strings.HasPrefix(line, "gitdir: ") {
+			return ""
+		}
+		gitDirPath := strings.TrimSpace(strings.TrimPrefix(line, "gitdir: "))
+		if !filepath.IsAbs(gitDirPath) {
+			gitDirPath = filepath.Join(rootPath, gitDirPath)
+		}
+		gitDir = gitDirPath
+	}
+
+	headFile := filepath.Join(gitDir, "HEAD")
+	data, err := os.ReadFile(headFile)
+	if err != nil {
+		return ""
+	}
+	head := strings.TrimSpace(string(data))
+
+	if strings.HasPrefix(head, "ref: ") {
+		ref := strings.TrimPrefix(head, "ref: ")
+		refPath := filepath.Join(gitDir, filepath.FromSlash(ref))
+		if data2, err := os.ReadFile(refPath); err == nil {
+			// Loose ref found — use its content.
+			head = strings.TrimSpace(string(data2))
+		} else if hash := resolvePackedRef(gitDir, ref); hash != "" {
+			// Loose ref missing — try packed-refs.
+			head = hash
+		} else {
+			// Ref cannot be resolved to a hash — disable git isolation
+			// rather than returning an unstable non-commit cache key.
+			return ""
+		}
+	}
+
+	if len(head) > 12 {
+		return head[:12]
+	}
+	return head
+}
+
+// resolvePackedRef searches the packed-refs file in gitDir for the given ref
+// and returns the commit hash if found, or empty string otherwise.
+func resolvePackedRef(gitDir, ref string) string {
+	f, err := os.Open(filepath.Join(gitDir, "packed-refs"))
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || line[0] == '#' || line[0] == '^' {
+			continue
+		}
+		fields := strings.SplitN(line, " ", 2)
+		if len(fields) == 2 && strings.TrimSpace(fields[1]) == ref {
+			return strings.TrimSpace(fields[0])
+		}
+	}
+	return ""
 }
 
 // rootURIToPath converts a file:// URI to a filesystem path.
@@ -598,7 +702,7 @@ type writeBacker interface {
 func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	s.AddTool(
 		mcp.NewTool("list_directory",
-			mcp.WithDescription("List children of a directory node. Use empty path for root."),
+			mcp.WithDescription("Browse the projected tree. Use instead of ls/find for 'what's in directory X?', 'list packages under Y'. Use empty path for root."),
 			mcp.WithString("path", mcp.Description("Directory path (empty for root)")),
 			mcp.WithBoolean("exclude_tests", mcp.Description("Exclude Test* and Benchmark* entries (default false). Recommended for large packages.")),
 		),
@@ -616,23 +720,23 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 
 	s.AddTool(
 		mcp.NewTool("find_callers",
-			mcp.WithDescription("Find all nodes that reference a given symbol or token."),
-			mcp.WithString("token", mcp.Required(), mcp.Description("Symbol or token name")),
+			mcp.WithDescription("Find all constructs that reference a symbol. Use for 'who calls X?', 'where is X used?', 'find usages of X'. More accurate than grep for symbol lookup."),
+			mcp.WithString("token", mcp.Required(), mcp.Description("Symbol or token name (e.g. 'GetCallers', 'ParseVuln')")),
 		),
 		r.wrapHandler(makeFindCallersHandler),
 	)
 
 	s.AddTool(
 		mcp.NewTool("find_callees",
-			mcp.WithDescription("Find all symbols called by a given construct."),
-			mcp.WithString("path", mcp.Required(), mcp.Description("Construct directory path")),
+			mcp.WithDescription("Find what a function/method calls. Use for 'what does X invoke?', 'dependencies of X'. Note: generic names (String, New, Error) may have false positives — prefer qualified calls."),
+			mcp.WithString("path", mcp.Required(), mcp.Description("Construct directory path (e.g. 'go/graph/methods/GetCallees')")),
 		),
 		r.wrapHandler(makeFindCalleesHandler),
 	)
 
 	s.AddTool(
 		mcp.NewTool("search",
-			mcp.WithDescription("Search for symbols matching a pattern (SQL LIKE: % = wildcard, case-insensitive). Optionally filter by construct type or role."),
+			mcp.WithDescription("Search for symbols by name pattern. Use instead of grep -r for 'find functions named X', 'find all X*', 'search for *auth*'. SQL LIKE wildcards: % = any chars. role=definition finds declarations."),
 			mcp.WithString("pattern", mcp.Required(), mcp.Description("Search pattern, e.g. 'Login%' or '%auth%'")),
 			mcp.WithString("type", mcp.Description("Filter by construct type in path, e.g. 'functions', 'methods', 'types', 'structs'")),
 			mcp.WithString("role", mcp.Description("Filter by role: 'definition' (where symbol is declared), 'reference' (where symbol is used). Default: returns references.")),
@@ -643,7 +747,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 
 	s.AddTool(
 		mcp.NewTool("get_communities",
-			mcp.WithDescription("Detect communities of densely co-referencing nodes using Louvain modularity optimization. Returns clusters of nodes that share symbols. Use summary=true for large codebases to get community sizes and top members without full member lists."),
+			mcp.WithDescription("Find clusters of related code using Louvain modularity detection. Use for 'what code works together?', 'find subsystems'. Requires dense cross-references. Use summary=true for large codebases."),
 			mcp.WithNumber("min_size", mcp.Description("Minimum community size (default 2)")),
 			mcp.WithBoolean("summary", mcp.Description("Return summary only (ID, size, top 5 members per community) instead of full member lists. Recommended for large codebases.")),
 		),
@@ -652,7 +756,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 
 	s.AddTool(
 		mcp.NewTool("find_definition",
-			mcp.WithDescription("Find where a symbol is defined. Returns the construct directory path(s) where the symbol is declared. Complements find_callers (who uses it) and find_callees (what it calls)."),
+			mcp.WithDescription("Find where a symbol is declared. Use for 'where is X defined?', 'where does X come from?'. Complements find_callers (who uses it) and find_callees (what it calls)."),
 			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to find definition for (e.g. 'GetCallers' or 'auth.Validate')")),
 		),
 		r.wrapHandler(makeFindDefinitionHandler),
@@ -679,7 +783,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 
 	s.AddTool(
 		mcp.NewTool("get_overview",
-			mcp.WithDescription("Get a structural overview of the projected data: top-level directories, node counts, available cross-reference stats. Call this first when exploring an unfamiliar codebase."),
+			mcp.WithDescription("START HERE when exploring a codebase. Returns top-level structure, node counts, cross-reference stats, and a usage guide for all tools."),
 		),
 		r.wrapHandler(makeGetOverviewHandler),
 	)
@@ -894,6 +998,17 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
+// genericGoNames is the set of method/function names that commonly cause
+// false positives in bare-token callee resolution. When a callee's base name
+// matches one of these, the result is flagged as potentially noisy.
+var genericGoNames = map[string]bool{
+	"String": true, "Error": true, "New": true, "Parse": true,
+	"Close": true, "Read": true, "Write": true, "Open": true,
+	"Run": true, "Start": true, "Stop": true, "Reset": true,
+	"Marshal": true, "Unmarshal": true, "Encode": true, "Decode": true,
+	"Format": true, "Scan": true, "Next": true, "Done": true,
+}
+
 func makeFindCalleesHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		path := request.GetString("path", "")
@@ -928,11 +1043,29 @@ func makeFindCalleesHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultText(string(data)), nil
 		}
 
-		paths := make([]string, 0, len(callees))
+		calleePaths := make([]string, 0, len(callees))
+		var warnings []string
+		seenGeneric := make(map[string]bool)
 		for _, c := range callees {
-			paths = append(paths, c.ID)
+			calleePaths = append(calleePaths, c.ID)
+			// Check if this callee's base name is a common generic identifier.
+			// Generic names resolved via bare-token fallback may include false
+			// positives from unrelated packages.
+			name := filepath.Base(c.ID)
+			if genericGoNames[name] && !seenGeneric[name] {
+				seenGeneric[name] = true
+				warnings = append(warnings,
+					fmt.Sprintf("'%s' is a common name — results may include false positives from unrelated packages. Use find_callers on the specific implementation path to verify.", name),
+				)
+			}
 		}
-		data, _ := json.MarshalIndent(paths, "", "  ")
+
+		type calleesResult struct {
+			Callees  []string `json:"callees"`
+			Warnings []string `json:"warnings,omitempty"`
+		}
+		out := calleesResult{Callees: calleePaths, Warnings: warnings}
+		data, _ := json.MarshalIndent(out, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }
@@ -993,7 +1126,10 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Reference search (default): query mache_refs
-		qg := g.(refsQuerier)
+		qg, ok := g.(refsQuerier)
+		if !ok {
+			return mcp.NewToolResultError("reference search requires a SQLite-backed graph; use role=definition for in-memory search"), nil
+		}
 		var rows *sql.Rows
 		var err error
 		if typeFilter != "" {
@@ -1070,10 +1206,26 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 		minSize := request.GetInt("min_size", 2)
 		summary := request.GetBool("summary", false)
 
-		rp := g.(refsMapProvider)
+		rp, ok := g.(refsMapProvider)
+		if !ok {
+			return mcp.NewToolResultError("community detection requires a graph with cross-reference data (SQLite backend or MemoryStore with refs)"), nil
+		}
 		refs := rp.RefsMap()
 		if len(refs) == 0 {
-			return mcp.NewToolResultText("[]"), nil
+			type emptyResult struct {
+				Communities []any   `json:"communities"`
+				NumNodes    int     `json:"num_nodes"`
+				NumEdges    int     `json:"num_edges"`
+				Modularity  float64 `json:"modularity"`
+				Message     string  `json:"message"`
+			}
+			data, _ := json.Marshal(emptyResult{
+				Communities: []any{},
+				Message: "No cross-references indexed. Community detection requires constructs that share symbols. " +
+					"Ensure the source was ingested with a schema that captures references (sitter_walker or json_walker with refs). " +
+					"Use get_overview to check ref_tokens count.",
+			})
+			return mcp.NewToolResultText(string(data)), nil
 		}
 
 		result := graph.DetectCommunities(refs, minSize)
@@ -1191,11 +1343,12 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 			Children int    `json:"children"`
 		}
 		type overview struct {
-			TopLevel   []dirInfo `json:"top_level"`
-			TotalDirs  int       `json:"total_dirs"`
-			TotalFiles int       `json:"total_files"`
-			RefTokens  int       `json:"ref_tokens,omitempty"`
-			DefTokens  int       `json:"def_tokens,omitempty"`
+			TopLevel   []dirInfo         `json:"top_level"`
+			TotalDirs  int               `json:"total_dirs"`
+			TotalFiles int               `json:"total_files"`
+			RefTokens  int               `json:"ref_tokens,omitempty"`
+			DefTokens  int               `json:"def_tokens,omitempty"`
+			Usage      map[string]string `json:"_usage,omitempty"`
 		}
 
 		ov := overview{}
@@ -1230,6 +1383,20 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		if dp, ok := g.(defsMapProvider); ok {
 			ov.DefTokens = len(dp.DefsMap())
+		}
+
+		// Embed tool routing hints when a code graph is indexed (has cross-references).
+		// This teaches the LLM which tool to use for each task without bloating the
+		// system prompt — guidance is only in context after get_overview is called.
+		if ov.RefTokens > 0 {
+			ov.Usage = map[string]string{
+				"find_callers":   "who calls a symbol — use instead of grep for 'who uses X?'",
+				"find_definition": "where a symbol is declared — use for 'where is X defined?'",
+				"find_callees":   "what a function invokes — note: generic names (String, New, Error) may have false positives",
+				"search":         "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
+				"list_directory": "browse the tree structure — use instead of ls/find",
+				"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
+			}
 		}
 
 		// Walk one level deeper to count total dirs/files
