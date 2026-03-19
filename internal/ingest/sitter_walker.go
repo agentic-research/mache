@@ -45,6 +45,13 @@ func RegisterQualifiedCallQuery(langName, query string) {
 	qualifiedCallQueryRegistry.Store(langName, query)
 }
 
+// schemaQueryKey identifies a compiled tree-sitter query by its selector text
+// and target language. Used as cache key for schema selector compilation.
+type schemaQueryKey struct {
+	selector string
+	lang     uintptr // *sitter.Language pointer identity
+}
+
 // SitterWalker implements Walker for Tree-sitter parsed code.
 type SitterWalker struct {
 	// callQueryCache caches compiled call-extraction queries keyed by language name.
@@ -53,6 +60,10 @@ type SitterWalker struct {
 	contextQueryCache sync.Map // string (language name) -> *sitter.Query
 	// qualifiedCallQueryCache caches compiled qualified call queries.
 	qualifiedCallQueryCache sync.Map // string (language name) -> *sitter.Query
+	// schemaQueryCache caches compiled schema selector queries keyed by
+	// (selector, language) pair. Schema selectors are the same across all
+	// files of the same language, so caching avoids recompilation on every file.
+	schemaQueryCache sync.Map // schemaQueryKey -> *sitter.Query
 }
 
 func NewSitterWalker() *SitterWalker {
@@ -96,12 +107,12 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 		}}, nil
 	}
 
-	// Compile the query
-	q, err := sitter.NewQuery([]byte(selector), sr.Lang)
+	// Compile the query (cached per selector+language pair).
+	q, err := w.getSchemaQuery(sr.Lang, selector)
 	if err != nil {
 		return nil, fmt.Errorf("invalid query '%s': %w", selector, err)
 	}
-	defer q.Close()
+	// Do NOT close q here — it is owned by the cache.
 
 	// Execute query
 	qc := sitter.NewQueryCursor()
@@ -205,6 +216,49 @@ func (m *sitterMatch) Context() any {
 		}
 	}
 	return nil
+}
+
+// getSchemaQuery returns a cached compiled query for schema selector execution.
+// The compiled query is reused across all files of the same language, avoiding
+// recompilation of the same S-expression on every file (e.g., 50K files × 20
+// selectors = 1M compilations reduced to ~20).
+func (w *SitterWalker) getSchemaQuery(lang *sitter.Language, selector string) (*sitter.Query, error) {
+	key := schemaQueryKey{selector: selector, lang: uintptr(unsafe.Pointer(lang))}
+	if cached, ok := w.schemaQueryCache.Load(key); ok {
+		return cached.(*sitter.Query), nil
+	}
+
+	q, err := sitter.NewQuery([]byte(selector), lang)
+	if err != nil {
+		return nil, err
+	}
+	actual, loaded := w.schemaQueryCache.LoadOrStore(key, q)
+	if loaded {
+		q.Close()
+		return actual.(*sitter.Query), nil
+	}
+	return q, nil
+}
+
+// Close releases all cached compiled queries. Call when the SitterWalker is
+// no longer needed (e.g., after ingestion completes).
+func (w *SitterWalker) Close() {
+	w.schemaQueryCache.Range(func(_, v any) bool {
+		v.(*sitter.Query).Close()
+		return true
+	})
+	w.callQueryCache.Range(func(_, v any) bool {
+		v.(*sitter.Query).Close()
+		return true
+	})
+	w.contextQueryCache.Range(func(_, v any) bool {
+		v.(*sitter.Query).Close()
+		return true
+	})
+	w.qualifiedCallQueryCache.Range(func(_, v any) bool {
+		v.(*sitter.Query).Close()
+		return true
+	})
 }
 
 // getContextQuery returns a cached compiled query for context extraction.
