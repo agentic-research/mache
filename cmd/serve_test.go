@@ -1062,6 +1062,46 @@ func TestGetGitHead_NoGitDir(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestGetGitHead_Worktree(t *testing.T) {
+	// Simulate a worktree: .git is a file with "gitdir: <path>"
+	mainDir := t.TempDir()
+	worktreeDir := t.TempDir()
+
+	// Set up the "real" git dir that the worktree points to
+	gitDir := filepath.Join(mainDir, ".git", "worktrees", "wt1")
+	require.NoError(t, os.MkdirAll(gitDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("aabbccdd11223344\n"), 0o644))
+
+	// Worktree's .git is a file pointing to the gitdir
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644))
+
+	got := getGitHead(worktreeDir)
+	assert.Equal(t, "aabbccdd1122", got)
+}
+
+func TestGetGitHead_PackedRefs(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+	// No loose ref file — only packed-refs
+	packedContent := "# pack-refs with: peeled fully-peeled sorted\n" +
+		"deadbeefdeadbeef refs/heads/main\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "packed-refs"), []byte(packedContent), 0o644))
+
+	got := getGitHead(dir)
+	assert.Equal(t, "deadbeefdead", got)
+}
+
+func TestGetGitHead_UnresolvableRef(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	// HEAD points to a ref that doesn't exist as loose or packed
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/nonexistent\n"), 0o644))
+
+	got := getGitHead(dir)
+	assert.Empty(t, got, "unresolvable ref should return empty string, not the ref name")
+}
+
 func TestGraphRegistry_GitBranchIsolation(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -229,9 +230,24 @@ func (r *graphRegistry) getOrCreateGraph(rootPath string) *lazyGraph {
 	if commit := getGitHead(rootPath); commit != "" {
 		cacheKey = rootPath + "@" + commit
 	}
+	// Fast path: return an existing graph if present for this exact cache key.
 	if v, ok := r.graphs.Load(cacheKey); ok {
 		return v.(*lazyGraph)
 	}
+	// Evict any prior graphs for the same rootPath but a different commit hash.
+	// This prevents unbounded accumulation of *lazyGraph instances (and their
+	// associated SQLite connections/temp files) across branch switches.
+	prefix := rootPath + "@"
+	r.graphs.Range(func(k, v any) bool {
+		keyStr := k.(string)
+		if keyStr != cacheKey && (keyStr == rootPath || strings.HasPrefix(keyStr, prefix)) {
+			if oldLg, ok := v.(*lazyGraph); ok && oldLg.cleanup != nil {
+				oldLg.cleanup()
+			}
+			r.graphs.Delete(k)
+		}
+		return true
+	})
 	lg := &lazyGraph{args: r.args, basePath: rootPath}
 	actual, _ := r.graphs.LoadOrStore(cacheKey, lg)
 	return actual.(*lazyGraph)
@@ -300,25 +316,85 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 }
 
 // getGitHead returns the current git commit hash (first 12 chars) for the
-// repository at rootPath, by reading .git/HEAD and resolving any ref pointer.
-// Returns empty string if rootPath is not a git repository.
+// repository at rootPath, by reading git metadata and resolving any ref pointer.
+// Supports worktrees and submodules (where .git is a file with a gitdir pointer)
+// and falls back to packed-refs when loose refs are missing.
+// Returns empty string if rootPath is not a git repository or the ref cannot
+// be resolved to an actual commit hash.
 func getGitHead(rootPath string) string {
-	headFile := filepath.Join(rootPath, ".git", "HEAD")
+	gitPath := filepath.Join(rootPath, ".git")
+	fi, err := os.Stat(gitPath)
+	if err != nil {
+		return ""
+	}
+	gitDir := gitPath
+
+	// Handle worktrees/submodules where .git is a file containing "gitdir: <path>".
+	if !fi.IsDir() {
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return ""
+		}
+		line := strings.TrimSpace(string(data))
+		if !strings.HasPrefix(line, "gitdir: ") {
+			return ""
+		}
+		gitDirPath := strings.TrimSpace(strings.TrimPrefix(line, "gitdir: "))
+		if !filepath.IsAbs(gitDirPath) {
+			gitDirPath = filepath.Join(rootPath, gitDirPath)
+		}
+		gitDir = gitDirPath
+	}
+
+	headFile := filepath.Join(gitDir, "HEAD")
 	data, err := os.ReadFile(headFile)
 	if err != nil {
 		return ""
 	}
 	head := strings.TrimSpace(string(data))
+
 	if strings.HasPrefix(head, "ref: ") {
-		refPath := filepath.Join(rootPath, ".git", strings.TrimPrefix(head, "ref: "))
+		ref := strings.TrimPrefix(head, "ref: ")
+		refPath := filepath.Join(gitDir, filepath.FromSlash(ref))
 		if data2, err := os.ReadFile(refPath); err == nil {
+			// Loose ref found — use its content.
 			head = strings.TrimSpace(string(data2))
+		} else if hash := resolvePackedRef(gitDir, ref); hash != "" {
+			// Loose ref missing — try packed-refs.
+			head = hash
+		} else {
+			// Ref cannot be resolved to a hash — disable git isolation
+			// rather than returning an unstable non-commit cache key.
+			return ""
 		}
 	}
+
 	if len(head) > 12 {
 		return head[:12]
 	}
 	return head
+}
+
+// resolvePackedRef searches the packed-refs file in gitDir for the given ref
+// and returns the commit hash if found, or empty string otherwise.
+func resolvePackedRef(gitDir, ref string) string {
+	f, err := os.Open(filepath.Join(gitDir, "packed-refs"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || line[0] == '#' || line[0] == '^' {
+			continue
+		}
+		fields := strings.SplitN(line, " ", 2)
+		if len(fields) == 2 && strings.TrimSpace(fields[1]) == ref {
+			return strings.TrimSpace(fields[0])
+		}
+	}
+	return ""
 }
 
 // rootURIToPath converts a file:// URI to a filesystem path.
