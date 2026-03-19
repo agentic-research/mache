@@ -549,7 +549,11 @@ func TestGetCommunities_Empty(t *testing.T) {
 	result, err := handler(context.Background(), makeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "[]", resultText(t, result))
+	// Empty refs should return a diagnostic object, not bare "[]"
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	assert.Contains(t, out, "message")
+	assert.Empty(t, out["communities"])
 }
 
 func TestGetCommunities_CustomMinSize(t *testing.T) {
@@ -1026,6 +1030,162 @@ func TestGraphRegistry_WrapHandler_RoutesToSessionGraph(t *testing.T) {
 
 	// Default graph has "default-root" as top-level
 	assert.Contains(t, text, "default-root")
+}
+
+// ---------------------------------------------------------------------------
+// git HEAD cache isolation tests
+// ---------------------------------------------------------------------------
+
+func TestGetGitHead_DirectHash(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("abc123def456789\n"), 0o644))
+
+	got := getGitHead(dir)
+	assert.Equal(t, "abc123def456", got) // first 12 chars
+}
+
+func TestGetGitHead_RefPointer(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "heads"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "heads", "main"), []byte("deadbeef12345678\n"), 0o644))
+
+	got := getGitHead(dir)
+	assert.Equal(t, "deadbeef1234", got)
+}
+
+func TestGetGitHead_NoGitDir(t *testing.T) {
+	dir := t.TempDir()
+	// No .git directory
+	got := getGitHead(dir)
+	assert.Empty(t, got)
+}
+
+func TestGraphRegistry_GitBranchIsolation(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	// First "branch" — commit abc123
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("abc123def456\n"), 0o644))
+
+	r := newGraphRegistry(dir, nil)
+	g1 := r.getOrCreateGraph(dir)
+	// Same branch — should return same instance
+	g1again := r.getOrCreateGraph(dir)
+	assert.Same(t, g1, g1again, "same commit should return same lazyGraph")
+
+	// Simulate branch switch — new HEAD
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("999aaabbbccc\n"), 0o644))
+	g2 := r.getOrCreateGraph(dir)
+	assert.NotSame(t, g1, g2, "different commit should return different lazyGraph")
+}
+
+func TestGraphRegistry_NoGitStillCachesPerRoot(t *testing.T) {
+	// Non-git directory: cache key falls back to rootPath only — still deduplicated
+	dir := t.TempDir()
+	r := newGraphRegistry(dir, nil)
+	g1 := r.getOrCreateGraph(dir)
+	g2 := r.getOrCreateGraph(dir)
+	assert.Same(t, g1, g2)
+}
+
+// ---------------------------------------------------------------------------
+// get_communities diagnostic message tests
+// ---------------------------------------------------------------------------
+
+func TestGetCommunities_EmptyRefsReturnsMessage(t *testing.T) {
+	store := graph.NewMemoryStore()
+	handler := makeGetCommunitiesHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	assert.Contains(t, out, "message", "empty refs should return a diagnostic message")
+	communities, ok := out["communities"]
+	require.True(t, ok)
+	assert.Empty(t, communities)
+}
+
+// noRefsGraph is a minimal graph.Graph that does NOT implement refsMapProvider.
+// Used to test the unchecked type assertion guard in makeGetCommunitiesHandler.
+type noRefsGraph struct {
+	graph.Graph
+}
+
+func TestGetCommunities_UnsupportedBackend(t *testing.T) {
+	// noRefsGraph embeds graph.Graph but does not implement RefsMap().
+	// The handler must return an error, not panic.
+	g := &noRefsGraph{graph.NewMemoryStore()}
+	handler := makeGetCommunitiesHandler(g)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "unsupported backend should return an error result")
+	assert.Contains(t, resultText(t, result), "cross-reference")
+}
+
+// ---------------------------------------------------------------------------
+// find_callees generic name warning tests
+// ---------------------------------------------------------------------------
+
+func TestFindCallees_GenericNameWarning(t *testing.T) {
+	store := graph.NewMemoryStore()
+	// Construct node with a "source" child
+	store.AddRoot(&graph.Node{
+		ID:       "pkg/svc",
+		Mode:     fs.ModeDir,
+		Children: []string{"pkg/svc/source"},
+		Properties: map[string][]byte{
+			"lang": []byte("go"),
+		},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "pkg/svc/source",
+		Mode: 0,
+		Data: []byte(`func run() { s := obj.String() }`),
+	})
+	// Definition for the generic name "String" at some node
+	require.NoError(t, store.AddDef("String", "pkg/other/String"))
+	store.AddNode(&graph.Node{ID: "pkg/other/String", Mode: fs.ModeDir, Children: []string{}})
+
+	// Extractor returns a call to "String" (bare, generic name)
+	store.SetCallExtractor(func(content []byte, path, lang string) ([]graph.QualifiedCall, error) {
+		return []graph.QualifiedCall{{Token: "String"}}, nil
+	})
+
+	handler := makeFindCalleesHandler(store)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/svc"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	assert.Contains(t, out, "callees")
+	assert.Contains(t, out, "warnings", "generic names should produce a warnings field")
+	warnings := out["warnings"].([]any)
+	assert.NotEmpty(t, warnings)
+}
+
+// ---------------------------------------------------------------------------
+// search unchecked assertion tests
+// ---------------------------------------------------------------------------
+
+// noQueryGraph is a minimal graph.Graph that does NOT implement refsQuerier.
+type noQueryGraph struct {
+	graph.Graph
+}
+
+func TestSearch_NonSQLiteBackendReturnsError(t *testing.T) {
+	g := &noQueryGraph{graph.NewMemoryStore()}
+	handler := makeSearchHandler(g)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "Foo"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "non-SQLite backend should return an error, not panic")
+	assert.Contains(t, resultText(t, result), "role=definition")
 }
 
 func TestRootURIToPath(t *testing.T) {
