@@ -1230,6 +1230,23 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		result := graph.DetectCommunities(refs, minSize)
 
+		// Push topology to ley-line sheaf cache (fire-and-forget).
+		go func() {
+			sockPath, err := leyline.DiscoverOrStart()
+			if err != nil {
+				return // no daemon — skip silently
+			}
+			sock, err := leyline.DialSocket(sockPath)
+			if err != nil {
+				return
+			}
+			defer func() { _ = sock.Close() }()
+			sc := leyline.NewSheafClient(sock)
+			if pushErr := sc.PushTopology(result, refs); pushErr != nil {
+				log.Printf("sheaf topology push: %v", pushErr)
+			}
+		}()
+
 		if summary {
 			type communitySummary struct {
 				ID         int      `json:"id"`
@@ -1390,11 +1407,11 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		// system prompt — guidance is only in context after get_overview is called.
 		if ov.RefTokens > 0 {
 			ov.Usage = map[string]string{
-				"find_callers":   "who calls a symbol — use instead of grep for 'who uses X?'",
+				"find_callers":    "who calls a symbol — use instead of grep for 'who uses X?'",
 				"find_definition": "where a symbol is declared — use for 'where is X defined?'",
-				"find_callees":   "what a function invokes — note: generic names (String, New, Error) may have false positives",
-				"search":         "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
-				"list_directory": "browse the tree structure — use instead of ls/find",
+				"find_callees":    "what a function invokes — note: generic names (String, New, Error) may have false positives",
+				"search":          "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
+				"list_directory":  "browse the tree structure — use instead of ls/find",
 				"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
 			}
 		}
