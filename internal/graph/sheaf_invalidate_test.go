@@ -250,6 +250,24 @@ func TestSheafInvalidator_ExplicitMembershipOverridesStored(t *testing.T) {
 	assert.Equal(t, 3, count)
 }
 
+func TestSheafInvalidator_ExplicitMembershipWithNilResult(t *testing.T) {
+	// Copilot review: explicit membership should enable cascading even when
+	// si.result is nil — the caller provided the data we need.
+	g := &mockGraph{}
+	backend := &mockSheafBackend{
+		response: []int{0}, // region 0 affected
+	}
+
+	si := NewSheafInvalidator(g, backend, nil) // no stored result
+
+	explicit := map[string]int{"node/a": 0, "node/b": 0}
+	count := si.InvalidateWithCascade("node/a", explicit)
+
+	require.Len(t, backend.calls, 1)
+	assert.Equal(t, 0, backend.calls[0])
+	assert.Equal(t, 2, count, "should cascade using explicit membership despite nil result")
+}
+
 // ---------------------------------------------------------------------------
 // SetCommunityResult updates the stored result
 // ---------------------------------------------------------------------------

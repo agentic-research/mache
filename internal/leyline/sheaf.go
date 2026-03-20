@@ -177,8 +177,10 @@ func buildRegions(cr *graph.CommunityResult) []region {
 // buildRestrictions discovers cross-community edges from the refs map.
 // For each token referenced by nodes in more than one community, we
 // create a restriction edge between each pair of those communities.
-// The boundary_hash is SHA-256 of the token. The co_change_rate is
-// proportional to how many cross-community node pairs share the token.
+// For a given (A,B) edge, boundary_hash is the SHA-256 of the sorted list
+// of all tokens contributing to that edge (joined with 0-byte separators).
+// The co_change_rate is proportional to how many cross-community node pairs
+// share those tokens.
 func buildRestrictions(cr *graph.CommunityResult, refs map[string][]string) []restriction {
 	if refs == nil {
 		return nil

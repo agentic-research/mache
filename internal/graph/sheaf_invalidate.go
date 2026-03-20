@@ -59,7 +59,7 @@ func (si *SheafInvalidator) InvalidateWithCascade(id string, membership map[stri
 	}
 
 	// If no sheaf backend or no community info, fall back to single invalidation.
-	if si.sheaf == nil || si.result == nil || membership == nil {
+	if si.sheaf == nil || membership == nil {
 		si.graph.Invalidate(id)
 		return 1
 	}
