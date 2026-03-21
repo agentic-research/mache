@@ -13,11 +13,14 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -95,16 +98,26 @@ func DiscoverOrStart() (string, error) {
 		managed.sock = ""
 	}
 
-	// Find the leyline binary
-	leylineBin, err := exec.LookPath("leyline")
-	if err != nil {
-		return "", fmt.Errorf("no ley-line socket found and leyline binary not on PATH")
-	}
-
-	// Prepare ~/.mache/ data directory
+	// Find the leyline binary: PATH → ~/.mache/bin/ → auto-download
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	leylineBin, err := exec.LookPath("leyline")
+	if err != nil {
+		// Fallback: check ~/.mache/bin/leyline
+		localBin := filepath.Join(home, ".mache", "bin", "leyline")
+		if _, statErr := os.Stat(localBin); statErr == nil {
+			leylineBin = localBin
+		} else {
+			// Auto-download from GitHub releases
+			downloaded, dlErr := downloadLeyline(localBin)
+			if dlErr != nil {
+				return "", fmt.Errorf("leyline not on PATH and auto-download failed: %w", dlErr)
+			}
+			leylineBin = downloaded
+		}
 	}
 	dataDir := filepath.Join(home, ".mache")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -283,4 +296,62 @@ func (c *SocketClient) Query(sql string) ([][]any, error) {
 // SetDeadline sets the read/write deadline on the underlying connection.
 func (c *SocketClient) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
+}
+
+// downloadLeyline fetches the leyline binary from the latest GitHub release
+// to the specified path. Returns the path on success.
+func downloadLeyline(destPath string) (string, error) {
+	osName := runtime.GOOS // "darwin" or "linux"
+	arch := runtime.GOARCH // "arm64" or "amd64"
+	assetName := fmt.Sprintf("leyline-%s-%s", osName, arch)
+	url := fmt.Sprintf(
+		"https://github.com/agentic-research/ley-line/releases/latest/download/%s",
+		assetName,
+	)
+
+	log.Printf("downloading leyline binary from %s", url)
+
+	resp, err := http.Get(url) //nolint:gosec // URL is hardcoded to GitHub releases
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		return "", fmt.Errorf("create dir: %w", err)
+	}
+
+	// Write to temp file then rename (atomic)
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), "leyline-download-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("write: %w", err)
+	}
+	_ = tmp.Close()
+
+	// Make executable
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("chmod: %w", err)
+	}
+
+	// Atomic rename
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("rename: %w", err)
+	}
+
+	log.Printf("leyline binary installed to %s", destPath)
+	return destPath, nil
 }
