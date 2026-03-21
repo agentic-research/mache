@@ -410,12 +410,13 @@ func rootURIToPath(uri string) string {
 // This allows the MCP server to start and respond to initialize/tools/list
 // before the potentially slow schema detection + ingestion completes.
 type lazyGraph struct {
-	args     []string
-	basePath string // optional; defaults to "." (CWD) when empty
-	once     sync.Once
-	inner    graph.Graph
-	cleanup  func()
-	err      error
+	args      []string
+	basePath  string // optional; defaults to "." (CWD) when empty
+	once      sync.Once
+	embedOnce sync.Once // triggers embedding on first successful get()
+	inner     graph.Graph
+	cleanup   func()
+	err       error
 }
 
 // resolvedBasePath returns basePath if set, otherwise ".".
@@ -500,9 +501,6 @@ func (lg *lazyGraph) init() {
 		lg.inner = g
 		lg.cleanup = cleanup
 		log.Println("graph ready")
-
-		// Fire-and-forget: push content to ley-line for embedding
-		go leyline.TriggerEmbedding(g, 100)
 	})
 }
 
@@ -511,6 +509,11 @@ func (lg *lazyGraph) get() (graph.Graph, error) {
 	if lg.err != nil {
 		return nil, lg.err
 	}
+	// Trigger embedding after first successful graph access.
+	// This ensures SQLiteGraph's lazy scan has completed before we walk nodes.
+	lg.embedOnce.Do(func() {
+		go leyline.TriggerEmbedding(lg.inner, 100)
+	})
 	return lg.inner, nil
 }
 
