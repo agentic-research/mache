@@ -1,0 +1,43 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "repos",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.item.Layer}}",
+          "selector": "$[*]",
+          "children": [
+            {
+              "name": "{{.item.Name}}",
+              "selector": "$",
+              "files": [
+                {
+                  "name": "purpose",
+                  "content_template": "{{.item.Purpose}}"
+                },
+                {
+                  "name": "path",
+                  "content_template": "{{.item.Path}}"
+                },
+                {
+                  "name": "language",
+                  "content_template": "{{.item.Language}}"
+                },
+                {
+                  "name": "status",
+                  "content_template": "{{.item.Status}}"
+                },
+                {
+                  "name": "properties.json",
+                  "content_template": "{{.item | json}}"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

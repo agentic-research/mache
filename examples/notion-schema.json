@@ -1,0 +1,25 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "pages",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.item.Name}}",
+          "selector": "$[*]",
+          "files": [
+            {
+              "name": "properties.json",
+              "content_template": "{{.item | json}}"
+            },
+            {
+              "name": "raw.json",
+              "content_template": "{{. | json}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
