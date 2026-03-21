@@ -22,6 +22,7 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lattice"
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/linter"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
@@ -475,6 +476,9 @@ var rootCmd = &cobra.Command{
 			log.Print("  # or press Ctrl+C in this terminal")
 		}
 
+		// Fire-and-forget: push content to ley-line for embedding
+		go leyline.TriggerEmbedding(g, 100)
+
 		// 4. Mount via selected backend
 		switch backend {
 		case "nfs":
@@ -786,6 +790,29 @@ func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mount
 	} else if ms, ok := g.(*graph.MemoryStore); ok {
 		macheFs.SetQueryFunc(ms.QueryRefs)
 	}
+
+	// Wire up semantic search for `? query` prefix in .query/
+	macheFs.SetSemanticSearchFunc(func(query string, k int) ([]machefs.SemanticHit, error) {
+		sockPath, err := leyline.DiscoverOrStart()
+		if err != nil {
+			return nil, err
+		}
+		sock, err := leyline.DialSocket(sockPath)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = sock.Close() }()
+		sc := leyline.NewSemanticClient(sock)
+		results, err := sc.Search(query, k)
+		if err != nil {
+			return nil, err
+		}
+		hits := make([]machefs.SemanticHit, len(results))
+		for i, r := range results {
+			hits[i] = machefs.SemanticHit{Path: r.ID, Distance: r.Distance}
+		}
+		return hits, nil
+	})
 
 	// Wire up write-back if requested (only for MemoryStore + tree-sitter sources)
 	if writable && engine != nil {
