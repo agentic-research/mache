@@ -3,6 +3,14 @@ package api
 // SchemaVersion is the current schema version string.
 const SchemaVersion = "v1"
 
+// DiagramDef is a named diagram view rendered by the {{diagram}} template function.
+// Grouping, labels, and visibility emerge from community detection on the refs
+// graph; the definition intentionally contains only the layout direction.
+type DiagramDef struct {
+	// Layout is the mermaid direction: "TD", "LR", "BT", or "RL".
+	Layout string `json:"layout"`
+}
+
 // Topology represents the root configuration of the semantic overlay.
 // It maps the input data source to a directory structure.
 type Topology struct {
@@ -10,6 +18,11 @@ type Topology struct {
 	Version string `json:"version"`
 	// Table is the SQLite table name to query (default: "results").
 	Table string `json:"table,omitempty"`
+	// Diagrams defines named diagram views that can be rendered via the
+	// {{diagram "name"}} template function. Each entry maps a diagram name
+	// to its definition. If absent, {{diagram "system"}} still works using
+	// the default "TD" layout.
+	Diagrams map[string]DiagramDef `json:"diagrams,omitempty"`
 	// FileSets defines reusable groups of file definitions that can be
 	// included by nodes via the Include field. Avoids duplicating file
 	// entries across many construct types.

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
@@ -1165,6 +1166,206 @@ func TestGetCommunities_UnsupportedBackend(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "unsupported backend should return an error result")
 	assert.Contains(t, resultText(t, result), "cross-reference")
+}
+
+// ---------------------------------------------------------------------------
+// get_diagram handler tests
+// ---------------------------------------------------------------------------
+
+// buildDiagramTestGraph creates a MemoryStore with two distinct communities
+// connected by a bridge token, suitable for testing get_diagram.
+//
+// Community 1: nodes a1, a2, a3 all reference "alpha"
+// Community 2: nodes b1, b2, b3 all reference "beta"
+// Bridge: a1 and b1 both reference "bridge"
+func buildDiagramTestGraph(t *testing.T) *graph.MemoryStore {
+	t.Helper()
+	store := graph.NewMemoryStore()
+
+	for _, id := range []string{"a1", "a2", "a3"} {
+		store.AddNode(&graph.Node{ID: id, Mode: fs.ModeDir})
+		require.NoError(t, store.AddRef("alpha", id))
+	}
+	for _, id := range []string{"b1", "b2", "b3"} {
+		store.AddNode(&graph.Node{ID: id, Mode: fs.ModeDir})
+		require.NoError(t, store.AddRef("beta", id))
+	}
+	require.NoError(t, store.AddRef("bridge", "a1"))
+	require.NoError(t, store.AddRef("bridge", "b1"))
+
+	return store
+}
+
+func TestGetDiagram_BasicMermaid(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	handler := makeGetDiagramHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "should succeed with refs data")
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "graph TD", "default layout should be TD")
+	assert.Contains(t, text, "subgraph", "multi-member classes should produce subgraphs")
+}
+
+func TestGetDiagram_LayoutOverride(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	handler := makeGetDiagramHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"layout": "LR"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "graph LR", "layout override should be respected")
+}
+
+func TestGetDiagram_InvalidLayout(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	handler := makeGetDiagramHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"layout": "DIAGONAL"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "invalid layout should return error")
+	assert.Contains(t, resultText(t, result), "invalid layout")
+}
+
+func TestGetDiagram_NoRefs(t *testing.T) {
+	store := graph.NewMemoryStore()
+	handler := makeGetDiagramHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "empty refs should return error")
+	assert.Contains(t, resultText(t, result), "cross-references")
+}
+
+func TestGetDiagram_UnsupportedBackend(t *testing.T) {
+	g := &noRefsGraph{graph.NewMemoryStore()}
+	handler := makeGetDiagramHandler(g)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "unsupported backend should return error")
+	assert.Contains(t, resultText(t, result), "cross-reference")
+}
+
+func TestGetDiagram_SingleCommunity(t *testing.T) {
+	// Two nodes sharing one token form a single community -- valid diagram, no edges
+	store := graph.NewMemoryStore()
+	store.AddNode(&graph.Node{ID: "x1", Mode: fs.ModeDir})
+	store.AddNode(&graph.Node{ID: "x2", Mode: fs.ModeDir})
+	require.NoError(t, store.AddRef("solo", "x1"))
+	require.NoError(t, store.AddRef("solo", "x2"))
+
+	handler := makeGetDiagramHandler(store)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "single community is valid")
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "graph TD")
+	assert.NotContains(t, text, "-->", "single community should have no cross-class edges")
+}
+
+func TestGetDiagram_CaseInsensitiveLayout(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	handler := makeGetDiagramHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"layout": "lr"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "graph LR", "lowercase layout should be normalized")
+}
+
+// schemaGraph wraps a MemoryStore and adds schemaProvider support.
+type schemaGraph struct {
+	*graph.MemoryStore
+	schema *api.Topology
+}
+
+func (sg *schemaGraph) Schema() *api.Topology { return sg.schema }
+
+func TestGetDiagram_NameResolvesSchemaLayout(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	sg := &schemaGraph{
+		MemoryStore: store,
+		schema: &api.Topology{
+			Version: "v1",
+			Diagrams: map[string]api.DiagramDef{
+				"architecture": {Layout: "LR"},
+			},
+		},
+	}
+
+	handler := makeGetDiagramHandler(sg)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"name": "architecture"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "graph LR", "name should resolve to schema-defined layout")
+}
+
+func TestGetDiagram_NameNotInSchema(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	sg := &schemaGraph{
+		MemoryStore: store,
+		schema: &api.Topology{
+			Version: "v1",
+			Diagrams: map[string]api.DiagramDef{
+				"deps": {Layout: "TD"},
+			},
+		},
+	}
+
+	handler := makeGetDiagramHandler(sg)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"name": "missing"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "undefined diagram name should return error")
+	assert.Contains(t, resultText(t, result), "not defined")
+}
+
+func TestGetDiagram_LayoutOverridesName(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	sg := &schemaGraph{
+		MemoryStore: store,
+		schema: &api.Topology{
+			Version: "v1",
+			Diagrams: map[string]api.DiagramDef{
+				"architecture": {Layout: "LR"},
+			},
+		},
+	}
+
+	// Explicit layout should take precedence over schema definition
+	handler := makeGetDiagramHandler(sg)
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"name":   "architecture",
+		"layout": "BT",
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "graph BT", "explicit layout should override schema")
+}
+
+func TestGetDiagram_SystemNameAlwaysAllowed(t *testing.T) {
+	store := buildDiagramTestGraph(t)
+	sg := &schemaGraph{
+		MemoryStore: store,
+		schema: &api.Topology{
+			Version: "v1",
+			Diagrams: map[string]api.DiagramDef{
+				"custom": {Layout: "RL"},
+			},
+		},
+	}
+
+	// "system" should work even when not explicitly in the schema
+	handler := makeGetDiagramHandler(sg)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"name": "system"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "graph TD", "system should default to TD")
 }
 
 // ---------------------------------------------------------------------------
