@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -28,28 +29,33 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 			ID         int      `json:"id"`
 			Size       int      `json:"size"`
 			TopMembers []string `json:"top_members"`
+			Note       string   `json:"note,omitempty"`
 		}
 		type architecture struct {
-			EntryPoints       []entryPoint      `json:"entry_points"`
+			MostReferenced    []entryPoint      `json:"most_referenced"`
 			KeyAbstractions   []keyAbstraction  `json:"key_abstractions"`
 			DependencyLayers  []dependencyLayer `json:"dependency_layers"`
 			TestFiles         []string          `json:"test_files"`
 			APISurface        []string          `json:"api_surface"`
 			FileCount         int               `json:"file_count"`
-			LanguageBreakdown map[string]int    `json:"language_breakdown"`
+			TopLevelBreakdown map[string]int    `json:"top_level_breakdown"`
 		}
 
 		arch := architecture{
-			LanguageBreakdown: make(map[string]int),
+			TopLevelBreakdown: make(map[string]int),
 		}
 
-		// BFS walk to count files, detect languages, find test files.
+		// BFS walk to count files, detect top-level segments, find test files.
 		var testFiles []string
 		roots, err := g.ListChildren("")
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("list root: %v", err)), nil
 		}
 		queue := make([]string, 0, len(roots))
+		seen := make(map[string]bool, len(roots))
+		for _, r := range roots {
+			seen[r] = true
+		}
 		queue = append(queue, roots...)
 		const maxNodes = 50000
 		visited := 0
@@ -64,7 +70,12 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 			if node.Mode.IsDir() {
 				children, _ := g.ListChildren(id)
-				queue = append(queue, children...)
+				for _, childID := range children {
+					if !seen[childID] {
+						seen[childID] = true
+						queue = append(queue, childID)
+					}
+				}
 				continue
 			}
 
@@ -72,7 +83,7 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 
 			parts := strings.SplitN(id, "/", 2)
 			if len(parts) > 0 {
-				arch.LanguageBreakdown[parts[0]]++
+				arch.TopLevelBreakdown[parts[0]]++
 			}
 
 			name := filepath.Base(id)
@@ -88,7 +99,7 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		arch.TestFiles = testFiles
 
-		// Entry points: symbols with highest fan-in (most referencing nodes).
+		// Most referenced: symbols with highest fan-in (most referencing nodes).
 		if rp, ok := g.(refsMapProvider); ok {
 			refs := rp.RefsMap()
 			type tokenCount struct {
@@ -107,28 +118,36 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 				limit = len(counts)
 			}
 			for _, tc := range counts[:limit] {
-				arch.EntryPoints = append(arch.EntryPoints, entryPoint{
+				arch.MostReferenced = append(arch.MostReferenced, entryPoint{
 					Symbol: tc.token,
 					FanIn:  tc.count,
 				})
 			}
 
 			// Dependency layers via community detection.
-			result := graph.DetectCommunities(refs, 2)
-			for _, c := range result.Communities {
-				top := c.Members
-				if len(top) > 5 {
-					top = top[:5]
+			// Skip for large graphs to avoid O(n^2) cost.
+			const communityLimit = 5000
+			if len(refs) > communityLimit {
+				arch.DependencyLayers = []dependencyLayer{{
+					Note: fmt.Sprintf("skipped: refs count %d exceeds %d threshold", len(refs), communityLimit),
+				}}
+			} else {
+				result := graph.DetectCommunities(refs, 2)
+				for _, c := range result.Communities {
+					top := c.Members
+					if len(top) > 5 {
+						top = top[:5]
+					}
+					cleaned := make([]string, len(top))
+					for i, m := range top {
+						cleaned[i] = strings.TrimSuffix(m, "/source")
+					}
+					arch.DependencyLayers = append(arch.DependencyLayers, dependencyLayer{
+						ID:         c.ID,
+						Size:       len(c.Members),
+						TopMembers: cleaned,
+					})
 				}
-				cleaned := make([]string, len(top))
-				for i, m := range top {
-					cleaned[i] = strings.TrimSuffix(m, "/source")
-				}
-				arch.DependencyLayers = append(arch.DependencyLayers, dependencyLayer{
-					ID:         c.ID,
-					Size:       len(c.Members),
-					TopMembers: cleaned,
-				})
 			}
 		}
 
@@ -157,11 +176,14 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 				})
 			}
 
-			// API surface: exported symbols (uppercase first letter).
+			// API surface: exported symbols (uppercase first rune).
 			var exported []string
 			for symbol := range defs {
-				if len(symbol) > 0 && unicode.IsUpper(rune(symbol[0])) {
-					exported = append(exported, symbol)
+				if len(symbol) > 0 {
+					r, _ := utf8.DecodeRuneInString(symbol)
+					if unicode.IsUpper(r) {
+						exported = append(exported, symbol)
+					}
 				}
 			}
 			sort.Strings(exported)
