@@ -222,3 +222,36 @@ func TestShouldIgnorePath(t *testing.T) {
 	assert.False(t, shouldIgnorePath("/repo/main.go"))
 	assert.False(t, shouldIgnorePath("/repo/internal/pkg/file.go"))
 }
+
+func TestShouldIgnoreDir(t *testing.T) {
+	assert.True(t, shouldIgnoreDir("/repo/vendor"))
+	assert.True(t, shouldIgnoreDir("/repo/node_modules"))
+	assert.True(t, shouldIgnoreDir("/repo/__pycache__"))
+	assert.True(t, shouldIgnoreDir("/repo/.git"))
+	assert.True(t, shouldIgnoreDir("/repo/.hidden"))
+
+	assert.False(t, shouldIgnoreDir("/repo/internal"))
+	assert.False(t, shouldIgnoreDir("/repo/cmd"))
+	assert.False(t, shouldIgnoreDir("/repo/pkg"))
+}
+
+func TestWatcher_VendorIgnored(t *testing.T) {
+	dir := t.TempDir()
+	var called int32
+
+	w, err := NewWatcher(dir, func(path string) {
+		atomic.AddInt32(&called, 1)
+	}, nil, WithDebounce(20*time.Millisecond))
+	require.NoError(t, err)
+	defer w.Stop()
+
+	// Create vendor directory and write a .go file inside it
+	vendorDir := filepath.Join(dir, "vendor")
+	require.NoError(t, os.MkdirAll(vendorDir, 0o755))
+	time.Sleep(50 * time.Millisecond) // let fsnotify settle
+
+	require.NoError(t, os.WriteFile(filepath.Join(vendorDir, "dep.go"), []byte("package dep"), 0o644))
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, int32(0), atomic.LoadInt32(&called), "vendor/ files should be ignored")
+}

@@ -27,8 +27,9 @@ type Watcher struct {
 	mu     sync.Mutex
 	timers map[string]*time.Timer
 
-	done chan struct{}
-	wg   sync.WaitGroup
+	done     chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 // WatcherOption configures a Watcher.
@@ -81,24 +82,21 @@ func NewWatcher(rootDir string, onChange, onDelete func(path string), opts ...Wa
 	return w, nil
 }
 
-// Stop shuts down the watcher. Safe to call multiple times.
+// Stop shuts down the watcher. Safe to call concurrently and multiple times.
 func (w *Watcher) Stop() {
-	select {
-	case <-w.done:
-		return // already stopped
-	default:
-	}
-	close(w.done)
-	_ = w.watcher.Close()
-	w.wg.Wait()
+	w.stopOnce.Do(func() {
+		close(w.done)
+		_ = w.watcher.Close()
+		w.wg.Wait()
 
-	// Cancel any pending timers.
-	w.mu.Lock()
-	for _, t := range w.timers {
-		t.Stop()
-	}
-	w.timers = nil
-	w.mu.Unlock()
+		// Cancel any pending timers.
+		w.mu.Lock()
+		for _, t := range w.timers {
+			t.Stop()
+		}
+		w.timers = nil
+		w.mu.Unlock()
+	})
 }
 
 // loop processes fsnotify events until done is closed.
@@ -135,7 +133,9 @@ func (w *Watcher) handleEvent(ev fsnotify.Event) {
 	// For newly created directories, start watching them.
 	if ev.Has(fsnotify.Create) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			_ = w.addDirsRecursive(path)
+			if err := w.addDirsRecursive(path); err != nil {
+				log.Printf("watcher: failed to watch new dir %s: %v", path, err)
+			}
 			return
 		}
 	}
@@ -174,6 +174,13 @@ func (w *Watcher) debouncedOnChange(path string) {
 
 	w.timers[path] = time.AfterFunc(w.debounce, func() {
 		w.mu.Lock()
+		// Guard against timer firing after Stop() has returned.
+		// Stop() sets w.timers = nil; if we see nil, the watcher
+		// is shut down and we must not call onChange.
+		if w.timers == nil {
+			w.mu.Unlock()
+			return
+		}
 		delete(w.timers, path)
 		w.mu.Unlock()
 
