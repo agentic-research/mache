@@ -713,7 +713,34 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 		log.Printf("Warning: refs flush: %v", err)
 	}
 
+	// Start file watcher for incremental re-index if source is a directory.
+	var fw *ingest.Watcher
+	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() {
+		onChange := func(path string) {
+			store.DeleteFileNodes(path)
+			if reErr := engine.ReIngestFile(path); reErr != nil {
+				log.Printf("watcher: re-ingest %s: %v", path, reErr)
+			} else {
+				log.Printf("watcher: re-indexed %s", path)
+			}
+		}
+		onDelete := func(path string) {
+			store.DeleteFileNodes(path)
+			log.Printf("watcher: deleted nodes for %s", path)
+		}
+		var watchErr error
+		fw, watchErr = ingest.NewWatcher(dataSource, onChange, onDelete)
+		if watchErr != nil {
+			log.Printf("Warning: file watcher failed to start: %v", watchErr)
+		} else {
+			log.Printf("file watcher started on %s", dataSource)
+		}
+	}
+
 	return store, func() {
+		if fw != nil {
+			fw.Stop()
+		}
 		_ = store.Close()
 		resolver.Close()
 	}, nil
