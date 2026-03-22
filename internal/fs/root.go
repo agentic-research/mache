@@ -99,9 +99,10 @@ type MacheFS struct {
 	promptContent []byte
 
 	// Query directory support (nil queryFn = feature disabled)
-	queryFn func(string, ...any) (*sql.Rows, error)
-	queryMu sync.RWMutex
-	queries map[string]*queryResult
+	queryFn    func(string, ...any) (*sql.Rows, error)
+	semanticFn SemanticSearchFunc // optional: `? query` prefix in .query/
+	queryMu    sync.RWMutex
+	queries    map[string]*queryResult
 }
 
 func NewMacheFS(schema *api.Topology, g graph.Graph) *MacheFS {
@@ -134,6 +135,20 @@ func (fs *MacheFS) SetQueryFunc(fn func(string, ...any) (*sql.Rows, error)) {
 	fs.queryFn = fn
 	fs.queries = make(map[string]*queryResult)
 	fs.resolver.EnableQuery()
+}
+
+// SemanticSearchFunc returns (path, distance) pairs for a natural language query.
+type SemanticSearchFunc func(query string, k int) ([]SemanticHit, error)
+
+// SemanticHit is a single result from semantic search, used by .query/ prefix routing.
+type SemanticHit struct {
+	Path     string
+	Distance float64
+}
+
+// SetSemanticSearchFunc enables the `? query` prefix in .query/ ctl writes.
+func (fs *MacheFS) SetSemanticSearchFunc(fn SemanticSearchFunc) {
+	fs.semanticFn = fn
 }
 
 // SetWritable enables write-back mode and wires the diagnostics handler.
@@ -935,15 +950,43 @@ func (fs *MacheFS) Create(path string, flags int, mode uint32) (int, uint64) {
 }
 
 // queryExecute runs the SQL from a completed query write and stores results.
+// If the query starts with "? ", it is routed to semantic search instead of SQL.
 func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
-	sqlStr := strings.TrimSpace(string(qwh.buf))
-	if sqlStr == "" {
+	input := strings.TrimSpace(string(qwh.buf))
+	if input == "" {
 		return 0
 	}
 
-	// 1. Run SQL (No Lock held!)
-	// Multiple agents can do this simultaneously
-	rows, err := fs.queryFn(sqlStr)
+	// Semantic search: "? natural language query" prefix
+	if strings.HasPrefix(input, "? ") && fs.semanticFn != nil {
+		query := strings.TrimSpace(input[2:])
+		if query == "" {
+			return 0
+		}
+		hits, err := fs.semanticFn(query, 20)
+		if err != nil {
+			log.Printf("query: semantic %q: %v", qwh.name, err)
+			return -fuse.EIO
+		}
+		var entries []queryEntry
+		for _, hit := range hits {
+			p := strings.TrimPrefix(hit.Path, "/")
+			if p == "" {
+				continue
+			}
+			entries = append(entries, queryEntry{
+				name:   strings.ReplaceAll(p, "/", "_"),
+				target: "../../" + p,
+			})
+		}
+		fs.queryMu.Lock()
+		fs.queries[qwh.name] = &queryResult{sql: input, entries: entries}
+		fs.queryMu.Unlock()
+		return 0
+	}
+
+	// SQL path (default)
+	rows, err := fs.queryFn(input)
 	if err != nil {
 		log.Printf("query: execute %q: %v", qwh.name, err)
 		return -fuse.EIO
@@ -970,9 +1013,9 @@ func (fs *MacheFS) queryExecute(qwh *queryWriteHandle) int {
 		log.Printf("query: rows %q: %v", qwh.name, err)
 	}
 
-	// 2. Save Results (Microsecond Lock)
+	// Save Results
 	fs.queryMu.Lock()
-	fs.queries[qwh.name] = &queryResult{sql: sqlStr, entries: entries}
+	fs.queries[qwh.name] = &queryResult{sql: input, entries: entries}
 	fs.queryMu.Unlock()
 
 	return 0

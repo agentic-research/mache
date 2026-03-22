@@ -410,12 +410,13 @@ func rootURIToPath(uri string) string {
 // This allows the MCP server to start and respond to initialize/tools/list
 // before the potentially slow schema detection + ingestion completes.
 type lazyGraph struct {
-	args     []string
-	basePath string // optional; defaults to "." (CWD) when empty
-	once     sync.Once
-	inner    graph.Graph
-	cleanup  func()
-	err      error
+	args      []string
+	basePath  string // optional; defaults to "." (CWD) when empty
+	once      sync.Once
+	embedOnce sync.Once // triggers embedding on first successful get()
+	inner     graph.Graph
+	cleanup   func()
+	err       error
 }
 
 // resolvedBasePath returns basePath if set, otherwise ".".
@@ -508,6 +509,11 @@ func (lg *lazyGraph) get() (graph.Graph, error) {
 	if lg.err != nil {
 		return nil, lg.err
 	}
+	// Trigger embedding after first successful graph access.
+	// This ensures SQLiteGraph's lazy scan has completed before we walk nodes.
+	lg.embedOnce.Do(func() {
+		go leyline.TriggerEmbedding(lg.inner, 100)
+	})
 	return lg.inner, nil
 }
 
@@ -743,6 +749,15 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithNumber("limit", mcp.Description("Max results (default 100)")),
 		),
 		r.wrapHandler(makeSearchHandler),
+	)
+
+	s.AddTool(
+		mcp.NewTool("semantic_search",
+			mcp.WithDescription("Find code by meaning using embedding similarity. Use for 'find code that does X', 'functions related to authentication', 'error handling patterns'. More flexible than pattern search — finds conceptually similar code even without exact name matches. Requires ley-line daemon with --embed flag."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Natural language description of what you're looking for")),
+			mcp.WithNumber("k", mcp.Description("Max results (default 10)")),
+		),
+		r.wrapHandler(makeSemanticSearchHandler),
 	)
 
 	s.AddTool(
@@ -1161,6 +1176,79 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		data, _ := json.MarshalIndent(results, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func makeSemanticSearchHandler(g graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		query := request.GetString("query", "")
+		if query == "" {
+			return mcp.NewToolResultError("query is required"), nil
+		}
+		k := request.GetInt("k", 10)
+
+		sockPath, err := leyline.DiscoverOrStart()
+		if err != nil {
+			return mcp.NewToolResultError(
+				"semantic search requires ley-line daemon (not found). Start with: leyline daemon --embed",
+			), nil
+		}
+
+		sock, err := leyline.DialSocket(sockPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("connect to ley-line: %v", err)), nil
+		}
+		defer func() { _ = sock.Close() }()
+
+		sc := leyline.NewSemanticClient(sock)
+		results, err := sc.Search(query, k)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("semantic search: %v", err)), nil
+		}
+
+		if len(results) == 0 {
+			return mcp.NewToolResultText("[]"), nil
+		}
+
+		type enrichedResult struct {
+			Path     string  `json:"path"`
+			Distance float64 `json:"distance"`
+			Type     string  `json:"type,omitempty"`
+			Snippet  string  `json:"snippet,omitempty"`
+		}
+
+		enriched := make([]enrichedResult, 0, len(results))
+		for _, r := range results {
+			er := enrichedResult{
+				Path:     r.ID,
+				Distance: r.Distance,
+			}
+
+			// Enrich with graph metadata
+			node, nodeErr := g.GetNode(r.ID)
+			if nodeErr == nil && node != nil {
+				if node.Mode.IsDir() {
+					er.Type = "directory"
+				} else {
+					er.Type = "file"
+					// Read a content snippet (first 200 bytes)
+					buf := make([]byte, 200)
+					n, _ := g.ReadContent(r.ID, buf, 0)
+					if n > 0 {
+						snippet := string(buf[:n])
+						if n == 200 {
+							snippet += "..."
+						}
+						er.Snippet = snippet
+					}
+				}
+			}
+
+			enriched = append(enriched, er)
+		}
+
+		data, _ := json.MarshalIndent(enriched, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }
