@@ -27,12 +27,20 @@ import (
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
+	treec "github.com/smacker/go-tree-sitter/c"
+	"github.com/smacker/go-tree-sitter/cpp"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/hcl"
+	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/javascript"
+	"github.com/smacker/go-tree-sitter/kotlin"
+	"github.com/smacker/go-tree-sitter/php"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/scala"
 	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/swift"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
 	"github.com/spf13/cobra"
@@ -190,6 +198,22 @@ var rootCmd = &cobra.Command{
 				inferred, err = inferFromTreeSitterFile(inf, dataPath, yaml.GetLanguage(), "YAML")
 			case ".rs":
 				inferred, err = inferFromTreeSitterFile(inf, dataPath, rust.GetLanguage(), "Rust")
+			case ".java":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, java.GetLanguage(), "Java")
+			case ".c", ".h":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, treec.GetLanguage(), "C")
+			case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, cpp.GetLanguage(), "C++")
+			case ".rb":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, ruby.GetLanguage(), "Ruby")
+			case ".php":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, php.GetLanguage(), "PHP")
+			case ".kt", ".kts":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, kotlin.GetLanguage(), "Kotlin")
+			case ".swift":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, swift.GetLanguage(), "Swift")
+			case ".scala", ".sc":
+				inferred, err = inferFromTreeSitterFile(inf, dataPath, scala.GetLanguage(), "Scala")
 			case ".git":
 				log.Print("Loading git commits...")
 				start := time.Now()

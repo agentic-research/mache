@@ -24,12 +24,20 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/treesitter/elixir"
 	sitter "github.com/smacker/go-tree-sitter"
+	treec "github.com/smacker/go-tree-sitter/c"
+	"github.com/smacker/go-tree-sitter/cpp"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/hcl"
+	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/javascript"
+	"github.com/smacker/go-tree-sitter/kotlin"
+	"github.com/smacker/go-tree-sitter/php"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/scala"
 	"github.com/smacker/go-tree-sitter/sql"
+	"github.com/smacker/go-tree-sitter/swift"
 	"github.com/smacker/go-tree-sitter/toml"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 	"github.com/smacker/go-tree-sitter/yaml"
@@ -61,7 +69,7 @@ type Engine struct {
 	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
 	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
 	sitterWalker     *SitterWalker              // shared across files for query cache reuse
-	fileIndex        map[string]FileIndexEntry   // cached file metadata for incremental re-ingestion
+	fileIndex        map[string]FileIndexEntry  // cached file metadata for incremental re-ingestion
 	mu               sync.Mutex
 }
 
@@ -95,10 +103,10 @@ type refLink struct {
 
 // treeSitterJob represents a source file to parse with tree-sitter.
 type treeSitterJob struct {
-	path    string
-	lang    *sitter.Language
+	path     string
+	lang     *sitter.Language
 	langName string
-	modTime time.Time
+	modTime  time.Time
 }
 
 // parsedTreeSitterFile is the result of parallel tree-sitter parsing.
@@ -137,6 +145,22 @@ func langForExt(ext string) (*sitter.Language, string) {
 		return toml.GetLanguage(), "toml"
 	case ".ex", ".exs":
 		return elixir.GetLanguage(), "elixir"
+	case ".java":
+		return java.GetLanguage(), "java"
+	case ".c", ".h":
+		return treec.GetLanguage(), "c"
+	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
+		return cpp.GetLanguage(), "cpp"
+	case ".rb":
+		return ruby.GetLanguage(), "ruby"
+	case ".php":
+		return php.GetLanguage(), "php"
+	case ".kt", ".kts":
+		return kotlin.GetLanguage(), "kotlin"
+	case ".swift":
+		return swift.GetLanguage(), "swift"
+	case ".scala", ".sc":
+		return scala.GetLanguage(), "scala"
 	default:
 		return nil, ""
 	}
@@ -1610,6 +1634,22 @@ func GetLanguage(langName string) *sitter.Language {
 		return toml.GetLanguage()
 	case "elixir":
 		return elixir.GetLanguage()
+	case "java":
+		return java.GetLanguage()
+	case "c":
+		return treec.GetLanguage()
+	case "cpp":
+		return cpp.GetLanguage()
+	case "ruby":
+		return ruby.GetLanguage()
+	case "php":
+		return php.GetLanguage()
+	case "kotlin":
+		return kotlin.GetLanguage()
+	case "swift":
+		return swift.GetLanguage()
+	case "scala":
+		return scala.GetLanguage()
 	default:
 		return nil
 	}
