@@ -96,6 +96,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 - Search for code by pattern (search)
 - Understand code structure and communities (get_communities)
 - Get type information and diagnostics from LSP (get_type_info, get_diagnostics)
+- Analyze change blast radius (get_impact)
 Call get_overview first when exploring a new codebase.`),
 	)
 	registerMCPTools(s, registry)
@@ -842,6 +843,16 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithDescription("START HERE when exploring a codebase. Returns top-level structure, node counts, cross-reference stats, and a usage guide for all tools."),
 		),
 		r.wrapHandler(makeGetOverviewHandler),
+	)
+
+	s.AddTool(
+		mcp.NewTool("get_impact",
+			mcp.WithDescription("Change impact analysis: given a symbol, trace through the refs graph to show affected callers and/or callees (multi-hop BFS traversal). Use for 'what would be affected if I change X?', 'blast radius of modifying Y'."),
+			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to analyze (e.g. 'GetCallers', 'auth.Validate')")),
+			mcp.WithNumber("depth", mcp.Description("Max traversal depth (default 2)")),
+			mcp.WithString("direction", mcp.Description("Traversal direction: 'callers' (who calls this), 'callees' (what this calls), 'both' (default 'both')")),
+		),
+		r.wrapHandler(makeGetImpactHandler),
 	)
 
 	s.AddTool(
