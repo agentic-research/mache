@@ -12,6 +12,21 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// maxImpactNodes caps the total number of nodes returned by get_impact to
+// prevent runaway BFS on highly-connected graphs.
+const maxImpactNodes = 500
+
+// genericNames are symbols so common that expanding their callers at depth > 0
+// would flood the result with unrelated call sites (e.g. every function that
+// calls "Close" or "String"). We skip GetCallers for these tokens when past
+// the root level because the caller wants the impact of the *original* symbol,
+// not every site that calls a ubiquitous interface method.
+var genericNames = map[string]bool{
+	"Close": true, "String": true, "Error": true, "Read": true,
+	"Write": true, "New": true, "Init": true, "Get": true,
+	"Set": true, "Len": true, "Reset": true,
+}
+
 // makeGetImpactHandler returns a handler that performs multi-hop BFS traversal
 // through the refs graph to show the blast radius of a symbol change.
 func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
@@ -63,6 +78,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		seen := make(map[string]bool)
 		var result []impactNode
+		truncated := false
 
 		// Seed the BFS with the definition root(s)
 		type bfsEntry struct {
@@ -80,6 +96,11 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		// BFS traversal
 		for len(queue) > 0 {
+			if len(result) >= maxImpactNodes {
+				truncated = true
+				break
+			}
+
 			entry := queue[0]
 			queue = queue[1:]
 
@@ -87,23 +108,36 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 				continue
 			}
 
-			// Callers: the directory name IS the token for GetCallers
+			// Callers: the directory name IS the token for GetCallers.
+			// Skip generic names (Close, String, Error, etc.) at depth > 0 to
+			// avoid explosion — these ubiquitous tokens would pull in most of
+			// the codebase and drown out the real impact signal.
 			if direction == "callers" || direction == "both" {
 				token := filepath.Base(entry.id)
-				callers, err := g.GetCallers(token)
-				if err == nil {
-					for _, c := range callers {
-						if !seen[c.ID] {
-							seen[c.ID] = true
-							result = append(result, impactNode{
-								Path:      c.ID,
-								Depth:     entry.depth + 1,
-								Direction: "caller",
-							})
-							queue = append(queue, bfsEntry{id: c.ID, depth: entry.depth + 1})
+				if entry.depth == 0 || !genericNames[token] {
+					callers, err := g.GetCallers(token)
+					if err == nil {
+						for _, c := range callers {
+							if len(result) >= maxImpactNodes {
+								truncated = true
+								break
+							}
+							if !seen[c.ID] {
+								seen[c.ID] = true
+								result = append(result, impactNode{
+									Path:      c.ID,
+									Depth:     entry.depth + 1,
+									Direction: "caller",
+								})
+								queue = append(queue, bfsEntry{id: c.ID, depth: entry.depth + 1})
+							}
 						}
 					}
 				}
+			}
+
+			if truncated {
+				break
 			}
 
 			// Callees: GetCallees takes a construct directory path
@@ -111,6 +145,10 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 				callees, err := g.GetCallees(entry.id)
 				if err == nil {
 					for _, c := range callees {
+						if len(result) >= maxImpactNodes {
+							truncated = true
+							break
+						}
 						if !seen[c.ID] {
 							seen[c.ID] = true
 							result = append(result, impactNode{
@@ -123,6 +161,10 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 					}
 				}
 			}
+
+			if truncated {
+				break
+			}
 		}
 
 		type impactResult struct {
@@ -131,6 +173,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 			Depth     int          `json:"depth"`
 			Direction string       `json:"direction"`
 			Total     int          `json:"total"`
+			Truncated bool         `json:"truncated,omitempty"`
 			Nodes     []impactNode `json:"nodes"`
 		}
 		out := impactResult{
@@ -139,6 +182,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 			Depth:     maxDepth,
 			Direction: direction,
 			Total:     len(result),
+			Truncated: truncated,
 			Nodes:     result,
 		}
 		data, _ := json.MarshalIndent(out, "", "  ")

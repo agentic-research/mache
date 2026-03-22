@@ -1553,6 +1553,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 				"search":          "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
 				"list_directory":  "browse the tree structure — use instead of ls/find",
 				"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
+				"get_impact":      "blast radius of changing a symbol — traces callers/callees to a configurable depth",
 			}
 		}
 
