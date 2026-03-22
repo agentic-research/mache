@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -172,18 +173,48 @@ func DiscoverOrStart() (string, error) {
 	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within 5s", sockPath)
 }
 
-// StopManaged kills the auto-spawned leyline daemon, if any.
+// StopManaged gracefully stops the auto-spawned leyline daemon, if any.
+// Sends SIGTERM first so leyline can unmount NFS cleanly, then waits up to
+// 3 seconds before falling back to SIGKILL. Without this, macOS shows a
+// "Server connections interrupted" dialog for the stale NFS mount.
 // Safe to call multiple times. Called automatically by cleanup hooks.
 func StopManaged() {
 	managed.mu.Lock()
 	defer managed.mu.Unlock()
-	if managed.proc != nil {
-		log.Printf("stopping managed leyline daemon (pid=%d)", managed.proc.Pid)
-		_ = managed.proc.Kill()
+	if managed.proc == nil {
+		return
+	}
+
+	pid := managed.proc.Pid
+	log.Printf("stopping managed leyline daemon (pid=%d)", pid)
+
+	// SIGTERM: leyline's signal handler unmounts NFS then exits
+	if err := managed.proc.Signal(syscall.SIGTERM); err != nil {
+		// Process already dead — just clean up
 		_ = managed.proc.Release()
 		managed.proc = nil
 		managed.sock = ""
+		return
 	}
+
+	// Wait up to 3s for graceful exit
+	done := make(chan struct{})
+	go func() {
+		_, _ = managed.proc.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Printf("leyline daemon (pid=%d) exited gracefully", pid)
+	case <-time.After(3 * time.Second):
+		log.Printf("leyline daemon (pid=%d) did not exit after SIGTERM, sending SIGKILL", pid)
+		_ = managed.proc.Kill()
+		<-done
+	}
+
+	managed.proc = nil
+	managed.sock = ""
 }
 
 // findExistingSocket checks env var and well-known path for an existing socket.
