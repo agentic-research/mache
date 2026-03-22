@@ -96,6 +96,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 - Search for code by pattern (search)
 - Understand code structure and communities (get_communities)
 - Get type information and diagnostics from LSP (get_type_info, get_diagnostics)
+- Analyze change blast radius (get_impact)
 Call get_overview first when exploring a new codebase.`),
 	)
 	registerMCPTools(s, registry)
@@ -845,6 +846,16 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	)
 
 	s.AddTool(
+		mcp.NewTool("get_impact",
+			mcp.WithDescription("Change impact analysis: given a symbol, trace through the refs graph to show affected callers and/or callees (multi-hop BFS traversal). Use for 'what would be affected if I change X?', 'blast radius of modifying Y'."),
+			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to analyze (e.g. 'GetCallers', 'auth.Validate')")),
+			mcp.WithNumber("depth", mcp.Description("Max traversal depth (default 2)")),
+			mcp.WithString("direction", mcp.Description("Traversal direction: 'callers' (who calls this), 'callees' (what this calls), 'both' (default 'both')")),
+		),
+		r.wrapHandler(makeGetImpactHandler),
+	)
+
+	s.AddTool(
 		mcp.NewTool("write_file",
 			mcp.WithDescription("Write new content to a source file node. Uses the splice pipeline: validate (tree-sitter) → format (gofumpt/hclwrite) → atomic splice into source file → update graph. The node must have a source origin (i.e., was ingested from a real file). Returns the result including any validation errors."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("File node path (e.g. 'go/graph/methods/MemoryStore.GetCallees/source')")),
@@ -1542,6 +1553,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 				"search":          "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
 				"list_directory":  "browse the tree structure — use instead of ls/find",
 				"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
+				"get_impact":      "blast radius of changing a symbol — traces callers/callees to a configurable depth",
 			}
 		}
 
