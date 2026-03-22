@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,7 @@ var (
 	serveHTTP   string
 	serveStdio  bool
 	servePath   string
+	serveRepo   string
 )
 
 func init() {
@@ -54,10 +56,23 @@ func init() {
 	serveCmd.Flags().StringVar(&serveHTTP, "http", "localhost:7532", "Listen address for Streamable HTTP transport")
 	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Use stdio transport instead of HTTP (for subprocess mode)")
 	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
+	serveCmd.Flags().StringVar(&serveRepo, "repo", "", "Git repo URL to clone and serve (ephemeral: cleaned up on exit)")
 	rootCmd.AddCommand(serveCmd)
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	// Ephemeral mode: clone repo to temp dir, serve from there, cleanup on exit
+	if serveRepo != "" {
+		tmpDir, cleanup, err := cloneRepo(serveRepo)
+		if err != nil {
+			return fmt.Errorf("clone %s: %w", serveRepo, err)
+		}
+		defer cleanup()
+		// Override basePath to the cloned directory
+		servePath = tmpDir
+		log.Printf("ephemeral mode: serving %s from %s", serveRepo, tmpDir)
+	}
+
 	registry := newGraphRegistry(servePath, args)
 	defer registry.Close()
 
@@ -630,6 +645,32 @@ func (lg *lazyGraph) ShiftOrigins(filePath string, afterByte uint32, delta int32
 
 // buildServeGraph constructs a read-only Graph from the data source.
 // Returns the graph, a cleanup function, and any error.
+// cloneRepo clones a git repo to a temp directory for ephemeral serving.
+// Returns the temp dir path and a cleanup function that removes it.
+// Uses shallow clone (depth=1) for speed.
+func cloneRepo(repoURL string) (string, func(), error) {
+	tmpDir, err := os.MkdirTemp("", "mache-ephemeral-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	cleanup := func() {
+		log.Printf("ephemeral cleanup: removing %s", tmpDir)
+		_ = os.RemoveAll(tmpDir)
+	}
+
+	log.Printf("cloning %s (shallow)...", repoURL)
+	cmd := exec.Command("git", "clone", "--depth=1", "--single-branch", repoURL, tmpDir)
+	cmd.Stdout = os.Stderr // show progress on stderr (not MCP stdout)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("git clone: %w", err)
+	}
+	log.Printf("cloned to %s", tmpDir)
+
+	return tmpDir, cleanup, nil
+}
+
 func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func(), error) {
 	noop := func() {}
 
