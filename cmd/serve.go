@@ -92,12 +92,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 		server.WithHooks(hooks),
 		server.WithInstructions(`Mache provides structural code intelligence tools. Use mache when you need to:
 - Explore unfamiliar codebases (get_overview, list_directory, read_file)
+- Understand architecture and key abstractions (get_architecture)
 - Find where symbols are defined or used (find_definition, find_callers, find_callees)
 - Search for code by pattern (search)
 - Understand code structure and communities (get_communities)
 - Get type information and diagnostics from LSP (get_type_info, get_diagnostics)
 - Analyze change blast radius (get_impact)
-Call get_overview first when exploring a new codebase.`),
+Call get_overview first when exploring a new codebase, then get_architecture for deeper orientation.`),
 	)
 	registerMCPTools(s, registry)
 
@@ -880,6 +881,13 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithString("direction", mcp.Description("Traversal direction: 'callers' (who calls this), 'callees' (what this calls), 'both' (default 'both')")),
 		),
 		r.wrapHandler(makeGetImpactHandler),
+	)
+
+	s.AddTool(
+		mcp.NewTool("get_architecture",
+			mcp.WithDescription("Structured architectural analysis of the codebase. Returns entry points (high fan-in), key abstractions (most defs), dependency layers (community-based), test files, API surface (exported symbols), file count, and language breakdown. Use after get_overview for deeper orientation."),
+		),
+		r.wrapHandler(makeGetArchitectureHandler),
 	)
 
 	s.AddTool(
