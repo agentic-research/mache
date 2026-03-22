@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/RoaringBitmap/roaring v1.9.4
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-git/go-billy/v5 v5.8.0
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/mark3labs/mcp-go v0.45.0
