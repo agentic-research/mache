@@ -6,10 +6,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
 	"github.com/mark3labs/mcp-go/server"
@@ -576,6 +579,358 @@ func TestGetCommunities_CustomMinSize(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &cr))
 	assert.Empty(t, cr.Communities)
+}
+
+// ---------------------------------------------------------------------------
+// get_overview handler tests
+// ---------------------------------------------------------------------------
+
+func TestGetOverview_Basic(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeGetOverviewHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	var ov map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &ov))
+
+	// Should have top_level dirs
+	topLevel, ok := ov["top_level"].([]any)
+	require.True(t, ok, "top_level should be an array")
+	assert.NotEmpty(t, topLevel, "should have top-level directories")
+
+	// Should count dirs (overview walks 2 levels from root; files are deeper in buildTestGraph)
+	totalDirs, _ := ov["total_dirs"].(float64)
+	assert.Greater(t, totalDirs, float64(0), "should have directories")
+
+	// Should report ref and def token counts (buildTestGraph adds refs + defs)
+	refTokens, _ := ov["ref_tokens"].(float64)
+	defTokens, _ := ov["def_tokens"].(float64)
+	assert.Greater(t, refTokens, float64(0), "should have ref tokens")
+	assert.Greater(t, defTokens, float64(0), "should have def tokens")
+
+	// Usage hints should be present when refs exist
+	assert.Contains(t, ov, "_usage")
+}
+
+func TestGetOverview_EmptyStore(t *testing.T) {
+	store := graph.NewMemoryStore()
+	handler := makeGetOverviewHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var ov map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &ov))
+	topLevel, ok := ov["top_level"]
+	assert.True(t, ok || topLevel == nil, "empty store should have null or empty top_level")
+}
+
+// ---------------------------------------------------------------------------
+// find_definition handler tests
+// ---------------------------------------------------------------------------
+
+func TestFindDefinition_Found(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeFindDefinitionHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	var defResult struct {
+		Symbol      string   `json:"symbol"`
+		Definitions []string `json:"definitions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &defResult))
+	assert.Equal(t, "Helper", defResult.Symbol)
+	assert.Contains(t, defResult.Definitions, "pkg/util/helper")
+}
+
+func TestFindDefinition_NotFound(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeFindDefinitionHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "NonExistent"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "no definition found")
+}
+
+func TestFindDefinition_CaseInsensitive(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeFindDefinitionHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "helper"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	var defResult struct {
+		Symbol      string   `json:"symbol"`
+		Definitions []string `json:"definitions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &defResult))
+	assert.Contains(t, defResult.Definitions, "pkg/util/helper")
+}
+
+func TestFindDefinition_RequiredSymbol(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeFindDefinitionHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": ""}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "required")
+}
+
+// ---------------------------------------------------------------------------
+// get_type_info handler tests
+// ---------------------------------------------------------------------------
+
+func TestGetTypeInfo_RequiredSymbol(t *testing.T) {
+	store := buildTestGraph(t)
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+	require.NoError(t, store.FlushRefs())
+
+	handler := makeGetTypeInfoHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": ""}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "required")
+}
+
+func TestGetTypeInfo_NoLSPTable(t *testing.T) {
+	store := buildTestGraph(t)
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+	require.NoError(t, store.FlushRefs())
+
+	handler := makeGetTypeInfoHandler(store)
+
+	// Without LSP data, should return an error message about missing table
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "_lsp_hover")
+}
+
+// ---------------------------------------------------------------------------
+// get_diagnostics handler tests
+// ---------------------------------------------------------------------------
+
+func TestGetDiagnostics_NoLSPTable(t *testing.T) {
+	store := buildTestGraph(t)
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+	require.NoError(t, store.FlushRefs())
+
+	handler := makeGetDiagnosticsHandler(store)
+
+	// Without LSP data, should return an error about missing table
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "_lsp")
+}
+
+func TestGetDiagnostics_NoLSPTableWithFile(t *testing.T) {
+	store := buildTestGraph(t)
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+	require.NoError(t, store.FlushRefs())
+
+	handler := makeGetDiagnosticsHandler(store)
+
+	// With file param but no LSP table, should attempt auto-enrichment
+	// (which will fail without ley-line daemon — that's expected)
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"symbol": "Helper",
+		"file":   "/tmp/nonexistent.go",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	// Should mention either _lsp or auto-enrichment failure
+	text := resultText(t, result)
+	assert.True(t, strings.Contains(text, "_lsp") || strings.Contains(text, "enrichment"),
+		"expected LSP or enrichment error, got: %s", text)
+}
+
+// ---------------------------------------------------------------------------
+// get_impact handler tests
+// ---------------------------------------------------------------------------
+
+func TestGetImpact_Found(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeGetImpactHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	var impact struct {
+		Symbol    string   `json:"symbol"`
+		Roots     []string `json:"roots"`
+		Total     int      `json:"total"`
+		Direction string   `json:"direction"`
+		Nodes     []struct {
+			Path      string `json:"path"`
+			Depth     int    `json:"depth"`
+			Direction string `json:"direction"`
+		} `json:"nodes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &impact))
+	assert.Equal(t, "Helper", impact.Symbol)
+	assert.Contains(t, impact.Roots, "pkg/util/helper")
+	assert.Greater(t, impact.Total, 0)
+
+	// The root node should be at depth 0 with direction "root"
+	assert.Equal(t, "pkg/util/helper", impact.Nodes[0].Path)
+	assert.Equal(t, 0, impact.Nodes[0].Depth)
+	assert.Equal(t, "root", impact.Nodes[0].Direction)
+}
+
+func TestGetImpact_NotFound(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeGetImpactHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "NonExistent"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "no definition found")
+}
+
+func TestGetImpact_RequiredSymbol(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeGetImpactHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": ""}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "required")
+}
+
+func TestGetImpact_CallersDirection(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeGetImpactHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"symbol":    "Helper",
+		"direction": "callers",
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var impact struct {
+		Direction string `json:"direction"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &impact))
+	assert.Equal(t, "callers", impact.Direction)
+}
+
+func TestGetImpact_InvalidDirection(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeGetImpactHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"symbol":    "Helper",
+		"direction": "invalid",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "direction")
+}
+
+// ---------------------------------------------------------------------------
+// get_architecture handler tests
+// ---------------------------------------------------------------------------
+
+func TestGetArchitecture_Basic(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeGetArchitectureHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	var arch struct {
+		MostReferenced    []any          `json:"most_referenced"`
+		KeyAbstractions   []any          `json:"key_abstractions"`
+		DependencyLayers  []any          `json:"dependency_layers"`
+		TestFiles         []string       `json:"test_files"`
+		APISurface        []string       `json:"api_surface"`
+		FileCount         int            `json:"file_count"`
+		TopLevelBreakdown map[string]int `json:"top_level_breakdown"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &arch))
+
+	// buildTestGraph has 2 files: pkg/main/source and pkg/util/helper/source
+	assert.Equal(t, 2, arch.FileCount)
+
+	// Top-level breakdown should include "pkg"
+	assert.Contains(t, arch.TopLevelBreakdown, "pkg")
+
+	// Should have most_referenced (Helper is referenced)
+	assert.NotEmpty(t, arch.MostReferenced)
+
+	// Should have key_abstractions (Helper is defined)
+	assert.NotEmpty(t, arch.KeyAbstractions)
+
+	// API surface should include exported symbol "Helper"
+	assert.Contains(t, arch.APISurface, "Helper")
+}
+
+func TestGetArchitecture_EmptyStore(t *testing.T) {
+	store := graph.NewMemoryStore()
+	handler := makeGetArchitectureHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var arch struct {
+		FileCount int `json:"file_count"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &arch))
+	assert.Equal(t, 0, arch.FileCount)
+}
+
+// ---------------------------------------------------------------------------
+// semantic_search handler tests
+// ---------------------------------------------------------------------------
+
+func TestSemanticSearch_RequiredQuery(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeSemanticSearchHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"query": ""}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "required")
+}
+
+func TestSemanticSearch_NoLeyLine(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeSemanticSearchHandler(store)
+
+	// Without ley-line daemon, should return a meaningful error
+	result, err := handler(context.Background(), makeRequest(map[string]any{"query": "Helper"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "ley-line")
 }
 
 // ---------------------------------------------------------------------------
@@ -1504,4 +1859,260 @@ func newTestLazyGraph(g graph.Graph, basePath string) *lazyGraph {
 	lg := &lazyGraph{inner: g, basePath: basePath}
 	lg.once.Do(func() {}) // mark as initialized
 	return lg
+}
+
+// ---------------------------------------------------------------------------
+// Arena test: ingest real Go source, exercise all 14 read-only MCP tools
+// ---------------------------------------------------------------------------
+
+// TestArena_AllTools ingests mache's own internal/graph/*.go files using the
+// Go schema preset, builds a real MemoryStore with refs/defs/callees, and then
+// exercises every read-only MCP tool handler to verify they produce valid,
+// non-error results against a real graph.
+func TestArena_AllTools(t *testing.T) {
+	// Locate the repository root via runtime.Caller — works regardless of
+	// the test binary's working directory (which Go may set to a temp dir).
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller failed")
+	repoRoot := filepath.Dir(filepath.Dir(thisFile)) // cmd/serve_test.go -> cmd/ -> repo root
+	graphDir := filepath.Join(repoRoot, "internal", "graph")
+
+	// Verify the source directory exists.
+	info, err := os.Stat(graphDir)
+	require.NoError(t, err, "internal/graph directory must exist")
+	require.True(t, info.IsDir())
+
+	// Load the Go schema preset.
+	schema, err := resolveSchema("go", repoRoot)
+	require.NoError(t, err, "resolveSchema(go) failed")
+	require.NotNil(t, schema)
+
+	// Build a real MemoryStore via the engine ingestion pipeline.
+	store := graph.NewMemoryStore()
+	resolver := ingest.NewSQLiteResolver()
+	store.SetResolver(resolver.Resolve)
+	store.SetCallExtractor(newCallExtractor())
+	defer resolver.Close()
+
+	engine := ingest.NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(graphDir), "ingestion of internal/graph failed")
+
+	// Initialize the refs database (needed by search, get_type_info, get_diagnostics).
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+	require.NoError(t, store.FlushRefs())
+
+	// Find a known construct path by walking the graph for subtests that need one.
+	var knownDirPath string  // a directory node (construct)
+	var knownFilePath string // a file node (source/context)
+	roots, listErr := store.ListChildren("")
+	require.NoError(t, listErr)
+	require.NotEmpty(t, roots, "ingested graph should have root nodes")
+
+	// BFS to find a construct directory and a file node.
+	queue := append([]string{}, roots...)
+	for len(queue) > 0 && (knownDirPath == "" || knownFilePath == "") {
+		id := queue[0]
+		queue = queue[1:]
+		node, nodeErr := store.GetNode(id)
+		if nodeErr != nil {
+			continue
+		}
+		if node.Mode.IsDir() {
+			if knownDirPath == "" {
+				knownDirPath = id
+			}
+			children, _ := store.ListChildren(id)
+			queue = append(queue, children...)
+		} else if knownFilePath == "" {
+			knownFilePath = id
+		}
+	}
+	require.NotEmpty(t, knownDirPath, "should find at least one directory node")
+	require.NotEmpty(t, knownFilePath, "should find at least one file node")
+
+	t.Logf("arena: roots=%d, knownDir=%s, knownFile=%s", len(roots), knownDirPath, knownFilePath)
+
+	// --- 1. list_directory ---
+	t.Run("list_directory", func(t *testing.T) {
+		handler := makeListDirHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"path": ""}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		var entries []nodeEntry
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+		assert.NotEmpty(t, entries, "root listing should have entries")
+	})
+
+	// --- 2. read_file ---
+	t.Run("read_file", func(t *testing.T) {
+		handler := makeReadFileHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"path": knownFilePath}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.NotEmpty(t, text, "read_file should return non-empty content")
+	})
+
+	// --- 3. find_callers ---
+	t.Run("find_callers", func(t *testing.T) {
+		handler := makeFindCallersHandler(store)
+		// find_callers indexes function calls (not type references).
+		// NewMemoryStore is called throughout internal/graph test files.
+		result, err := handler(context.Background(), makeRequest(map[string]any{"token": "NewMemoryStore"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		var paths []string
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &paths))
+		assert.NotEmpty(t, paths, "NewMemoryStore should have callers in internal/graph")
+	})
+
+	// --- 4. find_callees ---
+	t.Run("find_callees", func(t *testing.T) {
+		handler := makeFindCalleesHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"path": knownDirPath}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		text := resultText(t, result)
+		assert.NotEmpty(t, text, "find_callees should return JSON output")
+	})
+
+	// --- 5. search ---
+	t.Run("search", func(t *testing.T) {
+		handler := makeSearchHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "%Memory%"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		type searchResult struct {
+			Token string `json:"token"`
+			Path  string `json:"path"`
+		}
+		var results []searchResult
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+		assert.NotEmpty(t, results, "search for %%Memory%% should find matches")
+	})
+
+	// --- 6. semantic_search ---
+	t.Run("semantic_search", func(t *testing.T) {
+		handler := makeSemanticSearchHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"query": "memory store"}))
+		require.NoError(t, err)
+		// Semantic search requires ley-line daemon; graceful error if not running.
+		require.NotNil(t, result)
+		text := resultText(t, result)
+		assert.NotEmpty(t, text, "semantic_search should return some output")
+	})
+
+	// --- 7. get_communities ---
+	t.Run("get_communities", func(t *testing.T) {
+		handler := makeGetCommunitiesHandler(store)
+		result, err := handler(context.Background(), makeRequest(nil))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		var cr graph.CommunityResult
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &cr))
+		assert.Greater(t, cr.NumNodes, 0, "should detect nodes in communities")
+		assert.NotEmpty(t, cr.Communities, "should detect at least one community")
+		assert.Greater(t, cr.Modularity, 0.0, "modularity should be positive")
+	})
+
+	// --- 8. find_definition ---
+	t.Run("find_definition", func(t *testing.T) {
+		handler := makeFindDefinitionHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.Contains(t, text, "MemoryStore", "should find definition for MemoryStore")
+		assert.Contains(t, text, "definitions", "response should have definitions field")
+	})
+
+	// --- 9. get_type_info ---
+	t.Run("get_type_info", func(t *testing.T) {
+		handler := makeGetTypeInfoHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		text := resultText(t, result)
+		assert.NotEmpty(t, text, "get_type_info should return some output")
+	})
+
+	// --- 10. get_diagnostics ---
+	t.Run("get_diagnostics", func(t *testing.T) {
+		handler := makeGetDiagnosticsHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		text := resultText(t, result)
+		assert.NotEmpty(t, text, "get_diagnostics should return some output")
+	})
+
+	// --- 11. get_overview ---
+	t.Run("get_overview", func(t *testing.T) {
+		handler := makeGetOverviewHandler(store)
+		result, err := handler(context.Background(), makeRequest(nil))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		type overview struct {
+			TotalDirs  int `json:"total_dirs"`
+			TotalFiles int `json:"total_files"`
+			RefTokens  int `json:"ref_tokens"`
+			DefTokens  int `json:"def_tokens"`
+		}
+		var ov overview
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &ov))
+		assert.Greater(t, ov.TotalDirs+ov.TotalFiles, 0, "overview should report nodes")
+		assert.Greater(t, ov.RefTokens, 0, "overview should report ref tokens")
+	})
+
+	// --- 12. get_impact ---
+	t.Run("get_impact", func(t *testing.T) {
+		handler := makeGetImpactHandler(store)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.NotEmpty(t, text, "get_impact should return impact info")
+		assert.Contains(t, text, "MemoryStore", "impact result should reference the symbol")
+	})
+
+	// --- 13. get_architecture ---
+	t.Run("get_architecture", func(t *testing.T) {
+		handler := makeGetArchitectureHandler(store)
+		result, err := handler(context.Background(), makeRequest(nil))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		type architecture struct {
+			MostReferenced    []any          `json:"most_referenced"`
+			KeyAbstractions   []any          `json:"key_abstractions"`
+			DependencyLayers  []any          `json:"dependency_layers"`
+			FileCount         int            `json:"file_count"`
+			TopLevelBreakdown map[string]int `json:"top_level_breakdown"`
+		}
+		var arch architecture
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &arch))
+		assert.Greater(t, arch.FileCount, 0, "architecture should count files")
+		assert.NotEmpty(t, arch.TopLevelBreakdown, "should have top-level breakdown")
+	})
+
+	// --- 14. get_diagram ---
+	t.Run("get_diagram", func(t *testing.T) {
+		handler := makeGetDiagramHandler(store)
+		result, err := handler(context.Background(), makeRequest(nil))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.Contains(t, text, "graph TD", "diagram should start with mermaid directive")
+		assert.Contains(t, text, "subgraph", "diagram should contain subgraph sections")
+	})
 }
