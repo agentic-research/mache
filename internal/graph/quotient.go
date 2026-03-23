@@ -204,6 +204,12 @@ func deriveLabels(q *QuotientGraph, refs map[string][]string) {
 	useIDF := nClasses > 1
 
 	for token, info := range tokenStats {
+		// Skip tokens that look like Go builtins or stdlib noise.
+		// These dominate at scale and produce uninformative labels.
+		if isStdlibToken(token) {
+			continue
+		}
+
 		var idf float64
 		if useIDF {
 			idf = math.Log(float64(nClasses) / float64(info.numClasses))
@@ -348,6 +354,43 @@ func FilterTestRefs(refs map[string][]string) map[string][]string {
 		}
 	}
 	return filtered
+}
+
+// isStdlibToken returns true for tokens that look like Go builtins or stdlib
+// symbols. These produce uninformative community labels at scale.
+//
+// Heuristic (no hardcoded list):
+//   - All-lowercase single words: len, make, append, string, int, int64, uint32, etc.
+//   - Common Go keywords/builtins that leak through tree-sitter as ref tokens
+//
+// Tokens that are NOT filtered:
+//   - Uppercase start: MemoryStore, Engine, SQLiteGraph (user-defined types)
+//   - Contains dot: auth.Validate (qualified calls)
+//   - Contains colon: env:DATABASE_URL (address refs)
+//   - Contains underscore: my_func (user convention, not stdlib)
+func isStdlibToken(token string) bool {
+	if len(token) == 0 {
+		return false
+	}
+	// Scheme-prefixed tokens (env:, path:, url:) are always domain-specific.
+	if strings.Contains(token, ":") {
+		return false
+	}
+	// Qualified names (pkg.Func) are always domain-specific.
+	if strings.Contains(token, ".") {
+		return false
+	}
+	// Tokens with underscores are user conventions, not stdlib.
+	if strings.Contains(token, "_") {
+		return false
+	}
+	// Uppercase start = exported user symbol (MemoryStore, Engine, etc.)
+	if token[0] >= 'A' && token[0] <= 'Z' {
+		return false
+	}
+	// What's left: lowercase single words like len, make, append, string, int, etc.
+	// These are Go builtins or stdlib function names that appear everywhere.
+	return true
 }
 
 func isTestNode(id string) bool {

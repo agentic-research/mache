@@ -141,13 +141,13 @@ func TestComputeQuotient_LabelDerivation(t *testing.T) {
 		},
 	}
 	refs := map[string][]string{
-		"rare":   {"a"},
-		"common": {"a", "b", "c"}, // most referenced
-		"mid":    {"a", "b"},
+		"Rare":   {"a"},
+		"Common": {"a", "b", "c"}, // most referenced
+		"Mid":    {"a", "b"},
 	}
 
 	q := ComputeQuotient(cr, refs)
-	assert.Equal(t, "common", q.Classes[0].Label, "label should be most-referenced token")
+	assert.Equal(t, "Common", q.Classes[0].Label, "label should be most-referenced token")
 }
 
 func TestComputeQuotient_LabelTiebreaker(t *testing.T) {
@@ -160,12 +160,12 @@ func TestComputeQuotient_LabelTiebreaker(t *testing.T) {
 		},
 	}
 	refs := map[string][]string{
-		"beta":  {"a", "b"}, // same count
-		"alpha": {"a", "b"}, // same count, lexicographically first
+		"Beta":  {"a", "b"}, // same count
+		"Alpha": {"a", "b"}, // same count, lexicographically first
 	}
 
 	q := ComputeQuotient(cr, refs)
-	assert.Equal(t, "alpha", q.Classes[0].Label, "ties broken lexicographically")
+	assert.Equal(t, "Alpha", q.Classes[0].Label, "ties broken lexicographically")
 }
 
 func TestComputeQuotient_NilRefs(t *testing.T) {
@@ -283,12 +283,12 @@ func TestMermaid_FewTokensShowAll(t *testing.T) {
 			{ID: 1, Label: "b", Members: []string{"b1", "b2"}},
 		},
 		Edges: []QuotientEdge{
-			{From: 0, To: 1, Weight: 5, Tokens: []string{"alpha", "beta"}},
+			{From: 0, To: 1, Weight: 5, Tokens: []string{"Alpha", "Beta"}},
 		},
 	}
 
 	out := q.Mermaid("TD")
-	assert.Contains(t, out, "alpha, beta")
+	assert.Contains(t, out, "Alpha, Beta")
 }
 
 func TestMermaid_SanitizesNodeIDs(t *testing.T) {
@@ -886,6 +886,26 @@ func TestFilterTestRefs(t *testing.T) {
 
 	// production should be unchanged.
 	assert.Equal(t, []string{"graph/functions/NewStore/source"}, filtered["production"])
+}
+
+func TestIsStdlibToken(t *testing.T) {
+	// Should be filtered (stdlib noise)
+	assert.True(t, isStdlibToken("len"))
+	assert.True(t, isStdlibToken("make"))
+	assert.True(t, isStdlibToken("append"))
+	assert.True(t, isStdlibToken("string"))
+	assert.True(t, isStdlibToken("int64"))
+	assert.True(t, isStdlibToken("uint32"))
+
+	// Should NOT be filtered (domain-specific)
+	assert.False(t, isStdlibToken("MemoryStore"))
+	assert.False(t, isStdlibToken("Engine"))
+	assert.False(t, isStdlibToken("SQLiteGraph"))
+	assert.False(t, isStdlibToken("env:DATABASE_URL"))
+	assert.False(t, isStdlibToken("path:code/thing"))
+	assert.False(t, isStdlibToken("auth.Validate"))
+	assert.False(t, isStdlibToken("my_func"))
+	assert.False(t, isStdlibToken(""))
 }
 
 func TestFilterTestRefs_PreservesNonTestNodes(t *testing.T) {

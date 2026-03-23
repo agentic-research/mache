@@ -54,6 +54,9 @@ type addressRefQueryCacheKey struct {
 // language against the AST node. Returns deduplicated, scheme-prefixed tokens
 // (e.g., "env:DATABASE_URL"). String captures are automatically unquoted.
 func (w *SitterWalker) ExtractAddressRefs(root *sitter.Node, source []byte, lang *sitter.Language, langName string) ([]string, error) {
+	if root == nil || lang == nil || len(source) == 0 {
+		return nil, nil
+	}
 	raw, ok := addressRefRegistry.Load(langName)
 	if !ok {
 		return nil, nil
