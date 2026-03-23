@@ -96,6 +96,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 - Find where symbols are defined or used (find_definition, find_callers, find_callees)
 - Search for code by pattern (search)
 - Understand code structure and communities (get_communities)
+- Visualize system structure as a mermaid diagram (get_diagram)
 - Get type information and diagnostics from LSP (get_type_info, get_diagnostics)
 - Analyze change blast radius (get_impact)
 Call get_overview first when exploring a new codebase, then get_architecture for deeper orientation.`),
@@ -432,8 +433,21 @@ type lazyGraph struct {
 	once      sync.Once
 	embedOnce sync.Once // triggers embedding on first successful get()
 	inner     graph.Graph
+	schema    *api.Topology // retained after init for schema-aware tools
 	cleanup   func()
 	err       error
+}
+
+// schemaProvider exposes the Topology used during graph construction.
+// Handlers like get_diagram use this to resolve named diagram definitions.
+type schemaProvider interface {
+	Schema() *api.Topology
+}
+
+// Schema returns the schema used to build this graph, or nil if not yet initialized.
+func (lg *lazyGraph) Schema() *api.Topology {
+	lg.init()
+	return lg.schema
 }
 
 // resolvedBasePath returns basePath if set, otherwise ".".
@@ -516,6 +530,7 @@ func (lg *lazyGraph) init() {
 			return
 		}
 		lg.inner = g
+		lg.schema = schema
 		lg.cleanup = cleanup
 		log.Println("graph ready")
 	})
@@ -888,6 +903,17 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithDescription("Structured architectural analysis of the codebase. Returns entry points (high fan-in), key abstractions (most defs), dependency layers (community-based), test files, API surface (exported symbols), file count, and language breakdown. Use after get_overview for deeper orientation."),
 		),
 		r.wrapHandler(makeGetArchitectureHandler),
+	)
+
+	s.AddTool(
+		mcp.NewTool("get_diagram",
+			mcp.WithDescription("Render a mermaid diagram of the projected system's structure. Uses community detection to group related code, then renders the quotient graph (classes + cross-class edges) as mermaid syntax. Edge labels show the most significant boundary tokens (above-mean weight)."),
+			mcp.WithString("name", mcp.Description("Diagram name from schema (default: full system view)")),
+			mcp.WithString("layout", mcp.Description("Layout direction: TD (top-down), LR (left-right), BT (bottom-top), RL (right-left). Default: TD")),
+			mcp.WithBoolean("exclude_tests", mcp.Description("Exclude test files (*_test.go, Test*, Benchmark*) from community detection. Produces cleaner domain-focused labels.")),
+			mcp.WithBoolean("compact", mcp.Description("Compact mode: render classes as labeled nodes with member count instead of subgraphs with full member listings. Better for large codebases.")),
+		),
+		r.wrapHandler(makeGetDiagramHandler),
 	)
 
 	s.AddTool(

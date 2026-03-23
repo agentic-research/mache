@@ -52,7 +52,7 @@ func BenchmarkEngine_ProcessRecord(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = processRecord(schema, walker, "db.sqlite", job)
+		_ = processRecord(schema, walker, "db.sqlite", job, nil, nil)
 	}
 }
 
@@ -73,7 +73,7 @@ func BenchmarkEngine_Parallelism(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_ = processRecord(schema, walker, "db.sqlite", job)
+			_ = processRecord(schema, walker, "db.sqlite", job, nil, nil)
 		}
 	})
 }

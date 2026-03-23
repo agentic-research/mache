@@ -60,6 +60,9 @@ type SitterWalker struct {
 	contextQueryCache sync.Map // string (language name) -> *sitter.Query
 	// qualifiedCallQueryCache caches compiled qualified call queries.
 	qualifiedCallQueryCache sync.Map // string (language name) -> *sitter.Query
+	// addressRefQueryCache caches compiled address ref queries keyed by
+	// (language name, scheme) pair.
+	addressRefQueryCache sync.Map // addressRefQueryCacheKey -> *sitter.Query
 	// schemaQueryCache caches compiled schema selector queries keyed by
 	// (selector, language) pair. Schema selectors are the same across all
 	// files of the same language, so caching avoids recompilation on every file.
@@ -256,6 +259,10 @@ func (w *SitterWalker) Close() {
 		return true
 	})
 	w.qualifiedCallQueryCache.Range(func(_, v any) bool {
+		v.(*sitter.Query).Close()
+		return true
+	})
+	w.addressRefQueryCache.Range(func(_, v any) bool {
 		v.(*sitter.Query).Close()
 		return true
 	})

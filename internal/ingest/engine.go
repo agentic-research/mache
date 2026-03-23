@@ -71,6 +71,15 @@ type Engine struct {
 	sitterWalker     *SitterWalker              // shared across files for query cache reuse
 	fileIndex        map[string]FileIndexEntry  // cached file metadata for incremental re-ingestion
 	mu               sync.Mutex
+
+	// diagramOnce guards lazy computation of cachedCommunities + cachedRefs.
+	diagramOnce       sync.Once
+	cachedCommunities *graph.CommunityResult
+	cachedRefs        map[string][]string
+	// diagramFuncMapOnce guards building of diagramFuncMap (safe for concurrent use).
+	diagramFuncMapOnce sync.Once
+	diagramFuncMap     template.FuncMap
+	diagramTmplCache   sync.Map // template string -> *template.Template
 }
 
 // --- Parallel ingestion types ---
@@ -646,9 +655,15 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 			continue
 		}
 
+		// Extract file-level address refs once (e.g., HCL variable declarations).
+		var fileAddrRefs []string
+		if addrRefs, err := walker.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
+			fileAddrRefs = addrRefs
+		}
+
 		var processErr error
 		for _, nodeSchema := range applicableNodes {
-			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context); err != nil {
+			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs); err != nil {
 				if strings.Contains(err.Error(), "invalid query") {
 					e.mu.Lock()
 					e.routedFiles[result.job.langName]++
@@ -769,7 +784,7 @@ func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil, nil); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -847,11 +862,17 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 			fileContext = ctxBytes
 		}
 
+		// Extract file-level address refs once (e.g., HCL variable declarations).
+		var fileAddrRefs []string
+		if addrRefs, err := walker.ExtractAddressRefs(tree.RootNode(), content, lang, langName); err == nil {
+			fileAddrRefs = addrRefs
+		}
+
 		// Filter schema nodes by language to prevent cross-language query errors
 		applicableNodes := filterNodesByLanguage(e.Schema.Nodes, langName)
 
 		for _, nodeSchema := range applicableNodes {
-			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, realPath, modTime, bt, fileContext); err != nil {
+			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, realPath, modTime, bt, fileContext, fileAddrRefs); err != nil {
 				// Tree-sitter query compilation fails when a schema selector
 				// uses node types from a different language (e.g. Go's
 				// "function_declaration" applied to a Python file). This is
@@ -1042,7 +1063,11 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 	jobs := make(chan recordJob, numWorkers*2)
 	results := make(chan recordResult, numWorkers*2)
 
-	// Workers: parse JSON, render templates, build nodes
+	// Workers: parse JSON, render templates, build nodes.
+	// DiagramFuncMap is safe for concurrent reads (built once, then shared).
+	diagramFuncs := e.DiagramFuncMap()
+	diagramCache := &e.diagramTmplCache
+
 	var workerWg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		workerWg.Add(1)
@@ -1050,7 +1075,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 			defer workerWg.Done()
 			w := NewJsonWalker()
 			for job := range jobs {
-				results <- processRecord(e.Schema, w, dbPath, job)
+				results <- processRecord(e.Schema, w, dbPath, job, diagramFuncs, diagramCache)
 			}
 		}()
 	}
@@ -1130,7 +1155,11 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 
 // processRecord is a pure function — parses one SQLite record through the schema
 // and returns all nodes to create, without touching the store.
-func processRecord(schema *api.Topology, walker Walker, dbPath string, job recordJob) recordResult {
+//
+// extraFuncs and tmplCache enable template functions like {{diagram}} in content
+// templates. When non-nil, content rendering uses RenderTemplateWithFuncs with
+// these extras merged in. When nil, falls back to RenderTemplate (base funcs only).
+func processRecord(schema *api.Topology, walker Walker, dbPath string, job recordJob, extraFuncs template.FuncMap, tmplCache *sync.Map) recordResult {
 	var parsed any
 	if err := json.Unmarshal([]byte(job.raw), &parsed); err != nil {
 		return recordResult{err: fmt.Errorf("parse record %s: %w", job.recordID, err)}
@@ -1141,7 +1170,7 @@ func processRecord(schema *api.Topology, walker Walker, dbPath string, job recor
 
 	for _, nodeSchema := range schema.Nodes {
 		for _, childSchema := range nodeSchema.Children {
-			collectNodes(&result, childSchema, walker, wrapper, nodeSchema.Name, dbPath, job.recordID)
+			collectNodes(&result, childSchema, walker, wrapper, nodeSchema.Name, dbPath, job.recordID, extraFuncs, tmplCache)
 			if result.err != nil {
 				return result
 			}
@@ -1153,7 +1182,10 @@ func processRecord(schema *api.Topology, walker Walker, dbPath string, job recor
 
 // collectNodes is the pure equivalent of processNode — builds node lists
 // without any store access. Safe to call from multiple goroutines.
-func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any, parentPath, dbPath, recordID string) {
+//
+// extraFuncs/tmplCache are threaded through for content template rendering
+// (e.g., {{diagram}}). When nil, uses base RenderTemplate.
+func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any, parentPath, dbPath, recordID string, extraFuncs template.FuncMap, tmplCache *sync.Map) {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		result.err = fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -1180,7 +1212,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				collectNodes(result, childSchema, walker, nextCtx, currentPath, dbPath, recordID)
+				collectNodes(result, childSchema, walker, nextCtx, currentPath, dbPath, recordID, extraFuncs, tmplCache)
 				if result.err != nil {
 					return
 				}
@@ -1197,7 +1229,12 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 			filePath := filepath.Join(currentPath, fileName)
 			fileId := toNodeID(filePath)
 
-			content, err := RenderTemplate(fileSchema.ContentTemplate, match.Values())
+			var content string
+			if len(extraFuncs) > 0 && tmplCache != nil {
+				content, err = RenderTemplateWithFuncs(fileSchema.ContentTemplate, match.Values(), extraFuncs, tmplCache)
+			} else {
+				content, err = RenderTemplate(fileSchema.ContentTemplate, match.Values())
+			}
 			if err != nil {
 				log.Printf("collectNodes: skip file content render %q: %v", fileId, err)
 				continue
@@ -1259,7 +1296,7 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte, fileAddressRefs []string) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -1390,7 +1427,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext, fileAddressRefs); err != nil {
 					return err
 				}
 			}
@@ -1404,6 +1441,27 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 					if c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang, root.LangName); err == nil {
 						calls = c
 					}
+					// Extract address-aware refs (env:, path:, url:) from the
+					// match scope. These typed tokens bridge across languages
+					// (e.g., Go os.Getenv calls within this function scope).
+					if addrRefs, err := sw.ExtractAddressRefs(root.Node, root.Source, root.Lang, root.LangName); err == nil {
+						calls = append(calls, addrRefs...)
+					}
+				}
+			}
+		}
+		// Append file-level address refs (e.g., HCL variable declarations)
+		// that weren't already found at the scope level. This avoids
+		// duplicate refs when a Go function both calls os.Getenv and the
+		// file-root also matches the same pattern.
+		if len(fileAddressRefs) > 0 {
+			scopeSeen := make(map[string]bool, len(calls))
+			for _, c := range calls {
+				scopeSeen[c] = true
+			}
+			for _, ref := range fileAddressRefs {
+				if !scopeSeen[ref] {
+					calls = append(calls, ref)
 				}
 			}
 		}
@@ -1459,7 +1517,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				vals["doc"] = docText
 			}
 
-			content, err := RenderTemplate(fileSchema.ContentTemplate, vals)
+			content, err := e.RenderContentTemplate(fileSchema.ContentTemplate, vals)
 			if err != nil {
 				log.Printf("processNode: skip file content render %q: %v", fileId, err)
 				continue
@@ -1720,6 +1778,95 @@ func RenderTemplate(tmpl string, values map[string]any) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// RenderTemplateWithFuncs renders a Go text/template with the standard mache
+// template functions plus additional per-engine functions (e.g., {{diagram}}).
+// Templates are cached in the provided cache; the caller must ensure the
+// extraFuncs map is stable for the cache's lifetime.
+func RenderTemplateWithFuncs(tmpl string, values map[string]any, extraFuncs template.FuncMap, cache *sync.Map) (string, error) {
+	var t *template.Template
+	if cached, ok := cache.Load(tmpl); ok {
+		t = cached.(*template.Template)
+	} else {
+		merged := make(template.FuncMap, len(tmplFuncs)+len(extraFuncs))
+		for k, v := range tmplFuncs {
+			merged[k] = v
+		}
+		for k, v := range extraFuncs {
+			merged[k] = v
+		}
+		var err error
+		t, err = template.New("").Funcs(merged).Parse(tmpl)
+		if err != nil {
+			return "", err
+		}
+		cache.Store(tmpl, t)
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, values); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// refsProvider is the subset of stores that expose their refs map.
+type refsProvider interface {
+	RefsMap() map[string][]string
+}
+
+// ensureDiagramData lazily computes and caches the CommunityResult and refs.
+// Safe for concurrent use; the computation runs at most once.
+func (e *Engine) ensureDiagramData() {
+	e.diagramOnce.Do(func() {
+		rp, ok := e.Store.(refsProvider)
+		if !ok {
+			return
+		}
+		e.cachedRefs = rp.RefsMap()
+		if len(e.cachedRefs) > 0 {
+			e.cachedCommunities = graph.DetectCommunities(e.cachedRefs, 2)
+		}
+	})
+}
+
+// DiagramFuncMap returns a template.FuncMap containing the {{diagram "name"}}
+// function. The returned FuncMap is built once via sync.Once and reused;
+// the closure inside captures the Engine and lazily initializes community
+// data on first call. Safe for concurrent use.
+func (e *Engine) DiagramFuncMap() template.FuncMap {
+	e.diagramFuncMapOnce.Do(func() {
+		e.diagramFuncMap = template.FuncMap{
+			"diagram": func(name string) string {
+				e.ensureDiagramData()
+
+				if e.cachedCommunities == nil || len(e.cachedCommunities.Communities) == 0 {
+					return "%% diagram: no communities detected"
+				}
+
+				// Determine layout from schema diagrams map or default.
+				layout := "TD"
+				if e.Schema != nil && e.Schema.Diagrams != nil {
+					if def, ok := e.Schema.Diagrams[name]; ok {
+						layout = def.Layout
+					} else if name != "system" {
+						return fmt.Sprintf("%% diagram %q not defined", name)
+					}
+				}
+
+				q := graph.ComputeQuotient(e.cachedCommunities, e.cachedRefs)
+				return q.Mermaid(layout)
+			},
+		}
+	})
+	return e.diagramFuncMap
+}
+
+// RenderContentTemplate renders a content template with the standard mache
+// functions plus the Engine's diagram function. This is the method that
+// processNode and collectNodes should use for file content rendering.
+func (e *Engine) RenderContentTemplate(tmpl string, values map[string]any) (string, error) {
+	return RenderTemplateWithFuncs(tmpl, values, e.DiagramFuncMap(), &e.diagramTmplCache)
 }
 
 // ReIngestFile re-ingests a single file, preserving the existing RootPath.

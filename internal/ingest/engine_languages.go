@@ -54,4 +54,28 @@ func init() {
 		(call target: (identifier) @call)
 		(call target: (dot right: (identifier) @call))
 	`)
+
+	// --- Address-aware ref queries ---
+	// These emit typed ref tokens (scheme:value) that bridge across languages.
+	// The @ref capture is unquoted and prefixed with the scheme automatically.
+
+	// Go: os.Getenv("VAR_NAME") → env:VAR_NAME
+	RegisterAddressRefQuery("go", "env", `
+		(call_expression
+			function: (selector_expression
+				operand: (identifier) @_pkg
+				field: (field_identifier) @_func)
+			arguments: (argument_list
+				(interpreted_string_literal) @ref)
+			(#eq? @_pkg "os")
+			(#eq? @_func "Getenv"))
+	`)
+
+	// HCL: variable "VAR_NAME" { ... } → env:VAR_NAME
+	RegisterAddressRefQuery("hcl", "env", `
+		(block
+			(identifier) @_type
+			(string_lit) @ref
+			(#eq? @_type "variable"))
+	`)
 }
