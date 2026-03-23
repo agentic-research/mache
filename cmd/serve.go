@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -159,11 +160,22 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	meta := registerServeSidecar(source, "mcp-http", serveHTTP)
 	defer removeServeSidecar(meta)
 
-	httpServer := server.NewStreamableHTTPServer(s,
+	mcpHandler := server.NewStreamableHTTPServer(s,
 		server.WithHTTPContextFunc(repoContextFromRequest),
 	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcpHandler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = fmt.Fprintln(w, "mache MCP server")
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintf(w, "Connect: claude mcp add --transport http mache \"http://%s/mcp?repo=<your-repo-url>\"\n", r.Host)
+	})
+
 	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
-	return httpServer.Start(serveHTTP)
+	httpSrv := &http.Server{Addr: serveHTTP, Handler: mux}
+	return httpSrv.ListenAndServe()
 }
 
 // registerServeSidecar writes a sidecar metadata file so `mache list` can discover

@@ -156,3 +156,52 @@ func TestHosted_Cleanup_ReleasesClone(t *testing.T) {
 	rc.cleanupTimer.Stop() // prevent actual cleanup in test
 	rc.mu.Unlock()
 }
+
+// ---------------------------------------------------------------------------
+// End-to-end hosted flow
+// ---------------------------------------------------------------------------
+
+func TestHosted_EndToEnd_SharedClone(t *testing.T) {
+	repoDir := initTestGitRepo(t)
+	r := newGraphRegistry("", nil)
+	repoURL := "file://" + repoDir
+
+	// Session 1 connects
+	baseDir1, err := r.getOrCreateRepoClone(repoURL)
+	require.NoError(t, err)
+	r.sessionRepos.Store("session-1", repoURL)
+
+	// Session 2 connects — same repo, shared base clone
+	baseDir2, err := r.getOrCreateRepoClone(repoURL)
+	require.NoError(t, err)
+	r.sessionRepos.Store("session-2", repoURL)
+
+	assert.Equal(t, baseDir1, baseDir2, "same repo should share base clone")
+
+	// Both disconnect
+	if url, ok := r.sessionRepos.LoadAndDelete("session-1"); ok {
+		r.releaseRepoClone(url.(string))
+	}
+	if url, ok := r.sessionRepos.LoadAndDelete("session-2"); ok {
+		r.releaseRepoClone(url.(string))
+	}
+
+	// Clone still exists (timer hasn't fired yet)
+	assert.DirExists(t, baseDir1)
+
+	// Stop timer to prevent cleanup during test
+	if v, ok := r.repoClones.Load(repoURL); ok {
+		rc := v.(*repoClone)
+		rc.mu.Lock()
+		if rc.cleanupTimer != nil {
+			rc.cleanupTimer.Stop()
+		}
+		rc.mu.Unlock()
+	}
+}
+
+func TestHosted_NoRepoParam_NormalPath(t *testing.T) {
+	r := newGraphRegistry(".", nil)
+	lg := r.getOrCreateGraph(".")
+	assert.NotNil(t, lg)
+}
