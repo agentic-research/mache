@@ -910,6 +910,8 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithDescription("Render a mermaid diagram of the projected system's structure. Uses community detection to group related code, then renders the quotient graph (classes + cross-class edges) as mermaid syntax. Edge labels show the most significant boundary tokens (above-mean weight)."),
 			mcp.WithString("name", mcp.Description("Diagram name from schema (default: full system view)")),
 			mcp.WithString("layout", mcp.Description("Layout direction: TD (top-down), LR (left-right), BT (bottom-top), RL (right-left). Default: TD")),
+			mcp.WithBoolean("exclude_tests", mcp.Description("Exclude test files (*_test.go, Test*, Benchmark*) from community detection. Produces cleaner domain-focused labels.")),
+			mcp.WithBoolean("compact", mcp.Description("Compact mode: render classes as labeled nodes with member count instead of subgraphs with full member listings. Better for large codebases.")),
 		),
 		r.wrapHandler(makeGetDiagramHandler),
 	)

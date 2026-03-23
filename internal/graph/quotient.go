@@ -232,13 +232,24 @@ func deriveLabels(q *QuotientGraph, refs map[string][]string) {
 	}
 }
 
+// MermaidOpts controls diagram rendering.
+type MermaidOpts struct {
+	Layout  string // "TD", "LR", "BT", "RL" (default "TD")
+	Compact bool   // omit member listings inside subgraphs
+}
+
 // Mermaid renders the quotient graph as mermaid syntax.
 //
 // Each Class becomes a subgraph (or a plain node if it has a single member).
 // Each QuotientEdge becomes an arrow. Edge annotations show boundary tokens
 // that contribute above the mean weight for that edge.
-// The layout parameter maps to mermaid direction: "TD", "LR", "BT", "RL".
 func (q *QuotientGraph) Mermaid(layout string) string {
+	return q.MermaidWithOpts(MermaidOpts{Layout: layout})
+}
+
+// MermaidWithOpts renders the quotient graph with full control over output.
+func (q *QuotientGraph) MermaidWithOpts(opts MermaidOpts) string {
+	layout := opts.Layout
 	if layout == "" {
 		layout = "TD"
 	}
@@ -256,12 +267,17 @@ func (q *QuotientGraph) Mermaid(layout string) string {
 			fmt.Fprintf(&b, "    %s[\"%s\"]\n", classNodeID(c.ID), c.Label)
 			continue
 		}
-		// Multi-member: subgraph.
-		fmt.Fprintf(&b, "    subgraph %s[\"%s\"]\n", classNodeID(c.ID), c.Label)
-		for _, m := range c.Members {
-			fmt.Fprintf(&b, "        %s\n", sanitizeMermaidID(m))
+		if opts.Compact {
+			// Compact: render as labeled node with member count.
+			fmt.Fprintf(&b, "    %s[\"%s (%d)\"]\n", classNodeID(c.ID), c.Label, len(c.Members))
+		} else {
+			// Full: subgraph with member listings.
+			fmt.Fprintf(&b, "    subgraph %s[\"%s\"]\n", classNodeID(c.ID), c.Label)
+			for _, m := range c.Members {
+				fmt.Fprintf(&b, "        %s\n", sanitizeMermaidID(m))
+			}
+			fmt.Fprintf(&b, "    end\n")
 		}
-		fmt.Fprintf(&b, "    end\n")
 	}
 
 	// Render edges.
@@ -313,6 +329,32 @@ func edgeLabel(e QuotientEdge) string {
 
 	// Fallback: no per-token weights (manually constructed QuotientEdge).
 	return sanitizeMermaidLabel(strings.Join(e.Tokens, ", "))
+}
+
+// FilterTestRefs returns a copy of refs with test-related nodes removed.
+// Test nodes are identified by containing "_test" or "Test" in their ID,
+// matching Go's *_test.go convention and TestXxx naming.
+func FilterTestRefs(refs map[string][]string) map[string][]string {
+	filtered := make(map[string][]string, len(refs))
+	for token, nodeIDs := range refs {
+		var kept []string
+		for _, nid := range nodeIDs {
+			if !isTestNode(nid) {
+				kept = append(kept, nid)
+			}
+		}
+		if len(kept) > 0 {
+			filtered[token] = kept
+		}
+	}
+	return filtered
+}
+
+func isTestNode(id string) bool {
+	return strings.Contains(id, "_test") ||
+		strings.Contains(id, "/Test") ||
+		strings.Contains(id, "/Benchmark") ||
+		strings.Contains(id, "/Fuzz")
 }
 
 func classNodeID(id int) string {

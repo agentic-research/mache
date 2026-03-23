@@ -839,3 +839,59 @@ func TestMermaid_EdgeLabelsAreValidSyntax(t *testing.T) {
 	// Should still show the prominent tokens and count.
 	assert.Contains(t, out, "t1, t2 +8 more")
 }
+
+func TestMermaid_CompactMode(t *testing.T) {
+	q := &QuotientGraph{
+		Classes: []Class{
+			{ID: 0, Label: "graph", Members: []string{"a", "b", "c"}},
+			{ID: 1, Label: "ingest", Members: []string{"d", "e"}},
+		},
+		Edges: []QuotientEdge{
+			{From: 0, To: 1, Weight: 5, Tokens: []string{"Engine"}},
+		},
+	}
+
+	out := q.MermaidWithOpts(MermaidOpts{Layout: "TD", Compact: true})
+	assert.Contains(t, out, `C0["graph (3)"]`, "compact should show member count")
+	assert.Contains(t, out, `C1["ingest (2)"]`)
+	assert.NotContains(t, out, "subgraph", "compact should not use subgraphs")
+	assert.Contains(t, out, "C0 -->|Engine| C1")
+}
+
+func TestMermaid_CompactSingleMember(t *testing.T) {
+	q := &QuotientGraph{
+		Classes: []Class{
+			{ID: 0, Label: "solo", Members: []string{"only"}},
+		},
+	}
+	out := q.MermaidWithOpts(MermaidOpts{Compact: true})
+	assert.Contains(t, out, `C0["solo"]`, "single member renders as plain node even in compact")
+}
+
+func TestFilterTestRefs(t *testing.T) {
+	refs := map[string][]string{
+		"MemoryStore": {"graph/types/MemoryStore/source", "graph/functions/TestMemoryStore_Basic/source"},
+		"testOnly":    {"graph/functions/TestFoo/source", "graph/functions/BenchmarkBar/source"},
+		"production":  {"graph/functions/NewStore/source"},
+	}
+
+	filtered := FilterTestRefs(refs)
+
+	// MemoryStore should keep only the non-test node.
+	assert.Equal(t, []string{"graph/types/MemoryStore/source"}, filtered["MemoryStore"])
+
+	// testOnly had only test nodes — should be removed entirely.
+	_, exists := filtered["testOnly"]
+	assert.False(t, exists, "token with only test refs should be removed")
+
+	// production should be unchanged.
+	assert.Equal(t, []string{"graph/functions/NewStore/source"}, filtered["production"])
+}
+
+func TestFilterTestRefs_PreservesNonTestNodes(t *testing.T) {
+	refs := map[string][]string{
+		"token": {"a/b/source", "c/d/source"},
+	}
+	filtered := FilterTestRefs(refs)
+	assert.Equal(t, refs["token"], filtered["token"], "no test nodes means no change")
+}

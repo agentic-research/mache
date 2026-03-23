@@ -14,6 +14,8 @@ func makeGetDiagramHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		layout := request.GetString("layout", "")
 		name := request.GetString("name", "")
+		excludeTests := request.GetBool("exclude_tests", false)
+		compact := request.GetBool("compact", false)
 
 		// Validate layout direction if provided.
 		if layout != "" {
@@ -53,13 +55,20 @@ func makeGetDiagramHandler(g graph.Graph) server.ToolHandlerFunc {
 			), nil
 		}
 
+		if excludeTests {
+			refs = graph.FilterTestRefs(refs)
+		}
+
 		cr := graph.DetectCommunities(refs, 2)
 		if len(cr.Communities) == 0 {
 			return mcp.NewToolResultError("No communities detected — not enough cross-references to form clusters."), nil
 		}
 
 		q := graph.ComputeQuotient(cr, refs)
-		mermaidText := q.Mermaid(layout)
+		mermaidText := q.MermaidWithOpts(graph.MermaidOpts{
+			Layout:  layout,
+			Compact: compact,
+		})
 
 		return mcp.NewToolResultText(mermaidText), nil
 	}
