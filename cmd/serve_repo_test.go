@@ -83,8 +83,27 @@ func TestRemoveWorktree(t *testing.T) {
 }
 
 func TestCreateWorktree_InvalidDir(t *testing.T) {
-	_, err := createWorktree("/tmp/not-a-git-repo-"+t.Name(), "session-x")
+	invalidDir := t.TempDir() // exists but is not a git repo
+	_, err := createWorktree(invalidDir, "session-x")
 	assert.Error(t, err, "should fail on non-git directory")
+}
+
+func TestSanitizeSessionID(t *testing.T) {
+	// Safe IDs
+	safe, err := sanitizeSessionID("abc-123_def")
+	assert.NoError(t, err)
+	assert.Equal(t, "abc-123_def", safe)
+
+	// Unsafe: path separator
+	_, err = sanitizeSessionID("../../etc/passwd")
+	assert.Error(t, err)
+
+	_, err = sanitizeSessionID("session/evil")
+	assert.Error(t, err)
+
+	// Unsafe: empty
+	_, err = sanitizeSessionID("")
+	assert.Error(t, err)
 }
 
 // ---------------------------------------------------------------------------
