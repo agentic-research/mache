@@ -178,7 +178,7 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 | Concern                     | File                                                   | Key functions/types                                                                     |
 | --------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | CLI + mount wiring          | `cmd/mount.go`                                         | `rootCmd`, `--writable`, `--infer`, `--backend` flags                                   |
-| MCP server                  | `cmd/serve.go`                                         | `mache serve`, `registerMCPTools`, `buildServeGraph`, `lazyGraph`, 9 tool handlers      |
+| MCP server                  | `cmd/serve.go`                                         | `mache serve`, `registerMCPTools`, `buildServeGraph`, `lazyGraph`, 15 tool handlers     |
 | Community detection         | `internal/graph/community.go`                          | `DetectCommunities` (Louvain), `ConnectedComponents`, `buildProjection`                 |
 | Schema types                | `api/schema.go`                                        | `Topology`, `Node`, `Leaf`                                                              |
 | Ingestion orchestration     | `internal/ingest/engine.go`                            | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `ingestRawFileUnder`, `dedupSuffix` |
