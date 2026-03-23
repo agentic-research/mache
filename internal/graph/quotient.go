@@ -370,18 +370,27 @@ func isTestToken(token string) bool {
 	return false
 }
 
+// stdlibUppercase contains exported Go stdlib functions that are ubiquitous
+// and produce uninformative community labels. Kept small and obvious — only
+// functions that appear in virtually every Go package.
+var stdlibUppercase = map[string]bool{
+	"Sprintf": true, "Errorf": true, "Printf": true, "Println": true,
+	"Fprintf": true, "Sscanf": true, "Scanf": true,
+	"Error": true, "String": true, "Strings": true, "Close": true,
+	"Lock": true, "Unlock": true, "RLock": true, "RUnlock": true,
+	"Contains": true, "HasPrefix": true, "HasSuffix": true,
+	"Join": true, "Split": true, "TrimSpace": true, "Replace": true, "ReplaceAll": true,
+	"NoError": true, "Equal": true, "True": true, "False": true, "Len": true,
+	"Run": true, "Helper": true, "Fatal": true, "Fatalf": true,
+	"IsDir": true, "Stat": true, "ReadFile": true, "WriteFile": true,
+	"Next": true, "Scan": true, "Query": true, "Exec": true,
+	"Now": true, "Background": true, "TODO": true,
+	"Marshal": true, "Unmarshal": true, "MarshalIndent": true,
+	"Base": true, "Dir": true, "Ext": true,
+}
+
 // isStdlibToken returns true for tokens that look like Go builtins or stdlib
 // symbols. These produce uninformative community labels at scale.
-//
-// Heuristic (no hardcoded list):
-//   - All-lowercase single words: len, make, append, string, int, int64, uint32, etc.
-//   - Common Go keywords/builtins that leak through tree-sitter as ref tokens
-//
-// Tokens that are NOT filtered:
-//   - Uppercase start: MemoryStore, Engine, SQLiteGraph (user-defined types)
-//   - Contains dot: auth.Validate (qualified calls)
-//   - Contains colon: env:DATABASE_URL (address refs)
-//   - Contains underscore: my_func (user convention, not stdlib)
 func isStdlibToken(token string) bool {
 	if len(token) == 0 {
 		return false
@@ -398,13 +407,12 @@ func isStdlibToken(token string) bool {
 	if strings.Contains(token, "_") {
 		return false
 	}
-	// Uppercase start = exported user symbol (MemoryStore, Engine, etc.)
-	if token[0] >= 'A' && token[0] <= 'Z' {
-		return false
+	// Lowercase single words: Go builtins (len, make, append, string, int, etc.)
+	if token[0] >= 'a' && token[0] <= 'z' {
+		return true
 	}
-	// What's left: lowercase single words like len, make, append, string, int, etc.
-	// These are Go builtins or stdlib function names that appear everywhere.
-	return true
+	// Known ubiquitous stdlib exports (Sprintf, Errorf, Lock, etc.)
+	return stdlibUppercase[token]
 }
 
 func isTestNode(id string) bool {

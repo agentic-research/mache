@@ -61,20 +61,48 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	var repoCloneDir string // set only for HTTP + --repo mode
+
 	// Ephemeral mode: clone repo to temp dir, serve from there, cleanup on exit
 	if serveRepo != "" {
-		tmpDir, cleanup, err := cloneRepo(serveRepo)
-		if err != nil {
-			return fmt.Errorf("clone %s: %w", serveRepo, err)
+		if serveStdio {
+			// Stdio: single session — clone directly, use as basePath
+			tmpDir, cleanup, err := cloneRepo(serveRepo)
+			if err != nil {
+				return fmt.Errorf("clone %s: %w", serveRepo, err)
+			}
+			defer cleanup()
+			servePath = tmpDir
+			log.Printf("ephemeral stdio mode: serving %s from %s", serveRepo, tmpDir)
+		} else {
+			// HTTP: multiple sessions — clone into base/ subdir so sessions/
+			// is a sibling under the same parent (all cleaned up together).
+			parentDir, err := os.MkdirTemp("", "mache-repo-*")
+			if err != nil {
+				return fmt.Errorf("create temp dir: %w", err)
+			}
+			defer func() {
+				log.Printf("ephemeral cleanup: removing %s", parentDir)
+				_ = os.RemoveAll(parentDir)
+			}()
+			baseDir := filepath.Join(parentDir, "base")
+			log.Printf("cloning %s for HTTP mode...", serveRepo)
+			cmd := exec.Command("git", "clone", "--depth=1", "--single-branch", serveRepo, baseDir)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("git clone: %w", err)
+			}
+			repoCloneDir = baseDir
+			// Set basePath to base clone as fallback (not CWD)
+			servePath = baseDir
+			log.Printf("ephemeral HTTP mode: base clone at %s", baseDir)
 		}
-		defer cleanup()
-		// Override basePath to the cloned directory
-		servePath = tmpDir
-		log.Printf("ephemeral mode: serving %s from %s", serveRepo, tmpDir)
 	}
 
 	registry := newGraphRegistry(servePath, args)
 	defer registry.Close()
+	registry.repoCloneDir = repoCloneDir
 
 	// Clean up session → root mapping on disconnect.
 	// Root discovery happens lazily on the first tool call (see wrapHandler)
@@ -83,6 +111,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	hooks := &server.Hooks{}
 	hooks.AddOnUnregisterSession(func(_ context.Context, session server.ClientSession) {
 		registry.unregisterSession(session.SessionID())
+		// Clean up worktree if in repo HTTP mode
+		registry.cleanupRepoSession(session.SessionID())
 		log.Printf("session %s unregistered", session.SessionID())
 	})
 
@@ -202,10 +232,13 @@ func removeServeSidecar(meta *MountMetadata) {
 // Each session's workspace root (from ListRoots) gets its own lazily-built
 // graph. Sessions without roots fall back to basePath (--path flag or CWD).
 type graphRegistry struct {
-	basePath string   // --path flag default
-	args     []string // positional args from command line
-	graphs   sync.Map // rootPath -> *lazyGraph
-	sessions sync.Map // sessionID -> rootPath
+	basePath      string   // --path flag default
+	args          []string // positional args from command line
+	graphs        sync.Map // rootPath -> *lazyGraph
+	sessions      sync.Map // sessionID -> rootPath
+	repoCloneDir  string   // base clone dir for --repo mode (empty otherwise)
+	worktrees     sync.Map // sessionID -> worktree path (for cleanup)
+	worktreeOnces sync.Map // sessionID -> *sync.Once (serialize creation)
 }
 
 func newGraphRegistry(basePath string, args []string) *graphRegistry {
@@ -307,6 +340,21 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 	// Fast path: already mapped
 	if rootPath, ok := r.sessions.Load(sid); ok {
 		return r.getOrCreateGraph(rootPath.(string))
+	}
+
+	// Repo HTTP mode: each session gets its own worktree.
+	// Short-circuit BEFORE ListRoots — in repo mode, client workspace roots
+	// are irrelevant; we always serve from the cloned repo.
+	if r.repoCloneDir != "" {
+		wtDir, err := r.ensureRepoWorktree(sid)
+		if err != nil {
+			log.Printf("create worktree for session %s: %v (using base clone)", sid, err)
+			r.registerSession(sid, r.repoCloneDir)
+			return r.getOrCreateGraph(r.repoCloneDir)
+		}
+		r.registerSession(sid, wtDir)
+		log.Printf("session %s → worktree %s", sid, wtDir)
+		return r.getOrCreateGraph(wtDir)
 	}
 
 	// Slow path: ask the client for its workspace roots.
