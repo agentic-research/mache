@@ -888,6 +888,26 @@ func TestFilterTestRefs(t *testing.T) {
 	assert.Equal(t, []string{"graph/functions/NewStore/source"}, filtered["production"])
 }
 
+func TestFilterTestRefs_FiltersTestEnvVarTokens(t *testing.T) {
+	refs := map[string][]string{
+		"env:MACHE_TEST_KEV_DB": {"graph/functions/setup/source"},
+		"env:DATABASE_URL":      {"graph/functions/connect/source"},
+		"env:test_mode":         {"cmd/functions/main/source"},
+		"MemoryStore":           {"graph/types/MemoryStore/source"},
+	}
+
+	filtered := FilterTestRefs(refs)
+
+	_, hasTestKev := filtered["env:MACHE_TEST_KEV_DB"]
+	assert.False(t, hasTestKev, "env var with TEST in name should be filtered")
+
+	_, hasTestMode := filtered["env:test_mode"]
+	assert.False(t, hasTestMode, "env var with test in name should be filtered")
+
+	assert.Contains(t, filtered, "env:DATABASE_URL", "production env var should be kept")
+	assert.Contains(t, filtered, "MemoryStore", "non-env tokens should be kept")
+}
+
 func TestIsStdlibToken(t *testing.T) {
 	// Should be filtered (stdlib noise)
 	assert.True(t, isStdlibToken("len"))

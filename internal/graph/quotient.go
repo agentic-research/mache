@@ -337,12 +337,16 @@ func edgeLabel(e QuotientEdge) string {
 	return sanitizeMermaidLabel(strings.Join(e.Tokens, ", "))
 }
 
-// FilterTestRefs returns a copy of refs with test-related nodes removed.
-// Test nodes are identified by containing "_test" or "Test" in their ID,
-// matching Go's *_test.go convention and TestXxx naming.
+// FilterTestRefs returns a copy of refs with test-related content removed.
+// Filters both test nodes (IDs containing "_test", "Test", "Benchmark") and
+// test tokens (env vars with "TEST" in the name, tokens starting with "Test").
 func FilterTestRefs(refs map[string][]string) map[string][]string {
 	filtered := make(map[string][]string, len(refs))
 	for token, nodeIDs := range refs {
+		// Skip tokens that are themselves test-related.
+		if isTestToken(token) {
+			continue
+		}
 		var kept []string
 		for _, nid := range nodeIDs {
 			if !isTestNode(nid) {
@@ -354,6 +358,16 @@ func FilterTestRefs(refs map[string][]string) map[string][]string {
 		}
 	}
 	return filtered
+}
+
+// isTestToken returns true for ref tokens that represent test infrastructure.
+func isTestToken(token string) bool {
+	// env:MACHE_TEST_KEV_DB, env:TEST_API_KEY, etc.
+	if strings.HasPrefix(token, "env:") {
+		name := token[4:]
+		return strings.Contains(name, "TEST") || strings.Contains(name, "test")
+	}
+	return false
 }
 
 // isStdlibToken returns true for tokens that look like Go builtins or stdlib
