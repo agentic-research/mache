@@ -105,3 +105,54 @@ func TestRepoFromContext_Helper(t *testing.T) {
 	_, ok = repoFromContext(ctx2)
 	assert.False(t, ok)
 }
+
+// ---------------------------------------------------------------------------
+// hosted mode: resolveSession wiring tests
+// ---------------------------------------------------------------------------
+
+func TestHosted_ResolveSession_CreatesWorktree(t *testing.T) {
+	repoDir := initTestGitRepo(t)
+	r := newGraphRegistry("", nil)
+
+	// Get base clone
+	baseDir, err := r.getOrCreateRepoClone("file://" + repoDir)
+	require.NoError(t, err)
+
+	// Create worktree like resolveSession would
+	wtDir, err := createWorktree(baseDir, "test-session")
+	require.NoError(t, err)
+	defer func() { _ = removeWorktree(baseDir, wtDir) }()
+
+	assert.DirExists(t, wtDir)
+	assert.NotEqual(t, baseDir, wtDir)
+
+	// Worktree should have the committed files
+	_, err = os.Stat(filepath.Join(wtDir, "main.go"))
+	assert.NoError(t, err)
+}
+
+func TestHosted_Cleanup_ReleasesClone(t *testing.T) {
+	repoDir := initTestGitRepo(t)
+	r := newGraphRegistry("", nil)
+	repoURL := "file://" + repoDir
+
+	// Simulate: session connects, gets clone + worktree
+	_, err := r.getOrCreateRepoClone(repoURL)
+	require.NoError(t, err)
+	r.sessionRepos.Store("session-1", repoURL)
+
+	// Simulate disconnect
+	if url, ok := r.sessionRepos.LoadAndDelete("session-1"); ok {
+		r.releaseRepoClone(url.(string))
+	}
+
+	// Clone should still exist (timer hasn't fired)
+	v, ok := r.repoClones.Load(repoURL)
+	require.True(t, ok)
+	rc := v.(*repoClone)
+	rc.mu.Lock()
+	assert.Equal(t, 0, rc.refCount)
+	assert.NotNil(t, rc.cleanupTimer, "should have scheduled cleanup")
+	rc.cleanupTimer.Stop() // prevent actual cleanup in test
+	rc.mu.Unlock()
+}

@@ -144,6 +144,31 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		return r.getOrCreateGraph(rootPath.(string))
 	}
 
+	// Hosted mode: ?repo= URL from HTTP context.
+	// This runs BEFORE CLI repo mode check because hosted mode has per-repo
+	// clones, not a single global repoCloneDir.
+	if repoURL, ok := repoFromContext(ctx); ok {
+		baseDir, err := r.getOrCreateRepoClone(repoURL)
+		if err != nil {
+			log.Printf("clone %s for session %s: %v", repoURL, sid, err)
+			// Clone failed — fall back to basePath
+			return r.getOrCreateGraph(r.resolvedBasePath())
+		}
+		r.sessionRepos.Store(sid, repoURL)
+
+		// Create worktree off this session's base clone
+		wtDir, err := createWorktree(baseDir, sid)
+		if err != nil {
+			log.Printf("worktree for session %s: %v (using base clone)", sid, err)
+			r.registerSession(sid, baseDir)
+			return r.getOrCreateGraph(baseDir)
+		}
+		r.worktrees.Store(sid, wtDir)
+		r.registerSession(sid, wtDir)
+		log.Printf("hosted session %s → %s (repo: %s)", sid, wtDir, repoURL)
+		return r.getOrCreateGraph(wtDir)
+	}
+
 	// Repo HTTP mode: each session gets its own worktree.
 	// Short-circuit BEFORE ListRoots — in repo mode, client workspace roots
 	// are irrelevant; we always serve from the cloned repo.
