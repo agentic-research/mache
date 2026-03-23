@@ -306,13 +306,13 @@ func edgeLabel(e QuotientEdge) string {
 			prominent = e.Tokens
 		}
 		if len(prominent) == len(e.Tokens) {
-			return strings.Join(prominent, ", ")
+			return sanitizeMermaidLabel(strings.Join(prominent, ", "))
 		}
-		return fmt.Sprintf("%s (+%d more)", strings.Join(prominent, ", "), len(e.Tokens)-len(prominent))
+		return sanitizeMermaidLabel(fmt.Sprintf("%s +%d more", strings.Join(prominent, ", "), len(e.Tokens)-len(prominent)))
 	}
 
 	// Fallback: no per-token weights (manually constructed QuotientEdge).
-	return strings.Join(e.Tokens, ", ")
+	return sanitizeMermaidLabel(strings.Join(e.Tokens, ", "))
 }
 
 func classNodeID(id int) string {
@@ -322,4 +322,14 @@ func classNodeID(id int) string {
 func sanitizeMermaidID(id string) string {
 	r := strings.NewReplacer("/", "_", ".", "_", "-", "_", " ", "_")
 	return r.Replace(id)
+}
+
+// sanitizeMermaidLabel escapes characters that break mermaid pipe-delimited
+// edge labels. Parentheses are parsed as node shapes; quotes break strings.
+func sanitizeMermaidLabel(s string) string {
+	s = strings.ReplaceAll(s, "(", "")
+	s = strings.ReplaceAll(s, ")", "")
+	s = strings.ReplaceAll(s, "\"", "")
+	s = strings.ReplaceAll(s, "#", "")
+	return s
 }

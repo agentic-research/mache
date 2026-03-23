@@ -273,7 +273,7 @@ func TestMermaid_EdgeLabelCollapse(t *testing.T) {
 
 	out := q.Mermaid("TD")
 	// Should show only above-mean tokens (t1, t2) plus count of remaining.
-	assert.Contains(t, out, "t1, t2 (+3 more)")
+	assert.Contains(t, out, "t1, t2 +3 more")
 }
 
 func TestMermaid_FewTokensShowAll(t *testing.T) {
@@ -338,7 +338,7 @@ func TestEdgeLabel_WeightedFiltering(t *testing.T) {
 	}
 	// Mean = 10/4 = 2.5. "heavy" (6) and "medium" (3) are >= 2.5.
 	label := edgeLabel(e)
-	assert.Equal(t, "heavy, medium (+2 more)", label)
+	assert.Equal(t, "heavy, medium +2 more", label)
 }
 
 func TestComputeQuotient_TokenWeightsPopulated(t *testing.T) {
@@ -786,4 +786,56 @@ func TestQuotientGraph_SelfHosting(t *testing.T) {
 		assert.NotContains(t, trimmed, "/",
 			"mermaid node IDs should not contain raw slashes: %s", trimmed)
 	}
+}
+
+func TestSanitizeMermaidLabel(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"simple", "simple"},
+		{"a, b (+3 more)", "a, b +3 more"},
+		{"func(x)", "funcx"},
+		{`key "value"`, "key value"},
+		{"no#hash", "nohash"},
+		{"already clean", "already clean"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.want, sanitizeMermaidLabel(tt.input))
+		})
+	}
+}
+
+func TestMermaid_EdgeLabelsAreValidSyntax(t *testing.T) {
+	// Regression: parentheses in edge labels break mermaid parsing.
+	// Labels like "(+210 more)" cause "Expecting SQE... got PS" errors.
+	q := &QuotientGraph{
+		Classes: []Class{
+			{ID: 0, Label: "core", Members: []string{"a1", "a2"}},
+			{ID: 1, Label: "util", Members: []string{"b1", "b2"}},
+		},
+		Edges: []QuotientEdge{
+			{
+				From: 0, To: 1, Weight: 100,
+				Tokens: []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10"},
+				TokenWeights: map[string]float64{
+					"t1": 50, "t2": 30, // above mean (100/10 = 10)
+					"t3": 5, "t4": 3, "t5": 3, "t6": 3, "t7": 2, "t8": 2, "t9": 1, "t10": 1,
+				},
+			},
+		},
+	}
+
+	out := q.Mermaid("TD")
+
+	// Must not contain parentheses in edge labels (breaks mermaid parser).
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "-->|") {
+			assert.NotContains(t, line, "(", "edge label must not contain '(' — breaks mermaid syntax")
+			assert.NotContains(t, line, ")", "edge label must not contain ')' — breaks mermaid syntax")
+		}
+	}
+
+	// Should still show the prominent tokens and count.
+	assert.Contains(t, out, "t1, t2 +8 more")
 }
