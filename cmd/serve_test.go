@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -315,6 +316,58 @@ func TestReadFile_EmptyContent(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	assert.Equal(t, "", resultText(t, result))
+}
+
+func TestReadFile_RejectsOversizedContent(t *testing.T) {
+	// Adversarial: a node claims 64MB of content — must be rejected, not allocated.
+	huge := make([]byte, 64*1024*1024)
+	store := graph.NewMemoryStore()
+	store.AddRoot(&graph.Node{
+		ID:       "dir",
+		Mode:     fs.ModeDir,
+		Children: []string{"dir/huge"},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "dir/huge",
+		Mode: 0,
+		Data: huge,
+	})
+
+	handler := makeReadFileHandler(store)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "dir/huge"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "should reject files exceeding max read size")
+	assert.Contains(t, resultText(t, result), "too large")
+}
+
+func TestReadFile_BatchRejectsTotalContentOverflow(t *testing.T) {
+	// Adversarial: 10 files of 4MB each = 40MB total — exceeds 32MB batch cap.
+	store := graph.NewMemoryStore()
+	childIDs := make([]string, 10)
+	for i := range childIDs {
+		id := fmt.Sprintf("dir/big_%d", i)
+		childIDs[i] = id
+		store.AddNode(&graph.Node{
+			ID:   id,
+			Mode: 0,
+			Data: make([]byte, 4*1024*1024),
+		})
+	}
+	store.AddRoot(&graph.Node{
+		ID:       "dir",
+		Mode:     fs.ModeDir,
+		Children: childIDs,
+	})
+
+	handler := makeReadFileHandler(store)
+	paths, _ := json.Marshal(childIDs)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"paths": string(paths)}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "batch returns per-file results, not top-level error")
+	text := resultText(t, result)
+	// Some files should succeed, but later ones should hit the cap
+	assert.Contains(t, text, "batch too large", "batch should enforce total content limit")
+	assert.Contains(t, text, "skipped", "remaining files should be skipped")
 }
 
 // ---------------------------------------------------------------------------
