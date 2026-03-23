@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -174,14 +175,28 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 }
 
 // landingPagePath is where rig's Dockerfile injects the landing page HTML.
-const landingPagePath = "/app/static/mache-landing.html"
+// Override via MACHE_LANDING_PAGE env var for custom deployments.
+var landingPagePath = defaultLandingPagePath()
+
+func defaultLandingPagePath() string {
+	if v := os.Getenv("MACHE_LANDING_PAGE"); v != "" {
+		return v
+	}
+	return "/app/static/mache-landing.html"
+}
 
 // serveLandingPage serves the rig-managed HTML landing page if available,
 // falling back to plain text with the connect URL.
 func serveLandingPage(w http.ResponseWriter, r *http.Request) {
-	if data, err := os.ReadFile(landingPagePath); err == nil {
+	data, err := os.ReadFile(landingPagePath)
+	if err == nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(data)
+		return
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		log.Printf("landing page read error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	// Fallback: plain text with connect instructions

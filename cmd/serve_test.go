@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -2123,8 +2124,28 @@ func TestArena_AllTools(t *testing.T) {
 // landing page handler tests
 // ---------------------------------------------------------------------------
 
+func TestServeLandingPage_ServesHTML(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "landing.html")
+	require.NoError(t, os.WriteFile(tmp, []byte("<h1>mache</h1>"), 0o644))
+
+	orig := landingPagePath
+	landingPagePath = tmp
+	defer func() { landingPagePath = orig }()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	serveLandingPage(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/html")
+	assert.Equal(t, "<h1>mache</h1>", rec.Body.String())
+}
+
 func TestServeLandingPage_FallbackPlainText(t *testing.T) {
-	// landingPagePath won't exist in test → should fall back to plain text
+	orig := landingPagePath
+	landingPagePath = "/nonexistent/landing.html"
+	defer func() { landingPagePath = orig }()
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = "mache.rosary.bot"
@@ -2138,6 +2159,10 @@ func TestServeLandingPage_FallbackPlainText(t *testing.T) {
 }
 
 func TestServeLandingPage_FallbackUsesXForwardedProto(t *testing.T) {
+	orig := landingPagePath
+	landingPagePath = "/nonexistent/landing.html"
+	defer func() { landingPagePath = orig }()
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = "mache.rosary.bot"
@@ -2148,9 +2173,28 @@ func TestServeLandingPage_FallbackUsesXForwardedProto(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "https://mache.rosary.bot/mcp")
 }
 
+func TestServeLandingPage_ReadErrorReturns500(t *testing.T) {
+	// Point at a directory — ReadFile on a dir returns a non-ErrNotExist error
+	orig := landingPagePath
+	landingPagePath = t.TempDir()
+	defer func() { landingPagePath = orig }()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	serveLandingPage(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
 func TestRequestScheme_Defaults(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	assert.Equal(t, "http", requestScheme(req))
+}
+
+func TestRequestScheme_TLS(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.TLS = &tls.ConnectionState{}
+	assert.Equal(t, "https", requestScheme(req))
 }
 
 func TestRequestScheme_XForwardedProto(t *testing.T) {
