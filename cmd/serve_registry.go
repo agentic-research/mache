@@ -28,15 +28,17 @@ import (
 // Each session's workspace root (from ListRoots) gets its own lazily-built
 // graph. Sessions without roots fall back to basePath (--path flag or CWD).
 type graphRegistry struct {
-	basePath      string   // --path flag default
-	args          []string // positional args from command line
-	graphs        sync.Map // rootPath -> *lazyGraph
-	sessions      sync.Map // sessionID -> rootPath
-	repoCloneDir  string   // base clone dir for --repo mode (empty otherwise)
-	worktrees     sync.Map // sessionID -> worktree path (for cleanup)
-	worktreeOnces sync.Map // sessionID -> *sync.Once (serialize creation)
-	repoClones    sync.Map // repo URL → *repoClone (hosted mode cache)
-	sessionRepos  sync.Map // sessionID → repo URL (for cleanup on disconnect)
+	basePath        string   // --path flag default
+	args            []string // positional args from command line
+	graphs          sync.Map // rootPath -> *lazyGraph
+	sessions        sync.Map // sessionID -> rootPath
+	repoCloneDir    string   // base clone dir for --repo mode (empty otherwise)
+	worktrees       sync.Map // sessionID -> worktree path (for cleanup)
+	worktreeOnces   sync.Map // sessionID -> *sync.Once (serialize creation)
+	repoClones      sync.Map // repo URL → *repoClone (hosted mode cache)
+	sessionRepos    sync.Map // sessionID → repo URL (for cleanup on disconnect)
+	sessionBaseDirs sync.Map // sessionID → base clone dir (for hosted worktree cleanup)
+	hostedOnces     sync.Map // sessionID → *sync.Once (serialize hosted worktree creation)
 }
 
 func newGraphRegistry(basePath string, args []string) *graphRegistry {
@@ -151,23 +153,25 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		baseDir, err := r.getOrCreateRepoClone(repoURL)
 		if err != nil {
 			log.Printf("clone %s for session %s: %v", repoURL, sid, err)
-			return r.getOrCreateGraph(r.resolvedBasePath())
+			// Return an error-producing graph — don't silently serve wrong repo.
+			errLg := &lazyGraph{err: fmt.Errorf("clone %s: %w", repoURL, err)}
+			return errLg
 		}
 		r.sessionRepos.Store(sid, repoURL)
+		// Track baseDir per session for correct worktree cleanup.
+		r.sessionBaseDirs.Store(sid, baseDir)
 
-		// Create worktree off this session's base clone
-		wtDir, err := createWorktree(baseDir, sid)
+		// Create worktree with per-session serialization.
+		wtDir, err := r.ensureHostedWorktree(sid, baseDir)
 		if err != nil {
 			log.Printf("worktree for session %s: %v (using base clone)", sid, err)
 			r.registerSession(sid, baseDir)
 			return r.getOrCreateGraph(baseDir)
 		}
-		r.worktrees.Store(sid, wtDir)
 		r.registerSession(sid, wtDir)
 		log.Printf("hosted session %s → %s (repo: %s)", sid, wtDir, repoURL)
 
 		lg := r.getOrCreateGraph(wtDir)
-		// If ?schema= was provided, set the preset to skip auto-detection/FCA.
 		if preset, ok := schemaFromContext(ctx); ok {
 			lg.schemaPreset = preset
 		}
