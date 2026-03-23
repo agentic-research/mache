@@ -909,7 +909,7 @@ func TestFilterTestRefs_FiltersTestEnvVarTokens(t *testing.T) {
 }
 
 func TestIsStdlibToken(t *testing.T) {
-	// Should be filtered (stdlib noise)
+	// Lowercase builtins — filtered
 	assert.True(t, isStdlibToken("len"))
 	assert.True(t, isStdlibToken("make"))
 	assert.True(t, isStdlibToken("append"))
@@ -917,10 +917,22 @@ func TestIsStdlibToken(t *testing.T) {
 	assert.True(t, isStdlibToken("int64"))
 	assert.True(t, isStdlibToken("uint32"))
 
-	// Should NOT be filtered (domain-specific)
+	// Uppercase stdlib — filtered
+	assert.True(t, isStdlibToken("Sprintf"))
+	assert.True(t, isStdlibToken("Errorf"))
+	assert.True(t, isStdlibToken("Printf"))
+	assert.True(t, isStdlibToken("Lock"))
+	assert.True(t, isStdlibToken("RLock"))
+	assert.True(t, isStdlibToken("Close"))
+	assert.True(t, isStdlibToken("Contains"))
+	assert.True(t, isStdlibToken("Unmarshal"))
+
+	// Domain-specific — NOT filtered
 	assert.False(t, isStdlibToken("MemoryStore"))
 	assert.False(t, isStdlibToken("Engine"))
 	assert.False(t, isStdlibToken("SQLiteGraph"))
+	assert.False(t, isStdlibToken("ComputeQuotient"))
+	assert.False(t, isStdlibToken("DetectCommunities"))
 	assert.False(t, isStdlibToken("env:DATABASE_URL"))
 	assert.False(t, isStdlibToken("path:code/thing"))
 	assert.False(t, isStdlibToken("auth.Validate"))
