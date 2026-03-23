@@ -2158,3 +2158,9 @@ func TestRequestScheme_XForwardedProto(t *testing.T) {
 	req.Header.Set("X-Forwarded-Proto", "https")
 	assert.Equal(t, "https", requestScheme(req))
 }
+
+func TestRequestScheme_RejectsArbitraryProto(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "<script>alert(1)</script>")
+	assert.Equal(t, "http", requestScheme(req), "must not reflect arbitrary header values")
+}

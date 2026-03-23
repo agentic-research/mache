@@ -195,7 +195,12 @@ func serveLandingPage(w http.ResponseWriter, r *http.Request) {
 // requestScheme returns "https" if behind a TLS-terminating proxy, else "http".
 func requestScheme(r *http.Request) string {
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		return proto
+		switch strings.ToLower(proto) {
+		case "https":
+			return "https"
+		case "http":
+			return "http"
+		}
 	}
 	if r.TLS != nil {
 		return "https"
