@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -315,6 +316,80 @@ func TestReadFile_EmptyContent(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	assert.Equal(t, "", resultText(t, result))
+}
+
+func TestReadFile_RejectsOversizedContent(t *testing.T) {
+	// Adversarial: a 64MB node — handler must reject without allocating a read buffer.
+	huge := make([]byte, 64*1024*1024)
+	store := graph.NewMemoryStore()
+	store.AddRoot(&graph.Node{
+		ID:       "dir",
+		Mode:     fs.ModeDir,
+		Children: []string{"dir/huge"},
+	})
+	store.AddNode(&graph.Node{
+		ID:   "dir/huge",
+		Mode: 0,
+		Data: huge,
+	})
+
+	handler := makeReadFileHandler(store)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "dir/huge"}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "should reject files exceeding max read size")
+	assert.Contains(t, resultText(t, result), "too large")
+}
+
+func TestReadFile_BatchRejectsTotalContentOverflow(t *testing.T) {
+	// Adversarial: 10 files of 4MB each = 40MB total — exceeds 32MB batch cap.
+	store := graph.NewMemoryStore()
+	childIDs := make([]string, 10)
+	for i := range childIDs {
+		id := fmt.Sprintf("dir/big_%d", i)
+		childIDs[i] = id
+		store.AddNode(&graph.Node{
+			ID:   id,
+			Mode: 0,
+			Data: make([]byte, 4*1024*1024),
+		})
+	}
+	store.AddRoot(&graph.Node{
+		ID:       "dir",
+		Mode:     fs.ModeDir,
+		Children: childIDs,
+	})
+
+	handler := makeReadFileHandler(store)
+	pathsJSON, _ := json.Marshal(childIDs)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"paths": string(pathsJSON)}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "batch returns per-file results, not top-level error")
+
+	// Unmarshal and verify structure: some succeed, then cap, then skipped.
+	type fileResult struct {
+		Path    string `json:"path"`
+		Content string `json:"content,omitempty"`
+		Error   string `json:"error,omitempty"`
+	}
+	var results []fileResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.Len(t, results, 10, "should have a result entry for every requested path")
+
+	var succeeded, capped, skipped int
+	for _, r := range results {
+		switch {
+		case r.Error == "":
+			succeeded++
+		case strings.Contains(r.Error, "batch too large"):
+			capped++
+		case strings.Contains(r.Error, "skipped"):
+			skipped++
+		}
+	}
+	assert.Greater(t, succeeded, 0, "some files should succeed before cap")
+	assert.Equal(t, 1, capped, "exactly one file should trigger the cap")
+	assert.Greater(t, skipped, 0, "remaining files should be skipped")
+	assert.Equal(t, 10, succeeded+capped+skipped, "all files accounted for")
 }
 
 // ---------------------------------------------------------------------------

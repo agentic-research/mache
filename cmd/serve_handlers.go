@@ -242,6 +242,8 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
+const maxReadFileSize = 32 * 1024 * 1024 // 32 MB per file
+
 type fileReadResult struct {
 	Content string              `json:"content"`
 	Origin  *graph.SourceOrigin `json:"origin,omitempty"`
@@ -269,6 +271,9 @@ func readOneFileWithOrigin(g graph.Graph, path string) (*fileReadResult, error) 
 	size := node.ContentSize()
 	if size == 0 {
 		return &fileReadResult{Origin: node.Origin}, nil
+	}
+	if size > maxReadFileSize {
+		return nil, fmt.Errorf("%s too large (%d bytes, max %d)", path, size, maxReadFileSize)
 	}
 	buf := make([]byte, size)
 	n, err := g.ReadContent(path, buf, 0)
@@ -300,14 +305,27 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 				Origin  *graph.SourceOrigin `json:"origin,omitempty"`
 				Error   string              `json:"error,omitempty"`
 			}
+			const maxBatchBytes int64 = maxReadFileSize // total content cap for batch
 			results := make([]fileResult, 0, len(paths))
-			for _, p := range paths {
+			var totalBytes int64
+			for i, p := range paths {
+				// Pre-check size to avoid allocating before rejecting.
+				if node, err := g.GetNode(p); err == nil && !node.Mode.IsDir() {
+					totalBytes += node.ContentSize()
+					if totalBytes > maxBatchBytes {
+						results = append(results, fileResult{Path: p, Error: fmt.Sprintf("batch too large (exceeds %d bytes total)", maxBatchBytes)})
+						for _, remaining := range paths[i+1:] {
+							results = append(results, fileResult{Path: remaining, Error: "skipped: batch size limit reached"})
+						}
+						break
+					}
+				}
 				r, err := readOneFileWithOrigin(g, p)
 				if err != nil {
 					results = append(results, fileResult{Path: p, Error: err.Error()})
-				} else {
-					results = append(results, fileResult{Path: p, Content: r.Content, Origin: r.Origin})
+					continue
 				}
+				results = append(results, fileResult{Path: p, Content: r.Content, Origin: r.Origin})
 			}
 			data, _ := json.MarshalIndent(results, "", "  ")
 			return mcp.NewToolResultText(string(data)), nil
