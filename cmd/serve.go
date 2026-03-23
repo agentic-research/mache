@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -166,16 +167,60 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcpHandler)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = fmt.Fprintln(w, "mache MCP server")
-		_, _ = fmt.Fprintln(w)
-		_, _ = fmt.Fprintf(w, "Connect: claude mcp add --transport http mache \"http://%s/mcp?repo=<your-repo-url>\"\n", r.Host)
-	})
+	mux.HandleFunc("/", serveLandingPage)
 
 	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
 	httpSrv := &http.Server{Addr: serveHTTP, Handler: mux}
 	return httpSrv.ListenAndServe()
+}
+
+// landingPagePath is where rig's Dockerfile injects the landing page HTML.
+// Override via MACHE_LANDING_PAGE env var for custom deployments.
+var landingPagePath = defaultLandingPagePath()
+
+func defaultLandingPagePath() string {
+	if v := os.Getenv("MACHE_LANDING_PAGE"); v != "" {
+		return v
+	}
+	return "/app/static/mache-landing.html"
+}
+
+// serveLandingPage serves the rig-managed HTML landing page if available,
+// falling back to plain text with the connect URL.
+func serveLandingPage(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(landingPagePath)
+	if err == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(data)
+		return
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		log.Printf("landing page read error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	// Fallback: plain text with connect instructions
+	scheme := requestScheme(r)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = fmt.Fprintln(w, "mache MCP server")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintf(w, "Connect: claude mcp add --transport http mache \"%s://%s/mcp?repo=<your-repo-url>\"\n", scheme, r.Host)
+}
+
+// requestScheme returns "https" if behind a TLS-terminating proxy, else "http".
+func requestScheme(r *http.Request) string {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		switch strings.ToLower(proto) {
+		case "https":
+			return "https"
+		case "http":
+			return "http"
+		}
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // registerServeSidecar writes a sidecar metadata file so `mache list` can discover
