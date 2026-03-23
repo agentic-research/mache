@@ -34,21 +34,25 @@ Add to your project's `.mcp.json`:
 
 That's it. Mache auto-infers the schema from your codebase. No config files, no mount, no daemon.
 
-Your agent gets 11 tools:
+Your agent gets 15 tools:
 
-| Tool | What it does |
-|------|-------------|
-| `get_overview` | Top-level structure, node counts, entry points |
-| `list_directory` | Browse the graph by path |
-| `read_file` | Read source content (supports batch reads) |
-| `find_definition` | Jump to where a symbol is defined |
-| `find_callers` | Who calls this? |
-| `find_callees` | What does this call? |
-| `search` | Pattern match across symbols |
-| `get_communities` | Find clusters of tightly-coupled code |
-| `get_type_info` | LSP type info and hover data |
-| `get_diagnostics` | LSP errors and warnings |
-| `write_file` | Edit through the splice pipeline: validate, format, splice |
+| Tool               | What it does                                               |
+| ------------------ | ---------------------------------------------------------- |
+| `get_overview`     | Top-level structure, node counts, entry points             |
+| `list_directory`   | Browse the graph by path                                   |
+| `read_file`        | Read source content (supports batch reads)                 |
+| `find_definition`  | Jump to where a symbol is defined                          |
+| `find_callers`     | Who calls this?                                            |
+| `find_callees`     | What does this call?                                       |
+| `search`           | Pattern match across symbols                               |
+| `semantic_search`  | Natural-language search via embeddings                     |
+| `get_communities`  | Find clusters of tightly-coupled code                      |
+| `get_type_info`    | LSP type info and hover data                               |
+| `get_diagnostics`  | LSP errors and warnings                                    |
+| `get_impact`       | Blast radius of changing a symbol                          |
+| `get_architecture` | Entry points, abstractions, dependency layers              |
+| `get_diagram`      | Mermaid diagram of system structure                        |
+| `write_file`       | Edit through the splice pipeline: validate, format, splice |
 
 ## Why this exists
 
@@ -102,9 +106,9 @@ Navigate by function name, not file path. `callers/` and `callees/` are virtual 
 With `--writable`, edits to `source` files go through a pipeline before touching your actual source:
 
 1. **Validate** — tree-sitter checks syntax
-2. **Format** — gofumpt (Go), hclwrite (HCL)
-3. **Splice** — atomic byte-range replacement in the source file
-4. **Update** — node content updated in-place, no re-ingest
+1. **Format** — gofumpt (Go), hclwrite (HCL)
+1. **Splice** — atomic byte-range replacement in the source file
+1. **Update** — node content updated in-place, no re-ingest
 
 If the syntax is wrong, the write is saved as a draft. The node path stays stable. Errors show up in `_diagnostics/`. The agent can read what it broke and try again without losing its place.
 
@@ -143,6 +147,7 @@ mache serve --http :9000 -s examples/nvd-schema.json results.db
 mache serve /path/to/data &
 claude mcp add --transport http mache http://localhost:7532/mcp
 ```
+
 </details>
 
 <details>
@@ -160,6 +165,7 @@ Add to `claude_desktop_config.json`:
   }
 }
 ```
+
 </details>
 
 ## How it works
@@ -177,6 +183,7 @@ Three backends: MCP server (JSON-RPC), NFS mount (macOS default), FUSE mount (Li
 Both structured data and filesystems are graphs. Your JSON object has nodes and edges (containment). Your filesystem has nodes and edges (parent-child). They're isomorphic.
 
 Operating systems never formalized this mapping. Mache does:
+
 - SQL is the graph operator — queries define projections from one topology to another
 - Schema defines topology — the formal specification of how source nodes map to filesystem nodes
 - The filesystem exposes traversal primitives: `cd` traverses an edge, `ls` enumerates children, `cat` reads node data
@@ -221,21 +228,22 @@ graph TD
 ```
 
 See [Architecture](docs/ARCHITECTURE.md) for the full picture.
+
 </details>
 
 ## What's stable, what's not
 
-| Capability | Status |
-| --- | --- |
-| Tree-sitter parsing (8 langs) | Stable |
-| NFS/FUSE mount | Stable |
-| Write-back (validate, format, splice) | Stable |
-| Cross-references (callers/callees) | Stable |
+| Capability                              | Status |
+| --------------------------------------- | ------ |
+| Tree-sitter parsing (8 langs)           | Stable |
+| NFS/FUSE mount                          | Stable |
+| Write-back (validate, format, splice)   | Stable |
+| Cross-references (callers/callees)      | Stable |
 | Context files (imports, types, globals) | Stable |
-| MCP server (11 tools, stdio + HTTP) | Stable |
-| Schema inference (FCA) | Beta |
-| Community detection (Louvain) | Beta |
-| LSP enrichment (type info, diagnostics) | Beta |
+| MCP server (15 tools, stdio + HTTP)     | Stable |
+| Schema inference (FCA)                  | Beta   |
+| Community detection (Louvain)           | Beta   |
+| LSP enrichment (type info, diagnostics) | Beta   |
 
 ## Landscape
 
@@ -254,6 +262,7 @@ task install          # copies to ~/.local/bin
 - **macOS:** `brew install go-task`
 - **macOS (FUSE):** `brew install --cask fuse-t` (only if using `--backend fuse`)
 - **Linux:** `apt-get install libfuse-dev` and [install Task](https://taskfile.dev/installation/)
+
 </details>
 
 ## Docs
