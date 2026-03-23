@@ -28,13 +28,17 @@ import (
 // Each session's workspace root (from ListRoots) gets its own lazily-built
 // graph. Sessions without roots fall back to basePath (--path flag or CWD).
 type graphRegistry struct {
-	basePath      string   // --path flag default
-	args          []string // positional args from command line
-	graphs        sync.Map // rootPath -> *lazyGraph
-	sessions      sync.Map // sessionID -> rootPath
-	repoCloneDir  string   // base clone dir for --repo mode (empty otherwise)
-	worktrees     sync.Map // sessionID -> worktree path (for cleanup)
-	worktreeOnces sync.Map // sessionID -> *sync.Once (serialize creation)
+	basePath        string   // --path flag default
+	args            []string // positional args from command line
+	graphs          sync.Map // rootPath -> *lazyGraph
+	sessions        sync.Map // sessionID -> rootPath
+	repoCloneDir    string   // base clone dir for --repo mode (empty otherwise)
+	worktrees       sync.Map // sessionID -> worktree path (for cleanup)
+	worktreeOnces   sync.Map // sessionID -> *sync.Once (serialize creation)
+	repoClones      sync.Map // repo URL → *repoClone (hosted mode cache)
+	sessionRepos    sync.Map // sessionID → repo URL (for cleanup on disconnect)
+	sessionBaseDirs sync.Map // sessionID → base clone dir (for hosted worktree cleanup)
+	hostedOnces     sync.Map // sessionID → *sync.Once (serialize hosted worktree creation)
 }
 
 func newGraphRegistry(basePath string, args []string) *graphRegistry {
@@ -55,6 +59,10 @@ func (r *graphRegistry) registerSession(sessionID, rootPath string) {
 
 func (r *graphRegistry) unregisterSession(sessionID string) {
 	r.sessions.Delete(sessionID)
+	// Release hosted-mode repo clone ref if this session used one.
+	if repoURL, ok := r.sessionRepos.LoadAndDelete(sessionID); ok {
+		r.releaseRepoClone(repoURL.(string))
+	}
 }
 
 // Close calls the cleanup function on every lazily-built graph.
@@ -136,6 +144,38 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 	// Fast path: already mapped
 	if rootPath, ok := r.sessions.Load(sid); ok {
 		return r.getOrCreateGraph(rootPath.(string))
+	}
+
+	// Hosted mode: ?repo= URL from HTTP context.
+	// This runs BEFORE CLI repo mode check because hosted mode has per-repo
+	// clones, not a single global repoCloneDir.
+	if repoURL, ok := repoFromContext(ctx); ok {
+		baseDir, err := r.getOrCreateRepoClone(repoURL)
+		if err != nil {
+			log.Printf("clone %s for session %s: %v", repoURL, sid, err)
+			// Return an error-producing graph — don't silently serve wrong repo.
+			errLg := &lazyGraph{err: fmt.Errorf("clone %s: %w", repoURL, err)}
+			return errLg
+		}
+		r.sessionRepos.Store(sid, repoURL)
+		// Track baseDir per session for correct worktree cleanup.
+		r.sessionBaseDirs.Store(sid, baseDir)
+
+		// Create worktree with per-session serialization.
+		wtDir, err := r.ensureHostedWorktree(sid, baseDir)
+		if err != nil {
+			log.Printf("worktree for session %s: %v (using base clone)", sid, err)
+			r.registerSession(sid, baseDir)
+			return r.getOrCreateGraph(baseDir)
+		}
+		r.registerSession(sid, wtDir)
+		log.Printf("hosted session %s → %s (repo: %s)", sid, wtDir, repoURL)
+
+		lg := r.getOrCreateGraph(wtDir)
+		if preset, ok := schemaFromContext(ctx); ok {
+			lg.schemaPreset = preset
+		}
+		return lg
 	}
 
 	// Repo HTTP mode: each session gets its own worktree.
@@ -276,14 +316,15 @@ func rootURIToPath(uri string) string {
 // This allows the MCP server to start and respond to initialize/tools/list
 // before the potentially slow schema detection + ingestion completes.
 type lazyGraph struct {
-	args      []string
-	basePath  string // optional; defaults to "." (CWD) when empty
-	once      sync.Once
-	embedOnce sync.Once // triggers embedding on first successful get()
-	inner     graph.Graph
-	schema    *api.Topology // retained after init for schema-aware tools
-	cleanup   func()
-	err       error
+	args         []string
+	basePath     string // optional; defaults to "." (CWD) when empty
+	schemaPreset string // optional; if set, skips auto-detection (e.g., "go", "python")
+	once         sync.Once
+	embedOnce    sync.Once // triggers embedding on first successful get()
+	inner        graph.Graph
+	schema       *api.Topology // retained after init for schema-aware tools
+	cleanup      func()
+	err          error
 }
 
 // schemaProvider exposes the Topology used during graph construction.
@@ -313,8 +354,18 @@ func (lg *lazyGraph) init() {
 		base := lg.resolvedBasePath()
 
 		if len(lg.args) == 0 {
-			cfg, err := loadProjectConfig(base)
-			if err != nil {
+			// If a schema preset was provided (e.g., from ?schema= query param),
+			// use it directly — skip config loading and auto-detection.
+			if lg.schemaPreset != "" {
+				resolved, err := resolveSchema(lg.schemaPreset, base)
+				if err != nil {
+					lg.err = fmt.Errorf("resolve schema preset %q: %w", lg.schemaPreset, err)
+					return
+				}
+				schema = resolved
+				dataSource = base
+				log.Printf("using schema preset %q (from query param)", lg.schemaPreset)
+			} else if cfg, err := loadProjectConfig(base); err != nil {
 				if !os.IsNotExist(err) {
 					lg.err = err
 					return

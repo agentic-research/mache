@@ -102,8 +102,41 @@ func (r *graphRegistry) ensureRepoWorktree(sessionID string) (string, error) {
 	return wtDir, nil
 }
 
+// ensureHostedWorktree creates a worktree for a hosted session with per-session
+// serialization. Uses hostedOnces (not worktreeOnces) to avoid conflicts with
+// CLI --repo mode.
+func (r *graphRegistry) ensureHostedWorktree(sessionID, baseDir string) (string, error) {
+	if wtDir, ok := r.worktrees.Load(sessionID); ok {
+		return wtDir.(string), nil
+	}
+
+	oncei, _ := r.hostedOnces.LoadOrStore(sessionID, &sync.Once{})
+	once := oncei.(*sync.Once)
+
+	var wtDir string
+	var createErr error
+	once.Do(func() {
+		wtDir, createErr = createWorktree(baseDir, sessionID)
+		if createErr == nil {
+			r.worktrees.Store(sessionID, wtDir)
+		}
+	})
+
+	if createErr != nil {
+		return "", createErr
+	}
+	if wtDir == "" {
+		if v, ok := r.worktrees.Load(sessionID); ok {
+			return v.(string), nil
+		}
+		return "", fmt.Errorf("worktree creation failed for session %s", sessionID)
+	}
+	return wtDir, nil
+}
+
 // cleanupRepoSession removes a session's worktree, evicts cached graphs,
-// and cleans up map entries.
+// and cleans up map entries. Uses per-session baseDir for hosted mode
+// (where different sessions may have different base clones).
 func (r *graphRegistry) cleanupRepoSession(sessionID string) {
 	wtDir, ok := r.worktrees.Load(sessionID)
 	if !ok {
@@ -123,9 +156,18 @@ func (r *graphRegistry) cleanupRepoSession(sessionID string) {
 		return true
 	})
 
-	if err := removeWorktree(r.repoCloneDir, wtPath); err != nil {
-		log.Printf("cleanup worktree for session %s: %v", sessionID, err)
+	// Determine the correct base clone dir for worktree removal.
+	// Hosted mode stores per-session baseDir; CLI mode uses r.repoCloneDir.
+	cloneDir := r.repoCloneDir
+	if bd, ok := r.sessionBaseDirs.LoadAndDelete(sessionID); ok {
+		cloneDir = bd.(string)
+	}
+	if cloneDir != "" {
+		if err := removeWorktree(cloneDir, wtPath); err != nil {
+			log.Printf("cleanup worktree for session %s: %v", sessionID, err)
+		}
 	}
 	r.worktrees.Delete(sessionID)
 	r.worktreeOnces.Delete(sessionID)
+	r.hostedOnces.Delete(sessionID)
 }
