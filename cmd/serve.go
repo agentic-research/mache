@@ -161,7 +161,7 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	defer removeServeSidecar(meta)
 
 	mcpHandler := server.NewStreamableHTTPServer(s,
-		server.WithHTTPContextFunc(repoContextFromRequest),
+		server.WithHTTPContextFunc(hostedContextFromRequest),
 	)
 
 	mux := http.NewServeMux()

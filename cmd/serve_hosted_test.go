@@ -78,7 +78,7 @@ func TestRepoCloneCache_RefCounting(t *testing.T) {
 
 func TestExtractRepoFromContext(t *testing.T) {
 	req := httptest.NewRequest("POST", "/mcp?repo=https://github.com/org/repo", nil)
-	ctx := repoContextFromRequest(req.Context(), req)
+	ctx := hostedContextFromRequest(req.Context(), req)
 	repo, ok := ctx.Value(repoContextKey{}).(string)
 	require.True(t, ok)
 	assert.Equal(t, "https://github.com/org/repo", repo)
@@ -86,14 +86,14 @@ func TestExtractRepoFromContext(t *testing.T) {
 
 func TestExtractRepoFromContext_NoParam(t *testing.T) {
 	req := httptest.NewRequest("POST", "/mcp", nil)
-	ctx := repoContextFromRequest(req.Context(), req)
+	ctx := hostedContextFromRequest(req.Context(), req)
 	_, ok := ctx.Value(repoContextKey{}).(string)
 	assert.False(t, ok, "no repo param means no context value")
 }
 
 func TestRepoFromContext_Helper(t *testing.T) {
 	req := httptest.NewRequest("POST", "/mcp?repo=https://github.com/org/repo", nil)
-	ctx := repoContextFromRequest(req.Context(), req)
+	ctx := hostedContextFromRequest(req.Context(), req)
 
 	repo, ok := repoFromContext(ctx)
 	require.True(t, ok)
@@ -101,9 +101,30 @@ func TestRepoFromContext_Helper(t *testing.T) {
 
 	// Without param
 	req2 := httptest.NewRequest("POST", "/mcp", nil)
-	ctx2 := repoContextFromRequest(req2.Context(), req2)
+	ctx2 := hostedContextFromRequest(req2.Context(), req2)
 	_, ok = repoFromContext(ctx2)
 	assert.False(t, ok)
+}
+
+func TestExtractSchemaFromContext(t *testing.T) {
+	req := httptest.NewRequest("POST", "/mcp?repo=https://github.com/org/repo&schema=go", nil)
+	ctx := hostedContextFromRequest(req.Context(), req)
+
+	schema, ok := schemaFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "go", schema)
+
+	repo, ok := repoFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "https://github.com/org/repo", repo)
+}
+
+func TestExtractSchemaFromContext_NoSchema(t *testing.T) {
+	req := httptest.NewRequest("POST", "/mcp?repo=https://github.com/org/repo", nil)
+	ctx := hostedContextFromRequest(req.Context(), req)
+
+	_, ok := schemaFromContext(ctx)
+	assert.False(t, ok, "no schema param means no context value")
 }
 
 // ---------------------------------------------------------------------------

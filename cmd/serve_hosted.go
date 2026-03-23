@@ -28,11 +28,24 @@ const repoIdleTTL = 10 * time.Minute
 // repoContextKey is a context key for the ?repo= URL query parameter.
 type repoContextKey struct{}
 
-// repoContextFromRequest extracts ?repo= from the HTTP request URL and
-// stashes it in context. This is the server.HTTPContextFunc for mcp-go.
-func repoContextFromRequest(ctx context.Context, r *http.Request) context.Context {
-	if repo := r.URL.Query().Get("repo"); repo != "" {
-		return context.WithValue(ctx, repoContextKey{}, repo)
+// schemaContextKey is a context key for the ?schema= URL query parameter.
+type schemaContextKey struct{}
+
+// hostedContextFromRequest extracts ?repo= and ?schema= from the HTTP request
+// URL and stashes them in context. This is the server.HTTPContextFunc for mcp-go.
+//
+// Query parameters:
+//   - repo:   Git URL to clone and serve (e.g., https://github.com/org/repo)
+//   - schema: Schema preset to use (e.g., "go", "python", "rust"). Skips
+//     auto-detection/FCA inference. Typically set by an upstream middleware
+//     that queries the GitHub languages API.
+func hostedContextFromRequest(ctx context.Context, r *http.Request) context.Context {
+	q := r.URL.Query()
+	if repo := q.Get("repo"); repo != "" {
+		ctx = context.WithValue(ctx, repoContextKey{}, repo)
+	}
+	if schema := q.Get("schema"); schema != "" {
+		ctx = context.WithValue(ctx, schemaContextKey{}, schema)
 	}
 	return ctx
 }
@@ -41,6 +54,12 @@ func repoContextFromRequest(ctx context.Context, r *http.Request) context.Contex
 func repoFromContext(ctx context.Context) (string, bool) {
 	repo, ok := ctx.Value(repoContextKey{}).(string)
 	return repo, ok
+}
+
+// schemaFromContext extracts the schema preset from context, if present.
+func schemaFromContext(ctx context.Context) (string, bool) {
+	schema, ok := ctx.Value(schemaContextKey{}).(string)
+	return schema, ok
 }
 
 // getOrCreateRepoClone returns the base clone dir for a repo URL.

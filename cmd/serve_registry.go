@@ -151,7 +151,6 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		baseDir, err := r.getOrCreateRepoClone(repoURL)
 		if err != nil {
 			log.Printf("clone %s for session %s: %v", repoURL, sid, err)
-			// Clone failed — fall back to basePath
 			return r.getOrCreateGraph(r.resolvedBasePath())
 		}
 		r.sessionRepos.Store(sid, repoURL)
@@ -166,7 +165,13 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		r.worktrees.Store(sid, wtDir)
 		r.registerSession(sid, wtDir)
 		log.Printf("hosted session %s → %s (repo: %s)", sid, wtDir, repoURL)
-		return r.getOrCreateGraph(wtDir)
+
+		lg := r.getOrCreateGraph(wtDir)
+		// If ?schema= was provided, set the preset to skip auto-detection/FCA.
+		if preset, ok := schemaFromContext(ctx); ok {
+			lg.schemaPreset = preset
+		}
+		return lg
 	}
 
 	// Repo HTTP mode: each session gets its own worktree.
@@ -307,14 +312,15 @@ func rootURIToPath(uri string) string {
 // This allows the MCP server to start and respond to initialize/tools/list
 // before the potentially slow schema detection + ingestion completes.
 type lazyGraph struct {
-	args      []string
-	basePath  string // optional; defaults to "." (CWD) when empty
-	once      sync.Once
-	embedOnce sync.Once // triggers embedding on first successful get()
-	inner     graph.Graph
-	schema    *api.Topology // retained after init for schema-aware tools
-	cleanup   func()
-	err       error
+	args         []string
+	basePath     string // optional; defaults to "." (CWD) when empty
+	schemaPreset string // optional; if set, skips auto-detection (e.g., "go", "python")
+	once         sync.Once
+	embedOnce    sync.Once // triggers embedding on first successful get()
+	inner        graph.Graph
+	schema       *api.Topology // retained after init for schema-aware tools
+	cleanup      func()
+	err          error
 }
 
 // schemaProvider exposes the Topology used during graph construction.
@@ -344,8 +350,18 @@ func (lg *lazyGraph) init() {
 		base := lg.resolvedBasePath()
 
 		if len(lg.args) == 0 {
-			cfg, err := loadProjectConfig(base)
-			if err != nil {
+			// If a schema preset was provided (e.g., from ?schema= query param),
+			// use it directly — skip config loading and auto-detection.
+			if lg.schemaPreset != "" {
+				resolved, err := resolveSchema(lg.schemaPreset, base)
+				if err != nil {
+					lg.err = fmt.Errorf("resolve schema preset %q: %w", lg.schemaPreset, err)
+					return
+				}
+				schema = resolved
+				dataSource = base
+				log.Printf("using schema preset %q (from query param)", lg.schemaPreset)
+			} else if cfg, err := loadProjectConfig(base); err != nil {
 				if !os.IsNotExist(err) {
 					lg.err = err
 					return
