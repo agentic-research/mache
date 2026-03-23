@@ -308,19 +308,22 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			const maxBatchBytes int64 = maxReadFileSize // total content cap for batch
 			results := make([]fileResult, 0, len(paths))
 			var totalBytes int64
-			for _, p := range paths {
+			for i, p := range paths {
+				// Pre-check size to avoid allocating before rejecting.
+				if node, err := g.GetNode(p); err == nil && !node.Mode.IsDir() {
+					totalBytes += node.ContentSize()
+					if totalBytes > maxBatchBytes {
+						results = append(results, fileResult{Path: p, Error: fmt.Sprintf("batch too large (exceeds %d bytes total)", maxBatchBytes)})
+						for _, remaining := range paths[i+1:] {
+							results = append(results, fileResult{Path: remaining, Error: "skipped: batch size limit reached"})
+						}
+						break
+					}
+				}
 				r, err := readOneFileWithOrigin(g, p)
 				if err != nil {
 					results = append(results, fileResult{Path: p, Error: err.Error()})
 					continue
-				}
-				totalBytes += int64(len(r.Content))
-				if totalBytes > maxBatchBytes {
-					results = append(results, fileResult{Path: p, Error: fmt.Sprintf("batch too large (exceeds %d bytes total)", maxBatchBytes)})
-					for _, remaining := range paths[len(results):] {
-						results = append(results, fileResult{Path: remaining, Error: "skipped: batch size limit reached"})
-					}
-					break
 				}
 				results = append(results, fileResult{Path: p, Content: r.Content, Origin: r.Origin})
 			}
