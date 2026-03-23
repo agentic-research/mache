@@ -198,6 +198,19 @@ func registerServeSidecar(source, typ, addr string) *MountMetadata {
 	return meta
 }
 
+// escapeLikePattern escapes SQL LIKE special characters (%, _, \, ')
+// so user input can be safely interpolated into LIKE patterns.
+// Use with ESCAPE '\' clause: WHERE col LIKE '%<escaped>%' ESCAPE '\'
+func escapeLikePattern(s string) string {
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+		`'`, `''`,
+	)
+	return r.Replace(s)
+}
+
 // validateHTTPAddr rejects non-loopback bind addresses per MCP spec:
 // "servers MUST only bind to localhost and MUST NOT bind to 0.0.0.0".
 func validateHTTPAddr(addr string) error {
@@ -1793,9 +1806,9 @@ func enrichAndQueryTypeInfo(filePath, symbol string) (*mcp.CallToolResult, error
 		return nil, fmt.Errorf("set query deadline: %w", err)
 	}
 
-	sanitized := strings.ReplaceAll(symbol, "'", "''")
+	escaped := escapeLikePattern(symbol)
 	rows, err := client.Query(fmt.Sprintf(
-		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s'`, sanitized))
+		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s' ESCAPE '\'`, escaped))
 	if err != nil {
 		return nil, fmt.Errorf("query _lsp_hover via daemon: %w", err)
 	}
@@ -1818,7 +1831,7 @@ func enrichAndQueryTypeInfo(filePath, symbol string) (*mcp.CallToolResult, error
 	// Fallback: broader match
 	if len(results) == 0 {
 		rows, err = client.Query(fmt.Sprintf(
-			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s%%'`, sanitized))
+			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s%%' ESCAPE '\'`, escaped))
 		if err == nil {
 			for _, row := range rows {
 				if len(row) >= 2 {
@@ -1919,10 +1932,10 @@ func enrichAndQueryDiagnostics(filePath, symbol string, limit int) (*mcp.CallToo
 
 	var query string
 	if symbol != "" {
-		sanitized := strings.ReplaceAll(symbol, "'", "''")
+		escaped := escapeLikePattern(symbol)
 		query = fmt.Sprintf(
-			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE '%%%s%%' LIMIT %d`,
-			sanitized, limit)
+			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE '%%%s%%' ESCAPE '\' LIMIT %d`,
+			escaped, limit)
 	} else {
 		query = fmt.Sprintf(
 			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT %d`,
