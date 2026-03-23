@@ -174,14 +174,16 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 
 	// HTTP: graceful shutdown drains in-flight requests so defers
 	// (registry.Close, StopManaged, removeServeSidecar) run normally.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	// signal.NotifyContext auto-cleans up if ListenAndServe returns for
+	// a non-signal reason (bind error, etc.) — no leaked goroutine.
+	sigCtx, sigStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer sigStop()
 	go func() {
-		<-sigCh
+		<-sigCtx.Done()
 		log.Println("shutting down…")
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := httpSrv.Shutdown(ctx); err != nil {
+		if err := httpSrv.Shutdown(shutCtx); err != nil {
 			log.Printf("HTTP shutdown: %v", err)
 		}
 	}()
