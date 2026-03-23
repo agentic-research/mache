@@ -61,6 +61,8 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	var repoCloneDir string // set only for HTTP + --repo mode
+
 	// Ephemeral mode: clone repo to temp dir, serve from there, cleanup on exit
 	if serveRepo != "" {
 		tmpDir, cleanup, err := cloneRepo(serveRepo)
@@ -68,13 +70,21 @@ func runServe(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("clone %s: %w", serveRepo, err)
 		}
 		defer cleanup()
-		// Override basePath to the cloned directory
-		servePath = tmpDir
 		log.Printf("ephemeral mode: serving %s from %s", serveRepo, tmpDir)
+
+		if serveStdio {
+			// Stdio: single session, single clone — use directly as basePath
+			servePath = tmpDir
+		} else {
+			// HTTP: multiple sessions — each gets a worktree off this base clone.
+			// Don't set servePath globally; per-session worktrees are created lazily.
+			repoCloneDir = tmpDir
+		}
 	}
 
 	registry := newGraphRegistry(servePath, args)
 	defer registry.Close()
+	registry.repoCloneDir = repoCloneDir
 
 	// Clean up session → root mapping on disconnect.
 	// Root discovery happens lazily on the first tool call (see wrapHandler)
@@ -83,6 +93,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	hooks := &server.Hooks{}
 	hooks.AddOnUnregisterSession(func(_ context.Context, session server.ClientSession) {
 		registry.unregisterSession(session.SessionID())
+		// Clean up worktree if in repo HTTP mode
+		registry.cleanupRepoSession(session.SessionID())
 		log.Printf("session %s unregistered", session.SessionID())
 	})
 
@@ -202,10 +214,12 @@ func removeServeSidecar(meta *MountMetadata) {
 // Each session's workspace root (from ListRoots) gets its own lazily-built
 // graph. Sessions without roots fall back to basePath (--path flag or CWD).
 type graphRegistry struct {
-	basePath string   // --path flag default
-	args     []string // positional args from command line
-	graphs   sync.Map // rootPath -> *lazyGraph
-	sessions sync.Map // sessionID -> rootPath
+	basePath     string   // --path flag default
+	args         []string // positional args from command line
+	graphs       sync.Map // rootPath -> *lazyGraph
+	sessions     sync.Map // sessionID -> rootPath
+	repoCloneDir string   // base clone dir for --repo mode (empty otherwise)
+	worktrees    sync.Map // sessionID -> worktree path (for cleanup)
 }
 
 func newGraphRegistry(basePath string, args []string) *graphRegistry {
@@ -324,6 +338,20 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 			}
 		} else if err != nil {
 			log.Printf("ListRoots for session %s: %v (using default path)", sid, err)
+		}
+	}
+
+	// Repo HTTP mode: each session gets its own worktree.
+	if r.repoCloneDir != "" {
+		wtDir, err := createWorktree(r.repoCloneDir, sid)
+		if err != nil {
+			log.Printf("create worktree for session %s: %v (using base clone)", sid, err)
+			// Fall through to use the base clone as fallback
+		} else {
+			r.worktrees.Store(sid, wtDir)
+			r.registerSession(sid, wtDir)
+			log.Printf("session %s → worktree %s", sid, wtDir)
+			return r.getOrCreateGraph(wtDir)
 		}
 	}
 
