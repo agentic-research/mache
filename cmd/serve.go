@@ -159,7 +159,9 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	meta := registerServeSidecar(source, "mcp-http", serveHTTP)
 	defer removeServeSidecar(meta)
 
-	httpServer := server.NewStreamableHTTPServer(s)
+	httpServer := server.NewStreamableHTTPServer(s,
+		server.WithHTTPContextFunc(repoContextFromRequest),
+	)
 	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
 	return httpServer.Start(serveHTTP)
 }

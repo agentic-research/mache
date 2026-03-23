@@ -35,6 +35,8 @@ type graphRegistry struct {
 	repoCloneDir  string   // base clone dir for --repo mode (empty otherwise)
 	worktrees     sync.Map // sessionID -> worktree path (for cleanup)
 	worktreeOnces sync.Map // sessionID -> *sync.Once (serialize creation)
+	repoClones    sync.Map // repo URL → *repoClone (hosted mode cache)
+	sessionRepos  sync.Map // sessionID → repo URL (for cleanup on disconnect)
 }
 
 func newGraphRegistry(basePath string, args []string) *graphRegistry {
@@ -55,6 +57,10 @@ func (r *graphRegistry) registerSession(sessionID, rootPath string) {
 
 func (r *graphRegistry) unregisterSession(sessionID string) {
 	r.sessions.Delete(sessionID)
+	// Release hosted-mode repo clone ref if this session used one.
+	if repoURL, ok := r.sessionRepos.LoadAndDelete(sessionID); ok {
+		r.releaseRepoClone(repoURL.(string))
+	}
 }
 
 // Close calls the cleanup function on every lazily-built graph.
