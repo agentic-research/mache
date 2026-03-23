@@ -81,6 +81,12 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Format check (gofumpt)
+        run: |
+          set -euo pipefail
+          go install mvdan.cc/gofumpt@latest
+          gofumpt -d -extra . | tee /dev/stderr | (! grep .)
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest

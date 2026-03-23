@@ -85,7 +85,7 @@ type Leaf struct {
 	Name string `json:"name"`
 	// ContentTemplate is the template string used to generate the file content.
 	// Mutually exclusive with ContentSource.
-	ContentTemplate string `json:"content_template,omitempty"`
+	ContentTemplate string `json:"content_template"`
 	// ContentSource names an auxiliary table that provides file content.
 	// The materializer joins the aux table with construct directories by
 	// symbol name to create files. Supported sources: "lsp_hover",

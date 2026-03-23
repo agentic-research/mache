@@ -247,6 +247,18 @@ func ShouldSkipFile(path string, size int64) bool {
 	return false
 }
 
+// ensureFile returns an error if path does not exist or is a directory.
+func ensureFile(path, kind string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%s is a directory, not %s", path, kind)
+	}
+	return info, nil
+}
+
 func isBinaryFile(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -755,13 +767,8 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 }
 
 func (e *Engine) ingestJSON(path string, modTime time.Time) error {
-	// Defensive check: ensure path is a file, not a directory
-	info, err := os.Stat(path)
-	if err != nil {
+	if _, err := ensureFile(path, "a JSON file"); err != nil {
 		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("%s is a directory, not a JSON file", path)
 	}
 
 	content, err := os.ReadFile(path)
@@ -820,13 +827,8 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 		realPath = absPath
 	}
 
-	// Defensive check: ensure path is a file, not a directory
-	info, err := os.Stat(realPath)
-	if err != nil {
+	if _, err := ensureFile(realPath, "a source file"); err != nil {
 		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("%s is a directory, not a source file", realPath)
 	}
 
 	content, err := os.ReadFile(realPath)
@@ -994,13 +996,9 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 		fileID = rel
 	}
 
-	// Defensive check: ensure path is a file, not a directory
-	info, err := os.Stat(path)
+	info, err := ensureFile(path, "a raw file")
 	if err != nil {
 		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("%s is a directory, cannot ingest as raw file", path)
 	}
 	if ShouldSkipFile(path, info.Size()) {
 		return nil
