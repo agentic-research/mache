@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2115,4 +2117,44 @@ func TestArena_AllTools(t *testing.T) {
 		assert.Contains(t, text, "graph TD", "diagram should start with mermaid directive")
 		assert.Contains(t, text, "subgraph", "diagram should contain subgraph sections")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// landing page handler tests
+// ---------------------------------------------------------------------------
+
+func TestServeLandingPage_FallbackPlainText(t *testing.T) {
+	// landingPagePath won't exist in test → should fall back to plain text
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "mache.rosary.bot"
+
+	serveLandingPage(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+	assert.Contains(t, rec.Body.String(), "mache MCP server")
+	assert.Contains(t, rec.Body.String(), "http://mache.rosary.bot/mcp")
+}
+
+func TestServeLandingPage_FallbackUsesXForwardedProto(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "mache.rosary.bot"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	serveLandingPage(rec, req)
+
+	assert.Contains(t, rec.Body.String(), "https://mache.rosary.bot/mcp")
+}
+
+func TestRequestScheme_Defaults(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	assert.Equal(t, "http", requestScheme(req))
+}
+
+func TestRequestScheme_XForwardedProto(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	assert.Equal(t, "https", requestScheme(req))
 }
