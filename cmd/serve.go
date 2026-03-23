@@ -135,18 +135,19 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	}
 
 	// Clean up any auto-spawned leyline daemon on exit.
-	// Defer handles normal returns; signal handler covers SIGTERM/SIGINT.
 	defer leyline.StopManaged()
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		leyline.StopManaged()
-		registry.Close()
-		os.Exit(0)
-	}()
 
 	if serveStdio {
+		// Stdio: hard exit on signal — no HTTP server to drain.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			leyline.StopManaged()
+			registry.Close()
+			os.Exit(0)
+		}()
+
 		meta := registerServeSidecar(source, "mcp-stdio", "")
 		defer removeServeSidecar(meta)
 		log.Println("mache MCP server ready on stdio")
@@ -169,9 +170,27 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	mux.Handle("/mcp", mcpHandler)
 	mux.HandleFunc("/", serveLandingPage)
 
-	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
 	httpSrv := &http.Server{Addr: serveHTTP, Handler: mux}
-	return httpSrv.ListenAndServe()
+
+	// HTTP: graceful shutdown drains in-flight requests so defers
+	// (registry.Close, StopManaged, removeServeSidecar) run normally.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Println("shutting down…")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(ctx); err != nil {
+			log.Printf("HTTP shutdown: %v", err)
+		}
+	}()
+
+	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
+	if err := httpSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // landingPagePath is where rig's Dockerfile injects the landing page HTML.

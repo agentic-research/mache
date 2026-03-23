@@ -500,6 +500,10 @@ var rootCmd = &cobra.Command{
 			log.Print("  # or press Ctrl+C in this terminal")
 		}
 
+		// Clean up any auto-spawned leyline daemon when the mount exits.
+		// TriggerEmbedding (below) or semantic search may auto-start one.
+		defer leyline.StopManaged()
+
 		// Fire-and-forget: push content to ley-line for embedding
 		go leyline.TriggerEmbedding(g, 100)
 
