@@ -66,14 +66,11 @@ func nextClosedSet(ctx *FormalContext, current *roaring.Bitmap, n int) *roaring.
 		c := ctx.Closure(b)
 
 		// Canonicity test: C ∩ {0,...,i-1} must equal current ∩ {0,...,i-1}
-		// i.e., closing B didn't add any attribute with index < i
-		valid := true
-		for j := uint32(0); j < ui; j++ {
-			if c.Contains(j) != current.Contains(j) {
-				valid = false
-				break
-			}
-		}
+		// i.e., closing B didn't add any attribute with index < i.
+		// Xor+And is O(bitmap containers) vs O(i) per-bit Contains calls.
+		diff := roaring.Xor(c, current)
+		diff.RemoveRange(uint64(ui), uint64(n))
+		valid := diff.IsEmpty()
 		if valid {
 			return c
 		}
