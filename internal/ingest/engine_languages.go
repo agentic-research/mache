@@ -21,7 +21,7 @@ func init() {
 
 	// Register HCL/Terraform queries — narrow to semantic references:
 	// module sources, variable defaults, and provider/resource references.
-	RegisterRefQuery("hcl", `
+	RegisterRefQuery("terraform", `
 		(block (identifier) @_type (body (attribute (identifier) @_key (expression (literal_value (string_lit) @ref)))
 			(#eq? @_key "source")))
 		(block (identifier) @_type (body (attribute (identifier) @_key (expression (literal_value (string_lit) @ref)))

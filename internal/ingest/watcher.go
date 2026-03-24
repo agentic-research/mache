@@ -18,7 +18,7 @@ import (
 type Watcher struct {
 	watcher   *fsnotify.Watcher
 	rootDir   string
-	gitignore *gitignoreMatcher
+	gitignore GitignoreMatcher
 
 	onChange func(path string)
 	onDelete func(path string)
@@ -45,7 +45,7 @@ func WithDebounce(d time.Duration) WatcherOption {
 // WithGitignore configures the watcher to skip directories matching gitignore
 // rules. This prevents watching build artifact directories (target/, dist/,
 // node_modules/) that would otherwise consume thousands of kqueue FDs on macOS.
-func WithGitignore(gi *gitignoreMatcher) WatcherOption {
+func WithGitignore(gi GitignoreMatcher) WatcherOption {
 	return func(w *Watcher) { w.gitignore = gi }
 }
 
@@ -244,7 +244,7 @@ func (w *Watcher) shouldIgnorePath(path string) bool {
 		}
 	}
 
-	// Check gitignore for files inside ignored directories.
+	// Check gitignore rules (file patterns like *.log, directory patterns, etc.).
 	if w.gitignore != nil {
 		rel, err := filepath.Rel(w.rootDir, path)
 		if err == nil {

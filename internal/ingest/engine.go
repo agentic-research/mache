@@ -284,10 +284,18 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 	}
 }
 
+// GitignoreMatcher matches paths against .gitignore-style rules.
+type GitignoreMatcher interface {
+	Match(rel string, isDir bool) bool
+}
+
 // Gitignore returns the gitignore matcher loaded during Ingest, or nil if none
 // was loaded. Pass this to WithGitignore when creating a Watcher so the watcher
 // skips the same directories the engine does.
-func (e *Engine) Gitignore() *gitignoreMatcher {
+func (e *Engine) Gitignore() GitignoreMatcher {
+	if e.gitignore == nil {
+		return nil
+	}
 	return e.gitignore
 }
 
