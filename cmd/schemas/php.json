@@ -1,0 +1,133 @@
+{
+  "version": "v1",
+  "file_sets": {
+    "lsp": [
+      {"name": "hover", "content_source": "lsp_hover"},
+      {"name": "diagnostics", "content_source": "lsp_diagnostics"},
+      {"name": "definitions", "content_source": "lsp_defs"},
+      {"name": "references", "content_source": "lsp_refs"}
+    ]
+  },
+  "nodes": [
+    {
+      "name": "use_declarations",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(namespace_use_declaration (namespace_use_clause (qualified_name) @name)) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "classes",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(class_declaration name: (name) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(method_declaration name: (name) @name) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "interfaces",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(interface_declaration name: (name) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "traits",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(trait_declaration name: (name) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "functions",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(function_definition name: (name) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "enums",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(enum_declaration name: (name) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "version": "v1",
+  "file_sets": {
+    "lsp": [
+      {"name": "hover", "content_source": "lsp_hover"},
+      {"name": "diagnostics", "content_source": "lsp_diagnostics"},
+      {"name": "definitions", "content_source": "lsp_defs"},
+      {"name": "references", "content_source": "lsp_refs"}
+    ]
+  },
+  "nodes": [
+    {
+      "name": "imports",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(import_statement source: (string) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(call_expression function: (import) arguments: (arguments (string) @name)) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "functions",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(function_declaration name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "classes",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(class_declaration name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(method_definition name: (property_identifier) @name) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exports",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(export_statement declaration: (function_declaration name: (identifier) @name)) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(export_statement declaration: (class_declaration name: (identifier) @name)) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "variables",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(lexical_declaration (variable_declarator name: (identifier) @name)) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

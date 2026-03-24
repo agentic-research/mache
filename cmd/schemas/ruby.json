@@ -1,0 +1,126 @@
+{
+  "version": "v1",
+  "file_sets": {
+    "lsp": [
+      {"name": "hover", "content_source": "lsp_hover"},
+      {"name": "diagnostics", "content_source": "lsp_diagnostics"},
+      {"name": "definitions", "content_source": "lsp_defs"},
+      {"name": "references", "content_source": "lsp_refs"}
+    ]
+  },
+  "nodes": [
+    {
+      "name": "requires",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(call method: (identifier) @_m arguments: (argument_list (string) @name) (#eq? @_m \"require\")) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(call method: (identifier) @_m arguments: (argument_list (string) @name) (#eq? @_m \"require_relative\")) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "classes",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(class name: (constant) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(method name: (identifier) @name) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "modules",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(module name: (constant) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "methods",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(method name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "singleton_methods",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(singleton_method name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

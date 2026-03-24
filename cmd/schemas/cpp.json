@@ -10,12 +10,38 @@
   },
   "nodes": [
     {
-      "name": "resources",
+      "name": "includes",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @_rtype (string_lit) @name (body) @scope (#eq? @_type \"resource\"))",
+          "selector": "(preproc_include path: (system_lib_string) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(preproc_include path: (string_literal) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "functions",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -27,12 +53,12 @@
       ]
     },
     {
-      "name": "data",
+      "name": "structs",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @_dtype (string_lit) @name (body) @scope (#eq? @_type \"data\"))",
+          "selector": "(struct_specifier name: (type_identifier) @name body: (field_declaration_list) @_body) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -44,12 +70,12 @@
       ]
     },
     {
-      "name": "variables",
+      "name": "enums",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"variable\"))",
+          "selector": "(enum_specifier name: (type_identifier) @name body: (enumerator_list) @_body) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -61,12 +87,12 @@
       ]
     },
     {
-      "name": "outputs",
+      "name": "typedefs",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"output\"))",
+          "selector": "(type_definition declarator: (type_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -78,12 +104,23 @@
       ]
     },
     {
-      "name": "modules",
+      "name": "macros",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"module\"))",
+          "selector": "(preproc_def name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(preproc_function_def name: (identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -95,28 +132,49 @@
       ]
     },
     {
-      "name": "locals",
-      "selector": "$",
-      "children": [
-        {
-          "name": "locals",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"locals\"))",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "providers",
+      "name": "classes",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"provider\"))",
+          "selector": "(class_specifier name: (type_identifier) @name body: (field_declaration_list) @_body) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(function_definition declarator: (function_declarator declarator: (field_identifier) @name)) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "namespaces",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(namespace_definition name: (identifier) @name) @scope",
+          "include": ["lsp"],
           "files": [
             {
               "name": "source",
@@ -127,28 +185,13 @@
       ]
     },
     {
-      "name": "terraform",
+      "name": "templates",
       "selector": "$",
       "children": [
         {
-          "name": "terraform",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"terraform\"))",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "moved",
-      "selector": "$",
-      "children": [
-        {
-          "name": "moved",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"moved\"))",
+          "name": "{{.name}}",
+          "selector": "(template_declaration (function_definition declarator: (function_declarator declarator: (identifier) @name))) @scope",
+          "include": ["lsp"],
           "files": [
             {
               "name": "source",

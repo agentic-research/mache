@@ -13,12 +13,26 @@ import (
 var embeddedSchemas embed.FS
 
 var presetSchemas = map[string]string{
-	"go":           "schemas/go.json",
-	"python":       "schemas/python.json",
-	"rust":         "schemas/rust.json",
-	"terraform":    "schemas/terraform.json",
-	"sql":          "schemas/sql.json",
-	"toml":         "schemas/toml.json",
+	// Source-code languages (mapped from DetectLanguageFromExt)
+	"go":         "schemas/go.json",
+	"python":     "schemas/python.json",
+	"rust":       "schemas/rust.json",
+	"terraform":  "schemas/terraform.json",
+	"sql":        "schemas/sql.json",
+	"toml":       "schemas/toml.json",
+	"yaml":       "schemas/yaml.json",
+	"javascript": "schemas/javascript.json",
+	"typescript": "schemas/typescript.json",
+	"java":       "schemas/java.json",
+	"c":          "schemas/c.json",
+	"cpp":        "schemas/cpp.json",
+	"ruby":       "schemas/ruby.json",
+	"php":        "schemas/php.json",
+	"kotlin":     "schemas/kotlin.json",
+	"swift":      "schemas/swift.json",
+	"scala":      "schemas/scala.json",
+	"elixir":     "schemas/elixir.json",
+	// Data-format presets (not auto-detected from file extensions)
 	"cli":          "schemas/cli.json",
 	"mcp":          "schemas/mcp.json",
 	"mcp-registry": "schemas/mcp-registry.json",
