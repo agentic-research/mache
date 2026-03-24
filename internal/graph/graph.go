@@ -118,7 +118,8 @@ type Graph interface {
 type MemoryStore struct {
 	mu       sync.RWMutex
 	nodes    map[string]*Node
-	roots    []string // Top-level nodes (e.g. "vulns")
+	roots    []string            // Top-level nodes (e.g. "vulns")
+	rootsSet map[string]struct{} // O(1) dedup for AddRoot
 	resolver ContentResolverFunc
 	cache    *contentCache
 	refs     map[string][]string // token -> []nodeID (callers: who calls token)
@@ -165,6 +166,7 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		nodes:       make(map[string]*Node),
 		roots:       []string{},
+		rootsSet:    make(map[string]struct{}),
 		refs:        make(map[string][]string),
 		defs:        make(map[string][]string),
 		fileToNodes: make(map[string]*roaring.Bitmap),
@@ -207,11 +209,10 @@ func (s *MemoryStore) AddRoot(n *Node) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nodes[n.ID] = n
-	for _, r := range s.roots {
-		if r == n.ID {
-			return
-		}
+	if _, dup := s.rootsSet[n.ID]; dup {
+		return
 	}
+	s.rootsSet[n.ID] = struct{}{}
 	s.roots = append(s.roots, n.ID)
 }
 
