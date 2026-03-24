@@ -145,7 +145,7 @@ func langForExt(ext string) (*sitter.Language, string) {
 	case ".sql":
 		return sql.GetLanguage(), "sql"
 	case ".tf", ".hcl":
-		return hcl.GetLanguage(), "hcl"
+		return hcl.GetLanguage(), "terraform"
 	case ".yaml", ".yml":
 		return yaml.GetLanguage(), "yaml"
 	case ".rs":
@@ -1680,7 +1680,7 @@ func GetLanguage(langName string) *sitter.Language {
 		return typescript.GetLanguage()
 	case "sql":
 		return sql.GetLanguage()
-	case "hcl":
+	case "hcl", "terraform":
 		return hcl.GetLanguage()
 	case "yaml":
 		return yaml.GetLanguage()

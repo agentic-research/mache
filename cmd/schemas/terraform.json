@@ -141,22 +141,6 @@
           ]
         }
       ]
-    },
-    {
-      "name": "moved",
-      "selector": "$",
-      "children": [
-        {
-          "name": "moved",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"moved\"))",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
     }
   ]
 }
