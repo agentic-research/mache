@@ -228,7 +228,7 @@ func ShouldSkipDir(base string) bool {
 		return true
 	}
 	switch base {
-	case "node_modules", "target", "dist", "build", "__pycache__":
+	case "node_modules", "target", "dist", "build", "vendor", "__pycache__":
 		return true
 	}
 	return false
@@ -282,6 +282,21 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 		routedFiles:      make(map[string]int),
 		childSeen:        make(map[string]map[string]bool),
 	}
+}
+
+// GitignoreMatcher matches paths against .gitignore-style rules.
+type GitignoreMatcher interface {
+	Match(rel string, isDir bool) bool
+}
+
+// Gitignore returns the gitignore matcher loaded during Ingest, or nil if none
+// was loaded. Pass this to WithGitignore when creating a Watcher so the watcher
+// skips the same directories the engine does.
+func (e *Engine) Gitignore() GitignoreMatcher {
+	if e.gitignore == nil {
+		return nil
+	}
+	return e.gitignore
 }
 
 // SetFileIndex sets a cached file index for incremental re-ingestion.
@@ -355,7 +370,7 @@ func (e *Engine) Ingest(path string) error {
 	if info.IsDir() {
 		// Load .gitignore patterns when enabled (default: true).
 		if e.RespectGitignore {
-			e.gitignore = loadGitignore(realPath)
+			e.gitignore = LoadGitignore(realPath)
 		}
 
 		// Determine which file types this schema can process.

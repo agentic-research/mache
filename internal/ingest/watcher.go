@@ -16,8 +16,9 @@ import (
 // changes so that a burst of writes to the same file produces a single
 // callback after a quiet period.
 type Watcher struct {
-	watcher *fsnotify.Watcher
-	rootDir string
+	watcher   *fsnotify.Watcher
+	rootDir   string
+	gitignore GitignoreMatcher
 
 	onChange func(path string)
 	onDelete func(path string)
@@ -39,6 +40,13 @@ type WatcherOption func(*Watcher)
 // Defaults to 100ms.
 func WithDebounce(d time.Duration) WatcherOption {
 	return func(w *Watcher) { w.debounce = d }
+}
+
+// WithGitignore configures the watcher to skip directories matching gitignore
+// rules. This prevents watching build artifact directories (target/, dist/,
+// node_modules/) that would otherwise consume thousands of kqueue FDs on macOS.
+func WithGitignore(gi GitignoreMatcher) WatcherOption {
+	return func(w *Watcher) { w.gitignore = gi }
 }
 
 // NewWatcher creates a file watcher on rootDir. onChange is called for
@@ -126,7 +134,7 @@ func (w *Watcher) loop() {
 func (w *Watcher) handleEvent(ev fsnotify.Event) {
 	path := ev.Name
 
-	if shouldIgnorePath(path) {
+	if w.shouldIgnorePath(path) {
 		return
 	}
 
@@ -213,7 +221,7 @@ func (w *Watcher) addDirsRecursive(root string) error {
 		if !d.IsDir() {
 			return nil
 		}
-		if shouldIgnoreDir(path) {
+		if w.shouldIgnoreDir(path) {
 			return filepath.SkipDir
 		}
 		return w.watcher.Add(path)
@@ -221,7 +229,7 @@ func (w *Watcher) addDirsRecursive(root string) error {
 }
 
 // shouldIgnorePath returns true for paths the watcher should skip entirely.
-func shouldIgnorePath(path string) bool {
+func (w *Watcher) shouldIgnorePath(path string) bool {
 	base := filepath.Base(path)
 
 	// Hidden files and directories (e.g. .git, .DS_Store)
@@ -236,21 +244,41 @@ func shouldIgnorePath(path string) bool {
 		}
 	}
 
+	// Check gitignore rules (file patterns like *.log, directory patterns, etc.).
+	if w.gitignore != nil {
+		rel, err := filepath.Rel(w.rootDir, path)
+		if err == nil {
+			rel = filepath.ToSlash(rel)
+			if w.gitignore.Match(rel, false) {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
-// shouldIgnoreDir returns true for directories we should not recurse into.
-func shouldIgnoreDir(path string) bool {
+// shouldIgnoreDir returns true for directories the watcher should not recurse
+// into. Uses ShouldSkipDir (the canonical engine skip list) as a baseline,
+// then defers to gitignore rules when available — so project-specific ignores
+// (target/, dist/, .terraform/, etc.) are respected automatically.
+func (w *Watcher) shouldIgnoreDir(path string) bool {
 	base := filepath.Base(path)
 
-	if strings.HasPrefix(base, ".") {
+	// Canonical skip list shared with the engine (hidden dirs, target, dist, etc.)
+	if ShouldSkipDir(base) {
 		return true
 	}
 
-	// Common non-source directories.
-	switch base {
-	case "node_modules", "vendor", "__pycache__", ".git":
-		return true
+	// Gitignore: covers project-specific patterns without maintaining a list.
+	if w.gitignore != nil {
+		rel, err := filepath.Rel(w.rootDir, path)
+		if err == nil {
+			rel = filepath.ToSlash(rel)
+			if w.gitignore.Match(rel, true) {
+				return true
+			}
+		}
 	}
 
 	return false

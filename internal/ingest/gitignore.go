@@ -24,9 +24,9 @@ type gitignoreMatcher struct {
 	nested   map[string][]gitignorePattern // dir (relative to rootDir) → patterns
 }
 
-// loadGitignore reads .gitignore from rootDir and discovers nested .gitignore
+// LoadGitignore reads .gitignore from rootDir and discovers nested .gitignore
 // files in the tree. Returns nil if no .gitignore exists at all.
-func loadGitignore(rootDir string) *gitignoreMatcher {
+func LoadGitignore(rootDir string) *gitignoreMatcher {
 	m := &gitignoreMatcher{
 		rootDir: rootDir,
 		nested:  make(map[string][]gitignorePattern),
