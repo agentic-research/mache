@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "mappings",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(stream (document (block_node (block_mapping (block_mapping_pair key: (flow_node) @name) @scope))))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

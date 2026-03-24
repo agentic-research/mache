@@ -10,12 +10,12 @@
   },
   "nodes": [
     {
-      "name": "imports",
+      "name": "includes",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(use_declaration argument: (scoped_identifier) @name) @scope",
+          "selector": "(preproc_include path: (system_lib_string) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -25,17 +25,7 @@
         },
         {
           "name": "{{.name}}",
-          "selector": "(use_declaration argument: (identifier) @name) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        },
-        {
-          "name": "{{.name}}",
-          "selector": "(use_declaration argument: (scoped_use_list) @name) @scope",
+          "selector": "(preproc_include path: (string_literal) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -51,7 +41,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(function_item name: (identifier) @name) @scope",
+          "selector": "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -68,7 +58,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(struct_item name: (type_identifier) @name) @scope",
+          "selector": "(struct_specifier name: (type_identifier) @name body: (field_declaration_list) @_body) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -85,7 +75,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(enum_item name: (type_identifier) @name) @scope",
+          "selector": "(enum_specifier name: (type_identifier) @name body: (enumerator_list) @_body) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -97,97 +87,13 @@
       ]
     },
     {
-      "name": "traits",
+      "name": "typedefs",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(trait_item name: (type_identifier) @name) @scope",
+          "selector": "(type_definition declarator: (type_identifier) @name) @scope",
           "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "implementations",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(impl_item type: (type_identifier) @name) @scope",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "type_aliases",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(type_item name: (type_identifier) @name) @scope",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "constants",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(const_item name: (identifier) @name) @scope",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "statics",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(static_item name: (identifier) @name) @scope",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "modules",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(mod_item name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -203,7 +109,88 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(macro_definition name: (identifier) @name) @scope",
+          "selector": "(preproc_def name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(preproc_function_def name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "classes",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(class_specifier name: (type_identifier) @name body: (field_declaration_list) @_body) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(function_definition declarator: (function_declarator declarator: (field_identifier) @name)) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "namespaces",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(namespace_definition name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "templates",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(template_declaration (function_definition declarator: (function_declarator declarator: (identifier) @name))) @scope",
           "include": ["lsp"],
           "files": [
             {

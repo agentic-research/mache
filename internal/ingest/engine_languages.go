@@ -72,7 +72,7 @@ func init() {
 	`)
 
 	// HCL: variable "VAR_NAME" { ... } → env:VAR_NAME
-	RegisterAddressRefQuery("hcl", "env", `
+	RegisterAddressRefQuery("terraform", "env", `
 		(block
 			(identifier) @_type
 			(string_lit) @ref

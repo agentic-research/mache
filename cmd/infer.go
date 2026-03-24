@@ -16,15 +16,28 @@ import (
 )
 
 // sourceCodePresets maps language names (as returned by DetectLanguageFromExt)
-// to their preset schema keys. Only source-code presets are included here —
-// data-format presets (cli, mcp, mcp-registry) are excluded because they
-// don't correspond to detected file extensions.
+// to their preset schema keys. Every compiled-in tree-sitter grammar with a
+// preset schema is listed here so auto-detection produces language-aware
+// projections instead of falling back to generic FCA inference.
 var sourceCodePresets = map[string]string{
-	"go":        "go",
-	"python":    "python",
-	"rust":      "rust",
-	"terraform": "terraform",
-	"sql":       "sql",
+	"go":         "go",
+	"python":     "python",
+	"rust":       "rust",
+	"terraform":  "terraform",
+	"sql":        "sql",
+	"toml":       "toml",
+	"yaml":       "yaml",
+	"javascript": "javascript",
+	"typescript": "typescript",
+	"java":       "java",
+	"c":          "c",
+	"cpp":        "cpp",
+	"ruby":       "ruby",
+	"php":        "php",
+	"kotlin":     "kotlin",
+	"swift":      "swift",
+	"scala":      "scala",
+	"elixir":     "elixir",
 }
 
 // detectProjectLanguages walks a directory tree and returns a map of

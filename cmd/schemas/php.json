@@ -10,12 +10,64 @@
   },
   "nodes": [
     {
-      "name": "resources",
+      "name": "use_declarations",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @_rtype (string_lit) @name (body) @scope (#eq? @_type \"resource\"))",
+          "selector": "(namespace_use_declaration (namespace_use_clause (qualified_name) @name)) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "classes",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(class_declaration name: (name) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(method_declaration name: (name) @name) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "interfaces",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(interface_declaration name: (name) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -27,12 +79,12 @@
       ]
     },
     {
-      "name": "data",
+      "name": "traits",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @_dtype (string_lit) @name (body) @scope (#eq? @_type \"data\"))",
+          "selector": "(trait_declaration name: (name) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -44,12 +96,12 @@
       ]
     },
     {
-      "name": "variables",
+      "name": "functions",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"variable\"))",
+          "selector": "(function_definition name: (name) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -61,78 +113,13 @@
       ]
     },
     {
-      "name": "outputs",
+      "name": "enums",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"output\"))",
+          "selector": "(enum_declaration name: (name) @name) @scope",
           "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "modules",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"module\"))",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "locals",
-      "selector": "$",
-      "children": [
-        {
-          "name": "locals",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"locals\"))",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "providers",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"provider\"))",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "terraform",
-      "selector": "$",
-      "children": [
-        {
-          "name": "terraform",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"terraform\"))",
           "files": [
             {
               "name": "source",

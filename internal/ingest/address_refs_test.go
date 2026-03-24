@@ -169,7 +169,7 @@ resource "aws_instance" "web" {
 	w := NewSitterWalker()
 	defer w.Close()
 
-	refs, err := w.ExtractAddressRefs(tree.RootNode(), code, lang, "hcl")
+	refs, err := w.ExtractAddressRefs(tree.RootNode(), code, lang, "terraform")
 	require.NoError(t, err)
 
 	assert.Contains(t, refs, "env:DATABASE_URL")
@@ -260,7 +260,7 @@ func LoadConfig() {
     {
       "name": "variables",
       "selector": "$",
-      "language": "hcl",
+      "language": "terraform",
       "children": [
         {
           "name": "{{.name}}",

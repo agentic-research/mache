@@ -10,12 +10,38 @@
   },
   "nodes": [
     {
-      "name": "resources",
+      "name": "imports",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @_rtype (string_lit) @name (body) @scope (#eq? @_type \"resource\"))",
+          "selector": "(import_statement source: (string) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(call_expression function: (import) arguments: (arguments (string) @name)) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "functions",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(function_declaration name: (identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -27,12 +53,59 @@
       ]
     },
     {
-      "name": "data",
+      "name": "classes",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @_dtype (string_lit) @name (body) @scope (#eq? @_type \"data\"))",
+          "selector": "(class_declaration name: (identifier) @name) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(method_definition name: (property_identifier) @name) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exports",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(export_statement declaration: (function_declaration name: (identifier) @name)) @scope",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(export_statement declaration: (class_declaration name: (identifier) @name)) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -49,90 +122,8 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"variable\"))",
+          "selector": "(lexical_declaration (variable_declarator name: (identifier) @name)) @scope",
           "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "outputs",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"output\"))",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "modules",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"module\"))",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "locals",
-      "selector": "$",
-      "children": [
-        {
-          "name": "locals",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"locals\"))",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "providers",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type \"provider\"))",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "terraform",
-      "selector": "$",
-      "children": [
-        {
-          "name": "terraform",
-          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"terraform\"))",
           "files": [
             {
               "name": "source",
