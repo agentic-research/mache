@@ -215,24 +215,31 @@ func TestIsSourceFile(t *testing.T) {
 }
 
 func TestShouldIgnorePath(t *testing.T) {
-	assert.True(t, shouldIgnorePath("/repo/.git/HEAD"))
-	assert.True(t, shouldIgnorePath("/repo/.hidden"))
-	assert.True(t, shouldIgnorePath(".DS_Store"))
+	w := &Watcher{rootDir: "/repo"}
 
-	assert.False(t, shouldIgnorePath("/repo/main.go"))
-	assert.False(t, shouldIgnorePath("/repo/internal/pkg/file.go"))
+	assert.True(t, w.shouldIgnorePath("/repo/.git/HEAD"))
+	assert.True(t, w.shouldIgnorePath("/repo/.hidden"))
+	assert.True(t, w.shouldIgnorePath(".DS_Store"))
+
+	assert.False(t, w.shouldIgnorePath("/repo/main.go"))
+	assert.False(t, w.shouldIgnorePath("/repo/internal/pkg/file.go"))
 }
 
 func TestShouldIgnoreDir(t *testing.T) {
-	assert.True(t, shouldIgnoreDir("/repo/vendor"))
-	assert.True(t, shouldIgnoreDir("/repo/node_modules"))
-	assert.True(t, shouldIgnoreDir("/repo/__pycache__"))
-	assert.True(t, shouldIgnoreDir("/repo/.git"))
-	assert.True(t, shouldIgnoreDir("/repo/.hidden"))
+	w := &Watcher{rootDir: "/repo"}
 
-	assert.False(t, shouldIgnoreDir("/repo/internal"))
-	assert.False(t, shouldIgnoreDir("/repo/cmd"))
-	assert.False(t, shouldIgnoreDir("/repo/pkg"))
+	// ShouldSkipDir canonical list
+	assert.True(t, w.shouldIgnoreDir("/repo/node_modules"))
+	assert.True(t, w.shouldIgnoreDir("/repo/target"))
+	assert.True(t, w.shouldIgnoreDir("/repo/dist"))
+	assert.True(t, w.shouldIgnoreDir("/repo/build"))
+	assert.True(t, w.shouldIgnoreDir("/repo/__pycache__"))
+	assert.True(t, w.shouldIgnoreDir("/repo/.git"))
+	assert.True(t, w.shouldIgnoreDir("/repo/.hidden"))
+
+	assert.False(t, w.shouldIgnoreDir("/repo/internal"))
+	assert.False(t, w.shouldIgnoreDir("/repo/cmd"))
+	assert.False(t, w.shouldIgnoreDir("/repo/pkg"))
 }
 
 func TestWatcher_VendorIgnored(t *testing.T) {
@@ -254,4 +261,83 @@ func TestWatcher_VendorIgnored(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, int32(0), atomic.LoadInt32(&called), "vendor/ files should be ignored")
+}
+
+// TestWatcher_TargetIgnored is a regression test for the FD leak where the
+// watcher did not skip build artifact directories like target/ (Rust), dist/,
+// build/. On macOS (kqueue), each watched directory consumes an FD, so watching
+// a Rust target/ tree with 11K+ subdirectories leaked thousands of FDs.
+func TestWatcher_TargetIgnored(t *testing.T) {
+	dir := t.TempDir()
+	var called int32
+
+	w, err := NewWatcher(dir, func(path string) {
+		atomic.AddInt32(&called, 1)
+	}, nil, WithDebounce(20*time.Millisecond))
+	require.NoError(t, err)
+	defer w.Stop()
+
+	// Simulate Rust build artifacts: target/debug/deps/
+	for _, subdir := range []string{
+		"target/debug/deps",
+		"target/debug/build/somecrate-abc123",
+		"target/release/deps",
+		"dist/assets",
+		"build/output",
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, subdir), 0o755))
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Write files that would match sourceExtensions
+	for _, f := range []string{
+		"target/debug/deps/main.rs",
+		"target/debug/build/somecrate-abc123/build-script-build",
+		"dist/assets/app.js",
+		"build/output/lib.go",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte("// code"), 0o644))
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, int32(0), atomic.LoadInt32(&called),
+		"files in target/, dist/, build/ should be ignored by watcher")
+}
+
+// TestWatcher_GitignoreSkipsDirs verifies that the watcher respects .gitignore
+// rules passed via WithGitignore, preventing FD exhaustion from project-specific
+// build output directories that aren't in the hardcoded skip list.
+func TestWatcher_GitignoreSkipsDirs(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a .gitignore that ignores a custom build dir
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("custom_build/\n"), 0o644))
+	gi := LoadGitignore(dir)
+	require.NotNil(t, gi)
+
+	var called int32
+	w, err := NewWatcher(dir, func(path string) {
+		atomic.AddInt32(&called, 1)
+	}, nil, WithDebounce(20*time.Millisecond), WithGitignore(gi))
+	require.NoError(t, err)
+	defer w.Stop()
+
+	// Create the gitignored directory and write source files
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "custom_build", "out"), 0o755))
+	time.Sleep(50 * time.Millisecond)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "custom_build", "out", "gen.go"),
+		[]byte("package gen"), 0o644))
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, int32(0), atomic.LoadInt32(&called),
+		"gitignored directories should not trigger watcher callbacks")
+
+	// Verify non-ignored files still trigger callbacks
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644))
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&called),
+		"non-ignored source files should still trigger callbacks")
 }

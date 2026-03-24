@@ -382,7 +382,8 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 			log.Printf("watcher: deleted nodes for %s", path)
 		}
 		var watchErr error
-		fw, watchErr = ingest.NewWatcher(dataSource, onChange, onDelete)
+		fw, watchErr = ingest.NewWatcher(dataSource, onChange, onDelete,
+			ingest.WithGitignore(engine.Gitignore()))
 		if watchErr != nil {
 			log.Printf("Warning: file watcher failed to start: %v", watchErr)
 		} else {
