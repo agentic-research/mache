@@ -24,6 +24,8 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/lang"
 	sitter "github.com/smacker/go-tree-sitter"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const inlineThreshold = 4096
@@ -1635,6 +1637,49 @@ var tmplFuncs = template.FuncMap{
 		}
 		return s[start:end]
 	},
+	// replace all occurrences: {{replace .name ":" " "}} → "alpine 3.18" from "alpine:3.18".
+	"replace": func(s, old, new string) string {
+		return strings.ReplaceAll(s, old, new)
+	},
+	// lower: {{lower .name}} → "rhel" from "RHEL".
+	"lower": func(s string) string {
+		return strings.ToLower(s)
+	},
+	// upper: {{upper .name}} → "DEBIAN" from "debian".
+	"upper": func(s string) string {
+		return strings.ToUpper(s)
+	},
+	// title: {{title .name}} → "Amazon Linux" from "amazon linux".
+	"title": cases.Title(language.Und).String,
+	// split: {{index (split .id ":") 0}} → "alpine" from "alpine:3.18".
+	"split": func(s, sep string) []string {
+		return strings.Split(s, sep)
+	},
+	// join: {{join ", " .parts}} or pipeline {{split .s ":" | join ", "}}.
+	// sep is first so the piped value (slice) arrives as the last arg.
+	// Accepts both []string and []any (JSON-parsed slices).
+	"join": func(sep string, parts any) string {
+		switch v := parts.(type) {
+		case []string:
+			return strings.Join(v, sep)
+		case []any:
+			strs := make([]string, len(v))
+			for i, elem := range v {
+				strs[i] = fmt.Sprintf("%v", elem)
+			}
+			return strings.Join(strs, sep)
+		default:
+			return fmt.Sprintf("%v", parts)
+		}
+	},
+	// hasPrefix: {{if hasPrefix .s "CVE"}}...{{end}}.
+	"hasPrefix": strings.HasPrefix,
+	// hasSuffix: {{if hasSuffix .s ".go"}}...{{end}}.
+	"hasSuffix": strings.HasSuffix,
+	// trimPrefix: {{trimPrefix .s "pkg/"}} → "auth/login.go" from "pkg/auth/login.go".
+	"trimPrefix": strings.TrimPrefix,
+	// trimSuffix: {{trimSuffix .s ".go"}} → "main" from "main.go".
+	"trimSuffix": strings.TrimSuffix,
 }
 
 // tmplCache stores parsed templates keyed by their source string.
