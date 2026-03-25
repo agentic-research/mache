@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/agentic-research/mache/internal/lang"
 	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
 )
 
 type Diagnostic struct {
@@ -20,13 +20,13 @@ func (d Diagnostic) String() string {
 
 // Lint checks the content for static analysis issues.
 // Currently supports Go only.
-func Lint(content []byte, lang string) ([]Diagnostic, error) {
-	if lang != "go" && !strings.HasSuffix(lang, ".go") {
+func Lint(content []byte, langName string) ([]Diagnostic, error) {
+	if langName != "go" && !strings.HasSuffix(langName, ".go") {
 		return nil, nil
 	}
 
 	parser := sitter.NewParser()
-	parser.SetLanguage(golang.GetLanguage())
+	parser.SetLanguage(lang.ForName("go").Grammar())
 	tree, err := parser.ParseCtx(context.Background(), nil, content)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func Lint(content []byte, lang string) ([]Diagnostic, error) {
 			) @decl
 		)
 	`
-	q, qerr := sitter.NewQuery([]byte(query), golang.GetLanguage())
+	q, qerr := sitter.NewQuery([]byte(query), lang.ForName("go").Grammar())
 	if qerr != nil {
 		return nil, fmt.Errorf("compile lint query: %w", qerr)
 	}
