@@ -1,6 +1,6 @@
 {
   "mache": {
-    "command": "mache",
-    "args": ["serve"]
+    "type": "http",
+    "url": "http://localhost:7532/mcp"
   }
 }
