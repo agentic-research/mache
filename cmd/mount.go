@@ -21,6 +21,7 @@ import (
 	machefs "github.com/agentic-research/mache/internal/fs"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/linter"
@@ -919,18 +920,19 @@ func newCallExtractor() graph.CallExtractor {
 		New: func() any { return sitter.NewParser() },
 	}
 	return func(content []byte, path, langName string) ([]graph.QualifiedCall, error) {
-		lang := ingest.GetLanguage(langName)
-		if lang == nil {
+		l := lang.ForName(langName)
+		if l == nil {
 			return nil, nil
 		}
+		grammar := l.Grammar()
 		parser := pool.Get().(*sitter.Parser)
 		defer pool.Put(parser)
-		parser.SetLanguage(lang)
+		parser.SetLanguage(grammar)
 		tree, _ := parser.ParseCtx(context.Background(), nil, content)
 		if tree == nil {
 			return nil, nil
 		}
-		return walker.ExtractQualifiedCalls(tree.RootNode(), content, lang, langName)
+		return walker.ExtractQualifiedCalls(tree.RootNode(), content, grammar, langName)
 	}
 }
 

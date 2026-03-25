@@ -22,25 +22,8 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
-	"github.com/agentic-research/mache/internal/treesitter/elixir"
+	"github.com/agentic-research/mache/internal/lang"
 	sitter "github.com/smacker/go-tree-sitter"
-	treec "github.com/smacker/go-tree-sitter/c"
-	"github.com/smacker/go-tree-sitter/cpp"
-	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/smacker/go-tree-sitter/hcl"
-	"github.com/smacker/go-tree-sitter/java"
-	"github.com/smacker/go-tree-sitter/javascript"
-	"github.com/smacker/go-tree-sitter/kotlin"
-	"github.com/smacker/go-tree-sitter/php"
-	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/ruby"
-	"github.com/smacker/go-tree-sitter/rust"
-	"github.com/smacker/go-tree-sitter/scala"
-	"github.com/smacker/go-tree-sitter/sql"
-	"github.com/smacker/go-tree-sitter/swift"
-	"github.com/smacker/go-tree-sitter/toml"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
-	"github.com/smacker/go-tree-sitter/yaml"
 )
 
 const inlineThreshold = 4096
@@ -130,49 +113,14 @@ type parsedTreeSitterFile struct {
 	readErr  error  // non-nil if file read failed
 }
 
-// langForExt returns the tree-sitter language and name for a file extension.
+// langForExt is a thin wrapper over the lang registry.
 // Returns nil, "" for unsupported extensions.
 func langForExt(ext string) (*sitter.Language, string) {
-	switch ext {
-	case ".go":
-		return golang.GetLanguage(), "go"
-	case ".py":
-		return python.GetLanguage(), "python"
-	case ".js":
-		return javascript.GetLanguage(), "javascript"
-	case ".ts", ".tsx":
-		return typescript.GetLanguage(), "typescript"
-	case ".sql":
-		return sql.GetLanguage(), "sql"
-	case ".tf", ".hcl":
-		return hcl.GetLanguage(), "terraform"
-	case ".yaml", ".yml":
-		return yaml.GetLanguage(), "yaml"
-	case ".rs":
-		return rust.GetLanguage(), "rust"
-	case ".toml":
-		return toml.GetLanguage(), "toml"
-	case ".ex", ".exs":
-		return elixir.GetLanguage(), "elixir"
-	case ".java":
-		return java.GetLanguage(), "java"
-	case ".c", ".h":
-		return treec.GetLanguage(), "c"
-	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
-		return cpp.GetLanguage(), "cpp"
-	case ".rb":
-		return ruby.GetLanguage(), "ruby"
-	case ".php":
-		return php.GetLanguage(), "php"
-	case ".kt", ".kts":
-		return kotlin.GetLanguage(), "kotlin"
-	case ".swift":
-		return swift.GetLanguage(), "swift"
-	case ".scala", ".sc":
-		return scala.GetLanguage(), "scala"
-	default:
+	l := lang.ForExt(ext)
+	if l == nil {
 		return nil, ""
 	}
+	return l.Grammar(), l.Name
 }
 
 // isBinaryFile returns true if the file appears to contain binary content.
@@ -1683,47 +1631,13 @@ func extractGoPackageName(fileRoot *sitter.Node, source []byte, lang *sitter.Lan
 
 // GetLanguage returns the tree-sitter language for a language name string.
 // Returns nil for unsupported languages.
+// Deprecated: use lang.ForName(name).Grammar() instead.
 func GetLanguage(langName string) *sitter.Language {
-	switch langName {
-	case "go":
-		return golang.GetLanguage()
-	case "python":
-		return python.GetLanguage()
-	case "javascript":
-		return javascript.GetLanguage()
-	case "typescript":
-		return typescript.GetLanguage()
-	case "sql":
-		return sql.GetLanguage()
-	case "hcl", "terraform":
-		return hcl.GetLanguage()
-	case "yaml":
-		return yaml.GetLanguage()
-	case "rust":
-		return rust.GetLanguage()
-	case "toml":
-		return toml.GetLanguage()
-	case "elixir":
-		return elixir.GetLanguage()
-	case "java":
-		return java.GetLanguage()
-	case "c":
-		return treec.GetLanguage()
-	case "cpp":
-		return cpp.GetLanguage()
-	case "ruby":
-		return ruby.GetLanguage()
-	case "php":
-		return php.GetLanguage()
-	case "kotlin":
-		return kotlin.GetLanguage()
-	case "swift":
-		return swift.GetLanguage()
-	case "scala":
-		return scala.GetLanguage()
-	default:
+	l := lang.ForName(langName)
+	if l == nil {
 		return nil
 	}
+	return l.Grammar()
 }
 
 var tmplFuncs = template.FuncMap{

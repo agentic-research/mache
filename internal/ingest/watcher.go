@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -284,27 +285,8 @@ func (w *Watcher) shouldIgnoreDir(path string) bool {
 	return false
 }
 
-// sourceExtensions is the set of file extensions the engine can ingest.
-// Matches the extensions handled by langForExt plus .json.
-var sourceExtensions = map[string]bool{
-	".go":   true,
-	".py":   true,
-	".js":   true,
-	".ts":   true,
-	".tsx":  true,
-	".sql":  true,
-	".tf":   true,
-	".hcl":  true,
-	".yaml": true,
-	".yml":  true,
-	".rs":   true,
-	".toml": true,
-	".ex":   true,
-	".exs":  true,
-	".json": true,
-}
-
 // isSourceFile returns true if the path has a recognized source extension.
+// Delegates to the lang registry (all tree-sitter languages + .json).
 func isSourceFile(path string) bool {
-	return sourceExtensions[filepath.Ext(path)]
+	return lang.IsSourceExt(filepath.Ext(path))
 }
