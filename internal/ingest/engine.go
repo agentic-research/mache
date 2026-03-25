@@ -101,8 +101,8 @@ type treeSitterJob struct {
 	modTime  time.Time
 }
 
-// parsedTreeSitterFile is the result of parallel tree-sitter parsing.
-// Contains the pre-parsed AST and file content, ready for sequential processNode.
+// parsedTreeSitterFile is the result of tree-sitter parsing (parallel or sequential).
+// Contains the pre-parsed AST and file content, ready for processTreeSitterResult.
 type parsedTreeSitterFile struct {
 	job      treeSitterJob
 	realPath string
@@ -568,122 +568,22 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 	})
 
 	processed := 0
-	for _, result := range results {
+	for i := range results {
 		processed++
 		if processed%1000 == 0 {
 			log.Printf("Ingested %d/%d files...", processed, fileCount.Load())
 		}
 
-		if result.readErr != nil {
+		if results[i].readErr != nil {
 			if firstErr == nil {
-				firstErr = result.readErr
+				firstErr = results[i].readErr
 			}
 			continue
 		}
 
-		if result.parseErr != nil {
-			log.Printf("ingest: parse failed for %s (using raw fallback): %v", result.job.path, result.parseErr)
-			// Fallback: ingest as broken file — use path hash to avoid ID collisions
-			// when two broken files share the same basename in different directories.
-			pathForID := result.realPath
-			if pathForID == "" {
-				pathForID = result.job.path
-			}
-			sum := sha256.Sum256([]byte(pathForID))
-			fallbackID := "BROKEN_" + hex.EncodeToString(sum[:8])
-			fileNode := &graph.Node{
-				ID:      fallbackID,
-				Mode:    0o444,
-				ModTime: result.job.modTime,
-				Data:    result.content,
-				Origin: &graph.SourceOrigin{
-					FilePath:  result.realPath,
-					StartByte: 0,
-					EndByte:   uint32(len(result.content)),
-				},
-			}
-			e.Store.AddNode(fileNode)
-			e.Store.AddRoot(fileNode)
-			continue
-		}
-
-		// Apply parsed tree using processNode (sequential, touches shared state).
-		bt := &bufferingTarget{IngestionTarget: e.Store}
-		walker := e.sitterWalker
-		root := SitterRoot{
-			Node:     result.tree.RootNode(),
-			FileRoot: result.tree.RootNode(),
-			Source:   result.content,
-			Lang:     result.job.lang,
-			LangName: result.job.langName,
-		}
-		sourceFile := filepath.Base(result.job.path)
-		applicableNodes := filterNodesByLanguage(e.Schema.Nodes, result.job.langName)
-
-		// No applicable schema nodes for this language — route to _project_files/.
-		if len(applicableNodes) == 0 {
-			if err := e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime); err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-			continue
-		}
-
-		// Extract file-level address refs once (e.g., HCL variable declarations).
-		var fileAddrRefs []string
-		if addrRefs, err := walker.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
-			fileAddrRefs = addrRefs
-		}
-
-		var processErr error
-		for _, nodeSchema := range applicableNodes {
-			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs); err != nil {
-				if strings.Contains(err.Error(), "invalid query") {
-					e.mu.Lock()
-					e.routedFiles[result.job.langName]++
-					e.mu.Unlock()
-					processErr = e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
-					break
-				}
-				processErr = fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
-				break
-			}
-		}
-
-		if processErr != nil {
+		if err := e.processTreeSitterResult(&results[i]); err != nil {
 			if firstErr == nil {
-				firstErr = processErr
-			}
-			continue
-		}
-
-		// No nodes produced — schema selectors didn't match anything in this
-		// language. Route to _project_files/ so the file isn't silently lost.
-		if len(bt.bufferedNodes) == 0 {
-			if err := e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime); err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-			continue
-		}
-
-		// Atomic swap of file nodes.
-		if ms, ok := e.Store.(*graph.MemoryStore); ok {
-			ms.ReplaceFileNodes(result.realPath, bt.bufferedNodes)
-		} else {
-			e.Store.DeleteFileNodes(result.realPath)
-			for _, n := range bt.bufferedNodes {
-				e.Store.AddNode(n)
-			}
-		}
-
-		// Record file metadata for incremental re-ingestion.
-		if sw, ok := e.Store.(*SQLiteWriter); ok {
-			info, err := os.Stat(result.realPath)
-			if err == nil {
-				sw.RecordFile(result.realPath, info.ModTime(), info.Size())
+				firstErr = err
 			}
 		}
 	}
@@ -780,7 +680,120 @@ func (b *bufferingTarget) AddDef(token, dirID string) error {
 	return b.IngestionTarget.AddDef(token, dirID)
 }
 
-func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName string, modTime time.Time) error {
+// processTreeSitterResult handles everything AFTER parsing for a single tree-sitter file.
+// Both ingestTreeSitter (sequential) and ingestTreeSitterParallel (phase 2) delegate here
+// to avoid divergent logic. The caller is responsible for populating the parsedTreeSitterFile
+// struct — workers do it in parallel, the sequential path does it inline.
+//
+// Steps:
+//  1. Parse error → BROKEN_ node with SHA256(path) ID (no collision)
+//  2. Filter schema nodes by language
+//  3. No applicable nodes → route to _project_files
+//  4. Extract address refs
+//  5. processNode for each applicable schema node
+//  6. Invalid query error → route to _project_files
+//  7. No buffered nodes → route to _project_files
+//  8. Atomic swap via ReplaceFileNodes
+//  9. RecordFile for incremental re-ingestion
+func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
+	// 1. Handle parse errors — use SHA256(path) for unique BROKEN_ IDs.
+	if result.parseErr != nil {
+		log.Printf("ingest: parse failed for %s (using raw fallback): %v", result.job.path, result.parseErr)
+		pathForID := result.realPath
+		if pathForID == "" {
+			pathForID = result.job.path
+		}
+		sum := sha256.Sum256([]byte(pathForID))
+		fallbackID := "BROKEN_" + hex.EncodeToString(sum[:8])
+		fileNode := &graph.Node{
+			ID:      fallbackID,
+			Mode:    0o444,
+			ModTime: result.job.modTime,
+			Data:    result.content,
+			Origin: &graph.SourceOrigin{
+				FilePath:  result.realPath,
+				StartByte: 0,
+				EndByte:   uint32(len(result.content)),
+			},
+		}
+		e.Store.AddNode(fileNode)
+		e.Store.AddRoot(fileNode)
+		return nil
+	}
+
+	// Use the shared walker if available (set during Ingest), otherwise
+	// create a temporary one (e.g., during ReIngestFile).
+	walker := e.sitterWalker
+	if walker == nil {
+		walker = NewSitterWalker()
+		defer walker.Close()
+	}
+
+	bt := &bufferingTarget{IngestionTarget: e.Store}
+	root := SitterRoot{
+		Node:     result.tree.RootNode(),
+		FileRoot: result.tree.RootNode(),
+		Source:   result.content,
+		Lang:     result.job.lang,
+		LangName: result.job.langName,
+	}
+	sourceFile := filepath.Base(result.job.path)
+
+	// 2. Filter schema nodes by language.
+	applicableNodes := filterNodesByLanguage(e.Schema.Nodes, result.job.langName)
+
+	// 3. No applicable schema nodes → route to _project_files/.
+	if len(applicableNodes) == 0 {
+		return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
+	}
+
+	// 4. Extract file-level address refs once (e.g., HCL variable declarations).
+	var fileAddrRefs []string
+	if addrRefs, err := walker.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
+		fileAddrRefs = addrRefs
+	}
+
+	// 5. processNode for each applicable schema node.
+	for _, nodeSchema := range applicableNodes {
+		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs); err != nil {
+			// 6. Invalid query → route to _project_files/.
+			if strings.Contains(err.Error(), "invalid query") {
+				e.mu.Lock()
+				e.routedFiles[result.job.langName]++
+				e.mu.Unlock()
+				return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
+			}
+			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
+		}
+	}
+
+	// 7. No nodes produced → route to _project_files/.
+	if len(bt.bufferedNodes) == 0 {
+		return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
+	}
+
+	// 8. Atomic swap of file nodes.
+	if ms, ok := e.Store.(*graph.MemoryStore); ok {
+		ms.ReplaceFileNodes(result.realPath, bt.bufferedNodes)
+	} else {
+		e.Store.DeleteFileNodes(result.realPath)
+		for _, n := range bt.bufferedNodes {
+			e.Store.AddNode(n)
+		}
+	}
+
+	// 9. Record file metadata for incremental re-ingestion.
+	if sw, ok := e.Store.(*SQLiteWriter); ok {
+		info, err := os.Stat(result.realPath)
+		if err == nil {
+			sw.RecordFile(result.realPath, info.ModTime(), info.Size())
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langName string, modTime time.Time) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -799,93 +812,36 @@ func (e *Engine) ingestTreeSitter(path string, lang *sitter.Language, langName s
 		return err
 	}
 
-	// ReplaceFileNodes handles deletion + addition atomically.
-	bt := &bufferingTarget{IngestionTarget: e.Store}
-
 	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		log.Printf("ingest: parse failed for %s (using raw fallback): %v", path, err)
+	parser.SetLanguage(grammar)
+	tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+
+	result := &parsedTreeSitterFile{
+		job: treeSitterJob{
+			path:     path,
+			lang:     grammar,
+			langName: langName,
+			modTime:  modTime,
+		},
+		realPath: realPath,
+		content:  content,
+		tree:     tree,
+		parseErr: parseErr,
 	}
 
-	if err == nil {
-		// Use the shared walker if available (set during Ingest), otherwise
-		// create a temporary one (e.g., during ReIngestFile).
+	// Extract context (imports, globals) when parse succeeded.
+	if parseErr == nil {
 		walker := e.sitterWalker
 		if walker == nil {
 			walker = NewSitterWalker()
 			defer walker.Close()
 		}
-		root := SitterRoot{Node: tree.RootNode(), FileRoot: tree.RootNode(), Source: content, Lang: lang, LangName: langName}
-		sourceFile := filepath.Base(path)
-
-		// Extract context (imports, globals) ONCE per file — shared across all constructs.
-		// This avoids N duplicate allocations where N = number of constructs in the file.
-		var fileContext []byte
-		if ctxBytes, err := walker.ExtractContext(tree.RootNode(), content, lang, langName); err == nil {
-			fileContext = ctxBytes
-		}
-
-		// Extract file-level address refs once (e.g., HCL variable declarations).
-		var fileAddrRefs []string
-		if addrRefs, err := walker.ExtractAddressRefs(tree.RootNode(), content, lang, langName); err == nil {
-			fileAddrRefs = addrRefs
-		}
-
-		// Filter schema nodes by language to prevent cross-language query errors
-		applicableNodes := filterNodesByLanguage(e.Schema.Nodes, langName)
-
-		for _, nodeSchema := range applicableNodes {
-			if err := e.processNode(nodeSchema, walker, root, "", sourceFile, realPath, modTime, bt, fileContext, fileAddrRefs); err != nil {
-				// Tree-sitter query compilation fails when a schema selector
-				// uses node types from a different language (e.g. Go's
-				// "function_declaration" applied to a Python file). This is
-				// expected when FCA infers a schema from mixed-language dirs.
-				// Route to _project_files/ so the content is still accessible.
-				if strings.Contains(err.Error(), "invalid query") {
-					e.mu.Lock()
-					e.routedFiles[langName]++
-					e.mu.Unlock()
-					return e.ingestRawFileUnder(path, "_project_files", modTime)
-				}
-				return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
-			}
+		if ctxBytes, err := walker.ExtractContext(tree.RootNode(), content, grammar, langName); err == nil {
+			result.context = ctxBytes
 		}
 	}
 
-	if err != nil {
-		// Fallback logic
-		baseName := filepath.Base(path)
-		fallbackID := "BROKEN_" + baseName
-
-		fileNode := &graph.Node{
-			ID:      fallbackID,
-			Mode:    0o444,
-			ModTime: modTime,
-			Data:    content,
-			Origin: &graph.SourceOrigin{
-				FilePath:  realPath,
-				StartByte: 0,
-				EndByte:   uint32(len(content)),
-			},
-		}
-		bt.AddNode(fileNode)
-		e.Store.AddRoot(fileNode)
-	}
-
-	// atomic swap
-	if ms, ok := e.Store.(*graph.MemoryStore); ok {
-		ms.ReplaceFileNodes(realPath, bt.bufferedNodes)
-	} else {
-		// Fallback for non-MemoryStore (shouldn't happen in write-back)
-		e.Store.DeleteFileNodes(realPath)
-		for _, n := range bt.bufferedNodes {
-			e.Store.AddNode(n)
-		}
-	}
-
-	return nil
+	return e.processTreeSitterResult(result)
 }
 
 func (e *Engine) ingestRawFile(path string, modTime time.Time) error {
