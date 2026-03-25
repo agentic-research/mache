@@ -63,7 +63,7 @@ func TestForExt_CaseInsensitive(t *testing.T) {
 
 func TestForExt_Unknown(t *testing.T) {
 	assert.Nil(t, ForExt(".xyz"))
-	assert.Nil(t, ForExt(".xyz"))
+	assert.Nil(t, ForExt(".abc"))
 	assert.Nil(t, ForExt(""))
 }
 

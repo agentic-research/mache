@@ -76,7 +76,7 @@ var Registry = []Language{
 	{Name: "scala", DisplayName: "Scala", Extensions: []string{".scala", ".sc"}, Grammar: scala.GetLanguage, PresetSchema: "scala", SentinelFiles: []string{"build.sbt"}},
 	// --- Added grammars (no preset schemas yet) ---
 	{Name: "bash", DisplayName: "Bash", Extensions: []string{".sh", ".bash"}, Grammar: bash.GetLanguage},
-	{Name: "csharp", DisplayName: "C#", Extensions: []string{".cs"}, Grammar: csharp.GetLanguage, SentinelFiles: []string{".csproj"}},
+	{Name: "csharp", DisplayName: "C#", Extensions: []string{".cs"}, Grammar: csharp.GetLanguage},
 	{Name: "css", DisplayName: "CSS", Extensions: []string{".css"}, Grammar: css.GetLanguage},
 	{Name: "cue", DisplayName: "CUE", Extensions: []string{".cue"}, Grammar: cue.GetLanguage},
 	{Name: "dockerfile", DisplayName: "Dockerfile", Extensions: []string{".dockerfile"}, Grammar: dockerfile.GetLanguage, SentinelFiles: []string{"Dockerfile"}},
