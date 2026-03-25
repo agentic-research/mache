@@ -24,6 +24,8 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/lang"
 	sitter "github.com/smacker/go-tree-sitter"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const inlineThreshold = 4096
@@ -1648,14 +1650,12 @@ var tmplFuncs = template.FuncMap{
 		return strings.ToUpper(s)
 	},
 	// title: {{title .name}} → "Amazon Linux" from "amazon linux".
-	"title": func(s string) string {
-		return strings.Title(s) //nolint:staticcheck // strings.Title is simple and sufficient here
-	},
+	"title": cases.Title(language.Und).String,
 	// split: {{index (split .id ":") 0}} → "alpine" from "alpine:3.18".
 	"split": func(s, sep string) []string {
 		return strings.Split(s, sep)
 	},
-	// join: {{join .parts ", "}} or pipeline {{split .s ":" | join ", "}}.
+	// join: {{join ", " .parts}} or pipeline {{split .s ":" | join ", "}}.
 	// sep is first so the piped value (slice) arrives as the last arg.
 	// Accepts both []string and []any (JSON-parsed slices).
 	"join": func(sep string, parts any) string {

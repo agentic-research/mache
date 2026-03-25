@@ -121,7 +121,7 @@ func TestTemplateFuncs_ReplaceAndLower(t *testing.T) {
 	assert.Equal(t, "alpine 3.18", out)
 }
 
-func TestTemplateFuncs_SplitJoinReplace(t *testing.T) {
+func TestTemplateFuncs_SplitJoin(t *testing.T) {
 	// "a:b:c" → split on ":" → join with ", "
 	out, err := RenderTemplate(`{{split .s ":" | join ", "}}`, map[string]any{"s": "a:b:c"})
 	require.NoError(t, err)
