@@ -112,7 +112,7 @@ func ForPath(path string) *Language {
 // IsSourceExt returns true if the extension is a recognized source file
 // (tree-sitter languages + .json).
 func IsSourceExt(ext string) bool {
-	return srcSet[ext]
+	return srcSet[strings.ToLower(ext)]
 }
 
 // Extensions returns all recognized file extensions in sorted order.
