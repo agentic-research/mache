@@ -10,14 +10,24 @@ import (
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/bash"
 	treec "github.com/smacker/go-tree-sitter/c"
 	"github.com/smacker/go-tree-sitter/cpp"
+	"github.com/smacker/go-tree-sitter/csharp"
+	"github.com/smacker/go-tree-sitter/css"
+	"github.com/smacker/go-tree-sitter/cue"
+	"github.com/smacker/go-tree-sitter/dockerfile"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/groovy"
 	"github.com/smacker/go-tree-sitter/hcl"
+	"github.com/smacker/go-tree-sitter/html"
 	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/kotlin"
+	"github.com/smacker/go-tree-sitter/lua"
+	markdownts "github.com/smacker/go-tree-sitter/markdown/tree-sitter-markdown"
 	"github.com/smacker/go-tree-sitter/php"
+	"github.com/smacker/go-tree-sitter/protobuf"
 	"github.com/smacker/go-tree-sitter/python"
 	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
@@ -64,6 +74,17 @@ var Registry = []Language{
 	{Name: "kotlin", DisplayName: "Kotlin", Extensions: []string{".kt", ".kts"}, Grammar: kotlin.GetLanguage, PresetSchema: "kotlin"},
 	{Name: "swift", DisplayName: "Swift", Extensions: []string{".swift"}, Grammar: swift.GetLanguage, PresetSchema: "swift", SentinelFiles: []string{"Package.swift"}},
 	{Name: "scala", DisplayName: "Scala", Extensions: []string{".scala", ".sc"}, Grammar: scala.GetLanguage, PresetSchema: "scala", SentinelFiles: []string{"build.sbt"}},
+	// --- Added grammars (no preset schemas yet) ---
+	{Name: "bash", DisplayName: "Bash", Extensions: []string{".sh", ".bash"}, Grammar: bash.GetLanguage},
+	{Name: "csharp", DisplayName: "C#", Extensions: []string{".cs"}, Grammar: csharp.GetLanguage},
+	{Name: "css", DisplayName: "CSS", Extensions: []string{".css"}, Grammar: css.GetLanguage},
+	{Name: "cue", DisplayName: "CUE", Extensions: []string{".cue"}, Grammar: cue.GetLanguage},
+	{Name: "dockerfile", DisplayName: "Dockerfile", Extensions: []string{".dockerfile"}, Grammar: dockerfile.GetLanguage, SentinelFiles: []string{"Dockerfile"}},
+	{Name: "groovy", DisplayName: "Groovy", Extensions: []string{".groovy"}, Grammar: groovy.GetLanguage, SentinelFiles: []string{"Jenkinsfile"}},
+	{Name: "html", DisplayName: "HTML", Extensions: []string{".html", ".htm"}, Grammar: html.GetLanguage},
+	{Name: "lua", DisplayName: "Lua", Extensions: []string{".lua"}, Grammar: lua.GetLanguage},
+	{Name: "markdown", DisplayName: "Markdown", Extensions: []string{".md", ".markdown"}, Grammar: markdownts.GetLanguage},
+	{Name: "protobuf", DisplayName: "Protocol Buffers", Extensions: []string{".proto"}, Grammar: protobuf.GetLanguage},
 }
 
 // Derived indexes — built once at init, never mutated.

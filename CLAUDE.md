@@ -33,28 +33,30 @@ Mache projects structured data (JSON, SQLite, source code) as a filesystem drive
 ```
 .db files  →  SQLiteGraph (zero-copy, lazy scan, direct SQL)  →  GraphFS (NFS) or MacheFS (FUSE)
 other files →  Engine (walkers + loaders)  →  MemoryStore       →  GraphFS (NFS) or MacheFS (FUSE)
-any source →  Engine → MemoryStore/SQLiteGraph                 →  MCP (stdio or Streamable HTTP)
+any source →  Engine → MemoryStore/SQLiteGraph                 →  MCP (Streamable HTTP or stdio)
 ```
 
 The `mache serve` command exposes the graph as MCP tools without mounting a filesystem.
-Two transports: stdio (default, client spawns mache) and Streamable HTTP (`--http :PORT`, always-on).
+Two transports: Streamable HTTP (`--http :PORT`, default, always-on) and stdio (`--stdio`, subprocess mode).
 HTTP mode uses stateful sessions — each client gets its own session ID mapped to the projected graph.
+Prefer HTTP over stdio to share one daemon across all sessions (avoids per-client FD leaks).
 
 The mount wiring in `cmd/mount.go` selects the data path based on file extension and the backend based on `--backend` flag (default: NFS on macOS, FUSE on Linux).
 
 ### Core Abstractions
 
-| Concept | Location | Role |
-|---------|----------|------|
-| Schema types | `api/schema.go` | `Topology` → `Node` (dirs) → `Leaf` (files) — declarative tree definition |
-| Graph interface | `internal/graph/graph.go` | `GetNode`, `ListChildren`, `ReadContent`, `GetCallers` — backend-agnostic |
-| MemoryStore | `internal/graph/graph.go` | Map-based graph with RWMutex + FIFO content cache (1024 entries) |
-| SQLiteGraph | `internal/graph/sqlite_graph.go` | Direct SQL backend: `compileLevels()` builds schema tree, `scanRoot()` streams all records using `json_extract()` in SQL, content resolved on-demand via PK lookup + template render |
-| Engine | `internal/ingest/engine.go` | Dispatches by extension (.db/.json/.go/.py/.js/.ts/.sql/.rs/.tf/.hcl/.yaml), recursive schema traversal, dedup via `dedupSuffix()` |
-| Walkers | `internal/ingest/json_walker.go`, `sitter_walker.go` | JSONPath (ojg) and tree-sitter AST query — both implement `Walker`/`Match` interfaces from `interfaces.go` |
-| GraphFS | `internal/nfsmount/graphfs.go` | NFS backend via go-nfs/billy, `callers/` virtual dir, write-back support |
-| MacheFS | `internal/fs/root.go` | FUSE backend: handle-based readdir (auto-mode for fuse-t), `callers/` symlinks, `.query/` magic dir |
-| Splice | `internal/writeback/splice.go` | Atomic byte-range replacement in source files for write-back |
+| Concept           | Location                                             | Role                                                                                                                                                                                 |
+| ----------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Schema types      | `api/schema.go`                                      | `Topology` → `Node` (dirs) → `Leaf` (files) — declarative tree definition                                                                                                            |
+| Graph interface   | `internal/graph/graph.go`                            | `GetNode`, `ListChildren`, `ReadContent`, `GetCallers` — backend-agnostic                                                                                                            |
+| MemoryStore       | `internal/graph/graph.go`                            | Map-based graph with RWMutex + FIFO content cache (1024 entries)                                                                                                                     |
+| SQLiteGraph       | `internal/graph/sqlite_graph.go`                     | Direct SQL backend: `compileLevels()` builds schema tree, `scanRoot()` streams all records using `json_extract()` in SQL, content resolved on-demand via PK lookup + template render |
+| Language registry | `internal/lang/lang.go`                              | Single source of truth for all 28 supported languages — extensions, grammars, presets, sentinel files. Every consumer derives from `lang.Registry`                                   |
+| Engine            | `internal/ingest/engine.go`                          | Dispatches by extension via `lang.ForExt()`, recursive schema traversal, dedup via `dedupSuffix()`                                                                                   |
+| Walkers           | `internal/ingest/json_walker.go`, `sitter_walker.go` | JSONPath (ojg) and tree-sitter AST query — both implement `Walker`/`Match` interfaces from `interfaces.go`                                                                           |
+| GraphFS           | `internal/nfsmount/graphfs.go`                       | NFS backend via go-nfs/billy, `callers/` virtual dir, write-back support                                                                                                             |
+| MacheFS           | `internal/fs/root.go`                                | FUSE backend: handle-based readdir (auto-mode for fuse-t), `callers/` symlinks, `.query/` magic dir                                                                                  |
+| Splice            | `internal/writeback/splice.go`                       | Atomic byte-range replacement in source files for write-back                                                                                                                         |
 
 ### Key Design Details
 
@@ -65,6 +67,10 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 - **Draft mode**: Invalid writes save as drafts; node path stays stable. Errors via `_diagnostics/ast-errors`.
 - **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `.query/` (SQL → symlinks), `callers/` (cross-refs, self-gating).
 - **NFS on macOS**: Default backend via `go-nfs`. Replaces fuse-t's NFS translation layer for full control.
+
+### Language Registry (`internal/lang`)
+
+All supported languages are defined in a single `Registry` slice in `internal/lang/lang.go`. Adding a new language means adding ONE entry — extensions, grammar, preset schema, sentinel files, and display name. Derived lookups (`ForExt`, `ForName`, `ForPath`, `IsSourceExt`, `Extensions`) are built at init time. All consumers (engine, watcher, writeback validation, schema presets, project detection, mount infer) use these lookups — no hardcoded switch statements elsewhere.
 
 ### Example Schemas
 

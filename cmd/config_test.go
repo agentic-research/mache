@@ -173,7 +173,7 @@ func TestDetectProjectType_TieBreaking(t *testing.T) {
 
 func TestDetectProjectType_NoMatch(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte(""), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.csv"), []byte(""), 0o644))
 	assert.Equal(t, "", detectProjectType(dir))
 }
 

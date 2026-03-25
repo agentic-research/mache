@@ -413,7 +413,7 @@ func detectProjectType(dir string) string {
 			counts["db"]++
 			continue
 		}
-		if l := lang.ForExt(ext); l != nil {
+		if l := lang.ForExt(ext); l != nil && l.PresetSchema != "" {
 			counts[l.Name]++
 		}
 	}

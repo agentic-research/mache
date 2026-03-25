@@ -7,11 +7,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRegistry_Has18Languages(t *testing.T) {
+func TestRegistry_Has28Languages(t *testing.T) {
 	expected := []string{
 		"go", "python", "javascript", "typescript", "sql", "terraform",
 		"yaml", "rust", "toml", "elixir", "java", "c", "cpp",
 		"ruby", "php", "kotlin", "swift", "scala",
+		"bash", "csharp", "css", "cue", "dockerfile", "groovy",
+		"html", "lua", "markdown", "protobuf",
 	}
 	for _, name := range expected {
 		l := ForName(name)
@@ -36,6 +38,15 @@ func TestForExt_AllExtensions(t *testing.T) {
 		".rb": "ruby", ".php": "php",
 		".kt": "kotlin", ".kts": "kotlin",
 		".swift": "swift", ".scala": "scala", ".sc": "scala",
+		// New grammars
+		".sh": "bash", ".bash": "bash",
+		".cs": "csharp", ".css": "css", ".cue": "cue",
+		".dockerfile": "dockerfile",
+		".groovy":     "groovy",
+		".html":       "html", ".htm": "html",
+		".lua": "lua",
+		".md":  "markdown", ".markdown": "markdown",
+		".proto": "protobuf",
 	}
 	for ext, wantName := range cases {
 		l := ForExt(ext)
@@ -52,7 +63,7 @@ func TestForExt_CaseInsensitive(t *testing.T) {
 
 func TestForExt_Unknown(t *testing.T) {
 	assert.Nil(t, ForExt(".xyz"))
-	assert.Nil(t, ForExt(".md"))
+	assert.Nil(t, ForExt(".abc"))
 	assert.Nil(t, ForExt(""))
 }
 
@@ -71,7 +82,8 @@ func TestIsSourceExt(t *testing.T) {
 	assert.True(t, IsSourceExt(".java"))
 	assert.True(t, IsSourceExt(".swift"))
 	assert.True(t, IsSourceExt(".json")) // special case: data format
-	assert.False(t, IsSourceExt(".md"))
+	assert.True(t, IsSourceExt(".md"))   // markdown is now a source extension
+	assert.False(t, IsSourceExt(".txt"))
 	assert.False(t, IsSourceExt(".o"))
 }
 
@@ -81,7 +93,7 @@ func TestExtensions_ReturnsAll(t *testing.T) {
 	assert.Contains(t, exts, ".scala")
 	assert.Contains(t, exts, ".hh")
 	assert.Contains(t, exts, ".json")
-	assert.True(t, len(exts) >= 28, "expected at least 28 extensions, got %d", len(exts))
+	assert.True(t, len(exts) >= 40, "expected at least 40 extensions, got %d", len(exts))
 }
 
 func TestExtensions_Sorted(t *testing.T) {
@@ -96,7 +108,8 @@ func TestForPath(t *testing.T) {
 	require.NotNil(t, l)
 	assert.Equal(t, "go", l.Name)
 
-	assert.Nil(t, ForPath("/foo/README.md"))
+	assert.NotNil(t, ForPath("/foo/README.md")) // markdown is now supported
+	assert.Nil(t, ForPath("/foo/data.csv"))
 }
 
 func TestNoDuplicateExtensions(t *testing.T) {
