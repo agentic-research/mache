@@ -25,6 +25,7 @@ import (
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/linter"
+	"github.com/agentic-research/mache/internal/materialize"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -48,6 +49,7 @@ var (
 	backend     string
 	agentMode   bool
 	outPath     string
+	outFormat   string
 	nfsOpts     string
 	snapshot    bool
 	maxFileSize string
@@ -61,7 +63,8 @@ func init() {
 	rootCmd.Flags().BoolVar(&inferSchema, "infer", false, "Auto-infer schema from data via FCA")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
 	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
-	rootCmd.Flags().StringVar(&outPath, "out", "", "Write .db to path instead of mounting (for leyline load); not compatible with --agent")
+	rootCmd.Flags().StringVar(&outPath, "out", "", "Write to path instead of mounting; not compatible with --agent")
+	rootCmd.Flags().StringVar(&outFormat, "format", "sqlite", "Output format for --out: sqlite, zip, boltdb")
 	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
 	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; copy is not atomic; default is zero-copy)")
 	rootCmd.Flags().StringVar(&maxFileSize, "max-file-size", "100MB", "Skip files larger than this during ingestion (e.g. 100MB, 1GB, 0 to disable)")
@@ -360,17 +363,23 @@ var rootCmd = &cobra.Command{
 				log.Printf("Indexing complete in %v", time.Since(start))
 				eng.PrintRoutingSummary()
 
-				// --out: materialize virtuals, copy .db, exit (no mount)
+				// --out: materialize virtuals, write to target format, exit (no mount)
 				if outPath != "" {
 					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
 						return fmt.Errorf("materialize virtuals: %w", err)
 					}
-					if err := copyFile(indexPath, outPath); err != nil {
-						return fmt.Errorf("copy db: %w", err)
+					mat, err := materialize.ForFormat(outFormat)
+					if err != nil {
+						return err
+					}
+					if err := mat.Materialize(indexPath, outPath); err != nil {
+						return fmt.Errorf("materialize (%s): %w", outFormat, err)
 					}
 					_ = os.Remove(indexPath)
-					log.Printf("Wrote %s", outPath)
-					log.Printf("Load into leyline: leyline load --db %s --control /tmp/ll.ctrl", outPath)
+					log.Printf("Wrote %s (format: %s)", outPath, outFormat)
+					if outFormat == "sqlite" {
+						log.Printf("Load into leyline: leyline load --db %s --control /tmp/ll.ctrl", outPath)
+					}
 					return nil
 				}
 
