@@ -207,7 +207,7 @@ func TestIsSourceFile(t *testing.T) {
 	assert.True(t, isSourceFile("lib.rs"))
 	assert.True(t, isSourceFile("mix.exs"))
 
-	assert.False(t, isSourceFile("readme.md"))
+	assert.True(t, isSourceFile("readme.md")) // markdown now supported
 	assert.False(t, isSourceFile("notes.txt"))
 	assert.False(t, isSourceFile("data.csv"))
 	assert.False(t, isSourceFile("image.png"))
