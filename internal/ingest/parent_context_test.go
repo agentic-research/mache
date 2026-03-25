@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 // TestEngine_ParentContext_JSONArrayFanout verifies that when a child selector
@@ -200,4 +202,63 @@ func TestEngine_ParentContext_NoParentAtRoot(t *testing.T) {
 	node, err := store.GetNode("items/foo/value")
 	require.NoError(t, err)
 	assert.Equal(t, "foo", string(node.Data))
+}
+
+// TestEngine_ParentContext_SQLiteStreamingPath exercises the collectNodes path
+// (used for .db ingestion) to verify _parent works in the SQLite streaming
+// pipeline, not just the MemoryStore/JSON file path.
+func TestEngine_ParentContext_SQLiteStreamingPath(t *testing.T) {
+	schema := &api.Topology{
+		Version: "v1",
+		Nodes: []api.Node{
+			{
+				Name:     "vulns",
+				Selector: "$",
+				Children: []api.Node{
+					{
+						Name:     "{{.item.name}}",
+						Selector: "$[*]",
+						Children: []api.Node{
+							{
+								Name:     "{{.pkg}}",
+								Selector: "$.item.affected[*]",
+								Files: []api.Leaf{
+									{
+										Name:            "detail",
+										ContentTemplate: "vuln={{._parent.item.name}} pkg={{.pkg}}",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Build a test SQLite DB with records containing nested arrays.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec("CREATE TABLE results (id TEXT PRIMARY KEY, record TEXT NOT NULL)")
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO results VALUES ('a', '{"schema":"vuln","identifier":"CVE-1","item":{"name":"CVE-2024-001","affected":[{"pkg":"curl"},{"pkg":"wget"}]}}')`)
+	require.NoError(t, err)
+	_ = db.Close()
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+
+	err = engine.Ingest(dbPath)
+	require.NoError(t, err)
+
+	// Verify _parent worked in the collectNodes path
+	node, err := store.GetNode("vulns/CVE-2024-001/curl/detail")
+	require.NoError(t, err, "curl/detail should exist via SQLite streaming path")
+	assert.Equal(t, "vuln=CVE-2024-001 pkg=curl", string(node.Data))
+
+	node, err = store.GetNode("vulns/CVE-2024-001/wget/detail")
+	require.NoError(t, err, "wget/detail should exist via SQLite streaming path")
+	assert.Equal(t, "vuln=CVE-2024-001 pkg=wget", string(node.Data))
 }

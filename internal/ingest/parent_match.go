@@ -6,6 +6,10 @@ import sitter "github.com/smacker/go-tree-sitter"
 // containing the parent match's values. This allows child templates to
 // reference parent fields via {{._parent.fieldName}}.
 //
+// Note: "_parent" is a reserved key. Schema data fields named "_parent" will
+// be shadowed. This is by design — underscore-prefixed keys are reserved for
+// engine-injected metadata (like _parent, _schema.json, _diagnostics).
+//
 // All other interfaces (OriginProvider, GetCaptureNode) are forwarded to the
 // inner match so that tree-sitter features (doc comments, location, write-back)
 // continue to work.
