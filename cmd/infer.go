@@ -11,33 +11,24 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// sourceCodePresets maps language names (as returned by DetectLanguageFromExt)
-// to their preset schema keys. Every compiled-in tree-sitter grammar with a
-// preset schema is listed here so auto-detection produces language-aware
-// projections instead of falling back to generic FCA inference.
-var sourceCodePresets = map[string]string{
-	"go":         "go",
-	"python":     "python",
-	"rust":       "rust",
-	"terraform":  "terraform",
-	"sql":        "sql",
-	"toml":       "toml",
-	"yaml":       "yaml",
-	"javascript": "javascript",
-	"typescript": "typescript",
-	"java":       "java",
-	"c":          "c",
-	"cpp":        "cpp",
-	"ruby":       "ruby",
-	"php":        "php",
-	"kotlin":     "kotlin",
-	"swift":      "swift",
-	"scala":      "scala",
-	"elixir":     "elixir",
+// sourceCodePresets maps language names to their preset schema keys.
+// Derived from the lang registry at init time — adding a language
+// to internal/lang automatically adds its preset here.
+var sourceCodePresets map[string]string
+
+func init() {
+	sourceCodePresets = make(map[string]string)
+	for i := range lang.Registry {
+		l := &lang.Registry[i]
+		if l.PresetSchema != "" {
+			sourceCodePresets[l.Name] = l.PresetSchema
+		}
+	}
 }
 
 // detectProjectLanguages walks a directory tree and returns a map of
@@ -56,8 +47,8 @@ func detectProjectLanguages(dir string) (map[string]int, error) {
 			return nil
 		}
 		ext := filepath.Ext(path)
-		if langName, _, ok := ingest.DetectLanguageFromExt(ext); ok {
-			counts[langName]++
+		if l := lang.ForExt(ext); l != nil {
+			counts[l.Name]++
 		}
 		return nil
 	})
@@ -84,21 +75,21 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 
 	// Log detected languages
 	langs := make([]string, 0, len(languageCounts))
-	for lang := range languageCounts {
-		langs = append(langs, lang)
+	for l := range languageCounts {
+		langs = append(langs, l)
 	}
 	sort.Strings(langs)
-	for _, lang := range langs {
-		log.Printf("  detected: %s (%d files)", lang, languageCounts[lang])
+	for _, l := range langs {
+		log.Printf("  detected: %s (%d files)", l, languageCounts[l])
 	}
 
 	// Split into preset vs inference buckets
 	var presetLangs, inferLangs []string
-	for _, lang := range langs {
-		if _, ok := sourceCodePresets[lang]; ok {
-			presetLangs = append(presetLangs, lang)
+	for _, l := range langs {
+		if _, ok := sourceCodePresets[l]; ok {
+			presetLangs = append(presetLangs, l)
 		} else {
-			inferLangs = append(inferLangs, lang)
+			inferLangs = append(inferLangs, l)
 		}
 	}
 
@@ -106,8 +97,8 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 	var allNodes []api.Node
 
 	// 1. Load preset schemas
-	for _, lang := range presetLangs {
-		presetKey := sourceCodePresets[lang]
+	for _, l := range presetLangs {
+		presetKey := sourceCodePresets[l]
 		topo, err := loadPresetSchema(presetKey)
 		if err != nil {
 			return nil, fmt.Errorf("load preset %q: %w", presetKey, err)
@@ -118,12 +109,12 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 		}
 		// Multi-language: wrap in namespace node
 		allNodes = append(allNodes, api.Node{
-			Name:     lang,
+			Name:     l,
 			Selector: "$",
-			Language: lang,
+			Language: l,
 			Children: topo.Nodes,
 		})
-		log.Printf("  %s: using preset schema", lang)
+		log.Printf("  %s: using preset schema", l)
 	}
 
 	// 2. FCA inference for remaining languages
@@ -156,7 +147,7 @@ func inferLanguages(dataPath string, langs []string, languageCounts map[string]i
 
 	for _, targetLang := range langs {
 		wg.Add(1)
-		go func(lang string) {
+		go func(targetName string) {
 			defer wg.Done()
 
 			var records []any
@@ -179,8 +170,8 @@ func inferLanguages(dataPath string, langs []string, languageCounts map[string]i
 				if ingest.ShouldSkipFile(path, info.Size()) {
 					return nil
 				}
-				langName, treeLang, ok := ingest.DetectLanguageFromExt(filepath.Ext(path))
-				if !ok || langName != lang {
+				l := lang.ForExt(filepath.Ext(path))
+				if l == nil || l.Name != targetName {
 					return nil
 				}
 				content, readErr := os.ReadFile(path)
@@ -188,22 +179,22 @@ func inferLanguages(dataPath string, langs []string, languageCounts map[string]i
 					return nil
 				}
 				parser := sitter.NewParser()
-				parser.SetLanguage(treeLang)
+				parser.SetLanguage(l.Grammar())
 				tree, _ := parser.ParseCtx(context.Background(), nil, content)
 				if tree != nil {
-					records = append(records, ingest.FlattenASTWithLanguage(tree.RootNode(), langName)...)
+					records = append(records, ingest.FlattenASTWithLanguage(tree.RootNode(), l.Name)...)
 				}
 				fileCount++
 				return nil
 			})
 
-			log.Printf("  %s: sampled %d/%d files for inference", lang, fileCount, languageCounts[lang])
+			log.Printf("  %s: sampled %d/%d files for inference", targetName, fileCount, languageCounts[targetName])
 
 			if walkErr != nil {
-				resultsChan <- langResult{lang: lang, err: walkErr}
+				resultsChan <- langResult{lang: targetName, err: walkErr}
 				return
 			}
-			resultsChan <- langResult{lang: lang, records: records}
+			resultsChan <- langResult{lang: targetName, records: records}
 		}(targetLang)
 	}
 
