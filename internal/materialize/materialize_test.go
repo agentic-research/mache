@@ -89,7 +89,7 @@ func TestSQLiteMaterializer_CopiesAllNodes(t *testing.T) {
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM nodes`).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 6, count) // 2 dirs + 2 files + 1 dir + 1 _schema.json
+	assert.Equal(t, 6, count) // 3 dirs (functions, HandleRequest, ProcessOrder) + 2 source files + _schema.json
 
 	// Verify specific content preserved
 	var record string

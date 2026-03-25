@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -39,7 +40,12 @@ func ForFormat(format string) (Materializer, error) {
 		return fn(), nil
 	}
 
-	return nil, fmt.Errorf("unknown output format: %q (supported: sqlite, zip, boltdb)", format)
+	// Build the supported-format list dynamically (core + registered).
+	supported := []string{"sqlite", "zip"}
+	for name := range formatRegistry {
+		supported = append(supported, name)
+	}
+	return nil, fmt.Errorf("unknown output format: %q (supported: %s)", format, strings.Join(supported, ", "))
 }
 
 // ---------------------------------------------------------------------------

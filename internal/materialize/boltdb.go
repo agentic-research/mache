@@ -26,9 +26,11 @@ func (m *BoltDBMaterializer) Materialize(srcDB, outPath string) error {
 	defer func() { _ = db.Close() }()
 
 	// Remove existing output — bbolt won't overwrite.
-	_ = os.Remove(outPath)
+	if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing output %q: %w", outPath, err)
+	}
 
-	bdb, err := bolt.Open(outPath, 0o644, nil)
+	bdb, err := bolt.Open(outPath, 0o600, nil)
 	if err != nil {
 		return fmt.Errorf("create boltdb: %w", err)
 	}

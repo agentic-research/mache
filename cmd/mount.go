@@ -64,7 +64,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
 	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
 	rootCmd.Flags().StringVar(&outPath, "out", "", "Write to path instead of mounting; not compatible with --agent")
-	rootCmd.Flags().StringVar(&outFormat, "format", "sqlite", "Output format for --out: sqlite, zip, boltdb")
+	rootCmd.Flags().StringVar(&outFormat, "format", "sqlite", "Output format for --out: sqlite, zip, boltdb (requires -tags boltdb)")
 	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
 	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; copy is not atomic; default is zero-copy)")
 	rootCmd.Flags().StringVar(&maxFileSize, "max-file-size", "100MB", "Skip files larger than this during ingestion (e.g. 100MB, 1GB, 0 to disable)")
