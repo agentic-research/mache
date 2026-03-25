@@ -21,28 +21,13 @@ import (
 	machefs "github.com/agentic-research/mache/internal/fs"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/linter"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
-	treec "github.com/smacker/go-tree-sitter/c"
-	"github.com/smacker/go-tree-sitter/cpp"
-	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/smacker/go-tree-sitter/hcl"
-	"github.com/smacker/go-tree-sitter/java"
-	"github.com/smacker/go-tree-sitter/javascript"
-	"github.com/smacker/go-tree-sitter/kotlin"
-	"github.com/smacker/go-tree-sitter/php"
-	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/ruby"
-	"github.com/smacker/go-tree-sitter/rust"
-	"github.com/smacker/go-tree-sitter/scala"
-	"github.com/smacker/go-tree-sitter/sql"
-	"github.com/smacker/go-tree-sitter/swift"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
-	"github.com/smacker/go-tree-sitter/yaml"
 	"github.com/spf13/cobra"
 	"github.com/winfsp/cgofuse/fuse"
 )
@@ -182,38 +167,6 @@ var rootCmd = &cobra.Command{
 				start := time.Now()
 				inferred, err = inf.InferFromSQLite(dataPath)
 				log.Printf("Schema inference done in %v", time.Since(start))
-			case ".js":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, javascript.GetLanguage(), "JavaScript")
-			case ".ts", ".tsx":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, typescript.GetLanguage(), "TypeScript")
-			case ".sql":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, sql.GetLanguage(), "SQL")
-			case ".py":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, python.GetLanguage(), "Python")
-			case ".go":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, golang.GetLanguage(), "Go")
-			case ".tf", ".hcl":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, hcl.GetLanguage(), "HCL/Terraform")
-			case ".yaml", ".yml":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, yaml.GetLanguage(), "YAML")
-			case ".rs":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, rust.GetLanguage(), "Rust")
-			case ".java":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, java.GetLanguage(), "Java")
-			case ".c", ".h":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, treec.GetLanguage(), "C")
-			case ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, cpp.GetLanguage(), "C++")
-			case ".rb":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, ruby.GetLanguage(), "Ruby")
-			case ".php":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, php.GetLanguage(), "PHP")
-			case ".kt", ".kts":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, kotlin.GetLanguage(), "Kotlin")
-			case ".swift":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, swift.GetLanguage(), "Swift")
-			case ".scala", ".sc":
-				inferred, err = inferFromTreeSitterFile(inf, dataPath, scala.GetLanguage(), "Scala")
 			case ".git":
 				log.Print("Loading git commits...")
 				start := time.Now()
@@ -231,17 +184,22 @@ var rootCmd = &cobra.Command{
 				}
 				log.Printf("Schema inference done in %v", time.Since(start))
 			default:
-				// Check if it's a directory
-				info, errStat := os.Stat(dataPath)
-				if errStat == nil && info.IsDir() {
-					log.Printf("Inferring schema from directory %s...", dataPath)
-					start := time.Now()
-					inferred, err = inferDirSchema(dataPath)
-					if err == nil {
-						log.Printf("Schema inferred in %v", time.Since(start))
-					}
+				// Try tree-sitter language lookup from the registry
+				if l := lang.ForExt(ext); l != nil {
+					inferred, err = inferFromTreeSitterFile(inf, dataPath, l.Grammar(), l.DisplayName)
 				} else {
-					err = fmt.Errorf("automatic inference not supported for %s", ext)
+					// Check if it's a directory
+					info, errStat := os.Stat(dataPath)
+					if errStat == nil && info.IsDir() {
+						log.Printf("Inferring schema from directory %s...", dataPath)
+						start := time.Now()
+						inferred, err = inferDirSchema(dataPath)
+						if err == nil {
+							log.Printf("Schema inferred in %v", time.Since(start))
+						}
+					} else {
+						err = fmt.Errorf("automatic inference not supported for %s", ext)
+					}
 				}
 			}
 
@@ -919,18 +877,19 @@ func newCallExtractor() graph.CallExtractor {
 		New: func() any { return sitter.NewParser() },
 	}
 	return func(content []byte, path, langName string) ([]graph.QualifiedCall, error) {
-		lang := ingest.GetLanguage(langName)
-		if lang == nil {
+		l := lang.ForName(langName)
+		if l == nil {
 			return nil, nil
 		}
+		grammar := l.Grammar()
 		parser := pool.Get().(*sitter.Parser)
 		defer pool.Put(parser)
-		parser.SetLanguage(lang)
+		parser.SetLanguage(grammar)
 		tree, _ := parser.ParseCtx(context.Background(), nil, content)
 		if tree == nil {
 			return nil, nil
 		}
-		return walker.ExtractQualifiedCalls(tree.RootNode(), content, lang, langName)
+		return walker.ExtractQualifiedCalls(tree.RootNode(), content, grammar, langName)
 	}
 }
 

@@ -2,6 +2,8 @@ package ingest
 
 import (
 	sitter "github.com/smacker/go-tree-sitter"
+
+	"github.com/agentic-research/mache/internal/lang"
 )
 
 // FlattenAST walks the tree and returns a list of records for FCA analysis.
@@ -13,12 +15,15 @@ func FlattenAST(root *sitter.Node) []any {
 // using language-specific enrichment if available.
 func FlattenASTWithLanguage(root *sitter.Node, langName string) []any {
 	var records []any
-	profile := GetLanguageProfile(langName)
-	walkAST(root, &records, profile)
+	var enrichFn func(n *sitter.Node, rec map[string]any)
+	if l := lang.ForName(langName); l != nil {
+		enrichFn = l.EnrichNode
+	}
+	walkAST(root, &records, enrichFn)
 	return records
 }
 
-func walkAST(n *sitter.Node, records *[]any, profile *LanguageProfile) {
+func walkAST(n *sitter.Node, records *[]any, enrichFn func(*sitter.Node, map[string]any)) {
 	if n == nil {
 		return
 	}
@@ -47,8 +52,8 @@ func walkAST(n *sitter.Node, records *[]any, profile *LanguageProfile) {
 		}
 
 		// Apply language-specific enrichment for languages without field names
-		if profile != nil && profile.EnrichNode != nil {
-			profile.EnrichNode(n, rec)
+		if enrichFn != nil {
+			enrichFn(n, rec)
 		}
 
 		*records = append(*records, rec)
@@ -57,6 +62,6 @@ func walkAST(n *sitter.Node, records *[]any, profile *LanguageProfile) {
 	// Recurse
 	count := int(n.ChildCount())
 	for i := 0; i < count; i++ {
-		walkAST(n.Child(i), records, profile)
+		walkAST(n.Child(i), records, enrichFn)
 	}
 }

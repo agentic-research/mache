@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/lang"
 )
 
 // ConfigFileName is the convention file looked up by `mache serve`.
@@ -371,15 +372,18 @@ func registerAllEditors(w io.Writer, binaryPath string) {
 }
 
 // sentinelFiles maps sentinel filenames to their language preset.
-// These are checked before extension counting so that projects with
-// code in subdirectories (e.g. cmd/, internal/) are detected correctly.
-var sentinelFiles = map[string]string{
-	"go.mod":           "go",
-	"go.sum":           "go",
-	"pyproject.toml":   "python",
-	"requirements.txt": "python",
-	"setup.py":         "python",
-	"Cargo.toml":       "rust",
+// Derived from the lang registry at init time — adding SentinelFiles
+// to a language in internal/lang automatically updates detection here.
+var sentinelFiles map[string]string
+
+func init() {
+	sentinelFiles = make(map[string]string)
+	for i := range lang.Registry {
+		l := &lang.Registry[i]
+		for _, sf := range l.SentinelFiles {
+			sentinelFiles[sf] = l.Name
+		}
+	}
 }
 
 // detectProjectType scans a directory and returns the best-fit schema preset name.
@@ -400,20 +404,17 @@ func detectProjectType(dir string) string {
 		name := e.Name()
 
 		// Sentinel files take priority
-		if lang, ok := sentinelFiles[name]; ok {
-			return lang
+		if preset, ok := sentinelFiles[name]; ok {
+			return preset
 		}
 
 		ext := strings.ToLower(filepath.Ext(name))
-		switch ext {
-		case ".go":
-			counts["go"]++
-		case ".py":
-			counts["python"]++
-		case ".sql":
-			counts["sql"]++
-		case ".db":
+		if ext == ".db" {
 			counts["db"]++
+			continue
+		}
+		if l := lang.ForExt(ext); l != nil {
+			counts[l.Name]++
 		}
 	}
 
@@ -424,9 +425,9 @@ func detectProjectType(dir string) string {
 
 	best := ""
 	bestCount := 0
-	for lang, count := range counts {
-		if count > bestCount || (count == bestCount && lang < best) {
-			best = lang
+	for l, count := range counts {
+		if count > bestCount || (count == bestCount && l < best) {
+			best = l
 			bestCount = count
 		}
 	}

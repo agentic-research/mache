@@ -10,9 +10,9 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
 	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +55,7 @@ var buildCmd = &cobra.Command{
 					return nil // try next file
 				}
 				parser := sitter.NewParser()
-				parser.SetLanguage(golang.GetLanguage())
+				parser.SetLanguage(lang.ForName("go").Grammar())
 				tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
 				if parseErr != nil {
 					log.Printf("schema inference: parse %s: %v", path, parseErr)
