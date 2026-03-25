@@ -656,7 +656,7 @@ func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil, nil); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil, nil, nil); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -757,7 +757,7 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 
 	// 5. processNode for each applicable schema node.
 	for _, nodeSchema := range applicableNodes {
-		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs); err != nil {
+		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil); err != nil {
 			// 6. Invalid query → route to _project_files/.
 			if strings.Contains(err.Error(), "invalid query") {
 				e.mu.Lock()
@@ -1089,7 +1089,7 @@ func processRecord(schema *api.Topology, walker Walker, dbPath string, job recor
 
 	for _, nodeSchema := range schema.Nodes {
 		for _, childSchema := range nodeSchema.Children {
-			collectNodes(&result, childSchema, walker, wrapper, nodeSchema.Name, dbPath, job.recordID, extraFuncs, tmplCache)
+			collectNodes(&result, childSchema, walker, wrapper, nodeSchema.Name, dbPath, job.recordID, extraFuncs, tmplCache, nil)
 			if result.err != nil {
 				return result
 			}
@@ -1104,11 +1104,18 @@ func processRecord(schema *api.Topology, walker Walker, dbPath string, job recor
 //
 // extraFuncs/tmplCache are threaded through for content template rendering
 // (e.g., {{diagram}}). When nil, uses base RenderTemplate.
-func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any, parentPath, dbPath, recordID string, extraFuncs template.FuncMap, tmplCache *sync.Map) {
+func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any, parentPath, dbPath, recordID string, extraFuncs template.FuncMap, tmplCache *sync.Map, parentMatchValues map[string]any) {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		result.err = fmt.Errorf("query failed for %s: %w", schema.Name, err)
 		return
+	}
+
+	// Inject _parent context into child matches when parent values are available.
+	if parentMatchValues != nil {
+		for i, m := range matches {
+			matches[i] = &parentAwareMatch{inner: m, parentValues: parentMatchValues}
+		}
 	}
 
 	for _, match := range matches {
@@ -1131,7 +1138,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				collectNodes(result, childSchema, walker, nextCtx, currentPath, dbPath, recordID, extraFuncs, tmplCache)
+				collectNodes(result, childSchema, walker, nextCtx, currentPath, dbPath, recordID, extraFuncs, tmplCache, match.Values())
 				if result.err != nil {
 					return
 				}
@@ -1215,10 +1222,17 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte, fileAddressRefs []string) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte, fileAddressRefs []string, parentMatchValues map[string]any) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
+	}
+
+	// Inject _parent context into child matches when parent values are available.
+	if parentMatchValues != nil {
+		for i, m := range matches {
+			matches[i] = &parentAwareMatch{inner: m, parentValues: parentMatchValues}
+		}
 	}
 
 	for _, match := range matches {
@@ -1346,7 +1360,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext, fileAddressRefs); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext, fileAddressRefs, match.Values()); err != nil {
 					return err
 				}
 			}
