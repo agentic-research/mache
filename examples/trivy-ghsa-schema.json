@@ -1,0 +1,28 @@
+{
+  "version": "v1",
+  "description": "Projects venturi GitHub Advisory data into trivy-db BoltDB layout. Usage: mache <mp> --data github.db --schema trivy-ghsa-schema.json --out trivy.db --format boltdb",
+  "nodes": [
+    {
+      "name": "advisories",
+      "selector": "$[*]",
+      "children": [
+        {
+          "name": "{{lookup ._parent.item.Advisory.namespace \"github:npm\" \"Npm\" \"github:python\" \"Pip\" \"github:go\" \"Go\" \"github:java\" \"Maven\" \"github:rust\" \"Cargo\" \"github:gem\" \"RubyGems\" \"github:composer\" \"Composer\" \"github:nuget\" \"NuGet\" \"github:swift\" \"Swift\" \"github:dart\" \"Dart\" \"github:erlang\" \"Erlang\" \"github:github-action\" \"GithubActions\" \"Other\"}}::ghsa",
+          "selector": "$[*].item.Advisory.FixedIn[*]",
+          "children": [
+            {
+              "name": "{{.name}}",
+              "selector": "$",
+              "files": [
+                {
+                  "name": "{{default (index ._parent._parent.item.Advisory.CVE 0) ._parent._parent.item.Advisory.ghsaId}}",
+                  "content_template": "{{dict \"FixedVersion\" .identifier \"AffectedVersion\" .range \"Severity\" (lookup ._parent._parent.item.Advisory.Severity \"Critical\" 4 \"High\" 3 \"Medium\" 2 \"Low\" 1 0) | json}}"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

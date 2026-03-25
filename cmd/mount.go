@@ -313,6 +313,38 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("scan failed: %w", err)
 				}
 				log.Printf("Scanning records done in %v", time.Since(start))
+
+				// --out with .db source: ingest via SQLiteWriter (produces nodes table),
+				// then materialize to target format and exit. Skip the SQLiteGraph
+				// mount path entirely.
+				if outPath != "" {
+					indexPath := filepath.Join(os.TempDir(), fmt.Sprintf("mache-out-%d-index.db", os.Getpid()))
+					_ = os.Remove(indexPath)
+					writer, err := ingest.NewSQLiteWriter(indexPath)
+					if err != nil {
+						return fmt.Errorf("create sqlite writer: %w", err)
+					}
+					eng := ingest.NewEngine(schema, writer)
+					if err := eng.Ingest(dataPath); err != nil {
+						_ = writer.Close()
+						return fmt.Errorf("ingest for --out: %w", err)
+					}
+					if err := writer.Close(); err != nil {
+						return fmt.Errorf("close sqlite writer: %w", err)
+					}
+
+					mat, mErr := materialize.ForFormat(outFormat)
+					if mErr != nil {
+						return mErr
+					}
+					if mErr = mat.Materialize(indexPath, outPath); mErr != nil {
+						return fmt.Errorf("materialize (%s): %w", outFormat, mErr)
+					}
+					_ = os.Remove(indexPath)
+					log.Printf("Wrote %s (format: %s)", outPath, outFormat)
+					return nil
+				}
+
 				g = sg
 			} else if !writable && ingest.SchemaUsesTreeSitter(schema) {
 				// Read-only source: ingest to SQLite index, mount via SQLiteGraph (fast path).

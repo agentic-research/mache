@@ -165,3 +165,101 @@ func TestTemplateFuncs_TrimSuffix(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "main", out)
 }
+
+// ---------------------------------------------------------------------------
+// dict — construct a map inline
+// ---------------------------------------------------------------------------
+
+func TestTemplateFuncs_Dict(t *testing.T) {
+	out, err := RenderTemplate(`{{dict "name" "curl" "version" "7.88" | json}}`, map[string]any{})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"name":"curl","version":"7.88"}`, out)
+}
+
+func TestTemplateFuncs_DictWithTemplateValues(t *testing.T) {
+	out, err := RenderTemplate(`{{dict "PkgName" .name "FixedVersion" .ver | json}}`, map[string]any{
+		"name": "openssl",
+		"ver":  "3.0.1",
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"PkgName":"openssl","FixedVersion":"3.0.1"}`, out)
+}
+
+func TestTemplateFuncs_DictEmpty(t *testing.T) {
+	out, err := RenderTemplate(`{{dict | json}}`, map[string]any{})
+	require.NoError(t, err)
+	assert.Equal(t, "{}", out)
+}
+
+func TestTemplateFuncs_DictWithIntValue(t *testing.T) {
+	out, err := RenderTemplate(`{{dict "Severity" 4 "Status" 3 | json}}`, map[string]any{})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"Severity":4,"Status":3}`, out)
+}
+
+// ---------------------------------------------------------------------------
+// lookup — enum/key-value mapping
+// ---------------------------------------------------------------------------
+
+func TestTemplateFuncs_Lookup(t *testing.T) {
+	out, err := RenderTemplate(`{{lookup .sev "Critical" "4" "High" "3" "Medium" "2" "Low" "1"}}`, map[string]any{"sev": "High"})
+	require.NoError(t, err)
+	assert.Equal(t, "3", out)
+}
+
+func TestTemplateFuncs_LookupDefault(t *testing.T) {
+	// Odd number of args after value → last arg is default
+	out, err := RenderTemplate(`{{lookup .sev "Critical" "4" "High" "3" "0"}}`, map[string]any{"sev": "Unknown"})
+	require.NoError(t, err)
+	assert.Equal(t, "0", out)
+}
+
+func TestTemplateFuncs_LookupNoMatch(t *testing.T) {
+	// Even args, no match → empty string
+	out, err := RenderTemplate(`{{lookup .sev "Critical" "4" "High" "3"}}`, map[string]any{"sev": "Low"})
+	require.NoError(t, err)
+	assert.Equal(t, "", out)
+}
+
+func TestTemplateFuncs_LookupIntValues(t *testing.T) {
+	out, err := RenderTemplate(`{{lookup .sev "Critical" 4 "High" 3 "Medium" 2 "Low" 1 0}}`, map[string]any{"sev": "Critical"})
+	require.NoError(t, err)
+	assert.Equal(t, "4", out)
+}
+
+// ---------------------------------------------------------------------------
+// default — fallback for empty/nil values
+// ---------------------------------------------------------------------------
+
+func TestTemplateFuncs_Default(t *testing.T) {
+	out, err := RenderTemplate(`{{default .name "unknown"}}`, map[string]any{"name": "curl"})
+	require.NoError(t, err)
+	assert.Equal(t, "curl", out)
+}
+
+func TestTemplateFuncs_DefaultEmpty(t *testing.T) {
+	out, err := RenderTemplate(`{{default .name "unknown"}}`, map[string]any{"name": ""})
+	require.NoError(t, err)
+	assert.Equal(t, "unknown", out)
+}
+
+func TestTemplateFuncs_DefaultNil(t *testing.T) {
+	out, err := RenderTemplate(`{{default .name "unknown"}}`, map[string]any{})
+	require.NoError(t, err)
+	assert.Equal(t, "unknown", out)
+}
+
+// ---------------------------------------------------------------------------
+// Composition — dict + lookup + json pipeline for trivy Advisory shape
+// ---------------------------------------------------------------------------
+
+func TestTemplateFuncs_TrivyAdvisoryShape(t *testing.T) {
+	// Simulates the trivy Advisory JSON construction from venturi GitHub Advisory fields
+	tmpl := `{{dict "FixedVersion" .ver "Severity" (lookup .sev "Critical" 4 "High" 3 "Medium" 2 "Low" 1 0) | json}}`
+	out, err := RenderTemplate(tmpl, map[string]any{
+		"ver": "3.0.1",
+		"sev": "High",
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"FixedVersion":"3.0.1","Severity":3}`, out)
+}

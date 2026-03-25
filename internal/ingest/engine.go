@@ -1087,9 +1087,14 @@ func processRecord(schema *api.Topology, walker Walker, dbPath string, job recor
 	wrapper := []any{parsed}
 	var result recordResult
 
+	// Expose the full record as _parent context for child selectors.
+	// In the streaming path, each record IS the top-level match — its fields
+	// should be accessible via {{._parent.item.Advisory.Severity}} etc.
+	recordValues, _ := parsed.(map[string]any)
+
 	for _, nodeSchema := range schema.Nodes {
 		for _, childSchema := range nodeSchema.Children {
-			collectNodes(&result, childSchema, walker, wrapper, nodeSchema.Name, dbPath, job.recordID, extraFuncs, tmplCache, nil)
+			collectNodes(&result, childSchema, walker, wrapper, nodeSchema.Name, dbPath, job.recordID, extraFuncs, tmplCache, recordValues)
 			if result.err != nil {
 				return result
 			}
@@ -1694,6 +1699,40 @@ var tmplFuncs = template.FuncMap{
 	"trimPrefix": strings.TrimPrefix,
 	// trimSuffix: {{trimSuffix .s ".go"}} → "main" from "main.go".
 	"trimSuffix": strings.TrimSuffix,
+	// dict: construct a map from key-value pairs.
+	// {{dict "PkgName" .name "Severity" 4 | json}} → {"PkgName":"curl","Severity":4}
+	"dict": func(pairs ...any) map[string]any {
+		m := make(map[string]any, len(pairs)/2)
+		for i := 0; i+1 < len(pairs); i += 2 {
+			m[fmt.Sprint(pairs[i])] = pairs[i+1]
+		}
+		return m
+	},
+	// lookup: key-value enum mapping. Last odd arg is default.
+	// {{lookup .Severity "Critical" 4 "High" 3 "Medium" 2 "Low" 1 0}}
+	"lookup": func(val any, pairs ...any) any {
+		s := fmt.Sprint(val)
+		for i := 0; i+1 < len(pairs); i += 2 {
+			if fmt.Sprint(pairs[i]) == s {
+				return pairs[i+1]
+			}
+		}
+		if len(pairs)%2 == 1 {
+			return pairs[len(pairs)-1]
+		}
+		return ""
+	},
+	// default: return fallback when value is empty, nil, or zero.
+	// {{default .name "unknown"}}
+	"default": func(val, fallback any) any {
+		if val == nil {
+			return fallback
+		}
+		if s, ok := val.(string); ok && s == "" {
+			return fallback
+		}
+		return val
+	},
 }
 
 // tmplCache stores parsed templates keyed by their source string.
