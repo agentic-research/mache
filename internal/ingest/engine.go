@@ -1699,14 +1699,17 @@ var tmplFuncs = template.FuncMap{
 	"trimPrefix": strings.TrimPrefix,
 	// trimSuffix: {{trimSuffix .s ".go"}} → "main" from "main.go".
 	"trimSuffix": strings.TrimSuffix,
-	// dict: construct a map from key-value pairs.
+	// dict: construct a map from key-value pairs. Errors on odd arg count.
 	// {{dict "PkgName" .name "Severity" 4 | json}} → {"PkgName":"curl","Severity":4}
-	"dict": func(pairs ...any) map[string]any {
+	"dict": func(pairs ...any) (map[string]any, error) {
+		if len(pairs)%2 != 0 {
+			return nil, fmt.Errorf("dict requires even number of args, got %d", len(pairs))
+		}
 		m := make(map[string]any, len(pairs)/2)
-		for i := 0; i+1 < len(pairs); i += 2 {
+		for i := 0; i < len(pairs); i += 2 {
 			m[fmt.Sprint(pairs[i])] = pairs[i+1]
 		}
-		return m
+		return m, nil
 	},
 	// lookup: key-value enum mapping. Last odd arg is default.
 	// {{lookup .Severity "Critical" 4 "High" 3 "Medium" 2 "Low" 1 0}}
@@ -1722,7 +1725,7 @@ var tmplFuncs = template.FuncMap{
 		}
 		return ""
 	},
-	// default: return fallback when value is empty, nil, or zero.
+	// default: return fallback when value is nil or empty string.
 	// {{default .name "unknown"}}
 	"default": func(val, fallback any) any {
 		if val == nil {

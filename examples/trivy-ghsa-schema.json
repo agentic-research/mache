@@ -15,7 +15,7 @@
               "selector": "$",
               "files": [
                 {
-                  "name": "{{default (index ._parent._parent.item.Advisory.CVE 0) ._parent._parent.item.Advisory.ghsaId}}",
+                  "name": "{{default (first ._parent._parent.item.Advisory.CVE) ._parent._parent.item.Advisory.ghsaId}}",
                   "content_template": "{{dict \"FixedVersion\" .identifier \"AffectedVersion\" .range \"Severity\" (lookup ._parent._parent.item.Advisory.Severity \"Critical\" 4 \"High\" 3 \"Medium\" 2 \"Low\" 1 0) | json}}"
                 }
               ]
