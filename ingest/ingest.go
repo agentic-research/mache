@@ -10,12 +10,18 @@ import (
 )
 
 // IngestionTarget combines Graph reading with writing capabilities.
-// MemoryStore satisfies this interface.
+// The graph.MemoryStore type satisfies this interface.
 type IngestionTarget = ii.IngestionTarget
 
 // Engine drives the ingestion process: schema traversal, file walking, and
 // node creation for both JSON and tree-sitter source paths.
 type Engine = ii.Engine
+
+// Walker queries structured data (JSON or tree-sitter AST) and returns matches.
+type Walker = ii.Walker
+
+// Match is a single result from a Walker query.
+type Match = ii.Match
 
 // JsonWalker implements the Walker interface for JSON-like data using JSONPath.
 type JsonWalker = ii.JsonWalker
