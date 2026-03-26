@@ -28,7 +28,7 @@ func TestOutFlag_DBSource(t *testing.T) {
 		INSERT INTO results VALUES ('b', '{"schema":"test","identifier":"item-2","item":{"name":"baz","value":"qux"}}');
 	`)
 	require.NoError(t, err)
-	_ = db.Close()
+	require.NoError(t, db.Close())
 
 	outZip := filepath.Join(tmpDir, "out.zip")
 
