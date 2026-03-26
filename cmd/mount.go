@@ -299,7 +299,12 @@ var rootCmd = &cobra.Command{
 				// --out with .db source: ingest via SQLiteWriter, materialize, exit.
 				// Skip OpenSQLiteGraph/EagerScan entirely — no mount needed.
 				if outPath != "" {
-					indexPath := filepath.Join(os.TempDir(), fmt.Sprintf("mache-out-%d-index.db", os.Getpid()))
+					indexFile, err := os.CreateTemp("", "mache-out-*.db")
+					if err != nil {
+						return fmt.Errorf("create temp index: %w", err)
+					}
+					indexPath := indexFile.Name()
+					_ = indexFile.Close() // SQLiteWriter opens it by path
 					defer func() { _ = os.Remove(indexPath) }()
 
 					writer, err := ingest.NewSQLiteWriter(indexPath)
