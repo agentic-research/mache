@@ -245,7 +245,7 @@ func TestEngine_ParentContext_SQLiteStreamingPath(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO results VALUES ('a', '{"schema":"vuln","identifier":"CVE-1","item":{"name":"CVE-2024-001","affected":[{"pkg":"curl"},{"pkg":"wget"}]}}')`)
 	require.NoError(t, err)
-	_ = db.Close()
+	require.NoError(t, db.Close())
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
