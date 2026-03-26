@@ -88,7 +88,7 @@ func TestInferFromSQLite_Synthetic(t *testing.T) {
 			fmt.Sprintf("rec-%d", i), string(data))
 		require.NoError(t, err)
 	}
-	_ = db.Close()
+	require.NoError(t, db.Close())
 
 	// Run full pipeline
 	inf := &Inferrer{Config: InferConfig{SampleSize: 100, RootName: "vulns"}}

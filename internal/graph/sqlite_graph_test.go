@@ -671,14 +671,21 @@ func BenchmarkScanRoot_Synthetic(b *testing.B) {
 	if _, err := db.Exec("CREATE TABLE results (id TEXT PRIMARY KEY, record TEXT NOT NULL)"); err != nil {
 		b.Fatal(err)
 	}
-	tx, _ := db.Begin()
+	tx, err := db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
 	for id, rec := range records {
 		if _, err := tx.Exec("INSERT INTO results (id, record) VALUES (?, ?)", id, rec); err != nil {
 			b.Fatal(err)
 		}
 	}
-	_ = tx.Commit()
-	_ = db.Close()
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		b.Fatal(err)
+	}
 
 	schema := kevSchema()
 
