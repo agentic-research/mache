@@ -296,15 +296,50 @@ var rootCmd = &cobra.Command{
 
 		if _, err := os.Stat(dataPath); err == nil {
 			if filepath.Ext(dataPath) == ".db" {
+				// --out with .db source: ingest via SQLiteWriter, materialize, exit.
+				// Skip OpenSQLiteGraph/EagerScan entirely — no mount needed.
+				if outPath != "" {
+					indexPath := filepath.Join(os.TempDir(), fmt.Sprintf("mache-out-%d-index.db", os.Getpid()))
+					defer func() { _ = os.Remove(indexPath) }()
+
+					writer, err := ingest.NewSQLiteWriter(indexPath)
+					if err != nil {
+						return fmt.Errorf("create sqlite writer: %w", err)
+					}
+					eng := ingest.NewEngine(schema, writer)
+					start := time.Now()
+					if err := eng.Ingest(dataPath); err != nil {
+						_ = writer.Close()
+						return fmt.Errorf("ingest for --out: %w", err)
+					}
+					if err := writer.Close(); err != nil {
+						return fmt.Errorf("close sqlite writer: %w", err)
+					}
+					log.Printf("Ingestion complete in %v", time.Since(start))
+
+					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
+						return fmt.Errorf("materialize virtuals: %w", err)
+					}
+
+					mat, mErr := materialize.ForFormat(outFormat)
+					if mErr != nil {
+						return mErr
+					}
+					if mErr = mat.Materialize(indexPath, outPath); mErr != nil {
+						return fmt.Errorf("materialize (%s): %w", outFormat, mErr)
+					}
+					log.Printf("Wrote %s (format: %s)", outPath, outFormat)
+					return nil
+				}
+
 				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
 				log.Printf("Opening %s (direct SQL backend)...", dataPath)
 				sg, err := graph.OpenSQLiteGraph(dataPath, schema, ingest.RenderTemplate)
 				if err != nil {
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}
-				defer func() { _ = sg.Close() }() // safe to ignore
+				defer func() { _ = sg.Close() }()
 
-				// Wire call extractor for callees/ resolution
 				sg.SetCallExtractor(newCallExtractor())
 
 				start := time.Now()
@@ -313,6 +348,7 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("scan failed: %w", err)
 				}
 				log.Printf("Scanning records done in %v", time.Since(start))
+
 				g = sg
 			} else if !writable && ingest.SchemaUsesTreeSitter(schema) {
 				// Read-only source: ingest to SQLite index, mount via SQLiteGraph (fast path).
