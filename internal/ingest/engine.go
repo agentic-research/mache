@@ -1747,9 +1747,9 @@ var tmplFuncs = template.FuncMap{
 	// {{dig "item.affected.0.package.ecosystem" .}} → "AlmaLinux:8" or ""
 	"dig": func(path string, obj any) string {
 		parts := strings.Split(path, ".")
-		var current any = obj
+		current := obj
 		for _, part := range parts {
-			if current == nil {
+			if current == nil || part == "" {
 				return ""
 			}
 			switch v := current.(type) {

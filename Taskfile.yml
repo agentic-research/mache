@@ -90,7 +90,7 @@ tasks:
     deps: [check-fuse-t]
     cmds:
       - echo "FUSE={{.FUSE_T_HEADERS}}"
-      - go test -race -gcflags=all=-d=checkptr=0 -v ./...
+      - go test -tags boltdb -race -gcflags=all=-d=checkptr=0 -v ./...
 
   test-coverage:
     desc: Run tests with coverage

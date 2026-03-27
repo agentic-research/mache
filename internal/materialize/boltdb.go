@@ -17,6 +17,9 @@ import (
 // Uses parent_id + name traversal (not path splitting on /) so that node names
 // containing slashes, parens, or other special characters work correctly.
 // e.g. "CVE-2018-14466 (AFS/RX)" is a valid node name.
+//
+// Root-level files (parent_id="", no parent bucket) are placed in a "_root"
+// bucket since BoltDB requires all values to live inside a bucket.
 type BoltDBMaterializer struct{}
 
 type boltNode struct {
@@ -70,7 +73,8 @@ func (m *BoltDBMaterializer) Materialize(srcDB, outPath string) error {
 
 	// Recursively create buckets and write files.
 	err = bdb.Update(func(tx *bolt.Tx) error {
-		return materializeBoltChildren(tx, nil, "", nodes, childrenOf)
+		visited := map[string]bool{}
+		return materializeBoltChildren(tx, nil, "", nodes, childrenOf, visited)
 	})
 	if err != nil {
 		return fmt.Errorf("materialize tree: %w", err)
@@ -82,7 +86,7 @@ func (m *BoltDBMaterializer) Materialize(srcDB, outPath string) error {
 // materializeBoltChildren recursively creates buckets for directory nodes
 // and writes key/value pairs for file nodes under the given parent bucket.
 // parentBucket is nil for the root transaction level.
-func materializeBoltChildren(tx *bolt.Tx, parentBucket *bolt.Bucket, parentID string, nodes []boltNode, childrenOf map[string][]int) error {
+func materializeBoltChildren(tx *bolt.Tx, parentBucket *bolt.Bucket, parentID string, nodes []boltNode, childrenOf map[string][]int, visited map[string]bool) error {
 	children, ok := childrenOf[parentID]
 	if !ok {
 		return nil
@@ -91,17 +95,19 @@ func materializeBoltChildren(tx *bolt.Tx, parentBucket *bolt.Bucket, parentID st
 	for _, idx := range children {
 		n := nodes[idx]
 
-		// Guard against self-referencing nodes (e.g. root with id="" parent_id="").
-		if n.id == parentID {
+		// Guard against cycles (self-references or longer A→B→A chains).
+		if visited[n.id] {
 			continue
 		}
+		visited[n.id] = true
 
 		if n.kind == 1 {
 			// Directory node → create bucket.
-			if n.name == "" {
+			if n.name == "" && parentBucket == nil {
 				// Transparent root: don't create a bucket, but process children
-				// as if they're at the current level.
-				if err := materializeBoltChildren(tx, parentBucket, n.id, nodes, childrenOf); err != nil {
+				// as if they're at the current level. Only applies at the true
+				// root (parentBucket==nil) to avoid flattening nested subtrees.
+				if err := materializeBoltChildren(tx, parentBucket, n.id, nodes, childrenOf, visited); err != nil {
 					return err
 				}
 				continue
@@ -119,7 +125,7 @@ func materializeBoltChildren(tx *bolt.Tx, parentBucket *bolt.Bucket, parentID st
 			}
 
 			// Recurse into children of this directory.
-			if err := materializeBoltChildren(tx, bucket, n.id, nodes, childrenOf); err != nil {
+			if err := materializeBoltChildren(tx, bucket, n.id, nodes, childrenOf, visited); err != nil {
 				return err
 			}
 
