@@ -70,7 +70,7 @@ tasks:
         sh: git describe --tags --abbrev=0 2>/dev/null || echo "dev"
     cmds:
       - >-
-        go build
+        go build -tags boltdb
         -ldflags "-X github.com/agentic-research/mache/cmd.Version={{.GIT_TAG}}
         -X github.com/agentic-research/mache/cmd.Commit={{.GIT_COMMIT}}
         -X github.com/agentic-research/mache/cmd.Date={{.BUILD_DATE}}"
@@ -90,7 +90,7 @@ tasks:
     deps: [check-fuse-t]
     cmds:
       - echo "FUSE={{.FUSE_T_HEADERS}}"
-      - go test -race -gcflags=all=-d=checkptr=0 -v ./...
+      - go test -tags boltdb -race -gcflags=all=-d=checkptr=0 -v ./...
 
   test-coverage:
     desc: Run tests with coverage
