@@ -25,7 +25,7 @@ func TestDig_NestedMapMissing(t *testing.T) {
 	// OSV record — no .item.Vulnerability at all
 	vals := map[string]any{
 		"item": map[string]any{
-			"id":      "ALBA-2019:0973",
+			"id":       "ALBA-2019:0973",
 			"affected": []any{},
 		},
 	}
