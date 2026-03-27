@@ -1,7 +1,7 @@
 repos:
   # Markdown formatting
   - repo: https://github.com/hukkin/mdformat
-    rev: 1.0.0
+    rev: 82912cdaea4fb830f751504486a7879c70526547 # 1.0.0
     hooks:
       - id: mdformat
         additional_dependencies:
@@ -11,7 +11,7 @@ repos:
 
   # Basic file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b # v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
