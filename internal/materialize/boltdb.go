@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"strings"
 
 	bolt "go.etcd.io/bbolt"
 	_ "modernc.org/sqlite"
@@ -14,9 +13,19 @@ import (
 
 // BoltDBMaterializer reads the node tree from a mache SQLite DB and writes
 // directories as bbolt nested buckets and file content as bucket key/values.
-// Tree path = bucket path. Root-level files (parent_id="") go into a "_root"
-// bucket.
+//
+// Uses parent_id + name traversal (not path splitting on /) so that node names
+// containing slashes, parens, or other special characters work correctly.
+// e.g. "CVE-2018-14466 (AFS/RX)" is a valid node name.
 type BoltDBMaterializer struct{}
+
+type boltNode struct {
+	id       string
+	parentID string
+	name     string
+	kind     int // 1=dir, 0=file
+	content  sql.NullString
+}
 
 func (m *BoltDBMaterializer) Materialize(srcDB, outPath string) error {
 	db, err := sql.Open("sqlite", srcDB)
@@ -36,99 +45,104 @@ func (m *BoltDBMaterializer) Materialize(srcDB, outPath string) error {
 	}
 	defer func() { _ = bdb.Close() }()
 
-	// First pass: create all directory buckets (kind=1).
-	dirRows, err := db.Query(`SELECT id FROM nodes WHERE kind = 1 ORDER BY id`)
+	// Build the full tree in memory: parent_id → []child rows.
+	// This avoids splitting IDs on "/" which breaks on names containing "/".
+	rows, err := db.Query(`SELECT id, COALESCE(parent_id, ''), name, kind, record FROM nodes ORDER BY id`)
 	if err != nil {
-		return fmt.Errorf("query dirs: %w", err)
+		return fmt.Errorf("query nodes: %w", err)
 	}
-	defer func() { _ = dirRows.Close() }()
+	defer func() { _ = rows.Close() }()
 
-	var dirs []string
-	for dirRows.Next() {
-		var id string
-		if err := dirRows.Scan(&id); err != nil {
-			return fmt.Errorf("scan dir: %w", err)
+	var nodes []boltNode
+	childrenOf := map[string][]int{} // parent_id → indices into nodes
+	for rows.Next() {
+		var n boltNode
+		if err := rows.Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.content); err != nil {
+			return fmt.Errorf("scan node: %w", err)
 		}
-		dirs = append(dirs, id)
+		idx := len(nodes)
+		nodes = append(nodes, n)
+		childrenOf[n.parentID] = append(childrenOf[n.parentID], idx)
 	}
-	if err := dirRows.Err(); err != nil {
-		return fmt.Errorf("iterate dirs: %w", err)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate nodes: %w", err)
 	}
 
+	// Recursively create buckets and write files.
 	err = bdb.Update(func(tx *bolt.Tx) error {
-		// Create directory buckets. Order by id ensures parents before children.
-		for _, id := range dirs {
-			parts := strings.Split(id, "/")
-			var b *bolt.Bucket
-			for _, part := range parts {
-				if b == nil {
-					var err error
-					b, err = tx.CreateBucketIfNotExists([]byte(part))
-					if err != nil {
-						return fmt.Errorf("create top bucket %s: %w", part, err)
-					}
-				} else {
-					var err error
-					b, err = b.CreateBucketIfNotExists([]byte(part))
-					if err != nil {
-						return fmt.Errorf("create nested bucket %s in %s: %w", part, id, err)
-					}
-				}
-			}
-		}
-		return nil
+		return materializeBoltChildren(tx, nil, "", nodes, childrenOf)
 	})
 	if err != nil {
-		return fmt.Errorf("create buckets: %w", err)
+		return fmt.Errorf("materialize tree: %w", err)
 	}
 
-	// Second pass: write file content (kind=0).
-	fileRows, err := db.Query(`SELECT id, parent_id, name, record FROM nodes WHERE kind = 0 AND record IS NOT NULL ORDER BY id`)
-	if err != nil {
-		return fmt.Errorf("query files: %w", err)
+	return nil
+}
+
+// materializeBoltChildren recursively creates buckets for directory nodes
+// and writes key/value pairs for file nodes under the given parent bucket.
+// parentBucket is nil for the root transaction level.
+func materializeBoltChildren(tx *bolt.Tx, parentBucket *bolt.Bucket, parentID string, nodes []boltNode, childrenOf map[string][]int) error {
+	children, ok := childrenOf[parentID]
+	if !ok {
+		return nil
 	}
-	defer func() { _ = fileRows.Close() }()
 
-	err = bdb.Update(func(tx *bolt.Tx) error {
-		for fileRows.Next() {
-			var id, parentID, name, content string
-			if err := fileRows.Scan(&id, &parentID, &name, &content); err != nil {
-				return fmt.Errorf("scan file: %w", err)
-			}
+	for _, idx := range children {
+		n := nodes[idx]
 
-			if parentID == "" {
-				// Root-level file → _root bucket.
-				b, err := tx.CreateBucketIfNotExists([]byte("_root"))
-				if err != nil {
-					return fmt.Errorf("create _root bucket: %w", err)
-				}
-				if err := b.Put([]byte(name), []byte(content)); err != nil {
-					return fmt.Errorf("put root file %s: %w", name, err)
+		// Guard against self-referencing nodes (e.g. root with id="" parent_id="").
+		if n.id == parentID {
+			continue
+		}
+
+		if n.kind == 1 {
+			// Directory node → create bucket.
+			if n.name == "" {
+				// Transparent root: don't create a bucket, but process children
+				// as if they're at the current level.
+				if err := materializeBoltChildren(tx, parentBucket, n.id, nodes, childrenOf); err != nil {
+					return err
 				}
 				continue
 			}
 
-			// Navigate to parent bucket.
-			parts := strings.Split(parentID, "/")
-			var b *bolt.Bucket
-			for _, part := range parts {
-				if b == nil {
-					b = tx.Bucket([]byte(part))
-				} else {
-					b = b.Bucket([]byte(part))
-				}
-				if b == nil {
-					return fmt.Errorf("parent bucket not found for %s", id)
-				}
+			var bucket *bolt.Bucket
+			var err error
+			if parentBucket == nil {
+				bucket, err = tx.CreateBucketIfNotExists([]byte(n.name))
+			} else {
+				bucket, err = parentBucket.CreateBucketIfNotExists([]byte(n.name))
 			}
-			if err := b.Put([]byte(name), []byte(content)); err != nil {
-				return fmt.Errorf("put file %s: %w", id, err)
+			if err != nil {
+				return fmt.Errorf("create bucket %q: %w", n.name, err)
+			}
+
+			// Recurse into children of this directory.
+			if err := materializeBoltChildren(tx, bucket, n.id, nodes, childrenOf); err != nil {
+				return err
+			}
+
+		} else if n.kind == 0 && n.content.Valid {
+			// File node → write key/value.
+			if n.name == "" {
+				continue // skip unnamed files
+			}
+			if parentBucket == nil {
+				// Root-level file → _root bucket.
+				root, err := tx.CreateBucketIfNotExists([]byte("_root"))
+				if err != nil {
+					return fmt.Errorf("create _root bucket: %w", err)
+				}
+				if err := root.Put([]byte(n.name), []byte(n.content.String)); err != nil {
+					return fmt.Errorf("put root file %q: %w", n.name, err)
+				}
+			} else {
+				if err := parentBucket.Put([]byte(n.name), []byte(n.content.String)); err != nil {
+					return fmt.Errorf("put file %q: %w", n.name, err)
+				}
 			}
 		}
-		return fileRows.Err()
-	})
-	if err != nil {
-		return fmt.Errorf("write files: %w", err)
 	}
 
 	return nil

@@ -1126,8 +1126,11 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 	for _, match := range matches {
 		name, err := RenderTemplate(schema.Name, match.Values())
 		if err != nil {
-			result.err = fmt.Errorf("failed to render name %s: %w", schema.Name, err)
-			return
+			// Skip records whose structure doesn't match this schema node.
+			// This allows a single schema to handle mixed-format data sources
+			// (e.g. vunnel OS format + OSV format in the same results table).
+			log.Printf("[WARN] skipping record: failed to render name %s: %v", schema.Name, err)
+			continue
 		}
 
 		currentPath := filepath.Join(parentPath, name)
@@ -1257,7 +1260,8 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		name, err := RenderTemplate(schema.Name, match.Values())
 		if err != nil {
-			return fmt.Errorf("failed to render name %s: %w", schema.Name, err)
+			log.Printf("[WARN] skipping file: failed to render name %s: %v", schema.Name, err)
+			continue
 		}
 
 		// Normalize path
@@ -1735,6 +1739,46 @@ var tmplFuncs = template.FuncMap{
 			return fallback
 		}
 		return val
+	},
+	// dig: safely navigate nested maps/slices by dot-separated path.
+	// Returns "" if any intermediate key is missing, nil, or out of bounds.
+	// Supports map string keys and integer indices for slices.
+	// {{dig "item.Vulnerability.NamespaceName" .}} → "alpine:3.18" or ""
+	// {{dig "item.affected.0.package.ecosystem" .}} → "AlmaLinux:8" or ""
+	"dig": func(path string, obj any) string {
+		parts := strings.Split(path, ".")
+		var current any = obj
+		for _, part := range parts {
+			if current == nil {
+				return ""
+			}
+			switch v := current.(type) {
+			case map[string]any:
+				val, ok := v[part]
+				if !ok {
+					return ""
+				}
+				current = val
+			case []any:
+				idx := 0
+				for _, c := range part {
+					if c < '0' || c > '9' {
+						return "" // not a valid index
+					}
+					idx = idx*10 + int(c-'0')
+				}
+				if idx >= len(v) {
+					return ""
+				}
+				current = v[idx]
+			default:
+				return ""
+			}
+		}
+		if current == nil {
+			return ""
+		}
+		return fmt.Sprint(current)
 	},
 }
 
