@@ -18,6 +18,7 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 )
@@ -334,7 +335,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 		if err := materializeVirtuals(dataSource, schema, false); err != nil {
 			return nil, noop, fmt.Errorf("materialize virtuals: %w", err)
 		}
-		sg, err := graph.OpenSQLiteGraph(dataSource, schema, ingest.RenderTemplate)
+		sg, err := graph.OpenSQLiteGraph(dataSource, schema, machetmpl.Render)
 		if err != nil {
 			return nil, noop, fmt.Errorf("open sqlite graph: %w", err)
 		}
