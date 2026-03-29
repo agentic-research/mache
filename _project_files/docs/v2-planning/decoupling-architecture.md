@@ -178,21 +178,63 @@ schema types — but no tree-sitter, no FUSE, no ley-line.
 | `mache-lite`       | no  | SQLiteGraph, NFS, MCP server                  | CI/CD, containers, data projection |
 | `mache serve --db` | no  | MCP server only                               | MCP tool for agents                |
 
-## Ley-line Alignment
+## Ley-line Alignment — The Pure Go Path
 
-The ley-line parallel refactor means:
+**Revised design goal**: mache + ley-line should require **zero CGO**. CGO is only
+needed for standalone mache (without ley-line) as a fallback.
 
-- **No more C FFI needed.** UDS socket + protobuf IR (`rs/ll/schema`) is the contract.
-- `internal/leyline/client.go` (the CGO file) can be **deleted** once UDS-only interop
-  is complete. `socket.go` + `semantic.go` + `sheaf.go` are already pure Go.
-- LSP enrichment moves to ley-line's public `rs/ll/lsp` crate. Mache triggers it
-  via UDS `tool` op, not by importing C bindings.
-- Future: ley-line's `ArenaBackend` trait abstraction means mache reads via pluggable
-  backend (local mmap, R2 edge, etc.) — all through the schema IR.
+### How ley-line eliminates CGO from mache
+
+Ley-line's `rs/ll-open/ts` crate (public tier) does tree-sitter parsing in Rust
+and projects results into SQLite `nodes` + `_source` + `_ast` tables — the same
+schema that mache's `SQLiteGraph` already reads.
+
+```
+Source code parsing (ley-line present):
+  source file → UDS request → leyline-ts parse_with_source()
+  → serialized SQLite bytes (nodes + _source + _ast tables)
+  → mache SQLiteGraph.Open() → MCP tools
+
+Source code parsing (standalone, no ley-line):
+  source file → Go tree-sitter (CGO) → internal/ingest/sitter_walker
+  → MemoryStore → MCP tools
+```
+
+The `Walker`/`Match` interfaces (`internal/ingest/interfaces.go`) are the seam:
+
+- `SitterWalker` — current: Go tree-sitter CGO bindings
+- `JSONWalker` — current: ojg JSONPath (pure Go)
+- `LeylineWalker` — future: sends parse + query requests to ley-line over UDS
+
+### What ley-line provides (no CGO needed in mache)
+
+| Capability           | Ley-line crate      | Mache consumer                  | CGO? |
+| -------------------- | ------------------- | ------------------------------- | ---- |
+| Tree-sitter parsing  | `ll-open/ts`        | SQLiteGraph (reads nodes table) | No   |
+| Bidirectional splice | `ll-open/ts/splice` | write-back pipeline             | No   |
+| LSP enrichment       | `ll-open/lsp`       | `_lsp`/`_lsp_hover` tables      | No   |
+| Semantic search      | `ll/embed`          | UDS socket client               | No   |
+| Sheaf cache          | `ll/sheaf`          | UDS socket client               | No   |
+
+### Target build matrix
+
+| Build                      | CGO    | Ley-line | Features                            |
+| -------------------------- | ------ | -------- | ----------------------------------- |
+| `mache` (full standalone)  | yes    | optional | All: Go tree-sitter, FUSE, NFS, MCP |
+| `mache` + `leyline` daemon | **no** | required | All: ley-line parsing, NFS, MCP     |
+| `mache serve --db`         | **no** | optional | SQLiteGraph, MCP server only        |
+
+### Implementation path
+
+1. **Done**: Extract `internal/template`, move `SQLiteResolver` to graph (this branch)
+1. **Next**: Add `LeylineWalker` that delegates parsing to ley-line via UDS
+1. **Then**: Build-tag `SitterWalker` + `internal/lang` behind `sitter` tag
+1. **Then**: Delete `internal/leyline/client.go` (C FFI) — UDS-only interop
+1. **Future**: mache ships as pure Go binary alongside leyline Rust binary (kiln)
 
 ## Non-Goals (This Branch)
 
-- Unified language registry (`internal/lang`) — already implemented, works as-is
+- Implementing `LeylineWalker` — design only, impl is ley-line-side work too
 - Full ley-line removal — just isolation/gating, not deletion
 - API changes — all existing CLI behavior preserved
 - New CLI commands — just build tag flexibility
