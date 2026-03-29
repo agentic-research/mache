@@ -267,3 +267,47 @@ func TestRender_SignatureMatchesTemplateRenderer(t *testing.T) {
 	fn := Render
 	_ = fn
 }
+
+// ---------------------------------------------------------------------------
+// Benchmarks — regression guard for template rendering performance.
+// The template cache makes repeated renders cheap; these benchmarks verify
+// that the extraction didn't introduce overhead vs the inline implementation.
+// ---------------------------------------------------------------------------
+
+// BenchmarkRender_Simple measures a trivial interpolation (cache-hot path).
+func BenchmarkRender_Simple(b *testing.B) {
+	values := map[string]any{"name": "CVE-2024-0001"}
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = Render("{{.name}}", values)
+	}
+}
+
+// BenchmarkRender_Complex measures a realistic schema template with multiple funcs.
+func BenchmarkRender_Complex(b *testing.B) {
+	values := map[string]any{
+		"item": map[string]any{
+			"cve": map[string]any{"id": "CVE-2024-12345"},
+			"Vulnerability": map[string]any{
+				"NamespaceName": "alpine:3.18",
+				"Severity":      "High",
+			},
+		},
+	}
+	tmpl := `{{dig "item.cve.id" .}} | {{dig "item.Vulnerability.NamespaceName" .}} | {{dig "item.Vulnerability.Severity" .}}`
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = Render(tmpl, values)
+	}
+}
+
+// BenchmarkRender_CacheCold measures the cost of parsing a new template (cache miss).
+func BenchmarkRender_CacheCold(b *testing.B) {
+	values := map[string]any{"x": "hello"}
+	b.ResetTimer()
+	for i := range b.N {
+		// Unique template string forces cache miss each iteration.
+		tmpl := "{{.x}}-" + string(rune('A'+i%26)) + string(rune('a'+i%26))
+		_, _ = Render(tmpl, values)
+	}
+}

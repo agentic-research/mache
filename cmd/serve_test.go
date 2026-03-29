@@ -17,6 +17,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
 	"github.com/mark3labs/mcp-go/server"
@@ -1967,7 +1968,7 @@ func TestArena_AllTools(t *testing.T) {
 
 	// Build a real MemoryStore via the engine ingestion pipeline.
 	store := graph.NewMemoryStore()
-	resolver := graph.NewSQLiteResolver(ingest.RenderTemplate)
+	resolver := graph.NewSQLiteResolver(machetmpl.Render)
 	store.SetResolver(resolver.Resolve)
 	store.SetCallExtractor(newCallExtractor())
 	defer resolver.Close()
