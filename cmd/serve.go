@@ -349,7 +349,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 
 	// MemoryStore path for JSON/source files
 	store := graph.NewMemoryStore()
-	resolver := ingest.NewSQLiteResolver()
+	resolver := graph.NewSQLiteResolver(machetmpl.Render)
 	store.SetResolver(resolver.Resolve)
 	store.SetCallExtractor(newCallExtractor())
 

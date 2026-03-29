@@ -1,4 +1,4 @@
-package ingest
+package graph
 
 import (
 	"database/sql"
@@ -6,25 +6,28 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/agentic-research/mache/internal/graph"
 	_ "modernc.org/sqlite"
 )
 
 // SQLiteResolver resolves ContentRef entries by fetching records from SQLite
 // and re-rendering their content templates.
 type SQLiteResolver struct {
-	mu  sync.Mutex
-	dbs map[string]*sql.DB
+	mu     sync.Mutex
+	dbs    map[string]*sql.DB
+	render TemplateRenderer
 }
 
-func NewSQLiteResolver() *SQLiteResolver {
+// NewSQLiteResolver creates a resolver that uses the given template renderer
+// to render content from SQLite records.
+func NewSQLiteResolver(render TemplateRenderer) *SQLiteResolver {
 	return &SQLiteResolver{
-		dbs: make(map[string]*sql.DB),
+		dbs:    make(map[string]*sql.DB),
+		render: render,
 	}
 }
 
 // Resolve fetches a record from SQLite and renders its content template.
-func (r *SQLiteResolver) Resolve(ref *graph.ContentRef) ([]byte, error) {
+func (r *SQLiteResolver) Resolve(ref *ContentRef) ([]byte, error) {
 	db, err := r.getDB(ref.DBPath)
 	if err != nil {
 		return nil, err
@@ -45,7 +48,7 @@ func (r *SQLiteResolver) Resolve(ref *graph.ContentRef) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("record %s is not a JSON object (got %T)", ref.RecordID, parsed)
 	}
-	content, err := RenderTemplate(ref.Template, values)
+	content, err := r.render(ref.Template, values)
 	if err != nil {
 		return nil, fmt.Errorf("render template for %s: %w", ref.RecordID, err)
 	}
@@ -67,11 +70,11 @@ func (r *SQLiteResolver) getDB(path string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(4)
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close() // ignore error
+		_ = db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA query_only=ON"); err != nil {
-		_ = db.Close() // ignore error
+		_ = db.Close()
 		return nil, fmt.Errorf("set query_only: %w", err)
 	}
 
@@ -84,6 +87,6 @@ func (r *SQLiteResolver) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, db := range r.dbs {
-		_ = db.Close() // ignore error
+		_ = db.Close()
 	}
 }

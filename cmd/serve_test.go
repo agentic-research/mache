@@ -1967,7 +1967,7 @@ func TestArena_AllTools(t *testing.T) {
 
 	// Build a real MemoryStore via the engine ingestion pipeline.
 	store := graph.NewMemoryStore()
-	resolver := ingest.NewSQLiteResolver()
+	resolver := graph.NewSQLiteResolver(ingest.RenderTemplate)
 	store.SetResolver(resolver.Resolve)
 	store.SetCallExtractor(newCallExtractor())
 	defer resolver.Close()

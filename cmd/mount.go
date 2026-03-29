@@ -439,7 +439,7 @@ var rootCmd = &cobra.Command{
 			} else {
 				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
 				store := graph.NewMemoryStore()
-				resolver := ingest.NewSQLiteResolver()
+				resolver := graph.NewSQLiteResolver(machetmpl.Render)
 				defer resolver.Close()
 				store.SetResolver(resolver.Resolve)
 
