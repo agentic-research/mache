@@ -184,9 +184,9 @@ func TestRender_Errors(t *testing.T) {
 	assert.Error(t, err, "malformed template should error")
 }
 
-// TestRender_MissingKeyRendsEmpty verifies Go's default missingkey=zero
-// behavior: missing keys render as empty string (not error).
-func TestRender_MissingKeyRendersEmpty(t *testing.T) {
+// TestRender_MissingKeyRendersNoValue verifies Go's default behavior for
+// missing keys: they render as the string "<no value>" (not an error).
+func TestRender_MissingKeyRendersNoValue(t *testing.T) {
 	got, err := Render("{{.missing}}", map[string]any{})
 	require.NoError(t, err)
 	assert.Equal(t, "<no value>", got)

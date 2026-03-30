@@ -35,8 +35,8 @@ type ASTRoot struct {
 // Query implements Walker. The selector is a tree-sitter S-expression pattern.
 // ASTWalker translates it to SQL queries against the nodes and _ast tables.
 //
-// Currently supports the common pattern: (node_kind field: (child_kind) @capture) @scope
-// Complex patterns with predicates (#eq?, etc.) fall back to SitterWalker.
+// Currently supports the common pattern: (node_kind field: (child_kind) @capture) @scope,
+// plus simple #eq? predicates over captured text. #match? requires SitterWalker.
 func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 	ar, ok := root.(ASTRoot)
 	if !ok {
@@ -49,7 +49,7 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 	}
 
 	// Find all nodes matching the outer kind under the current scope
-	scopeNodes, err := w.findNodesByKind(ar.DB, ar.ParentPrefix, pattern.outerKind)
+	scopeNodes, err := w.findNodesByKind(ar.DB, ar.ParentPrefix, pattern.outerKind, ar.SourceID)
 	if err != nil {
 		return nil, fmt.Errorf("find %s nodes: %w", pattern.outerKind, err)
 	}
@@ -69,7 +69,7 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			if cap.name == "scope" {
 				continue // scope is the outer node itself
 			}
-			child, err := w.findChildByKindAST(ar.DB, scopeNode.id, cap.kind)
+			child, err := w.findChildByKindAST(ar.DB, scopeNode.id, cap.kind, ar.SourceID)
 			if err != nil || child == nil {
 				continue
 			}
@@ -125,7 +125,7 @@ func SelectWalker(db *sql.DB) (Walker, error) {
 		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_ast'",
 	).Scan(&count)
 	if err != nil {
-		return NewSitterWalker(), nil
+		return nil, fmt.Errorf("inspect sqlite_master for _ast table: %w", err)
 	}
 	if count > 0 {
 		return NewASTWalker(db), nil
@@ -168,7 +168,8 @@ type selectorPredicate struct {
 //	(function_declaration name: (identifier) @name) @scope
 //	(type_declaration (type_spec name: (type_identifier) @name) @scope)
 //
-// Returns an error for patterns with predicates (#eq?) or other complex syntax
+// Supports simple #eq? predicates by extracting them into pattern.predicates.
+// Returns an error for patterns with #match? or other complex syntax
 // that require the full tree-sitter query engine.
 func parseSelector(selector string) (*selectorPattern, error) {
 	s := strings.TrimSpace(selector)
@@ -315,26 +316,21 @@ func extractLastKind(s string) string {
 // Ley-line disambiguates siblings of the same kind with suffixes (e.g.,
 // function_declaration_0, function_declaration_1). We match by _ast.node_kind
 // which stores the original tree-sitter kind without suffixes.
-func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind string) ([]astNode, error) {
-	var query string
-	var args []any
+func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind, sourceID string) ([]astNode, error) {
+	query := `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
+	                COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
+	         FROM nodes n
+	         JOIN _ast a ON a.node_id = n.id
+	         WHERE a.node_kind = ?`
+	args := []any{kind}
 
-	if parentPrefix == "" {
-		// Top-level: find by _ast.node_kind (exact, no suffixes)
-		query = `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
-		                COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
-		         FROM nodes n
-		         JOIN _ast a ON a.node_id = n.id
-		         WHERE a.node_kind = ?`
-		args = []any{kind}
-	} else {
-		// Scoped: find under a specific parent prefix
-		query = `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
-		                COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
-		         FROM nodes n
-		         JOIN _ast a ON a.node_id = n.id
-		         WHERE a.node_kind = ? AND n.id LIKE ?`
-		args = []any{kind, parentPrefix + "/%"}
+	if parentPrefix != "" {
+		query += " AND n.id LIKE ?"
+		args = append(args, parentPrefix+"/%")
+	}
+	if sourceID != "" {
+		query += " AND a.source_id = ?"
+		args = append(args, sourceID)
 	}
 
 	rows, err := db.Query(query, args...)
@@ -355,18 +351,23 @@ func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind string) ([]as
 	return nodes, rows.Err()
 }
 
-// findChildByKindAST finds the first child matching a node_kind via _ast table.
-func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind string) (*astNode, error) {
+// findChildByKindAST finds the first descendant matching a node_kind via _ast table.
+// Scoped to sourceID when non-empty to prevent cross-file matches.
+func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID string) (*astNode, error) {
+	query := `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
+	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
+	 FROM nodes n
+	 JOIN _ast a ON a.node_id = n.id
+	 WHERE n.id LIKE ? AND a.node_kind = ?`
+	args := []any{parentID + "/%", kind}
+	if sourceID != "" {
+		query += " AND a.source_id = ?"
+		args = append(args, sourceID)
+	}
+	query += " LIMIT 1"
+
 	var n astNode
-	err := db.QueryRow(
-		`SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
-		        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
-		 FROM nodes n
-		 JOIN _ast a ON a.node_id = n.id
-		 WHERE n.id LIKE ? AND a.node_kind = ?
-		 LIMIT 1`,
-		parentID+"/%", kind,
-	).Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte)
+	err := db.QueryRow(query, args...).Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

@@ -1324,7 +1324,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Children: existingChildren,
 		}
 
-		// Store language name, package name, and register definition for callees/ resolution
+		// Store language name, package name for callees/ resolution (SitterWalker path)
 		if _, ok := walker.(*SitterWalker); ok {
 			if ctxAny := match.Context(); ctxAny != nil {
 				if root, ok := ctxAny.(SitterRoot); ok && root.LangName != "" {
@@ -1339,14 +1339,18 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 							node.Properties["pkg"] = []byte(pkgName)
 						}
 					}
-
-					// Store structured imports (avoids regex re-parsing at query time)
-					if fileImports != nil {
-						if importJSON, err := json.Marshal(fileImports); err == nil {
-							node.Properties["imports"] = importJSON
-						}
-					}
 				}
+			}
+		}
+
+		// Store structured imports (avoids regex re-parsing at query time).
+		// Independent of walker type — persist whenever fileImports is non-nil.
+		if fileImports != nil {
+			if node.Properties == nil {
+				node.Properties = make(map[string][]byte)
+			}
+			if importJSON, err := json.Marshal(fileImports); err == nil {
+				node.Properties["imports"] = importJSON
 			}
 		}
 		store.AddNode(node)

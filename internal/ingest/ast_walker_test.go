@@ -304,6 +304,15 @@ func TestSelectWalker_ReturnsSitterWalkerWhenNoASTTable(t *testing.T) {
 	assert.True(t, ok, "should return SitterWalker when _ast table missing")
 }
 
+func TestSelectWalker_ReturnsErrorOnBrokenDB(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	_ = db.Close() // close it so queries fail
+
+	_, err = SelectWalker(db)
+	assert.Error(t, err, "should return error on broken DB")
+}
+
 func TestParseSelector_Simple(t *testing.T) {
 	p, err := parseSelector("(function_declaration name: (identifier) @name) @scope")
 	require.NoError(t, err)
