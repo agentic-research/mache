@@ -773,10 +773,18 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 		return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
 	}
 
-	// 4. Extract file-level address refs once (e.g., HCL variable declarations).
+	// 4. Extract file-level address refs (e.g., HCL variable declarations).
+	// ASTWalker path queries _ast table for the same patterns.
 	var fileAddrRefs []string
-	if sw, ok := w.(*SitterWalker); ok && result.tree != nil {
-		if addrRefs, err := sw.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
+	switch wt := w.(type) {
+	case *SitterWalker:
+		if result.tree != nil {
+			if addrRefs, err := wt.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
+				fileAddrRefs = addrRefs
+			}
+		}
+	case *ASTWalker:
+		if addrRefs, err := wt.ExtractAddressRefs(result.job.path, result.job.langName); err == nil {
 			fileAddrRefs = addrRefs
 		}
 	}

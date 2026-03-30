@@ -311,3 +311,77 @@ func BenchmarkRender_CacheCold(b *testing.B) {
 		_, _ = Render(tmpl, values)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Fuzz test — Render takes user-authored schema templates. Malformed templates
+// should error cleanly, never panic.
+// ---------------------------------------------------------------------------
+
+// FuzzRender feeds random template strings and values to find panics in the
+// template parser, func map, and cache. Schema templates are authored by users
+// and can contain arbitrary text — this must be safe.
+func FuzzRender(f *testing.F) {
+	// Real templates from mache schemas
+	f.Add("{{.name}}", "CVE-2024-0001")
+	f.Add("{{slice .id 4 8}}", "CVE-2024-0001")
+	f.Add(`{{json .data}}`, `{"key":"value"}`)
+	f.Add(`{{dig "item.cve.id" .}}`, "nested")
+	f.Add(`{{lower .name}}`, "RHEL")
+	f.Add(`{{default .name "unknown"}}`, "")
+	f.Add(`{{split .id ":" | join ", "}}`, "alpine:3.18")
+	// Edge cases
+	f.Add("{{", "x")
+	f.Add("}}", "x")
+	f.Add("{{.}}", "x")
+	f.Add("", "x")
+	f.Add("no template at all", "x")
+	f.Add(`{{printf "%s" .v}}`, "hello") // printf is NOT in our funcmap
+
+	f.Fuzz(func(t *testing.T, tmpl, val string) {
+		// Must not panic. Errors are fine.
+		values := map[string]any{
+			"name": val,
+			"id":   val,
+			"data": val,
+			"v":    val,
+			"s":    val,
+			"item": map[string]any{"cve": map[string]any{"id": val}},
+		}
+		_, _ = Render(tmpl, values)
+	})
+}
+
+// TestRender_RaceCondition exercises the template cache under heavy concurrent
+// load with a mix of cache hits and misses (run with -race flag).
+func TestRender_RaceCondition(t *testing.T) {
+	const goroutines = 50
+	templates := []string{
+		"{{.name}}",
+		"{{slice .name 0 3}}",
+		"{{lower .name}}",
+		"{{json .data}}",
+		"{{dig \"item.id\" .}}",
+	}
+
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			tmpl := templates[n%len(templates)]
+			values := map[string]any{
+				"name": "test-value",
+				"data": map[string]any{"key": n},
+				"item": map[string]any{"id": "CVE-2024"},
+			}
+			result, err := Render(tmpl, values)
+			assert.NoError(t, err)
+			assert.NotEmpty(t, result)
+
+			// Also exercise cache-miss path with unique templates
+			uniqueTmpl := tmpl + "-" + string(rune('a'+n%26))
+			_, _ = Render(uniqueTmpl, values)
+		}(i)
+	}
+	wg.Wait()
+}

@@ -3,6 +3,7 @@ package ingest
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -63,6 +64,7 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 	var matches []Match
 	for _, scopeNode := range scopeNodes {
 		values := make(map[string]any)
+		captureRanges := make(map[string][2]int)
 
 		// Resolve captures from children (searches descendants, not just direct children)
 		for _, cap := range pattern.captures {
@@ -72,6 +74,10 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			child, err := w.findChildByKindAST(ar.DB, scopeNode.id, cap.kind, ar.SourceID)
 			if err != nil || child == nil {
 				continue
+			}
+			// Record byte range for CaptureOrigin
+			if child.startByte < child.endByte {
+				captureRanges[cap.name] = [2]int{child.startByte, child.endByte}
 			}
 			// Leaf node: record column has the text
 			if child.record != "" {
@@ -97,7 +103,8 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 
 		// Build the match
 		m := &astMatch{
-			values: values,
+			values:        values,
+			captureRanges: captureRanges,
 			ctx: ASTRoot{
 				DB:           ar.DB,
 				SourceID:     ar.SourceID,
@@ -114,6 +121,52 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 
 // Close is a no-op — the ASTWalker doesn't own the database connection.
 func (w *ASTWalker) Close() {}
+
+// ExtractAddressRefs runs all registered address ref queries for the given
+// language by querying the _ast table. Returns deduplicated, scheme-prefixed
+// tokens (e.g., "env:DATABASE_URL"). Mirrors SitterWalker.ExtractAddressRefs
+// but uses SQL instead of CGO tree-sitter.
+func (w *ASTWalker) ExtractAddressRefs(sourcePath, langName string) ([]string, error) {
+	raw, ok := addressRefRegistry.Load(langName)
+	if !ok {
+		return nil, nil
+	}
+	entries := raw.([]addressRefEntry)
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	sourceID := filepath.Base(sourcePath)
+	root := ASTRoot{DB: w.db, SourceID: sourceID, ParentPrefix: ""}
+
+	seen := make(map[string]bool)
+	var tokens []string
+
+	for _, entry := range entries {
+		matches, err := w.Query(root, entry.Query)
+		if err != nil {
+			continue // selector may not be supported by ASTWalker
+		}
+		for _, m := range matches {
+			vals := m.Values()
+			refVal, ok := vals["ref"].(string)
+			if !ok || refVal == "" {
+				continue
+			}
+			value := unquoteCapture(refVal)
+			if value == "" {
+				continue
+			}
+			token := entry.Scheme + ":" + value
+			if !seen[token] {
+				seen[token] = true
+				tokens = append(tokens, token)
+			}
+		}
+	}
+
+	return tokens, nil
+}
 
 // SelectWalker inspects a SQLite database and returns the best Walker.
 // If the database has an _ast table (produced by ley-line's ll-open/ts),
@@ -169,15 +222,22 @@ type selectorPredicate struct {
 //	(type_declaration (type_spec name: (type_identifier) @name) @scope)
 //
 // Supports simple #eq? predicates by extracting them into pattern.predicates.
-// Returns an error for patterns with #match? or other complex syntax
-// that require the full tree-sitter query engine.
+// Returns an error for patterns with #match?, #not-eq?, #any-eq?, #is?, #is-not?
+// or other complex syntax that requires the full tree-sitter query engine.
 func parseSelector(selector string) (*selectorPattern, error) {
 	s := strings.TrimSpace(selector)
 	if s == "" {
 		return nil, fmt.Errorf("empty selector")
 	}
+	// Reject predicates we can't handle. #eq? is supported (extracted below).
+	// #match? and all others require the full tree-sitter query engine.
 	if strings.Contains(s, "#match?") {
 		return nil, fmt.Errorf("#match? predicates require SitterWalker (CGO)")
+	}
+	for _, unsupported := range []string{"#not-eq?", "#any-eq?", "#is?", "#is-not?"} {
+		if strings.Contains(s, unsupported) {
+			return nil, fmt.Errorf("%s predicates require SitterWalker (CGO)", unsupported)
+		}
 	}
 
 	pattern := &selectorPattern{}
@@ -253,31 +313,35 @@ func parseSelector(selector string) (*selectorPattern, error) {
 	}
 
 	// Extract #eq? predicates: (#eq? @capture "literal")
-	eqRe := "(#eq?"
-	for {
-		idx := strings.Index(s, eqRe)
-		if idx < 0 {
-			break
+	// Scan-based approach: find each occurrence without mutating the string.
+	{
+		const marker = "(#eq?"
+		offset := 0
+		for {
+			idx := strings.Index(s[offset:], marker)
+			if idx < 0 {
+				break
+			}
+			absIdx := offset + idx
+			rest := s[absIdx+len(marker):]
+			closeIdx := strings.IndexByte(rest, ')')
+			if closeIdx < 0 {
+				break
+			}
+			body := strings.TrimSpace(rest[:closeIdx])
+			parts := strings.Fields(body)
+			if len(parts) >= 2 && strings.HasPrefix(parts[0], "@") {
+				capName := parts[0][1:]
+				if capName != "" {
+					literal := strings.Trim(parts[1], "\"\\")
+					pattern.predicates = append(pattern.predicates, selectorPredicate{
+						capture: capName,
+						literal: literal,
+					})
+				}
+			}
+			offset = absIdx + len(marker) + closeIdx + 1
 		}
-		// Find the closing paren for this predicate
-		rest := s[idx+len(eqRe):]
-		closeIdx := strings.IndexByte(rest, ')')
-		if closeIdx < 0 {
-			break
-		}
-		body := strings.TrimSpace(rest[:closeIdx])
-		// body is like: @_type "resource"
-		parts := strings.Fields(body)
-		if len(parts) >= 2 && strings.HasPrefix(parts[0], "@") {
-			capName := parts[0][1:]
-			literal := strings.Trim(parts[1], "\"\\")
-			pattern.predicates = append(pattern.predicates, selectorPredicate{
-				capture: capName,
-				literal: literal,
-			})
-		}
-		// Move past this predicate to find more
-		s = s[:idx] + s[idx+len(eqRe)+closeIdx+1:]
 	}
 
 	if pattern.outerKind == "" {
@@ -352,7 +416,8 @@ func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind, sourceID str
 }
 
 // findChildByKindAST finds the first descendant matching a node_kind via _ast table.
-// Scoped to sourceID when non-empty to prevent cross-file matches.
+// Ordered by start_byte ASC for deterministic first-occurrence behavior (matches
+// tree-sitter's document-order traversal). Scoped to sourceID when non-empty.
 func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID string) (*astNode, error) {
 	query := `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
 	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
@@ -364,7 +429,7 @@ func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID stri
 		query += " AND a.source_id = ?"
 		args = append(args, sourceID)
 	}
-	query += " LIMIT 1"
+	query += " ORDER BY a.start_byte ASC LIMIT 1"
 
 	var n astNode
 	err := db.QueryRow(query, args...).Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte)
@@ -390,19 +455,25 @@ func (w *ASTWalker) readSource(db *sql.DB, sourceID string) ([]byte, error) {
 // --- Match implementation ---
 
 type astMatch struct {
-	values    map[string]any
-	ctx       ASTRoot
-	startByte int
-	endByte   int
+	values        map[string]any
+	captureRanges map[string][2]int // capture name → [startByte, endByte]
+	ctx           ASTRoot
+	startByte     int
+	endByte       int
 }
 
 func (m *astMatch) Values() map[string]any { return m.values }
 func (m *astMatch) Context() any           { return m.ctx }
 
 // CaptureOrigin satisfies OriginProvider for write-back support.
+// Returns byte ranges for @scope (the outer matched node) and any named
+// captures whose byte ranges were recorded during Query.
 func (m *astMatch) CaptureOrigin(name string) (uint32, uint32, bool) {
 	if name == "scope" {
 		return uint32(m.startByte), uint32(m.endByte), true
+	}
+	if r, ok := m.captureRanges[name]; ok && r[0] < r[1] {
+		return uint32(r[0]), uint32(r[1]), true
 	}
 	return 0, 0, false
 }
