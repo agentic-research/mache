@@ -218,17 +218,65 @@ func TestASTWalker_CaptureOrigin(t *testing.T) {
 	assert.True(t, start < end, "scope should have valid byte range")
 }
 
-func TestASTWalker_PredicateSelectorsReturnError(t *testing.T) {
-	db := seedTestAST(t)
+func TestASTWalker_PredicateEqFilter(t *testing.T) {
+	// Build a DB with HCL-like block structure
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT);
+		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
+		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
+		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
+
+		INSERT INTO _source VALUES ('main.tf', 'hcl', '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('', '', '', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block', '', 'block', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/identifier', 'block', 'identifier', 0, 0, 'resource');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/string_lit', 'block', 'string_lit', 0, 0, '"aws_instance"');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/body', 'block', 'body', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1', '', 'block_1', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/identifier', 'block_1', 'identifier', 0, 0, 'variable');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/string_lit', 'block_1', 'string_lit', 0, 0, '"region"');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/body', 'block_1', 'body', 1, 0, '');
+
+		INSERT INTO _ast VALUES ('block', 'main.tf', 'block', 0, 50, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block/identifier', 'main.tf', 'identifier', 0, 8, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block/string_lit', 'main.tf', 'string_lit', 9, 23, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block/body', 'main.tf', 'body', 24, 50, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1', 'main.tf', 'block', 52, 100, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1/identifier', 'main.tf', 'identifier', 52, 60, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1/string_lit', 'main.tf', 'string_lit', 61, 69, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1/body', 'main.tf', 'body', 70, 100, 0, 0, 0, 0);
+	`)
+	require.NoError(t, err)
+
+	w := NewASTWalker(db)
+	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
+
+	// Should match only the "resource" block, not the "variable" block
+	matches, err := w.Query(root, `(block (identifier) @_type (string_lit) @name (body) @scope (#eq? @_type "resource"))`)
+	require.NoError(t, err)
+	require.Len(t, matches, 1, "should match only the resource block")
+
+	v := matches[0].Values()
+	assert.Equal(t, "resource", v["_type"])
+	assert.Equal(t, "\"aws_instance\"", v["name"])
+}
+
+func TestASTWalker_MatchPredicateRejectsNonMatch(t *testing.T) {
+	// #match? predicates still require CGO
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
-	root := ASTRoot{DB: db, SourceID: "main.go", ParentPrefix: ""}
+	root := ASTRoot{DB: db, SourceID: "", ParentPrefix: ""}
 
-	// Predicate selectors require SitterWalker (CGO)
-	_, err := w.Query(root, `(block (identifier) @_type (#eq? @_type "resource"))`)
+	_, err = w.Query(root, `(identifier) @name (#match? @name "^test")`)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "predicate")
+	assert.Contains(t, err.Error(), "#match?")
 }
 
 func TestParseSelector_Simple(t *testing.T) {

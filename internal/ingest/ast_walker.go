@@ -82,6 +82,19 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			}
 		}
 
+		// Apply #eq? predicate filters
+		skip := false
+		for _, pred := range pattern.predicates {
+			val, ok := values[pred.capture].(string)
+			if !ok || val != pred.literal {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
 		// Build the match
 		m := &astMatch{
 			values: values,
@@ -115,13 +128,20 @@ type astNode struct {
 }
 
 type selectorPattern struct {
-	outerKind string // the node kind to match (e.g., "function_declaration")
-	captures  []selectorCapture
+	outerKind  string // the node kind to match (e.g., "function_declaration")
+	captures   []selectorCapture
+	predicates []selectorPredicate // #eq? filters
 }
 
 type selectorCapture struct {
 	kind string // child node kind (e.g., "identifier")
 	name string // capture name (e.g., "name")
+}
+
+// selectorPredicate represents a #eq? filter: capture text must equal literal.
+type selectorPredicate struct {
+	capture string // capture name to check (e.g., "_type")
+	literal string // expected text value (e.g., "resource")
 }
 
 // parseSelector parses a tree-sitter S-expression into a simple pattern.
@@ -137,8 +157,8 @@ func parseSelector(selector string) (*selectorPattern, error) {
 	if s == "" {
 		return nil, fmt.Errorf("empty selector")
 	}
-	if strings.Contains(s, "#eq?") || strings.Contains(s, "#match?") {
-		return nil, fmt.Errorf("predicate selectors require SitterWalker (CGO)")
+	if strings.Contains(s, "#match?") {
+		return nil, fmt.Errorf("#match? predicates require SitterWalker (CGO)")
 	}
 
 	pattern := &selectorPattern{}
@@ -211,6 +231,34 @@ func parseSelector(selector string) (*selectorPattern, error) {
 			}
 		}
 		i = nameEnd
+	}
+
+	// Extract #eq? predicates: (#eq? @capture "literal")
+	eqRe := "(#eq?"
+	for {
+		idx := strings.Index(s, eqRe)
+		if idx < 0 {
+			break
+		}
+		// Find the closing paren for this predicate
+		rest := s[idx+len(eqRe):]
+		closeIdx := strings.IndexByte(rest, ')')
+		if closeIdx < 0 {
+			break
+		}
+		body := strings.TrimSpace(rest[:closeIdx])
+		// body is like: @_type "resource"
+		parts := strings.Fields(body)
+		if len(parts) >= 2 && strings.HasPrefix(parts[0], "@") {
+			capName := parts[0][1:]
+			literal := strings.Trim(parts[1], "\"\\")
+			pattern.predicates = append(pattern.predicates, selectorPredicate{
+				capture: capName,
+				literal: literal,
+			})
+		}
+		// Move past this predicate to find more
+		s = s[:idx] + s[idx+len(eqRe)+closeIdx+1:]
 	}
 
 	if pattern.outerKind == "" {
