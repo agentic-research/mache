@@ -1,5 +1,9 @@
 # Leyline Isolation Manifest (v2)
 
+> **Status: Design document.** None of the refactoring below has been implemented yet.
+> `internal/leyline/` is still in place, auto-spawn is active, and tools are
+> hardcoded in `serve_handlers.go`. See `decoupling-architecture.md` for progress.
+
 This document catalogues the current tight coupling between `mache` and the `leyline` daemon.
 As part of the v2 workspace microkernel refactor, these "novelty" components will be broken apart
 and isolated so that the core `mache` graph and schemas do not depend on them.
