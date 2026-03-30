@@ -23,9 +23,8 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/lang"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	sitter "github.com/smacker/go-tree-sitter"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 )
 
 const inlineThreshold = 4096
@@ -54,6 +53,7 @@ type Engine struct {
 	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
 	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
 	sitterWalker     *SitterWalker              // shared across files for query cache reuse
+	astWalker        *ASTWalker                 // SQL-backed walker for ley-line pre-parsed .db files
 	fileIndex        map[string]FileIndexEntry  // cached file metadata for incremental re-ingestion
 	mu               sync.Mutex
 
@@ -110,9 +110,10 @@ type parsedTreeSitterFile struct {
 	realPath string
 	content  []byte
 	tree     *sitter.Tree
-	context  []byte // extracted imports/globals context
-	parseErr error  // non-nil if tree-sitter parsing failed
-	readErr  error  // non-nil if file read failed
+	context  []byte            // extracted imports/globals context
+	imports  map[string]string // structured imports: alias → path (Go only, nil for others)
+	parseErr error             // non-nil if tree-sitter parsing failed
+	readErr  error             // non-nil if file read failed
 }
 
 // langForExt is a thin wrapper over the lang registry.
@@ -232,6 +233,14 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 		routedFiles:      make(map[string]int),
 		childSeen:        make(map[string]map[string]bool),
 	}
+}
+
+// SetASTWalker configures the engine to use a SQL-backed ASTWalker for
+// tree-sitter schema selectors instead of CGO SitterWalker. When set,
+// source file parsing is skipped — the ASTWalker queries pre-parsed
+// _ast/_source tables from a ley-line .db.
+func (e *Engine) SetASTWalker(w *ASTWalker) {
+	e.astWalker = w
 }
 
 // GitignoreMatcher matches paths against .gitignore-style rules.
@@ -453,6 +462,10 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 					); err == nil {
 						result.context = ctxBytes
 					}
+					// Extract structured imports (Go) — avoids regex re-parsing at query time.
+					if job.langName == "go" {
+						result.imports = e.sitterWalker.ExtractGoImports(tree.RootNode(), result.content, job.lang)
+					}
 				}
 				parsed <- result
 			}
@@ -656,7 +669,7 @@ func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil, nil, nil); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil, nil, nil, nil); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -723,22 +736,33 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 		return nil
 	}
 
-	// Use the shared walker if available (set during Ingest), otherwise
-	// create a temporary one (e.g., during ReIngestFile).
-	walker := e.sitterWalker
-	if walker == nil {
-		walker = NewSitterWalker()
-		defer walker.Close()
+	// Select walker: ASTWalker (pure Go, SQL) when available, else SitterWalker (CGO).
+	var w Walker
+	var root any
+	if e.astWalker != nil {
+		w = e.astWalker
+		root = ASTRoot{
+			DB:           e.astWalker.db,
+			SourceID:     filepath.Base(result.job.path),
+			ParentPrefix: "",
+		}
+	} else {
+		sw := e.sitterWalker
+		if sw == nil {
+			sw = NewSitterWalker()
+			defer sw.Close()
+		}
+		w = sw
+		root = SitterRoot{
+			Node:     result.tree.RootNode(),
+			FileRoot: result.tree.RootNode(),
+			Source:   result.content,
+			Lang:     result.job.lang,
+			LangName: result.job.langName,
+		}
 	}
 
 	bt := &bufferingTarget{IngestionTarget: e.Store}
-	root := SitterRoot{
-		Node:     result.tree.RootNode(),
-		FileRoot: result.tree.RootNode(),
-		Source:   result.content,
-		Lang:     result.job.lang,
-		LangName: result.job.langName,
-	}
 	sourceFile := filepath.Base(result.job.path)
 
 	// 2. Filter schema nodes by language.
@@ -749,15 +773,25 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 		return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
 	}
 
-	// 4. Extract file-level address refs once (e.g., HCL variable declarations).
+	// 4. Extract file-level address refs (e.g., HCL variable declarations).
+	// ASTWalker path queries _ast table for the same patterns.
 	var fileAddrRefs []string
-	if addrRefs, err := walker.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
-		fileAddrRefs = addrRefs
+	switch wt := w.(type) {
+	case *SitterWalker:
+		if result.tree != nil {
+			if addrRefs, err := wt.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
+				fileAddrRefs = addrRefs
+			}
+		}
+	case *ASTWalker:
+		if addrRefs, err := wt.ExtractAddressRefs(result.job.path, result.job.langName); err == nil {
+			fileAddrRefs = addrRefs
+		}
 	}
 
 	// 5. processNode for each applicable schema node.
 	for _, nodeSchema := range applicableNodes {
-		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil); err != nil {
+		if err := e.processNode(nodeSchema, w, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil, result.imports); err != nil {
 			// 6. Invalid query → route to _project_files/.
 			if strings.Contains(err.Error(), "invalid query") {
 				e.mu.Lock()
@@ -840,6 +874,9 @@ func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langNam
 		}
 		if ctxBytes, err := walker.ExtractContext(tree.RootNode(), content, grammar, langName); err == nil {
 			result.context = ctxBytes
+		}
+		if langName == "go" {
+			result.imports = walker.ExtractGoImports(tree.RootNode(), content, grammar)
 		}
 	}
 
@@ -1230,7 +1267,7 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte, fileAddressRefs []string, parentMatchValues map[string]any) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte, fileAddressRefs []string, parentMatchValues map[string]any, fileImports map[string]string) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -1295,7 +1332,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Children: existingChildren,
 		}
 
-		// Store language name, package name, and register definition for callees/ resolution
+		// Store language name, package name for callees/ resolution (SitterWalker path)
 		if _, ok := walker.(*SitterWalker); ok {
 			if ctxAny := match.Context(); ctxAny != nil {
 				if root, ok := ctxAny.(SitterRoot); ok && root.LangName != "" {
@@ -1311,6 +1348,17 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 						}
 					}
 				}
+			}
+		}
+
+		// Store structured imports (avoids regex re-parsing at query time).
+		// Independent of walker type — persist whenever fileImports is non-nil.
+		if fileImports != nil {
+			if node.Properties == nil {
+				node.Properties = make(map[string][]byte)
+			}
+			if importJSON, err := json.Marshal(fileImports); err == nil {
+				node.Properties["imports"] = importJSON
 			}
 		}
 		store.AddNode(node)
@@ -1369,7 +1417,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext, fileAddressRefs, match.Values()); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext, fileAddressRefs, match.Values(), fileImports); err != nil {
 					return err
 				}
 			}
@@ -1621,221 +1669,15 @@ func GetLanguage(langName string) *sitter.Language {
 	return l.Grammar()
 }
 
-var tmplFuncs = template.FuncMap{
-	"json": func(v any) string {
-		b, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprintf("<json error: %v>", err)
-		}
-		return string(b)
-	},
-	"first": func(v any) any {
-		switch s := v.(type) {
-		case []any:
-			if len(s) > 0 {
-				return s[0]
-			}
-		}
-		return nil
-	},
-	// unquote strips Go string quotes: {{unquote .path}} → cobra from "cobra".
-	// Tree-sitter captures of interpreted_string_literal include surrounding quotes.
-	"unquote": func(s string) string {
-		if u, err := strconv.Unquote(s); err == nil {
-			return u
-		}
-		return s
-	},
-	// slice extracts a substring: {{slice .someField 4 8}} → characters [4:8].
-	// Used for temporal sharding: {{slice .item.cve.id 4 8}} → "2024" from "CVE-2024-0001".
-	"slice": func(s string, start, end int) string {
-		if start < 0 {
-			start = 0
-		}
-		if end > len(s) {
-			end = len(s)
-		}
-		if start >= end {
-			return ""
-		}
-		return s[start:end]
-	},
-	// replace all occurrences: {{replace .name ":" " "}} → "alpine 3.18" from "alpine:3.18".
-	"replace": func(s, old, new string) string {
-		return strings.ReplaceAll(s, old, new)
-	},
-	// lower: {{lower .name}} → "rhel" from "RHEL".
-	"lower": func(s string) string {
-		return strings.ToLower(s)
-	},
-	// upper: {{upper .name}} → "DEBIAN" from "debian".
-	"upper": func(s string) string {
-		return strings.ToUpper(s)
-	},
-	// title: {{title .name}} → "Amazon Linux" from "amazon linux".
-	"title": cases.Title(language.Und).String,
-	// split: {{index (split .id ":") 0}} → "alpine" from "alpine:3.18".
-	"split": func(s, sep string) []string {
-		return strings.Split(s, sep)
-	},
-	// join: {{join ", " .parts}} or pipeline {{split .s ":" | join ", "}}.
-	// sep is first so the piped value (slice) arrives as the last arg.
-	// Accepts both []string and []any (JSON-parsed slices).
-	"join": func(sep string, parts any) string {
-		switch v := parts.(type) {
-		case []string:
-			return strings.Join(v, sep)
-		case []any:
-			strs := make([]string, len(v))
-			for i, elem := range v {
-				strs[i] = fmt.Sprintf("%v", elem)
-			}
-			return strings.Join(strs, sep)
-		default:
-			return fmt.Sprintf("%v", parts)
-		}
-	},
-	// hasPrefix: {{if hasPrefix .s "CVE"}}...{{end}}.
-	"hasPrefix": strings.HasPrefix,
-	// hasSuffix: {{if hasSuffix .s ".go"}}...{{end}}.
-	"hasSuffix": strings.HasSuffix,
-	// trimPrefix: {{trimPrefix .s "pkg/"}} → "auth/login.go" from "pkg/auth/login.go".
-	"trimPrefix": strings.TrimPrefix,
-	// trimSuffix: {{trimSuffix .s ".go"}} → "main" from "main.go".
-	"trimSuffix": strings.TrimSuffix,
-	// dict: construct a map from key-value pairs. Errors on odd arg count.
-	// {{dict "PkgName" .name "Severity" 4 | json}} → {"PkgName":"curl","Severity":4}
-	"dict": func(pairs ...any) (map[string]any, error) {
-		if len(pairs)%2 != 0 {
-			return nil, fmt.Errorf("dict requires even number of args, got %d", len(pairs))
-		}
-		m := make(map[string]any, len(pairs)/2)
-		for i := 0; i < len(pairs); i += 2 {
-			m[fmt.Sprint(pairs[i])] = pairs[i+1]
-		}
-		return m, nil
-	},
-	// lookup: key-value enum mapping. Last odd arg is default.
-	// {{lookup .Severity "Critical" 4 "High" 3 "Medium" 2 "Low" 1 0}}
-	"lookup": func(val any, pairs ...any) any {
-		s := fmt.Sprint(val)
-		for i := 0; i+1 < len(pairs); i += 2 {
-			if fmt.Sprint(pairs[i]) == s {
-				return pairs[i+1]
-			}
-		}
-		if len(pairs)%2 == 1 {
-			return pairs[len(pairs)-1]
-		}
-		return ""
-	},
-	// default: return fallback when value is nil or empty string.
-	// {{default .name "unknown"}}
-	"default": func(val, fallback any) any {
-		if val == nil {
-			return fallback
-		}
-		if s, ok := val.(string); ok && s == "" {
-			return fallback
-		}
-		return val
-	},
-	// dig: safely navigate nested maps/slices by dot-separated path.
-	// Returns "" if any intermediate key is missing, nil, or out of bounds.
-	// Supports map string keys and integer indices for slices.
-	// {{dig "item.Vulnerability.NamespaceName" .}} → "alpine:3.18" or ""
-	// {{dig "item.affected.0.package.ecosystem" .}} → "AlmaLinux:8" or ""
-	"dig": func(path string, obj any) string {
-		parts := strings.Split(path, ".")
-		current := obj
-		for _, part := range parts {
-			if current == nil || part == "" {
-				return ""
-			}
-			switch v := current.(type) {
-			case map[string]any:
-				val, ok := v[part]
-				if !ok {
-					return ""
-				}
-				current = val
-			case []any:
-				idx := 0
-				for _, c := range part {
-					if c < '0' || c > '9' {
-						return "" // not a valid index
-					}
-					idx = idx*10 + int(c-'0')
-				}
-				if idx >= len(v) {
-					return ""
-				}
-				current = v[idx]
-			default:
-				return ""
-			}
-		}
-		if current == nil {
-			return ""
-		}
-		return fmt.Sprint(current)
-	},
-}
-
-// tmplCache stores parsed templates keyed by their source string.
-// template.Template.Execute is safe for concurrent use (Go docs guarantee this),
-// so a shared cache with sync.Map is correct. Each caller uses its own bytes.Buffer.
-var tmplCache sync.Map // template string → *template.Template
-
-// RenderTemplate renders a Go text/template with the standard mache template functions.
-// Parsed templates are cached — repeated calls with the same template string skip parsing.
+// RenderTemplate delegates to internal/template.Render.
+// Kept as a public alias for backward compatibility with existing callers.
 func RenderTemplate(tmpl string, values map[string]any) (string, error) {
-	var t *template.Template
-	if cached, ok := tmplCache.Load(tmpl); ok {
-		t = cached.(*template.Template)
-	} else {
-		var err error
-		t, err = template.New("").Funcs(tmplFuncs).Parse(tmpl)
-		if err != nil {
-			return "", err
-		}
-		tmplCache.Store(tmpl, t)
-	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, values); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
+	return machetmpl.Render(tmpl, values)
 }
 
-// RenderTemplateWithFuncs renders a Go text/template with the standard mache
-// template functions plus additional per-engine functions (e.g., {{diagram}}).
-// Templates are cached in the provided cache; the caller must ensure the
-// extraFuncs map is stable for the cache's lifetime.
+// RenderTemplateWithFuncs delegates to internal/template.RenderWithFuncs.
 func RenderTemplateWithFuncs(tmpl string, values map[string]any, extraFuncs template.FuncMap, cache *sync.Map) (string, error) {
-	var t *template.Template
-	if cached, ok := cache.Load(tmpl); ok {
-		t = cached.(*template.Template)
-	} else {
-		merged := make(template.FuncMap, len(tmplFuncs)+len(extraFuncs))
-		for k, v := range tmplFuncs {
-			merged[k] = v
-		}
-		for k, v := range extraFuncs {
-			merged[k] = v
-		}
-		var err error
-		t, err = template.New("").Funcs(merged).Parse(tmpl)
-		if err != nil {
-			return "", err
-		}
-		cache.Store(tmpl, t)
-	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, values); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
+	return machetmpl.RenderWithFuncs(tmpl, values, extraFuncs, cache)
 }
 
 // refsProvider is the subset of stores that expose their refs map.

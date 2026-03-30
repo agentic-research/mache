@@ -41,6 +41,9 @@ jobs:
             fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev
 
     runs-on: ${{ matrix.os }}
+    permissions:
+      id-token: write
+      contents: write
 
     steps:
       - name: Checkout mache
@@ -62,10 +65,16 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Download pre-built ley-line artifacts (staticlib + header)
+      - name: Exchange OIDC → GitHub token (octo-sts)
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: agentic-research/ley-line
+          identity: mache-release
+
       - name: Download ley-line release artifacts
         env:
-          GH_TOKEN: ${{ secrets.LEYLINE_PAT }}
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
         run: |
           mkdir -p leyline-artifacts
           gh release download --repo agentic-research/ley-line \
@@ -111,6 +120,9 @@ jobs:
     if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' || github.event.client_payload.tag != '')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -133,10 +145,16 @@ jobs:
             dist/mache-*
             dist/checksums-sha256.txt
 
-      # Notify kiln to assemble the final distribution
+      - name: Exchange OIDC → GitHub token for kiln dispatch (octo-sts)
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: agentic-research/kiln
+          identity: mache-release
+
       - name: Dispatch to kiln
         env:
-          GH_TOKEN: ${{ secrets.LEYLINE_PAT }}
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
         run: |
           gh api repos/agentic-research/kiln/dispatches \
             -f event_type=mache-release \

@@ -61,3 +61,14 @@ var ErrNotFound = ig.ErrNotFound
 
 // ErrActNotSupported is returned by Graph implementations that do not support actions.
 var ErrActNotSupported = ig.ErrActNotSupported
+
+// TemplateRenderer renders a Go text/template string with the given values map.
+type TemplateRenderer = ig.TemplateRenderer
+
+// SQLiteResolver resolves ContentRef entries by fetching records from SQLite
+// and re-rendering their content templates.
+type SQLiteResolver = ig.SQLiteResolver
+
+// NewSQLiteResolver creates a resolver that uses the given template renderer
+// to render content from SQLite records.
+var NewSQLiteResolver = ig.NewSQLiteResolver

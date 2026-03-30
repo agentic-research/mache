@@ -17,6 +17,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
 	"github.com/mark3labs/mcp-go/server"
@@ -1967,7 +1968,7 @@ func TestArena_AllTools(t *testing.T) {
 
 	// Build a real MemoryStore via the engine ingestion pipeline.
 	store := graph.NewMemoryStore()
-	resolver := ingest.NewSQLiteResolver()
+	resolver := graph.NewSQLiteResolver(machetmpl.Render)
 	store.SetResolver(resolver.Resolve)
 	store.SetCallExtractor(newCallExtractor())
 	defer resolver.Close()
@@ -2282,4 +2283,131 @@ func TestRequestScheme_RejectsArbitraryProto(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Forwarded-Proto", "<script>alert(1)</script>")
 	assert.Equal(t, "http", requestScheme(req), "must not reflect arbitrary header values")
+}
+
+// ---------------------------------------------------------------------------
+// Golden-path: .db data → SQLiteGraph → MCP tools (decoupled path)
+// ---------------------------------------------------------------------------
+
+// TestSQLiteGraphGoldenPath exercises the full .db serve pipeline end-to-end:
+// schema + JSON data → ingest → SQLiteWriter → .db file → SQLiteGraph (via
+// machetmpl.Render) → MCP tool handlers. This validates the decoupled path
+// where the MCP serve layer only depends on internal/graph + internal/template,
+// not on internal/ingest or tree-sitter.
+func TestSQLiteGraphGoldenPath(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	repoRoot := filepath.Dir(filepath.Dir(thisFile))
+
+	// Load MCP schema + sample data.
+	schemaBytes, err := os.ReadFile(filepath.Join(repoRoot, "examples", "mcp-schema.json"))
+	require.NoError(t, err)
+	var schema api.Topology
+	require.NoError(t, json.Unmarshal(schemaBytes, &schema))
+
+	dataPath := filepath.Join(repoRoot, "examples", "mcp-sample-manifest.json")
+
+	// Phase 1: Build the .db (uses ingest — the "build" side).
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	writer, err := ingest.NewSQLiteWriter(dbPath)
+	require.NoError(t, err)
+
+	engine := ingest.NewEngine(&schema, writer)
+	require.NoError(t, engine.Ingest(dataPath))
+	require.NoError(t, writer.Close())
+
+	// Phase 2: Open with SQLiteGraph using only graph + template (the "serve" side).
+	// This is the decoupled path — no ingest.RenderTemplate, no tree-sitter.
+	sg, err := graph.OpenSQLiteGraph(dbPath, &schema, machetmpl.Render)
+	require.NoError(t, err)
+	defer func() { _ = sg.Close() }()
+
+	require.NoError(t, sg.EagerScan())
+
+	// Phase 3: Exercise MCP tool handlers against the SQLiteGraph.
+	t.Run("list_directory_root", func(t *testing.T) {
+		handler := makeListDirHandler(sg)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"path": ""}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		var entries []nodeEntry
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+		assert.NotEmpty(t, entries, "root should have entries")
+
+		// MCP schema projects: tools/, resources/, prompts/
+		names := map[string]bool{}
+		for _, e := range entries {
+			names[e.Name] = true
+		}
+		assert.True(t, names["tools"], "should have tools/ dir")
+	})
+
+	t.Run("list_directory_tools", func(t *testing.T) {
+		handler := makeListDirHandler(sg)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"path": "tools"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		var entries []nodeEntry
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+		// MCP sample has 3 tools: search-issues, create-issue, read-file
+		assert.GreaterOrEqual(t, len(entries), 3, "tools/ should have at least 3 entries")
+	})
+
+	t.Run("read_file_tool_description", func(t *testing.T) {
+		handler := makeReadFileHandler(sg)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"path": "tools/search-issues/description"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.Contains(t, text, "Search for issues", "description should contain tool purpose")
+	})
+
+	t.Run("read_file_input_schema_json", func(t *testing.T) {
+		handler := makeReadFileHandler(sg)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"path": "tools/search-issues/input-schema.json"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		var inputSchema map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &inputSchema), "input-schema.json must be valid JSON")
+		assert.Equal(t, "object", inputSchema["type"])
+	})
+
+	t.Run("search_returns_clean_response", func(t *testing.T) {
+		handler := makeSearchHandler(sg)
+		// JSON data schemas don't produce defs — verify search returns a clean
+		// response (empty array, no crash) rather than an error.
+		result, err := handler(context.Background(), makeRequest(map[string]any{
+			"pattern": "%search%",
+			"role":    "definition",
+		}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		// Valid JSON response (may be empty array for JSON data schemas).
+		assert.True(t, strings.HasPrefix(text, "["), "should return JSON array")
+	})
+
+	t.Run("find_definition", func(t *testing.T) {
+		handler := makeFindDefinitionHandler(sg)
+		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "search-issues"}))
+		require.NoError(t, err)
+		// May or may not find results depending on defs indexing — just verify no crash.
+		require.NotNil(t, result)
+	})
+
+	t.Run("get_overview", func(t *testing.T) {
+		handler := makeGetOverviewHandler(sg)
+		result, err := handler(context.Background(), makeRequest(map[string]any{}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.NotEmpty(t, text, "overview should return non-empty content")
+	})
 }

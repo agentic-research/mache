@@ -27,6 +27,7 @@ import (
 	"github.com/agentic-research/mache/internal/linter"
 	"github.com/agentic-research/mache/internal/materialize"
 	"github.com/agentic-research/mache/internal/nfsmount"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/spf13/cobra"
@@ -339,7 +340,7 @@ var rootCmd = &cobra.Command{
 
 				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
 				log.Printf("Opening %s (direct SQL backend)...", dataPath)
-				sg, err := graph.OpenSQLiteGraph(dataPath, schema, ingest.RenderTemplate)
+				sg, err := graph.OpenSQLiteGraph(dataPath, schema, machetmpl.Render)
 				if err != nil {
 					return fmt.Errorf("open sqlite graph: %w", err)
 				}
@@ -424,7 +425,7 @@ var rootCmd = &cobra.Command{
 					return nil
 				}
 
-				sg, err := graph.OpenSQLiteGraph(indexPath, schema, ingest.RenderTemplate)
+				sg, err := graph.OpenSQLiteGraph(indexPath, schema, machetmpl.Render)
 				if err != nil {
 					return fmt.Errorf("open indexed graph: %w", err)
 				}
@@ -438,7 +439,7 @@ var rootCmd = &cobra.Command{
 			} else {
 				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
 				store := graph.NewMemoryStore()
-				resolver := ingest.NewSQLiteResolver()
+				resolver := graph.NewSQLiteResolver(machetmpl.Render)
 				defer resolver.Close()
 				store.SetResolver(resolver.Resolve)
 
@@ -584,7 +585,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 	}
 
 	// Read-only hot-swap mode (existing logic)
-	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, ingest.RenderTemplate)
+	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
 	if err != nil {
 		return fmt.Errorf("open initial graph %s: %w", dbPath, err)
 	}
@@ -610,7 +611,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 				}
 
 				// Open new graph
-				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, ingest.RenderTemplate)
+				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
 				if err != nil {
 					log.Printf("Error opening new graph %s: %v", newDBPath, err)
 					_ = os.Remove(newDBPath)
@@ -648,7 +649,7 @@ func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, 
 	flusher.Start(100 * time.Millisecond)
 	defer func() { _ = flusher.Close() }() // final flush on unmount
 
-	wg, err := graph.OpenWritableGraph(masterDBPath, schema, ingest.RenderTemplate, flusher)
+	wg, err := graph.OpenWritableGraph(masterDBPath, schema, machetmpl.Render, flusher)
 	if err != nil {
 		return fmt.Errorf("open writable graph: %w", err)
 	}

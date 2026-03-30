@@ -49,20 +49,28 @@ jobs:
       - name: Test
         run: task test
 
-  # Notify kiln on merge to main (triggers rebuild with latest HEAD).
-  # Tag-based releases are handled by release.yml instead.
   notify-kiln:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test, lint]
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
+      - name: Exchange OIDC → GitHub token (octo-sts)
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: agentic-research/kiln
+          identity: mache-ci
+
       - name: Trigger kiln rebuild
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
         run: |
           gh api repos/agentic-research/kiln/dispatches \
             -f event_type=upstream-update \
             -f 'client_payload[repo]=agentic-research/mache'
-        env:
-          GH_TOKEN: ${{ secrets.LEYLINE_PAT }}
 
   lint:
     runs-on: ubuntu-latest
