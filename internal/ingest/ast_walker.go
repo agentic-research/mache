@@ -115,6 +115,24 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 // Close is a no-op — the ASTWalker doesn't own the database connection.
 func (w *ASTWalker) Close() {}
 
+// SelectWalker inspects a SQLite database and returns the best Walker.
+// If the database has an _ast table (produced by ley-line's ll-open/ts),
+// returns an ASTWalker (pure Go, no CGO). Otherwise returns a SitterWalker
+// (requires CGO tree-sitter bindings).
+func SelectWalker(db *sql.DB) (Walker, error) {
+	var count int
+	err := db.QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_ast'",
+	).Scan(&count)
+	if err != nil {
+		return NewSitterWalker(), nil
+	}
+	if count > 0 {
+		return NewASTWalker(db), nil
+	}
+	return NewSitterWalker(), nil
+}
+
 // --- Internal types ---
 
 type astNode struct {

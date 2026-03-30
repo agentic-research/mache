@@ -279,6 +279,31 @@ func TestASTWalker_MatchPredicateRejectsNonMatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "#match?")
 }
 
+func TestSelectWalker_ReturnsASTWalkerWhenASTTableExists(t *testing.T) {
+	db := seedTestAST(t)
+	defer func() { _ = db.Close() }()
+
+	w, err := SelectWalker(db)
+	require.NoError(t, err)
+	_, ok := w.(*ASTWalker)
+	assert.True(t, ok, "should return ASTWalker when _ast table exists")
+}
+
+func TestSelectWalker_ReturnsSitterWalkerWhenNoASTTable(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Just nodes table, no _ast
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, name TEXT)`)
+	require.NoError(t, err)
+
+	w, err := SelectWalker(db)
+	require.NoError(t, err)
+	_, ok := w.(*SitterWalker)
+	assert.True(t, ok, "should return SitterWalker when _ast table missing")
+}
+
 func TestParseSelector_Simple(t *testing.T) {
 	p, err := parseSelector("(function_declaration name: (identifier) @name) @scope")
 	require.NoError(t, err)
