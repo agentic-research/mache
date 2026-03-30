@@ -53,6 +53,7 @@ type Engine struct {
 	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
 	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
 	sitterWalker     *SitterWalker              // shared across files for query cache reuse
+	astWalker        *ASTWalker                 // SQL-backed walker for ley-line pre-parsed .db files
 	fileIndex        map[string]FileIndexEntry  // cached file metadata for incremental re-ingestion
 	mu               sync.Mutex
 
@@ -232,6 +233,14 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 		routedFiles:      make(map[string]int),
 		childSeen:        make(map[string]map[string]bool),
 	}
+}
+
+// SetASTWalker configures the engine to use a SQL-backed ASTWalker for
+// tree-sitter schema selectors instead of CGO SitterWalker. When set,
+// source file parsing is skipped — the ASTWalker queries pre-parsed
+// _ast/_source tables from a ley-line .db.
+func (e *Engine) SetASTWalker(w *ASTWalker) {
+	e.astWalker = w
 }
 
 // GitignoreMatcher matches paths against .gitignore-style rules.
@@ -727,22 +736,33 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 		return nil
 	}
 
-	// Use the shared walker if available (set during Ingest), otherwise
-	// create a temporary one (e.g., during ReIngestFile).
-	walker := e.sitterWalker
-	if walker == nil {
-		walker = NewSitterWalker()
-		defer walker.Close()
+	// Select walker: ASTWalker (pure Go, SQL) when available, else SitterWalker (CGO).
+	var w Walker
+	var root any
+	if e.astWalker != nil {
+		w = e.astWalker
+		root = ASTRoot{
+			DB:           e.astWalker.db,
+			SourceID:     filepath.Base(result.job.path),
+			ParentPrefix: "",
+		}
+	} else {
+		sw := e.sitterWalker
+		if sw == nil {
+			sw = NewSitterWalker()
+			defer sw.Close()
+		}
+		w = sw
+		root = SitterRoot{
+			Node:     result.tree.RootNode(),
+			FileRoot: result.tree.RootNode(),
+			Source:   result.content,
+			Lang:     result.job.lang,
+			LangName: result.job.langName,
+		}
 	}
 
 	bt := &bufferingTarget{IngestionTarget: e.Store}
-	root := SitterRoot{
-		Node:     result.tree.RootNode(),
-		FileRoot: result.tree.RootNode(),
-		Source:   result.content,
-		Lang:     result.job.lang,
-		LangName: result.job.langName,
-	}
 	sourceFile := filepath.Base(result.job.path)
 
 	// 2. Filter schema nodes by language.
@@ -755,13 +775,15 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 
 	// 4. Extract file-level address refs once (e.g., HCL variable declarations).
 	var fileAddrRefs []string
-	if addrRefs, err := walker.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
-		fileAddrRefs = addrRefs
+	if sw, ok := w.(*SitterWalker); ok && result.tree != nil {
+		if addrRefs, err := sw.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
+			fileAddrRefs = addrRefs
+		}
 	}
 
 	// 5. processNode for each applicable schema node.
 	for _, nodeSchema := range applicableNodes {
-		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil, result.imports); err != nil {
+		if err := e.processNode(nodeSchema, w, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil, result.imports); err != nil {
 			// 6. Invalid query → route to _project_files/.
 			if strings.Contains(err.Error(), "invalid query") {
 				e.mu.Lock()
