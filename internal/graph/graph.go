@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -569,8 +570,27 @@ var (
 	memberImportRe = regexp.MustCompile(`(\w+)?\s*"([^"]+)"`)
 )
 
+// loadImports returns structured import mappings from a node.
+// Prefers Properties["imports"] (JSON, set by tree-sitter during ingestion).
+// Falls back to regex parsing of Context text for backward compatibility.
+func loadImports(node *Node) map[string]string {
+	if node.Properties != nil {
+		if raw, ok := node.Properties["imports"]; ok && len(raw) > 0 {
+			var imports map[string]string
+			if err := json.Unmarshal(raw, &imports); err == nil && len(imports) > 0 {
+				return imports
+			}
+		}
+	}
+	if node.Context != nil {
+		return parseGoImports(node.Context)
+	}
+	return nil
+}
+
 // parseGoImports extracts alias → import path mappings from Go context text.
 // For unaliased imports, the alias is the last path segment.
+// Deprecated: prefer structured imports from Properties["imports"].
 func parseGoImports(ctx []byte) map[string]string {
 	imports := make(map[string]string)
 	text := string(ctx)
@@ -679,9 +699,9 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 
 			// Import-path fallback for aliased imports:
 			// import mypkg "github.com/foo/bar/auth" → mypkg.Validate → auth.Validate
-			if !resolved && node.Context != nil {
+			if !resolved && (node.Context != nil || node.Properties != nil) {
 				if imports == nil {
-					imports = parseGoImports(node.Context)
+					imports = loadImports(node)
 				}
 				if importPath, ok := imports[qc.Qualifier]; ok {
 					altPkg := filepath.Base(importPath)

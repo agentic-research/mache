@@ -338,6 +338,83 @@ func (w *SitterWalker) ExtractContext(root *sitter.Node, source []byte, lang *si
 	return buf.Bytes(), nil
 }
 
+// goImportQuery is the tree-sitter query for Go import declarations.
+// Captures alias (optional) and path for each import spec.
+const goImportQuery = `
+(import_spec
+  name: (package_identifier)? @alias
+  path: (interpreted_string_literal) @path)
+`
+
+// ExtractGoImports extracts structured import mappings from a Go AST.
+// Returns a map of alias → import path (e.g., "fmt" → "fmt", "mypkg" → "github.com/foo/bar").
+// For unaliased imports, the alias is the last path segment.
+func (w *SitterWalker) ExtractGoImports(root *sitter.Node, source []byte, lang *sitter.Language) map[string]string {
+	q, err := w.getGoImportQuery(lang)
+	if err != nil || q == nil {
+		return nil
+	}
+
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+	qc.Exec(q, root)
+
+	imports := make(map[string]string)
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+
+		var alias, path string
+		for _, c := range m.Captures {
+			name := q.CaptureNameForId(c.Index)
+			text := c.Node.Content(source)
+			switch name {
+			case "alias":
+				alias = text
+			case "path":
+				// Strip surrounding quotes from interpreted_string_literal
+				if len(text) >= 2 && text[0] == '"' {
+					text = text[1 : len(text)-1]
+				}
+				path = text
+			}
+		}
+
+		if path == "" || alias == "_" || alias == "." {
+			continue
+		}
+		if alias == "" {
+			// Default alias is last path segment
+			parts := bytes.Split([]byte(path), []byte("/"))
+			alias = string(parts[len(parts)-1])
+		}
+		imports[alias] = path
+	}
+
+	return imports
+}
+
+var goImportQueryCache sync.Map // *sitter.Language → *sitter.Query
+
+func (w *SitterWalker) getGoImportQuery(lang *sitter.Language) (*sitter.Query, error) {
+	ptr := uintptr(unsafe.Pointer(lang))
+	if cached, ok := goImportQueryCache.Load(ptr); ok {
+		return cached.(*sitter.Query), nil
+	}
+	q, err := sitter.NewQuery([]byte(goImportQuery), lang)
+	if err != nil {
+		return nil, err
+	}
+	actual, loaded := goImportQueryCache.LoadOrStore(ptr, q)
+	if loaded {
+		q.Close()
+		return actual.(*sitter.Query), nil
+	}
+	return q, nil
+}
+
 // getCallQuery returns a cached compiled query for call extraction, compiling
 // it on first use for the given language. The compiled query is reused across
 // all subsequent calls for the same language.

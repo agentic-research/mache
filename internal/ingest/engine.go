@@ -109,9 +109,10 @@ type parsedTreeSitterFile struct {
 	realPath string
 	content  []byte
 	tree     *sitter.Tree
-	context  []byte // extracted imports/globals context
-	parseErr error  // non-nil if tree-sitter parsing failed
-	readErr  error  // non-nil if file read failed
+	context  []byte            // extracted imports/globals context
+	imports  map[string]string // structured imports: alias → path (Go only, nil for others)
+	parseErr error             // non-nil if tree-sitter parsing failed
+	readErr  error             // non-nil if file read failed
 }
 
 // langForExt is a thin wrapper over the lang registry.
@@ -452,6 +453,10 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 					); err == nil {
 						result.context = ctxBytes
 					}
+					// Extract structured imports (Go) — avoids regex re-parsing at query time.
+					if job.langName == "go" {
+						result.imports = e.sitterWalker.ExtractGoImports(tree.RootNode(), result.content, job.lang)
+					}
 				}
 				parsed <- result
 			}
@@ -655,7 +660,7 @@ func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 
 	walker := NewJsonWalker()
 	for _, nodeSchema := range e.Schema.Nodes {
-		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil, nil, nil); err != nil {
+		if err := e.processNode(nodeSchema, walker, data, "", "", "", modTime, e.Store, nil, nil, nil, nil); err != nil {
 			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err)
 		}
 	}
@@ -756,7 +761,7 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 
 	// 5. processNode for each applicable schema node.
 	for _, nodeSchema := range applicableNodes {
-		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil); err != nil {
+		if err := e.processNode(nodeSchema, walker, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil, result.imports); err != nil {
 			// 6. Invalid query → route to _project_files/.
 			if strings.Contains(err.Error(), "invalid query") {
 				e.mu.Lock()
@@ -839,6 +844,9 @@ func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langNam
 		}
 		if ctxBytes, err := walker.ExtractContext(tree.RootNode(), content, grammar, langName); err == nil {
 			result.context = ctxBytes
+		}
+		if langName == "go" {
+			result.imports = walker.ExtractGoImports(tree.RootNode(), content, grammar)
 		}
 	}
 
@@ -1229,7 +1237,7 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte, fileAddressRefs []string, parentMatchValues map[string]any) error {
+func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath, sourceFile, absSourceFile string, modTime time.Time, store IngestionTarget, fileContext []byte, fileAddressRefs []string, parentMatchValues map[string]any, fileImports map[string]string) error {
 	matches, err := walker.Query(ctx, schema.Selector)
 	if err != nil {
 		return fmt.Errorf("query failed for %s: %w", schema.Name, err)
@@ -1309,6 +1317,13 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 							node.Properties["pkg"] = []byte(pkgName)
 						}
 					}
+
+					// Store structured imports (avoids regex re-parsing at query time)
+					if fileImports != nil {
+						if importJSON, err := json.Marshal(fileImports); err == nil {
+							node.Properties["imports"] = importJSON
+						}
+					}
 				}
 			}
 		}
@@ -1368,7 +1383,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		nextCtx := match.Context()
 		if nextCtx != nil {
 			for _, childSchema := range schema.Children {
-				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext, fileAddressRefs, match.Values()); err != nil {
+				if err := e.processNode(childSchema, walker, nextCtx, currentPath, sourceFile, absSourceFile, modTime, store, fileContext, fileAddressRefs, match.Values(), fileImports); err != nil {
 					return err
 				}
 			}
