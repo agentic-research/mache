@@ -2411,3 +2411,147 @@ func TestSQLiteGraphGoldenPath(t *testing.T) {
 		assert.NotEmpty(t, text, "overview should return non-empty content")
 	})
 }
+
+// ---------------------------------------------------------------------------
+// LSP enrichment: _lsp_defs / _lsp_refs query helpers + handler integration
+// ---------------------------------------------------------------------------
+
+// openLSPFixture opens the testdata/lsp-fixture.db via SQLiteGraph.
+// The fixture has _lsp_defs, _lsp_refs, nodes, and node_refs tables.
+func openLSPFixture(t *testing.T) *graph.SQLiteGraph {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	repoRoot := filepath.Dir(filepath.Dir(thisFile))
+	dbPath := filepath.Join(repoRoot, "testdata", "lsp-fixture.db")
+
+	// Minimal schema — the nodes table provides the structure directly
+	var schema api.Topology
+	require.NoError(t, json.Unmarshal([]byte(`{"table":"nodes","nodes":[]}`), &schema))
+
+	sg, err := graph.OpenSQLiteGraph(dbPath, &schema, machetmpl.Render)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sg.Close() })
+	return sg
+}
+
+func TestQueryLSPDefs_Found(t *testing.T) {
+	sg := openLSPFixture(t)
+
+	defs, err := queryLSPDefs(sg, "Validate")
+	require.NoError(t, err)
+	require.NotEmpty(t, defs, "should find LSP defs for Validate")
+
+	// Verify the returned definition
+	assert.Equal(t, "mypackage/Validate", defs[0].NodeID)
+	assert.Contains(t, defs[0].URI, "mypackage.go")
+	assert.Equal(t, 10, defs[0].StartLine)
+}
+
+func TestQueryLSPDefs_NotFound(t *testing.T) {
+	sg := openLSPFixture(t)
+
+	defs, err := queryLSPDefs(sg, "NonExistentSymbol")
+	require.NoError(t, err)
+	assert.Empty(t, defs, "should return empty for unknown symbol")
+}
+
+func TestQueryLSPRefs_Found(t *testing.T) {
+	sg := openLSPFixture(t)
+
+	refs, err := queryLSPRefs(sg, "Validate")
+	require.NoError(t, err)
+	require.Len(t, refs, 2, "Validate has 2 reference locations")
+
+	// Verify URIs contain expected files
+	uris := make([]string, len(refs))
+	for i, r := range refs {
+		uris[i] = r.URI
+	}
+	assert.Contains(t, uris, "file:///project/main_test.go")
+	assert.Contains(t, uris, "file:///project/handler.go")
+}
+
+func TestQueryLSPRefs_NotFound(t *testing.T) {
+	sg := openLSPFixture(t)
+
+	refs, err := queryLSPRefs(sg, "NonExistentSymbol")
+	require.NoError(t, err)
+	assert.Empty(t, refs, "should return empty for unknown symbol")
+}
+
+func TestFindDefinition_LSPFallback(t *testing.T) {
+	sg := openLSPFixture(t)
+	handler := makeFindDefinitionHandler(sg)
+
+	// "Validate" exists in both DefsMap and _lsp_defs, but DefsMap should
+	// take priority. Use a symbol that's only in _lsp_defs (Config is in
+	// both node_refs and _lsp_defs — the DefsMap will find it via
+	// node_defs if populated). So we test the LSP fallback path by
+	// querying for the full node_id path which won't match DefsMap keys.
+	//
+	// Actually, DefsMap for SQLiteGraph reads from node_defs table. Our
+	// fixture doesn't have node_defs, only node_refs. So DefsMap will be
+	// empty and the LSP fallback should kick in for any symbol.
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+
+	// Should come from LSP fallback since DefsMap is empty
+	var lspResult struct {
+		Symbol      string           `json:"symbol"`
+		Source      string           `json:"source"`
+		Definitions []lspDefLocation `json:"definitions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &lspResult))
+	assert.Equal(t, "Validate", lspResult.Symbol)
+	assert.Equal(t, "lsp", lspResult.Source)
+	assert.NotEmpty(t, lspResult.Definitions)
+	assert.Contains(t, lspResult.Definitions[0].URI, "mypackage.go")
+}
+
+func TestFindCallers_WithLSPRefs(t *testing.T) {
+	sg := openLSPFixture(t)
+	handler := makeFindCallersHandler(sg)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+
+	// The fixture has node_refs for Validate, so GetCallers returns graph
+	// callers. LSP refs should also be present in the response.
+	var callersResult struct {
+		Callers []string         `json:"callers"`
+		LSPRefs []lspRefLocation `json:"lsp_refs"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &callersResult))
+	assert.NotEmpty(t, callersResult.LSPRefs, "should have LSP refs")
+	assert.Len(t, callersResult.LSPRefs, 2, "Validate has 2 LSP ref locations")
+
+	// Verify LSP ref URIs
+	refURIs := make([]string, len(callersResult.LSPRefs))
+	for i, r := range callersResult.LSPRefs {
+		refURIs[i] = r.URI
+	}
+	assert.Contains(t, refURIs, "file:///project/main_test.go")
+	assert.Contains(t, refURIs, "file:///project/handler.go")
+}
+
+func TestFindCallers_NoLSPTable(t *testing.T) {
+	// MemoryStore has no QueryRefs — should return original format
+	store := buildTestGraph(t)
+	handler := makeFindCallersHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Helper"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	// Should be plain array (backward-compatible format)
+	var paths []string
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &paths))
+	assert.Contains(t, paths, "pkg/main/source")
+}

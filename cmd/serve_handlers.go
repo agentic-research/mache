@@ -360,13 +360,31 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("get callers: %v", err)), nil
 		}
-		if len(callers) == 0 {
-			return mcp.NewToolResultText("[]"), nil
-		}
 
 		paths := make([]string, 0, len(callers))
 		for _, c := range callers {
 			paths = append(paths, c.ID)
+		}
+
+		// Supplement with LSP references if available
+		if qg, ok := g.(refsQuerier); ok {
+			lspRefs, lspErr := queryLSPRefs(qg, token)
+			if lspErr == nil && len(lspRefs) > 0 {
+				type callersResult struct {
+					Callers []string         `json:"callers"`
+					LSPRefs []lspRefLocation `json:"lsp_refs"`
+				}
+				data, _ := json.MarshalIndent(callersResult{
+					Callers: paths,
+					LSPRefs: lspRefs,
+				}, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			}
+		}
+
+		// No LSP data — return original format for backward compatibility
+		if len(paths) == 0 {
+			return mcp.NewToolResultText("[]"), nil
 		}
 		data, _ := json.MarshalIndent(paths, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
@@ -784,6 +802,25 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 					}, "", "  ")
 					return mcp.NewToolResultText(string(data)), nil
 				}
+
+				// LSP fallback: try _lsp_defs from ley-line pre-baked DB
+				if qg, ok := g.(refsQuerier); ok {
+					lspDefs, err := queryLSPDefs(qg, symbol)
+					if err == nil && len(lspDefs) > 0 {
+						type lspResult struct {
+							Symbol      string           `json:"symbol"`
+							Source      string           `json:"source"`
+							Definitions []lspDefLocation `json:"definitions"`
+						}
+						data, _ := json.MarshalIndent(lspResult{
+							Symbol:      symbol,
+							Source:      "lsp",
+							Definitions: lspDefs,
+						}, "", "  ")
+						return mcp.NewToolResultText(string(data)), nil
+					}
+				}
+
 				return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q", symbol)), nil
 			}
 		}
