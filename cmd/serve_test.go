@@ -2555,3 +2555,86 @@ func TestFindCallers_NoLSPTable(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &paths))
 	assert.Contains(t, paths, "pkg/main/source")
 }
+
+// ---------------------------------------------------------------------------
+// LSP pre-baked end-to-end: fixture DB → SQLiteGraph → all LSP-enriched tools
+// ---------------------------------------------------------------------------
+
+// TestLSPPrebakedEndToEnd exercises the full pipeline against testdata/lsp-fixture.db:
+// fixture DB → SQLiteGraph → all LSP-enriched MCP tool handlers.
+func TestLSPPrebakedEndToEnd(t *testing.T) {
+	sg := openLSPFixture(t)
+
+	// --- 1. get_type_info ---
+	t.Run("get_type_info", func(t *testing.T) {
+		handler := makeGetTypeInfoHandler(sg)
+
+		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.Contains(t, text, "func Validate", "hover text should contain function signature")
+	})
+
+	// --- 2. get_diagnostics ---
+	t.Run("get_diagnostics", func(t *testing.T) {
+		handler := makeGetDiagnosticsHandler(sg)
+
+		// Query all diagnostics (no symbol filter) — fixture has clean code, no diagnostics
+		result, err := handler(context.Background(), makeRequest(nil))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		// Fixture _lsp rows have empty diagnostics — response should report none found
+		assert.Contains(t, text, "no diagnostics found", "clean fixture should report no diagnostics")
+	})
+
+	// --- 3. find_definition ---
+	t.Run("find_definition", func(t *testing.T) {
+		handler := makeFindDefinitionHandler(sg)
+
+		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		// LSP fallback path: fixture has _lsp_defs but no node_defs table
+		assert.Contains(t, text, "file:///project", "definition should contain file URI from _lsp_defs")
+	})
+
+	// --- 4. find_callers ---
+	t.Run("find_callers", func(t *testing.T) {
+		handler := makeFindCallersHandler(sg)
+
+		result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		assert.Contains(t, text, "main_test.go", "LSP refs should include main_test.go")
+		assert.Contains(t, text, "handler.go", "LSP refs should include handler.go")
+	})
+
+	// --- 5. get_overview ---
+	t.Run("get_overview", func(t *testing.T) {
+		handler := makeGetOverviewHandler(sg)
+
+		result, err := handler(context.Background(), makeRequest(nil))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+
+		text := resultText(t, result)
+		require.NotEmpty(t, text, "overview should return non-empty response")
+
+		var ov map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &ov), "overview response should be valid JSON")
+		topLevel, ok := ov["top_level"]
+		require.True(t, ok, "overview should have top_level field")
+		require.NotNil(t, topLevel, "top_level should not be nil")
+		entries, ok := topLevel.([]any)
+		require.True(t, ok, "top_level should be an array")
+		assert.NotEmpty(t, entries, "fixture should have at least one top-level directory")
+	})
+}
