@@ -170,7 +170,7 @@ Add to `claude_desktop_config.json`:
 
 ## How it works
 
-- **Tree-sitter** parses source into AST nodes (Go, Python, JS, TS, Rust, SQL, HCL, YAML)
+- **Tree-sitter** parses source into AST nodes (28 languages including Go, Python, JS, TS, Rust, Java, C, Ruby, SQL, HCL, YAML)
 - **Schema inference** (Formal Concept Analysis) groups nodes into containers — `functions/`, `types/`, `classes/`
 - **Cross-reference extraction** builds a call graph from identifiers and imports
 - **SQL projection** maps the graph into a navigable tree
@@ -235,7 +235,7 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 | Capability                              | Status |
 | --------------------------------------- | ------ |
-| Tree-sitter parsing (8 langs)           | Stable |
+| Tree-sitter parsing (28 langs)          | Stable |
 | NFS/FUSE mount                          | Stable |
 | Write-back (validate, format, splice)   | Stable |
 | Cross-references (callers/callees)      | Stable |

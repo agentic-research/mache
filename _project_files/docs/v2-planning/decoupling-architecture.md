@@ -226,10 +226,14 @@ The `Walker`/`Match` interfaces (`internal/ingest/interfaces.go`) are the seam:
 
 ### Implementation path
 
-1. **Done**: Extract `internal/template`, move `SQLiteResolver` to graph (this branch)
-1. **Next**: Add `LeylineWalker` that delegates parsing to ley-line via UDS
-1. **Then**: Build-tag `SitterWalker` + `internal/lang` behind `sitter` tag
-1. **Then**: Delete `internal/leyline/client.go` (C FFI) — UDS-only interop
+1. **Done**: Extract `internal/template`, move `SQLiteResolver` to graph, add `ASTWalker` (PR #143)
+1. **Pending**: Split `cmd/serve.go` into `serve_sqlite.go` + `serve_source.go` (Step 2)
+1. **Pending**: Gate ley-line MCP tools behind flag or runtime check (Step 3)
+1. **Pending**: Gate FUSE behind `fuse` build tag (Step 4)
+1. **Pending**: Verify `CGO_ENABLED=0` build (Step 5)
+1. **Future**: Add `LeylineWalker` that delegates parsing to ley-line via UDS
+1. **Future**: Build-tag `SitterWalker` + `internal/lang` behind `sitter` tag
+1. **Future**: Delete `internal/leyline/client.go` (C FFI) — UDS-only interop
 1. **Future**: mache ships as pure Go binary alongside leyline Rust binary (kiln)
 
 ## Non-Goals (This Branch)

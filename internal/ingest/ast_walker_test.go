@@ -450,19 +450,11 @@ func TestParseSelector_Nested(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Adversarial review tests — surface known fidelity gaps vs SitterWalker.
-// Each test documents a specific finding from the v2-workspace-refactor review.
+// Edge case tests — ASTWalker fidelity vs SitterWalker.
 // ---------------------------------------------------------------------------
 
-// TestParseSelector_MultiplePredicates stress-tests the string-mutation
-// pattern in parseSelector's #eq? extraction loop. The loop modifies `s`
-// in-place via concatenation (line ~280 of ast_walker.go) to consume each
-// predicate. Tested with 2 and 3 predicates — works today, but the mutation
-// pattern is fragile.
-//
-// FINDING: OBSERVATION — parseSelector mutates `s` during #eq? extraction.
-// Works for current schemas, but consider a scan-based approach if adding
-// more predicate types.
+// TestParseSelector_MultiplePredicates verifies that the #eq? extraction
+// correctly handles multiple predicates in a single selector.
 func TestParseSelector_MultiplePredicates(t *testing.T) {
 	// Terraform-like: match blocks where _type="resource" AND _provider="aws"
 	selector := `(block (identifier) @_type (identifier) @_provider (string_lit) @name (body) @scope (#eq? @_type "resource") (#eq? @_provider "aws"))`
@@ -492,13 +484,9 @@ func TestParseSelector_MultiplePredicates(t *testing.T) {
 	assert.Equal(t, "z", pred3Map["c"], "third of three predicates")
 }
 
-// TestASTWalker_NotEqPredicateSilentlyIgnored surfaces the silent predicate
-// drop bug. Tree-sitter supports #not-eq? to exclude matches; ASTWalker
-// only checks for #match? (rejects) and #eq? (extracts). All other predicate
-// types are silently ignored, producing false-positive matches.
-//
-// FINDING: CONCERN — #not-eq? silently passes through, returning matches
-// that tree-sitter would have filtered out.
+// TestASTWalker_NotEqPredicateSilentlyIgnored verifies that unsupported
+// predicates (#not-eq?, #any-eq?, #is?, #is-not?) are rejected with an
+// error rather than silently ignored.
 func TestASTWalker_NotEqPredicateSilentlyIgnored(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -528,12 +516,9 @@ func TestASTWalker_NotEqPredicateSilentlyIgnored(t *testing.T) {
 	assert.Contains(t, err.Error(), "SitterWalker")
 }
 
-// TestASTWalker_CaptureOriginNamedCapture surfaces the CaptureOrigin contract
-// gap. SitterWalker returns byte ranges for ANY captured name (e.g., @name).
-// ASTWalker only returns ranges for @scope; all others return (0, 0, false).
-//
-// FINDING: CONCERN — write-back and location consumers that ask for named
-// capture origins will get silent false negatives from ASTWalker.
+// TestASTWalker_CaptureOriginNamedCapture verifies that CaptureOrigin returns
+// byte ranges for named captures (e.g., @name), not just @scope. The _ast table
+// has start_byte/end_byte for every node — these are stored in astMatch.captureRanges.
 func TestASTWalker_CaptureOriginNamedCapture(t *testing.T) {
 	db := seedTestAST(t)
 	defer func() { _ = db.Close() }()
@@ -563,13 +548,11 @@ func TestASTWalker_CaptureOriginNamedCapture(t *testing.T) {
 	assert.False(t, unknownOK, "unknown capture should return false")
 }
 
-// TestASTWalker_MultipleChildrenSameKind surfaces the LIMIT 1 nondeterminism
-// bug in findChildByKindAST. When a parent has multiple descendants of the
-// same node_kind, the query returns an arbitrary one (no ORDER BY). SitterWalker
-// captures all of them.
-//
-// FINDING: CONCERN — for HCL blocks with multiple string_lit children (e.g.,
-// resource type + resource name), ASTWalker picks one nondeterministically.
+// TestASTWalker_MultipleChildrenSameKind documents the LIMIT 1 behavior in
+// findChildByKindAST. When a parent has multiple descendants of the same
+// node_kind (e.g., two string_lit children in an HCL block), only the first
+// by start_byte is returned. Tree-sitter distinguishes by field name;
+// ASTWalker only matches by node_kind.
 func TestASTWalker_MultipleChildrenSameKind(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -613,17 +596,11 @@ func TestASTWalker_MultipleChildrenSameKind(t *testing.T) {
 
 	v := matches[0].Values()
 	name, _ := v["name"].(string)
-	// LIMIT 1 without ORDER BY: which string_lit did we get?
-	// This test documents the nondeterminism — it should get "aws_instance"
-	// (first by node ID sort order) but SQLite doesn't guarantee that.
-	t.Logf("Captured @name = %q (nondeterministic — LIMIT 1 without ORDER BY)", name)
-	assert.NotEmpty(t, name, "should capture at least one string_lit")
+	// ORDER BY start_byte ASC ensures we get the first child deterministically.
+	assert.Equal(t, "\"aws_instance\"", name, "should capture first string_lit by document order")
 
-	// The real concern: there's no way to capture the SECOND string_lit
-	// ("my_server") separately. Tree-sitter handles this via positional
-	// field matching (field: name vs unnamed). ASTWalker only matches by kind.
-	t.Logf("NOTE: Second string_lit child ('\"my_server\"') is unreachable via ASTWalker. " +
-		"Tree-sitter distinguishes children by field name; ASTWalker only matches by node_kind.")
+	// Second string_lit ("my_server") is not separately addressable —
+	// ASTWalker matches by node_kind, not by field name.
 }
 
 // ---------------------------------------------------------------------------
