@@ -331,6 +331,152 @@ func queryDiagnosticsFromGraph(qg refsQuerier, symbol string, limit int) (*mcp.C
 	return mcp.NewToolResultText(string(data)), nil
 }
 
+// ---------------------------------------------------------------------------
+// LSP definition/reference query helpers
+// ---------------------------------------------------------------------------
+
+// lspDefLocation represents a definition location from the _lsp_defs table.
+type lspDefLocation struct {
+	NodeID    string `json:"node_id"`
+	URI       string `json:"uri"`
+	StartLine int    `json:"start_line"`
+	StartCol  int    `json:"start_col"`
+	EndLine   int    `json:"end_line"`
+	EndCol    int    `json:"end_col"`
+}
+
+// lspRefLocation represents a reference location from the _lsp_refs table.
+type lspRefLocation struct {
+	NodeID    string `json:"node_id"`
+	URI       string `json:"uri"`
+	StartLine int    `json:"start_line"`
+	StartCol  int    `json:"start_col"`
+	EndLine   int    `json:"end_line"`
+	EndCol    int    `json:"end_col"`
+}
+
+// queryLSPDefs queries the _lsp_defs table for definition locations of a symbol.
+// Returns nil, nil if the table does not exist.
+func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
+	// Check if _lsp_defs table exists
+	rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_defs'`)
+	if err != nil {
+		return nil, fmt.Errorf("check _lsp_defs existence: %w", err)
+	}
+	var tableExists int
+	if rows.Next() {
+		_ = rows.Scan(&tableExists)
+	}
+	_ = rows.Close()
+	if tableExists == 0 {
+		return nil, nil
+	}
+
+	// Try node_id suffix match (symbol is the trailing component of node_id)
+	escaped := escapeLikeMeta(symbol)
+	rows, err = qg.QueryRefs(
+		`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
+		 FROM _lsp_defs WHERE node_id LIKE ? ESCAPE '\'`,
+		"%/"+escaped,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query _lsp_defs: %w", err)
+	}
+
+	var results []lspDefLocation
+	for rows.Next() {
+		var r lspDefLocation
+		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	_ = rows.Close()
+
+	// Fallback: broader LIKE match
+	if len(results) == 0 {
+		rows, err = qg.QueryRefs(
+			`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
+			 FROM _lsp_defs WHERE node_id LIKE ? ESCAPE '\'`,
+			"%"+escaped+"%",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("query _lsp_defs (broad): %w", err)
+		}
+		for rows.Next() {
+			var r lspDefLocation
+			if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
+				continue
+			}
+			results = append(results, r)
+		}
+		_ = rows.Close()
+	}
+
+	return results, nil
+}
+
+// queryLSPRefs queries the _lsp_refs table for reference locations of a symbol.
+// Returns nil, nil if the table does not exist.
+func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
+	// Check if _lsp_refs table exists
+	rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_refs'`)
+	if err != nil {
+		return nil, fmt.Errorf("check _lsp_refs existence: %w", err)
+	}
+	var tableExists int
+	if rows.Next() {
+		_ = rows.Scan(&tableExists)
+	}
+	_ = rows.Close()
+	if tableExists == 0 {
+		return nil, nil
+	}
+
+	// Try node_id suffix match
+	escaped := escapeLikeMeta(symbol)
+	rows, err = qg.QueryRefs(
+		`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
+		 FROM _lsp_refs WHERE node_id LIKE ? ESCAPE '\'`,
+		"%/"+escaped,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query _lsp_refs: %w", err)
+	}
+
+	var results []lspRefLocation
+	for rows.Next() {
+		var r lspRefLocation
+		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	_ = rows.Close()
+
+	// Fallback: broader LIKE match
+	if len(results) == 0 {
+		rows, err = qg.QueryRefs(
+			`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
+			 FROM _lsp_refs WHERE node_id LIKE ? ESCAPE '\'`,
+			"%"+escaped+"%",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("query _lsp_refs (broad): %w", err)
+		}
+		for rows.Next() {
+			var r lspRefLocation
+			if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
+				continue
+			}
+			results = append(results, r)
+		}
+		_ = rows.Close()
+	}
+
+	return results, nil
+}
+
 // escapeLikeMeta escapes SQL LIKE metacharacters (%, _, \) only.
 // Safe with parameterized queries — does not modify quotes.
 func escapeLikeMeta(s string) string {

@@ -60,3 +60,6 @@ tools/KNOWN_ISSUES.md
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+
+# Test fixture databases are committed (override the *.db rule above)
+!testdata/*.db
