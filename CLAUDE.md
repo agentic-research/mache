@@ -71,6 +71,7 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 - **Draft mode**: Invalid writes save as drafts; node path stays stable. Errors via `_diagnostics/ast-errors`.
 - **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `.query/` (SQL → symlinks), `callers/` (cross-refs, self-gating).
 - **NFS on macOS**: Default backend via `go-nfs`. Replaces fuse-t's NFS translation layer for full control.
+- **LSP enrichment**: When a `.db` has `_lsp*` tables (produced by ley-line's `ll-open/lsp` crate), `find_definition` falls back to `_lsp_defs` and `find_callers` supplements with `_lsp_refs`. `get_type_info` reads `_lsp_hover`, `get_diagnostics` reads `_lsp`. No runtime daemon needed — all pre-baked at build time by ley-line.
 
 ### Language Registry (`internal/lang`)
 
