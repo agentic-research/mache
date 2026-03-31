@@ -2542,7 +2542,7 @@ func TestFindCallers_WithLSPRefs(t *testing.T) {
 }
 
 func TestFindCallers_NoLSPTable(t *testing.T) {
-	// MemoryStore has no QueryRefs — should return original format
+	// In-memory refs DB has no _lsp_refs table — handler should return original format
 	store := buildTestGraph(t)
 	handler := makeFindCallersHandler(store)
 

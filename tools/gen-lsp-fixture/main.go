@@ -19,11 +19,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -168,7 +168,9 @@ func createSchema(db *sql.DB) error {
 //	  Config/         (type: Config struct { Name string })
 //	    source
 func insertFixture(db *sql.DB) error {
-	now := time.Now().UnixNano()
+	// Use a fixed timestamp for deterministic fixture output.
+	// 1711843200 = 2024-03-31T00:00:00Z
+	const now = 1711843200
 
 	// Source file content (single file containing all three symbols)
 	sourceContent := `package mypackage
@@ -220,7 +222,9 @@ func Helper() string {
 		{"mypackage", "", "mypackage", 1, 0, "", ""},
 
 		// Validate function directory
-		{"mypackage/Validate", "mypackage", "Validate", 1, 0, `{"lang":"go","pkg":"mypackage"}`, ""},
+		// record uses map[string][]byte JSON encoding (base64 values) to match
+		// SQLiteGraph's json.Unmarshal(record, &map[string][]byte) in readProperties.
+		{"mypackage/Validate", "mypackage", "Validate", 1, 0, mustPropertiesJSON("go", "mypackage"), ""},
 		// Validate source file (inline content in record column)
 		{
 			"mypackage/Validate/source", "mypackage/Validate", "source", 0,
@@ -230,7 +234,7 @@ func Helper() string {
 		},
 
 		// Helper function directory
-		{"mypackage/Helper", "mypackage", "Helper", 1, 0, `{"lang":"go","pkg":"mypackage"}`, ""},
+		{"mypackage/Helper", "mypackage", "Helper", 1, 0, mustPropertiesJSON("go", "mypackage"), ""},
 		// Helper source file
 		{
 			"mypackage/Helper/source", "mypackage/Helper", "source", 0,
@@ -240,7 +244,7 @@ func Helper() string {
 		},
 
 		// Config type directory
-		{"mypackage/Config", "mypackage", "Config", 1, 0, `{"lang":"go","pkg":"mypackage"}`, ""},
+		{"mypackage/Config", "mypackage", "Config", 1, 0, mustPropertiesJSON("go", "mypackage"), ""},
 		// Config source file
 		{
 			"mypackage/Config/source", "mypackage/Config", "source", 0,
@@ -489,9 +493,16 @@ func Helper() string {
 	return nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// mustPropertiesJSON returns a JSON-encoded map[string][]byte for a construct
+// directory's Properties field. SQLiteGraph reads Properties via
+// json.Unmarshal(record, &map[string][]byte), so values must be base64-encoded.
+func mustPropertiesJSON(lang, pkg string) string {
+	b, err := json.Marshal(map[string][]byte{
+		"lang": []byte(lang),
+		"pkg":  []byte(pkg),
+	})
+	if err != nil {
+		panic(err)
 	}
-	return b
+	return string(b)
 }

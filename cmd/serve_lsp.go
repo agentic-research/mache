@@ -361,7 +361,7 @@ func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
 	// Check if _lsp_defs table exists
 	rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_defs'`)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("check _lsp_defs existence: %w", err)
 	}
 	var tableExists int
 	if rows.Next() {
@@ -422,7 +422,7 @@ func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
 	// Check if _lsp_refs table exists
 	rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_refs'`)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("check _lsp_refs existence: %w", err)
 	}
 	var tableExists int
 	if rows.Next() {
