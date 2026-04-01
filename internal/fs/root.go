@@ -42,7 +42,6 @@ func pathIno(path string) uint64 {
 type dirHandle struct {
 	path    string                    // FUSE directory path (e.g., "/vulns")
 	entries []string                  // base names: [".", "..", virtual..., child1, ...]
-	stats   []graph.NodeStat          // pre-computed child stats from ListChildStats (indexed by child base name)
 	statMap map[string]graph.NodeStat // base name → NodeStat for O(1) lookup during readdir
 }
 
@@ -391,7 +390,7 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 	fs.handleMu.Lock()
 	fh := fs.nextHandle
 	fs.nextHandle++
-	fs.handles[fh] = &dirHandle{path: path, entries: entries, stats: childStats, statMap: statMap}
+	fs.handles[fh] = &dirHandle{path: path, entries: entries, statMap: statMap}
 	fs.handleMu.Unlock()
 
 	return 0, fh

@@ -154,9 +154,9 @@ func (c *CompositeGraph) ListChildStats(id string) ([]NodeStat, error) {
 		stats := make([]NodeStat, len(names))
 		for i, name := range names {
 			stats[i] = NodeStat{
-				ID:      name,
-				IsDir:   true,
-				ModTime: time.Now(),
+				ID:    name,
+				IsDir: true,
+				// Zero ModTime — FUSE/NFS substitute mountTime for deterministic timestamps.
 			}
 		}
 		return stats, nil

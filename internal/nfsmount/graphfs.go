@@ -400,9 +400,6 @@ func cleanPath(path string) string {
 	return path
 }
 
-// nodeToFileInfo converts a graph.Node to os.FileInfo.
-// Zero ModTime falls back to the stable mount time (not time.Now()) so that
-// build tools see deterministic timestamps across remounts.
 // statToFileInfo converts a NodeStat (from ListChildStats) to os.FileInfo.
 // Uses mountTime as fallback for zero ModTime. No GetNode call needed.
 func (fs *GraphFS) statToFileInfo(s graph.NodeStat) os.FileInfo {
@@ -425,6 +422,9 @@ func (fs *GraphFS) statToFileInfo(s graph.NodeStat) os.FileInfo {
 	return newFileInfo(s.ID, size, mode, modTime)
 }
 
+// nodeToFileInfo converts a graph.Node to os.FileInfo.
+// Zero ModTime falls back to the stable mount time (not time.Now()) so that
+// build tools see deterministic timestamps across remounts.
 func (fs *GraphFS) nodeToFileInfo(n *graph.Node) os.FileInfo {
 	mode := os.FileMode(0o444)
 	if n.Mode.IsDir() {
