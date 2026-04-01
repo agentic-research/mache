@@ -36,7 +36,8 @@ func mergeSortedDedup(a, b []string) []string {
 }
 
 // compactSorted removes consecutive duplicates from a sorted slice.
-// Returns a new slice — does not mutate the input.
+// For slices of length 0 or 1, returns the input as-is (no allocation).
+// For longer slices, returns a new slice.
 func compactSorted(s []string) []string {
 	if len(s) <= 1 {
 		return s

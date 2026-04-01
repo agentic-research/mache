@@ -87,15 +87,17 @@ func TestMemoryStore_AddFileChildren_Atomicity(t *testing.T) {
 		files[i] = &Node{
 			ID:   fmt.Sprintf("pkg/atomic/file_%03d", i),
 			Mode: 0,
-			Data: []byte(fmt.Sprintf("content_%d", i)),
+			Data: fmt.Appendf(nil, "content_%d", i),
 		}
 	}
 
-	// Concurrent reader should see 0 or 50 children, never partial
+	// Start barrier: reader starts before writer to maximize overlap window
+	ready := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for k := 0; k < 1000; k++ {
+		close(ready) // signal: reader is running
+		for k := 0; k < 5000; k++ {
 			children, err := store.ListChildren("pkg/atomic")
 			if err != nil {
 				continue
@@ -106,6 +108,7 @@ func TestMemoryStore_AddFileChildren_Atomicity(t *testing.T) {
 		}
 	}()
 
+	<-ready // wait for reader goroutine to start
 	store.AddFileChildren(dir, files)
 	<-done
 }

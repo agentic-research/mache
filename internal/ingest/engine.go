@@ -699,6 +699,10 @@ func (b *bufferingTarget) AddDef(token, dirID string) error {
 	return b.IngestionTarget.AddDef(token, dirID)
 }
 
+// AddFileChildren buffers file nodes for the later ReplaceFileNodes atomic swap
+// and passes the parent dir update through immediately (same as AddNode for dirs).
+// Children are appended in-memory here; the real store sees the complete parent.
+// Safe without locking because bufferingTarget is single-goroutine.
 func (b *bufferingTarget) AddFileChildren(parent *graph.Node, files []*graph.Node) {
 	b.bufferedNodes = append(b.bufferedNodes, files...)
 	for _, f := range files {

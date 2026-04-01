@@ -78,6 +78,12 @@ func TestCompactSorted_Empty(t *testing.T) {
 	assert.Empty(t, compactSorted(nil))
 }
 
+func TestCompactSorted_SingleElement(t *testing.T) {
+	s := []string{"a"}
+	got := compactSorted(s)
+	assert.Equal(t, []string{"a"}, got)
+}
+
 func TestCompactSorted_NoDupes(t *testing.T) {
 	s := []string{"a", "b", "c"}
 	assert.Equal(t, s, compactSorted(s))
@@ -161,12 +167,11 @@ func TestFlushChildSlices_UnsortedInput(t *testing.T) {
 func TestMergeSortedDedup_Fuzz(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	for i := 0; i < 200; i++ {
-		a := randomSortedStrings(rng, rng.Intn(100))
-		b := randomSortedStrings(rng, rng.Intn(100))
+		a := randomSortedPaths(rng, rng.Intn(100))
+		b := randomSortedPaths(rng, rng.Intn(100))
 		merged := mergeSortedDedup(a, b)
 		require.True(t, sort.StringsAreSorted(merged),
 			"iteration %d: output not sorted", i)
-		// No consecutive dupes
 		for j := 1; j < len(merged); j++ {
 			require.NotEqual(t, merged[j-1], merged[j],
 				"iteration %d: duplicate at index %d", i, j)
@@ -174,10 +179,27 @@ func TestMergeSortedDedup_Fuzz(t *testing.T) {
 	}
 }
 
-func randomSortedStrings(rng *rand.Rand, n int) []string {
+// randomSortedPaths generates path-like strings matching production IDs
+// (e.g., "vulns/2024/03/CVE-2024-1234/source"). Exercises lexicographic
+// ordering with path separators, not just single characters.
+func randomSortedPaths(rng *rand.Rand, n int) []string {
+	segments := []string{
+		"vulns", "advisories", "tools", "pkg", "cmd", "internal",
+		"2023", "2024", "2025", "01", "06", "12",
+		"CVE-2024-1234", "CVE-2024-5678", "GHSA-abc", "GHSA-xyz",
+		"source", "doc", "severity", "context",
+	}
 	s := make([]string, n)
 	for i := range s {
-		s[i] = string(rune('a' + rng.Intn(26)))
+		depth := 1 + rng.Intn(4) // 1-4 path segments
+		parts := make([]string, depth)
+		for d := range parts {
+			parts[d] = segments[rng.Intn(len(segments))]
+		}
+		s[i] = parts[0]
+		for _, p := range parts[1:] {
+			s[i] += "/" + p
+		}
 	}
 	sort.Strings(s)
 	return s
