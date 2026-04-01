@@ -403,6 +403,10 @@ func (w *SQLiteWriter) ListChildren(id string) ([]string, error) {
 	return nil, nil // Not used during ingest
 }
 
+func (w *SQLiteWriter) ListChildStats(id string) ([]graph.NodeStat, error) {
+	return nil, nil // Not used during ingest
+}
+
 func (w *SQLiteWriter) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	return 0, nil // Not used during ingest
 }

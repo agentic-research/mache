@@ -159,6 +159,44 @@ func (g *WritableGraph) ListChildren(id string) ([]string, error) {
 	return children, rows.Err()
 }
 
+// ListChildStats implements Graph. Queries the nodes table for child stats
+// without rendering content.
+func (g *WritableGraph) ListChildStats(id string) ([]NodeStat, error) {
+	if len(id) > 0 && id[0] == '/' {
+		id = id[1:]
+	}
+
+	var rows *sql.Rows
+	var err error
+	if id == "" {
+		rows, err = g.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+	} else {
+		rows, err = g.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stats []NodeStat
+	for rows.Next() {
+		var childID string
+		var kind, size int
+		var mtimeNano int64
+		if err := rows.Scan(&childID, &kind, &size, &mtimeNano); err != nil {
+			return nil, err
+		}
+		stats = append(stats, NodeStat{
+			ID:          childID,
+			IsDir:       kind == 1,
+			ContentSize: int64(size),
+			ModTime:     time.Unix(0, mtimeNano),
+			HasOrigin:   false,
+		})
+	}
+	return stats, rows.Err()
+}
+
 func (g *WritableGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	if len(id) > 0 && id[0] == '/' {
 		id = id[1:]

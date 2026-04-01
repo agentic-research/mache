@@ -51,6 +51,17 @@ type SourceOrigin struct {
 	EndByte   uint32 `json:"end_byte"`
 }
 
+// NodeStat holds the immutable stat fields needed for directory listing.
+// Value type — no pointers to mutable store data. Copying a NodeStat gives
+// the caller a frozen snapshot that is safe to read without any lock.
+type NodeStat struct {
+	ID          string
+	IsDir       bool
+	ContentSize int64
+	ModTime     time.Time
+	HasOrigin   bool // true if write-back is possible (Origin != nil)
+}
+
 // Node is the universal primitive.
 // The Mode field explicitly declares whether this is a file or directory.
 type Node struct {
@@ -100,6 +111,10 @@ type CallExtractor func(content []byte, path, langName string) ([]QualifiedCall,
 type Graph interface {
 	GetNode(id string) (*Node, error)
 	ListChildren(id string) ([]string, error)
+	// ListChildStats returns stat snapshots for all children of a directory.
+	// Eliminates N individual GetNode calls during FUSE/NFS readdir.
+	// Returns []NodeStat (value types, safe to read without a lock).
+	ListChildStats(id string) ([]NodeStat, error)
 	ReadContent(id string, buf []byte, offset int64) (int, error)
 	GetCallers(token string) ([]*Node, error)
 	GetCallees(id string) ([]*Node, error)
@@ -243,14 +258,14 @@ func (s *MemoryStore) AddFileChildren(parent *Node, files []*Node) {
 	s.nodes[parent.ID] = parent
 }
 
-// ListChildNodes returns the full Node objects for all children of the given
-// parent under a single RLock. Eliminates N individual GetNode calls during
-// directory listing. Missing children are silently skipped.
-func (s *MemoryStore) ListChildNodes(id string) ([]*Node, error) {
+// ListChildStats returns stat snapshots for all children under a single RLock.
+// Returns []NodeStat (value types, no aliasing) — safe to read without a lock.
+// Eliminates N individual GetNode calls during FUSE/NFS readdir.
+// Missing children are silently skipped.
+func (s *MemoryStore) ListChildStats(id string) ([]NodeStat, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Root case
 	var childIDs []string
 	if id == "" || id == "/" {
 		childIDs = s.roots
@@ -263,13 +278,19 @@ func (s *MemoryStore) ListChildNodes(id string) ([]*Node, error) {
 		childIDs = n.Children
 	}
 
-	nodes := make([]*Node, 0, len(childIDs))
+	stats := make([]NodeStat, 0, len(childIDs))
 	for _, cid := range childIDs {
 		if n, ok := s.nodes[cid]; ok {
-			nodes = append(nodes, n)
+			stats = append(stats, NodeStat{
+				ID:          n.ID,
+				IsDir:       n.Mode.IsDir(),
+				ContentSize: n.ContentSize(),
+				ModTime:     n.ModTime,
+				HasOrigin:   n.Origin != nil,
+			})
 		}
 	}
-	return nodes, nil
+	return stats, nil
 }
 
 // UpdateNodeContent surgically updates a node's content and origin in-place.

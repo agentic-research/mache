@@ -41,6 +41,13 @@ func (h *HotSwapGraph) ListChildren(id string) ([]string, error) {
 	return h.current.ListChildren(id)
 }
 
+// ListChildStats delegates to current graph.
+func (h *HotSwapGraph) ListChildStats(id string) ([]NodeStat, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.current.ListChildStats(id)
+}
+
 // ReadContent delegates to current graph.
 func (h *HotSwapGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	h.mu.RLock()

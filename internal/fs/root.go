@@ -40,8 +40,10 @@ func pathIno(path string) uint64 {
 // Readdir uses the path to construct full FUSE paths for GetNode calls,
 // enabling ReaddirPlus (stats returned inline, eliminating N+1 LOOKUP calls).
 type dirHandle struct {
-	path    string   // FUSE directory path (e.g., "/vulns")
-	entries []string // base names: [".", "..", "child1", ...]
+	path    string                    // FUSE directory path (e.g., "/vulns")
+	entries []string                  // base names: [".", "..", virtual..., child1, ...]
+	stats   []graph.NodeStat          // pre-computed child stats from ListChildStats (indexed by child base name)
+	statMap map[string]graph.NodeStat // base name → NodeStat for O(1) lookup during readdir
 }
 
 // writeHandle tracks an in-progress write to a file node.
@@ -367,25 +369,29 @@ func (fs *MacheFS) Opendir(path string) (int, uint64) {
 		}
 	}
 
-	children, err := fs.Graph.ListChildren(path)
+	childStats, err := fs.Graph.ListChildStats(path)
 	if err != nil {
 		return -fuse.ENOENT, 0
 	}
 
-	entries := make([]string, 0, len(children)+6)
+	entries := make([]string, 0, len(childStats)+6)
 	entries = append(entries, ".", "..")
 	// Inject virtual entries from all handlers
 	for _, extra := range fs.resolver.DirExtras(path, node) {
 		entries = append(entries, extra.Name)
 	}
-	for _, c := range children {
-		entries = append(entries, filepath.Base(c))
+	// Build stat map for O(1) lookup during readdir
+	statMap := make(map[string]graph.NodeStat, len(childStats))
+	for _, s := range childStats {
+		base := filepath.Base(s.ID)
+		entries = append(entries, base)
+		statMap[base] = s
 	}
 
 	fs.handleMu.Lock()
 	fh := fs.nextHandle
 	fs.nextHandle++
-	fs.handles[fh] = &dirHandle{path: path, entries: entries}
+	fs.handles[fh] = &dirHandle{path: path, entries: entries, stats: childStats, statMap: statMap}
 	fs.handleMu.Unlock()
 
 	return 0, fh
@@ -439,7 +445,7 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 	// Auto-mode: pass offset=0 to fill(). FUSE handles pagination internally.
 	// fuse-t translates to NFS READDIR and manages cookie-based continuation.
 	for _, name := range dh.entries {
-		stat := fs.readdirStat(dh.path, name)
+		stat := fs.readdirStat(dh, name)
 		if !fill(name, stat, 0) {
 			break // buffer full
 		}
@@ -449,8 +455,12 @@ func (fs *MacheFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t
 }
 
 // readdirStat builds a fuse.Stat_t for one directory entry.
+// For graph children, uses pre-computed NodeStat from the dirHandle (no GetNode call).
+// For virtual entries (".", "..", callers/, _diagnostics/, etc.), uses the resolver.
 // Returns nil for entries that can't be resolved (kernel falls back to LOOKUP).
-func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
+func (fs *MacheFS) readdirStat(dh *dirHandle, name string) *fuse.Stat_t {
+	dirPath := dh.path
+
 	stat := &fuse.Stat_t{
 		Atim:     fs.mountTime,
 		Mtim:     fs.mountTime,
@@ -479,6 +489,30 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		fullPath = dirPath + "/" + name
 	}
 
+	// Check pre-computed stats from ListChildStats (graph children)
+	if ns, ok := dh.statMap[name]; ok {
+		stat.Ino = pathIno(fullPath)
+		if ns.IsDir {
+			stat.Mode = fuse.S_IFDIR | 0o555
+			stat.Nlink = 2
+			stat.Size = 4096
+		} else {
+			perm := uint32(0o444)
+			if fs.Writable && ns.HasOrigin {
+				perm = 0o644
+			}
+			stat.Mode = fuse.S_IFREG | perm
+			stat.Nlink = 1
+			stat.Size = ns.ContentSize
+		}
+		if !ns.ModTime.IsZero() {
+			ts := fuse.NewTimespec(ns.ModTime)
+			stat.Mtim = ts
+			stat.Ctim = ts
+		}
+		return stat
+	}
+
 	// Virtual entries: delegate to resolver
 	if entry := fs.resolver.Resolve(fullPath); entry != nil {
 		stat.Ino = pathIno(fullPath)
@@ -486,26 +520,7 @@ func (fs *MacheFS) readdirStat(dirPath, name string) *fuse.Stat_t {
 		return stat
 	}
 
-	node, err := fs.Graph.GetNode(fullPath)
-	if err != nil {
-		return nil // fallback to individual LOOKUP
-	}
-
-	stat.Ino = pathIno(fullPath)
-	if node.Mode.IsDir() {
-		stat.Mode = fuse.S_IFDIR | 0o555
-		stat.Nlink = 2
-		stat.Size = 4096
-	} else {
-		perm := uint32(0o444)
-		if fs.Writable && node.Origin != nil {
-			perm = 0o644
-		}
-		stat.Mode = fuse.S_IFREG | perm
-		stat.Nlink = 1
-		stat.Size = node.ContentSize()
-	}
-	return stat
+	return nil // fallback to individual LOOKUP
 }
 
 // Read returns the Data of a file node.

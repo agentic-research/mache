@@ -280,12 +280,12 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: fmt.Errorf("not a directory")}
 	}
 
-	children, err := fs.graph.ListChildren(path)
+	childStats, err := fs.graph.ListChildStats(path)
 	if err != nil {
 		return nil, &os.PathError{Op: "readdir", Path: path, Err: os.ErrNotExist}
 	}
 
-	infos := make([]os.FileInfo, 0, len(children)+3)
+	infos := make([]os.FileInfo, 0, len(childStats)+3)
 
 	// Inject virtual entries from all handlers
 	for _, extra := range fs.resolver.DirExtras(path, node) {
@@ -302,12 +302,8 @@ func (fs *GraphFS) ReadDir(path string) ([]os.FileInfo, error) {
 		infos = append(infos, newFileInfo(fullPath, extra.Size, mode, fs.mountTime))
 	}
 
-	for _, childID := range children {
-		childNode, err := fs.graph.GetNode(childID)
-		if err != nil {
-			continue
-		}
-		infos = append(infos, fs.nodeToFileInfo(childNode))
+	for _, stat := range childStats {
+		infos = append(infos, fs.statToFileInfo(stat))
 	}
 
 	return infos, nil
@@ -407,6 +403,28 @@ func cleanPath(path string) string {
 // nodeToFileInfo converts a graph.Node to os.FileInfo.
 // Zero ModTime falls back to the stable mount time (not time.Now()) so that
 // build tools see deterministic timestamps across remounts.
+// statToFileInfo converts a NodeStat (from ListChildStats) to os.FileInfo.
+// Uses mountTime as fallback for zero ModTime. No GetNode call needed.
+func (fs *GraphFS) statToFileInfo(s graph.NodeStat) os.FileInfo {
+	mode := os.FileMode(0o444)
+	if s.IsDir {
+		mode = os.ModeDir | 0o555
+	} else if s.HasOrigin {
+		mode = 0o644
+	}
+	var size int64
+	if s.IsDir {
+		size = 4096
+	} else {
+		size = s.ContentSize
+	}
+	modTime := s.ModTime
+	if modTime.IsZero() {
+		modTime = fs.mountTime
+	}
+	return newFileInfo(s.ID, size, mode, modTime)
+}
+
 func (fs *GraphFS) nodeToFileInfo(n *graph.Node) os.FileInfo {
 	mode := os.FileMode(0o444)
 	if n.Mode.IsDir() {
