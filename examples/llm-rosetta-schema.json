@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    {
+      "name": "{{.provider}}",
+      "selector": "$[*]",
+      "files": [
+        {"name": "endpoint", "content_template": "{{.endpoint}}"},
+        {"name": "method", "content_template": "{{.method}}"},
+        {"name": "model", "content_template": "{{dig \"request.model\" .}}"},
+        {"name": "response-content", "content_template": "{{default (dig \"response.choices.0.message.content\" .) (default (dig \"response.content.0.text\" .) (default (dig \"response.candidates.0.content.parts.0.text\" .) (default (dig \"response.message.content\" .) (dig \"response.text\" .))))}}"},
+        {"name": "input-tokens", "content_template": "{{default (dig \"response.usage.prompt_tokens\" .) (default (dig \"response.usage.input_tokens\" .) (default (dig \"response.usageMetadata.promptTokenCount\" .) (default (dig \"response.prompt_eval_count\" .) (dig \"response.meta.tokens.input_tokens\" .))))}}"},
+        {"name": "output-tokens", "content_template": "{{default (dig \"response.usage.completion_tokens\" .) (default (dig \"response.usage.output_tokens\" .) (default (dig \"response.usageMetadata.candidatesTokenCount\" .) (default (dig \"response.eval_count\" .) (dig \"response.meta.tokens.output_tokens\" .))))}}"},
+        {"name": "finish-reason", "content_template": "{{default (dig \"response.choices.0.finish_reason\" .) (default (dig \"response.stop_reason\" .) (default (dig \"response.candidates.0.finishReason\" .) (default (dig \"response.done_reason\" .) (dig \"response.finish_reason\" .))))}}"},
+        {"name": "request.json", "content_template": "{{json .request}}"},
+        {"name": "response.json", "content_template": "{{json .response}}"}
+      ]
+    }
+  ]
+}

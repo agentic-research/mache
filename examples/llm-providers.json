@@ -1,0 +1,196 @@
+[
+  {
+    "provider": "openai",
+    "endpoint": "chat/completions",
+    "method": "POST",
+    "request": {
+      "model": "gpt-4o",
+      "messages": [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hello"}
+      ],
+      "temperature": 0.7,
+      "max_tokens": 1024,
+      "top_p": 1.0,
+      "stream": false,
+      "stop": null,
+      "frequency_penalty": 0,
+      "presence_penalty": 0
+    },
+    "response": {
+      "id": "chatcmpl-abc123",
+      "object": "chat.completion",
+      "model": "gpt-4o",
+      "choices": [
+        {
+          "index": 0,
+          "message": {"role": "assistant", "content": "Hello! How can I help?"},
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+        "total_tokens": 20
+      }
+    }
+  },
+  {
+    "provider": "anthropic",
+    "endpoint": "messages",
+    "method": "POST",
+    "request": {
+      "model": "claude-sonnet-4-20250514",
+      "messages": [
+        {"role": "user", "content": "Hello"}
+      ],
+      "system": "You are helpful.",
+      "max_tokens": 1024,
+      "temperature": 0.7,
+      "top_p": 1.0,
+      "stream": false,
+      "stop_sequences": []
+    },
+    "response": {
+      "id": "msg_abc123",
+      "type": "message",
+      "model": "claude-sonnet-4-20250514",
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "Hello! How can I help?"}
+      ],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 8
+      }
+    }
+  },
+  {
+    "provider": "google",
+    "endpoint": "generateContent",
+    "method": "POST",
+    "request": {
+      "model": "gemini-2.0-flash",
+      "contents": [
+        {
+          "role": "user",
+          "parts": [{"text": "Hello"}]
+        }
+      ],
+      "systemInstruction": {
+        "parts": [{"text": "You are helpful."}]
+      },
+      "generationConfig": {
+        "temperature": 0.7,
+        "maxOutputTokens": 1024,
+        "topP": 1.0
+      }
+    },
+    "response": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [{"text": "Hello! How can I help?"}]
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 12,
+        "candidatesTokenCount": 8,
+        "totalTokenCount": 20
+      }
+    }
+  },
+  {
+    "provider": "ollama",
+    "endpoint": "api/chat",
+    "method": "POST",
+    "request": {
+      "model": "llama3",
+      "messages": [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hello"}
+      ],
+      "stream": false,
+      "options": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "num_predict": 1024
+      }
+    },
+    "response": {
+      "model": "llama3",
+      "message": {
+        "role": "assistant",
+        "content": "Hello! How can I help?"
+      },
+      "done": true,
+      "done_reason": "stop",
+      "total_duration": 1234567890,
+      "prompt_eval_count": 12,
+      "eval_count": 8
+    }
+  },
+  {
+    "provider": "cohere",
+    "endpoint": "chat",
+    "method": "POST",
+    "request": {
+      "model": "command-r-plus",
+      "message": "Hello",
+      "preamble": "You are helpful.",
+      "temperature": 0.7,
+      "max_tokens": 1024,
+      "p": 1.0,
+      "stream": false
+    },
+    "response": {
+      "response_id": "abc123",
+      "text": "Hello! How can I help?",
+      "generation_id": "gen-abc",
+      "finish_reason": "COMPLETE",
+      "meta": {
+        "tokens": {
+          "input_tokens": 12,
+          "output_tokens": 8
+        }
+      }
+    }
+  },
+  {
+    "provider": "mistral",
+    "endpoint": "chat/completions",
+    "method": "POST",
+    "request": {
+      "model": "mistral-large-latest",
+      "messages": [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hello"}
+      ],
+      "temperature": 0.7,
+      "max_tokens": 1024,
+      "top_p": 1.0,
+      "stream": false
+    },
+    "response": {
+      "id": "cmpl-abc123",
+      "object": "chat.completion",
+      "model": "mistral-large-latest",
+      "choices": [
+        {
+          "index": 0,
+          "message": {"role": "assistant", "content": "Hello! How can I help?"},
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+        "total_tokens": 20
+      }
+    }
+  }
+]
