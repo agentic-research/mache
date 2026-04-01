@@ -25,6 +25,16 @@ func NewASTWalker(db *sql.DB) *ASTWalker {
 	return &ASTWalker{db: db}
 }
 
+// EnsureIndexes creates compound indexes on the _ast table for query
+// performance. Call once after opening the DB, before concurrent queries.
+// Transforms findNodesByKind from O(N) full table scan to O(K) index lookup.
+// Returns an error if the index cannot be created (e.g., no _ast table,
+// read-only DB, or connection pool exhausted).
+func (w *ASTWalker) EnsureIndexes() error {
+	_, err := w.db.Exec("CREATE INDEX IF NOT EXISTS idx_ast_kind_source ON _ast(node_kind, source_id)")
+	return err
+}
+
 // ASTRoot is the root context for ASTWalker queries. It scopes queries
 // to a subtree of the AST via the parentPrefix.
 type ASTRoot struct {

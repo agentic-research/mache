@@ -240,6 +240,9 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 // source file parsing is skipped — the ASTWalker queries pre-parsed
 // _ast/_source tables from a ley-line .db.
 func (e *Engine) SetASTWalker(w *ASTWalker) {
+	if err := w.EnsureIndexes(); err != nil {
+		log.Printf("ASTWalker: index creation failed (queries will use full scan): %v", err)
+	}
 	e.astWalker = w
 }
 

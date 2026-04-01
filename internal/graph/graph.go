@@ -859,8 +859,17 @@ func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error)
 }
 
 // contentCache is a simple FIFO-evicting bounded cache for resolved content.
+// Uses RWMutex so concurrent readers (MCP tool calls) don't block each other.
+//
+// Note: the get→miss→resolve→put sequence in resolveContent is not atomic.
+// Under high concurrency, multiple goroutines may miss the cache simultaneously
+// and all invoke the resolver for the same key. This is benign — the first
+// writer wins via put()'s dedup check, and subsequent resolver results are
+// discarded. The resolver (SQLite query + template render) is idempotent.
+// Use golang.org/x/sync/singleflight if redundant resolver calls become
+// a measurable bottleneck.
 type contentCache struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	entries map[string][]byte
 	keys    []string
 	maxSize int
@@ -875,8 +884,8 @@ func newContentCache(maxSize int) *contentCache {
 }
 
 func (c *contentCache) get(key string) ([]byte, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	v, ok := c.entries[key]
 	return v, ok
 }
@@ -889,8 +898,10 @@ func (c *contentCache) put(key string, value []byte) {
 		return
 	}
 	if len(c.entries) >= c.maxSize {
+		// Copy to avoid backing-array leak from reslicing.
 		evict := c.keys[0]
-		c.keys = c.keys[1:]
+		copy(c.keys, c.keys[1:])
+		c.keys = c.keys[:len(c.keys)-1]
 		delete(c.entries, evict)
 	}
 	c.entries[key] = value

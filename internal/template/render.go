@@ -191,6 +191,12 @@ var Funcs = template.FuncMap{
 // so a shared cache with sync.Map is correct. Each caller uses its own bytes.Buffer.
 var cache sync.Map // template string → *template.Template
 
+// bufPool reuses bytes.Buffer across Render calls to reduce heap allocations.
+// At 323K records with ~5 templates each, this avoids ~1.6M small allocs.
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
 // Render renders a Go text/template with the standard mache template functions.
 // Parsed templates are cached — repeated calls with the same template string skip parsing.
 func Render(tmpl string, values map[string]any) (string, error) {
@@ -205,8 +211,10 @@ func Render(tmpl string, values map[string]any) (string, error) {
 		}
 		cache.Store(tmpl, t)
 	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, values); err != nil {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	if err := t.Execute(buf, values); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
@@ -231,8 +239,10 @@ func RenderWithFuncs(tmpl string, values map[string]any, extraFuncs template.Fun
 		}
 		c.Store(tmpl, t)
 	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, values); err != nil {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	if err := t.Execute(buf, values); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
