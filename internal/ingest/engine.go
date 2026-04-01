@@ -41,6 +41,7 @@ type IngestionTarget interface {
 	AddRef(token, nodeID string) error
 	AddDef(token, dirID string) error
 	DeleteFileNodes(filePath string)
+	AddFileChildren(parent *graph.Node, files []*graph.Node)
 }
 
 // Engine drives the ingestion process.
@@ -696,6 +697,18 @@ func (b *bufferingTarget) AddNode(n *graph.Node) {
 
 func (b *bufferingTarget) AddDef(token, dirID string) error {
 	return b.IngestionTarget.AddDef(token, dirID)
+}
+
+// AddFileChildren buffers file nodes for the later ReplaceFileNodes atomic swap
+// and passes the parent dir update through immediately (same as AddNode for dirs).
+// Children are appended in-memory here; the real store sees the complete parent.
+// Safe without locking because bufferingTarget is single-goroutine.
+func (b *bufferingTarget) AddFileChildren(parent *graph.Node, files []*graph.Node) {
+	b.bufferedNodes = append(b.bufferedNodes, files...)
+	for _, f := range files {
+		parent.Children = append(parent.Children, f.ID)
+	}
+	b.IngestionTarget.AddNode(parent)
 }
 
 // processTreeSitterResult handles everything AFTER parsing for a single tree-sitter file.
@@ -1495,6 +1508,9 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		}
 		store.AddNode(node)
 
+		// Collect file children for batch write (single lock acquisition).
+		var fileNodes []*graph.Node
+		var sourceFileID string
 		for _, fileSchema := range schema.Files {
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
@@ -1555,16 +1571,22 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				}
 			}
 
-			store.AddNode(fileNode)
-			node.Children = append(node.Children, fileId)
-			store.AddNode(node)
-
-			// Update Index — only for the source file to avoid duplicate refs
+			fileNodes = append(fileNodes, fileNode)
 			if fileSchema.Name == "source" {
-				for _, token := range calls {
-					if err := store.AddRef(token, fileId); err != nil {
-						return fmt.Errorf("add ref %s -> %s: %w", token, fileId, err)
-					}
+				sourceFileID = fileId
+			}
+		}
+
+		// Batch write: single lock acquisition for all file nodes + parent update.
+		if len(fileNodes) > 0 {
+			store.AddFileChildren(node, fileNodes)
+		}
+
+		// Refs AFTER batch (source file must exist in store first)
+		if sourceFileID != "" {
+			for _, token := range calls {
+				if err := store.AddRef(token, sourceFileID); err != nil {
+					return fmt.Errorf("add ref %s -> %s: %w", token, sourceFileID, err)
 				}
 			}
 		}
