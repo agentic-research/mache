@@ -860,6 +860,14 @@ func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error)
 
 // contentCache is a simple FIFO-evicting bounded cache for resolved content.
 // Uses RWMutex so concurrent readers (MCP tool calls) don't block each other.
+//
+// Note: the get→miss→resolve→put sequence in resolveContent is not atomic.
+// Under high concurrency, multiple goroutines may miss the cache simultaneously
+// and all invoke the resolver for the same key. This is benign — the first
+// writer wins via put()'s dedup check, and subsequent resolver results are
+// discarded. The resolver (SQLite query + template render) is idempotent.
+// Use golang.org/x/sync/singleflight if redundant resolver calls become
+// a measurable bottleneck.
 type contentCache struct {
 	mu      sync.RWMutex
 	entries map[string][]byte
