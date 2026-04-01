@@ -33,6 +33,8 @@ func ForFormat(format string) (Materializer, error) {
 		return &SQLiteMaterializer{}, nil
 	case "zip":
 		return &ZIPMaterializer{}, nil
+	case "json":
+		return &JSONMaterializer{}, nil
 	}
 
 	// Check optional (build-tag gated) formats.
@@ -41,7 +43,7 @@ func ForFormat(format string) (Materializer, error) {
 	}
 
 	// Build the supported-format list dynamically (core + registered).
-	supported := []string{"sqlite", "zip"}
+	supported := []string{"sqlite", "zip", "json"}
 	for name := range formatRegistry {
 		supported = append(supported, name)
 	}

@@ -234,3 +234,48 @@ func TestForFormat_Unknown(t *testing.T) {
 	_, err := ForFormat("parquet")
 	assert.Error(t, err)
 }
+
+// setupEmptyRootTestDB creates a nodes table with an empty-named root node
+// (the trivy-v2 schema pattern) and children that should become top-level buckets.
+func setupEmptyRootTestDB(t *testing.T) string {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			kind INTEGER NOT NULL,
+			size INTEGER DEFAULT 0,
+			mtime INTEGER NOT NULL,
+			record TEXT
+		);
+		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
+
+		-- Empty root node (trivy schema uses "name": "")
+		INSERT INTO nodes VALUES ('', '', '', 1, 0, 1000, NULL);
+
+		-- Platform bucket (child of empty root)
+		INSERT INTO nodes VALUES ('alpine 3.18', '', 'alpine 3.18', 1, 0, 2000, NULL);
+
+		-- Package bucket
+		INSERT INTO nodes VALUES ('alpine 3.18/curl', 'alpine 3.18', 'curl', 1, 0, 2000, NULL);
+
+		-- Advisory file (CVE ID as filename)
+		INSERT INTO nodes VALUES ('alpine 3.18/curl/CVE-2024-1234', 'alpine 3.18/curl', 'CVE-2024-1234', 0, 42, 3000, '{"FixedVersion":"8.5.0-r0","Status":0}');
+
+		-- _schema.json at root
+		INSERT INTO nodes VALUES ('_schema.json', '', '_schema.json', 0, 14, 4000, '{"version":"v1"}');
+	`)
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(t.TempDir(), "source.db")
+	_, err = db.Exec(`VACUUM INTO ?`, dbPath)
+	require.NoError(t, err)
+
+	return dbPath
+}
