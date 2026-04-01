@@ -1277,18 +1277,7 @@ func flushChildSlices(slices map[string][]string, target *sync.Map) {
 		// Merge with any existing entries from prior batches
 		if existing, ok := target.Load(parent); ok {
 			prev := existing.([]string)
-			merged := make([]string, 0, len(prev)+len(deduped))
-			merged = append(merged, prev...)
-			merged = append(merged, deduped...)
-			sort.Strings(merged)
-			k := 0
-			for i, c := range merged {
-				if i == 0 || c != merged[i-1] {
-					merged[k] = c
-					k++
-				}
-			}
-			deduped = merged[:k]
+			deduped = mergeSortedDedup(prev, deduped)
 		}
 
 		target.Store(parent, deduped)

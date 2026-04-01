@@ -225,6 +225,53 @@ func (s *MemoryStore) AddNode(n *Node) {
 	s.indexNode(n)
 }
 
+// AddFileChildren atomically adds file nodes and appends their IDs to the
+// parent directory's Children slice. Single lock acquisition for the batch.
+func (s *MemoryStore) AddFileChildren(parent *Node, files []*Node) {
+	if len(files) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range files {
+		s.nodes[f.ID] = f
+		s.indexNode(f)
+	}
+	for _, f := range files {
+		parent.Children = append(parent.Children, f.ID)
+	}
+	s.nodes[parent.ID] = parent
+}
+
+// ListChildNodes returns the full Node objects for all children of the given
+// parent under a single RLock. Eliminates N individual GetNode calls during
+// directory listing. Missing children are silently skipped.
+func (s *MemoryStore) ListChildNodes(id string) ([]*Node, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Root case
+	var childIDs []string
+	if id == "" || id == "/" {
+		childIDs = s.roots
+	} else {
+		id = normalizeID(id)
+		n, ok := s.nodes[id]
+		if !ok {
+			return nil, ErrNotFound
+		}
+		childIDs = n.Children
+	}
+
+	nodes := make([]*Node, 0, len(childIDs))
+	for _, cid := range childIDs {
+		if n, ok := s.nodes[cid]; ok {
+			nodes = append(nodes, n)
+		}
+	}
+	return nodes, nil
+}
+
 // UpdateNodeContent surgically updates a node's content and origin in-place.
 // Preserves Children, Context, Properties, and Ref. Clears DraftData on success.
 func (s *MemoryStore) UpdateNodeContent(id string, data []byte, origin *SourceOrigin, modTime time.Time) error {

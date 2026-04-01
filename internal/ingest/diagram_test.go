@@ -305,6 +305,14 @@ func (m *minimalStore) AddRoot(_ *graph.Node)    {}
 func (m *minimalStore) AddRef(_, _ string) error { return nil }
 func (m *minimalStore) AddDef(_, _ string) error { return nil }
 func (m *minimalStore) DeleteFileNodes(_ string) {}
+func (m *minimalStore) AddFileChildren(parent *graph.Node, files []*graph.Node) {
+	for _, f := range files {
+		m.nodes[f.ID] = f
+		parent.Children = append(parent.Children, f.ID)
+	}
+	m.nodes[parent.ID] = parent
+}
+
 func (m *minimalStore) GetNode(id string) (*graph.Node, error) {
 	if n, ok := m.nodes[id]; ok {
 		return n, nil

@@ -326,6 +326,15 @@ func (w *SQLiteWriter) AddDef(token, dirID string) error {
 	return err
 }
 
+func (w *SQLiteWriter) AddFileChildren(parent *graph.Node, files []*graph.Node) {
+	for _, f := range files {
+		w.AddNode(f)
+	}
+	// Update parent (SQLiteWriter stores parent_id in child rows, so
+	// the parent's Children field is not persisted — just re-store parent).
+	w.AddNode(parent)
+}
+
 func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
