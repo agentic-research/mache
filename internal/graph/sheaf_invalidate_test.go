@@ -32,6 +32,7 @@ type mockGraph struct {
 
 func (m *mockGraph) GetNode(id string) (*Node, error)                             { return nil, ErrNotFound }
 func (m *mockGraph) ListChildren(id string) ([]string, error)                     { return nil, nil }
+func (m *mockGraph) ListChildStats(id string) ([]NodeStat, error)                 { return nil, nil }
 func (m *mockGraph) ReadContent(id string, buf []byte, offset int64) (int, error) { return 0, nil }
 func (m *mockGraph) GetCallers(token string) ([]*Node, error)                     { return nil, nil }
 func (m *mockGraph) GetCallees(id string) ([]*Node, error)                        { return nil, nil }

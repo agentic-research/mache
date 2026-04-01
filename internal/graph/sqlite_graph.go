@@ -456,6 +456,117 @@ func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
 	return nil, ErrNotFound
 }
 
+// ListChildStats returns stat snapshots for all children of a directory.
+// For the nodes-table fast path, it queries the nodes table for children
+// with kind, size, and mtime — no content rendering.
+// For the legacy scan path, it uses dirChildren + schema structure.
+// ContentSize may be 0 for unvisited files (FUSE/NFS fall back to LOOKUP).
+func (g *SQLiteGraph) ListChildStats(id string) ([]NodeStat, error) {
+	if len(id) > 0 && id[0] == '/' {
+		id = id[1:]
+	}
+
+	// Fast Path: Nodes Table
+	if g.useNodesTable {
+		var rows *sql.Rows
+		var err error
+		if id == "" {
+			rows, err = g.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		} else {
+			rows, err = g.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rows.Close() }()
+
+		var stats []NodeStat
+		for rows.Next() {
+			var childID string
+			var kind, size int
+			var mtimeNano int64
+			if err := rows.Scan(&childID, &kind, &size, &mtimeNano); err != nil {
+				return nil, err
+			}
+			stats = append(stats, NodeStat{
+				ID:          childID,
+				IsDir:       kind == 1,
+				ContentSize: int64(size),
+				ModTime:     time.Unix(0, mtimeNano),
+				HasOrigin:   false, // SQLiteGraph nodes don't have write-back origins
+			})
+		}
+		return stats, rows.Err()
+	}
+
+	// Legacy scan path: use dirChildren + schema to determine child types
+	if id == "" {
+		// Root: return schema root names as directory stats
+		var stats []NodeStat
+		for _, l := range g.levels {
+			if l.isStatic {
+				stats = append(stats, NodeStat{
+					ID:    l.staticName,
+					IsDir: true,
+				})
+			}
+		}
+		return stats, nil
+	}
+
+	segments := strings.Split(id, "/")
+	if err := g.ensureScanned(segments[0]); err != nil {
+		return nil, err
+	}
+
+	v, ok := g.dirChildren.Load(id)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	children := v.([]string)
+
+	// Determine the schema level for this directory to know about leaf files
+	level, _ := g.walkSchema(segments)
+
+	stats := make([]NodeStat, 0, len(children))
+	for _, childPath := range children {
+		childBase := filepath.Base(childPath)
+		isFile := false
+
+		// Check if this child name matches a file leaf at the current schema level
+		if level != nil {
+			for _, f := range level.files {
+				fname := f.Name
+				if !strings.Contains(fname, "{{") && fname == childBase {
+					isFile = true
+					break
+				}
+			}
+		}
+
+		if isFile {
+			// File node — use sizeCache if available, otherwise 0
+			var contentSize int64
+			if cached, ok := g.sizeCache.Load(childPath); ok {
+				contentSize = cached.(int64)
+			}
+			stats = append(stats, NodeStat{
+				ID:          childPath,
+				IsDir:       false,
+				ContentSize: contentSize,
+				HasOrigin:   false,
+			})
+		} else {
+			// Directory node
+			stats = append(stats, NodeStat{
+				ID:    childPath,
+				IsDir: true,
+			})
+		}
+	}
+	return stats, nil
+}
+
 func (g *SQLiteGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	if len(id) > 0 && id[0] == '/' {
 		id = id[1:]

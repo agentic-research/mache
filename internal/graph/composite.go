@@ -137,6 +137,53 @@ func (c *CompositeGraph) ListChildren(id string) ([]string, error) {
 	return res, nil
 }
 
+// ListChildStats implements Graph.
+func (c *CompositeGraph) ListChildStats(id string) ([]NodeStat, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	id = strings.TrimPrefix(id, "/")
+
+	// Root: return mount point names as directory stats (sorted for deterministic readdir)
+	if id == "" {
+		names := make([]string, 0, len(c.mounts))
+		for prefix := range c.mounts {
+			names = append(names, prefix)
+		}
+		sort.Strings(names)
+		stats := make([]NodeStat, len(names))
+		for i, name := range names {
+			stats[i] = NodeStat{
+				ID:    name,
+				IsDir: true,
+				// Zero ModTime — FUSE/NFS substitute mountTime for deterministic timestamps.
+			}
+		}
+		return stats, nil
+	}
+
+	prefix, subPath, g := c.resolve(id)
+	if g == nil {
+		return nil, ErrNotFound
+	}
+	var subStats []NodeStat
+	var err error
+	if subPath == "" {
+		subStats, err = g.ListChildStats("")
+	} else {
+		subStats, err = g.ListChildStats(subPath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	res := make([]NodeStat, len(subStats))
+	for i, s := range subStats {
+		res[i] = s
+		res[i].ID = prefix + "/" + strings.TrimPrefix(s.ID, "/")
+	}
+	return res, nil
+}
+
 // ReadContent implements Graph.
 func (c *CompositeGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	c.mu.RLock()

@@ -464,6 +464,14 @@ func (lg *lazyGraph) ListChildren(id string) ([]string, error) {
 	return g.ListChildren(id)
 }
 
+func (lg *lazyGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
+	g, err := lg.get()
+	if err != nil {
+		return nil, err
+	}
+	return g.ListChildStats(id)
+}
+
 func (lg *lazyGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	g, err := lg.get()
 	if err != nil {
