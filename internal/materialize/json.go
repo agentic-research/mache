@@ -70,8 +70,12 @@ func (m *JSONMaterializer) Materialize(srcDB, outPath string) error {
 	}
 
 	// Build the JSON tree recursively from root children.
+	// Initialize to empty slice (not nil) so JSON encodes as [] not null.
 	visited := map[string]bool{}
 	root := buildJSONChildren("", nodes, childrenOf, visited)
+	if root == nil {
+		root = []*jsonEntry{}
+	}
 
 	// Write atomically: temp file in same directory, then rename.
 	dir := filepath.Dir(outPath)
@@ -149,7 +153,7 @@ func buildJSONChildren(parentID string, nodes []jsonNode, childrenOf map[string]
 				Type: "file",
 				Size: &n.size,
 			}
-			if n.content.Valid && n.content.String != "" {
+			if n.content.Valid {
 				s := n.content.String
 				entry.Content = &s
 			}

@@ -1,6 +1,7 @@
 package materialize
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 func TestJSONMaterializer_Interface(t *testing.T) {
@@ -173,4 +175,82 @@ func TestForFormat_JSON(t *testing.T) {
 	m, err := ForFormat("json")
 	require.NoError(t, err)
 	assert.IsType(t, &JSONMaterializer{}, m)
+}
+
+// TestJSONMaterializer_EmptyDB verifies that an empty source DB produces
+// a valid JSON array ([]), not null. Regression test for rosary-e6e044.
+func TestJSONMaterializer_EmptyDB(t *testing.T) {
+	srcDB := filepath.Join(t.TempDir(), "empty.db")
+	db, err := sql.Open("sqlite", srcDB)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	outPath := filepath.Join(t.TempDir(), "empty.json")
+	m := &JSONMaterializer{}
+	require.NoError(t, m.Materialize(srcDB, outPath))
+
+	data, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	assert.Equal(t, "[]\n", string(data), "empty DB should produce [], not null")
+}
+
+// TestJSONMaterializer_EmptyStringContent verifies that file nodes with
+// record="" (empty string, not NULL) include content in the output.
+// Matches BoltDB materializer behavior. Regression test for rosary-e6f311.
+func TestJSONMaterializer_EmptyStringContent(t *testing.T) {
+	srcDB := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", srcDB)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO nodes VALUES ('root', '', 'root', 1, 0, 0, NULL, NULL, NULL)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO nodes VALUES ('root/empty', 'root', 'empty-file', 0, 0, 0, NULL, '', NULL)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	outPath := filepath.Join(t.TempDir(), "out.json")
+	m := &JSONMaterializer{}
+	require.NoError(t, m.Materialize(srcDB, outPath))
+
+	data, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+
+	var entries []*jsonEntry
+	require.NoError(t, json.Unmarshal(data, &entries))
+	require.Len(t, entries, 1, "should have root dir")
+
+	rootDir := entries[0]
+	require.Len(t, rootDir.Children, 1, "root should have one child")
+	file := rootDir.Children[0]
+	assert.Equal(t, "empty-file", file.Name)
+	assert.NotNil(t, file.Content, "empty-string content should be present, not omitted")
+	assert.Equal(t, "", *file.Content)
+}
+
+// TestJSONMaterializer_CycleProtection verifies that cyclic parent_id
+// references don't cause infinite recursion.
+func TestJSONMaterializer_CycleProtection(t *testing.T) {
+	srcDB := filepath.Join(t.TempDir(), "cycle.db")
+	db, err := sql.Open("sqlite", srcDB)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT)`)
+	require.NoError(t, err)
+	// A → B → A cycle
+	_, err = db.Exec(`INSERT INTO nodes VALUES ('a', 'b', 'a', 1, 0, 0, NULL, NULL, NULL)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO nodes VALUES ('b', 'a', 'b', 1, 0, 0, NULL, NULL, NULL)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	outPath := filepath.Join(t.TempDir(), "cycle.json")
+	m := &JSONMaterializer{}
+	// Should not hang or panic
+	require.NoError(t, m.Materialize(srcDB, outPath))
+
+	data, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	assert.True(t, json.Valid(data), "output should be valid JSON despite cycle")
 }
