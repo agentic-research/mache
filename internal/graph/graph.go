@@ -169,10 +169,9 @@ type MemoryStore struct {
 	refreshMu  sync.Map                    // filePath → *sync.Mutex (per-file refresh serialization)
 }
 
-// normalizeID strips a leading slash from node IDs.
-// GraphFS paths use "/Foo/source" but MemoryStore keys are "Foo/source".
 // NormalizeID strips a leading slash from node IDs.
 // FUSE/NFS paths use "/foo/source" but graph keys are "foo/source".
+// Only strips one leading slash; "//double" becomes "/double".
 func NormalizeID(id string) string {
 	if len(id) > 0 && id[0] == '/' {
 		return id[1:]
@@ -183,7 +182,7 @@ func NormalizeID(id string) string {
 // SliceContent copies content bytes into buf at the given offset.
 // Returns the number of bytes copied. Shared by all ReadContent implementations.
 func SliceContent(data, buf []byte, offset int64) int {
-	if offset >= int64(len(data)) {
+	if offset < 0 || offset >= int64(len(data)) {
 		return 0
 	}
 	end := offset + int64(len(buf))
@@ -933,9 +932,11 @@ func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error)
 	return data, nil
 }
 
-// contentCache is a simple FIFO-evicting bounded cache for resolved content.
 // ContentCache is a FIFO-bounded cache for resolved content bytes.
 // Uses RWMutex so concurrent readers (MCP tool calls) don't block each other.
+// Replaces the inline sync.Mutex caches that SQLiteGraph and WritableGraph
+// previously maintained — the RWMutex promotion is safe because the old code
+// never relied on exclusive read access (check-then-set unlocked between steps).
 // Shared by MemoryStore, SQLiteGraph, and WritableGraph.
 //
 // Note: the get→miss→resolve→put sequence in resolveContent is not atomic.
@@ -988,8 +989,10 @@ func (c *ContentCache) Put(key string, value []byte) {
 }
 
 // Delete removes a key from both the map and the keys slice.
-// Fixes the phantom-eviction bug where deleting from the map only
-// leaves orphaned keys that waste eviction slots.
+// Invariant: entries and keys are always in sync — every key in the map
+// has exactly one entry in the keys slice, maintained by Put (dedup)
+// and Delete (linear scan + remove). The break-after-first-match in the
+// scan is correct because Put never creates duplicate key entries.
 func (c *ContentCache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

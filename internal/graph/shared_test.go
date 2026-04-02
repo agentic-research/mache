@@ -68,6 +68,13 @@ func TestSliceContent_PartialRead(t *testing.T) {
 	assert.Equal(t, "hel", string(buf[:n]))
 }
 
+func TestSliceContent_NegativeOffset(t *testing.T) {
+	data := []byte("hello")
+	buf := make([]byte, 10)
+	assert.Equal(t, 0, SliceContent(data, buf, -1))
+	assert.Equal(t, 0, SliceContent(data, buf, -9999))
+}
+
 func TestSliceContent_EmptyData(t *testing.T) {
 	buf := make([]byte, 10)
 	assert.Equal(t, 0, SliceContent(nil, buf, 0))
