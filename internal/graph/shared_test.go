@@ -9,6 +9,22 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Shared test helpers
+// ---------------------------------------------------------------------------
+
+// closableGraph wraps any Graph and tracks whether Close was called.
+// Used by HotSwapGraph Swap tests and anywhere Close-on-teardown matters.
+type closableGraph struct {
+	Graph
+	closed bool
+}
+
+func (c *closableGraph) Close() error {
+	c.closed = true
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // NormalizeID — exported path normalization
 // ---------------------------------------------------------------------------
 

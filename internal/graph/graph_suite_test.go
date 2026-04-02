@@ -54,6 +54,20 @@ func RunGraphSuite(t *testing.T, factory GraphFactory) {
 
 	// -- GetNode ----------------------------------------------------------
 
+	t.Run("GetNode/root_empty_string", func(t *testing.T) {
+		g := factory(t)
+		// Contract: GetNode("") returns a root-level directory node or ErrNotFound.
+		// MemoryStore returns ErrNotFound (no "" key in map).
+		// SQLiteGraph/WritableGraph return a synthetic root Node{ID:"", Mode:dir}.
+		// Both behaviors are valid — the FUSE/NFS layer handles root specially.
+		n, err := g.GetNode("")
+		if err == nil {
+			assert.True(t, n.Mode.IsDir(), "root should be a directory")
+		} else {
+			assert.ErrorIs(t, err, ErrNotFound)
+		}
+	})
+
 	t.Run("GetNode/dir", func(t *testing.T) {
 		g := factory(t)
 		n, err := g.GetNode("pkg/auth")
@@ -116,6 +130,16 @@ func RunGraphSuite(t *testing.T, factory GraphFactory) {
 
 	// -- ListChildStats ---------------------------------------------------
 
+	t.Run("ListChildStats/root", func(t *testing.T) {
+		g := factory(t)
+		stats, err := g.ListChildStats("")
+		if err == nil {
+			// Should contain "pkg" as a directory
+			require.NotEmpty(t, stats)
+			assert.True(t, stats[0].IsDir)
+		}
+	})
+
 	t.Run("ListChildStats/dir", func(t *testing.T) {
 		g := factory(t)
 		stats, err := g.ListChildStats("pkg")
@@ -154,7 +178,9 @@ func RunGraphSuite(t *testing.T, factory GraphFactory) {
 	t.Run("ListChildStats/not_found", func(t *testing.T) {
 		g := factory(t)
 		stats, err := g.ListChildStats("nonexistent")
-		// Some impls return error, some return empty slice — both are valid
+		// Known inconsistency: MemoryStore returns ErrNotFound, SQLiteGraph
+		// returns (nil, nil) because SELECT returns zero rows without error.
+		// Both are acceptable — callers handle both empty and error.
 		if err == nil {
 			assert.Empty(t, stats)
 		}
