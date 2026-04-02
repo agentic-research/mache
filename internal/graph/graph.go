@@ -137,7 +137,7 @@ type MemoryStore struct {
 	roots    []string            // Top-level nodes (e.g. "vulns")
 	rootsSet map[string]struct{} // O(1) dedup for AddRoot
 	resolver ContentResolverFunc
-	cache    *contentCache
+	cache    *ContentCache
 	refs     map[string][]string // token -> []nodeID (callers: who calls token)
 	defs     map[string][]string // token -> []construct_dir_id (definitions: where token is defined)
 
@@ -222,7 +222,7 @@ func (s *MemoryStore) SetResolver(fn ContentResolverFunc) {
 	if size > 16384 {
 		size = 16384
 	}
-	s.cache = newContentCache(size)
+	s.cache = NewContentCache(size)
 }
 
 // RootIDs returns a copy of the top-level root node IDs.
@@ -916,7 +916,7 @@ func (s *MemoryStore) ReadContent(id string, buf []byte, offset int64) (int, err
 
 func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error) {
 	if s.cache != nil {
-		if cached, ok := s.cache.get(id); ok {
+		if cached, ok := s.cache.Get(id); ok {
 			return cached, nil
 		}
 	}
@@ -928,44 +928,49 @@ func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error)
 		return nil, err
 	}
 	if s.cache != nil {
-		s.cache.put(id, data)
+		s.cache.Put(id, data)
 	}
 	return data, nil
 }
 
 // contentCache is a simple FIFO-evicting bounded cache for resolved content.
+// ContentCache is a FIFO-bounded cache for resolved content bytes.
 // Uses RWMutex so concurrent readers (MCP tool calls) don't block each other.
+// Shared by MemoryStore, SQLiteGraph, and WritableGraph.
 //
 // Note: the get→miss→resolve→put sequence in resolveContent is not atomic.
 // Under high concurrency, multiple goroutines may miss the cache simultaneously
 // and all invoke the resolver for the same key. This is benign — the first
-// writer wins via put()'s dedup check, and subsequent resolver results are
+// writer wins via Put's dedup check, and subsequent resolver results are
 // discarded. The resolver (SQLite query + template render) is idempotent.
-// Use golang.org/x/sync/singleflight if redundant resolver calls become
-// a measurable bottleneck.
-type contentCache struct {
+type ContentCache struct {
 	mu      sync.RWMutex
 	entries map[string][]byte
 	keys    []string
 	maxSize int
 }
 
-func newContentCache(maxSize int) *contentCache {
-	return &contentCache{
+// NewContentCache creates a FIFO-bounded content cache.
+func NewContentCache(maxSize int) *ContentCache {
+	return &ContentCache{
 		entries: make(map[string][]byte, maxSize),
 		keys:    make([]string, 0, maxSize),
 		maxSize: maxSize,
 	}
 }
 
-func (c *contentCache) get(key string) ([]byte, bool) {
+// Get retrieves cached content. Safe for concurrent readers.
+func (c *ContentCache) Get(key string) ([]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	v, ok := c.entries[key]
 	return v, ok
 }
 
-func (c *contentCache) put(key string, value []byte) {
+// Put stores content, evicting the oldest entry if at capacity.
+// Deduplicates: if key already exists, updates the value without
+// adding a duplicate key entry.
+func (c *ContentCache) Put(key string, value []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.entries[key]; ok {
@@ -973,7 +978,6 @@ func (c *contentCache) put(key string, value []byte) {
 		return
 	}
 	if len(c.entries) >= c.maxSize {
-		// Copy to avoid backing-array leak from reslicing.
 		evict := c.keys[0]
 		copy(c.keys, c.keys[1:])
 		c.keys = c.keys[:len(c.keys)-1]
@@ -981,6 +985,25 @@ func (c *contentCache) put(key string, value []byte) {
 	}
 	c.entries[key] = value
 	c.keys = append(c.keys, key)
+}
+
+// Delete removes a key from both the map and the keys slice.
+// Fixes the phantom-eviction bug where deleting from the map only
+// leaves orphaned keys that waste eviction slots.
+func (c *ContentCache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; !ok {
+		return
+	}
+	delete(c.entries, key)
+	for i, k := range c.keys {
+		if k == key {
+			copy(c.keys[i:], c.keys[i+1:])
+			c.keys = c.keys[:len(c.keys)-1]
+			break
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

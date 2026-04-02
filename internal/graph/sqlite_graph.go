@@ -88,11 +88,7 @@ type SQLiteGraph struct {
 	// are tiny and we need them to survive across large directory traversals.
 	sizeCache sync.Map // file path (string) → int64
 
-	// Rendered content cache (FIFO-bounded, protects against hot-file storms)
-	contentMu    sync.Mutex
-	contentCache map[string][]byte
-	contentKeys  []string
-	maxContent   int
+	cache *ContentCache // FIFO-bounded rendered content (protects against hot-file storms)
 
 	useNodesTable bool // Fast path: use "nodes" table instead of scanning "results"
 
@@ -158,8 +154,7 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 			schema:        schema,
 			render:        render,
 			levels:        compileLevels(schema),
-			contentCache:  make(map[string][]byte),
-			maxContent:    2048,
+			cache:         NewContentCache(2048),
 			useNodesTable: true,
 		}, nil
 	}
@@ -238,8 +233,7 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 		dbID:          dbID,
 		pendingRefs:   make(map[string]*roaring.Bitmap),
 		fileIDMap:     make(map[string]uint32),
-		contentCache:  make(map[string][]byte),
-		maxContent:    2048,
+		cache:         NewContentCache(2048),
 		useNodesTable: false,
 	}, nil
 }
@@ -926,9 +920,7 @@ func (g *SQLiteGraph) getCallersFromSidecar(token string) ([]*Node, error) {
 // stale size/data from being served on the next Getattr or Read.
 func (g *SQLiteGraph) Invalidate(id string) {
 	g.sizeCache.Delete(id)
-	g.contentMu.Lock()
-	delete(g.contentCache, id)
-	g.contentMu.Unlock()
+	g.cache.Delete(id)
 }
 
 // QueryRefs executes a SQL query against the refs database.
@@ -1432,12 +1424,9 @@ func (g *SQLiteGraph) isChild(parentPath, childPath string) bool {
 
 func (g *SQLiteGraph) resolveContent(filePath string, segments []string, leaf *api.Leaf) ([]byte, error) {
 	// Check cache
-	g.contentMu.Lock()
-	if c, ok := g.contentCache[filePath]; ok {
-		g.contentMu.Unlock()
+	if c, ok := g.cache.Get(filePath); ok {
 		return c, nil
 	}
-	g.contentMu.Unlock()
 
 	var content []byte
 
@@ -1507,16 +1496,7 @@ func (g *SQLiteGraph) resolveContent(filePath string, segments []string, leaf *a
 		content = []byte(rendered)
 	}
 
-	// Cache (FIFO eviction)
-	g.contentMu.Lock()
-	if len(g.contentCache) >= g.maxContent {
-		evict := g.contentKeys[0]
-		g.contentKeys = g.contentKeys[1:]
-		delete(g.contentCache, evict)
-	}
-	g.contentCache[filePath] = content
-	g.contentKeys = append(g.contentKeys, filePath)
-	g.contentMu.Unlock()
+	g.cache.Put(filePath, content)
 
 	return content, nil
 }
