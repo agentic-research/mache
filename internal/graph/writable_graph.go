@@ -90,9 +90,7 @@ func OpenWritableGraph(masterDBPath string, schema *api.Topology, render Templat
 // ---------------------------------------------------------------------------
 
 func (g *WritableGraph) GetNode(id string) (*Node, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 	if id == "" {
 		return &Node{ID: "", Mode: os.ModeDir | 0o555}, nil
 	}
@@ -132,9 +130,7 @@ func (g *WritableGraph) GetNode(id string) (*Node, error) {
 }
 
 func (g *WritableGraph) ListChildren(id string) ([]string, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	var rows *sql.Rows
 	var err error
@@ -162,9 +158,7 @@ func (g *WritableGraph) ListChildren(id string) ([]string, error) {
 // ListChildStats implements Graph. Queries the nodes table for child stats
 // without rendering content.
 func (g *WritableGraph) ListChildStats(id string) ([]NodeStat, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	var rows *sql.Rows
 	var err error
@@ -198,23 +192,14 @@ func (g *WritableGraph) ListChildStats(id string) ([]NodeStat, error) {
 }
 
 func (g *WritableGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	content, err := g.resolveContent(id)
 	if err != nil {
 		return 0, err
 	}
 
-	if offset >= int64(len(content)) {
-		return 0, nil
-	}
-	end := offset + int64(len(buf))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return copy(buf, content[offset:end]), nil
+	return SliceContent(content, buf, offset), nil
 }
 
 // resolveContent reads file content. Checks the nodes.record column first
@@ -340,9 +325,7 @@ func (g *WritableGraph) UpdateRecord(id string, content []byte) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	now := time.Now().UnixNano()
 	result, err := g.db.Exec(

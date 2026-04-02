@@ -301,9 +301,7 @@ func (g *SQLiteGraph) DefsMap() map[string][]string {
 }
 
 func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 	if id == "" {
 		return &Node{ID: "", Mode: os.ModeDir | 0o555}, nil
 	}
@@ -403,9 +401,7 @@ func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 }
 
 func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	// Fast Path: Nodes Table
 	if g.useNodesTable {
@@ -462,9 +458,7 @@ func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
 // For the legacy scan path, it uses dirChildren + schema structure.
 // ContentSize may be 0 for unvisited files (FUSE/NFS fall back to LOOKUP).
 func (g *SQLiteGraph) ListChildStats(id string) ([]NodeStat, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	// Fast Path: Nodes Table
 	if g.useNodesTable {
@@ -568,9 +562,7 @@ func (g *SQLiteGraph) ListChildStats(id string) ([]NodeStat, error) {
 }
 
 func (g *SQLiteGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	segments := strings.Split(id, "/")
 	_, fileLeaf := g.walkSchema(segments)
@@ -586,14 +578,7 @@ func (g *SQLiteGraph) ReadContent(id string, buf []byte, offset int64) (int, err
 		return 0, err
 	}
 
-	if offset >= int64(len(content)) {
-		return 0, nil
-	}
-	end := offset + int64(len(buf))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return copy(buf, content[offset:end]), nil
+	return SliceContent(content, buf, offset), nil
 }
 
 // AddRef accumulates a reference in-memory. No SQL is issued until FlushRefs.
@@ -700,9 +685,7 @@ func (g *SQLiteGraph) GetCallers(token string) ([]*Node, error) {
 
 // GetCallees implements Graph.
 func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	// 1. Find the "source" file child
 	children, err := g.ListChildren(id)

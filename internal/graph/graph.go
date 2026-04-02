@@ -171,11 +171,26 @@ type MemoryStore struct {
 
 // normalizeID strips a leading slash from node IDs.
 // GraphFS paths use "/Foo/source" but MemoryStore keys are "Foo/source".
-func normalizeID(id string) string {
+// NormalizeID strips a leading slash from node IDs.
+// FUSE/NFS paths use "/foo/source" but graph keys are "foo/source".
+func NormalizeID(id string) string {
 	if len(id) > 0 && id[0] == '/' {
 		return id[1:]
 	}
 	return id
+}
+
+// SliceContent copies content bytes into buf at the given offset.
+// Returns the number of bytes copied. Shared by all ReadContent implementations.
+func SliceContent(data, buf []byte, offset int64) int {
+	if offset >= int64(len(data)) {
+		return 0
+	}
+	end := offset + int64(len(buf))
+	if end > int64(len(data)) {
+		end = int64(len(data))
+	}
+	return copy(buf, data[offset:end])
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -270,7 +285,7 @@ func (s *MemoryStore) ListChildStats(id string) ([]NodeStat, error) {
 	if id == "" || id == "/" {
 		childIDs = s.roots
 	} else {
-		id = normalizeID(id)
+		id = NormalizeID(id)
 		n, ok := s.nodes[id]
 		if !ok {
 			return nil, ErrNotFound
@@ -299,7 +314,7 @@ func (s *MemoryStore) UpdateNodeContent(id string, data []byte, origin *SourceOr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return ErrNotFound
@@ -318,7 +333,7 @@ func (s *MemoryStore) UpdateNodeContext(id string, ctx []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return ErrNotFound
@@ -691,7 +706,7 @@ func addGoImport(imports map[string]string, alias, path string) {
 func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 	// 1. Find the "source" file child
 	s.mu.RLock()
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	node, ok := s.nodes[id]
 	s.mu.RUnlock()
 
@@ -824,7 +839,7 @@ func (s *MemoryStore) GetNode(id string) (*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -842,7 +857,7 @@ func (s *MemoryStore) ListChildren(id string) ([]string, error) {
 		return s.roots, nil
 	}
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -896,15 +911,7 @@ func (s *MemoryStore) ReadContent(id string, buf []byte, offset int64) (int, err
 		return 0, nil
 	}
 
-	if offset >= int64(len(data)) {
-		return 0, nil
-	}
-	end := offset + int64(len(buf))
-	if end > int64(len(data)) {
-		end = int64(len(data))
-	}
-	n := copy(buf, data[offset:end])
-	return n, nil
+	return SliceContent(data, buf, offset), nil
 }
 
 func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error) {
