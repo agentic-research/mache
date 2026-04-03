@@ -31,11 +31,7 @@ type WritableGraph struct {
 	mu        sync.RWMutex
 	tableName string
 
-	// Content cache for reads (same pattern as SQLiteGraph)
-	contentMu    sync.Mutex
-	contentCache map[string][]byte
-	contentKeys  []string
-	maxContent   int
+	cache *ContentCache // FIFO-bounded rendered content cache
 
 	sizeCache sync.Map
 }
@@ -73,15 +69,14 @@ func OpenWritableGraph(masterDBPath string, schema *api.Topology, render Templat
 	}
 
 	return &WritableGraph{
-		db:           db,
-		dbPath:       masterDBPath,
-		schema:       schema,
-		render:       render,
-		levels:       compileLevels(schema),
-		flusher:      flusher,
-		tableName:    tableName,
-		contentCache: make(map[string][]byte),
-		maxContent:   2048,
+		db:        db,
+		dbPath:    masterDBPath,
+		schema:    schema,
+		render:    render,
+		levels:    compileLevels(schema),
+		flusher:   flusher,
+		tableName: tableName,
+		cache:     NewContentCache(2048),
 	}, nil
 }
 
@@ -90,9 +85,7 @@ func OpenWritableGraph(masterDBPath string, schema *api.Topology, render Templat
 // ---------------------------------------------------------------------------
 
 func (g *WritableGraph) GetNode(id string) (*Node, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 	if id == "" {
 		return &Node{ID: "", Mode: os.ModeDir | 0o555}, nil
 	}
@@ -132,9 +125,7 @@ func (g *WritableGraph) GetNode(id string) (*Node, error) {
 }
 
 func (g *WritableGraph) ListChildren(id string) ([]string, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	var rows *sql.Rows
 	var err error
@@ -162,9 +153,7 @@ func (g *WritableGraph) ListChildren(id string) ([]string, error) {
 // ListChildStats implements Graph. Queries the nodes table for child stats
 // without rendering content.
 func (g *WritableGraph) ListChildStats(id string) ([]NodeStat, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	var rows *sql.Rows
 	var err error
@@ -198,23 +187,14 @@ func (g *WritableGraph) ListChildStats(id string) ([]NodeStat, error) {
 }
 
 func (g *WritableGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	content, err := g.resolveContent(id)
 	if err != nil {
 		return 0, err
 	}
 
-	if offset >= int64(len(content)) {
-		return 0, nil
-	}
-	end := offset + int64(len(buf))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return copy(buf, content[offset:end]), nil
+	return SliceContent(content, buf, offset), nil
 }
 
 // resolveContent reads file content. Checks the nodes.record column first
@@ -222,12 +202,9 @@ func (g *WritableGraph) ReadContent(id string, buf []byte, offset int64) (int, e
 // rendering from the source record via record_id.
 func (g *WritableGraph) resolveContent(id string) ([]byte, error) {
 	// Check cache
-	g.contentMu.Lock()
-	if c, ok := g.contentCache[id]; ok {
-		g.contentMu.Unlock()
+	if c, ok := g.cache.Get(id); ok {
 		return c, nil
 	}
-	g.contentMu.Unlock()
 
 	// Try reading directly from the record column (works for inline content
 	// written by mache build, or content updated via UpdateRecord)
@@ -255,18 +232,7 @@ func (g *WritableGraph) resolveContent(id string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 
-	// Cache (FIFO eviction)
-	g.contentMu.Lock()
-	if _, ok := g.contentCache[id]; !ok {
-		if len(g.contentCache) >= g.maxContent {
-			evict := g.contentKeys[0]
-			g.contentKeys = g.contentKeys[1:]
-			delete(g.contentCache, evict)
-		}
-		g.contentCache[id] = content
-		g.contentKeys = append(g.contentKeys, id)
-	}
-	g.contentMu.Unlock()
+	g.cache.Put(id, content)
 
 	return content, nil
 }
@@ -325,9 +291,7 @@ func (g *WritableGraph) GetCallees(id string) ([]*Node, error) {
 
 func (g *WritableGraph) Invalidate(id string) {
 	g.sizeCache.Delete(id)
-	g.contentMu.Lock()
-	delete(g.contentCache, id)
-	g.contentMu.Unlock()
+	g.cache.Delete(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -340,9 +304,7 @@ func (g *WritableGraph) UpdateRecord(id string, content []byte) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if len(id) > 0 && id[0] == '/' {
-		id = id[1:]
-	}
+	id = NormalizeID(id)
 
 	now := time.Now().UnixNano()
 	result, err := g.db.Exec(

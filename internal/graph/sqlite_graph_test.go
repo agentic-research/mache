@@ -1117,34 +1117,5 @@ func TestSQLiteGraph_DefaultTableName(t *testing.T) {
 	assert.Contains(t, children, "vulns/CVE-2024-0001")
 }
 
-// ---------------------------------------------------------------------------
-// Regression: HotSwapGraph closes old graph on Swap
-// ---------------------------------------------------------------------------
-
-type closableGraph struct {
-	Graph
-	closed bool
-}
-
-func (c *closableGraph) Close() error {
-	c.closed = true
-	return nil
-}
-
-func TestHotSwapGraph_ClosesOldOnSwap(t *testing.T) {
-	store1 := &closableGraph{Graph: NewMemoryStore()}
-	store2 := &closableGraph{Graph: NewMemoryStore()}
-
-	hot := NewHotSwapGraph(store1)
-
-	// Swap should close the old graph
-	hot.Swap(store2)
-	assert.True(t, store1.closed, "old graph should be closed after Swap")
-	assert.False(t, store2.closed, "new graph should not be closed")
-
-	// Second swap should close store2
-	store3 := &closableGraph{Graph: NewMemoryStore()}
-	hot.Swap(store3)
-	assert.True(t, store2.closed, "second old graph should be closed after Swap")
-	assert.False(t, store3.closed, "current graph should not be closed")
-}
+// HotSwapGraph Swap/Close tests moved to hotswap_test.go.
+// closableGraph helper moved to shared_test.go.

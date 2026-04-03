@@ -82,11 +82,13 @@ func (r *SQLiteResolver) getDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Close closes all open database connections.
+// Close closes all open database connections and clears the pool.
+// Subsequent Resolve calls will re-open databases as needed.
 func (r *SQLiteResolver) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, db := range r.dbs {
 		_ = db.Close()
 	}
+	r.dbs = make(map[string]*sql.DB)
 }

@@ -137,7 +137,7 @@ type MemoryStore struct {
 	roots    []string            // Top-level nodes (e.g. "vulns")
 	rootsSet map[string]struct{} // O(1) dedup for AddRoot
 	resolver ContentResolverFunc
-	cache    *contentCache
+	cache    *ContentCache
 	refs     map[string][]string // token -> []nodeID (callers: who calls token)
 	defs     map[string][]string // token -> []construct_dir_id (definitions: where token is defined)
 
@@ -169,13 +169,27 @@ type MemoryStore struct {
 	refreshMu  sync.Map                    // filePath → *sync.Mutex (per-file refresh serialization)
 }
 
-// normalizeID strips a leading slash from node IDs.
-// GraphFS paths use "/Foo/source" but MemoryStore keys are "Foo/source".
-func normalizeID(id string) string {
+// NormalizeID strips a leading slash from node IDs.
+// FUSE/NFS paths use "/foo/source" but graph keys are "foo/source".
+// Only strips one leading slash; "//double" becomes "/double".
+func NormalizeID(id string) string {
 	if len(id) > 0 && id[0] == '/' {
 		return id[1:]
 	}
 	return id
+}
+
+// SliceContent copies content bytes into buf at the given offset.
+// Returns the number of bytes copied. Shared by all ReadContent implementations.
+func SliceContent(data, buf []byte, offset int64) int {
+	if offset < 0 || offset >= int64(len(data)) {
+		return 0
+	}
+	end := offset + int64(len(buf))
+	if end > int64(len(data)) {
+		end = int64(len(data))
+	}
+	return copy(buf, data[offset:end])
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -207,7 +221,7 @@ func (s *MemoryStore) SetResolver(fn ContentResolverFunc) {
 	if size > 16384 {
 		size = 16384
 	}
-	s.cache = newContentCache(size)
+	s.cache = NewContentCache(size)
 }
 
 // RootIDs returns a copy of the top-level root node IDs.
@@ -270,7 +284,7 @@ func (s *MemoryStore) ListChildStats(id string) ([]NodeStat, error) {
 	if id == "" || id == "/" {
 		childIDs = s.roots
 	} else {
-		id = normalizeID(id)
+		id = NormalizeID(id)
 		n, ok := s.nodes[id]
 		if !ok {
 			return nil, ErrNotFound
@@ -299,7 +313,7 @@ func (s *MemoryStore) UpdateNodeContent(id string, data []byte, origin *SourceOr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return ErrNotFound
@@ -318,7 +332,7 @@ func (s *MemoryStore) UpdateNodeContext(id string, ctx []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return ErrNotFound
@@ -691,7 +705,7 @@ func addGoImport(imports map[string]string, alias, path string) {
 func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 	// 1. Find the "source" file child
 	s.mu.RLock()
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	node, ok := s.nodes[id]
 	s.mu.RUnlock()
 
@@ -824,7 +838,7 @@ func (s *MemoryStore) GetNode(id string) (*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -842,7 +856,7 @@ func (s *MemoryStore) ListChildren(id string) ([]string, error) {
 		return s.roots, nil
 	}
 
-	id = normalizeID(id)
+	id = NormalizeID(id)
 	n, ok := s.nodes[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -896,20 +910,12 @@ func (s *MemoryStore) ReadContent(id string, buf []byte, offset int64) (int, err
 		return 0, nil
 	}
 
-	if offset >= int64(len(data)) {
-		return 0, nil
-	}
-	end := offset + int64(len(buf))
-	if end > int64(len(data)) {
-		end = int64(len(data))
-	}
-	n := copy(buf, data[offset:end])
-	return n, nil
+	return SliceContent(data, buf, offset), nil
 }
 
 func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error) {
 	if s.cache != nil {
-		if cached, ok := s.cache.get(id); ok {
+		if cached, ok := s.cache.Get(id); ok {
 			return cached, nil
 		}
 	}
@@ -921,44 +927,51 @@ func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error)
 		return nil, err
 	}
 	if s.cache != nil {
-		s.cache.put(id, data)
+		s.cache.Put(id, data)
 	}
 	return data, nil
 }
 
-// contentCache is a simple FIFO-evicting bounded cache for resolved content.
+// ContentCache is a FIFO-bounded cache for resolved content bytes.
 // Uses RWMutex so concurrent readers (MCP tool calls) don't block each other.
+// Replaces the inline sync.Mutex caches that SQLiteGraph and WritableGraph
+// previously maintained — the RWMutex promotion is safe because the old code
+// never relied on exclusive read access (check-then-set unlocked between steps).
+// Shared by MemoryStore, SQLiteGraph, and WritableGraph.
 //
 // Note: the get→miss→resolve→put sequence in resolveContent is not atomic.
 // Under high concurrency, multiple goroutines may miss the cache simultaneously
 // and all invoke the resolver for the same key. This is benign — the first
-// writer wins via put()'s dedup check, and subsequent resolver results are
+// writer wins via Put's dedup check, and subsequent resolver results are
 // discarded. The resolver (SQLite query + template render) is idempotent.
-// Use golang.org/x/sync/singleflight if redundant resolver calls become
-// a measurable bottleneck.
-type contentCache struct {
+type ContentCache struct {
 	mu      sync.RWMutex
 	entries map[string][]byte
 	keys    []string
 	maxSize int
 }
 
-func newContentCache(maxSize int) *contentCache {
-	return &contentCache{
+// NewContentCache creates a FIFO-bounded content cache.
+func NewContentCache(maxSize int) *ContentCache {
+	return &ContentCache{
 		entries: make(map[string][]byte, maxSize),
 		keys:    make([]string, 0, maxSize),
 		maxSize: maxSize,
 	}
 }
 
-func (c *contentCache) get(key string) ([]byte, bool) {
+// Get retrieves cached content. Safe for concurrent readers.
+func (c *ContentCache) Get(key string) ([]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	v, ok := c.entries[key]
 	return v, ok
 }
 
-func (c *contentCache) put(key string, value []byte) {
+// Put stores content, evicting the oldest entry if at capacity.
+// Deduplicates: if key already exists, updates the value without
+// adding a duplicate key entry.
+func (c *ContentCache) Put(key string, value []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.entries[key]; ok {
@@ -966,7 +979,6 @@ func (c *contentCache) put(key string, value []byte) {
 		return
 	}
 	if len(c.entries) >= c.maxSize {
-		// Copy to avoid backing-array leak from reslicing.
 		evict := c.keys[0]
 		copy(c.keys, c.keys[1:])
 		c.keys = c.keys[:len(c.keys)-1]
@@ -974,6 +986,27 @@ func (c *contentCache) put(key string, value []byte) {
 	}
 	c.entries[key] = value
 	c.keys = append(c.keys, key)
+}
+
+// Delete removes a key from both the map and the keys slice.
+// Invariant: entries and keys are always in sync — every key in the map
+// has exactly one entry in the keys slice, maintained by Put (dedup)
+// and Delete (linear scan + remove). The break-after-first-match in the
+// scan is correct because Put never creates duplicate key entries.
+func (c *ContentCache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; !ok {
+		return
+	}
+	delete(c.entries, key)
+	for i, k := range c.keys {
+		if k == key {
+			copy(c.keys[i:], c.keys[i+1:])
+			c.keys = c.keys[:len(c.keys)-1]
+			break
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
