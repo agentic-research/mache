@@ -569,13 +569,17 @@ func makeSemanticSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		sockPath, err := leyline.DiscoverOrStart()
 		if err != nil {
 			return mcp.NewToolResultError(
-				"semantic search requires ley-line daemon (not found). Start with: leyline daemon --embed",
+				"semantic search not available — requires ley-line daemon with embeddings.\n" +
+					"This is an optional feature. Use 'search' for pattern-based code search instead.",
 			), nil
 		}
 
 		sock, err := leyline.DialSocket(sockPath)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("connect to ley-line: %v", err)), nil
+			return mcp.NewToolResultError(
+				"semantic search not available — ley-line daemon not responding.\n" +
+					"This is an optional feature. Use 'search' for pattern-based code search instead.",
+			), nil
 		}
 		defer func() { _ = sock.Close() }()
 
