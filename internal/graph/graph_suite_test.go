@@ -282,9 +282,25 @@ func hotSwapFactory(t *testing.T) Graph {
 	return NewHotSwapGraph(memoryStoreFactory(t))
 }
 
-// sqliteGraphFactory creates a temp SQLite DB with a nodes table matching
-// the canonical test graph, then opens it as a SQLiteGraph.
+// sqliteGraphFactory opens the canonical test DB as a SQLiteGraph (nodes-table fast path).
 func sqliteGraphFactory(t *testing.T) Graph {
+	t.Helper()
+	dbPath := createNodesTableDB(t)
+	schema := &api.Topology{Table: "results"}
+	g, err := OpenSQLiteGraph(dbPath, schema, stubRender)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+	return g
+}
+
+// stubRender is a no-op renderer for tests where content is inline in the record column.
+func stubRender(tmpl string, values map[string]any) (string, error) {
+	return tmpl, nil
+}
+
+// createNodesTableDB creates a temp SQLite DB with the canonical test graph
+// in the nodes table schema. Shared by sqliteGraphFactory and writableGraphFactory.
+func createNodesTableDB(t *testing.T) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -331,24 +347,25 @@ func sqliteGraphFactory(t *testing.T) Graph {
 		require.NoError(t, err)
 	}
 	require.NoError(t, db.Close())
+	return dbPath
+}
 
-	// Minimal schema — just needs Table set for the nodes-table path
+// writableGraphFactory opens the canonical test DB as a WritableGraph.
+func writableGraphFactory(t *testing.T) Graph {
+	t.Helper()
+	dbPath := createNodesTableDB(t)
 	schema := &api.Topology{Table: "results"}
-	g, err := OpenSQLiteGraph(dbPath, schema, stubRender)
+	g, err := OpenWritableGraph(dbPath, schema, stubRender, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = g.Close() })
 	return g
-}
-
-// stubRender is a no-op renderer for SQLiteGraph tests where content is inline.
-func stubRender(tmpl string, values map[string]any) (string, error) {
-	return tmpl, nil
 }
 
 // ---------------------------------------------------------------------------
 // Suite runners — one per implementation
 // ---------------------------------------------------------------------------
 
-func TestMemoryStore_GraphSuite(t *testing.T)  { RunGraphSuite(t, memoryStoreFactory) }
-func TestHotSwapGraph_GraphSuite(t *testing.T) { RunGraphSuite(t, hotSwapFactory) }
-func TestSQLiteGraph_GraphSuite(t *testing.T)  { RunGraphSuite(t, sqliteGraphFactory) }
+func TestMemoryStore_GraphSuite(t *testing.T)   { RunGraphSuite(t, memoryStoreFactory) }
+func TestHotSwapGraph_GraphSuite(t *testing.T)  { RunGraphSuite(t, hotSwapFactory) }
+func TestSQLiteGraph_GraphSuite(t *testing.T)   { RunGraphSuite(t, sqliteGraphFactory) }
+func TestWritableGraph_GraphSuite(t *testing.T) { RunGraphSuite(t, writableGraphFactory) }
