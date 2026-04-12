@@ -21,8 +21,8 @@ task build
 task install   # copies to ~/.local/bin
 ```
 
-**macOS:** `brew install go-task` for Task. FUSE mount needs `brew install --cask fuse-t`.
-**Linux:** `apt-get install libfuse-dev` for FUSE mount support.
+**macOS:** `brew install go-task` for Task.
+**Linux:** [Install Task](https://taskfile.dev/installation/).
 
 ### Use with Claude Code
 
@@ -178,7 +178,7 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 | Tree-sitter parsing (28 langs)          | Stable                                                                        |
 | MCP server (15 tools, stdio + HTTP)     | Stable                                                                        |
 | Cross-references (callers/callees)      | Stable                                                                        |
-| NFS/FUSE mount + write-back             | Stable                                                                        |
+| NFS mount + write-back                  | Stable                                                                        |
 | Schema inference (FCA)                  | Beta                                                                          |
 | Community detection (Louvain)           | Beta                                                                          |
 | LSP enrichment (type info, diagnostics) | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open) |

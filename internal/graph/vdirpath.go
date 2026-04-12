@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Virtual directory path helpers shared by FUSE (internal/fs) and NFS (internal/nfsmount).
+// Virtual directory path helpers used by the NFS backend (internal/nfsmount).
 // These parse callers/, callees/, and _diagnostics/ virtual directory paths
 // without any Graph dependency.
 
