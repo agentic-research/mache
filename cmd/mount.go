@@ -44,7 +44,6 @@ var (
 	writable    bool
 	inferSchema bool
 	quiet       bool
-	backend     string
 	agentMode   bool
 	outPath     string
 	outFormat   string
@@ -66,8 +65,6 @@ func init() {
 	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
 	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; copy is not atomic; default is zero-copy)")
 	rootCmd.Flags().StringVar(&maxFileSize, "max-file-size", "100MB", "Skip files larger than this during ingestion (e.g. 100MB, 1GB, 0 to disable)")
-
-	backend = "nfs" // NFS is the only mount backend (FUSE removed in v0.7.0)
 
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(listCmd)
@@ -235,7 +232,7 @@ var rootCmd = &cobra.Command{
 		var engine *ingest.Engine // non-nil for MemoryStore paths (needed for write-back)
 
 		if controlPath != "" {
-			return mountControl(controlPath, schema, mountPoint, backend)
+			return mountControl(controlPath, schema, mountPoint)
 		}
 
 		// Snapshot: copy data source to temp before mounting for isolation.
@@ -514,7 +511,7 @@ var rootCmd = &cobra.Command{
 }
 
 // mountControl starts Mache in hot-swap mode using the Control Block.
-func mountControl(path string, schema *api.Topology, mountPoint, backend string) error {
+func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	ctrl, err := control.OpenOrCreate(path)
 	if err != nil {
 		return fmt.Errorf("open control: %w", err)
@@ -566,7 +563,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 
 	// Writable arena mode: mache IS the writer, no hot-swap watcher.
 	if writable {
-		return mountControlWritable(dbPath, arenaPath, schema, ctrl, mountPoint, backend)
+		return mountControlWritable(dbPath, arenaPath, schema, ctrl, mountPoint)
 	}
 
 	// Read-only hot-swap mode (existing logic)
@@ -621,7 +618,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 
 // mountControlWritable opens the extracted DB in read-write mode and
 // wires a WritableGraph + ArenaFlusher for arena write-back.
-func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, ctrl *control.Controller, mountPoint, backend string) error {
+func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, ctrl *control.Controller, mountPoint string) error {
 	flusher := graph.NewArenaFlusher(arenaPath, masterDBPath, ctrl)
 	flusher.Start(100 * time.Millisecond)
 	defer func() { _ = flusher.Close() }() // final flush on unmount

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Test Commands
 
-All commands use [Task](https://taskfile.dev) — it sets required CGO flags automatically.
+All commands use [Task](https://taskfile.dev).
 
 ```bash
 task build          # Build binary + codesign (macOS)
@@ -18,9 +18,7 @@ task test-go-schema # Self-hosting smoke test (ingests mache's own source)
 task tidy           # go mod tidy
 ```
 
-**Do not use `go test` directly on macOS** — CGO flags for tree-sitter are required and only set by `task`.
-
-Run a single test: `task test -- -run TestName` or set the env vars from Taskfile.yml and use `go test -v -run TestName ./internal/graph/`.
+Run a single test: `task test -- -run TestName` or `go test -v -run TestName ./internal/graph/`.
 
 Integration tests require real SQLite databases and are gated behind env vars (`MACHE_TEST_KEV_DB`, `MACHE_TEST_NVD_DB`) — they skip automatically when unset.
 
