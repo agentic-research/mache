@@ -16,7 +16,7 @@ require (
 	github.com/winfsp/cgofuse v1.6.0
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/sys v0.42.0
-	golang.org/x/text v0.35.0
+	golang.org/x/text v0.36.0
 	modernc.org/sqlite v1.48.0
 	mvdan.cc/gofumpt v0.9.2
 )
@@ -44,9 +44,9 @@ require (
 	github.com/willscott/go-nfs-client v0.0.0-20240104095149-b44639837b00 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zclconf/go-cty v1.16.3 // indirect
-	golang.org/x/mod v0.33.0 // indirect
+	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/tools v0.42.0 // indirect
+	golang.org/x/tools v0.43.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
