@@ -16,7 +16,6 @@ import (
 type WritableGraph struct {
 	ntr     *NodesTableReader // all read operations
 	dbPath  string            // temp file path (the writable master)
-	schema  *api.Topology
 	flusher *ArenaFlusher
 	mu      sync.RWMutex
 }
@@ -55,7 +54,6 @@ func OpenWritableGraph(masterDBPath string, schema *api.Topology, render Templat
 	return &WritableGraph{
 		ntr:     NewNodesTableReader(db, tableName, render, compileLevels(schema), 0o644, 0o755, 2048),
 		dbPath:  masterDBPath,
-		schema:  schema,
 		flusher: flusher,
 	}, nil
 }

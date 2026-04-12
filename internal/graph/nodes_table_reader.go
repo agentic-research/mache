@@ -37,7 +37,7 @@ type NodesTableReader struct {
 }
 
 // DB returns the underlying database connection.
-// Used by WritableGraph.UpdateRecord for write operations.
+// Used by WritableGraph for write operations and Close.
 func (r *NodesTableReader) DB() *sql.DB { return r.db }
 
 // NewNodesTableReader creates a reader for the nodes-table schema.
@@ -248,7 +248,7 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 			Mode: r.fileMode,
 		})
 	}
-	return nodes, nil
+	return nodes, rows.Err()
 }
 
 // Invalidate evicts cached content and size for a node.
