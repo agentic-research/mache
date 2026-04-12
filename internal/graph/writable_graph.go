@@ -2,11 +2,7 @@ package graph
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"log"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,25 +11,14 @@ import (
 )
 
 // WritableGraph is a read-write SQLite backend for arena-mode mounts.
-// It opens the master .db in read-write mode and supports mutations
-// that are flushed back to the arena via ArenaFlusher.
-//
-// Read methods use the same nodes-table queries as SQLiteGraph's fast path.
-// Write methods mutate the nodes table directly (UPDATE/INSERT/DELETE).
-// Flush serializes the entire .db back to the double-buffered arena.
+// Read methods delegate to NodesTableReader (shared with SQLiteGraph).
+// Write methods mutate the nodes table and flush to the arena.
 type WritableGraph struct {
-	db        *sql.DB
-	dbPath    string // temp file path (the writable master)
-	schema    *api.Topology
-	render    TemplateRenderer
-	levels    []*schemaLevel
-	flusher   *ArenaFlusher
-	mu        sync.RWMutex
-	tableName string
-
-	cache *ContentCache // FIFO-bounded rendered content cache
-
-	sizeCache sync.Map
+	ntr     *NodesTableReader // all read operations
+	dbPath  string            // temp file path (the writable master)
+	schema  *api.Topology
+	flusher *ArenaFlusher
+	mu      sync.RWMutex
 }
 
 // OpenWritableGraph opens a writable connection to the master .db.
@@ -46,7 +31,6 @@ func OpenWritableGraph(masterDBPath string, schema *api.Topology, render Templat
 	db.SetMaxOpenConns(2)
 
 	// journal_mode=DELETE: after commit, the .db file IS the serialized form.
-	// No WAL files to worry about — os.ReadFile returns valid SQLite bytes.
 	if _, err := db.Exec("PRAGMA journal_mode=DELETE"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set journal mode: %w", err)
@@ -69,229 +53,31 @@ func OpenWritableGraph(masterDBPath string, schema *api.Topology, render Templat
 	}
 
 	return &WritableGraph{
-		db:        db,
-		dbPath:    masterDBPath,
-		schema:    schema,
-		render:    render,
-		levels:    compileLevels(schema),
-		flusher:   flusher,
-		tableName: tableName,
-		cache:     NewContentCache(2048),
+		ntr:     NewNodesTableReader(db, tableName, render, compileLevels(schema), 0o644, 0o755, 2048),
+		dbPath:  masterDBPath,
+		schema:  schema,
+		flusher: flusher,
 	}, nil
 }
 
 // ---------------------------------------------------------------------------
-// Graph interface (read methods)
+// Read methods — delegate to NodesTableReader
 // ---------------------------------------------------------------------------
 
-func (g *WritableGraph) GetNode(id string) (*Node, error) {
-	id = NormalizeID(id)
-	if id == "" {
-		return &Node{ID: "", Mode: os.ModeDir | 0o555}, nil
-	}
-
-	var kind, size int
-	var mtimeNano int64
-	var recordID sql.NullString
-	err := g.db.QueryRow("SELECT kind, size, mtime, record_id FROM nodes WHERE id = ?", id).Scan(&kind, &size, &mtimeNano, &recordID)
-	if err == sql.ErrNoRows {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	mode := os.FileMode(0o644) // writable files
-	if kind == 1 {
-		mode = os.ModeDir | 0o755
-	}
-
-	node := &Node{
-		ID:      id,
-		Mode:    mode,
-		ModTime: time.Unix(0, mtimeNano),
-	}
-
-	if kind == 0 {
-		// File node — set up content ref for lazy resolution
-		if cachedSize, ok := g.sizeCache.Load(id); ok {
-			node.Ref = &ContentRef{ContentLen: cachedSize.(int64)}
-			return node, nil
-		}
-		node.Ref = &ContentRef{ContentLen: int64(size)}
-		g.sizeCache.Store(id, int64(size))
-	}
-	return node, nil
-}
-
-func (g *WritableGraph) ListChildren(id string) ([]string, error) {
-	id = NormalizeID(id)
-
-	var rows *sql.Rows
-	var err error
-	if id == "" {
-		rows, err = g.db.Query("SELECT id FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
-	} else {
-		rows, err = g.db.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var children []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		children = append(children, name)
-	}
-	return children, rows.Err()
-}
-
-// ListChildStats implements Graph. Queries the nodes table for child stats
-// without rendering content.
+func (g *WritableGraph) GetNode(id string) (*Node, error)         { return g.ntr.GetNode(id) }
+func (g *WritableGraph) ListChildren(id string) ([]string, error) { return g.ntr.ListChildren(id) }
 func (g *WritableGraph) ListChildStats(id string) ([]NodeStat, error) {
-	id = NormalizeID(id)
-
-	var rows *sql.Rows
-	var err error
-	if id == "" {
-		rows, err = g.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
-	} else {
-		rows, err = g.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var stats []NodeStat
-	for rows.Next() {
-		var childID string
-		var kind, size int
-		var mtimeNano int64
-		if err := rows.Scan(&childID, &kind, &size, &mtimeNano); err != nil {
-			return nil, err
-		}
-		stats = append(stats, NodeStat{
-			ID:          childID,
-			IsDir:       kind == 1,
-			ContentSize: int64(size),
-			ModTime:     time.Unix(0, mtimeNano),
-			HasOrigin:   false,
-		})
-	}
-	return stats, rows.Err()
+	return g.ntr.ListChildStats(id)
 }
 
 func (g *WritableGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
-	id = NormalizeID(id)
-
-	content, err := g.resolveContent(id)
-	if err != nil {
-		return 0, err
-	}
-
-	return SliceContent(content, buf, offset), nil
+	return g.ntr.ReadContent(id, buf, offset)
 }
-
-// resolveContent reads file content. Checks the nodes.record column first
-// (populated by mache build or UpdateRecord), then falls back to template
-// rendering from the source record via record_id.
-func (g *WritableGraph) resolveContent(id string) ([]byte, error) {
-	// Check cache
-	if c, ok := g.cache.Get(id); ok {
-		return c, nil
-	}
-
-	// Try reading directly from the record column (works for inline content
-	// written by mache build, or content updated via UpdateRecord)
-	var record sql.NullString
-	var recordID sql.NullString
-	err := g.db.QueryRow("SELECT record, record_id FROM nodes WHERE id = ?", id).Scan(&record, &recordID)
-	if err == sql.ErrNoRows {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var content []byte
-	if record.Valid && record.String != "" {
-		// Direct content in record column
-		content = []byte(record.String)
-	} else if recordID.Valid && recordID.String != "" {
-		// Fall back to template rendering from source record
-		content, err = g.renderFromRecord(id, recordID.String)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		return nil, ErrNotFound
-	}
-
-	g.cache.Put(id, content)
-
-	return content, nil
-}
-
-// renderFromRecord fetches a record by ID and renders content via template.
-func (g *WritableGraph) renderFromRecord(filePath, recordID string) ([]byte, error) {
-	var raw string
-	if err := g.db.QueryRow("SELECT record FROM "+g.tableName+" WHERE id = ?", recordID).Scan(&raw); err != nil {
-		return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
-	}
-
-	var parsed any
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return nil, fmt.Errorf("parse record %s: %w", recordID, err)
-	}
-	values, _ := parsed.(map[string]any)
-
-	segments := strings.Split(filePath, "/")
-	_, fileLeaf := walkSchemaLevels(g.levels, segments)
-	if fileLeaf == nil {
-		return nil, fmt.Errorf("no schema leaf for %s", filePath)
-	}
-
-	rendered, err := g.render(fileLeaf.ContentTemplate, values)
-	if err != nil {
-		return nil, fmt.Errorf("render %s: %w", filePath, err)
-	}
-	return []byte(rendered), nil
-}
-
-func (g *WritableGraph) GetCallers(token string) ([]*Node, error) {
-	rows, err := g.db.Query("SELECT node_id FROM node_refs WHERE token = ?", token)
-	if err != nil {
-		return nil, fmt.Errorf("query node_refs: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var nodes []*Node
-	for rows.Next() {
-		var nodeID string
-		if err := rows.Scan(&nodeID); err != nil {
-			log.Printf("GetCallers: skip row scan: %v", err)
-			continue
-		}
-		nodes = append(nodes, &Node{
-			ID:   nodeID,
-			Mode: 0o644,
-		})
-	}
-	return nodes, nil
-}
-
-func (g *WritableGraph) GetCallees(id string) ([]*Node, error) {
-	return nil, nil // arena-mode mounts don't have call extraction
-}
-
-func (g *WritableGraph) Invalidate(id string) {
-	g.sizeCache.Delete(id)
-	g.cache.Delete(id)
+func (g *WritableGraph) GetCallers(token string) ([]*Node, error) { return g.ntr.GetCallers(token) }
+func (g *WritableGraph) GetCallees(id string) ([]*Node, error)    { return nil, nil }
+func (g *WritableGraph) Invalidate(id string)                     { g.ntr.Invalidate(id) }
+func (g *WritableGraph) Act(id, action, payload string) (*ActionResult, error) {
+	return nil, ErrActNotSupported
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +85,6 @@ func (g *WritableGraph) Invalidate(id string) {
 // ---------------------------------------------------------------------------
 
 // UpdateRecord updates a file node's content in the nodes table.
-// The content is stored as an opaque blob in the record column.
 func (g *WritableGraph) UpdateRecord(id string, content []byte) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -307,7 +92,7 @@ func (g *WritableGraph) UpdateRecord(id string, content []byte) error {
 	id = NormalizeID(id)
 
 	now := time.Now().UnixNano()
-	result, err := g.db.Exec(
+	result, err := g.ntr.DB.Exec(
 		"UPDATE nodes SET record = ?, size = ?, mtime = ? WHERE id = ?",
 		string(content), len(content), now, id,
 	)
@@ -319,20 +104,18 @@ func (g *WritableGraph) UpdateRecord(id string, content []byte) error {
 		return ErrNotFound
 	}
 
-	// Evict caches
-	g.Invalidate(id)
+	g.ntr.Invalidate(id)
 	return nil
 }
 
-// Flush requests a coalesced arena flush. Non-blocking — the actual I/O
-// happens on the flusher's background tick. Use FlushNow for synchronous.
+// Flush requests a coalesced arena flush. Non-blocking.
 func (g *WritableGraph) Flush() {
 	if g.flusher != nil {
 		g.flusher.RequestFlush()
 	}
 }
 
-// FlushNow performs a synchronous arena flush. Use on unmount.
+// FlushNow performs a synchronous arena flush.
 func (g *WritableGraph) FlushNow() error {
 	if g.flusher == nil {
 		return nil
@@ -342,17 +125,12 @@ func (g *WritableGraph) FlushNow() error {
 
 // Close closes the database connection.
 func (g *WritableGraph) Close() error {
-	return g.db.Close()
+	return g.ntr.DB.Close()
 }
 
 // DBPath returns the path to the writable master database.
 func (g *WritableGraph) DBPath() string {
 	return g.dbPath
-}
-
-// Act returns ErrActNotSupported — WritableGraph is a code-editing graph, not an interactive UI.
-func (g *WritableGraph) Act(id, action, payload string) (*ActionResult, error) {
-	return nil, ErrActNotSupported
 }
 
 // Verify interface compliance at compile time.
