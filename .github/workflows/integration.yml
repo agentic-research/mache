@@ -21,11 +21,7 @@ jobs:
   integration:
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev fuse
-          - os: macos-latest
-            fuse_setup: brew install --cask fuse-t
+        os: [ubuntu-latest, macos-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
     name: integration (${{ matrix.os }})
@@ -40,9 +36,6 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
-
-      - name: Install FUSE
-        run: ${{ matrix.fuse_setup }}
 
       - name: Install Task
         uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2

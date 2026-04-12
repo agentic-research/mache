@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/control"
-	machefs "github.com/agentic-research/mache/internal/fs"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
@@ -31,7 +29,6 @@ import (
 	"github.com/agentic-research/mache/internal/writeback"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/spf13/cobra"
-	"github.com/winfsp/cgofuse/fuse"
 )
 
 var (
@@ -47,7 +44,6 @@ var (
 	writable    bool
 	inferSchema bool
 	quiet       bool
-	backend     string
 	agentMode   bool
 	outPath     string
 	outFormat   string
@@ -69,12 +65,6 @@ func init() {
 	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
 	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; copy is not atomic; default is zero-copy)")
 	rootCmd.Flags().StringVar(&maxFileSize, "max-file-size", "100MB", "Skip files larger than this during ingestion (e.g. 100MB, 1GB, 0 to disable)")
-
-	defaultBackend := "fuse"
-	if runtime.GOOS == "darwin" {
-		defaultBackend = "nfs"
-	}
-	rootCmd.Flags().StringVar(&backend, "backend", defaultBackend, "Mount backend: nfs or fuse")
 
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(listCmd)
@@ -242,7 +232,7 @@ var rootCmd = &cobra.Command{
 		var engine *ingest.Engine // non-nil for MemoryStore paths (needed for write-back)
 
 		if controlPath != "" {
-			return mountControl(controlPath, schema, mountPoint, backend)
+			return mountControl(controlPath, schema, mountPoint)
 		}
 
 		// Snapshot: copy data source to temp before mounting for isolation.
@@ -516,20 +506,12 @@ var rootCmd = &cobra.Command{
 		// Fire-and-forget: push content to ley-line for embedding
 		go leyline.TriggerEmbedding(g, 100)
 
-		// 4. Mount via selected backend
-		switch backend {
-		case "nfs":
-			return mountNFS(schema, g, engine, mountPoint, writable, promptContent)
-		case "fuse":
-			return mountFUSE(schema, g, engine, mountPoint, writable, promptContent)
-		default:
-			return fmt.Errorf("unknown backend %q (use nfs or fuse)", backend)
-		}
+		return mountNFS(schema, g, engine, mountPoint, writable, promptContent)
 	},
 }
 
 // mountControl starts Mache in hot-swap mode using the Control Block.
-func mountControl(path string, schema *api.Topology, mountPoint, backend string) error {
+func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	ctrl, err := control.OpenOrCreate(path)
 	if err != nil {
 		return fmt.Errorf("open control: %w", err)
@@ -581,7 +563,7 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 
 	// Writable arena mode: mache IS the writer, no hot-swap watcher.
 	if writable {
-		return mountControlWritable(dbPath, arenaPath, schema, ctrl, mountPoint, backend)
+		return mountControlWritable(dbPath, arenaPath, schema, ctrl, mountPoint)
 	}
 
 	// Read-only hot-swap mode (existing logic)
@@ -631,20 +613,12 @@ func mountControl(path string, schema *api.Topology, mountPoint, backend string)
 		}
 	}()
 
-	// Mount
-	switch backend {
-	case "nfs":
-		return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
-	case "fuse":
-		return mountFUSE(schema, hotSwap, nil, mountPoint, false, nil)
-	default:
-		return fmt.Errorf("unknown backend %q", backend)
-	}
+	return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
 }
 
 // mountControlWritable opens the extracted DB in read-write mode and
 // wires a WritableGraph + ArenaFlusher for arena write-back.
-func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, ctrl *control.Controller, mountPoint, backend string) error {
+func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, ctrl *control.Controller, mountPoint string) error {
 	flusher := graph.NewArenaFlusher(arenaPath, masterDBPath, ctrl)
 	flusher.Start(100 * time.Millisecond)
 	defer func() { _ = flusher.Close() }() // final flush on unmount
@@ -657,14 +631,7 @@ func mountControlWritable(masterDBPath, arenaPath string, schema *api.Topology, 
 
 	log.Println("Writable arena mode: edits write to master DB and flush to arena (100ms coalesce).")
 
-	switch backend {
-	case "nfs":
-		return mountWritableNFS(schema, wg, mountPoint)
-	case "fuse":
-		return mountFUSE(schema, wg, nil, mountPoint, true, nil)
-	default:
-		return fmt.Errorf("unknown backend %q", backend)
-	}
+	return mountWritableNFS(schema, wg, mountPoint)
 }
 
 // mountWritableNFS mounts a WritableGraph via NFS with arena write-back.
@@ -814,88 +781,8 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 	return nil
 }
 
-// mountFUSE starts a FUSE mount (original backend).
-func mountFUSE(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountPoint string, writable bool, promptContent []byte) error {
-	macheFs := machefs.NewMacheFS(schema, g)
-	if len(promptContent) > 0 {
-		macheFs.SetPromptContent(promptContent)
-	}
-
-	// Wire up query directory (enables /.query/ magic dir for both backends)
-	if sg, ok := g.(*graph.SQLiteGraph); ok {
-		macheFs.SetQueryFunc(sg.QueryRefs)
-	} else if ms, ok := g.(*graph.MemoryStore); ok {
-		macheFs.SetQueryFunc(ms.QueryRefs)
-	}
-
-	// Wire up semantic search for `? query` prefix in .query/
-	macheFs.SetSemanticSearchFunc(func(query string, k int) ([]machefs.SemanticHit, error) {
-		sockPath, err := leyline.DiscoverOrStart()
-		if err != nil {
-			return nil, err
-		}
-		sock, err := leyline.DialSocket(sockPath)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = sock.Close() }()
-		sc := leyline.NewSemanticClient(sock)
-		results, err := sc.Search(query, k)
-		if err != nil {
-			return nil, err
-		}
-		hits := make([]machefs.SemanticHit, len(results))
-		for i, r := range results {
-			hits[i] = machefs.SemanticHit{Path: r.ID, Distance: r.Distance}
-		}
-		return hits, nil
-	})
-
-	// Wire up write-back if requested (only for MemoryStore + tree-sitter sources)
-	if writable && engine != nil {
-		macheFs.Engine = engine
-		// Wire both the exported field and the VFS diagnostics handler
-		var diagStatus *sync.Map
-		if ms, ok := g.(*graph.MemoryStore); ok {
-			diagStatus = &ms.WriteStatus
-		}
-		macheFs.SetWritable(true, diagStatus)
-		log.Println("Write-back enabled: edits will splice into source files.")
-	} else if writable {
-		log.Println("Warning: --writable ignored (only supported for non-.db sources)")
-	}
-
-	host := fuse.NewFileSystemHost(macheFs)
-	host.SetCapReaddirPlus(true)
-
-	log.Printf("Mounting mache at %s (using fuse-t/cgofuse)...", mountPoint)
-
-	opts := []string{
-		"-o", fmt.Sprintf("uid=%d", os.Getuid()),
-		"-o", fmt.Sprintf("gid=%d", os.Getgid()),
-		"-o", "fsname=mache",
-		"-o", "subtype=mache",
-		"-o", "entry_timeout=0.0",
-		"-o", "attr_timeout=0.0",
-		"-o", "negative_timeout=0.0",
-		"-o", "direct_io",
-	}
-
-	if runtime.GOOS == "darwin" {
-		opts = append(opts, "-o", "nobrowse")
-		opts = append(opts, "-o", "noattrcache")
-	}
-
-	if !macheFs.Writable {
-		opts = append([]string{"-o", "ro"}, opts...)
-	}
-
-	if !host.Mount(mountPoint, opts) {
-		return fmt.Errorf("mount failed")
-	}
-
-	return nil
-}
+// FUSE backend removed in v0.7.0 (ADR-0006). NFS is the only mount backend.
+// For FUSE mounts, use ley-line-open's `leyline serve`.
 
 // inferFromTreeSitterFile reads a source file, parses it with tree-sitter,
 // and infers a topology schema. Returns an error if parsing fails.

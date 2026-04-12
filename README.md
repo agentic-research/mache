@@ -21,8 +21,8 @@ task build
 task install   # copies to ~/.local/bin
 ```
 
-**macOS:** `brew install go-task` for Task. FUSE mount needs `brew install --cask fuse-t`.
-**Linux:** `apt-get install libfuse-dev` for FUSE mount support.
+**macOS:** `brew install go-task` for Task.
+**Linux:** [Install Task](https://taskfile.dev/installation/). NFS mount requires `nfs-common` (`apt-get install nfs-common`).
 
 ### Use with Claude Code
 
@@ -62,11 +62,11 @@ Mache auto-infers the schema from your codebase. One server shared across all se
 1. **Parse** — tree-sitter parses source into AST nodes (28 languages)
 1. **Infer** — schema inference (FCA) discovers the natural groupings (`functions/`, `types/`, `classes/`)
 1. **Link** — cross-reference extraction builds a call graph from identifiers and imports
-1. **Project** — SQL maps the graph into a navigable tree
+1. **Project** — the graph is exposed as MCP tools (primary) or a mounted filesystem (optional)
 
-## Mount as a filesystem
+## Mount as a filesystem (optional)
 
-Mache can also mount your data as a real directory tree:
+The graph can also be browsed as a mounted directory tree — useful for `ls`, `cat`, shell scripts, or tools that work with files:
 
 ```bash
 mache --infer -d ./src --writable /tmp/mache-src
@@ -178,7 +178,7 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 | Tree-sitter parsing (28 langs)          | Stable                                                                        |
 | MCP server (15 tools, stdio + HTTP)     | Stable                                                                        |
 | Cross-references (callers/callees)      | Stable                                                                        |
-| NFS/FUSE mount + write-back             | Stable                                                                        |
+| NFS mount + write-back                  | Stable                                                                        |
 | Schema inference (FCA)                  | Beta                                                                          |
 | Community detection (Louvain)           | Beta                                                                          |
 | LSP enrichment (type info, diagnostics) | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open) |

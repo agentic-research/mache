@@ -5,49 +5,12 @@ version: '3'
 
 vars:
   BINARY_NAME: bin/mache
-  # fuse-t configuration for macOS
-  FUSE_T_HEADERS: /Library/Frameworks/fuse_t.framework/Versions/Current/Headers
-  FUSE_T_FRAMEWORK: /Library/Frameworks
-
-env:
-  # Set CGO flags for fuse-t on macOS (no-op on other platforms)
-  CGO_CFLAGS: '{{if eq OS "darwin"}}-I{{.FUSE_T_HEADERS}}{{end}}'
-  CGO_LDFLAGS: '{{if eq OS "darwin"}}-F{{.FUSE_T_FRAMEWORK}} -framework fuse_t -Wl,-rpath,{{.FUSE_T_FRAMEWORK}}{{end}}'
 
 tasks:
   default:
     desc: Show available tasks
     cmds:
       - task --list
-
-  check-fuse-t:
-    desc: Check if fuse-t is installed (macOS only)
-    silent: true
-    cmds:
-      - |
-        if [ "$(uname)" = "Darwin" ]; then
-          if [ ! -d "{{.FUSE_T_HEADERS}}" ]; then
-            echo "❌ fuse-t not found. Run 'task setup' to install."
-            exit 1
-          else
-            echo "✅ fuse-t found at {{.FUSE_T_HEADERS}}"
-          fi
-        else
-          echo "ℹ️  fuse-t check skipped (not macOS)"
-        fi
-
-  setup:
-    desc: Install system dependencies (e.g. fuse-t on macOS)
-    cmds:
-      - |
-        if [ "$(uname)" = "Darwin" ]; then
-          if [ ! -d "{{.FUSE_T_HEADERS}}" ]; then
-            echo "Installing fuse-t via Homebrew..."
-            brew install --cask fuse-t
-          else
-            echo "✅ fuse-t is already installed."
-          fi
-        fi
 
   install:
     desc: Build, codesign, and install mache to ~/.local/bin
@@ -59,8 +22,7 @@ tasks:
         platforms: [darwin]
 
   build:
-    desc: Build and codesign mache (with FUSE-T network entitlements)
-    deps: [check-fuse-t]
+    desc: Build and codesign mache
     vars:
       GIT_COMMIT:
         sh: git rev-parse --short HEAD 2>/dev/null || echo "none"
@@ -87,9 +49,7 @@ tasks:
 
   test:
     desc: Run all tests
-    deps: [check-fuse-t]
     cmds:
-      - echo "FUSE={{.FUSE_T_HEADERS}}"
       - go test -tags boltdb -race -gcflags=all=-d=checkptr=0 -v ./...
 
   test-coverage:
@@ -126,7 +86,7 @@ tasks:
       - rm -f coverage.out coverage.html
 
   validate:
-    desc: Validate example schemas against synthetic SQLite fixtures (no FUSE required)
+    desc: Validate example schemas against synthetic SQLite fixtures
     cmds:
       - go test -v -run 'TestEngine_IngestSQLite' ./internal/ingest/
 

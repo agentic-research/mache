@@ -13,10 +13,8 @@ task test
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - [Task](https://taskfile.dev) (build runner)
-- **macOS:** [fuse-t](https://www.fuse-t.org/) (`brew install --cask fuse-t`)
-- **Linux:** libfuse-dev (`apt-get install libfuse-dev`)
 
 ## Development Workflow
 
@@ -31,10 +29,10 @@ task check     # All of the above
 ## Submitting Changes
 
 1. **Fork** the repo and create a feature branch.
-2. **Make your changes**. Add tests for new functionality.
-3. **Run `task check`** and ensure it passes.
-4. **Commit your changes**. We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) messages (e.g., `fix: ...`, `feat: ...`, `docs: ...`).
-5. **Open a pull request** with a clear description of the change.
+1. **Make your changes**. Add tests for new functionality.
+1. **Run `task check`** and ensure it passes.
+1. **Commit your changes**. We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) messages (e.g., `fix: ...`, `feat: ...`, `docs: ...`).
+1. **Open a pull request** with a clear description of the change.
 
 ## Scope of Contributions
 
