@@ -14,6 +14,25 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// lspEnrichHint is the user-facing guidance shown when LSP data is missing
+// and ley-line daemon is not available. Single definition, used by both
+// get_type_info and get_diagnostics handlers.
+// lspEnrichHint is the user-facing guidance shown when LSP data is missing
+// and ley-line daemon is not available. Single definition, used by both
+// get_type_info and get_diagnostics handlers.
+const lspEnrichHint = "Pre-enrich your database with ll-open, or install ley-line for live enrichment.\n" +
+	"See: github.com/agentic-research/ley-line-open"
+
+func lspTableMissing(table, feature string) *mcp.CallToolResult {
+	return mcp.NewToolResultError(fmt.Sprintf("no %s table in database. To get %s, either:\n"+
+		"  1. Pre-enrich with: ll-open enrich-lsp (see github.com/agentic-research/ley-line-open)\n"+
+		"  2. Pass a 'file' param to trigger live enrichment (requires ley-line daemon)", table, feature))
+}
+
+func lspEnrichFailed(feature string) *mcp.CallToolResult {
+	return mcp.NewToolResultError(fmt.Sprintf("%s not available — LSP enrichment requires ley-line daemon.\n%s", feature, lspEnrichHint))
+}
+
 func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		symbol := request.GetString("symbol", "")
@@ -26,7 +45,7 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		// Check if _lsp_hover table exists
 		rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_hover'`)
 		if err != nil {
-			return mcp.NewToolResultError("LSP data not available — run `leyline lsp` to enrich the database"), nil
+			return mcp.NewToolResultError("LSP data not available for this data source"), nil
 		}
 		var tableExists int
 		if rows.Next() {
@@ -34,16 +53,14 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		_ = rows.Close()
 		if tableExists == 0 {
-			// Auto-enrichment: if file param is provided, trigger LSP via ley-line daemon
 			filePath := request.GetString("file", "")
 			if filePath == "" {
-				return mcp.NewToolResultError("no _lsp_hover table — pass 'file' param to auto-enrich or run `leyline lsp`"), nil
+				return lspTableMissing("_lsp_hover", "type info"), nil
 			}
-
 			result, err := enrichAndQueryTypeInfo(filePath, symbol)
 			if err != nil {
 				log.Printf("LSP auto-enrichment failed: %v", err)
-				return mcp.NewToolResultError(fmt.Sprintf("no _lsp_hover table — auto-enrichment failed: %v", err)), nil
+				return lspEnrichFailed("type info"), nil
 			}
 			return result, nil
 		}
@@ -63,7 +80,7 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		// Check if _lsp table exists
 		rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`)
 		if err != nil {
-			return mcp.NewToolResultError("LSP data not available — run `leyline lsp` to enrich the database"), nil
+			return mcp.NewToolResultError("LSP data not available for this data source"), nil
 		}
 		var tableExists int
 		if rows.Next() {
@@ -73,13 +90,12 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		if tableExists == 0 {
 			filePath := request.GetString("file", "")
 			if filePath == "" {
-				return mcp.NewToolResultError("no _lsp table — pass 'file' param to auto-enrich or run `leyline lsp`"), nil
+				return lspTableMissing("_lsp", "diagnostics"), nil
 			}
-
 			result, err := enrichAndQueryDiagnostics(filePath, symbol, limit)
 			if err != nil {
 				log.Printf("LSP auto-enrichment failed: %v", err)
-				return mcp.NewToolResultError(fmt.Sprintf("no _lsp table — auto-enrichment failed: %v", err)), nil
+				return lspEnrichFailed("diagnostics"), nil
 			}
 			return result, nil
 		}

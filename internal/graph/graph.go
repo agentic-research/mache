@@ -619,8 +619,16 @@ func (s *MemoryStore) ShiftOrigins(filePath string, afterByte uint32, delta int3
 		}
 		// Only shift nodes that start at or after the splice point
 		if n.Origin.StartByte >= afterByte {
-			n.Origin.StartByte = uint32(int32(n.Origin.StartByte) + delta)
-			n.Origin.EndByte = uint32(int32(n.Origin.EndByte) + delta)
+			newStart := int32(n.Origin.StartByte) + delta
+			newEnd := int32(n.Origin.EndByte) + delta
+			if newStart < 0 {
+				newStart = 0
+			}
+			if newEnd < 0 {
+				newEnd = 0
+			}
+			n.Origin.StartByte = uint32(newStart)
+			n.Origin.EndByte = uint32(newEnd)
 		}
 	}
 }
@@ -851,9 +859,10 @@ func (s *MemoryStore) ListChildren(id string) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Root case
 	if id == "" || id == "/" {
-		return s.roots, nil
+		out := make([]string, len(s.roots))
+		copy(out, s.roots)
+		return out, nil
 	}
 
 	id = NormalizeID(id)
@@ -861,7 +870,9 @@ func (s *MemoryStore) ListChildren(id string) ([]string, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return n.Children, nil
+	out := make([]string, len(n.Children))
+	copy(out, n.Children)
+	return out, nil
 }
 
 // ReadContent implements Graph. It handles both inline and lazy content.

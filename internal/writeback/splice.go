@@ -9,9 +9,21 @@ import (
 	"github.com/agentic-research/mache/internal/graph"
 )
 
+// MaxSpliceFileSize is the maximum source file size Splice will read.
+// Prevents OOM on accidentally large files (e.g., generated code, vendored blobs).
+const MaxSpliceFileSize = 100 * 1024 * 1024 // 100MB
+
 // Splice replaces the byte range identified by origin with newContent in the source file.
 // The write is atomic: content is written to a temp file first, then renamed.
 func Splice(origin graph.SourceOrigin, newContent []byte) error {
+	info, err := os.Stat(origin.FilePath)
+	if err != nil {
+		return fmt.Errorf("stat source %s: %w", origin.FilePath, err)
+	}
+	if info.Size() > MaxSpliceFileSize {
+		return fmt.Errorf("source file %s is %d bytes (max %d)", origin.FilePath, info.Size(), MaxSpliceFileSize)
+	}
+
 	src, err := os.ReadFile(origin.FilePath)
 	if err != nil {
 		return fmt.Errorf("read source %s: %w", origin.FilePath, err)
@@ -57,11 +69,8 @@ func Splice(origin graph.SourceOrigin, newContent []byte) error {
 		return fmt.Errorf("close temp: %w", err)
 	}
 
-	// Preserve original file permissions
-	info, err := os.Stat(origin.FilePath)
-	if err == nil {
-		_ = os.Chmod(tmpName, info.Mode()) // best-effort permission sync
-	}
+	// Preserve original file permissions (reuse stat from size guard)
+	_ = os.Chmod(tmpName, info.Mode())
 
 	if err := os.Rename(tmpName, origin.FilePath); err != nil {
 		_ = os.Remove(tmpName) // best-effort cleanup
