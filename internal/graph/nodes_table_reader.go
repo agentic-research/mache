@@ -26,28 +26,32 @@ const (
 // The caller owns the *sql.DB lifecycle — NodesTableReader holds a
 // reference but does not close it.
 type NodesTableReader struct {
-	DB        *sql.DB
-	TableName string           // source records table ("results" or schema.Table)
-	Render    TemplateRenderer // for record_id fallback rendering
-	Levels    []*schemaLevel   // compiled schema levels
-	FileMode  os.FileMode      // permission for file nodes
-	DirMode   os.FileMode      // permission for dir nodes
-	SizeCache sync.Map         // file path → int64
-	Cache     *ContentCache    // FIFO-bounded rendered content
+	db        *sql.DB
+	tableName string           // source records table ("results" or schema.Table)
+	render    TemplateRenderer // for record_id fallback rendering
+	levels    []*schemaLevel   // compiled schema levels
+	fileMode  os.FileMode      // permission for file nodes
+	dirMode   os.FileMode      // permission for dir nodes
+	sizeCache sync.Map         // file path → int64
+	cache     *ContentCache    // FIFO-bounded rendered content
 }
+
+// DB returns the underlying database connection.
+// Used by WritableGraph.UpdateRecord for write operations.
+func (r *NodesTableReader) DB() *sql.DB { return r.db }
 
 // NewNodesTableReader creates a reader for the nodes-table schema.
 func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 	levels []*schemaLevel, fileMode, dirMode os.FileMode, cacheSize int,
 ) *NodesTableReader {
 	return &NodesTableReader{
-		DB:        db,
-		TableName: tableName,
-		Render:    render,
-		Levels:    levels,
-		FileMode:  fileMode,
-		DirMode:   dirMode,
-		Cache:     NewContentCache(cacheSize),
+		db:        db,
+		tableName: tableName,
+		render:    render,
+		levels:    levels,
+		fileMode:  fileMode,
+		dirMode:   dirMode,
+		cache:     NewContentCache(cacheSize),
 	}
 }
 
@@ -55,13 +59,13 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	id = NormalizeID(id)
 	if id == "" {
-		return &Node{ID: "", Mode: os.ModeDir | r.DirMode}, nil
+		return &Node{ID: "", Mode: os.ModeDir | r.dirMode}, nil
 	}
 
 	var kind, size int
 	var mtimeNano int64
 	var recordID sql.NullString
-	err := r.DB.QueryRow("SELECT kind, size, mtime, record_id FROM nodes WHERE id = ?", id).
+	err := r.db.QueryRow("SELECT kind, size, mtime, record_id FROM nodes WHERE id = ?", id).
 		Scan(&kind, &size, &mtimeNano, &recordID)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -70,9 +74,9 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		return nil, err
 	}
 
-	mode := r.FileMode
+	mode := r.fileMode
 	if kind == NodeKindDir {
-		mode = os.ModeDir | r.DirMode
+		mode = os.ModeDir | r.dirMode
 	}
 
 	node := &Node{
@@ -82,12 +86,12 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	}
 
 	if kind == NodeKindFile {
-		if cachedSize, ok := r.SizeCache.Load(id); ok {
+		if cachedSize, ok := r.sizeCache.Load(id); ok {
 			node.Ref = &ContentRef{ContentLen: cachedSize.(int64)}
 			return node, nil
 		}
 		node.Ref = &ContentRef{ContentLen: int64(size)}
-		r.SizeCache.Store(id, int64(size))
+		r.sizeCache.Store(id, int64(size))
 	}
 	return node, nil
 }
@@ -99,9 +103,9 @@ func (r *NodesTableReader) ListChildren(id string) ([]string, error) {
 	var rows *sql.Rows
 	var err error
 	if id == "" {
-		rows, err = r.DB.Query("SELECT id FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		rows, err = r.db.Query("SELECT id FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
 	} else {
-		rows, err = r.DB.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
+		rows, err = r.db.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
 	}
 	if err != nil {
 		return nil, err
@@ -126,9 +130,9 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 	var rows *sql.Rows
 	var err error
 	if id == "" {
-		rows, err = r.DB.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
 	} else {
-		rows, err = r.DB.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
+		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
 	}
 	if err != nil {
 		return nil, err
@@ -167,13 +171,13 @@ func (r *NodesTableReader) ReadContent(id string, buf []byte, offset int64) (int
 // resolveContent reads file content. Checks cache, then nodes.record column
 // (inline content), then falls back to template rendering via record_id.
 func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
-	if c, ok := r.Cache.Get(id); ok {
+	if c, ok := r.cache.Get(id); ok {
 		return c, nil
 	}
 
 	var record sql.NullString
 	var recordID sql.NullString
-	err := r.DB.QueryRow("SELECT record, record_id FROM nodes WHERE id = ?", id).
+	err := r.db.QueryRow("SELECT record, record_id FROM nodes WHERE id = ?", id).
 		Scan(&record, &recordID)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -194,14 +198,14 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 
-	r.Cache.Put(id, content)
+	r.cache.Put(id, content)
 	return content, nil
 }
 
 // renderFromRecord fetches a record by ID and renders content via template.
 func (r *NodesTableReader) renderFromRecord(filePath, recordID string) ([]byte, error) {
 	var raw string
-	if err := r.DB.QueryRow("SELECT record FROM "+r.TableName+" WHERE id = ?", recordID).Scan(&raw); err != nil {
+	if err := r.db.QueryRow("SELECT record FROM "+r.tableName+" WHERE id = ?", recordID).Scan(&raw); err != nil {
 		return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
 	}
 
@@ -212,12 +216,12 @@ func (r *NodesTableReader) renderFromRecord(filePath, recordID string) ([]byte, 
 	values, _ := parsed.(map[string]any)
 
 	segments := strings.Split(filePath, "/")
-	_, fileLeaf := walkSchemaLevels(r.Levels, segments)
+	_, fileLeaf := walkSchemaLevels(r.levels, segments)
 	if fileLeaf == nil {
 		return nil, fmt.Errorf("no schema leaf for %s", filePath)
 	}
 
-	rendered, err := r.Render(fileLeaf.ContentTemplate, values)
+	rendered, err := r.render(fileLeaf.ContentTemplate, values)
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", filePath, err)
 	}
@@ -226,7 +230,7 @@ func (r *NodesTableReader) renderFromRecord(filePath, recordID string) ([]byte, 
 
 // GetCallers returns nodes that reference the given token via node_refs table.
 func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
-	rows, err := r.DB.Query("SELECT node_id FROM node_refs WHERE token = ?", token)
+	rows, err := r.db.Query("SELECT node_id FROM node_refs WHERE token = ?", token)
 	if err != nil {
 		return nil, fmt.Errorf("query node_refs: %w", err)
 	}
@@ -241,7 +245,7 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 		}
 		nodes = append(nodes, &Node{
 			ID:   nodeID,
-			Mode: r.FileMode,
+			Mode: r.fileMode,
 		})
 	}
 	return nodes, nil
@@ -249,6 +253,6 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 
 // Invalidate evicts cached content and size for a node.
 func (r *NodesTableReader) Invalidate(id string) {
-	r.SizeCache.Delete(id)
-	r.Cache.Delete(id)
+	r.sizeCache.Delete(id)
+	r.cache.Delete(id)
 }

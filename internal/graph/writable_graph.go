@@ -92,7 +92,7 @@ func (g *WritableGraph) UpdateRecord(id string, content []byte) error {
 	id = NormalizeID(id)
 
 	now := time.Now().UnixNano()
-	result, err := g.ntr.DB.Exec(
+	result, err := g.ntr.DB().Exec(
 		"UPDATE nodes SET record = ?, size = ?, mtime = ? WHERE id = ?",
 		string(content), len(content), now, id,
 	)
@@ -125,7 +125,7 @@ func (g *WritableGraph) FlushNow() error {
 
 // Close closes the database connection.
 func (g *WritableGraph) Close() error {
-	return g.ntr.DB.Close()
+	return g.ntr.DB().Close()
 }
 
 // DBPath returns the path to the writable master database.

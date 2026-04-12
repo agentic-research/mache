@@ -297,13 +297,13 @@ func (g *SQLiteGraph) DefsMap() map[string][]string {
 }
 
 func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
+	if g.useNodesTable {
+		return g.ntr.GetNode(id)
+	}
+
 	id = NormalizeID(id)
 	if id == "" {
 		return &Node{ID: "", Mode: os.ModeDir | 0o555}, nil
-	}
-
-	if g.useNodesTable {
-		return g.ntr.GetNode(id)
 	}
 
 	segments := strings.Split(id, "/")
@@ -354,11 +354,11 @@ func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 }
 
 func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
-	id = NormalizeID(id)
-
 	if g.useNodesTable {
 		return g.ntr.ListChildren(id)
 	}
+
+	id = NormalizeID(id)
 
 	// Root: return schema root names
 	if id == "" {
@@ -388,11 +388,11 @@ func (g *SQLiteGraph) ListChildren(id string) ([]string, error) {
 // For the legacy scan path, it uses dirChildren + schema structure.
 // ContentSize may be 0 for unvisited files (FUSE/NFS fall back to LOOKUP).
 func (g *SQLiteGraph) ListChildStats(id string) ([]NodeStat, error) {
-	id = NormalizeID(id)
-
 	if g.useNodesTable {
 		return g.ntr.ListChildStats(id)
 	}
+
+	id = NormalizeID(id)
 
 	// Legacy scan path: use dirChildren + schema to determine child types
 	if id == "" {
@@ -809,11 +809,11 @@ func (g *SQLiteGraph) getCallersFromSidecar(token string) ([]*Node, error) {
 // stale size/data from being served on the next Getattr or Read.
 func (g *SQLiteGraph) Invalidate(id string) {
 	if g.ntr != nil {
-		g.ntr.Invalidate(id)
+		g.ntr.Invalidate(id) // nodes-table path: ntr owns sizeCache + cache
 	}
-	g.sizeCache.Delete(id)
+	g.sizeCache.Delete(id) // legacy path sizeCache (no-op when ntr is set)
 	if g.cache != nil {
-		g.cache.Delete(id)
+		g.cache.Delete(id) // legacy path cache (nil when ntr is set)
 	}
 }
 
