@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Test Commands
 
-All commands use [Task](https://taskfile.dev) — it sets required CGO flags for fuse-t automatically.
+All commands use [Task](https://taskfile.dev) — it sets required CGO flags automatically.
 
 ```bash
 task build          # Build binary + codesign (macOS)
@@ -18,7 +18,7 @@ task test-go-schema # Self-hosting smoke test (ingests mache's own source)
 task tidy           # go mod tidy
 ```
 
-**Do not use `go test` directly on macOS** — CGO_CFLAGS/CGO_LDFLAGS for fuse-t are required and only set by `task`.
+**Do not use `go test` directly on macOS** — CGO flags for tree-sitter are required and only set by `task`.
 
 Run a single test: `task test -- -run TestName` or set the env vars from Taskfile.yml and use `go test -v -run TestName ./internal/graph/`.
 
@@ -31,8 +31,8 @@ Mache projects structured data (JSON, SQLite, source code) as a filesystem drive
 ### Three Presentation Paths
 
 ```
-.db files  →  SQLiteGraph (zero-copy, lazy scan, direct SQL)  →  GraphFS (NFS) or MacheFS (FUSE)
-other files →  Engine (walkers + loaders)  →  MemoryStore       →  GraphFS (NFS) or MacheFS (FUSE)
+.db files  →  SQLiteGraph (zero-copy, lazy scan, direct SQL)  →  GraphFS (NFS) or MCP
+other files →  Engine (walkers + loaders)  →  MemoryStore       →  GraphFS (NFS) or MCP
 any source →  Engine → MemoryStore/SQLiteGraph                 →  MCP (Streamable HTTP or stdio)
 ```
 
@@ -43,7 +43,7 @@ Two transports: Streamable HTTP (`--http :PORT`, default, always-on) and stdio (
 HTTP mode uses stateful sessions — each client gets its own session ID mapped to the projected graph.
 Prefer HTTP over stdio to share one daemon across all sessions (avoids per-client FD leaks).
 
-The mount wiring in `cmd/mount.go` selects the data path based on file extension and the backend based on `--backend` flag (default: NFS on macOS, FUSE on Linux).
+The mount wiring in `cmd/mount.go` selects the data path based on file extension. NFS is the only mount backend (FUSE was removed in v0.7.0 — see ADR-0006). For FUSE mounts, use ley-line-open's `leyline serve`.
 
 ### Core Abstractions
 
@@ -59,7 +59,7 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 | Template renderer | `internal/template/render.go`                                         | Pure Go template rendering with mache func map (`json`, `first`, `slice`, `dig`, `dict`, etc.). Extracted from engine.go to break the graph→ingest→tree-sitter CGO chain                                                               |
 | SQLiteResolver    | `internal/graph/sqlite_resolver.go`                                   | Resolves `ContentRef` entries by fetching records from SQLite and re-rendering via injected `TemplateRenderer` func                                                                                                                    |
 | GraphFS           | `internal/nfsmount/graphfs.go`                                        | NFS backend via go-nfs/billy, `callers/` virtual dir, write-back support                                                                                                                                                               |
-| MacheFS           | `internal/fs/root.go`                                                 | FUSE backend: handle-based readdir (auto-mode for fuse-t), `callers/` symlinks, `.query/` magic dir                                                                                                                                    |
+| NodesTableReader  | `internal/graph/nodes_table_reader.go`                                | Shared SQL queries for nodes-table schema (GetNode, ListChildren, ReadContent, GetCallers). Used by SQLiteGraph fast path and WritableGraph.                                                                                           |
 | Splice            | `internal/writeback/splice.go`                                        | Atomic byte-range replacement in source files for write-back                                                                                                                                                                           |
 
 ### Key Design Details
@@ -70,7 +70,7 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 - **Write-back pipeline**: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins`. No re-ingest.
 - **Draft mode**: Invalid writes save as drafts; node path stays stable. Errors via `_diagnostics/ast-errors`.
 - **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `.query/` (SQL → symlinks), `callers/` (cross-refs, self-gating).
-- **NFS on macOS**: Default backend via `go-nfs`. Replaces fuse-t's NFS translation layer for full control.
+- **NFS mount**: Only mount backend (FUSE removed in v0.7.0). Pure Go via `go-nfs`.
 - **LSP enrichment**: When a `.db` has `_lsp*` tables (produced by ley-line's `ll-open/lsp` crate), `find_definition` falls back to `_lsp_defs` and `find_callers` supplements with `_lsp_refs`. `get_type_info` reads `_lsp_hover`, `get_diagnostics` reads `_lsp`. No runtime daemon needed — all pre-baked at build time by ley-line.
 
 ### Language Registry (`internal/lang`)
@@ -85,6 +85,5 @@ All supported languages are defined in a single `Registry` slice in `internal/la
 
 - **Formatter**: gofumpt (stricter than gofmt). Pre-commit hooks enforce it.
 - **Test framework**: `github.com/stretchr/testify` (assert/require).
-- **Pure-Go SQLite**: Uses `modernc.org/sqlite` (no CGO dependency for SQLite itself — CGO is only needed for fuse-t).
-- **CI**: GitHub Actions runs `go test -race ./...` and `golangci-lint` on ubuntu with libfuse-dev.
-- Ignore ld warnings about duplicate `-rpath` — pre-existing fuse-t noise.
+- **Pure-Go SQLite**: Uses `modernc.org/sqlite` (no CGO dependency for SQLite).
+- **CI**: GitHub Actions runs `go test -race ./...` and `golangci-lint` on ubuntu.

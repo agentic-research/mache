@@ -586,7 +586,10 @@ func makeSemanticSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		sc := leyline.NewSemanticClient(sock)
 		results, err := sc.Search(query, k)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("semantic search: %v", err)), nil
+			return mcp.NewToolResultError(
+				"semantic search not available — ley-line daemon does not support embeddings.\n" +
+					"This is an optional feature. Use 'search' for pattern-based code search instead.",
+			), nil
 		}
 
 		if len(results) == 0 {
