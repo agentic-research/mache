@@ -17,7 +17,7 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/sys v0.42.0
 	golang.org/x/text v0.36.0
-	modernc.org/sqlite v1.48.0
+	modernc.org/sqlite v1.48.2
 	mvdan.cc/gofumpt v0.9.2
 )
 
