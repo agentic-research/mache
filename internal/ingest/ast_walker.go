@@ -178,6 +178,38 @@ func (w *ASTWalker) ExtractAddressRefs(sourcePath, langName string) ([]string, e
 	return tokens, nil
 }
 
+// ExtractGoImports reads Go import aliases from the _imports table
+// (produced by ley-line-open's `leyline parse`). Returns alias → path map
+// for qualified call resolution (e.g., auth.Validate → github.com/foo/auth).
+// Mirrors SitterWalker.ExtractGoImports but uses SQL instead of CGO tree-sitter.
+func (w *ASTWalker) ExtractGoImports(sourceID string) (map[string]string, error) {
+	// Check if _imports table exists (older .dbs produced before LLO didn't have it)
+	var count int
+	if err := w.db.QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_imports'",
+	).Scan(&count); err != nil || count == 0 {
+		return nil, nil
+	}
+
+	rows, err := w.db.Query(
+		"SELECT alias, path FROM _imports WHERE source_id = ?", sourceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query _imports: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	imports := make(map[string]string)
+	for rows.Next() {
+		var alias, path string
+		if err := rows.Scan(&alias, &path); err != nil {
+			continue
+		}
+		imports[alias] = path
+	}
+	return imports, rows.Err()
+}
+
 // SelectWalker inspects a SQLite database and returns the best Walker.
 // If the database has an _ast table (produced by ley-line's ll-open/ts),
 // returns an ASTWalker (pure Go, no CGO). Otherwise returns a SitterWalker
