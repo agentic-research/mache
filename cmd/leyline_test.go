@@ -38,8 +38,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 
 		CREATE TABLE node_defs (
 			token TEXT,
-			dir_id TEXT,
-			PRIMARY KEY (token, dir_id)
+			node_id TEXT,
+			PRIMARY KEY (token, node_id)
 		) WITHOUT ROWID;
 
 		-- Function directories

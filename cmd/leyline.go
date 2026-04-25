@@ -122,7 +122,7 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 	for token, callerNodeIDs := range callerMap {
 		// Look up the directory that defines this token
 		var dirID string
-		err := tx.QueryRow(`SELECT dir_id FROM node_defs WHERE token = ?`, token).Scan(&dirID)
+		err := tx.QueryRow(`SELECT node_id FROM node_defs WHERE token = ?`, token).Scan(&dirID)
 		if err != nil {
 			continue // no definition found, skip
 		}
@@ -197,7 +197,7 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	// Pre-load all defs: token → []dir_id (multiple constructs may define
 	// the same token, e.g. Init in different packages).
 	defsMap := make(map[string][]string)
-	defRows, err := tx.Query(`SELECT token, dir_id FROM node_defs`)
+	defRows, err := tx.Query(`SELECT token, node_id FROM node_defs`)
 	if err != nil {
 		return fmt.Errorf("query node_defs: %w", err)
 	}

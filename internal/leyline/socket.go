@@ -133,8 +133,10 @@ func DiscoverOrStart() (string, error) {
 	ctrlPath := filepath.Join(dataDir, "default.ctrl")
 	sockPath := filepath.Join(dataDir, "default.sock")
 
-	// Start leyline serve as a background subprocess
-	cmd := exec.Command(leylineBin, "serve",
+	// Start leyline daemon as a background subprocess.
+	// `daemon` creates the UDS socket at <ctrl>.sock that mache connects to.
+	// `serve` mounts only (no socket) — wrong for our use case.
+	cmd := exec.Command(leylineBin, "daemon",
 		"--arena", arenaPath,
 		"--arena-size-mib", "64",
 		"--control", ctrlPath,

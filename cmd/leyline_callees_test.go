@@ -41,8 +41,8 @@ func TestMaterializeCallees(t *testing.T) {
 		);
 		CREATE TABLE node_defs (
 			token TEXT,
-			dir_id TEXT,
-			PRIMARY KEY (token, dir_id)
+			node_id TEXT,
+			PRIMARY KEY (token, node_id)
 		);
 	`)
 	require.NoError(t, err)
@@ -76,9 +76,9 @@ func TestMaterializeCallees(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert defs: FuncA and FuncB are defined
-	_, err = db.Exec("INSERT INTO node_defs (token, dir_id) VALUES (?, ?)", "FuncA", "pkg/functions/FuncA")
+	_, err = db.Exec("INSERT INTO node_defs (token, node_id) VALUES (?, ?)", "FuncA", "pkg/functions/FuncA")
 	require.NoError(t, err)
-	_, err = db.Exec("INSERT INTO node_defs (token, dir_id) VALUES (?, ?)", "FuncB", "pkg/functions/FuncB")
+	_, err = db.Exec("INSERT INTO node_defs (token, node_id) VALUES (?, ?)", "FuncB", "pkg/functions/FuncB")
 	require.NoError(t, err)
 
 	// Materialize callers (existing)

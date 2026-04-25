@@ -73,8 +73,8 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 
 	CREATE TABLE IF NOT EXISTS node_defs (
 		token TEXT,
-		dir_id TEXT,
-		PRIMARY KEY (token, dir_id)
+		node_id TEXT,
+		PRIMARY KEY (token, node_id)
 	) WITHOUT ROWID;
 
 	CREATE TABLE IF NOT EXISTS file_index (
@@ -121,7 +121,7 @@ func (w *SQLiteWriter) beginTx() error {
 		return err
 	}
 
-	w.stmtDef, err = w.tx.Prepare(`INSERT OR IGNORE INTO node_defs (token, dir_id) VALUES (?, ?)`)
+	w.stmtDef, err = w.tx.Prepare(`INSERT OR IGNORE INTO node_defs (token, node_id) VALUES (?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -344,7 +344,7 @@ func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 	_, _ = w.tx.Exec(`DELETE FROM node_refs WHERE node_id IN (
 		SELECT id FROM nodes WHERE source_file = ?
 	)`, filePath)
-	_, _ = w.tx.Exec(`DELETE FROM node_defs WHERE dir_id IN (
+	_, _ = w.tx.Exec(`DELETE FROM node_defs WHERE node_id IN (
 		SELECT id FROM nodes WHERE source_file = ?
 	)`, filePath)
 	_, _ = w.tx.Exec(`DELETE FROM nodes WHERE source_file = ?`, filePath)

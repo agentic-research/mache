@@ -688,7 +688,7 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 			}
 			// SQL fallback: node_defs table (pre-built DBs)
 			if !resolved && g.useNodesTable {
-				rows, qErr := g.db.Query("SELECT dir_id FROM node_defs WHERE token = ?", qualKey)
+				rows, qErr := g.db.Query("SELECT node_id FROM node_defs WHERE token = ?", qualKey)
 				if qErr == nil {
 					for rows.Next() {
 						var defID string
@@ -726,7 +726,7 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 		// SQL fallback: node_defs then nodes table
 		if g.useNodesTable {
 			var defID string
-			err := g.db.QueryRow("SELECT dir_id FROM node_defs WHERE token = ? LIMIT 1", qc.Token).Scan(&defID)
+			err := g.db.QueryRow("SELECT node_id FROM node_defs WHERE token = ? LIMIT 1", qc.Token).Scan(&defID)
 			if err == nil && defID != id && !seen[defID] {
 				seen[defID] = true
 				nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
