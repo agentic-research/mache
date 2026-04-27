@@ -353,6 +353,20 @@ func (lg *lazyGraph) init() {
 		var schema *api.Topology
 		base := lg.resolvedBasePath()
 
+		// --control mode: skip all source detection, read from arena.
+		if serveControl != "" {
+			g, cleanup, err := buildServeGraph("", &api.Topology{Version: api.SchemaVersion})
+			if err != nil {
+				lg.err = err
+				return
+			}
+			lg.inner = g
+			lg.cleanup = cleanup
+			lg.schema = &api.Topology{Version: api.SchemaVersion}
+			log.Println("graph ready (arena control mode)")
+			return
+		}
+
 		if len(lg.args) == 0 {
 			// If a schema preset was provided (e.g., from ?schema= query param),
 			// use it directly — skip config loading and auto-detection.
