@@ -3,6 +3,7 @@ package ingest
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -485,13 +486,24 @@ func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID stri
 }
 
 // readSource reads the source content for a given source ID.
+// Handles both inline BLOBs (content column) and file path references
+// (path column, used when LLO stores references instead of content).
 func (w *ASTWalker) readSource(db *sql.DB, sourceID string) ([]byte, error) {
 	var content []byte
-	err := db.QueryRow("SELECT content FROM _source WHERE id = ?", sourceID).Scan(&content)
+	var path sql.NullString
+	err := db.QueryRow("SELECT content, path FROM _source WHERE id = ?", sourceID).Scan(&content, &path)
 	if err != nil {
 		return nil, err
 	}
-	return content, nil
+	// If content is inline, use it directly
+	if len(content) > 0 {
+		return content, nil
+	}
+	// Fall back to reading from disk via path reference
+	if path.Valid && path.String != "" {
+		return os.ReadFile(path.String)
+	}
+	return nil, fmt.Errorf("_source %s: no content and no path", sourceID)
 }
 
 // --- Match implementation ---
