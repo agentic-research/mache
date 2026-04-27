@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/control"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
@@ -40,11 +41,12 @@ Examples:
 }
 
 var (
-	serveSchema string
-	serveHTTP   string
-	serveStdio  bool
-	servePath   string
-	serveRepo   string
+	serveSchema  string
+	serveHTTP    string
+	serveStdio   bool
+	servePath    string
+	serveRepo    string
+	serveControl string
 )
 
 func init() {
@@ -53,6 +55,7 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Use stdio transport instead of HTTP (for subprocess mode)")
 	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
 	serveCmd.Flags().StringVar(&serveRepo, "repo", "", "Git repo URL to clone and serve (ephemeral: cleaned up on exit)")
+	serveCmd.Flags().StringVar(&serveControl, "control", "", "Path to ley-line control block (reads from arena, enables hot-swap)")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -329,6 +332,13 @@ func cloneRepo(repoURL string) (string, func(), error) {
 func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func(), error) {
 	noop := func() {}
 
+	// Control block path: read from ley-line arena with hot-swap.
+	// The daemon produces the .db and loads it into the arena.
+	// Mache reads the active buffer and swaps on generation bump.
+	if serveControl != "" {
+		return buildControlGraph(serveControl, schema)
+	}
+
 	if filepath.Ext(dataSource) == ".db" {
 		// Materialize virtual nodes (callers, callees, content sources)
 		// into the .db before opening it as a graph.
@@ -399,4 +409,106 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 		_ = store.Close()
 		resolver.Close()
 	}, nil
+}
+
+// buildControlGraph reads from a ley-line arena via the control block.
+// Returns a HotSwapGraph that auto-updates when the daemon flips the arena.
+// Used when `mache serve --control <path>` is called (e.g., by leyline daemon).
+func buildControlGraph(ctrlPath string, schema *api.Topology) (graph.Graph, func(), error) {
+	ctrl, err := control.OpenOrCreate(ctrlPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open control: %w", err)
+	}
+
+	// Wait for first valid arena
+	gen := ctrl.GetGeneration()
+	arenaPath := ctrl.GetArenaPath()
+	if arenaPath == "" {
+		log.Println("Waiting for initial arena from ley-line daemon...")
+		deadline := time.After(30 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				_ = ctrl.Close()
+				return nil, nil, fmt.Errorf("timed out waiting for initial arena (30s)")
+			default:
+			}
+			if p := ctrl.GetArenaPath(); p != "" {
+				arenaPath = p
+				gen = ctrl.GetGeneration()
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// Wait for valid arena header
+	var dbPath string
+	deadline := time.After(30 * time.Second)
+	for {
+		dbPath, err = graph.ExtractActiveDB(arenaPath)
+		if err == nil {
+			break
+		}
+		select {
+		case <-deadline:
+			_ = ctrl.Close()
+			return nil, nil, fmt.Errorf("timed out waiting for valid arena header (30s): %w", err)
+		default:
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	log.Printf("Arena ready (gen %d). Serving from %s", gen, dbPath)
+
+	// Open initial graph
+	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
+	if err != nil {
+		_ = ctrl.Close()
+		return nil, nil, fmt.Errorf("open initial graph: %w", err)
+	}
+
+	hotSwap := graph.NewHotSwapGraph(initialGraph)
+
+	// Background poller: detect arena flips and hot-swap the graph
+	stopCh := make(chan struct{})
+	go func() {
+		lastGen := gen
+		prevDBPath := dbPath
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+			currentGen := ctrl.GetGeneration()
+			if currentGen > lastGen {
+				newArena := ctrl.GetArenaPath()
+				newDBPath, extractErr := graph.ExtractActiveDB(newArena)
+				if extractErr != nil {
+					log.Printf("arena flip: extract failed: %v", extractErr)
+					continue
+				}
+				newGraph, openErr := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
+				if openErr != nil {
+					log.Printf("arena flip: open graph failed: %v", openErr)
+					_ = os.Remove(newDBPath)
+					continue
+				}
+				hotSwap.Swap(newGraph)
+				log.Printf("Hot-swap: gen %d → %d", lastGen, currentGen)
+				lastGen = currentGen
+				if prevDBPath != "" {
+					_ = os.Remove(prevDBPath)
+				}
+				prevDBPath = newDBPath
+			}
+		}
+	}()
+
+	cleanup := func() {
+		close(stopCh)
+		_ = ctrl.Close()
+	}
+
+	return hotSwap, cleanup, nil
 }
