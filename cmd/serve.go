@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/control"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
@@ -411,104 +410,32 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 	}, nil
 }
 
-// buildControlGraph reads from a ley-line arena via the control block.
-// Returns a HotSwapGraph that auto-updates when the daemon flips the arena.
-// Used when `mache serve --control <path>` is called (e.g., by leyline daemon).
-func buildControlGraph(ctrlPath string, schema *api.Topology) (graph.Graph, func(), error) {
-	ctrl, err := control.OpenOrCreate(ctrlPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open control: %w", err)
-	}
+// buildControlGraph connects to the ley-line daemon over UDS.
+// The daemon owns SQLite (zero-copy via sqlite3_deserialize on the arena).
+// Mache sends structured ops, never opens SQLite directly.
+func buildControlGraph(ctrlPath string, _ *api.Topology) (graph.Graph, func(), error) {
+	// The daemon socket is at <ctrl>.sock (convention)
+	sockPath := ctrlPath[:len(ctrlPath)-len(".ctrl")] + ".sock"
 
-	// Wait for first valid arena
-	gen := ctrl.GetGeneration()
-	arenaPath := ctrl.GetArenaPath()
-	if arenaPath == "" {
-		log.Println("Waiting for initial arena from ley-line daemon...")
-		deadline := time.After(30 * time.Second)
-		for {
-			select {
-			case <-deadline:
-				_ = ctrl.Close()
-				return nil, nil, fmt.Errorf("timed out waiting for initial arena (30s)")
-			default:
-			}
-			if p := ctrl.GetArenaPath(); p != "" {
-				arenaPath = p
-				gen = ctrl.GetGeneration()
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	// Wait for valid arena header
-	var dbPath string
+	// Wait for socket to appear (daemon may still be starting)
 	deadline := time.After(30 * time.Second)
 	for {
-		dbPath, err = graph.ExtractActiveDB(arenaPath)
-		if err == nil {
+		if _, err := os.Stat(sockPath); err == nil {
 			break
 		}
 		select {
 		case <-deadline:
-			_ = ctrl.Close()
-			return nil, nil, fmt.Errorf("timed out waiting for valid arena header (30s): %w", err)
+			return nil, nil, fmt.Errorf("timed out waiting for daemon socket %s (30s)", sockPath)
 		default:
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
-	log.Printf("Arena ready (gen %d). Serving from %s", gen, dbPath)
 
-	// Open initial graph
-	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
+	g, err := newUDSGraph(sockPath)
 	if err != nil {
-		_ = ctrl.Close()
-		return nil, nil, fmt.Errorf("open initial graph: %w", err)
+		return nil, nil, fmt.Errorf("connect to daemon: %w", err)
 	}
+	log.Printf("Connected to ley-line daemon at %s", sockPath)
 
-	hotSwap := graph.NewHotSwapGraph(initialGraph)
-
-	// Background poller: detect arena flips and hot-swap the graph
-	stopCh := make(chan struct{})
-	go func() {
-		lastGen := gen
-		prevDBPath := dbPath
-		for {
-			select {
-			case <-stopCh:
-				return
-			case <-time.After(100 * time.Millisecond):
-			}
-			currentGen := ctrl.GetGeneration()
-			if currentGen > lastGen {
-				newArena := ctrl.GetArenaPath()
-				newDBPath, extractErr := graph.ExtractActiveDB(newArena)
-				if extractErr != nil {
-					log.Printf("arena flip: extract failed: %v", extractErr)
-					continue
-				}
-				newGraph, openErr := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
-				if openErr != nil {
-					log.Printf("arena flip: open graph failed: %v", openErr)
-					_ = os.Remove(newDBPath)
-					continue
-				}
-				hotSwap.Swap(newGraph)
-				log.Printf("Hot-swap: gen %d → %d", lastGen, currentGen)
-				lastGen = currentGen
-				if prevDBPath != "" {
-					_ = os.Remove(prevDBPath)
-				}
-				prevDBPath = newDBPath
-			}
-		}
-	}()
-
-	cleanup := func() {
-		close(stopCh)
-		_ = ctrl.Close()
-	}
-
-	return hotSwap, cleanup, nil
+	return g, func() { _ = g.Close() }, nil
 }
