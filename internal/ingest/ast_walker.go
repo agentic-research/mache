@@ -280,7 +280,7 @@ type selectorPattern struct {
 type selectorCapture struct {
 	kind     string   // leaf node kind to match (e.g., "type_identifier")
 	name     string   // capture name (e.g., "receiver")
-	ancestry []string // required ancestor kinds from leaf to outer, e.g. ["pointer_type", "parameter_declaration", "parameter_list"]
+	ancestry []string // intermediate node kinds from outer to leaf (excluding scope and leaf itself), e.g. ["parameter_list", "parameter_declaration", "pointer_type"]
 }
 
 // selectorPredicate represents a #eq? filter: capture text must equal literal.
@@ -385,7 +385,9 @@ func tokenizeSExpr(s string) []string {
 }
 
 // parseSExprNode parses one (kind children...) node from tokens starting at pos.
-// ancestorKinds is the stack of parent node kinds leading to this node.
+// ancestorKinds accumulates the node-kind path from the root of the parse to
+// this node's parent. The first entry is always the outerKind (scope).
+// Captures record ancestry via ancestryFromKinds (skip scope, keep the rest).
 // Returns the position after the closing paren.
 func parseSExprNode(tokens []string, pos int, ancestorKinds []string, pattern *selectorPattern) int {
 	if pos >= len(tokens) || tokens[pos] != "(" {
@@ -464,16 +466,10 @@ func parseSExprNode(tokens []string, pos int, ancestorKinds []string, pattern *s
 				capName := tokens[pos][1:]
 				pos++
 				if capName != "" && capName != "scope" {
-					var ancestry []string
-					for _, a := range ancestorKinds {
-						if a != pattern.outerKind {
-							ancestry = append(ancestry, a)
-						}
-					}
 					pattern.captures = append(pattern.captures, selectorCapture{
 						kind:     nestedKind,
 						name:     capName,
-						ancestry: ancestry,
+						ancestry: ancestryFromKinds(ancestorKinds),
 					})
 				}
 			}
@@ -484,17 +480,10 @@ func parseSExprNode(tokens []string, pos int, ancestorKinds []string, pattern *s
 			capName := tok[1:]
 			pos++
 			if capName != "scope" && capName != "" && capName[0] != '_' {
-				// Build ancestry from outer to leaf (excluding outer kind which is pattern.outerKind)
-				var ancestry []string
-				for _, a := range ancestorKinds {
-					if a != pattern.outerKind {
-						ancestry = append(ancestry, a)
-					}
-				}
 				pattern.captures = append(pattern.captures, selectorCapture{
 					kind:     nodeKind,
 					name:     capName,
-					ancestry: ancestry,
+					ancestry: ancestryFromKinds(ancestorKinds),
 				})
 			} else if capName != "" && capName[0] == '_' {
 				// Captures starting with _ are for #eq? predicates — still record them
@@ -515,21 +504,28 @@ func parseSExprNode(tokens []string, pos int, ancestorKinds []string, pattern *s
 		capName := tokens[pos][1:]
 		pos++
 		if capName != "scope" && capName != "" {
-			var ancestry []string
-			for _, a := range ancestorKinds {
-				if a != pattern.outerKind {
-					ancestry = append(ancestry, a)
-				}
-			}
 			pattern.captures = append(pattern.captures, selectorCapture{
 				kind:     nodeKind,
 				name:     capName,
-				ancestry: ancestry,
+				ancestry: ancestryFromKinds(ancestorKinds),
 			})
 		}
 	}
 
 	return pos
+}
+
+// ancestryFromKinds returns the intermediate node kinds between the scope and
+// the leaf. ancestorKinds[0] is always the outerKind (scope) — skip it.
+//
+//	ancestorKinds=["call","arguments","call"] → ["arguments","call"]
+func ancestryFromKinds(ancestorKinds []string) []string {
+	if len(ancestorKinds) <= 1 {
+		return nil
+	}
+	out := make([]string, len(ancestorKinds)-1)
+	copy(out, ancestorKinds[1:])
+	return out
 }
 
 // findNodesByKind finds all nodes of a specific kind under a parent prefix.

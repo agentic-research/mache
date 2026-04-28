@@ -95,6 +95,11 @@ tasks:
     cmds:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
 
+  parity:
+    desc: Run ASTWalker ↔ SitterWalker parity tests (requires leyline on PATH)
+    cmds:
+      - go test -tags leyline -v -run 'TestASTParity' ./internal/ingest/
+
   fuzz-gen:
     desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target
     dir: tools/fuzz-gen

@@ -1,3 +1,5 @@
+//go:build leyline
+
 package ingest
 
 import (
