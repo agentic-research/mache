@@ -449,6 +449,77 @@ func TestParseSelector_Nested(t *testing.T) {
 	assert.Equal(t, "name", p.captures[0].name)
 }
 
+// TestParseSelector_RepeatedOuterKind verifies ancestry when the outerKind
+// (e.g., "call") reappears as a nested node. The Elixir def selector has this:
+//
+//	(call target: (identifier) @_fn (arguments (call target: (identifier) @name)) ...)
+//
+// The @name capture's ancestry must be ["arguments", "call"] — not ["arguments"].
+// Regression: the filter was removing ALL occurrences of outerKind from the
+// ancestor chain instead of just the first (the scope).
+func TestParseSelector_RepeatedOuterKind(t *testing.T) {
+	selector := `(call target: (identifier) @_fn (arguments (call target: (identifier) @name)) (#eq? @_fn "def")) @scope`
+	p, err := parseSelector(selector)
+	require.NoError(t, err)
+	assert.Equal(t, "call", p.outerKind)
+
+	// Find the @name capture
+	var nameCap *selectorCapture
+	for i := range p.captures {
+		if p.captures[i].name == "name" {
+			nameCap = &p.captures[i]
+			break
+		}
+	}
+	require.NotNil(t, nameCap, "@name capture must exist")
+	assert.Equal(t, "identifier", nameCap.kind)
+	assert.Equal(t, []string{"arguments", "call"}, nameCap.ancestry,
+		"ancestry must include inner 'call' — not strip it because outerKind is also 'call'")
+}
+
+// TestParseSelector_DeepAncestry verifies that the Go pointer-receiver and
+// value-receiver selectors produce distinct ancestry chains. This is the
+// mechanism that lets matchAncestry distinguish (*Greeter).Greet from
+// (Greeter).String in the _ast ID path.
+func TestParseSelector_DeepAncestry(t *testing.T) {
+	// Pointer receiver: 3-level ancestry
+	ptrSel := `(method_declaration receiver: (parameter_list (parameter_declaration type: (pointer_type (type_identifier) @receiver))) name: (field_identifier) @name) @scope`
+	ptr, err := parseSelector(ptrSel)
+	require.NoError(t, err)
+	assert.Equal(t, "method_declaration", ptr.outerKind)
+
+	var ptrReceiver, ptrName *selectorCapture
+	for i := range ptr.captures {
+		switch ptr.captures[i].name {
+		case "receiver":
+			ptrReceiver = &ptr.captures[i]
+		case "name":
+			ptrName = &ptr.captures[i]
+		}
+	}
+	require.NotNil(t, ptrReceiver)
+	require.NotNil(t, ptrName)
+	assert.Equal(t, "type_identifier", ptrReceiver.kind)
+	assert.Equal(t, []string{"parameter_list", "parameter_declaration", "pointer_type"}, ptrReceiver.ancestry)
+	assert.Equal(t, "field_identifier", ptrName.kind)
+	assert.Empty(t, ptrName.ancestry, "name is a direct child of method_declaration")
+
+	// Value receiver: 2-level ancestry (no pointer_type)
+	valSel := `(method_declaration receiver: (parameter_list (parameter_declaration type: (type_identifier) @receiver)) name: (field_identifier) @name) @scope`
+	val, err := parseSelector(valSel)
+	require.NoError(t, err)
+
+	var valReceiver *selectorCapture
+	for i := range val.captures {
+		if val.captures[i].name == "receiver" {
+			valReceiver = &val.captures[i]
+		}
+	}
+	require.NotNil(t, valReceiver)
+	assert.Equal(t, []string{"parameter_list", "parameter_declaration"}, valReceiver.ancestry,
+		"value receiver has shorter ancestry than pointer receiver")
+}
+
 // ---------------------------------------------------------------------------
 // Edge case tests — ASTWalker fidelity vs SitterWalker.
 // ---------------------------------------------------------------------------

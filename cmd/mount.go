@@ -61,7 +61,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress standard output")
 	rootCmd.Flags().BoolVar(&agentMode, "agent", false, "Agent mode: auto-mount to temp dir with instructions")
 	rootCmd.Flags().StringVar(&outPath, "out", "", "Write to path instead of mounting; not compatible with --agent")
-	rootCmd.Flags().StringVar(&outFormat, "format", "sqlite", "Output format for --out: sqlite, zip, boltdb (requires -tags boltdb)")
+	rootCmd.Flags().StringVar(&outFormat, "format", "sqlite", "Output format for --out: sqlite, zip, json")
 	rootCmd.Flags().StringVar(&nfsOpts, "nfs-opts", "", "Extra NFS mount options (comma-separated, appended to defaults)")
 	rootCmd.Flags().BoolVar(&snapshot, "snapshot", false, "Copy data source to temp before mounting (true sandbox; copy is not atomic; default is zero-copy)")
 	rootCmd.Flags().StringVar(&maxFileSize, "max-file-size", "100MB", "Skip files larger than this during ingestion (e.g. 100MB, 1GB, 0 to disable)")
@@ -574,46 +574,105 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 
 	hotSwap := graph.NewHotSwapGraph(initialGraph)
 
-	// Start Watcher
+	// Start Watcher — event-driven with polling fallback.
+	// Runs for the lifetime of the NFS mount (mountNFS blocks below).
 	go func() {
 		lastGen := gen
-		prevDBPath := dbPath // track for cleanup
-		for {
-			time.Sleep(100 * time.Millisecond)
-			currentGen := ctrl.GetGeneration()
-			if currentGen > lastGen {
-				newPath := ctrl.GetArenaPath()
-				log.Printf("Hot Swap Detected: Gen %d -> %d (%s)", lastGen, currentGen, newPath)
+		prevDBPath := dbPath
 
-				// Extract new DB from arena
-				newDBPath, err := graph.ExtractActiveDB(newPath)
-				if err != nil {
-					log.Printf("Error extracting new db: %v", err)
-					continue
-				}
-
-				// Open new graph
-				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
-				if err != nil {
-					log.Printf("Error opening new graph %s: %v", newDBPath, err)
-					_ = os.Remove(newDBPath)
-					continue
-				}
-
-				// Atomic Swap
-				hotSwap.Swap(newGraph)
-				lastGen = currentGen
-
-				// Clean up previous temp DB
-				if prevDBPath != "" {
-					_ = os.Remove(prevDBPath)
-				}
-				prevDBPath = newDBPath
+		// Try to subscribe to daemon events for instant hot-swap.
+		sockPath := strings.TrimSuffix(path, ".ctrl") + ".sock"
+		eventCh, subClient := trySubscribe(sockPath)
+		defer func() {
+			if subClient != nil {
+				_ = subClient.Close()
 			}
+		}()
+
+		for {
+			if eventCh != nil {
+				// Event-driven: wait for daemon push.
+				ev, ok := <-eventCh
+				if !ok {
+					// Connection lost — fall back to polling.
+					log.Println("event subscription lost, falling back to polling")
+					if subClient != nil {
+						_ = subClient.Close()
+						subClient = nil
+					}
+					eventCh = nil
+					continue
+				}
+				_ = ev // event received — check generation below
+			} else {
+				// Polling fallback.
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			currentGen := ctrl.GetGeneration()
+			if currentGen <= lastGen {
+				continue
+			}
+
+			newPath := ctrl.GetArenaPath()
+			log.Printf("Hot Swap Detected: Gen %d -> %d (%s)", lastGen, currentGen, newPath)
+
+			newDBPath, err := graph.ExtractActiveDB(newPath)
+			if err != nil {
+				log.Printf("Error extracting new db: %v", err)
+				continue
+			}
+
+			newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
+			if err != nil {
+				log.Printf("Error opening new graph %s: %v", newDBPath, err)
+				_ = os.Remove(newDBPath)
+				continue
+			}
+
+			hotSwap.Swap(newGraph)
+			lastGen = currentGen
+
+			// Defer removal of the old DB file. Swap() closes the SQLite
+			// connection synchronously, but on macOS the NFS page cache
+			// may still hold stale file mappings (WAL/SHM). A brief delay
+			// lets the kernel release them, avoiding SQLITE_IOERR_SHORT_READ
+			// on any in-flight reads that raced with the swap.
+			if prevDBPath != "" {
+				old := prevDBPath
+				go func() {
+					time.Sleep(2 * time.Second)
+					_ = os.Remove(old)
+					_ = os.Remove(old + "-wal")
+					_ = os.Remove(old + "-shm")
+				}()
+			}
+			prevDBPath = newDBPath
 		}
 	}()
 
 	return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
+}
+
+// trySubscribe attempts to connect to the daemon's UDS socket and subscribe
+// to snapshot events. Returns a channel of events and the client (for cleanup),
+// or nil if subscription fails (caller should fall back to polling).
+func trySubscribe(sockPath string) (<-chan map[string]any, *leyline.SocketClient) {
+	sc, err := leyline.DialSocket(sockPath)
+	if err != nil {
+		log.Printf("event subscription: dial failed (%v), using polling", err)
+		return nil, nil
+	}
+
+	ch, err := sc.Subscribe([]string{"daemon.snapshot", "daemon.reparse.**"})
+	if err != nil {
+		log.Printf("event subscription: subscribe failed (%v), using polling", err)
+		_ = sc.Close()
+		return nil, nil
+	}
+
+	log.Println("event subscription active — instant hot-swap enabled")
+	return ch, sc
 }
 
 // mountControlWritable opens the extracted DB in read-write mode and

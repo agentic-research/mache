@@ -55,6 +55,17 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		return nil, fmt.Errorf("ASTWalker.Query: expected ASTRoot, got %T", root)
 	}
 
+	// "$" is the wildcard selector — returns a single match representing
+	// "everything at this level." Used by schema nodes like functions/,
+	// types/, imports/ to create grouping containers. The Engine iterates
+	// children of this match using nested schema nodes with real selectors.
+	if selector == "$" {
+		return []Match{&astMatch{
+			values: map[string]any{},
+			ctx:    ar,
+		}}, nil
+	}
+
 	pattern, err := parseSelector(selector)
 	if err != nil {
 		return nil, fmt.Errorf("parse selector: %w", err)
@@ -72,18 +83,32 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		source, _ = w.readSource(ar.DB, ar.SourceID)
 	}
 
+	// Identify required captures: any capture whose name doesn't start with "_"
+	// is required. If it fails to resolve, the entire match is skipped.
+	requiredCaptures := map[string]bool{}
+	for _, cap := range pattern.captures {
+		if cap.name != "scope" && !strings.HasPrefix(cap.name, "_") {
+			requiredCaptures[cap.name] = true
+		}
+	}
+
 	var matches []Match
 	for _, scopeNode := range scopeNodes {
 		values := make(map[string]any)
 		captureRanges := make(map[string][2]int)
+		missingRequired := false
 
 		// Resolve captures from children (searches descendants, not just direct children)
 		for _, cap := range pattern.captures {
 			if cap.name == "scope" {
-				continue // scope is the outer node itself
+				continue
 			}
-			child, err := w.findChildByKindAST(ar.DB, scopeNode.id, cap.kind, ar.SourceID)
+			child, err := w.findChildByKindAST(ar.DB, scopeNode.id, cap.kind, ar.SourceID, cap.ancestry)
 			if err != nil || child == nil {
+				if requiredCaptures[cap.name] {
+					missingRequired = true
+					break
+				}
 				continue
 			}
 			// Record byte range for CaptureOrigin
@@ -97,6 +122,11 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 				// Fall back to byte-range from source
 				values[cap.name] = string(source[child.startByte:child.endByte])
 			}
+		}
+
+		// Skip match if any required capture couldn't be resolved
+		if missingRequired {
+			continue
 		}
 
 		// Apply #eq? predicate filters
@@ -248,8 +278,9 @@ type selectorPattern struct {
 }
 
 type selectorCapture struct {
-	kind string // child node kind (e.g., "identifier")
-	name string // capture name (e.g., "name")
+	kind     string   // leaf node kind to match (e.g., "type_identifier")
+	name     string   // capture name (e.g., "receiver")
+	ancestry []string // intermediate node kinds from outer to leaf (excluding scope and leaf itself), e.g. ["parameter_list", "parameter_declaration", "pointer_type"]
 }
 
 // selectorPredicate represents a #eq? filter: capture text must equal literal.
@@ -258,132 +289,52 @@ type selectorPredicate struct {
 	literal string // expected text value (e.g., "resource")
 }
 
-// parseSelector parses a tree-sitter S-expression into a simple pattern.
-// Handles the common forms used in mache schemas:
+// parseSelector parses a tree-sitter S-expression into a selectorPattern.
+// Builds ancestry chains for each capture so that nested type constraints
+// (e.g., pointer_type > type_identifier vs bare type_identifier) are matched
+// correctly against the _ast table's ID-path hierarchy.
 //
-//	(function_declaration name: (identifier) @name) @scope
-//	(type_declaration (type_spec name: (type_identifier) @name) @scope)
-//
-// Supports simple #eq? predicates by extracting them into pattern.predicates.
-// Returns an error for patterns with #match?, #not-eq?, #any-eq?, #is?, #is-not?
-// or other complex syntax that requires the full tree-sitter query engine.
+// Supports #eq? predicates. Rejects #match? and other CGO-only predicates.
 func parseSelector(selector string) (*selectorPattern, error) {
 	s := strings.TrimSpace(selector)
 	if s == "" {
 		return nil, fmt.Errorf("empty selector")
 	}
-	// Reject predicates we can't handle. #eq? is supported (extracted below).
-	// #match? and all others require the full tree-sitter query engine.
 	if strings.Contains(s, "#match?") {
 		return nil, fmt.Errorf("#match? predicates require SitterWalker (CGO)")
 	}
-	for _, unsupported := range []string{"#not-eq?", "#any-eq?", "#is?", "#is-not?"} {
-		if strings.Contains(s, unsupported) {
-			return nil, fmt.Errorf("%s predicates require SitterWalker (CGO)", unsupported)
+	for _, un := range []string{"#not-eq?", "#any-eq?", "#is?", "#is-not?"} {
+		if strings.Contains(s, un) {
+			return nil, fmt.Errorf("%s predicates require SitterWalker (CGO)", un)
 		}
+	}
+
+	// Tokenize the S-expression
+	tokens := tokenizeSExpr(s)
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("empty selector after tokenize")
 	}
 
 	pattern := &selectorPattern{}
+	pos := 0
 
-	// Scan for all @capture tokens and the (kind) immediately before each.
-	// Also find the outermost node kind (first identifier after the first open paren).
-	//
-	// Strategy: find every @name token, then look backward for the preceding (kind).
-	// The outer kind is the first word after the first '('.
+	// Parse the outermost (kind ...) @scope
+	_ = parseSExprNode(tokens, pos, nil, pattern)
 
-	// Find outer kind: first word after first '('
-	if idx := strings.IndexByte(s, '('); idx >= 0 {
-		rest := strings.TrimSpace(s[idx+1:])
-		if spIdx := strings.IndexAny(rest, " ()"); spIdx > 0 {
-			pattern.outerKind = rest[:spIdx]
-		}
-	}
-
-	// Find all @captures with their preceding kinds.
-	// Walk the string looking for @name tokens (not @scope).
-	for i := 0; i < len(s); i++ {
-		if s[i] != '@' {
-			continue
-		}
-		// Extract capture name
-		nameStart := i + 1
-		nameEnd := nameStart
-		for nameEnd < len(s) && s[nameEnd] != ' ' && s[nameEnd] != ')' {
-			nameEnd++
-		}
-		captureName := s[nameStart:nameEnd]
-		if captureName == "scope" || captureName == "" {
-			i = nameEnd
-			continue
-		}
-
-		// Look backward for the preceding (kind) — the last ')' before this '@'
-		// then find its matching '(' to extract the kind name.
-		j := i - 1
-		for j >= 0 && s[j] == ' ' {
-			j--
-		}
-		if j >= 0 && s[j] == ')' {
-			// Find matching open paren
-			depth := 0
-			k := j
-			for k >= 0 {
-				if s[k] == ')' {
-					depth++
-				} else if s[k] == '(' {
-					depth--
-					if depth == 0 {
-						break
-					}
-				}
-				k--
-			}
-			if k >= 0 {
-				inner := s[k+1 : j]
-				// The kind is the last bare identifier in the inner text
-				// e.g., from "type_spec name: (type_identifier)" → "type_identifier"
-				// e.g., from "identifier" → "identifier"
-				kind := extractLastKind(inner)
-				if kind != "" {
-					pattern.captures = append(pattern.captures, selectorCapture{
-						kind: kind,
-						name: captureName,
-					})
-				}
-			}
-		}
-		i = nameEnd
-	}
-
-	// Extract #eq? predicates: (#eq? @capture "literal")
-	// Scan-based approach: find each occurrence without mutating the string.
-	{
-		const marker = "(#eq?"
-		offset := 0
-		for {
-			idx := strings.Index(s[offset:], marker)
-			if idx < 0 {
-				break
-			}
-			absIdx := offset + idx
-			rest := s[absIdx+len(marker):]
-			closeIdx := strings.IndexByte(rest, ')')
-			if closeIdx < 0 {
-				break
-			}
-			body := strings.TrimSpace(rest[:closeIdx])
-			parts := strings.Fields(body)
-			if len(parts) >= 2 && strings.HasPrefix(parts[0], "@") {
-				capName := parts[0][1:]
+	// Extract #eq? predicates
+	for i := 0; i < len(tokens)-4; i++ {
+		if tokens[i] == "(" && tokens[i+1] == "#eq?" {
+			// (#eq? @capture "literal")
+			if i+4 < len(tokens) && strings.HasPrefix(tokens[i+2], "@") {
+				capName := tokens[i+2][1:]
+				literal := strings.Trim(tokens[i+3], "\"")
 				if capName != "" {
-					literal := strings.Trim(parts[1], "\"\\")
 					pattern.predicates = append(pattern.predicates, selectorPredicate{
 						capture: capName,
 						literal: literal,
 					})
 				}
 			}
-			offset = absIdx + len(marker) + closeIdx + 1
 		}
 	}
 
@@ -394,29 +345,187 @@ func parseSelector(selector string) (*selectorPattern, error) {
 	return pattern, nil
 }
 
-// extractLastKind finds the last bare node kind in an S-expression fragment.
-// "type_spec name: (type_identifier)" → "type_identifier"
-// "identifier" → "identifier"
-func extractLastKind(s string) string {
-	s = strings.TrimSpace(s)
-	// If there's a nested group, extract the kind from the last one
-	lastOpen := strings.LastIndexByte(s, '(')
-	if lastOpen >= 0 {
-		rest := s[lastOpen+1:]
-		if spIdx := strings.IndexAny(rest, " )"); spIdx > 0 {
-			return rest[:spIdx]
+// tokenizeSExpr splits an S-expression into tokens: "(", ")", identifiers, @captures, "field:", "#eq?", strings.
+func tokenizeSExpr(s string) []string {
+	var tokens []string
+	i := 0
+	for i < len(s) {
+		ch := s[i]
+		switch ch {
+		case '(', ')':
+			tokens = append(tokens, string(ch))
+			i++
+		case ' ', '\t', '\n':
+			i++
+		case '"':
+			// Quoted string
+			j := i + 1
+			for j < len(s) && s[j] != '"' {
+				if s[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j < len(s) {
+				j++ // consume closing quote
+			}
+			tokens = append(tokens, s[i:j])
+			i = j
+		default:
+			// Identifier, @capture, field:, #predicate
+			j := i
+			for j < len(s) && s[j] != ' ' && s[j] != '(' && s[j] != ')' && s[j] != '\t' && s[j] != '\n' {
+				j++
+			}
+			tokens = append(tokens, s[i:j])
+			i = j
 		}
-		return strings.TrimRight(rest, ")")
 	}
-	// No parens — the whole thing is the kind (possibly with field: prefix)
-	parts := strings.Fields(s)
-	for i := len(parts) - 1; i >= 0; i-- {
-		p := parts[i]
-		if !strings.HasSuffix(p, ":") && !strings.HasPrefix(p, "@") {
-			return strings.Trim(p, "()")
+	return tokens
+}
+
+// parseSExprNode parses one (kind children...) node from tokens starting at pos.
+// ancestorKinds accumulates the node-kind path from the root of the parse to
+// this node's parent. The first entry is always the outerKind (scope).
+// Captures record ancestry via ancestryFromKinds (skip scope, keep the rest).
+// Returns the position after the closing paren.
+func parseSExprNode(tokens []string, pos int, ancestorKinds []string, pattern *selectorPattern) int {
+	if pos >= len(tokens) || tokens[pos] != "(" {
+		return pos
+	}
+	pos++ // consume "("
+
+	// Skip predicates like (#eq? ...)
+	if pos < len(tokens) && strings.HasPrefix(tokens[pos], "#") {
+		depth := 1
+		for pos < len(tokens) && depth > 0 {
+			switch tokens[pos] {
+			case "(":
+				depth++
+			case ")":
+				depth--
+			}
+			pos++
+		}
+		return pos
+	}
+
+	// First token after "(" is the node kind
+	if pos >= len(tokens) {
+		return pos
+	}
+	nodeKind := tokens[pos]
+	pos++
+
+	// Set outer kind if this is the first node
+	if pattern.outerKind == "" {
+		pattern.outerKind = nodeKind
+	}
+
+	// Process children: field: labels, nested (kind ...), @captures
+	for pos < len(tokens) {
+		tok := tokens[pos]
+
+		if tok == ")" {
+			pos++ // consume closing paren
+			break
+		}
+
+		if strings.HasSuffix(tok, ":") {
+			// field: label — skip it, next token is the child
+			pos++
+			continue
+		}
+
+		if tok == "(" {
+			if pos+1 < len(tokens) && strings.HasPrefix(tokens[pos+1], "#") {
+				// Predicate — skip
+				depth := 1
+				pos++
+				for pos < len(tokens) && depth > 0 {
+					switch tokens[pos] {
+					case "(":
+						depth++
+					case ")":
+						depth--
+					}
+					pos++
+				}
+				continue
+			}
+			// Remember the nested node's kind before recursing
+			nestedKind := ""
+			if pos+1 < len(tokens) && tokens[pos+1] != "(" && tokens[pos+1] != ")" && !strings.HasPrefix(tokens[pos+1], "#") {
+				nestedKind = tokens[pos+1]
+			}
+			// Nested node — recurse with this node's kind added to ancestry
+			pos = parseSExprNode(tokens, pos, append(ancestorKinds, nodeKind), pattern)
+			// Check for @capture after the nested node's closing paren
+			// e.g., (identifier) @_type — the capture belongs to "identifier", not "block"
+			if pos < len(tokens) && strings.HasPrefix(tokens[pos], "@") && nestedKind != "" {
+				capName := tokens[pos][1:]
+				pos++
+				if capName != "" && capName != "scope" {
+					pattern.captures = append(pattern.captures, selectorCapture{
+						kind:     nestedKind,
+						name:     capName,
+						ancestry: ancestryFromKinds(ancestorKinds),
+					})
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(tok, "@") {
+			capName := tok[1:]
+			pos++
+			if capName != "scope" && capName != "" && capName[0] != '_' {
+				pattern.captures = append(pattern.captures, selectorCapture{
+					kind:     nodeKind,
+					name:     capName,
+					ancestry: ancestryFromKinds(ancestorKinds),
+				})
+			} else if capName != "" && capName[0] == '_' {
+				// Captures starting with _ are for #eq? predicates — still record them
+				pattern.captures = append(pattern.captures, selectorCapture{
+					kind: nodeKind,
+					name: capName,
+				})
+			}
+			continue
+		}
+
+		// Some other token — skip
+		pos++
+	}
+
+	// Check for @capture after the closing paren (e.g., ") @scope", ") @_type")
+	if pos < len(tokens) && strings.HasPrefix(tokens[pos], "@") {
+		capName := tokens[pos][1:]
+		pos++
+		if capName != "scope" && capName != "" {
+			pattern.captures = append(pattern.captures, selectorCapture{
+				kind:     nodeKind,
+				name:     capName,
+				ancestry: ancestryFromKinds(ancestorKinds),
+			})
 		}
 	}
-	return ""
+
+	return pos
+}
+
+// ancestryFromKinds returns the intermediate node kinds between the scope and
+// the leaf. ancestorKinds[0] is always the outerKind (scope) — skip it.
+//
+//	ancestorKinds=["call","arguments","call"] → ["arguments","call"]
+func ancestryFromKinds(ancestorKinds []string) []string {
+	if len(ancestorKinds) <= 1 {
+		return nil
+	}
+	out := make([]string, len(ancestorKinds)-1)
+	copy(out, ancestorKinds[1:])
+	return out
 }
 
 // findNodesByKind finds all nodes of a specific kind under a parent prefix.
@@ -458,31 +567,139 @@ func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind, sourceID str
 	return nodes, rows.Err()
 }
 
-// findChildByKindAST finds the first descendant matching a node_kind via _ast table.
-// Ordered by start_byte ASC for deterministic first-occurrence behavior (matches
-// tree-sitter's document-order traversal). Scoped to sourceID when non-empty.
-func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID string) (*astNode, error) {
-	query := `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
+// findChildByKindAST finds the first descendant matching a node_kind via _ast table,
+// optionally verifying that the node's ID path contains the required ancestor kinds.
+// Ordered by start_byte ASC for deterministic first-occurrence behavior.
+//
+// When ancestry is non-empty, the query constrains depth in SQL using a
+// LIKE pattern with exactly len(ancestry)+1 path segments (ancestors + leaf),
+// plus a NOT LIKE excluding deeper descendants. This avoids scanning all
+// descendants in Go — only nodes at the exact expected depth are returned.
+func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID string, ancestry []string) (*astNode, error) {
+	const baseCols = `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
 	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
 	 FROM nodes n
 	 JOIN _ast a ON a.node_id = n.id
-	 WHERE n.id LIKE ? AND a.node_kind = ?`
-	args := []any{parentID + "/%", kind}
+	 WHERE `
+
+	var query string
+	var args []any
+
+	if len(ancestry) == 0 {
+		// No ancestry — match any descendant at any depth.
+		query = baseCols + "n.id LIKE ? AND a.node_kind = ?"
+		args = []any{parentID + "/%", kind}
+	} else {
+		// Ancestry constraint — restrict to exact depth.
+		// For ancestry=["parameter_list","parameter_declaration"], build:
+		//   LIKE 'parentID/%/%/%'         (3 segments: 2 ancestors + leaf)
+		//   NOT LIKE 'parentID/%/%/%/%'   (exclude deeper nodes)
+		depthPattern := parentID
+		for range len(ancestry) + 1 {
+			depthPattern += "/%"
+		}
+		query = baseCols + "n.id LIKE ? AND n.id NOT LIKE ? AND a.node_kind = ?"
+		args = []any{depthPattern, depthPattern + "/%", kind}
+	}
+
 	if sourceID != "" {
 		query += " AND a.source_id = ?"
 		args = append(args, sourceID)
 	}
-	query += " ORDER BY a.start_byte ASC LIMIT 1"
+	query += " ORDER BY a.start_byte ASC"
 
-	var n astNode
-	err := db.QueryRow(query, args...).Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte)
-	if err == sql.ErrNoRows {
-		return nil, nil
+	if len(ancestry) == 0 {
+		// No ancestry — first match wins.
+		query += " LIMIT 1"
+		var n astNode
+		err := db.QueryRow(query, args...).Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &n, nil
 	}
+
+	// With ancestry: depth is constrained in SQL, but we still verify
+	// the exact kind sequence in Go (LIKE % wildcards don't check kinds).
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
-	return &n, nil
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var n astNode
+		if err := rows.Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte); err != nil {
+			continue
+		}
+		suffix := strings.TrimPrefix(n.id, parentID+"/")
+		if matchAncestry(suffix, ancestry) {
+			return &n, nil
+		}
+	}
+	return nil, nil
+}
+
+// matchAncestry checks that the path from the scope node to the leaf node
+// matches the expected ancestor chain EXACTLY. The ancestry slice lists the
+// intermediate node kinds from outermost to innermost (excluding the scope
+// and the leaf itself).
+//
+// For the pointer receiver selector:
+//
+//	ancestry=["parameter_list", "parameter_declaration", "pointer_type"]
+//	matches: .../parameter_list_0/parameter_declaration/pointer_type/type_identifier ✓
+//	rejects: .../parameter_list_0/parameter_declaration/type_identifier               ✗
+//
+// For the value receiver selector:
+//
+//	ancestry=["parameter_list", "parameter_declaration"]
+//	matches: .../parameter_list_0/parameter_declaration/type_identifier               ✓
+//	rejects: .../parameter_list_0/parameter_declaration/pointer_type/type_identifier   ✗
+//
+// "Exact" means every segment in the path between scope and leaf must be
+// accounted for by the ancestry chain. Extra intermediate nodes cause rejection.
+func matchAncestry(pathSuffix string, ancestry []string) bool {
+	segments := strings.Split(pathSuffix, "/")
+	// The last segment is the leaf node itself — exclude it
+	if len(segments) > 0 {
+		segments = segments[:len(segments)-1]
+	}
+
+	// Strip numeric suffixes from all segments
+	stripped := make([]string, len(segments))
+	for i, seg := range segments {
+		stripped[i] = stripNumericSuffix(seg)
+	}
+
+	// The stripped segments must match the ancestry exactly
+	if len(stripped) != len(ancestry) {
+		return false
+	}
+	for i := range ancestry {
+		if stripped[i] != ancestry[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// stripNumericSuffix removes a trailing _N (e.g., "parameter_list_0" → "parameter_list").
+func stripNumericSuffix(s string) string {
+	idx := strings.LastIndexByte(s, '_')
+	if idx <= 0 {
+		return s
+	}
+	tail := s[idx+1:]
+	for _, c := range tail {
+		if c < '0' || c > '9' {
+			return s
+		}
+	}
+	return s[:idx]
 }
 
 // readSource reads the source content for a given source ID.
