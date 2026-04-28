@@ -215,12 +215,29 @@ func defaultLandingPagePath() string {
 	return "/app/static/mache-landing.html"
 }
 
+// landingPageCacheControl is the Cache-Control header sent with the landing
+// page response. The HTML file is static at deploy time; a 5-minute cache
+// is plenty for a status page and reduces disk reads on every "/" hit.
+const landingPageCacheControl = "public, max-age=300"
+
 // serveLandingPage serves the rig-managed HTML landing page if available,
-// falling back to plain text with the connect URL.
+// falling back to plain text with the connect URL. Bead mache-ef3de2:
+// rejects non-GET/HEAD methods with 405 and sets Cache-Control on the
+// response so a CDN or browser can cache the static page.
 func serveLandingPage(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		// continue
+	default:
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	data, err := os.ReadFile(landingPagePath)
 	if err == nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", landingPageCacheControl)
 		_, _ = w.Write(data)
 		return
 	}
@@ -232,6 +249,7 @@ func serveLandingPage(w http.ResponseWriter, r *http.Request) {
 	// Fallback: plain text with connect instructions
 	scheme := requestScheme(r)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", landingPageCacheControl)
 	_, _ = fmt.Fprintln(w, "mache MCP server")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintf(w, "Connect: claude mcp add --transport http mache \"%s://%s/mcp?repo=<your-repo-url>\"\n", scheme, r.Host)

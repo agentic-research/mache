@@ -2262,6 +2262,72 @@ func TestServeLandingPage_ReadErrorReturns500(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+// TestServeLandingPage_RejectsNonGet — bead mache-ef3de2.
+func TestServeLandingPage_RejectsNonGet(t *testing.T) {
+	for _, method := range []string{"POST", "PUT", "DELETE", "PATCH", "OPTIONS"} {
+		t.Run(method, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(method, "/", nil)
+			serveLandingPage(rec, req)
+
+			assert.Equal(t, http.StatusMethodNotAllowed, rec.Code,
+				"%s should return 405", method)
+			assert.Equal(t, "GET, HEAD", rec.Header().Get("Allow"),
+				"405 response must include Allow header")
+		})
+	}
+}
+
+// TestServeLandingPage_HEADAllowed verifies that HEAD is treated like GET.
+func TestServeLandingPage_HEADAllowed(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "landing.html")
+	require.NoError(t, os.WriteFile(tmp, []byte("<h1>mache</h1>"), 0o644))
+
+	orig := landingPagePath
+	landingPagePath = tmp
+	defer func() { landingPagePath = orig }()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("HEAD", "/", nil)
+	serveLandingPage(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/html")
+}
+
+// TestServeLandingPage_SetsCacheControl — bead mache-ef3de2.
+func TestServeLandingPage_SetsCacheControl(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "landing.html")
+	require.NoError(t, os.WriteFile(tmp, []byte("<h1>mache</h1>"), 0o644))
+
+	orig := landingPagePath
+	landingPagePath = tmp
+	defer func() { landingPagePath = orig }()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	serveLandingPage(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, landingPageCacheControl, rec.Header().Get("Cache-Control"))
+}
+
+// TestServeLandingPage_FallbackSetsCacheControl ensures the plain-text
+// fallback path also benefits from caching.
+func TestServeLandingPage_FallbackSetsCacheControl(t *testing.T) {
+	orig := landingPagePath
+	landingPagePath = "/nonexistent/landing.html"
+	defer func() { landingPagePath = orig }()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "mache.rosary.bot"
+	serveLandingPage(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, landingPageCacheControl, rec.Header().Get("Cache-Control"))
+}
+
 func TestRequestScheme_Defaults(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	assert.Equal(t, "http", requestScheme(req))
