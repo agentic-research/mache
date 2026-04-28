@@ -345,21 +345,26 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 	}
 
 	if filepath.Ext(dataSource) == ".db" {
-		// Materialize virtual nodes (callers, callees, content sources)
-		// into the .db before opening it as a graph.
-		if err := materializeVirtuals(dataSource, schema, false); err != nil {
-			return nil, noop, fmt.Errorf("materialize virtuals: %w", err)
+		return openDBGraph(dataSource, schema, noop)
+	}
+
+	// Auto-invoke leyline: when the source is a directory and `leyline` is
+	// available, run `leyline parse <dir> -o <tmp.db>` and open the result.
+	// This eliminates CGO tree-sitter at mount time. Falls back silently to
+	// the in-process Engine + SitterWalker path on any failure.
+	// Disable via MACHE_NO_LEYLINE=1.
+	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() &&
+		os.Getenv("MACHE_NO_LEYLINE") == "" {
+		if dbPath, dbCleanup, err := autoInvokeLeylineParse(dataSource); err == nil {
+			g, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
+			if gerr == nil {
+				return g, gCleanup, nil
+			}
+			log.Printf("auto-leyline: opened .db failed (%v); falling back to in-process ingest", gerr)
+			dbCleanup()
+		} else {
+			log.Printf("auto-leyline: skipping (%v); using in-process ingest", err)
 		}
-		sg, err := graph.OpenSQLiteGraph(dataSource, schema, machetmpl.Render)
-		if err != nil {
-			return nil, noop, fmt.Errorf("open sqlite graph: %w", err)
-		}
-		sg.SetCallExtractor(newCallExtractor())
-		if err := sg.EagerScan(); err != nil {
-			_ = sg.Close()
-			return nil, noop, fmt.Errorf("scan: %w", err)
-		}
-		return sg, func() { _ = sg.Close() }, nil
 	}
 
 	// MemoryStore path for JSON/source files
@@ -414,6 +419,78 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 		_ = store.Close()
 		resolver.Close()
 	}, nil
+}
+
+// openDBGraph opens a .db file as a SQLiteGraph after materializing virtual
+// nodes. The extra cleanup callback runs after the graph is closed (used to
+// delete an auto-generated temp .db).
+func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (graph.Graph, func(), error) {
+	if extraCleanup == nil {
+		extraCleanup = func() {}
+	}
+	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+		extraCleanup()
+		return nil, func() {}, fmt.Errorf("materialize virtuals: %w", err)
+	}
+	sg, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
+	if err != nil {
+		extraCleanup()
+		return nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)
+	}
+	sg.SetCallExtractor(newCallExtractor())
+	if err := sg.EagerScan(); err != nil {
+		_ = sg.Close()
+		extraCleanup()
+		return nil, func() {}, fmt.Errorf("scan: %w", err)
+	}
+	return sg, func() {
+		_ = sg.Close()
+		extraCleanup()
+	}, nil
+}
+
+// autoInvokeLeylineParse runs `leyline parse <sourceDir> -o <tmpdb>` and
+// returns the path to the produced .db plus a cleanup function that removes
+// it. Returns an error if leyline is not available on PATH or in the bundled
+// location, or if parsing fails. The caller should fall back to the
+// in-process ingest path on any error.
+func autoInvokeLeylineParse(sourceDir string) (string, func(), error) {
+	leylineBin, err := exec.LookPath("leyline")
+	if err != nil {
+		// Fallback: ~/.mache/bin/leyline (matches DiscoverOrStart's lookup)
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return "", nil, fmt.Errorf("leyline not on PATH: %w", err)
+		}
+		bundled := filepath.Join(home, ".mache", "bin", "leyline")
+		if _, sErr := os.Stat(bundled); sErr != nil {
+			return "", nil, fmt.Errorf("leyline not on PATH and not at %s", bundled)
+		}
+		leylineBin = bundled
+	}
+
+	tmpFile, err := os.CreateTemp("", "mache-leyline-*.db")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp .db: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+
+	cleanup := func() {
+		_ = os.Remove(tmpPath)
+		_ = os.Remove(tmpPath + "-wal")
+		_ = os.Remove(tmpPath + "-shm")
+	}
+
+	log.Printf("auto-leyline: parsing %s -> %s", sourceDir, tmpPath)
+	cmd := exec.Command(leylineBin, "parse", sourceDir, "-o", tmpPath)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("leyline parse: %w", err)
+	}
+	return tmpPath, cleanup, nil
 }
 
 // buildControlGraph connects to the ley-line daemon over UDS.

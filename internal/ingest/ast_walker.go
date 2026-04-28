@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -134,6 +135,30 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		for _, pred := range pattern.predicates {
 			val, ok := values[pred.capture].(string)
 			if !ok || val != pred.literal {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		// Apply #match? regex filters: capture text must match
+		for _, mp := range pattern.matchPreds {
+			val, ok := values[mp.capture].(string)
+			if !ok || !mp.regex.MatchString(val) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		// Apply #not-match? regex filters: capture text must NOT match
+		for _, mp := range pattern.notMatchPreds {
+			val, ok := values[mp.capture].(string)
+			if !ok || mp.regex.MatchString(val) {
 				skip = true
 				break
 			}
@@ -272,9 +297,11 @@ type astNode struct {
 }
 
 type selectorPattern struct {
-	outerKind  string // the node kind to match (e.g., "function_declaration")
-	captures   []selectorCapture
-	predicates []selectorPredicate // #eq? filters
+	outerKind     string // the node kind to match (e.g., "function_declaration")
+	captures      []selectorCapture
+	predicates    []selectorPredicate      // #eq? filters
+	matchPreds    []selectorMatchPredicate // #match? regex filters
+	notMatchPreds []selectorMatchPredicate // #not-match? negated regex filters
 }
 
 type selectorCapture struct {
@@ -289,19 +316,27 @@ type selectorPredicate struct {
 	literal string // expected text value (e.g., "resource")
 }
 
+// selectorMatchPredicate represents a #match? or #not-match? filter:
+// capture text must (or must not) match the regex.
+type selectorMatchPredicate struct {
+	capture string         // capture name to check
+	regex   *regexp.Regexp // compiled regex; tree-sitter regex syntax is RE2-compatible for the patterns we care about
+	pattern string         // original pattern source (for error messages)
+}
+
 // parseSelector parses a tree-sitter S-expression into a selectorPattern.
 // Builds ancestry chains for each capture so that nested type constraints
 // (e.g., pointer_type > type_identifier vs bare type_identifier) are matched
 // correctly against the _ast table's ID-path hierarchy.
 //
-// Supports #eq? predicates. Rejects #match? and other CGO-only predicates.
+// Supports #eq?, #match?, and #not-match? predicates. Captured text for
+// match predicates is resolved from the _source byte ranges already populated
+// by the capture loop. Other tree-sitter predicates (#not-eq?, #any-eq?,
+// #is?, #is-not?) still require SitterWalker.
 func parseSelector(selector string) (*selectorPattern, error) {
 	s := strings.TrimSpace(selector)
 	if s == "" {
 		return nil, fmt.Errorf("empty selector")
-	}
-	if strings.Contains(s, "#match?") {
-		return nil, fmt.Errorf("#match? predicates require SitterWalker (CGO)")
 	}
 	for _, un := range []string{"#not-eq?", "#any-eq?", "#is?", "#is-not?"} {
 		if strings.Contains(s, un) {
@@ -321,19 +356,39 @@ func parseSelector(selector string) (*selectorPattern, error) {
 	// Parse the outermost (kind ...) @scope
 	_ = parseSExprNode(tokens, pos, nil, pattern)
 
-	// Extract #eq? predicates
+	// Extract #eq? / #match? / #not-match? predicates
 	for i := 0; i < len(tokens)-4; i++ {
-		if tokens[i] == "(" && tokens[i+1] == "#eq?" {
-			// (#eq? @capture "literal")
-			if i+4 < len(tokens) && strings.HasPrefix(tokens[i+2], "@") {
-				capName := tokens[i+2][1:]
-				literal := strings.Trim(tokens[i+3], "\"")
-				if capName != "" {
-					pattern.predicates = append(pattern.predicates, selectorPredicate{
-						capture: capName,
-						literal: literal,
-					})
-				}
+		if tokens[i] != "(" {
+			continue
+		}
+		predName := tokens[i+1]
+		if predName != "#eq?" && predName != "#match?" && predName != "#not-match?" {
+			continue
+		}
+		if i+4 >= len(tokens) || !strings.HasPrefix(tokens[i+2], "@") {
+			continue
+		}
+		capName := tokens[i+2][1:]
+		if capName == "" {
+			continue
+		}
+		literal := strings.Trim(tokens[i+3], "\"")
+		switch predName {
+		case "#eq?":
+			pattern.predicates = append(pattern.predicates, selectorPredicate{
+				capture: capName,
+				literal: literal,
+			})
+		case "#match?", "#not-match?":
+			re, err := regexp.Compile(literal)
+			if err != nil {
+				return nil, fmt.Errorf("compile %s regex %q: %w", predName, literal, err)
+			}
+			mp := selectorMatchPredicate{capture: capName, regex: re, pattern: literal}
+			if predName == "#match?" {
+				pattern.matchPreds = append(pattern.matchPreds, mp)
+			} else {
+				pattern.notMatchPreds = append(pattern.notMatchPreds, mp)
 			}
 		}
 	}

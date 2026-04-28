@@ -383,18 +383,73 @@ func TestASTWalker_PredicateEqFilter(t *testing.T) {
 	assert.Equal(t, "\"aws_instance\"", v["name"])
 }
 
-func TestASTWalker_MatchPredicateRejectsNonMatch(t *testing.T) {
-	// #match? predicates still require CGO
+// TestASTWalker_MatchPredicate verifies that #match? regex predicates
+// filter captures using the capture's resolved text. Implements bead
+// mache-37646f — replaces the previous "rejects #match?" behavior.
+func TestASTWalker_MatchPredicate(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	w := NewASTWalker(db)
-	root := ASTRoot{DB: db, SourceID: "", ParentPrefix: ""}
+	// Same HCL-like fixture as TestASTWalker_PredicateEqFilter, two blocks:
+	// "resource" and "variable".
+	_, err = db.Exec(`
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT);
+		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
+		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
+		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
 
-	_, err = w.Query(root, `(identifier) @name (#match? @name "^test")`)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "#match?")
+		INSERT INTO _source VALUES ('main.tf', 'hcl', '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('', '', '', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block', '', 'block', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/identifier', 'block', 'identifier', 0, 0, 'resource');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/string_lit', 'block', 'string_lit', 0, 0, '"aws_instance"');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/body', 'block', 'body', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1', '', 'block_1', 1, 0, '');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/identifier', 'block_1', 'identifier', 0, 0, 'variable');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/string_lit', 'block_1', 'string_lit', 0, 0, '"region"');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/body', 'block_1', 'body', 1, 0, '');
+
+		INSERT INTO _ast VALUES ('block', 'main.tf', 'block', 0, 50, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block/identifier', 'main.tf', 'identifier', 0, 8, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block/string_lit', 'main.tf', 'string_lit', 9, 23, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block/body', 'main.tf', 'body', 24, 50, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1', 'main.tf', 'block', 52, 100, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1/identifier', 'main.tf', 'identifier', 52, 60, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1/string_lit', 'main.tf', 'string_lit', 61, 69, 0, 0, 0, 0);
+		INSERT INTO _ast VALUES ('block_1/body', 'main.tf', 'body', 70, 100, 0, 0, 0, 0);
+	`)
+	require.NoError(t, err)
+
+	w := NewASTWalker(db)
+	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
+
+	t.Run("match keeps only matching captures", func(t *testing.T) {
+		// regex matches "resource" but not "variable"
+		matches, err := w.Query(root, `(block (identifier) @_type (string_lit) @name (body) @scope (#match? @_type "^reso"))`)
+		require.NoError(t, err)
+		require.Len(t, matches, 1)
+		assert.Equal(t, "resource", matches[0].Values()["_type"])
+	})
+
+	t.Run("match excludes when no capture matches", func(t *testing.T) {
+		matches, err := w.Query(root, `(block (identifier) @_type (string_lit) @name (body) @scope (#match? @_type "^nope$"))`)
+		require.NoError(t, err)
+		assert.Empty(t, matches)
+	})
+
+	t.Run("not-match keeps captures that fail the regex", func(t *testing.T) {
+		matches, err := w.Query(root, `(block (identifier) @_type (string_lit) @name (body) @scope (#not-match? @_type "^reso"))`)
+		require.NoError(t, err)
+		require.Len(t, matches, 1)
+		assert.Equal(t, "variable", matches[0].Values()["_type"])
+	})
+
+	t.Run("invalid regex returns parse error", func(t *testing.T) {
+		_, err := w.Query(root, `(block (identifier) @_type (body) @scope (#match? @_type "[unterminated"))`)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "#match?")
+	})
 }
 
 func TestSelectWalker_ReturnsASTWalkerWhenASTTableExists(t *testing.T) {
@@ -553,6 +608,22 @@ func TestParseSelector_MultiplePredicates(t *testing.T) {
 	assert.Equal(t, "x", pred3Map["a"], "first of three predicates")
 	assert.Equal(t, "y", pred3Map["b"], "second of three predicates")
 	assert.Equal(t, "z", pred3Map["c"], "third of three predicates")
+}
+
+// TestParseSelector_MatchPredicates verifies that #match? and #not-match?
+// predicates are extracted from selectors with their regex compiled.
+func TestParseSelector_MatchPredicates(t *testing.T) {
+	selector := `(block (identifier) @name (body) @scope (#match? @name "^test_") (#not-match? @name "_skip$"))`
+	p, err := parseSelector(selector)
+	require.NoError(t, err)
+	require.Len(t, p.matchPreds, 1)
+	require.Len(t, p.notMatchPreds, 1)
+	assert.Equal(t, "name", p.matchPreds[0].capture)
+	assert.Equal(t, "^test_", p.matchPreds[0].pattern)
+	assert.True(t, p.matchPreds[0].regex.MatchString("test_foo"))
+	assert.False(t, p.matchPreds[0].regex.MatchString("foo"))
+	assert.Equal(t, "name", p.notMatchPreds[0].capture)
+	assert.Equal(t, "_skip$", p.notMatchPreds[0].pattern)
 }
 
 // TestASTWalker_NotEqPredicateSilentlyIgnored verifies that unsupported
