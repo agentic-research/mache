@@ -142,6 +142,75 @@ func TestASTWalker_ExtractCalls_UnknownLanguageReturnsNil(t *testing.T) {
 	assert.Nil(t, calls, "unregistered language returns nil, not error")
 }
 
+// TestASTWalker_ExtractContext verifies that import/const/var/type
+// declarations are concatenated into a context blob from _source byte
+// ranges. Bead mache-37926d.
+func TestASTWalker_ExtractContext(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ctx.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	const src = `package main
+
+import "fmt"
+
+const Pi = 3.14
+
+type Greeter struct{}
+`
+	importStart, importEnd := 14, 26
+	constStart, constEnd := 28, 43
+	typeStart, typeEnd := 45, 67
+
+	_, err = db.Exec(`
+		CREATE TABLE _ast (
+			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
+			node_kind TEXT NOT NULL,
+			start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
+			start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER
+		);
+		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL, path TEXT);
+	`)
+	require.NoError(t, err)
+
+	_, err = db.Exec("INSERT INTO _source (id, language, content) VALUES ('main.go', 'go', ?)", []byte(src))
+	require.NoError(t, err)
+
+	for _, r := range []struct {
+		id, kind   string
+		start, end int
+	}{
+		{"src/import", "import_declaration", importStart, importEnd},
+		{"src/const", "const_declaration", constStart, constEnd},
+		{"src/type", "type_declaration", typeStart, typeEnd},
+	} {
+		_, err := db.Exec("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', ?, ?, ?, 0, 0, 0, 0)",
+			r.id, r.kind, r.start, r.end)
+		require.NoError(t, err)
+	}
+
+	w := NewASTWalker(db)
+	got, err := w.ExtractContext("main.go", "go")
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+
+	gotStr := string(got)
+	assert.Contains(t, gotStr, "import \"fmt\"")
+	assert.Contains(t, gotStr, "const Pi = 3.14")
+	assert.Contains(t, gotStr, "type Greeter struct{}")
+}
+
+func TestASTWalker_ExtractContext_UnknownLanguageReturnsNil(t *testing.T) {
+	db := seedCallExtractionAST(t)
+	defer func() { _ = db.Close() }()
+
+	w := NewASTWalker(db)
+	got, err := w.ExtractContext("main.go", "no-such-lang")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
 func TestASTWalker_ExtractCalls_Dedupes(t *testing.T) {
 	db := seedCallExtractionAST(t)
 	defer func() { _ = db.Close() }()

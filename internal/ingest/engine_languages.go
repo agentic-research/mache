@@ -19,30 +19,31 @@ func init() {
 			field: (field_identifier) @call))
 	`)
 
-	// ASTWalker (pure-Go path) parses one S-expression per call.
-	// Bare calls + qualified calls in two separate patterns.
-	RegisterASTCallQuery("go", []string{
-		`(call_expression function: (identifier) @call) @scope`,
-		`(call_expression function: (selector_expression operand: (identifier) @pkg field: (field_identifier) @call)) @scope`,
+	// ASTWalker context kinds — top-level node kinds whose source bytes
+	// constitute the context blob. Mirrors the Go context query above.
+	RegisterASTContextKinds("go", []string{
+		"import_declaration", "const_declaration", "var_declaration", "type_declaration",
 	})
 
-	// Python: 'call' parent, identifier or attribute child.
-	RegisterASTCallQuery("python", []string{
-		`(call function: (identifier) @call) @scope`,
-		`(call function: (attribute attribute: (identifier) @call)) @scope`,
+	// ASTWalker (pure-Go path): batched JOIN-style fast path. One CallPattern
+	// per shape; ExtractCalls/ExtractQualifiedCalls translate each into a
+	// single SQL query that returns all matches in one pass.
+	RegisterASTCallPatterns("go", []CallPattern{
+		{OuterKind: "call_expression", LeafKind: "identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"selector_expression"}, LeafKind: "field_identifier", QualifierKind: "identifier"},
 	})
-
-	// Rust: function calls and method calls.
-	RegisterASTCallQuery("rust", []string{
-		`(call_expression function: (identifier) @call) @scope`,
-		`(call_expression function: (scoped_identifier name: (identifier) @call)) @scope`,
-		`(call_expression function: (field_expression field: (field_identifier) @call)) @scope`,
+	RegisterASTCallPatterns("python", []CallPattern{
+		{OuterKind: "call", LeafKind: "identifier"},
+		{OuterKind: "call", Ancestors: []string{"attribute"}, LeafKind: "identifier"},
 	})
-
-	// Elixir: local and qualified function calls.
-	RegisterASTCallQuery("elixir", []string{
-		`(call target: (identifier) @call) @scope`,
-		`(call target: (dot right: (identifier) @call)) @scope`,
+	RegisterASTCallPatterns("rust", []CallPattern{
+		{OuterKind: "call_expression", LeafKind: "identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"scoped_identifier"}, LeafKind: "identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"field_expression"}, LeafKind: "field_identifier"},
+	})
+	RegisterASTCallPatterns("elixir", []CallPattern{
+		{OuterKind: "call", LeafKind: "identifier"},
+		{OuterKind: "call", Ancestors: []string{"dot"}, LeafKind: "identifier"},
 	})
 
 	// Register HCL/Terraform queries — narrow to semantic references:
