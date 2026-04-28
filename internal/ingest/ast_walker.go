@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/agentic-research/mache/internal/graph"
 	_ "modernc.org/sqlite"
 )
 
@@ -239,6 +241,108 @@ func (w *ASTWalker) ExtractGoImports(sourceID string) (map[string]string, error)
 		imports[alias] = path
 	}
 	return imports, rows.Err()
+}
+
+// callQueryRegistry stores per-language call extraction selectors for the
+// pure-Go ASTWalker. These are the same tree-sitter S-expressions used by
+// SitterWalker, separated into individual patterns since parseSelector only
+// understands one (outerKind ...) per call.
+var callQueryRegistry sync.Map // langName → []string (one selector per pattern)
+
+// RegisterASTCallQuery registers per-language selector patterns for use by
+// ASTWalker.ExtractCalls. Each pattern must be a single S-expression rooted
+// at the language's call-node kind.
+func RegisterASTCallQuery(langName string, patterns []string) {
+	callQueryRegistry.Store(langName, patterns)
+}
+
+// ExtractCalls finds function-call tokens in the given source file by
+// running per-language selectors against the _ast table. Returns
+// deduplicated bare tokens (e.g. "Validate", "Println"). Mirrors
+// SitterWalker.ExtractCalls but uses SQL instead of CGO.
+//
+// If no patterns are registered for the language, returns (nil, nil) — the
+// caller treats that as "no calls" and falls through to other extraction
+// paths. langName must match the value used at RegisterASTCallQuery time.
+func (w *ASTWalker) ExtractCalls(sourcePath, langName string) ([]string, error) {
+	raw, ok := callQueryRegistry.Load(langName)
+	if !ok {
+		return nil, nil
+	}
+	patterns := raw.([]string)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+
+	sourceID := filepath.Base(sourcePath)
+	root := ASTRoot{DB: w.db, SourceID: sourceID, ParentPrefix: ""}
+
+	seen := make(map[string]bool)
+	var calls []string
+	for _, sel := range patterns {
+		matches, err := w.Query(root, sel)
+		if err != nil {
+			// Selector unsupported by ASTWalker — skip and try the next.
+			continue
+		}
+		for _, m := range matches {
+			if v, ok := m.Values()["call"].(string); ok && v != "" && !seen[v] {
+				seen[v] = true
+				calls = append(calls, v)
+			}
+		}
+	}
+	return calls, nil
+}
+
+// ExtractQualifiedCalls finds call tokens with optional package qualifiers,
+// mirroring SitterWalker.ExtractQualifiedCalls. Patterns that capture both
+// @call and @pkg produce QualifiedCall{Token, Qualifier}; patterns that only
+// capture @call produce QualifiedCall{Token}.
+//
+// If no qualified patterns are registered, falls back to ExtractCalls and
+// returns bare tokens with empty qualifiers.
+func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.QualifiedCall, error) {
+	raw, ok := callQueryRegistry.Load(langName)
+	if !ok {
+		bare, err := w.ExtractCalls(sourcePath, langName)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]graph.QualifiedCall, len(bare))
+		for i, t := range bare {
+			out[i] = graph.QualifiedCall{Token: t}
+		}
+		return out, nil
+	}
+	patterns := raw.([]string)
+
+	sourceID := filepath.Base(sourcePath)
+	root := ASTRoot{DB: w.db, SourceID: sourceID, ParentPrefix: ""}
+
+	seen := make(map[string]bool)
+	var calls []graph.QualifiedCall
+	for _, sel := range patterns {
+		matches, err := w.Query(root, sel)
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			vals := m.Values()
+			token, _ := vals["call"].(string)
+			if token == "" {
+				continue
+			}
+			pkg, _ := vals["pkg"].(string)
+			key := pkg + "." + token
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			calls = append(calls, graph.QualifiedCall{Token: token, Qualifier: pkg})
+		}
+	}
+	return calls, nil
 }
 
 // SelectWalker inspects a SQLite database and returns the best Walker.
@@ -586,9 +690,11 @@ func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID stri
 	var args []any
 
 	if len(ancestry) == 0 {
-		// No ancestry — match any descendant at any depth.
-		query = baseCols + "n.id LIKE ? AND a.node_kind = ?"
-		args = []any{parentID + "/%", kind}
+		// No ancestry — direct child only (depth 1 below parent).
+		// Tree-sitter S-expressions like `(parent (child) @cap)` mean
+		// child is a direct child; we mirror that by constraining depth.
+		query = baseCols + "n.id LIKE ? AND n.id NOT LIKE ? AND a.node_kind = ?"
+		args = []any{parentID + "/%", parentID + "/%/%", kind}
 	} else {
 		// Ancestry constraint — restrict to exact depth.
 		// For ancestry=["parameter_list","parameter_declaration"], build:
