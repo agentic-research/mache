@@ -703,6 +703,15 @@ func (b *bufferingTarget) AddDef(token, dirID string) error {
 // and passes the parent dir update through immediately (same as AddNode for dirs).
 // Children are appended in-memory here; the real store sees the complete parent.
 // Safe without locking because bufferingTarget is single-goroutine.
+//
+// Multi-call invariant (bead mache-ad3f75): when processNode is invoked
+// repeatedly for the same parent ID across multiple matches, each call
+// constructs a fresh `parent` node by re-fetching the existing Children
+// from the store before the file loop. The append below therefore extends
+// the most recently published Children list rather than the stale slice
+// held by the previous call. Re-publishing the parent via AddNode then
+// installs the merged list. If processNode were ever changed to reuse a
+// `parent` pointer across calls, this loop would silently lose children.
 func (b *bufferingTarget) AddFileChildren(parent *graph.Node, files []*graph.Node) {
 	b.bufferedNodes = append(b.bufferedNodes, files...)
 	for _, f := range files {

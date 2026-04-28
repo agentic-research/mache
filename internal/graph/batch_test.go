@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"io/fs"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -78,11 +79,24 @@ func TestMemoryStore_AddFileChildren_AppendsToExisting(t *testing.T) {
 	assert.Equal(t, []string{"pkg/util/existing", "pkg/util/source"}, got)
 }
 
+// TestMemoryStore_AddFileChildren_Atomicity exercises atomicity across many
+// concurrent writer/reader cycles. Each cycle: a fresh parent dir is created,
+// a reader goroutine starts, the writer adds 50 children. The reader asserts
+// it never observes a partial Children slice.
+//
+// Bead mache-ace669: the prior version started the reader once, called
+// AddFileChildren once, and relied on the goroutine being scheduled before
+// the write completed — easy false pass. This version uses a WaitGroup
+// barrier per cycle to maximize interleave, runs many cycles with Gosched
+// in the reader, and is sized to run on a multi-core scheduler.
 func TestMemoryStore_AddFileChildren_Atomicity(t *testing.T) {
-	store := NewMemoryStore()
-	dir := &Node{ID: "pkg/atomic", Mode: fs.ModeDir}
-	store.AddNode(dir)
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Skip("atomicity test needs at least 2 OS threads to interleave")
+	}
 
+	const cycles = 200
+
+	store := NewMemoryStore()
 	files := make([]*Node, 50)
 	for i := range files {
 		files[i] = &Node{
@@ -92,25 +106,122 @@ func TestMemoryStore_AddFileChildren_Atomicity(t *testing.T) {
 		}
 	}
 
-	ready := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		close(ready)
-		for k := 0; k < 5000; k++ {
-			children, err := store.ListChildren("pkg/atomic")
-			if err != nil {
-				continue
-			}
-			n := len(children)
-			assert.True(t, n == 0 || n == 50,
-				"observed %d children — partial update leaked", n)
-		}
-	}()
+	for cycle := 0; cycle < cycles; cycle++ {
+		dirID := fmt.Sprintf("pkg/atomic_%d", cycle)
+		dir := &Node{ID: dirID, Mode: fs.ModeDir}
+		store.AddNode(dir)
 
-	<-ready
-	store.AddFileChildren(dir, files)
-	<-done
+		// Per-cycle file IDs — each cycle has its own children
+		cycleFiles := make([]*Node, len(files))
+		for i, f := range files {
+			cycleFiles[i] = &Node{
+				ID:   fmt.Sprintf("%s/file_%03d", dirID, i),
+				Mode: f.Mode,
+				Data: f.Data,
+			}
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		start := make(chan struct{})
+
+		// Reader: spin on ListChildren until the writer has finished one
+		// AddFileChildren, asserting only valid intermediate states.
+		go func(parentID string) {
+			defer wg.Done()
+			<-start
+			for {
+				children, err := store.ListChildren(parentID)
+				if err != nil {
+					runtime.Gosched()
+					continue
+				}
+				n := len(children)
+				assert.True(t, n == 0 || n == 50,
+					"cycle=%d observed %d children — partial update leaked", cycle, n)
+				if n == 50 {
+					return
+				}
+				runtime.Gosched()
+			}
+		}(dirID)
+
+		// Writer: fires the start signal and immediately performs the add.
+		// The barrier guarantees the reader has been scheduled before the
+		// write begins.
+		go func() {
+			defer wg.Done()
+			close(start)
+			store.AddFileChildren(dir, cycleFiles)
+		}()
+
+		wg.Wait()
+	}
+}
+
+// TestMemoryStore_AddFileChildren_NodeMapConsistency proves the additional
+// invariant that any child ID present in the parent's Children list also
+// resolves via GetNode — the file nodes are inserted into the node map
+// before the parent's Children update becomes visible.
+//
+// Falsifiable: if AddFileChildren published the parent's Children list
+// before populating the node map, a concurrent reader would observe a
+// child ID with no node behind it.
+func TestMemoryStore_AddFileChildren_NodeMapConsistency(t *testing.T) {
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Skip("consistency test needs at least 2 OS threads to interleave")
+	}
+
+	const cycles = 100
+
+	for cycle := 0; cycle < cycles; cycle++ {
+		store := NewMemoryStore()
+		dirID := "pkg/cons"
+		dir := &Node{ID: dirID, Mode: fs.ModeDir}
+		store.AddNode(dir)
+
+		files := make([]*Node, 25)
+		for i := range files {
+			files[i] = &Node{
+				ID:   fmt.Sprintf("%s/file_%03d", dirID, i),
+				Mode: 0,
+				Data: fmt.Appendf(nil, "v%d", i),
+			}
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		start := make(chan struct{})
+
+		go func() {
+			defer wg.Done()
+			<-start
+			for {
+				children, err := store.ListChildren(dirID)
+				if err != nil {
+					runtime.Gosched()
+					continue
+				}
+				for _, cid := range children {
+					_, err := store.GetNode(cid)
+					require.NoError(t, err,
+						"cycle=%d child %s in Children but missing from node map", cycle, cid)
+				}
+				if len(children) == 25 {
+					return
+				}
+				runtime.Gosched()
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			close(start)
+			store.AddFileChildren(dir, files)
+		}()
+
+		wg.Wait()
+	}
 }
 
 // ===========================================================================
