@@ -132,6 +132,18 @@ func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.Tool
 		} else {
 			lg = r.getOrCreateGraph(r.resolvedBasePath())
 		}
+
+		// Readiness gate: in daemon mode, check if the graph has any content.
+		// The daemon may still be parsing — return a helpful message instead of
+		// empty results that confuse the agent.
+		if serveControl != "" {
+			if children, err := lg.ListChildren(""); err == nil && len(children) == 0 {
+				return mcp.NewToolResultText(
+					"Graph is still loading — the daemon is parsing source files. Please retry in a few seconds.",
+				), nil
+			}
+		}
+
 		return handlerFactory(lg)(ctx, req)
 	}
 }
