@@ -2,38 +2,106 @@ package ingest
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
-// TestASTParity_GoSchema verifies that Engine+ASTWalker (reading from a
-// leyline-produced .db) produces the same projected tree as Engine+SitterWalker
-// (parsing source directly with CGO tree-sitter).
-//
-// This is the parity gate for tree-sitter CGO deletion. If this test passes,
-// ASTWalker is a drop-in replacement for SitterWalker.
+// runParityTest verifies Engine+ASTWalker produces the same projected tree
+// as Engine+SitterWalker for a given language. This is the parity gate for
+// tree-sitter CGO deletion per language.
 //
 // Requires: leyline binary on PATH (skips if not available).
-func TestASTParity_GoSchema(t *testing.T) {
-	leylineBin, err := exec.LookPath("leyline")
-	if err != nil {
+func runParityTest(t *testing.T, schemaPath, lang, sourceFile string, sourceContent []byte) {
+	t.Helper()
+
+	if _, err := exec.LookPath("leyline"); err != nil {
 		t.Skip("leyline binary not on PATH — skipping parity test")
 	}
 
-	schema := loadGoSchema(t)
+	schemaData, err := os.ReadFile(schemaPath)
+	require.NoError(t, err)
+	var schema api.Topology
+	require.NoError(t, json.Unmarshal(schemaData, &schema))
 
-	// Write test Go source
+	// Write source file
 	srcDir := t.TempDir()
-	goFile := filepath.Join(srcDir, "example.go")
-	require.NoError(t, os.WriteFile(goFile, []byte(`package demo
+	srcPath := filepath.Join(srcDir, sourceFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(srcPath), 0o755))
+	require.NoError(t, os.WriteFile(srcPath, sourceContent, 0o644))
+
+	// --- SitterWalker path (CGO) ---
+	sitterStore := graph.NewMemoryStore()
+	sitterEngine := NewEngine(&schema, sitterStore)
+	require.NoError(t, sitterEngine.Ingest(srcPath))
+
+	sitterNodes := collectAllNodes(t, sitterStore)
+	t.Logf("SitterWalker: %d nodes", len(sitterNodes))
+
+	// --- ASTWalker path (pure Go, via leyline parse) ---
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	cmd := exec.Command("leyline", "parse", srcDir, "-o", dbPath, "--lang", lang)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "leyline parse failed: %s", string(out))
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	astStore := graph.NewMemoryStore()
+	astEngine := NewEngine(&schema, astStore)
+	astEngine.SetASTWalker(NewASTWalker(db))
+	require.NoError(t, astEngine.Ingest(srcDir))
+
+	astNodes := collectAllNodes(t, astStore)
+	t.Logf("ASTWalker:    %d nodes", len(astNodes))
+
+	// --- Compare ---
+	sitterRoots, _ := sitterStore.ListChildren("")
+	astRoots, _ := astStore.ListChildren("")
+	sort.Strings(sitterRoots)
+	sort.Strings(astRoots)
+	assert.Equal(t, sitterRoots, astRoots, "root children should match")
+
+	sort.Strings(sitterNodes)
+	sort.Strings(astNodes)
+	assert.Equal(t, len(sitterNodes), len(astNodes), "node count should match")
+	if !assert.Equal(t, sitterNodes, astNodes, "all nodes should match") {
+		// Log first 10 differences for debugging
+		diffs := 0
+		si, ai := 0, 0
+		for si < len(sitterNodes) && ai < len(astNodes) && diffs < 10 {
+			if sitterNodes[si] == astNodes[ai] {
+				si++
+				ai++
+			} else if sitterNodes[si] < astNodes[ai] {
+				t.Logf("  SITTER only: %s", sitterNodes[si])
+				si++
+				diffs++
+			} else {
+				t.Logf("  AST only:    %s", astNodes[ai])
+				ai++
+				diffs++
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-language parity tests
+// ---------------------------------------------------------------------------
+
+func TestASTParity_Go(t *testing.T) {
+	runParityTest(t, "../../examples/go-schema.json", "go", "example.go", []byte(`package demo
 
 const MaxRetries = 3
 
@@ -64,99 +132,63 @@ import "fmt"
 func Caller() {
 	fmt.Println(Hello())
 }
-`), 0o644))
-
-	// --- SitterWalker path (CGO) ---
-	sitterStore := graph.NewMemoryStore()
-	sitterEngine := NewEngine(schema, sitterStore)
-	require.NoError(t, sitterEngine.Ingest(goFile))
-
-	sitterNodes := collectAllNodes(t, sitterStore)
-	t.Logf("SitterWalker produced %d nodes", len(sitterNodes))
-
-	// --- ASTWalker path (pure Go, via leyline parse) ---
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	cmd := exec.Command(leylineBin, "parse", srcDir, "-o", dbPath, "--lang", "go")
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "leyline parse failed: %s", string(out))
-
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// Verify _ast table exists
-	var count int
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_ast'").Scan(&count))
-	require.Equal(t, 1, count, "_ast table must exist in leyline-produced .db")
-
-	// --- Trace: query method selectors directly with ASTWalker ---
-	aw := NewASTWalker(db)
-	ptrSel := `(method_declaration receiver: (parameter_list (parameter_declaration type: (pointer_type (type_identifier) @receiver))) name: (field_identifier) @name) @scope`
-	valSel := `(method_declaration receiver: (parameter_list (parameter_declaration type: (type_identifier) @receiver)) name: (field_identifier) @name) @scope`
-	funcSel := `(function_declaration name: (identifier) @name) @scope`
-
-	root := ASTRoot{DB: db, SourceID: "example.go", ParentPrefix: ""}
-	ptrMatches, ptrErr := aw.Query(root, ptrSel)
-	valMatches, valErr := aw.Query(root, valSel)
-	funcMatches, funcErr := aw.Query(root, funcSel)
-
-	t.Logf("AST Pointer receiver matches: %d (err=%v)", len(ptrMatches), ptrErr)
-	for i, m := range ptrMatches {
-		t.Logf("  ptr[%d]: %v", i, m.Values())
-	}
-	t.Logf("AST Value receiver matches: %d (err=%v)", len(valMatches), valErr)
-	for i, m := range valMatches {
-		t.Logf("  val[%d]: %v", i, m.Values())
-	}
-	t.Logf("AST Function matches: %d (err=%v)", len(funcMatches), funcErr)
-	for i, m := range funcMatches {
-		t.Logf("  func[%d]: %v", i, m.Values())
-	}
-
-	// Expected: ptr should match Greet only, val should match String only
-	// If either matches BOTH methods, that's the bug
-	// --- End trace ---
-
-	astStore := graph.NewMemoryStore()
-	astEngine := NewEngine(schema, astStore)
-	astEngine.SetASTWalker(NewASTWalker(db))
-	require.NoError(t, astEngine.Ingest(srcDir))
-
-	astNodes := collectAllNodes(t, astStore)
-	t.Logf("ASTWalker produced %d nodes", len(astNodes))
-
-	// --- Compare projected trees ---
-
-	// Both should produce the same root-level packages
-	sitterRoots, _ := sitterStore.ListChildren("")
-	astRoots, _ := astStore.ListChildren("")
-	sort.Strings(sitterRoots)
-	sort.Strings(astRoots)
-	assert.Equal(t, sitterRoots, astRoots, "root children should match")
-
-	// Both should find the same functions
-	sitterFuncs := findNodesByPrefix(sitterNodes, "demo/functions/")
-	astFuncs := findNodesByPrefix(astNodes, "demo/functions/")
-	sort.Strings(sitterFuncs)
-	sort.Strings(astFuncs)
-	assert.Equal(t, sitterFuncs, astFuncs, "functions should match")
-
-	// Both should find the same types
-	sitterTypes := findNodesByPrefix(sitterNodes, "demo/types/")
-	astTypes := findNodesByPrefix(astNodes, "demo/types/")
-	sort.Strings(sitterTypes)
-	sort.Strings(astTypes)
-	assert.Equal(t, sitterTypes, astTypes, "types should match")
-
-	// Both should find the same methods
-	sitterMethods := findNodesByPrefix(sitterNodes, "demo/methods/")
-	astMethods := findNodesByPrefix(astNodes, "demo/methods/")
-	sort.Strings(sitterMethods)
-	sort.Strings(astMethods)
-	assert.Equal(t, sitterMethods, astMethods, "methods should match")
+`))
 }
 
-// collectAllNodes returns all node IDs in the store via BFS.
+func TestASTParity_Python(t *testing.T) {
+	runParityTest(t, "../../cmd/schemas/python.json", "python", "example.py", []byte(`import os
+from pathlib import Path
+
+class Animal:
+    def __init__(self, name):
+        self.name = name
+
+    def speak(self):
+        return f"{self.name} speaks"
+
+class Dog(Animal):
+    def speak(self):
+        return f"{self.name} barks"
+
+def greet(name):
+    return f"Hello, {name}"
+
+def main():
+    dog = Dog("Rex")
+    print(greet(dog.name))
+    print(dog.speak())
+`))
+}
+
+func TestASTParity_Elixir(t *testing.T) {
+	runParityTest(t, "../../cmd/schemas/elixir.json", "elixir", "example.ex", []byte(`defmodule MyApp.Greeter do
+  def hello(name) do
+    "Hello, #{name}"
+  end
+
+  defp internal_helper do
+    :ok
+  end
+
+  defmacro my_macro(expr) do
+    quote do
+      unquote(expr)
+    end
+  end
+end
+
+defmodule MyApp.Worker do
+  def run do
+    Greeter.hello("world")
+  end
+end
+`))
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 func collectAllNodes(t *testing.T, store *graph.MemoryStore) []string {
 	t.Helper()
 	var all []string
@@ -174,15 +206,4 @@ func collectAllNodes(t *testing.T, store *graph.MemoryStore) []string {
 		}
 	}
 	return all
-}
-
-// findNodesByPrefix returns node IDs that start with the given prefix.
-func findNodesByPrefix(nodes []string, prefix string) []string {
-	var result []string
-	for _, n := range nodes {
-		if len(n) >= len(prefix) && n[:len(prefix)] == prefix {
-			result = append(result, n)
-		}
-	}
-	return result
 }
