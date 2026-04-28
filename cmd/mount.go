@@ -633,8 +633,19 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 			hotSwap.Swap(newGraph)
 			lastGen = currentGen
 
+			// Defer removal of the old DB file. Swap() closes the SQLite
+			// connection synchronously, but on macOS the NFS page cache
+			// may still hold stale file mappings (WAL/SHM). A brief delay
+			// lets the kernel release them, avoiding SQLITE_IOERR_SHORT_READ
+			// on any in-flight reads that raced with the swap.
 			if prevDBPath != "" {
-				_ = os.Remove(prevDBPath)
+				old := prevDBPath
+				go func() {
+					time.Sleep(2 * time.Second)
+					_ = os.Remove(old)
+					_ = os.Remove(old + "-wal")
+					_ = os.Remove(old + "-shm")
+				}()
 			}
 			prevDBPath = newDBPath
 		}

@@ -570,13 +570,38 @@ func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind, sourceID str
 // findChildByKindAST finds the first descendant matching a node_kind via _ast table,
 // optionally verifying that the node's ID path contains the required ancestor kinds.
 // Ordered by start_byte ASC for deterministic first-occurrence behavior.
+//
+// When ancestry is non-empty, the query constrains depth in SQL using a
+// LIKE pattern with exactly len(ancestry)+1 path segments (ancestors + leaf),
+// plus a NOT LIKE excluding deeper descendants. This avoids scanning all
+// descendants in Go — only nodes at the exact expected depth are returned.
 func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID string, ancestry []string) (*astNode, error) {
-	query := `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
+	const baseCols = `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
 	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
 	 FROM nodes n
 	 JOIN _ast a ON a.node_id = n.id
-	 WHERE n.id LIKE ? AND a.node_kind = ?`
-	args := []any{parentID + "/%", kind}
+	 WHERE `
+
+	var query string
+	var args []any
+
+	if len(ancestry) == 0 {
+		// No ancestry — match any descendant at any depth.
+		query = baseCols + "n.id LIKE ? AND a.node_kind = ?"
+		args = []any{parentID + "/%", kind}
+	} else {
+		// Ancestry constraint — restrict to exact depth.
+		// For ancestry=["parameter_list","parameter_declaration"], build:
+		//   LIKE 'parentID/%/%/%'         (3 segments: 2 ancestors + leaf)
+		//   NOT LIKE 'parentID/%/%/%/%'   (exclude deeper nodes)
+		depthPattern := parentID
+		for range len(ancestry) + 1 {
+			depthPattern += "/%"
+		}
+		query = baseCols + "n.id LIKE ? AND n.id NOT LIKE ? AND a.node_kind = ?"
+		args = []any{depthPattern, depthPattern + "/%", kind}
+	}
+
 	if sourceID != "" {
 		query += " AND a.source_id = ?"
 		args = append(args, sourceID)
@@ -584,7 +609,7 @@ func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID stri
 	query += " ORDER BY a.start_byte ASC"
 
 	if len(ancestry) == 0 {
-		// No ancestry constraint — return first match (old behavior)
+		// No ancestry — first match wins.
 		query += " LIMIT 1"
 		var n astNode
 		err := db.QueryRow(query, args...).Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte)
@@ -597,10 +622,8 @@ func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID stri
 		return &n, nil
 	}
 
-	// With ancestry constraint: check that the node's ID path between
-	// parentID and the leaf contains the required ancestor kinds in order.
-	// e.g., ancestry=["parameter_list","parameter_declaration","pointer_type"]
-	// means the path should be: .../parameter_list.../parameter_declaration.../pointer_type.../type_identifier
+	// With ancestry: depth is constrained in SQL, but we still verify
+	// the exact kind sequence in Go (LIKE % wildcards don't check kinds).
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -612,8 +635,6 @@ func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID stri
 		if err := rows.Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte); err != nil {
 			continue
 		}
-		// Check ancestry: the path segments between parentID and this node
-		// should contain all ancestor kinds in order
 		suffix := strings.TrimPrefix(n.id, parentID+"/")
 		if matchAncestry(suffix, ancestry) {
 			return &n, nil
