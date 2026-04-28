@@ -574,46 +574,88 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 
 	hotSwap := graph.NewHotSwapGraph(initialGraph)
 
-	// Start Watcher
+	// Start Watcher — event-driven with polling fallback.
 	go func() {
 		lastGen := gen
-		prevDBPath := dbPath // track for cleanup
+		prevDBPath := dbPath
+
+		// Try to subscribe to daemon events for instant hot-swap.
+		sockPath := strings.TrimSuffix(path, ".ctrl") + ".sock"
+		eventCh, subClient := trySubscribe(sockPath)
+
 		for {
-			time.Sleep(100 * time.Millisecond)
-			currentGen := ctrl.GetGeneration()
-			if currentGen > lastGen {
-				newPath := ctrl.GetArenaPath()
-				log.Printf("Hot Swap Detected: Gen %d -> %d (%s)", lastGen, currentGen, newPath)
-
-				// Extract new DB from arena
-				newDBPath, err := graph.ExtractActiveDB(newPath)
-				if err != nil {
-					log.Printf("Error extracting new db: %v", err)
+			if eventCh != nil {
+				// Event-driven: wait for daemon push.
+				ev, ok := <-eventCh
+				if !ok {
+					// Connection lost — fall back to polling.
+					log.Println("event subscription lost, falling back to polling")
+					if subClient != nil {
+						_ = subClient.Close()
+						subClient = nil
+					}
+					eventCh = nil
 					continue
 				}
-
-				// Open new graph
-				newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
-				if err != nil {
-					log.Printf("Error opening new graph %s: %v", newDBPath, err)
-					_ = os.Remove(newDBPath)
-					continue
-				}
-
-				// Atomic Swap
-				hotSwap.Swap(newGraph)
-				lastGen = currentGen
-
-				// Clean up previous temp DB
-				if prevDBPath != "" {
-					_ = os.Remove(prevDBPath)
-				}
-				prevDBPath = newDBPath
+				_ = ev // event received — check generation below
+			} else {
+				// Polling fallback.
+				time.Sleep(100 * time.Millisecond)
 			}
+
+			currentGen := ctrl.GetGeneration()
+			if currentGen <= lastGen {
+				continue
+			}
+
+			newPath := ctrl.GetArenaPath()
+			log.Printf("Hot Swap Detected: Gen %d -> %d (%s)", lastGen, currentGen, newPath)
+
+			newDBPath, err := graph.ExtractActiveDB(newPath)
+			if err != nil {
+				log.Printf("Error extracting new db: %v", err)
+				continue
+			}
+
+			newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
+			if err != nil {
+				log.Printf("Error opening new graph %s: %v", newDBPath, err)
+				_ = os.Remove(newDBPath)
+				continue
+			}
+
+			hotSwap.Swap(newGraph)
+			lastGen = currentGen
+
+			if prevDBPath != "" {
+				_ = os.Remove(prevDBPath)
+			}
+			prevDBPath = newDBPath
 		}
 	}()
 
 	return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
+}
+
+// trySubscribe attempts to connect to the daemon's UDS socket and subscribe
+// to snapshot events. Returns a channel of events and the client (for cleanup),
+// or nil if subscription fails (caller should fall back to polling).
+func trySubscribe(sockPath string) (<-chan map[string]any, *leyline.SocketClient) {
+	sc, err := leyline.DialSocket(sockPath)
+	if err != nil {
+		log.Printf("event subscription: dial failed (%v), using polling", err)
+		return nil, nil
+	}
+
+	ch, err := sc.Subscribe([]string{"daemon.snapshot", "daemon.reparse.**"})
+	if err != nil {
+		log.Printf("event subscription: subscribe failed (%v), using polling", err)
+		_ = sc.Close()
+		return nil, nil
+	}
+
+	log.Println("event subscription active — instant hot-swap enabled")
+	return ch, sc
 }
 
 // mountControlWritable opens the extracted DB in read-write mode and
