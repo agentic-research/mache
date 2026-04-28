@@ -59,6 +59,12 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	// When spawned by the daemon (--control), auto-assign port if --http wasn't
+	// explicitly set. Avoids "address already in use" when port 7532 is taken.
+	if serveControl != "" && !cmd.Flags().Changed("http") {
+		serveHTTP = "localhost:0"
+	}
+
 	var repoCloneDir string // set only for HTTP + --repo mode
 
 	// Ephemeral mode: clone repo to temp dir, serve from there, cleanup on exit
