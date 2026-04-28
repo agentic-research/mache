@@ -19,6 +19,32 @@ func init() {
 			field: (field_identifier) @call))
 	`)
 
+	// ASTWalker (pure-Go path) parses one S-expression per call.
+	// Bare calls + qualified calls in two separate patterns.
+	RegisterASTCallQuery("go", []string{
+		`(call_expression function: (identifier) @call) @scope`,
+		`(call_expression function: (selector_expression operand: (identifier) @pkg field: (field_identifier) @call)) @scope`,
+	})
+
+	// Python: 'call' parent, identifier or attribute child.
+	RegisterASTCallQuery("python", []string{
+		`(call function: (identifier) @call) @scope`,
+		`(call function: (attribute attribute: (identifier) @call)) @scope`,
+	})
+
+	// Rust: function calls and method calls.
+	RegisterASTCallQuery("rust", []string{
+		`(call_expression function: (identifier) @call) @scope`,
+		`(call_expression function: (scoped_identifier name: (identifier) @call)) @scope`,
+		`(call_expression function: (field_expression field: (field_identifier) @call)) @scope`,
+	})
+
+	// Elixir: local and qualified function calls.
+	RegisterASTCallQuery("elixir", []string{
+		`(call target: (identifier) @call) @scope`,
+		`(call target: (dot right: (identifier) @call)) @scope`,
+	})
+
 	// Register HCL/Terraform queries — narrow to semantic references:
 	// module sources, variable defaults, and provider/resource references.
 	RegisterRefQuery("terraform", `
