@@ -105,6 +105,8 @@ func runParityTest(t *testing.T, schemaPath, lang, sourceFile string, sourceCont
 func TestASTParity_Go(t *testing.T) {
 	runParityTest(t, "../../examples/go-schema.json", "go", "example.go", []byte(`package demo
 
+import "fmt"
+
 const MaxRetries = 3
 
 var DefaultName = "world"
@@ -128,8 +130,6 @@ func (g *Greeter) Greet() string {
 func (g Greeter) String() string {
 	return g.Name
 }
-
-import "fmt"
 
 func Caller() {
 	fmt.Println(Hello())

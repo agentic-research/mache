@@ -575,6 +575,7 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	hotSwap := graph.NewHotSwapGraph(initialGraph)
 
 	// Start Watcher — event-driven with polling fallback.
+	// Runs for the lifetime of the NFS mount (mountNFS blocks below).
 	go func() {
 		lastGen := gen
 		prevDBPath := dbPath
@@ -582,6 +583,11 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 		// Try to subscribe to daemon events for instant hot-swap.
 		sockPath := strings.TrimSuffix(path, ".ctrl") + ".sock"
 		eventCh, subClient := trySubscribe(sockPath)
+		defer func() {
+			if subClient != nil {
+				_ = subClient.Close()
+			}
+		}()
 
 		for {
 			if eventCh != nil {

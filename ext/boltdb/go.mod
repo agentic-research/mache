@@ -1,6 +1,6 @@
 module github.com/agentic-research/mache/ext/boltdb
 
-go 1.25.0
+go 1.25.5
 
 require (
 	go.etcd.io/bbolt v1.4.3

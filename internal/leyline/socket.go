@@ -373,13 +373,22 @@ func (c *SocketClient) Subscribe(topics []string) (<-chan map[string]any, error)
 
 	ch := make(chan map[string]any, 64)
 
-	// Read pushed events in a goroutine.
+	// Read pushed events in a goroutine. A 60s read deadline detects
+	// daemon crashes that don't cleanly close the socket (e.g., SIGKILL).
+	// The deadline resets on every successful read or timeout-with-retry.
 	go func() {
 		defer close(ch)
+		const readTimeout = 60 * time.Second
 		for {
+			_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
 			evLine, err := c.rd.ReadString('\n')
 			if err != nil {
-				return // connection closed
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					// Deadline hit with no data — connection likely dead.
+					// Could add a ping/pong here later; for now, close.
+					return
+				}
+				return // connection closed or broken
 			}
 			evLine = strings.TrimSpace(evLine)
 			if evLine == "" {
