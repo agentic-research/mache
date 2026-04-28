@@ -416,6 +416,17 @@ func (c *SocketClient) Subscribe(topics []string) (<-chan map[string]any, error)
 	return ch, nil
 }
 
+// Prioritize requests the daemon to parse the given files on the next pass.
+// Non-blocking from the daemon's perspective: it acknowledges the request
+// and schedules the files for priority parsing asynchronously.
+func (c *SocketClient) Prioritize(files []string) error {
+	_, err := c.SendOp(map[string]any{
+		"op":    "prioritize",
+		"files": files,
+	})
+	return err
+}
+
 // Enrich triggers an enrichment pass on the daemon.
 // Pass name is e.g. "lsp", "tree-sitter". Files is optional (nil = all).
 func (c *SocketClient) Enrich(pass string, files []string) (map[string]any, error) {

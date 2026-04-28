@@ -15,6 +15,23 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// prioritizeAndAdvise sends a fire-and-forget hint to the ley-line daemon
+// to prioritize parsing the given files. Returns a user-facing message, or
+// empty string if not in daemon mode or the daemon is unreachable.
+func prioritizeAndAdvise(files []string) string {
+	if serveControl == "" || len(files) == 0 {
+		return ""
+	}
+	sockPath := strings.TrimSuffix(serveControl, ".ctrl") + ".sock"
+	sc, err := leyline.DialSocket(sockPath)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = sc.Close() }()
+	_ = sc.Prioritize(files) // fire-and-forget
+	return "File not yet parsed — prioritized for next daemon pass, retry shortly."
+}
+
 // registerMCPTools registers all tool definitions with session-aware handlers.
 // All tools are registered unconditionally — lazyGraph delegates to the inner
 // graph and returns errors for unsupported operations at call time. This lets
@@ -337,6 +354,10 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		r, err := readOneFileWithOrigin(g, path)
 		if err != nil {
+			// In daemon mode, the file may not be parsed yet — ask daemon to prioritize it.
+			if msg := prioritizeAndAdvise([]string{path}); msg != "" {
+				return mcp.NewToolResultText(msg), nil
+			}
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		// If there's an origin, return it as structured JSON so the consumer
@@ -384,6 +405,9 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		// No LSP data — return original format for backward compatibility
 		if len(paths) == 0 {
+			if serveControl != "" {
+				return mcp.NewToolResultText("[] — daemon may still be parsing, retry shortly"), nil
+			}
 			return mcp.NewToolResultText("[]"), nil
 		}
 		data, _ := json.MarshalIndent(paths, "", "  ")
@@ -518,7 +542,8 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultText(string(data)), nil
 		}
 
-		// Reference search (default): query mache_refs
+		// Reference search (default): query mache_refs (vtab) or node_refs (real table).
+		// Leyline-parsed .dbs have node_refs (token, node_id); legacy sidecar has mache_refs (token, path).
 		qg, ok := g.(refsQuerier)
 		if !ok {
 			return mcp.NewToolResultError("reference search requires a SQLite-backed graph; use role=definition for in-memory search"), nil
@@ -535,6 +560,20 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 				"SELECT token, path FROM mache_refs WHERE token LIKE ? LIMIT ?",
 				pattern, limit,
 			)
+		}
+		// Fallback: node_refs table (leyline-parsed .db) when mache_refs vtab doesn't exist.
+		if err != nil && strings.Contains(err.Error(), "no such table") {
+			if typeFilter != "" {
+				rows, err = qg.QueryRefs(
+					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? AND node_id LIKE ? LIMIT ?",
+					pattern, "%/"+typeFilter+"/%", limit,
+				)
+			} else {
+				rows, err = qg.QueryRefs(
+					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? LIMIT ?",
+					pattern, limit,
+				)
+			}
 		}
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("query: %v", err)), nil
@@ -828,6 +867,9 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 					}
 				}
 
+				if serveControl != "" {
+					return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q — daemon may still be parsing, retry shortly", symbol)), nil
+				}
 				return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q", symbol)), nil
 			}
 		}
