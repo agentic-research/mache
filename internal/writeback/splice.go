@@ -13,8 +13,19 @@ import (
 // Prevents OOM on accidentally large files (e.g., generated code, vendored blobs).
 const MaxSpliceFileSize = 100 * 1024 * 1024 // 100MB
 
+// ErrSourceChanged is returned when the source file was modified between
+// when Splice read it and when Splice was about to commit. Indicates the
+// byte ranges in SourceOrigin are stale and the splice would write corrupt
+// content. Callers should re-ingest and retry.
+var ErrSourceChanged = fmt.Errorf("source file changed during splice")
+
 // Splice replaces the byte range identified by origin with newContent in the source file.
 // The write is atomic: content is written to a temp file first, then renamed.
+//
+// To defend against TOCTOU between read and rename, Splice captures the
+// file's size and modification time before reading and re-checks them
+// immediately before the rename. If they don't match, Splice returns
+// ErrSourceChanged without touching the source.
 func Splice(origin graph.SourceOrigin, newContent []byte) error {
 	info, err := os.Stat(origin.FilePath)
 	if err != nil {
@@ -27,6 +38,10 @@ func Splice(origin graph.SourceOrigin, newContent []byte) error {
 	src, err := os.ReadFile(origin.FilePath)
 	if err != nil {
 		return fmt.Errorf("read source %s: %w", origin.FilePath, err)
+	}
+	if int64(len(src)) != info.Size() {
+		// Concurrent writer truncated/extended the file between Stat and ReadFile.
+		return fmt.Errorf("%w: read %d bytes, stat reported %d", ErrSourceChanged, len(src), info.Size())
 	}
 
 	start := origin.StartByte
@@ -71,6 +86,23 @@ func Splice(origin graph.SourceOrigin, newContent []byte) error {
 
 	// Preserve original file permissions (reuse stat from size guard)
 	_ = os.Chmod(tmpName, info.Mode())
+
+	// Re-stat right before commit to detect concurrent modification.
+	// If size or mtime changed since the initial read, the byte ranges in
+	// origin are stale and writing would corrupt the file. Abort instead.
+	finalInfo, statErr := os.Stat(origin.FilePath)
+	if statErr != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("re-stat source %s: %w", origin.FilePath, statErr)
+	}
+	if finalInfo.Size() != info.Size() || !finalInfo.ModTime().Equal(info.ModTime()) {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("%w: %s (size %d->%d, mtime %s->%s)",
+			ErrSourceChanged, origin.FilePath,
+			info.Size(), finalInfo.Size(),
+			info.ModTime().Format("15:04:05.000"),
+			finalInfo.ModTime().Format("15:04:05.000"))
+	}
 
 	if err := os.Rename(tmpName, origin.FilePath); err != nil {
 		_ = os.Remove(tmpName) // best-effort cleanup
