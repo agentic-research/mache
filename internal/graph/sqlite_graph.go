@@ -933,6 +933,11 @@ func (g *SQLiteGraph) walkSchema(segments []string) (*schemaLevel, *api.Leaf) {
 
 // walkSchemaLevels walks compiled schema levels to find the level and optional
 // leaf matching the given path segments. Shared by SQLiteGraph and WritableGraph.
+//
+// When descending past a level with multiple children, prefer the static
+// child whose name matches the path segment (e.g. go-schema's "functions" /
+// "methods" / "types" siblings under each package). Fall back to the first
+// dynamic (template-named) child when no static name matches.
 func walkSchemaLevels(levels []*schemaLevel, segments []string) (*schemaLevel, *api.Leaf) {
 	if len(segments) == 0 {
 		return nil, nil
@@ -964,14 +969,37 @@ func walkSchemaLevels(levels []*schemaLevel, segments []string) (*schemaLevel, *
 			}
 		}
 
-		// Descend to child level (single child pattern per level)
 		if len(current.children) == 0 {
 			return nil, nil
 		}
-		current = current.children[0]
+		current = pickChildLevel(current.children, seg)
+		if current == nil {
+			return nil, nil
+		}
 	}
 
 	return current, nil
+}
+
+// pickChildLevel selects the schema child that matches the given path segment.
+// Returns the matching static child if one exists, otherwise the first dynamic
+// (template-named) child, otherwise the first child as a last-resort fallback.
+// Returns nil only when the input slice is empty.
+func pickChildLevel(children []*schemaLevel, seg string) *schemaLevel {
+	if len(children) == 0 {
+		return nil
+	}
+	for _, c := range children {
+		if c.isStatic && c.staticName == seg {
+			return c
+		}
+	}
+	for _, c := range children {
+		if !c.isStatic {
+			return c
+		}
+	}
+	return children[0]
 }
 
 // ---------------------------------------------------------------------------

@@ -100,16 +100,21 @@ func resolveDataSource(sourcePath, configDir string) (string, error) {
 
 // checkPathContainment verifies that resolved is within or equal to base.
 // Prevents path traversal attacks from untrusted .mache.json files.
+//
+// Resolves symlinks via filepath.EvalSymlinks before comparison so a target
+// pointing to a symlink that escapes the project directory is caught even
+// if the symlink itself sits inside the project. If the target does not
+// exist yet (EvalSymlinks errors), falls back to filepath.Abs since
+// nonexistent paths cannot point anywhere malicious until they are created.
 func checkPathContainment(resolved, base string) error {
-	absResolved, err := filepath.Abs(resolved)
+	absResolved, err := evalOrAbs(resolved)
 	if err != nil {
 		return fmt.Errorf("resolve absolute path %q: %w", resolved, err)
 	}
-	absBase, err := filepath.Abs(base)
+	absBase, err := evalOrAbs(base)
 	if err != nil {
 		return fmt.Errorf("resolve absolute path %q: %w", base, err)
 	}
-	// Check that resolved path starts with base path
 	rel, err := filepath.Rel(absBase, absResolved)
 	if err != nil {
 		return fmt.Errorf("path %q escapes project directory %q", resolved, base)
@@ -118,6 +123,36 @@ func checkPathContainment(resolved, base string) error {
 		return fmt.Errorf("path %q escapes project directory %q", resolved, base)
 	}
 	return nil
+}
+
+// evalOrAbs resolves symlinks if the path exists. If the path itself
+// doesn't exist (e.g. configured target not yet created), it walks up to
+// the nearest existing parent, resolves that, and reattaches the missing
+// tail. This avoids false escapes caused by platform symlink quirks like
+// macOS /var → /private/var when one of the comparison paths is real and
+// the other is purely lexical.
+func evalOrAbs(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		return r, nil
+	}
+	// Walk up until we hit an existing dir, resolve it, then rejoin the tail.
+	dir := abs
+	var tail []string
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return abs, nil // hit filesystem root with no existing ancestor
+		}
+		tail = append([]string{filepath.Base(dir)}, tail...)
+		dir = parent
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(append([]string{r}, tail...)...), nil
+		}
+	}
 }
 
 // mcpServerEntry is the mache entry written into MCP config files.

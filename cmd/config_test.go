@@ -460,3 +460,56 @@ func TestRegisterAllEditors_Output(t *testing.T) {
 	assert.Contains(t, output, "[Cursor]")
 	assert.Contains(t, output, "mcp.json")
 }
+
+// TestCheckPathContainment_SymlinkEscape — bead mache-5c9356.
+//
+// FALSIFIABLE: with the prior implementation (filepath.Abs only), a symlink
+// inside the project that targets a path outside the project bypassed the
+// containment check. With EvalSymlinks the symlink is resolved before the
+// comparison and the escape is caught.
+func TestCheckPathContainment_SymlinkEscape(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "project")
+	outside := filepath.Join(parent, "outside")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	require.NoError(t, os.MkdirAll(outside, 0o755))
+
+	// Create a target file outside the project.
+	target := filepath.Join(outside, "secret.json")
+	require.NoError(t, os.WriteFile(target, []byte("secret"), 0o644))
+
+	// Create a symlink inside the project pointing to it.
+	link := filepath.Join(project, "evil.json")
+	require.NoError(t, os.Symlink(target, link))
+
+	// Lexical filepath.Abs(link) would just be /<parent>/project/evil.json,
+	// which IS contained in /<parent>/project — so the old code passed.
+	// With EvalSymlinks the link resolves to /<parent>/outside/secret.json
+	// which is correctly rejected.
+	err := checkPathContainment(link, project)
+	require.Error(t, err, "symlink escape must be rejected")
+	assert.Contains(t, err.Error(), "escapes")
+}
+
+// TestCheckPathContainment_NonexistentTargetIsAllowed verifies the fallback
+// to lexical Abs when a path component does not exist yet (e.g. configured
+// target that hasn't been created).
+func TestCheckPathContainment_NonexistentTargetIsAllowed(t *testing.T) {
+	project := t.TempDir()
+	// Target that doesn't exist yet but is lexically inside the project.
+	target := filepath.Join(project, "future", "file.json")
+	require.NoError(t, checkPathContainment(target, project))
+}
+
+// TestCheckPathContainment_PlainEscapeStillRejected verifies a non-symlink
+// `..` escape is still caught.
+func TestCheckPathContainment_PlainEscapeStillRejected(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+
+	bad := filepath.Join(project, "..", "outside.json")
+	err := checkPathContainment(bad, project)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes")
+}
