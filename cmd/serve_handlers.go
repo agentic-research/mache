@@ -181,6 +181,16 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 		),
 		r.wrapHandler(makeResolveRefHandler),
 	)
+
+	s.AddTool(
+		mcp.NewTool("find_smells",
+			mcp.WithDescription("Run structural code-smell rules against the parsed _ast table. Call with no arguments for the registry listing; call with `rule` to scan. Rules look for patterns like 'magic int literal in a binary expression' (Go) — useful for sweeping a monorepo before adding named constants. Each finding includes line/column and a short snippet so editors can jump to it. Requires a leyline-parsed .db (the _ast table)."),
+			mcp.WithString("rule", mcp.Description("Rule ID to run. Omit to list available rules.")),
+			mcp.WithString("source_id", mcp.Description("Limit the scan to one parsed source file (matches _source.id, e.g. 'main.go').")),
+			mcp.WithNumber("limit", mcp.Description("Max findings (default 200).")),
+		),
+		r.wrapHandler(makeFindSmellsHandler),
+	)
 }
 
 type nodeEntry struct {
