@@ -83,8 +83,47 @@ With `--infer`, the schema itself can be derived automatically: the `lattice` pa
 - **`GraphFS`** — NFS filesystem via `go-nfs`/`billy`. Adapts the `Graph` interface to `billy.Filesystem`. The only mount backend (the earlier FUSE backend was removed in v0.7.0; see ADR-0006).
 - **`_project_files/`** — Non-AST files (READMEs, configs, docs) encountered during tree-sitter ingestion are routed into a separate `_project_files/` tree via `ingestRawFileUnder()`. This preserves access to supporting files without polluting the AST-derived structure.
 - **Friendly-name grouping** — `ProjectAST` in the lattice package maps raw tree-sitter node types to intuitive container directory names: `function_declaration` → `functions/`, `class_definition` → `classes/`, `type_declaration` → `types/`, etc. Language-specific containment rules nest methods inside classes for Python/TypeScript.
-- **MCP Server** (`cmd/serve.go`) — `mache serve` exposes any graph as an MCP (Model Context Protocol) server. Two transports: stdio (default, client spawns mache as subprocess) and Streamable HTTP (`--http :PORT`, mache runs as an independent always-on process with stateful sessions). Fifteen tools wrap the `Graph` interface: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `semantic_search`, `get_communities`, `get_overview`, `get_type_info`, `get_diagnostics`, `get_impact`, `get_architecture`, `get_diagram`, and `write_file`. Several are conditional on backend capabilities (e.g., `search` requires `QueryRefs`, `write_file` requires `writeBacker`). Uses `mark3labs/mcp-go` with lazy graph initialization for instant health-check response. No filesystem mount needed.
+- **MCP Server** (`cmd/serve.go`) — `mache serve` exposes any graph as an MCP (Model Context Protocol) server. Two transports: stdio (default, client spawns mache as subprocess) and Streamable HTTP (`--http :PORT`, mache runs as an independent always-on process with stateful sessions). Sixteen tools wrap the `Graph` interface: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `semantic_search`, `get_communities`, `get_overview`, `get_type_info`, `get_diagnostics`, `get_impact`, `get_architecture`, `get_diagram`, `write_file`, and `find_smells`. Several are conditional on backend capabilities (e.g., `search` requires `QueryRefs`, `write_file` requires `writeBacker`, LSP tools require `_lsp*` tables produced by ley-line-open). Uses `mark3labs/mcp-go` with lazy graph initialization for instant health-check response. No filesystem mount needed.
 - **Community Detection** (`internal/graph/community.go`) — Louvain modularity optimization on the refs graph. Projects the bipartite token→nodeID refs into a unipartite co-reference graph (edge weight = shared tokens), then iteratively moves nodes between communities to maximize modularity. Also provides `ConnectedComponents` as a simpler baseline. Exposed via the `get_communities` MCP tool.
+
+## Interplay with ley-line-open
+
+Mache works standalone, but pairs with [ley-line-open](https://github.com/agentic-research/ley-line-open) (LLO) for the modern, CGO-free path. Two modes:
+
+### Standalone (CGO tree-sitter, default for source mounts)
+
+```
+source dir → mache (Engine + SitterWalker + CGO tree-sitter) → MemoryStore → MCP / NFS
+```
+
+Mache parses source itself via the `SitterWalker` (tree-sitter grammars linked via CGO). The ingestion writes a sidecar SQLite with `nodes`, `node_refs`, `node_defs`, `file_index` — enough to power `find_callers`, `find_callees`, `search`, `find_definition`, `get_communities`, `get_impact`, and the four `find_smells` rules that operate on `node_defs`/`node_refs` (`dead_code`, `untested_function`, `fan_out_skew`, `duplicate_definitions`). No `_ast`, `_source`, or `_lsp*` tables are produced — the AST lives in memory, not on disk.
+
+### LLO-paired (pure Go, pre-baked .db)
+
+```
+source dir → leyline parse (Rust tree-sitter) → .db with _ast / _source / node_refs / node_defs / _imports / _lsp* tables
+                          ↓
+mache (SQLiteGraph + ASTWalker, pure Go) → MCP / NFS
+```
+
+LLO's `leyline parse` produces a `.db` containing the full AST plus optional LSP enrichment. Mache's `SQLiteGraph` reads the file directly via `json_extract()` and lazy content resolution — no CGO tree-sitter, no in-memory AST, no re-parse. `ASTWalker` consumes `_ast` rows via SQL where the standalone path would invoke `SitterWalker`.
+
+This is the path under [ADR-0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md). For mache binaries built without the tree-sitter CGO build tags, LLO is required.
+
+### Tool capability matrix
+
+| Tool                                                                                                  | Standalone (CGO) | LLO-paired (.db) | Notes                                                                |
+| ----------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | -------------------------------------------------------------------- |
+| `list_directory`, `read_file`, `get_overview`, `get_diagram`                                          | ✓                | ✓                | Topology-only — works on any backend                                 |
+| `find_callers`, `find_callees`, `find_definition`, `search`                                           | ✓                | ✓                | `node_refs` / `node_defs` populated by both paths                    |
+| `get_communities`, `get_impact`, `get_architecture`                                                   | ✓                | ✓                | Derived from refs graph                                              |
+| `write_file`                                                                                          | ✓                | ✓                | Splice pipeline runs on either backend (validate → format → splice)  |
+| `find_smells` rules: `dead_code`, `untested_function`, `duplicate_definitions`, `fan_out_skew`        | ✓                | ✓                | Use `node_defs` / `node_refs` only                                   |
+| `find_smells` rules: `magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file` | ✗                | ✓                | Need `_ast` table — only LLO writes it                               |
+| `get_type_info`, `get_diagnostics`                                                                    | ✗                | ✓ (LSP-enriched) | Need `_lsp*` tables produced by ley-line's `lsp` crate at build time |
+| `semantic_search`                                                                                     | ✗                | ✓ (with daemon)  | Embeddings via the LLO daemon UDS proxy                              |
+
+When a tool falls into the second column without enrichment, the handler returns a friendly error message explaining how to enable it (typically: re-run `leyline parse` with the relevant flag).
 
 ## Write Pipeline
 

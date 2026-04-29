@@ -37,25 +37,26 @@ Mache auto-infers the schema from your codebase. One server shared across all se
 
 ## MCP tools
 
-12 tools work out of the box. 3 optional tools provide LSP type info and semantic search when [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment is available — without it, they return a message explaining how to enable them.
+13 tools work out of the box. 3 optional tools provide LSP type info and semantic search when [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment is available — without it, they return a message explaining how to enable them. `find_smells` partially degrades on tree-sitter-only mounts (rules that need `_ast` tables require an LLO-built `.db`); see [Architecture](docs/ARCHITECTURE.md#interplay-with-ley-line-open) for details.
 
-| Tool               | What it does                                                   |
-| ------------------ | -------------------------------------------------------------- |
-| `get_overview`     | Top-level structure, node counts, entry points                 |
-| `list_directory`   | Browse the graph by path                                       |
-| `read_file`        | Read source content (supports batch reads)                     |
-| `find_definition`  | Jump to where a symbol is defined                              |
-| `find_callers`     | Who calls this?                                                |
-| `find_callees`     | What does this call?                                           |
-| `search`           | Pattern match across symbols                                   |
-| `get_communities`  | Find clusters of tightly-coupled code                          |
-| `get_impact`       | Blast radius of changing a symbol                              |
-| `get_architecture` | Entry points, abstractions, dependency layers                  |
-| `get_diagram`      | Mermaid diagram of system structure                            |
-| `write_file`       | Edit through the splice pipeline: validate, format, splice     |
-| `semantic_search`  | Natural-language search via embeddings *(optional — ley-line)* |
-| `get_type_info`    | LSP type info and hover data *(optional — ley-line)*           |
-| `get_diagnostics`  | LSP errors and warnings *(optional — ley-line)*                |
+| Tool               | What it does                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `get_overview`     | Top-level structure, node counts, entry points                                                                      |
+| `list_directory`   | Browse the graph by path                                                                                            |
+| `read_file`        | Read source content (supports batch reads)                                                                          |
+| `find_definition`  | Jump to where a symbol is defined                                                                                   |
+| `find_callers`     | Who calls this?                                                                                                     |
+| `find_callees`     | What does this call?                                                                                                |
+| `search`           | Pattern match across symbols                                                                                        |
+| `get_communities`  | Find clusters of tightly-coupled code                                                                               |
+| `get_impact`       | Blast radius of changing a symbol                                                                                   |
+| `get_architecture` | Entry points, abstractions, dependency layers                                                                       |
+| `get_diagram`      | Mermaid diagram of system structure                                                                                 |
+| `write_file`       | Edit through the splice pipeline: validate, format, splice                                                          |
+| `find_smells`      | Run structural code-smell rules (cyclomatic, dead code, fan-out skew, duplicate defs, etc.) — `_ast` rules need LLO |
+| `semantic_search`  | Natural-language search via embeddings *(optional — ley-line)*                                                      |
+| `get_type_info`    | LSP type info and hover data *(optional — ley-line)*                                                                |
+| `get_diagnostics`  | LSP errors and warnings *(optional — ley-line)*                                                                     |
 
 ## How it works
 
@@ -176,7 +177,7 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 | Capability                              | Status                                                                        |
 | --------------------------------------- | ----------------------------------------------------------------------------- |
 | Tree-sitter parsing (28 langs)          | Stable                                                                        |
-| MCP server (15 tools, stdio + HTTP)     | Stable                                                                        |
+| MCP server (16 tools, stdio + HTTP)     | Stable                                                                        |
 | Cross-references (callers/callees)      | Stable                                                                        |
 | NFS mount + write-back                  | Stable                                                                        |
 | Schema inference (FCA)                  | Beta                                                                          |
