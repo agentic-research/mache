@@ -161,6 +161,38 @@ var smellRegistry = []SmellRule{
 		`,
 	},
 	{
+		ID:          "duplicate_definitions",
+		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Cross-language since node_defs is populated by every leyline parser.",
+		ScopeColumn: "COALESCE(n.source_file, '')",
+		Query: `
+			SELECT COALESCE(n.source_file, '') AS source_id,
+			       d.node_id,
+			       0 AS start_byte,
+			       0 AS end_byte,
+			       0 AS start_row,
+			       0 AS start_col,
+			       c.copies AS metric
+			FROM (
+				SELECT token, COUNT(*) AS copies
+				FROM node_defs
+				WHERE token NOT IN (
+					'main','init',
+					'String','Error','Format','Scan','GoString',
+					'Read','Write','Close','Open','Seek','ReadAt','WriteAt','ReadFrom','WriteTo',
+					'Len','Less','Swap',
+					'MarshalJSON','UnmarshalJSON','MarshalText','UnmarshalText','MarshalBinary','UnmarshalBinary',
+					'Marshal','Unmarshal','Reset','Clone','Copy','Equal','Hash','Validate'
+				)
+				GROUP BY token
+				HAVING copies > 1
+			) c
+			JOIN node_defs d ON d.token = c.token
+			JOIN nodes n ON n.id = d.node_id
+			%s
+			ORDER BY metric DESC, n.source_file, d.node_id
+		`,
+	},
+	{
 		ID:          "fan_out_skew",
 		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
 		ScopeColumn: "COALESCE(n.source_file, '')",
