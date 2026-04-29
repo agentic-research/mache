@@ -426,6 +426,58 @@ func TestFindSmells_LongFunction(t *testing.T) {
 	assert.Equal(t, int64(100), resp.Findings[0].Metric)
 }
 
+// TestFindSmells_UntestedFunction seeds three exported Go-style defs:
+// one with a Test counterpart (covered), one without (untested), and
+// one whose name is on the skip list (excluded). Plus an unexported
+// def to prove the GLOB '[A-Z]' filter holds.
+func TestFindSmells_UntestedFunction(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Covered: TestFooBar exists, so FooBar is OK.
+		INSERT INTO node_defs VALUES ('FooBar', 'pkg/funcs/FooBar');
+		INSERT INTO node_defs VALUES ('TestFooBar', 'pkg/funcs/TestFooBar');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/FooBar',     'pkg/funcs', 'FooBar',     1, 0, 'foo.go',     ''),
+		  ('pkg/funcs/TestFooBar', 'pkg/funcs', 'TestFooBar', 1, 0, 'foo_test.go', '');
+
+		-- Uncovered: no TestOrphan anywhere.
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/funcs/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/Orphan', 'pkg/funcs', 'Orphan', 1, 0, 'orphan.go', '');
+
+		-- Skip list: capitalized but excluded.
+		INSERT INTO node_defs VALUES ('String', 'pkg/funcs/String');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/String', 'pkg/funcs', 'String', 1, 0, 'stringer.go', '');
+
+		-- Unexported (lowercase): must NOT be flagged.
+		INSERT INTO node_defs VALUES ('helper', 'pkg/funcs/helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/helper', 'pkg/funcs', 'helper', 1, 0, 'helpers.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "untested_function",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "only Orphan is uncovered + exported + not on skip list")
+	assert.Equal(t, "pkg/funcs/Orphan", resp.Findings[0].NodeID)
+	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID)
+}
+
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)

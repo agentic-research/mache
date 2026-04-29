@@ -135,6 +135,32 @@ var smellRegistry = []SmellRule{
 		`,
 	},
 	{
+		ID:          "untested_function",
+		Languages:   []string{"go"},
+		Description: "Exported Go functions with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Excludes Test*/Benchmark*/Example* (they ARE tests) and main/init (entry points). The rule's heuristic is Go-specific — running it against a Python or Rust .db will produce mostly noise.",
+		ScopeColumn: "COALESCE(n.source_file, '')",
+		Query: `
+			SELECT COALESCE(n.source_file, '') AS source_id,
+			       d.node_id,
+			       0 AS start_byte,
+			       0 AS end_byte,
+			       0 AS start_row,
+			       0 AS start_col,
+			       0 AS metric
+			FROM node_defs d
+			JOIN nodes n ON n.id = d.node_id
+			LEFT JOIN node_defs t ON t.token = 'Test' || d.token
+			WHERE substr(d.token, 1, 1) GLOB '[A-Z]'
+			  AND d.token NOT LIKE 'Test%%'
+			  AND d.token NOT LIKE 'Benchmark%%'
+			  AND d.token NOT LIKE 'Example%%'
+			  AND d.token NOT IN ('main','init','String','Error')
+			  AND t.token IS NULL
+			%s
+			ORDER BY COALESCE(n.source_file, ''), d.token
+		`,
+	},
+	{
 		ID:          "long_file",
 		Description: "Source files exceeding 1500 lines (end_row reported on the source-file root AST node). Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind. Threshold hard-coded today.",
 		ScopeColumn: "src.source_id",
