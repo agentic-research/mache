@@ -86,13 +86,7 @@ func TestResolveSchema_AllPresets(t *testing.T) {
 //
 // Remove an entry when the corresponding bead is closed and the selector
 // compiles cleanly.
-var knownBrokenPresets = map[string]string{
-	"typescript": "mache-co9f",
-	"cpp":        "mache-y1ay",
-	"swift":      "mache-k6vj",
-	"kotlin":     "mache-uzjb",
-	"scala":      "mache-vtkl",
-}
+var knownBrokenPresets = map[string]string{}
 
 // TestPresetSchemas_SelectorsCompile loads every preset schema whose key
 // matches a registered tree-sitter language and verifies that each

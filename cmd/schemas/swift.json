@@ -31,7 +31,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(class_declaration name: (type_identifier) @name) @scope",
+          "selector": "(class_declaration \"class\" (type_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -84,7 +84,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(struct_declaration name: (type_identifier) @name) @scope",
+          "selector": "(class_declaration \"struct\" (type_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -118,7 +118,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(enum_declaration name: (type_identifier) @name) @scope",
+          "selector": "(class_declaration \"enum\" (type_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {

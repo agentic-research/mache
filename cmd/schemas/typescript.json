@@ -58,7 +58,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(class_declaration name: (identifier) @name) @scope",
+          "selector": "(class_declaration name: (type_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -156,7 +156,7 @@
         },
         {
           "name": "{{.name}}",
-          "selector": "(export_statement declaration: (class_declaration name: (identifier) @name)) @scope",
+          "selector": "(export_statement declaration: (class_declaration name: (type_identifier) @name)) @scope",
           "include": ["lsp"],
           "files": [
             {
