@@ -170,6 +170,15 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 		),
 		r.wrapHandler(makeWriteFileHandler),
 	)
+
+	s.AddTool(
+		mcp.NewTool("resolve_ref",
+			mcp.WithDescription("Resolve a typed cross-language ref token (scheme:locator) to its target. First milestone of the cross-language ref graph (mache-q43l). Today supports the `mod:` scheme with local-relative paths (./X, ../Y) — returns the resolved absolute path plus a directory listing with detected languages. Other schemes return a `remote_hint` so the caller knows resolution was skipped. Useful for following Terraform `module { source = ... }` references into the projected target."),
+			mcp.WithString("token", mcp.Required(), mcp.Description("Typed ref token in `scheme:locator` form (e.g. `mod:./modules/vpc`).")),
+			mcp.WithString("base_path", mcp.Description("File or directory the locator is interpreted relative to. Required for local-relative locators.")),
+		),
+		r.wrapHandler(makeResolveRefHandler),
+	)
 }
 
 type nodeEntry struct {
