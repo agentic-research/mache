@@ -81,11 +81,21 @@ type SQLiteGraph struct {
 	nextFileID  uint32
 	fileIDMap   map[string]uint32 // path → file ID (in-memory during ingestion)
 
-	// Size cache: file path → rendered byte length (legacy scan path only).
-	// The nodes-table fast path uses ntr.SizeCache instead.
+	// Size cache: file path → rendered byte length.
+	// Used ONLY by the legacy scan path (useNodesTable = false). The
+	// nodes-table fast path stores sizes inside its NodesTableReader
+	// (ntr.SizeCache) and never writes here. Invalidate still calls
+	// .Delete on this map for both paths — it's a no-op on the fast
+	// path because nothing was ever stored — but the spurious call is
+	// cheap and keeps Invalidate uniform across both backends.
+	// See bead mache-033cc9.
 	sizeCache sync.Map // file path (string) → int64
 
-	cache *ContentCache // FIFO-bounded rendered content (legacy scan path only)
+	// FIFO-bounded rendered content cache. Same legacy-only story as
+	// sizeCache above: nil on the nodes-table fast path (initialized
+	// only by the legacy OpenSQLiteGraph branch), and Invalidate's
+	// nil check guards the delete.
+	cache *ContentCache
 
 	// Nodes-table fast path: when non-nil, all read methods delegate here.
 	// Initialized only when the DB has a "nodes" table (built by mache build).
