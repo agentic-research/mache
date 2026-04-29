@@ -35,12 +35,20 @@ func mergeSortedDedup(a, b []string) []string {
 	return result
 }
 
-// compactSorted removes consecutive duplicates from a sorted slice.
-// For slices of length 0 or 1, returns the input as-is (no allocation).
-// For longer slices, returns a new slice.
+// compactSorted removes consecutive duplicates from a sorted slice and
+// always returns a slice that does not alias the input — callers may
+// freely append to the result without stomping the source's backing
+// array.
+//
+// Bead mache-ad17c1: previous implementation aliased for len<=1, which
+// matched the caller's current usage in mergeSortedDedup but was a
+// latent hazard if the function gets reused.
 func compactSorted(s []string) []string {
-	if len(s) <= 1 {
-		return s
+	if len(s) == 0 {
+		return nil
+	}
+	if len(s) == 1 {
+		return []string{s[0]}
 	}
 	out := make([]string, 0, len(s))
 	for _, v := range s {
