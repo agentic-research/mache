@@ -173,7 +173,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(namespace_definition name: (identifier) @name) @scope",
+          "selector": "(namespace_definition (namespace_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {

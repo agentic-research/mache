@@ -31,7 +31,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(class_declaration (type_identifier) @name) @scope",
+          "selector": "(class_declaration \"class\" (type_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {
@@ -84,7 +84,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(interface_declaration (type_identifier) @name) @scope",
+          "selector": "(class_declaration \"interface\" (type_identifier) @name) @scope",
           "include": ["lsp"],
           "files": [
             {

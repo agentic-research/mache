@@ -15,7 +15,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(import_declaration (stable_identifier) @name) @scope",
+          "selector": "(import_declaration (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
