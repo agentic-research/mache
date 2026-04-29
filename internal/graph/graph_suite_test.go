@@ -47,24 +47,53 @@ var (
 // The factory is responsible for cleanup (use t.Cleanup or t.TempDir).
 type GraphFactory func(t *testing.T) Graph
 
+// SuiteOpts pins implementation-specific behaviour the Graph contract
+// allows but where each backend has a definite answer. The suite's
+// permissive defaults match older code; setting these lets the suite
+// catch regressions in a specific backend instead of accepting the
+// other valid behaviour silently.
+//
+// Bead mache-035f19 — without RootEmptyReturnsDir set, a regression
+// where ntr.GetNode("") flipped to ErrNotFound would silently pass
+// the WritableGraph suite while breaking FUSE/NFS root lookups in
+// production.
+type SuiteOpts struct {
+	// RootEmptyReturnsDir asserts GetNode("") returns a synthetic dir
+	// node. Backends backed by NodesTableReader (SQLiteGraph,
+	// WritableGraph, HotSwapGraph) set this true; MemoryStore does
+	// not — it returns ErrNotFound for the empty key.
+	RootEmptyReturnsDir bool
+}
+
 // RunGraphSuite runs the full Graph interface contract suite against any
 // implementation. Each test is independent — failures are isolated.
 func RunGraphSuite(t *testing.T, factory GraphFactory) {
+	RunGraphSuiteWithOpts(t, factory, SuiteOpts{})
+}
+
+// RunGraphSuiteWithOpts is the explicit form. Prefer this for new
+// implementations so the contract assertion is precise.
+func RunGraphSuiteWithOpts(t *testing.T, factory GraphFactory, opts SuiteOpts) {
 	t.Helper()
 
 	// -- GetNode ----------------------------------------------------------
 
 	t.Run("GetNode/root_empty_string", func(t *testing.T) {
 		g := factory(t)
-		// Contract: GetNode("") returns a root-level directory node or ErrNotFound.
-		// MemoryStore returns ErrNotFound (no "" key in map).
-		// SQLiteGraph/WritableGraph return a synthetic root Node{ID:"", Mode:dir}.
-		// Both behaviors are valid — the FUSE/NFS layer handles root specially.
 		n, err := g.GetNode("")
-		if err == nil {
-			assert.True(t, n.Mode.IsDir(), "root should be a directory")
+		if opts.RootEmptyReturnsDir {
+			require.NoError(t, err, "this backend MUST return a synthetic root node for empty id")
+			assert.Equal(t, "", n.ID)
+			assert.True(t, n.Mode.IsDir(), "root must be a directory")
 		} else {
-			assert.ErrorIs(t, err, ErrNotFound)
+			// Permissive default — kept so existing tests stay green
+			// while we tighten implementations one at a time. Either
+			// answer is allowed; FUSE/NFS layers handle root specially.
+			if err == nil {
+				assert.True(t, n.Mode.IsDir(), "root should be a directory")
+			} else {
+				assert.ErrorIs(t, err, ErrNotFound)
+			}
 		}
 	})
 
@@ -126,6 +155,12 @@ func RunGraphSuite(t *testing.T, factory GraphFactory) {
 		children, err := g.ListChildren("pkg/empty")
 		require.NoError(t, err)
 		assert.Empty(t, children)
+		// Bead mache-0375fe — pin the nil-vs-empty contract.
+		// Backends are free to return nil OR an empty slice; both
+		// satisfy len() == 0. Pinning len explicitly catches silent
+		// shape changes that would surprise JSON consumers.
+		assert.Zero(t, len(children),
+			"empty dir must return nil or zero-length slice (got non-empty %v)", children)
 	})
 
 	// -- ListChildStats ---------------------------------------------------
@@ -365,7 +400,23 @@ func writableGraphFactory(t *testing.T) Graph {
 // Suite runners — one per implementation
 // ---------------------------------------------------------------------------
 
-func TestMemoryStore_GraphSuite(t *testing.T)   { RunGraphSuite(t, memoryStoreFactory) }
-func TestHotSwapGraph_GraphSuite(t *testing.T)  { RunGraphSuite(t, hotSwapFactory) }
-func TestSQLiteGraph_GraphSuite(t *testing.T)   { RunGraphSuite(t, sqliteGraphFactory) }
-func TestWritableGraph_GraphSuite(t *testing.T) { RunGraphSuite(t, writableGraphFactory) }
+func TestMemoryStore_GraphSuite(t *testing.T) {
+	// MemoryStore returns ErrNotFound for GetNode("") — no synthetic root.
+	RunGraphSuite(t, memoryStoreFactory)
+}
+
+func TestHotSwapGraph_GraphSuite(t *testing.T) {
+	// HotSwapGraph wraps MemoryStore in this fixture, so it inherits
+	// MemoryStore's ErrNotFound behaviour for empty id. If a future
+	// caller swaps in an SQLiteGraph the contract flips — that's
+	// the point of HotSwap.
+	RunGraphSuite(t, hotSwapFactory)
+}
+
+func TestSQLiteGraph_GraphSuite(t *testing.T) {
+	RunGraphSuiteWithOpts(t, sqliteGraphFactory, SuiteOpts{RootEmptyReturnsDir: true})
+}
+
+func TestWritableGraph_GraphSuite(t *testing.T) {
+	RunGraphSuiteWithOpts(t, writableGraphFactory, SuiteOpts{RootEmptyReturnsDir: true})
+}
