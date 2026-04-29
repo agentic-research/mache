@@ -1,6 +1,11 @@
 go 1.25.5
 
-use (
-	.
-	./ext/boltdb
-)
+use .
+
+// ext/boltdb intentionally NOT in the workspace — it's an optional add-on
+// that pulls in go.etcd.io/bbolt (which has open Dependabot alerts and is
+// only used by venturi/trivy-db projection workflows). To work on it:
+//
+//	cd ext/boltdb && go build ./...
+//
+// Or temporarily add `./ext/boltdb` to the `use` block above.
