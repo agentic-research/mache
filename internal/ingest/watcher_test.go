@@ -169,19 +169,24 @@ func TestWatcher_NewSubdirectory(t *testing.T) {
 	require.NoError(t, err)
 	defer w.Stop()
 
-	// Create a new subdirectory with a source file.
+	// Create a new subdirectory with a source file. macOS FSEvents has
+	// higher latency than Linux inotify, so the sub-watcher install can
+	// take >50ms — wait long enough for it to settle before the file
+	// write, otherwise the watcher misses the create event entirely.
 	subDir := filepath.Join(tmpDir, "pkg")
 	require.NoError(t, os.MkdirAll(subDir, 0o755))
-
-	// Small delay to let the watcher pick up the new dir.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
 	goFile := filepath.Join(subDir, "lib.go")
 	require.NoError(t, os.WriteFile(goFile, []byte("package pkg"), 0o644))
 
-	time.Sleep(200 * time.Millisecond)
+	// Poll for the callback instead of sleeping a fixed window — bounded
+	// at 2s with 25ms ticks, which is generous on inotify and tolerable
+	// on FSEvents without making the happy path slow.
+	require.Eventually(t, func() bool {
+		return callCount.Load() >= 1
+	}, 2*time.Second, 25*time.Millisecond, "should detect file in new subdirectory")
 
-	assert.GreaterOrEqual(t, callCount.Load(), int32(1), "should detect file in new subdirectory")
 	mu.Lock()
 	assert.Equal(t, goFile, lastPath)
 	mu.Unlock()
