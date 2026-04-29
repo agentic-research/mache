@@ -29,7 +29,6 @@ graph TD
 
     subgraph "System Interface"
         NFS["NFS Server<br/>(go-nfs / billy)"]
-        FUSE["FUSE Bridge<br/>(cgofuse / fuse-t)"]
         MCP["MCP Server<br/>(stdio or Streamable HTTP)"]
         Tools["User Tools<br/>ls, cat, grep, MCP clients"]
     end
@@ -53,13 +52,10 @@ graph TD
 
     SQLiteGraph -->|Graph Interface| NFS
     MemoryStore -->|Graph Interface| NFS
-    SQLiteGraph -->|Graph Interface| FUSE
-    MemoryStore -->|Graph Interface| FUSE
     SQLiteGraph -->|Graph Interface| MCP
     MemoryStore -->|Graph Interface| MCP
 
     NFS --- Tools
-    FUSE --- Tools
     MCP --- Tools
 ```
 
@@ -71,7 +67,9 @@ There are two data paths depending on the source:
    - **Code**: `.go`, `.py`, `.js`, `.ts`, `.tsx`, `.rs`, `.sql`
    - **Config**: `.tf`, `.hcl`, `.yaml`, `.yml`
 
-Both paths are fronted by the same `Graph` interface and served via either an **NFS server** (macOS default, `go-nfs` + `billy`) or a **FUSE bridge** (Linux default, `cgofuse` + `fuse-t`). A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
+Both paths are fronted by the same `Graph` interface and served via an **NFS server** (`go-nfs` + `billy`, pure Go, cross-platform). A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
+
+> Note: The earlier user-space FUSE bridge (`cgofuse` + `fuse-t`, ADR-0001) was removed in v0.7.0 in favor of the pure-Go NFS path (ADR-0006). For FUSE mounts today, use ley-line-open's `leyline serve`.
 
 With `--infer`, the schema itself can be derived automatically: the `lattice` package reservoir-samples records from a SQLite source, builds a Formal Concept Analysis lattice, and projects it into a valid `Topology` — detecting identifier fields, temporal shard levels, and leaf files without any hand-authored schema.
 
@@ -82,8 +80,7 @@ With `--infer`, the schema itself can be derived automatically: the `lattice` pa
   - **`MemoryStore`** — In-memory map for small datasets (JSON files, source code).
   - **`SQLiteGraph`** — Direct SQL backend for `.db` sources. One-pass scan builds the directory tree; content resolved on demand via primary key lookup and template rendering. No data copied.
 - **`Engine`** — Drives ingestion: walks files, dispatches to walkers, renders templates, builds the graph. Tracks source file paths for origin-aware nodes. Deduplicates same-name constructs (e.g. multiple `init()`) by appending `.from_<filename>` suffixes.
-- **`GraphFS`** — NFS filesystem via `go-nfs`/`billy`. Adapts the `Graph` interface to `billy.Filesystem`. Default backend on macOS.
-- **`MacheFS`** — FUSE implementation via cgofuse. Handle-based readdir with auto-mode for fuse-t compatibility. Extended cache timeouts (300s) for NFS performance. Default backend on Linux.
+- **`GraphFS`** — NFS filesystem via `go-nfs`/`billy`. Adapts the `Graph` interface to `billy.Filesystem`. The only mount backend (the earlier FUSE backend was removed in v0.7.0; see ADR-0006).
 - **`_project_files/`** — Non-AST files (READMEs, configs, docs) encountered during tree-sitter ingestion are routed into a separate `_project_files/` tree via `ingestRawFileUnder()`. This preserves access to supporting files without polluting the AST-derived structure.
 - **Friendly-name grouping** — `ProjectAST` in the lattice package maps raw tree-sitter node types to intuitive container directory names: `function_declaration` → `functions/`, `class_definition` → `classes/`, `type_declaration` → `types/`, etc. Language-specific containment rules nest methods inside classes for Python/TypeScript.
 - **MCP Server** (`cmd/serve.go`) — `mache serve` exposes any graph as an MCP (Model Context Protocol) server. Two transports: stdio (default, client spawns mache as subprocess) and Streamable HTTP (`--http :PORT`, mache runs as an independent always-on process with stateful sessions). Fifteen tools wrap the `Graph` interface: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `semantic_search`, `get_communities`, `get_overview`, `get_type_info`, `get_diagnostics`, `get_impact`, `get_architecture`, `get_diagram`, and `write_file`. Several are conditional on backend capabilities (e.g., `search` requires `QueryRefs`, `write_file` requires `writeBacker`). Uses `mark3labs/mcp-go` with lazy graph initialization for instant health-check response. No filesystem mount needed.
@@ -133,21 +130,16 @@ Plan 9-style query directory at root. Create a query dir (`mkdir /.query/my_sear
 
 Per-directory virtual subdirectory exposing cross-references. For any directory node, `callers/` lists nodes that reference the token (function/method name) derived from the directory name. Self-gating: only appears when `GetCallers(token)` returns non-empty results.
 
-- **NFS**: Entries are `graphFile`s — reading them returns the actual source content of the calling code.
-- **FUSE**: Entries are symlinks pointing back into the graph (e.g., `../../../funcs/Main/source`).
+Entries are `graphFile`s — reading them returns the actual source content of the calling code.
 
 ```bash
 # List callers of function Bar
 ls /funcs/Bar/callers/
 # → funcs_Foo_source
 
-# NFS: read caller content directly
+# Read caller content directly
 cat /funcs/Bar/callers/funcs_Foo_source
 # → func Foo() { Bar() }
-
-# FUSE: follow symlink
-readlink /funcs/Bar/callers/funcs_Foo_source
-# → ../../../funcs/Foo/source
 ```
 
 ### `callees/`
@@ -160,15 +152,14 @@ Resolution pipeline:
 1. Extract qualified calls via tree-sitter (`CallExtractor` → `[]QualifiedCall`)
 1. Resolve each call against the `defs` index: qualified lookup (`auth.Validate`) → import-path fallback → bare token lookup
 
-- **NFS**: Entries are `graphFile`s — reading returns the callee's source content.
-- **FUSE**: Entries are symlinks pointing into the graph (mirrors `callers/` pattern).
+Entries are `graphFile`s — reading returns the callee's source content.
 
 ```bash
 # What does HandleRequest call?
 ls /functions/HandleRequest/callees/
 # → functions_ValidateToken_source  functions_WriteResponse_source
 
-# Read callee source directly (NFS)
+# Read callee source directly
 cat /functions/HandleRequest/callees/functions_ValidateToken_source
 # → func ValidateToken(tok string) error { ... }
 ```
@@ -190,7 +181,6 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 | Graph (SQLite direct)       | `internal/graph/sqlite_graph.go`                       | `SQLiteGraph`, `EagerScan`, `GetCallers`, `GetCallees`                                  |
 | NFS backend                 | `internal/nfsmount/graphfs.go`                         | `GraphFS`, `graphFile`, `writeFile`, `callers/`                                         |
 | NFS server                  | `internal/nfsmount/server.go`                          | `NewServer`, NFS listener                                                               |
-| FUSE backend                | `internal/fs/root.go`                                  | `MacheFS`, `writeHandle`, `callers/`, `.query/`                                         |
 | Source splicing             | `internal/writeback/splice.go`                         | `Splice`                                                                                |
 | Validation                  | `internal/writeback/validate.go`                       | `Validate`                                                                              |
 | Formatting                  | `internal/writeback/format.go`                         | `FormatBuffer` (Go: gofumpt, HCL: hclwrite)                                             |
@@ -204,14 +194,15 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 
 ## Architectural Decision Records (ADRs)
 
-| ADR                                                                                      | Status   | Summary                                                               |
-| ---------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------- |
-| [0001: User-Space FUSE Bridge](adr/0001-user-space-fuse-bridge.md)                       | Accepted | fuse-t + cgofuse for macOS (no kexts)                                 |
-| [0002: Declarative Topology Schema](adr/0002-declarative-topology-schema.md)             | Accepted | Schema-driven ingestion with Go templates                             |
-| [0003: CAS & Layered Overlays](adr/0003-cas-layered-overlays.md)                         | Proposed | Content-Addressed Storage and Docker-style layers (ideated)           |
-| [0004: MVCC Memory Ledger](adr/0004-mvcc-memory-ledger.md)                               | Proposed | ECS + mmap + RCU for 10M+ entities (ideated)                          |
-| [0005: FCA Schema Inference](adr/0005-fca-schema-inference.md)                           | Accepted | NextClosure on sampled records, bitmap-accelerated lattice → topology |
-| [0006: Syntax-Aware Write Protection](adr/0006-syntax-aware-write-protection.md)         | Accepted | Tree-sitter validation before source splice                           |
-| [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed | Git objects as first-class data source                                |
-| [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted | Information-theoretic field scoring for schema inference              |
-| [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted | Validate → format → splice → surgical update (no re-ingest)           |
+| ADR                                                                                      | Status     | Summary                                                                      |
+| ---------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
+| [0001: User-Space FUSE Bridge](adr/0001-user-space-fuse-bridge.md)                       | Superseded | fuse-t + cgofuse for macOS (no kexts) — replaced by NFS in v0.7.0 (see 0006) |
+| [0002: Declarative Topology Schema](adr/0002-declarative-topology-schema.md)             | Accepted   | Schema-driven ingestion with Go templates                                    |
+| [0003: CAS & Layered Overlays](adr/0003-cas-layered-overlays.md)                         | Proposed   | Content-Addressed Storage and Docker-style layers (ideated)                  |
+| [0004: MVCC Memory Ledger](adr/0004-mvcc-memory-ledger.md)                               | Proposed   | ECS + mmap + RCU for 10M+ entities (ideated)                                 |
+| [0005: FCA Schema Inference](adr/0005-fca-schema-inference.md)                           | Accepted   | NextClosure on sampled records, bitmap-accelerated lattice → topology        |
+| [0006: Syntax-Aware Write Protection](adr/0006-syntax-aware-write-protection.md)         | Accepted   | Tree-sitter validation before source splice                                  |
+| [0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md)                                | Accepted   | Drop CGO/FUSE; pre-baked .db via leyline; NFS-only mount (v0.7.0)            |
+| [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed   | Git objects as first-class data source                                       |
+| [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted   | Information-theoretic field scoring for schema inference                     |
+| [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted   | Validate → format → splice → surgical update (no re-ingest)                  |
