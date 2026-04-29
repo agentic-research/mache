@@ -256,6 +256,16 @@ func (s *MemoryStore) AddNode(n *Node) {
 
 // AddFileChildren atomically adds file nodes and appends their IDs to the
 // parent directory's Children slice. Single lock acquisition for the batch.
+//
+// Copy-on-write: publishes a NEW *Node into the map rather than mutating the
+// caller's parent in place. Readers that obtained the previous *Node pointer
+// from GetNode see an immutable snapshot of the old Children slice; subsequent
+// GetNode callers see the updated node. This avoids a data race where a
+// reader holds a *Node pointer (lock released) while a writer appends to the
+// same Children slice.
+//
+// Side effect: the caller's `parent` pointer is stale after this call —
+// further mutations via that pointer are not reflected in the store.
 func (s *MemoryStore) AddFileChildren(parent *Node, files []*Node) {
 	if len(files) == 0 {
 		return
@@ -266,10 +276,21 @@ func (s *MemoryStore) AddFileChildren(parent *Node, files []*Node) {
 		s.nodes[f.ID] = f
 		s.indexNode(f)
 	}
-	for _, f := range files {
-		parent.Children = append(parent.Children, f.ID)
+
+	// Use the canonical parent already in the map (if any). The caller's
+	// pointer may be a stale copy from an earlier GetNode.
+	canonical, ok := s.nodes[parent.ID]
+	if !ok {
+		canonical = parent
 	}
-	s.nodes[parent.ID] = parent
+	newChildren := make([]string, 0, len(canonical.Children)+len(files))
+	newChildren = append(newChildren, canonical.Children...)
+	for _, f := range files {
+		newChildren = append(newChildren, f.ID)
+	}
+	updated := *canonical
+	updated.Children = newChildren
+	s.nodes[parent.ID] = &updated
 }
 
 // ListChildStats returns stat snapshots for all children under a single RLock.

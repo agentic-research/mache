@@ -18,6 +18,11 @@ type CompositeGraph struct {
 	mu     sync.RWMutex
 	mounts map[string]Graph // prefix → sub-graph
 
+	// mountTime is captured at construction and used as the ModTime for the
+	// synthetic root and mount-point directory nodes. Stable across calls so
+	// NFS/FUSE attribute caches don't invalidate on every readdir.
+	mountTime time.Time
+
 	// callerDepth guards against infinite recursion in GetCallers/GetCallees
 	// when a mounted sub-graph delegates back to this CompositeGraph.
 	callerDepth atomic.Int32
@@ -25,7 +30,10 @@ type CompositeGraph struct {
 
 // NewCompositeGraph creates an empty composite graph.
 func NewCompositeGraph() *CompositeGraph {
-	return &CompositeGraph{mounts: make(map[string]Graph)}
+	return &CompositeGraph{
+		mounts:    make(map[string]Graph),
+		mountTime: time.Now(),
+	}
 }
 
 // Mount registers a sub-graph under the given prefix.
@@ -76,7 +84,7 @@ func (c *CompositeGraph) GetNode(id string) (*Node, error) {
 		return &Node{
 			ID:      "",
 			Mode:    fs.ModeDir | 0o555,
-			ModTime: time.Now(),
+			ModTime: c.mountTime,
 		}, nil
 	}
 
@@ -89,7 +97,7 @@ func (c *CompositeGraph) GetNode(id string) (*Node, error) {
 		return &Node{
 			ID:      id,
 			Mode:    fs.ModeDir | 0o555,
-			ModTime: time.Now(),
+			ModTime: c.mountTime,
 		}, nil
 	}
 	n, err := g.GetNode(subPath)
@@ -154,9 +162,9 @@ func (c *CompositeGraph) ListChildStats(id string) ([]NodeStat, error) {
 		stats := make([]NodeStat, len(names))
 		for i, name := range names {
 			stats[i] = NodeStat{
-				ID:    name,
-				IsDir: true,
-				// Zero ModTime — FUSE/NFS substitute mountTime for deterministic timestamps.
+				ID:      name,
+				IsDir:   true,
+				ModTime: c.mountTime,
 			}
 		}
 		return stats, nil

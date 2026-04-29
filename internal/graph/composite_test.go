@@ -119,6 +119,61 @@ func TestCompositeGraph_GetNodeMountPoint(t *testing.T) {
 	}
 }
 
+// TestCompositeGraph_ModTimeStable — bead mache-14f11a.
+//
+// FALSIFIABLE: prior implementation called time.Now() inside GetNode and
+// ListChildStats, so two consecutive calls returned different ModTimes for
+// the same synthetic root/mount-point node. This breaks NFS attribute caches
+// and produces non-deterministic readdir output.
+//
+// With mountTime captured at construction, all calls return the same value.
+func TestCompositeGraph_ModTimeStable(t *testing.T) {
+	c := NewCompositeGraph()
+	_ = c.Mount("browser", testStore("x", nil, nil))
+	_ = c.Mount("iterm", testStore("y", nil, nil))
+
+	// Root node ModTime
+	root1, err := c.GetNode("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root2, err := c.GetNode("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !root1.ModTime.Equal(root2.ModTime) {
+		t.Errorf("root ModTime drifted: %v vs %v", root1.ModTime, root2.ModTime)
+	}
+
+	// Mount-point ModTime
+	mp1, err := c.GetNode("browser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp2, err := c.GetNode("browser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mp1.ModTime.Equal(mp2.ModTime) {
+		t.Errorf("mount-point ModTime drifted: %v vs %v", mp1.ModTime, mp2.ModTime)
+	}
+
+	// ListChildStats root: ModTime must match GetNode mount-point ModTime
+	stats, err := c.ListChildStats("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("expected 2 mount stats, got %d", len(stats))
+	}
+	for _, s := range stats {
+		if !s.ModTime.Equal(mp1.ModTime) {
+			t.Errorf("ListChildStats[%s] ModTime %v != GetNode ModTime %v",
+				s.ID, s.ModTime, mp1.ModTime)
+		}
+	}
+}
+
 func TestCompositeGraph_PathRouting(t *testing.T) {
 	browserStore := testStore("header",
 		map[string][]string{

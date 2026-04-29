@@ -116,6 +116,10 @@ func (c *GraphCache) PutFile(id string, data []byte) {
 
 // AppendChild adds childID to the Children list of parentID if not already
 // present. Returns false if the parent does not exist.
+//
+// Copy-on-write: publishes a new *Node into the store rather than mutating
+// the live parent in place, so readers holding a *Node from GetNode see an
+// immutable snapshot.
 func (c *GraphCache) AppendChild(parentID, childID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -127,13 +131,17 @@ func (c *GraphCache) AppendChild(parentID, childID string) bool {
 	if slices.Contains(parent.Children, childID) {
 		return true // already present
 	}
-	parent.Children = append(parent.Children, childID)
+	updated := *parent
+	updated.Children = append(slices.Clone(parent.Children), childID)
+	c.store.AddNode(&updated)
 	c.persistLocked()
 	return true
 }
 
 // RemoveChild removes childID from the Children list of parentID.
 // Returns false if the parent does not exist.
+//
+// Copy-on-write: see AppendChild.
 func (c *GraphCache) RemoveChild(parentID, childID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -148,7 +156,9 @@ func (c *GraphCache) RemoveChild(parentID, childID string) bool {
 			filtered = append(filtered, ch)
 		}
 	}
-	parent.Children = filtered
+	updated := *parent
+	updated.Children = filtered
+	c.store.AddNode(&updated)
 	c.persistLocked()
 	return true
 }
@@ -157,6 +167,8 @@ func (c *GraphCache) RemoveChild(parentID, childID string) bool {
 // Returns false if the node does not exist.
 // Combined with RemoveChild on the parent, this effectively "deletes" a subtree:
 // ExportSQLite only walks from roots, so orphaned nodes are not persisted.
+//
+// Copy-on-write: see AppendChild.
 func (c *GraphCache) ClearChildren(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -165,14 +177,19 @@ func (c *GraphCache) ClearChildren(id string) bool {
 	if err != nil {
 		return false
 	}
-	node.Children = []string{}
+	updated := *node
+	updated.Children = []string{}
+	c.store.AddNode(&updated)
 	c.persistLocked()
 	return true
 }
 
 // --- Read methods ---
 
-// GetNode returns the node at the given id, or (nil, false) if not found.
+// GetNode returns a shallow copy of the node at the given id, or (nil, false)
+// if not found. The returned *Node's Children and Data slices are detached
+// from the live store so the caller may read them without holding the cache
+// lock and without racing against concurrent mutations.
 func (c *GraphCache) GetNode(id string) (*Node, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -181,11 +198,15 @@ func (c *GraphCache) GetNode(id string) (*Node, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return node, true
+	cp := *node
+	cp.Children = slices.Clone(node.Children)
+	cp.Data = slices.Clone(node.Data)
+	return &cp, true
 }
 
-// GetData returns the Data field of a file node, or (nil, false) if the node
-// does not exist or has no data.
+// GetData returns a copy of the Data field of a file node, or (nil, false)
+// if the node does not exist or has no data. The returned slice is detached
+// from the live store.
 func (c *GraphCache) GetData(id string) ([]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -194,11 +215,12 @@ func (c *GraphCache) GetData(id string) ([]byte, bool) {
 	if err != nil || len(node.Data) == 0 {
 		return nil, false
 	}
-	return node.Data, true
+	return slices.Clone(node.Data), true
 }
 
-// ListChildren returns the Children of a directory node, or (nil, false) if the
-// node does not exist or is not a directory.
+// ListChildren returns a copy of the Children of a directory node, or
+// (nil, false) if the node does not exist or is not a directory. The returned
+// slice is detached from the live store.
 func (c *GraphCache) ListChildren(id string) ([]string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -207,7 +229,7 @@ func (c *GraphCache) ListChildren(id string) ([]string, bool) {
 	if err != nil || !node.Mode.IsDir() {
 		return nil, false
 	}
-	return node.Children, true
+	return slices.Clone(node.Children), true
 }
 
 // RootIDs returns all root node IDs.

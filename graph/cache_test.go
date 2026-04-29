@@ -1,6 +1,7 @@
 package graph_test
 
 import (
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"sync"
@@ -378,5 +379,68 @@ func TestGraphCache_StoreEscapeHatch(t *testing.T) {
 	}
 	if len(children) != 2 {
 		t.Errorf("children = %v, want 2 entries", children)
+	}
+}
+
+// TestGraphCache_NoRaceOnGetNodeChildren — bead mache-5ca676.
+//
+// Falsifiable race test for the public GraphCache aliasing bug. With the
+// previous implementation, GetNode returned the live *Node pointer and
+// AppendChild appended to parent.Children in place. `go test -race` flags
+// this as a data race.
+//
+// With the copy-on-write fix, GetNode returns a detached snapshot and
+// AppendChild publishes a new *Node, so readers see an immutable slice.
+func TestGraphCache_NoRaceOnGetNodeChildren(t *testing.T) {
+	c := graph.NewGraphCache("")
+	c.PutDir("pkg", true)
+	c.PutFile("pkg/seed", []byte("x"))
+	c.AppendChild("pkg", "pkg/seed")
+
+	ready := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		close(ready)
+		for k := 0; k < 5000; k++ {
+			n, ok := c.GetNode("pkg")
+			if !ok {
+				continue
+			}
+			for _, child := range n.Children {
+				_ = child
+			}
+		}
+	}()
+
+	<-ready
+	for i := 0; i < 50; i++ {
+		id := fmt.Sprintf("pkg/f_%03d", i)
+		c.PutFile(id, []byte("v"))
+		c.AppendChild("pkg", id)
+	}
+	<-done
+}
+
+// TestGraphCache_GetNodeReturnsDetachedCopy proves that mutating the
+// returned *Node does not leak back into the store.
+func TestGraphCache_GetNodeReturnsDetachedCopy(t *testing.T) {
+	c := graph.NewGraphCache("")
+	c.PutDir("d", true)
+	c.PutFile("d/a", []byte("v"))
+	c.AppendChild("d", "d/a")
+
+	n, ok := c.GetNode("d")
+	if !ok {
+		t.Fatal("expected d")
+	}
+	// Mutate the returned slice — must not affect future reads.
+	n.Children = append(n.Children, "rogue")
+
+	again, _ := c.GetNode("d")
+	for _, child := range again.Children {
+		if child == "rogue" {
+			t.Fatal("GetNode returned a live pointer; caller mutation leaked into store")
+		}
 	}
 }

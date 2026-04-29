@@ -113,6 +113,55 @@ func TestMemoryStore_AddFileChildren_Atomicity(t *testing.T) {
 	<-done
 }
 
+// TestMemoryStore_AddFileChildren_NoRaceOnGetNodeChildren — bead mache-acc7dd
+//
+// Falsifiable race test for the GetNode + AddFileChildren aliasing bug.
+//
+// FALSIFIABLE: With the in-place `parent.Children = append(...)` implementation,
+// a reader holding a *Node from GetNode would observe Children mutating while
+// AddFileChildren ran. `go test -race` flags this as a data race.
+//
+// With the copy-on-write fix, AddFileChildren publishes a new *Node into the
+// map; the previously-returned *Node's Children slice is immutable thereafter.
+// Run: go test -race -run TestMemoryStore_AddFileChildren_NoRaceOnGetNodeChildren
+func TestMemoryStore_AddFileChildren_NoRaceOnGetNodeChildren(t *testing.T) {
+	store := NewMemoryStore()
+	dir := &Node{ID: "pkg/race", Mode: fs.ModeDir, Children: []string{"pkg/race/seed"}}
+	store.AddNode(dir)
+	store.AddNode(&Node{ID: "pkg/race/seed", Mode: 0})
+
+	files := make([]*Node, 50)
+	for i := range files {
+		files[i] = &Node{
+			ID:   fmt.Sprintf("pkg/race/f_%03d", i),
+			Mode: 0,
+		}
+	}
+
+	ready := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		close(ready)
+		for k := 0; k < 5000; k++ {
+			n, err := store.GetNode("pkg/race")
+			if err != nil {
+				continue
+			}
+			// Read Children directly from the returned *Node — no lock held.
+			// With the in-place append implementation this is a data race
+			// against AddFileChildren below.
+			for _, c := range n.Children {
+				_ = c
+			}
+		}
+	}()
+
+	<-ready
+	store.AddFileChildren(dir, files)
+	<-done
+}
+
 // ===========================================================================
 // ListChildStats — bead mache-07bbf7
 //
