@@ -19,6 +19,33 @@ func init() {
 			field: (field_identifier) @call))
 	`)
 
+	// ASTWalker context kinds — top-level node kinds whose source bytes
+	// constitute the context blob. Mirrors the Go context query above.
+	RegisterASTContextKinds("go", []string{
+		"import_declaration", "const_declaration", "var_declaration", "type_declaration",
+	})
+
+	// ASTWalker (pure-Go path): batched JOIN-style fast path. One CallPattern
+	// per shape; ExtractCalls/ExtractQualifiedCalls translate each into a
+	// single SQL query that returns all matches in one pass.
+	RegisterASTCallPatterns("go", []CallPattern{
+		{OuterKind: "call_expression", LeafKind: "identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"selector_expression"}, LeafKind: "field_identifier", QualifierKind: "identifier"},
+	})
+	RegisterASTCallPatterns("python", []CallPattern{
+		{OuterKind: "call", LeafKind: "identifier"},
+		{OuterKind: "call", Ancestors: []string{"attribute"}, LeafKind: "identifier"},
+	})
+	RegisterASTCallPatterns("rust", []CallPattern{
+		{OuterKind: "call_expression", LeafKind: "identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"scoped_identifier"}, LeafKind: "identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"field_expression"}, LeafKind: "field_identifier"},
+	})
+	RegisterASTCallPatterns("elixir", []CallPattern{
+		{OuterKind: "call", LeafKind: "identifier"},
+		{OuterKind: "call", Ancestors: []string{"dot"}, LeafKind: "identifier"},
+	})
+
 	// Register HCL/Terraform queries — narrow to semantic references:
 	// module sources, variable defaults, and provider/resource references.
 	RegisterRefQuery("terraform", `
