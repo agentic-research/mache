@@ -108,6 +108,15 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 }
 
 // ListChildren returns child IDs for a directory from the nodes table.
+//
+// Empty-result contract: when the directory has no children, the
+// returned slice is nil (not an empty slice). All callers must handle
+// nil correctly — len(nil) is 0, range over nil is a no-op, and
+// JSON-encoding nil produces null. Don't change to []string{} without
+// auditing JSON consumers (the MCP serve_handlers list_directory
+// shapes its own non-nil response).
+//
+// Bead mache-0375fe.
 func (r *NodesTableReader) ListChildren(id string) ([]string, error) {
 	id = NormalizeID(id)
 
