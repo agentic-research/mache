@@ -478,6 +478,63 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID)
 }
 
+// TestFindSmells_FanOutSkew seeds a god-function and several normal
+// callers and asserts only the god-function is flagged. Mean fan-out
+// is (12 + 6×1) / 7 ≈ 2.57; 3×mean ≈ 7.7, well below the god's 12.
+// The 5-call floor would also gate out smaller outliers if they crept
+// past the mean check.
+func TestFindSmells_FanOutSkew(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- God-function: 12 distinct callees.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/god/Dispatcher', 'pkg/god', 'Dispatcher', 1, 0, 'dispatcher.go', '');
+		INSERT INTO node_refs VALUES
+		  ('A','pkg/god/Dispatcher'),('B','pkg/god/Dispatcher'),('C','pkg/god/Dispatcher'),
+		  ('D','pkg/god/Dispatcher'),('E','pkg/god/Dispatcher'),('F','pkg/god/Dispatcher'),
+		  ('G','pkg/god/Dispatcher'),('H','pkg/god/Dispatcher'),('I','pkg/god/Dispatcher'),
+		  ('J','pkg/god/Dispatcher'),('K','pkg/god/Dispatcher'),('L','pkg/god/Dispatcher');
+
+		-- Six normal callers, 1 callee each — dilutes the project mean
+		-- so the god's fan-out exceeds 3× mean. Nodes rows aren't
+		-- required since they fail the threshold and never hit the JOIN.
+		INSERT INTO node_refs VALUES
+		  ('Z1','pkg/ok/N1'),('Z2','pkg/ok/N2'),('Z3','pkg/ok/N3'),
+		  ('Z4','pkg/ok/N4'),('Z5','pkg/ok/N5'),('Z6','pkg/ok/N6');
+
+		-- A caller with 6 callees — over the 5-call floor, but still
+		-- under 3×mean. Asserts the threshold isn't trivially met.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/ok/Borderline', 'pkg/ok', 'Borderline', 1, 0, 'borderline.go', '');
+		INSERT INTO node_refs VALUES
+		  ('M1','pkg/ok/Borderline'),('M2','pkg/ok/Borderline'),
+		  ('M3','pkg/ok/Borderline'),('M4','pkg/ok/Borderline'),
+		  ('M5','pkg/ok/Borderline'),('M6','pkg/ok/Borderline');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "fan_out_skew",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "only Dispatcher exceeds 3×mean and the 5-call floor")
+	assert.Equal(t, "pkg/god/Dispatcher", resp.Findings[0].NodeID)
+	assert.Equal(t, "dispatcher.go", resp.Findings[0].SourceID)
+	assert.Equal(t, int64(12), resp.Findings[0].Metric, "fan-out count is reported as metric")
+}
+
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)
