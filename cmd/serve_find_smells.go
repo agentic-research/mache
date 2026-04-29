@@ -14,21 +14,34 @@ import (
 
 // SmellRule describes one structural code-smell pattern. Rules are
 // language-aware: each carries the language(s) it applies to plus a
-// SQL query template that runs against the `_ast` and `nodes` tables
-// produced by `leyline parse`.
+// SQL query template that runs against the `_ast` / `nodes` /
+// `node_defs` / `node_refs` tables produced by `leyline parse`.
 //
-// The query MUST select the columns: source_id, node_id, start_byte,
-// end_byte, start_row, start_col (in that order). The handler shapes
-// them into a uniform response.
+// The query MUST select exactly six columns:
+//
+//	source_id, node_id, start_byte, end_byte, start_row, start_col
+//
+// in that order. The handler shapes them into a uniform response with
+// 1-based line/column and an optional snippet.
+//
+// `ScopeColumn` is the SQL expression the handler will compare to
+// source_id when the caller passes `source_id` to find_smells (e.g.
+// "lit.source_id" for AST-walking rules; "n.source_file" for rules
+// that join via nodes). The query template MUST contain a single
+// `%s` placeholder where the scope clause should be spliced in;
+// rules unconcerned with scoping can keep the placeholder empty by
+// leaving ScopeColumn blank.
 //
 // Bead mache-6z2e tracks the broader "machelint" idea — declarative
 // rules consumed via this tool. Today the registry is hard-coded; in
-// the future it becomes user-extensible.
+// the future it becomes user-extensible (declarative JSON, per-repo
+// overrides, etc.).
 type SmellRule struct {
 	ID          string   // stable identifier, used as the MCP tool argument
 	Languages   []string // matches `_source.language` values; empty = any
 	Description string   // shown in the help payload
-	Query       string   // SQL with one optional placeholder for source_id
+	Query       string   // SQL with one `%s` placeholder for the optional scope clause
+	ScopeColumn string   // SQL expression to compare to source_id; empty disables source_id scoping
 }
 
 // smellRegistry holds the built-in rules.
@@ -37,6 +50,7 @@ var smellRegistry = []SmellRule{
 		ID:          "magic_int_in_comparison",
 		Languages:   []string{"go"},
 		Description: "Go binary expressions where an int_literal appears as a direct operand. Each match is a candidate magic constant — replace with a named const if the value carries domain meaning.",
+		ScopeColumn: "lit.source_id",
 		Query: `
 			SELECT lit.source_id, lit.node_id, lit.start_byte, lit.end_byte, lit.start_row, lit.start_col
 			FROM _ast lit
@@ -47,6 +61,26 @@ var smellRegistry = []SmellRule{
 			  AND pa.node_kind   = 'binary_expression'
 			%s
 			ORDER BY lit.source_id, lit.start_byte
+		`,
+	},
+	{
+		ID:          "dead_code",
+		Description: "Symbols defined in node_defs that have no entries in node_refs — nothing in the indexed graph references them. False positives expected for entry points (main, init), interface methods invoked dynamically (String, Error), and exported API consumed outside the indexed scope. The skip list at the top of the rule excludes the most common offenders; tune by editing the rule.",
+		ScopeColumn: "COALESCE(n.source_file, '')",
+		Query: `
+			SELECT COALESCE(n.source_file, '') AS source_id,
+			       defs.node_id,
+			       0  AS start_byte,
+			       0  AS end_byte,
+			       0  AS start_row,
+			       0  AS start_col
+			FROM node_defs defs
+			JOIN nodes n ON n.id = defs.node_id
+			LEFT JOIN node_refs refs ON refs.token = defs.token
+			WHERE refs.token IS NULL
+			  AND defs.token NOT IN ('main','init','String','Error','Read','Write','Close','Len','Less','Swap','MarshalJSON','UnmarshalJSON','Format','Scan')
+			%s
+			ORDER BY COALESCE(n.source_file, ''), defs.node_id
 		`,
 	},
 }
@@ -151,8 +185,8 @@ func rulesListing() any {
 func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
 	scope := ""
 	args := []any{}
-	if sourceID != "" {
-		scope = "AND lit.source_id = ?"
+	if sourceID != "" && rule.ScopeColumn != "" {
+		scope = "AND " + rule.ScopeColumn + " = ?"
 		args = append(args, sourceID)
 	}
 	query := fmt.Sprintf(rule.Query, scope) + fmt.Sprintf(" LIMIT %d", limit)

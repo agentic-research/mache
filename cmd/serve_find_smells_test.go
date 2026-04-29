@@ -227,6 +227,88 @@ func TestFindSmells_SourceIDFilterScopes(t *testing.T) {
 	assert.Equal(t, "other.go", resp.Findings[0].SourceID)
 }
 
+// TestFindSmells_DeadCode seeds node_defs + node_refs and asserts that
+// only the unreferenced symbol is flagged. Excludes one symbol on the
+// rule's skip list (init) to verify that filter still works.
+func TestFindSmells_DeadCode(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Defined + referenced — alive.
+		INSERT INTO node_defs VALUES ('LiveFn', 'pkg/funcs/LiveFn');
+		INSERT INTO node_refs VALUES ('LiveFn', 'pkg/funcs/Caller/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/LiveFn',         'pkg/funcs',        'LiveFn',  1, 0, 'live.go',   ''),
+		  ('pkg/funcs/Caller/source',  'pkg/funcs/Caller', 'source',  0, 0, 'caller.go', '');
+
+		-- Defined, never referenced — DEAD.
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/funcs/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/Orphan', 'pkg/funcs', 'Orphan', 1, 0, 'orphan.go', '');
+
+		-- Defined + on the skip list — must NOT be flagged.
+		INSERT INTO node_defs VALUES ('init', 'pkg/funcs/init');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/init', 'pkg/funcs', 'init', 1, 0, 'startup.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "dead_code",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "only Orphan is unreferenced and not on the skip list")
+	assert.Equal(t, "pkg/funcs/Orphan", resp.Findings[0].NodeID)
+	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID,
+		"source_id comes from the construct dir's source_file column")
+}
+
+// TestFindSmells_DeadCodeSourceIDFilter exercises the per-rule
+// ScopeColumn — for dead_code that's `COALESCE(n.source_file, ”)`,
+// not the magic-int rule's `lit.source_id`.
+func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		INSERT INTO node_defs VALUES ('OrphanA', 'pkg/A'), ('OrphanB', 'pkg/B');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/A', 'pkg', 'A', 1, 0, 'a.go', ''),
+		  ('pkg/B', 'pkg', 'B', 1, 0, 'b.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule":      "dead_code",
+		"source_id": "a.go",
+	}))
+	require.NoError(t, err)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total)
+	assert.Equal(t, "a.go", resp.Findings[0].SourceID)
+}
+
 func TestFindSmells_LimitCaps(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.db.Close() }()
