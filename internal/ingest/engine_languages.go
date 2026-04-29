@@ -105,4 +105,16 @@ func init() {
 			(string_lit) @ref
 			(#eq? @_type "variable"))
 	`)
+
+	// HCL: module "X" { source = "..." } → mod:<source-value>
+	// First milestone of mache-q43l (cross-language ref graph). The emitted
+	// token is consumed by the resolver layer: local-path locators project
+	// the target directory; remote locators are recorded as edges only.
+	RegisterAddressRefQuery("terraform", "mod", `
+		(block
+			(identifier) @_type
+			(body (attribute (identifier) @_key (expression (literal_value (string_lit) @ref))))
+			(#eq? @_type "module")
+			(#eq? @_key "source"))
+	`)
 }

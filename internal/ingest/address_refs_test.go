@@ -181,6 +181,47 @@ resource "aws_instance" "web" {
 	assert.Len(t, refs, 2, "should find exactly two variable env refs")
 }
 
+// TestExtractAddressRefs_HCLModuleSource — bead mache-q43l first milestone.
+// Module blocks with a `source = "..."` attribute emit `mod:<value>` tokens.
+// Variable defaults / resource attributes must NOT match.
+func TestExtractAddressRefs_HCLModuleSource(t *testing.T) {
+	code := []byte(`module "vpc" {
+  source = "./modules/vpc"
+  version = "1.0.0"
+}
+
+module "remote_app" {
+  source = "github.com/foo/bar"
+}
+
+variable "DB" {
+  default = "postgres://localhost:5432/mydb"
+}
+
+resource "aws_instance" "web" {
+  source = "this should not match — wrong block type"
+}
+`)
+	lang := hcl.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	w := NewSitterWalker()
+	defer w.Close()
+
+	refs, err := w.ExtractAddressRefs(tree.RootNode(), code, lang, "terraform")
+	require.NoError(t, err)
+
+	assert.Contains(t, refs, "mod:./modules/vpc")
+	assert.Contains(t, refs, "mod:github.com/foo/bar")
+	for _, ref := range refs {
+		assert.NotContains(t, ref, "aws_instance", "resource source attributes must not produce mod refs")
+		assert.NotContains(t, ref, "this should not match", "non-module block sources must not match")
+	}
+}
+
 func TestExtractAddressRefs_NoRegistry(t *testing.T) {
 	// Languages with no registered address ref queries should return nil.
 	w := NewSitterWalker()
