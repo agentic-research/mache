@@ -633,3 +633,49 @@ func TestFindSmells_LimitCaps(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
 	assert.Equal(t, 1, resp.Total)
 }
+
+// TestFindSmells_MinMetricFilters seeds a long_file rule run with
+// three source files of escalating size and asserts the min_metric
+// arg gates findings on the metric column.
+func TestFindSmells_MinMetricFilters(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  ('a_root', 'a.go', 'source_file', 0, 100, 0, 0, 1600, 0),
+		  ('b_root', 'b.go', 'source_file', 0, 100, 0, 0, 2000, 0),
+		  ('c_root', 'c.go', 'source_file', 0, 100, 0, 0, 5000, 0);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+
+	// No threshold: all three files (>1500 lines) come back.
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "long_file"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var unfiltered struct {
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &unfiltered))
+	require.Equal(t, 3, unfiltered.Total, "all three files exceed the rule's 1500-line floor")
+
+	// min_metric=2500 should keep only c.go (5000 lines).
+	res, err = handler(context.Background(), makeRequest(map[string]any{
+		"rule":       "long_file",
+		"min_metric": float64(2500),
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var filtered struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &filtered))
+	require.Equal(t, 1, filtered.Total, "only c.go passes the 2500-line cutoff")
+	assert.Equal(t, "c.go", filtered.Findings[0].SourceID)
+	assert.Equal(t, int64(5000), filtered.Findings[0].Metric)
+}
