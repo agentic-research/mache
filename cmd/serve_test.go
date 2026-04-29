@@ -770,6 +770,76 @@ func TestFindDefinition_RequiredSymbol(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "required")
 }
 
+// TestFindDefinition_NoFuzzyByDefault — bead mache-nmia.
+//
+// Anchored matching is the default. A query like "Help" used to return
+// "Helper" as a substring suggestion in the prior implementation; now it
+// reports no definition unless fuzzy=true is explicitly passed.
+func TestFindDefinition_NoFuzzyByDefault(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeFindDefinitionHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Help"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "no definition found", "default mode must not return substring matches")
+	assert.Contains(t, text, "fuzzy=true", "default-mode response should hint at fuzzy=true")
+	// Make sure we didn't accidentally serialize a defResult JSON.
+	assert.NotContains(t, text, "\"definitions\"")
+}
+
+// TestFindDefinition_FuzzyOptIn — fuzzy=true brings substring matches back.
+func TestFindDefinition_FuzzyOptIn(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeFindDefinitionHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"symbol": "Help",
+		"fuzzy":  true,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	var resp struct {
+		Message     string   `json:"message"`
+		Suggestions []string `json:"suggestions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &resp))
+	assert.Contains(t, resp.Message, "fuzzy=true")
+	require.NotEmpty(t, resp.Suggestions)
+	assert.Contains(t, resp.Suggestions[0], "Helper")
+}
+
+// TestFindDefinition_FuzzyShortSymbolSkipped — symbols below minFuzzyLen
+// don't fuzzy-match even when fuzzy=true (they would match too much).
+func TestFindDefinition_FuzzyShortSymbolSkipped(t *testing.T) {
+	store := buildTestGraph(t)
+	handler := makeFindDefinitionHandler(store)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"symbol": "He", // 2 chars, would match "Helper" but is below threshold
+		"fuzzy":  true,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "no definition found")
+}
+
+// TestCollectFuzzyMatches caps at the requested limit.
+func TestCollectFuzzyMatches_RespectsLimit(t *testing.T) {
+	defs := map[string][]string{
+		"Helper":      {"a"},
+		"HelperAux":   {"b"},
+		"OtherHelper": {"c"},
+		"Helping":     {"d"},
+	}
+	got := collectFuzzyMatches(defs, "help", 2)
+	assert.Len(t, got, 2, "must cap at limit")
+}
+
 // ---------------------------------------------------------------------------
 // get_type_info handler tests
 // ---------------------------------------------------------------------------
