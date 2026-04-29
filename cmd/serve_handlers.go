@@ -102,8 +102,9 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 
 	s.AddTool(
 		mcp.NewTool("find_definition",
-			mcp.WithDescription("Find where a symbol is declared. Use for 'where is X defined?', 'where does X come from?'. Complements find_callers (who uses it) and find_callees (what it calls)."),
+			mcp.WithDescription("Find where a symbol is declared. Use for 'where is X defined?', 'where does X come from?'. Default match is anchored: case-sensitive exact, then case-insensitive exact. Set fuzzy=true to also fall back to substring suggestions when no anchored match exists (recommended only for short queries in unfamiliar codebases — fuzzy is noisy in monorepos)."),
 			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to find definition for (e.g. 'GetCallers' or 'auth.Validate')")),
+			mcp.WithBoolean("fuzzy", mcp.Description("Fall back to substring matching when no anchored match is found (default false). Symbols shorter than 4 characters are never fuzzy-matched.")),
 		),
 		r.wrapHandler(makeFindDefinitionHandler),
 	)
@@ -803,87 +804,123 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
+// minFuzzyLen guards the partial-substring branch. Symbols shorter than
+// this trigger fuzzy matches against essentially every common token in
+// large codebases, which is exactly the noise mache-nmia complained
+// about. 4 chars is the smallest length where substring matching is
+// usually meaningful (e.g. "auth" → AuthZ, OAuth, authenticate).
+const minFuzzyLen = 4
+
+// maxFuzzySuggestions caps how many partial-match suggestions ride back
+// in a single response. The prior limit was 20 — still a wall of text in
+// monorepos. 8 keeps the suggestion list scannable.
+const maxFuzzySuggestions = 8
+
 func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
-	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		symbol := request.GetString("symbol", "")
 		if symbol == "" {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
+		fuzzy := request.GetBool("fuzzy", false)
 
 		dp := g.(defsMapProvider)
 		defs := dp.DefsMap()
 
-		// Try exact match first
-		dirIDs, ok := defs[symbol]
-		if !ok {
-			// Try case-insensitive prefix/suffix matching
-			var matches []string
-			symbolLower := strings.ToLower(symbol)
-			for token, ids := range defs {
-				if strings.ToLower(token) == symbolLower {
-					dirIDs = ids
-					ok = true
-					break
-				}
-				// Also collect partial matches for suggestions
-				tokenLower := strings.ToLower(token)
-				if strings.Contains(tokenLower, symbolLower) || strings.Contains(symbolLower, tokenLower) {
-					for _, id := range ids {
-						matches = append(matches, token+" → "+id)
-					}
-				}
-			}
-			if !ok {
-				if len(matches) > 0 {
-					if len(matches) > 20 {
-						matches = matches[:20]
-					}
-					type suggestion struct {
-						Message     string   `json:"message"`
-						Suggestions []string `json:"suggestions"`
-					}
-					data, _ := json.MarshalIndent(suggestion{
-						Message:     fmt.Sprintf("no exact definition for %q, but found similar symbols", symbol),
-						Suggestions: matches,
-					}, "", "  ")
-					return mcp.NewToolResultText(string(data)), nil
-				}
+		// 1. Anchored exact match — case-sensitive.
+		if dirIDs, ok := defs[symbol]; ok {
+			return findDefinitionResult(symbol, dirIDs), nil
+		}
 
-				// LSP fallback: try _lsp_defs from ley-line pre-baked DB
-				if qg, ok := g.(refsQuerier); ok {
-					lspDefs, err := queryLSPDefs(qg, symbol)
-					if err == nil && len(lspDefs) > 0 {
-						type lspResult struct {
-							Symbol      string           `json:"symbol"`
-							Source      string           `json:"source"`
-							Definitions []lspDefLocation `json:"definitions"`
-						}
-						data, _ := json.MarshalIndent(lspResult{
-							Symbol:      symbol,
-							Source:      "lsp",
-							Definitions: lspDefs,
-						}, "", "  ")
-						return mcp.NewToolResultText(string(data)), nil
-					}
-				}
-
-				if serveControl != "" {
-					return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q — daemon may still be parsing, retry shortly", symbol)), nil
-				}
-				return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q", symbol)), nil
+		// 2. Anchored exact match — case-insensitive.
+		// Same token, just different case — still "anchored," not noise.
+		symbolLower := strings.ToLower(symbol)
+		for token, ids := range defs {
+			if strings.ToLower(token) == symbolLower {
+				return findDefinitionResult(symbol, ids), nil
 			}
 		}
 
-		type defResult struct {
-			Symbol      string   `json:"symbol"`
-			Definitions []string `json:"definitions"`
+		// 3. Fuzzy substring fallback — opt-in only. The default behavior
+		// previously returned a wall of partial matches that drowned out
+		// the right answer in monorepos (bead mache-nmia).
+		if fuzzy && len(symbol) >= minFuzzyLen {
+			matches := collectFuzzyMatches(defs, symbolLower, maxFuzzySuggestions)
+			if len(matches) > 0 {
+				type suggestion struct {
+					Message     string   `json:"message"`
+					Suggestions []string `json:"suggestions"`
+				}
+				data, _ := json.MarshalIndent(suggestion{
+					Message:     fmt.Sprintf("no exact definition for %q, but found similar symbols (fuzzy=true)", symbol),
+					Suggestions: matches,
+				}, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			}
 		}
-		data, _ := json.MarshalIndent(defResult{
-			Symbol:      symbol,
-			Definitions: dirIDs,
-		}, "", "  ")
-		return mcp.NewToolResultText(string(data)), nil
+
+		// 4. LSP fallback: try _lsp_defs from a ley-line pre-baked DB.
+		if qg, ok := g.(refsQuerier); ok {
+			lspDefs, err := queryLSPDefs(qg, symbol)
+			if err == nil && len(lspDefs) > 0 {
+				type lspResult struct {
+					Symbol      string           `json:"symbol"`
+					Source      string           `json:"source"`
+					Definitions []lspDefLocation `json:"definitions"`
+				}
+				data, _ := json.MarshalIndent(lspResult{
+					Symbol:      symbol,
+					Source:      "lsp",
+					Definitions: lspDefs,
+				}, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			}
+		}
+
+		// 5. Nothing matched. Hint at fuzzy if available.
+		hint := ""
+		if !fuzzy && len(symbol) >= minFuzzyLen {
+			hint = " — try fuzzy=true for substring matches"
+		}
+		if serveControl != "" {
+			return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q — daemon may still be parsing, retry shortly%s", symbol, hint)), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q%s", symbol, hint)), nil
 	}
+}
+
+// findDefinitionResult shapes the success response for find_definition.
+func findDefinitionResult(symbol string, dirIDs []string) *mcp.CallToolResult {
+	type defResult struct {
+		Symbol      string   `json:"symbol"`
+		Definitions []string `json:"definitions"`
+	}
+	data, _ := json.MarshalIndent(defResult{Symbol: symbol, Definitions: dirIDs}, "", "  ")
+	return mcp.NewToolResultText(string(data))
+}
+
+// collectFuzzyMatches walks the defs map looking for tokens whose
+// case-insensitive form contains symbolLower (or vice versa) and returns
+// up to `limit` "token → dir_id" pairs. Caller has already ensured
+// symbolLower is at least minFuzzyLen.
+func collectFuzzyMatches(defs map[string][]string, symbolLower string, limit int) []string {
+	var matches []string
+	for token, ids := range defs {
+		if len(matches) >= limit {
+			break
+		}
+		tokenLower := strings.ToLower(token)
+		if !strings.Contains(tokenLower, symbolLower) && !strings.Contains(symbolLower, tokenLower) {
+			continue
+		}
+		for _, id := range ids {
+			matches = append(matches, token+" → "+id)
+			if len(matches) >= limit {
+				break
+			}
+		}
+	}
+	return matches
 }
 
 func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
