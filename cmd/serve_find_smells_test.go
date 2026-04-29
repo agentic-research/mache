@@ -391,6 +391,71 @@ func TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction(t *testing.T) {
 	assert.Equal(t, 2, len(got), "topif is not under any function — no extra finding")
 }
 
+// TestFindSmells_LongFunction seeds two functions of different sizes
+// and asserts the rule flags only the one over the threshold (80 lines).
+func TestFindSmells_LongFunction(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  -- Long: 100 lines (10 → 110), should fire.
+		  ('big_fn',   'main.go', 'function_declaration', 100, 200, 10, 0, 110, 0),
+		  -- Just under threshold: exactly 80 lines, should NOT fire (> 80).
+		  ('mid_fn',   'main.go', 'method_declaration',   300, 400, 200, 0, 280, 0),
+		  -- Tiny: 5 lines.
+		  ('small_fn', 'main.go', 'function_declaration', 500, 550, 300, 0, 305, 0);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "long_function",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "only big_fn (100 lines) is over the 80-line threshold")
+	assert.Equal(t, "big_fn", resp.Findings[0].NodeID)
+	assert.Equal(t, int64(100), resp.Findings[0].Metric)
+}
+
+// TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
+func TestFindSmells_LongFile(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  ('huge_file_root', 'huge.go',  'source_file', 0, 999999, 0, 0, 2000, 0),
+		  ('small_file_root','small.go', 'source_file', 0, 1234,   0, 0, 50,   0);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "long_file",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "only huge.go is over 1500 lines")
+	assert.Equal(t, "huge.go", resp.Findings[0].SourceID)
+	assert.Equal(t, int64(2000), resp.Findings[0].Metric)
+}
+
 func TestFindSmells_LimitCaps(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.db.Close() }()
