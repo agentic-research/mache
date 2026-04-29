@@ -84,6 +84,30 @@ func TestCompactSorted_SingleElement(t *testing.T) {
 	assert.Equal(t, []string{"a"}, got)
 }
 
+// TestCompactSorted_NoAliasing — bead mache-ad17c1.
+//
+// FALSIFIABLE: prior implementation returned the input slice directly
+// for len<=1, so a caller appending to the result could stomp the
+// source's backing array. With the fresh-slice fix, mutating the
+// returned slice must not leak back into the input.
+func TestCompactSorted_NoAliasing(t *testing.T) {
+	src := []string{"only"}
+	out := compactSorted(src)
+
+	// Mutate the result. If out aliases src, this would change src too.
+	out[0] = "mutated"
+
+	assert.Equal(t, "only", src[0],
+		"compactSorted must return a slice that does not alias the input")
+}
+
+// TestCompactSorted_EmptyReturnsNil pins the contract for empty input —
+// nil rather than an aliased empty slice, so callers can branch on it.
+func TestCompactSorted_EmptyReturnsNil(t *testing.T) {
+	assert.Nil(t, compactSorted(nil))
+	assert.Nil(t, compactSorted([]string{}))
+}
+
 func TestCompactSorted_NoDupes(t *testing.T) {
 	s := []string{"a", "b", "c"}
 	assert.Equal(t, s, compactSorted(s))
