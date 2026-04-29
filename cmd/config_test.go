@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/lang"
+	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,6 +76,79 @@ func TestResolveSchema_AllPresets(t *testing.T) {
 			require.NotNil(t, topo)
 			assert.Equal(t, "v1", topo.Version)
 		})
+	}
+}
+
+// knownBrokenPresets maps preset name → tracking bead for selectors that
+// don't compile against their tree-sitter grammar. The test skips these
+// so CI stays green while the schemas are being repaired. Each bead lists
+// the specific selector(s) involved.
+//
+// Remove an entry when the corresponding bead is closed and the selector
+// compiles cleanly.
+var knownBrokenPresets = map[string]string{
+	"typescript": "mache-co9f",
+	"cpp":        "mache-y1ay",
+	"swift":      "mache-k6vj",
+	"kotlin":     "mache-uzjb",
+	"scala":      "mache-vtkl",
+}
+
+// TestPresetSchemas_SelectorsCompile loads every preset schema whose key
+// matches a registered tree-sitter language and verifies that each
+// selector in the schema tree compiles as a tree-sitter query against
+// that language. Bead mache-a21b69 — `TestResolveSchema_AllPresets`
+// only validates JSON parsing, so a broken selector silently routes
+// files to `_project_files/` instead of failing loudly.
+//
+// Data-format presets (cli, mcp, mcp-registry) use JSONPath selectors
+// rather than tree-sitter and are skipped. Presets in
+// knownBrokenPresets are skipped pending the linked beads.
+func TestPresetSchemas_SelectorsCompile(t *testing.T) {
+	dataPresets := map[string]bool{"cli": true, "mcp": true, "mcp-registry": true}
+
+	for name := range presetSchemas {
+		if dataPresets[name] {
+			continue
+		}
+		l := lang.ForName(name)
+		if l == nil || l.Grammar() == nil {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			if bead, broken := knownBrokenPresets[name]; broken {
+				t.Skipf("known-broken selectors — see %s", bead)
+			}
+			topo, err := loadPresetSchema(name)
+			require.NoError(t, err)
+			require.NotNil(t, topo)
+
+			grammar := l.Grammar()
+			walkPresetNodes(t, topo.Nodes, name, func(node api.Node, path string) {
+				if node.Selector == "" {
+					return
+				}
+				if node.Selector == "$" {
+					return
+				}
+				q, err := sitter.NewQuery([]byte(node.Selector), grammar)
+				if err != nil {
+					t.Errorf("preset %q selector at %s failed to compile:\n  selector: %s\n  error: %v",
+						name, path, node.Selector, err)
+					return
+				}
+				q.Close()
+			})
+		})
+	}
+}
+
+func walkPresetNodes(t *testing.T, nodes []api.Node, parentPath string, fn func(api.Node, string)) {
+	t.Helper()
+	for i := range nodes {
+		path := parentPath + "/" + nodes[i].Name
+		fn(nodes[i], path)
+		walkPresetNodes(t, nodes[i].Children, path, fn)
 	}
 }
 
