@@ -535,6 +535,57 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 	assert.Equal(t, int64(12), resp.Findings[0].Metric, "fan-out count is reported as metric")
 }
 
+// TestFindSmells_DuplicateDefinitions seeds three groups: a duplicated
+// helper (two defs, two source files — flagged twice), an interface
+// method on the skip list (two defs — excluded), and a unique symbol
+// (one def — excluded).
+func TestFindSmells_DuplicateDefinitions(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Duplicated helper — both should appear in findings.
+		INSERT INTO node_defs VALUES ('Helper', 'pkg/a/Helper'), ('Helper', 'pkg/b/Helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/Helper', 'pkg/a', 'Helper', 1, 0, 'a/helper.go', ''),
+		  ('pkg/b/Helper', 'pkg/b', 'Helper', 1, 0, 'b/helper.go', '');
+
+		-- Interface method — duplication is expected, must be excluded.
+		INSERT INTO node_defs VALUES ('String', 'pkg/a/String'), ('String', 'pkg/b/String');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/String', 'pkg/a', 'String', 1, 0, 'a/stringer.go', ''),
+		  ('pkg/b/String', 'pkg/b', 'String', 1, 0, 'b/stringer.go', '');
+
+		-- Unique symbol — must NOT be flagged.
+		INSERT INTO node_defs VALUES ('Solo', 'pkg/a/Solo');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/Solo', 'pkg/a', 'Solo', 1, 0, 'a/solo.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "duplicate_definitions",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 2, resp.Total, "both Helper defs flagged, String skipped, Solo not duplicated")
+
+	gotIDs := []string{resp.Findings[0].NodeID, resp.Findings[1].NodeID}
+	assert.ElementsMatch(t, []string{"pkg/a/Helper", "pkg/b/Helper"}, gotIDs)
+	for _, f := range resp.Findings {
+		assert.Equal(t, int64(2), f.Metric, "duplicate count reported as metric")
+	}
+}
+
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)
