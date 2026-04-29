@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/agentic-research/mache/internal/graph"
 	_ "modernc.org/sqlite"
 )
 
@@ -129,7 +130,7 @@ func buildJSONChildren(parentID string, nodes []jsonNode, childrenOf map[string]
 		}
 		visited[n.id] = true
 
-		if n.kind == 1 {
+		if n.kind == graph.NodeKindDir {
 			// Directory node.
 			if n.name == "" && parentID == "" {
 				// Transparent unnamed root — promote children.
@@ -143,7 +144,7 @@ func buildJSONChildren(parentID string, nodes []jsonNode, childrenOf map[string]
 				Children: buildJSONChildren(n.id, nodes, childrenOf, visited),
 			}
 			entries = append(entries, entry)
-		} else if n.kind == 0 {
+		} else if n.kind == graph.NodeKindFile {
 			// File node.
 			if n.name == "" {
 				continue

@@ -92,6 +92,7 @@ func (m *ZIPMaterializer) Materialize(srcDB, outPath string) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	// kind = 0 → graph.NodeKindFile (file nodes only).
 	rows, err := db.Query(`SELECT id, record FROM nodes WHERE kind = 0 AND record IS NOT NULL ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("query nodes: %w", err)

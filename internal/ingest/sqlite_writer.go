@@ -237,10 +237,11 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		}
 	}
 
-	// Store full os.FileMode for fidelity (kind column: 1=dir, 0=file).
-	kind := 0
+	// Store full os.FileMode for fidelity. kind column uses the wire
+	// constants NodeKindFile/NodeKindDir.
+	kind := graph.NodeKindFile
 	if n.Mode.IsDir() {
-		kind = 1
+		kind = graph.NodeKindDir
 	}
 
 	// 3. Record ID (for lazy loading)
@@ -386,7 +387,7 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 	}
 
 	mode := os.FileMode(0o444)
-	if kind == 1 {
+	if kind == graph.NodeKindDir {
 		mode = os.ModeDir | 0o555
 	}
 
