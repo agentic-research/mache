@@ -17,20 +17,26 @@ import (
 // SQL query template that runs against the `_ast` / `nodes` /
 // `node_defs` / `node_refs` tables produced by `leyline parse`.
 //
-// The query MUST select exactly six columns:
+// The query MUST select exactly seven columns:
 //
-//	source_id, node_id, start_byte, end_byte, start_row, start_col
+//	source_id, node_id, start_byte, end_byte, start_row, start_col, metric
 //
-// in that order. The handler shapes them into a uniform response with
-// 1-based line/column and an optional snippet.
+// in that order. `metric` is an integer score (cyclomatic complexity,
+// fan-out count, line length, etc.); binary rules that don't carry
+// a metric emit `0 AS metric`. The handler shapes the row into a
+// uniform response with 1-based line/column and an optional snippet.
 //
 // `ScopeColumn` is the SQL expression the handler will compare to
 // source_id when the caller passes `source_id` to find_smells (e.g.
 // "lit.source_id" for AST-walking rules; "n.source_file" for rules
 // that join via nodes). The query template MUST contain a single
 // `%s` placeholder where the scope clause should be spliced in;
-// rules unconcerned with scoping can keep the placeholder empty by
-// leaving ScopeColumn blank.
+// rules unconcerned with scoping can leave ScopeColumn blank.
+//
+// Threshold filtering on the metric column is intentionally
+// client-side today — agents sort/filter the response. A server-side
+// min_metric arg is filed as a follow-up; we'll add it once two or
+// more rules need it.
 //
 // Bead mache-6z2e tracks the broader "machelint" idea — declarative
 // rules consumed via this tool. Today the registry is hard-coded; in
@@ -52,7 +58,7 @@ var smellRegistry = []SmellRule{
 		Description: "Go binary expressions where an int_literal appears as a direct operand. Each match is a candidate magic constant — replace with a named const if the value carries domain meaning.",
 		ScopeColumn: "lit.source_id",
 		Query: `
-			SELECT lit.source_id, lit.node_id, lit.start_byte, lit.end_byte, lit.start_row, lit.start_col
+			SELECT lit.source_id, lit.node_id, lit.start_byte, lit.end_byte, lit.start_row, lit.start_col, 0 AS metric
 			FROM _ast lit
 			JOIN nodes n   ON n.id = lit.node_id
 			JOIN nodes p   ON p.id = n.parent_id
@@ -73,7 +79,8 @@ var smellRegistry = []SmellRule{
 			       0  AS start_byte,
 			       0  AS end_byte,
 			       0  AS start_row,
-			       0  AS start_col
+			       0  AS start_col,
+			       0  AS metric
 			FROM node_defs defs
 			JOIN nodes n ON n.id = defs.node_id
 			LEFT JOIN node_refs refs ON refs.token = defs.token
@@ -83,10 +90,36 @@ var smellRegistry = []SmellRule{
 			ORDER BY COALESCE(n.source_file, ''), defs.node_id
 		`,
 	},
+	{
+		ID:          "cyclomatic_complexity",
+		Languages:   []string{"go"},
+		Description: "Per-function cyclomatic complexity, computed as the count of control-flow AST nodes (if/for/case/select-case) inside each function or method body. Findings are sorted descending by metric — agents typically only care about the top N. Use min_metric (TODO) once the threshold arg lands; today, filter client-side. Rule scopes via fn.source_id when source_id is provided.",
+		ScopeColumn: "fn.source_id",
+		Query: `
+			SELECT fn.source_id,
+			       fn.node_id,
+			       fn.start_byte,
+			       fn.end_byte,
+			       fn.start_row,
+			       fn.start_col,
+			       COUNT(branch.node_id) AS metric
+			FROM _ast fn
+			LEFT JOIN _ast branch
+			  ON branch.source_id = fn.source_id
+			  AND branch.node_id LIKE fn.node_id || '/%%'
+			  AND branch.node_kind IN ('if_statement','for_statement','case_clause','expression_case','type_case','communication_case','default_case')
+			WHERE fn.node_kind IN ('function_declaration','method_declaration')
+			%s
+			GROUP BY fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col
+			ORDER BY metric DESC, fn.source_id, fn.start_byte
+		`,
+	},
 }
 
 // smellFinding is one row of a smell scan. Byte ranges and (1-based)
-// line/column let editors jump straight to the offending span.
+// line/column let editors jump straight to the offending span. Metric
+// carries a numeric score for rules that compute one (cyclomatic
+// complexity, fan-out count, line length, etc.); binary rules emit 0.
 type smellFinding struct {
 	RuleID    string `json:"rule_id"`
 	SourceID  string `json:"source_id"`
@@ -95,7 +128,8 @@ type smellFinding struct {
 	EndByte   int    `json:"end_byte"`
 	Line      int    `json:"line"`              // 1-based
 	Column    int    `json:"column"`            // 1-based
-	Snippet   string `json:"snippet,omitempty"` // up to ~80 chars of source
+	Metric    int64  `json:"metric,omitempty"`  // rule-specific score (0 omitted)
+	Snippet   string `json:"snippet,omitempty"` // short source preview
 }
 
 // makeFindSmellsHandler returns the MCP handler. With no `rule` arg
@@ -206,8 +240,9 @@ func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) (
 			endByte   int
 			startRow  int
 			startCol  int
+			metric    int64
 		)
-		if err := rows.Scan(&src, &nodeID, &startByte, &endByte, &startRow, &startCol); err != nil {
+		if err := rows.Scan(&src, &nodeID, &startByte, &endByte, &startRow, &startCol, &metric); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		out = append(out, smellFinding{
@@ -218,6 +253,7 @@ func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) (
 			EndByte:   endByte,
 			Line:      startRow + 1, // tree-sitter is 0-indexed; agents expect 1-based
 			Column:    startCol + 1,
+			Metric:    metric,
 		})
 	}
 	return out, rows.Err()

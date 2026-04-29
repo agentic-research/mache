@@ -309,6 +309,88 @@ func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
 	assert.Equal(t, "a.go", resp.Findings[0].SourceID)
 }
 
+// TestFindSmells_CyclomaticComplexity seeds two functions with
+// different control-flow counts and asserts the rule returns them
+// ranked by metric DESC.
+//
+// fnA has 3 branches (1 if + 1 for + 1 case) → metric 3.
+// fnB has 0 branches → metric 0.
+// Both should appear; fnA first.
+func TestFindSmells_CyclomaticComplexity(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  ('fnA',                'main.go', 'function_declaration', 100, 200, 10, 0, 30, 0),
+		  ('fnA/if_a',           'main.go', 'if_statement',         110, 120, 11, 1, 12, 0),
+		  ('fnA/for_a',          'main.go', 'for_statement',        130, 150, 13, 1, 16, 0),
+		  ('fnA/switch/case_a',  'main.go', 'case_clause',          160, 180, 17, 2, 18, 0),
+		  ('fnB',                'main.go', 'function_declaration', 250, 280, 31, 0, 35, 0);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "cyclomatic_complexity",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	require.Equal(t, 2, resp.Total)
+	assert.Equal(t, "fnA", resp.Findings[0].NodeID, "highest-complexity function ranks first")
+	assert.Equal(t, int64(3), resp.Findings[0].Metric, "1 if + 1 for + 1 case = 3")
+	assert.Equal(t, "fnB", resp.Findings[1].NodeID)
+	assert.Equal(t, int64(0), resp.Findings[1].Metric)
+}
+
+// TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction proves
+// the LIKE 'fn.node_id || /%' filter — branches in OTHER functions
+// or top-level branches outside any function don't get attributed.
+func TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  ('foo',         'main.go', 'function_declaration', 100, 200, 10, 0, 20, 0),
+		  ('foo/if_1',    'main.go', 'if_statement',         110, 120, 11, 1, 12, 0),
+		  ('bar',         'main.go', 'function_declaration', 300, 400, 31, 0, 40, 0),
+		  ('bar/if_1',    'main.go', 'if_statement',         310, 320, 32, 1, 33, 0),
+		  ('bar/if_2',    'main.go', 'if_statement',         330, 340, 34, 1, 35, 0),
+		  -- A naked top-level if outside any function — must NOT be attributed.
+		  ('topif',       'main.go', 'if_statement',         500, 510, 50, 0, 51, 0);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "cyclomatic_complexity",
+	}))
+	require.NoError(t, err)
+
+	var resp struct {
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	got := map[string]int64{}
+	for _, f := range resp.Findings {
+		got[f.NodeID] = f.Metric
+	}
+	assert.Equal(t, int64(2), got["bar"], "bar has 2 ifs as descendants")
+	assert.Equal(t, int64(1), got["foo"], "foo has 1 if")
+	assert.Equal(t, 2, len(got), "topif is not under any function — no extra finding")
+}
+
 func TestFindSmells_LimitCaps(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.db.Close() }()
