@@ -114,6 +114,45 @@ var smellRegistry = []SmellRule{
 			ORDER BY metric DESC, fn.source_id, fn.start_byte
 		`,
 	},
+	{
+		ID:          "long_function",
+		Languages:   []string{"go"},
+		Description: "Functions and methods whose body spans more than 80 source lines (end_row - start_row). Sorted descending by line count. Threshold is hard-coded today — use cyclomatic_complexity for a sister metric on the same nodes.",
+		ScopeColumn: "fn.source_id",
+		Query: `
+			SELECT fn.source_id,
+			       fn.node_id,
+			       fn.start_byte,
+			       fn.end_byte,
+			       fn.start_row,
+			       fn.start_col,
+			       (fn.end_row - fn.start_row) AS metric
+			FROM _ast fn
+			WHERE fn.node_kind IN ('function_declaration','method_declaration')
+			  AND (fn.end_row - fn.start_row) > 80
+			%s
+			ORDER BY metric DESC, fn.source_id, fn.start_byte
+		`,
+	},
+	{
+		ID:          "long_file",
+		Description: "Source files exceeding 1500 lines (end_row reported on the source-file root AST node). Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind. Threshold hard-coded today.",
+		ScopeColumn: "src.source_id",
+		Query: `
+			SELECT src.source_id,
+			       src.node_id,
+			       src.start_byte,
+			       src.end_byte,
+			       src.start_row,
+			       src.start_col,
+			       src.end_row AS metric
+			FROM _ast src
+			WHERE src.node_kind = 'source_file'
+			  AND src.end_row > 1500
+			%s
+			ORDER BY metric DESC, src.source_id
+		`,
+	},
 }
 
 // smellFinding is one row of a smell scan. Byte ranges and (1-based)
