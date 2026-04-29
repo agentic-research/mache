@@ -179,6 +179,18 @@ func NormalizeID(id string) string {
 	return id
 }
 
+// parentOfNodeID returns the parent ID by stripping the last `/segment`.
+// Top-level IDs (no `/`) return "". Used by deleteFileNodes to find the
+// minimal set of parents whose Children slices need pruning.
+func parentOfNodeID(id string) string {
+	for i := len(id) - 1; i >= 0; i-- {
+		if id[i] == '/' {
+			return id[:i]
+		}
+	}
+	return ""
+}
+
 // SliceContent copies content bytes into buf at the given offset.
 // Returns the number of bytes copied. Shared by all ReadContent implementations.
 func SliceContent(data, buf []byte, offset int64) int {
@@ -557,21 +569,31 @@ func (s *MemoryStore) deleteFileNodes(filePath string) {
 		delete(s.fileToNodes, filePath)
 	}
 
-	// 3. Clean up children pointers in remaining nodes
-	for _, n := range s.nodes {
-		if n.Mode.IsDir() && len(n.Children) > 0 {
-			newChildren := n.Children[:0]
-			changed := false
-			for _, c := range n.Children {
-				if _, del := deleteSet[c]; del {
-					changed = true
-				} else {
-					newChildren = append(newChildren, c)
-				}
+	// 3. Clean up Children pointers in just the parents of deleted nodes.
+	// Was an O(N) scan over the whole store (bead mache-07f9ca); now
+	// O(K) over the unique parent paths derived from the deleted IDs.
+	parentsTouched := make(map[string]struct{}, len(deleteSet))
+	for id := range deleteSet {
+		if pid := parentOfNodeID(id); pid != "" {
+			parentsTouched[pid] = struct{}{}
+		}
+	}
+	for pid := range parentsTouched {
+		n, ok := s.nodes[pid]
+		if !ok || !n.Mode.IsDir() || len(n.Children) == 0 {
+			continue
+		}
+		newChildren := n.Children[:0]
+		changed := false
+		for _, c := range n.Children {
+			if _, del := deleteSet[c]; del {
+				changed = true
+			} else {
+				newChildren = append(newChildren, c)
 			}
-			if changed {
-				n.Children = newChildren
-			}
+		}
+		if changed {
+			n.Children = newChildren
 		}
 	}
 
