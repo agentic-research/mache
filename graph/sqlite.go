@@ -10,6 +10,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// nodeKindFile and nodeKindDir mirror the wire-format constants in
+// internal/graph (NodeKindFile/NodeKindDir). Duplicated here because
+// this is the public graph/ package and Go's import rules forbid
+// reaching into internal/. The values are part of mache's on-disk
+// schema and must stay in sync.
+const (
+	nodeKindFile = 0
+	nodeKindDir  = 1
+)
+
 // ExportSQLite writes all nodes from a MemoryStore to a SQLite database.
 // Creates the nodes table if it doesn't exist. Existing entries are overwritten.
 // The resulting file uses the standard mache nodes table schema.
@@ -63,9 +73,9 @@ func exportNode(store *MemoryStore, stmt *sql.Stmt, nodeID, parentID string) err
 		return err
 	}
 
-	kind := 0 // file
+	kind := nodeKindFile
 	if node.Mode.IsDir() {
-		kind = 1
+		kind = nodeKindDir
 	}
 
 	// Build record JSON: inline data + properties.
@@ -145,7 +155,7 @@ func ImportSQLite(dbPath string) (*MemoryStore, error) {
 			ID:      r.id,
 			ModTime: time.Unix(0, r.mtime),
 		}
-		if r.kind == 1 {
+		if r.kind == nodeKindDir {
 			node.Mode = fs.ModeDir
 			node.Children = []string{}
 		}

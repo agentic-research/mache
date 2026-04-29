@@ -12,6 +12,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// nodeKindFile and nodeKindDir mirror internal/graph.NodeKindFile/Dir.
+// Duplicated here because this is a workspace module that can't import
+// the internal package — the values are part of mache's on-disk schema
+// and must stay in sync.
+const (
+	nodeKindFile = 0
+	nodeKindDir  = 1
+)
+
 // Materialize reads the node tree from a mache SQLite DB and writes
 // directories as bbolt nested buckets and file content as bucket key/values.
 func Materialize(srcDB, outPath string) error {
@@ -67,7 +76,7 @@ func Materialize(srcDB, outPath string) error {
 			}
 			visited[n.id] = true
 
-			if n.kind == 1 {
+			if n.kind == nodeKindDir {
 				if n.name == "" && pb == nil {
 					if err := writeChildren(tx, pb, n.id, visited); err != nil {
 						return err
@@ -87,7 +96,7 @@ func Materialize(srcDB, outPath string) error {
 				if err := writeChildren(tx, bucket, n.id, visited); err != nil {
 					return err
 				}
-			} else if n.kind == 0 && n.content.Valid && n.name != "" {
+			} else if n.kind == nodeKindFile && n.content.Valid && n.name != "" {
 				if pb == nil {
 					root, err := tx.CreateBucketIfNotExists([]byte("_root"))
 					if err != nil {

@@ -628,6 +628,7 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	var langName string
 	if g.useNodesTable {
 		var recordJSON sql.NullString
+		// kind = 1 → graph.NodeKindDir (constructs are dirs).
 		_ = g.db.QueryRow("SELECT record FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON)
 		if recordJSON.Valid && recordJSON.String != "" {
 			var props map[string][]byte
@@ -733,6 +734,7 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 				continue
 			}
 			// Final fallback: name match in nodes table
+			// kind = 1 → graph.NodeKindDir (definition constructs are dirs).
 			err = g.db.QueryRow("SELECT id FROM nodes WHERE name = ? AND kind = 1 LIMIT 1", qc.Token).Scan(&defID)
 			if err == nil && defID != id && !seen[defID] {
 				seen[defID] = true

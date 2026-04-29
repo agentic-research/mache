@@ -382,6 +382,7 @@ func collectContentSources(schema *api.Topology) map[string]string {
 
 // buildNameToDirIndex builds a map from directory leaf name to directory IDs.
 func buildNameToDirIndex(tx *sql.Tx) (map[string][]string, error) {
+	// kind = 1 → graph.NodeKindDir.
 	rows, err := tx.Query(`SELECT id FROM nodes WHERE kind = 1`)
 	if err != nil {
 		return nil, fmt.Errorf("query dirs: %w", err)
@@ -558,6 +559,7 @@ func extractCallerDir(nodeID string) (dirID string) {
 // nodes, keeping only the directory structure and metadata (name, mtime).
 // This prevents raw project files from bloating the --out DB.
 func stripProjectFileContent(tx *sql.Tx) error {
+	// kind = 0 → graph.NodeKindFile (file nodes only).
 	_, err := tx.Exec(`UPDATE nodes SET record = NULL, size = 0 WHERE kind = 0 AND id LIKE '_project_files/%'`)
 	return err
 }
