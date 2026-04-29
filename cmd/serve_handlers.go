@@ -165,9 +165,10 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 
 	s.AddTool(
 		mcp.NewTool("write_file",
-			mcp.WithDescription("Write new content to a source file node. Uses the splice pipeline: validate (tree-sitter) → format (gofumpt/hclwrite) → atomic splice into source file → update graph. The node must have a source origin (i.e., was ingested from a real file). Returns the result including any validation errors."),
+			mcp.WithDescription("Write new content to a source file node. Pipeline: validate (tree-sitter, always) → format (gofumpt/hclwrite, opt-out via format=false) → atomic splice into source file → update graph. The node must have a source origin. Set format=false when the caller (LLM, pre-commit) already owns formatting and wants mache to splice verbatim."),
 			mcp.WithString("path", mcp.Required(), mcp.Description("File node path (e.g. 'go/graph/methods/MemoryStore.GetCallees/source')")),
 			mcp.WithString("content", mcp.Required(), mcp.Description("New content to write")),
+			mcp.WithBoolean("format", mcp.Description("Run the language formatter (gofumpt for Go, hclwrite for HCL) before splicing. Default true. Set false when formatting is owned upstream — validation still runs.")),
 		),
 		r.wrapHandler(makeWriteFileHandler),
 	)

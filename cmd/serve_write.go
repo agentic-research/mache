@@ -14,7 +14,7 @@ import (
 )
 
 func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
-	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		path := request.GetString("path", "")
 		if path == "" {
 			return mcp.NewToolResultError("path is required"), nil
@@ -23,6 +23,13 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		if content == "" {
 			return mcp.NewToolResultError("content is required"), nil
 		}
+		// Default true preserves the prior behavior (gofumpt for Go,
+		// hclwrite for HCL). Bead mache-2a7605: callers that own
+		// formatting upstream (pre-commit, the LLM itself) can pass
+		// format=false so mache only validates structure and splices
+		// the content verbatim. Validation is non-negotiable; formatting
+		// is now opt-out.
+		format := request.GetBool("format", true)
 
 		node, err := g.GetNode(path)
 		if err != nil {
@@ -38,7 +45,9 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		origin := *node.Origin
 		newContent := []byte(content)
 
-		// 1. Validate syntax
+		// 1. Validate syntax — always runs. Type/structure diagnostics are
+		// the mache write path's contract; we never let invalid bytes
+		// through to the splice.
 		if err := writeback.Validate(newContent, origin.FilePath); err != nil {
 			type valResult struct {
 				Status string `json:"status"`
@@ -55,8 +64,11 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultText(string(data)), nil
 		}
 
-		// 2. Format (gofumpt for Go, hclwrite for HCL)
-		formatted := writeback.FormatBuffer(newContent, origin.FilePath)
+		// 2. Format (gofumpt for Go, hclwrite for HCL) — opt-out.
+		formatted := newContent
+		if format {
+			formatted = writeback.FormatBuffer(newContent, origin.FilePath)
+		}
 
 		// 3. Splice into source file
 		oldLen := origin.EndByte - origin.StartByte
@@ -84,18 +96,20 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		g.Invalidate(path)
 
 		type writeResult struct {
-			Status     string              `json:"status"`
-			Path       string              `json:"path"`
-			Origin     *graph.SourceOrigin `json:"origin"`
-			Formatted  bool                `json:"formatted"`
-			BytesDelta int32               `json:"bytes_delta"`
+			Status        string              `json:"status"`
+			Path          string              `json:"path"`
+			Origin        *graph.SourceOrigin `json:"origin"`
+			FormatApplied bool                `json:"format_applied"`           // formatter ran (format=true)
+			FormatChanged bool                `json:"format_changed,omitempty"` // formatter actually altered the bytes
+			BytesDelta    int32               `json:"bytes_delta"`
 		}
 		data, _ := json.MarshalIndent(writeResult{
-			Status:     "ok",
-			Path:       path,
-			Origin:     newOrigin,
-			Formatted:  string(formatted) != content,
-			BytesDelta: delta,
+			Status:        "ok",
+			Path:          path,
+			Origin:        newOrigin,
+			FormatApplied: format,
+			FormatChanged: format && string(formatted) != content,
+			BytesDelta:    delta,
 		}, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
