@@ -161,6 +161,35 @@ var smellRegistry = []SmellRule{
 		`,
 	},
 	{
+		ID:          "fan_out_skew",
+		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
+		ScopeColumn: "COALESCE(n.source_file, '')",
+		Query: `
+			WITH fanout AS (
+				SELECT node_id AS caller_id, COUNT(DISTINCT token) AS n
+				FROM node_refs
+				GROUP BY node_id
+			),
+			proj AS (
+				SELECT AVG(n) AS mu FROM fanout
+			)
+			SELECT COALESCE(n.source_file, '') AS source_id,
+			       f.caller_id AS node_id,
+			       0 AS start_byte,
+			       0 AS end_byte,
+			       0 AS start_row,
+			       0 AS start_col,
+			       f.n AS metric
+			FROM fanout f
+			JOIN nodes n ON n.id = f.caller_id
+			CROSS JOIN proj p
+			WHERE f.n >= 5
+			  AND CAST(f.n AS REAL) > 3.0 * p.mu
+			%s
+			ORDER BY metric DESC, source_id, node_id
+		`,
+	},
+	{
 		ID:          "long_file",
 		Description: "Source files exceeding 1500 lines (end_row reported on the source-file root AST node). Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind. Threshold hard-coded today.",
 		ScopeColumn: "src.source_id",
