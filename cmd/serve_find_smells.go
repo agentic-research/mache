@@ -33,10 +33,9 @@ import (
 // `%s` placeholder where the scope clause should be spliced in;
 // rules unconcerned with scoping can leave ScopeColumn blank.
 //
-// Threshold filtering on the metric column is intentionally
-// client-side today — agents sort/filter the response. A server-side
-// min_metric arg is filed as a follow-up; we'll add it once two or
-// more rules need it.
+// Threshold filtering on the metric column is server-side via the
+// `min_metric` request arg — handler drops findings whose metric
+// is below the cutoff before returning. Default 0 keeps every row.
 //
 // Bead mache-6z2e tracks the broader "machelint" idea — declarative
 // rules consumed via this tool. Today the registry is hard-coded; in
@@ -93,7 +92,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "cyclomatic_complexity",
 		Languages:   []string{"go"},
-		Description: "Per-function cyclomatic complexity, computed as the count of control-flow AST nodes (if/for/case/select-case) inside each function or method body. Findings are sorted descending by metric — agents typically only care about the top N. Use min_metric (TODO) once the threshold arg lands; today, filter client-side. Rule scopes via fn.source_id when source_id is provided.",
+		Description: "Per-function cyclomatic complexity, computed as the count of control-flow AST nodes (if/for/case/select-case) inside each function or method body. Findings are sorted descending by metric — agents typically only care about the top N, so pair with `min_metric` to set a cutoff (e.g. 10 for 'noteworthy', 20 for 'review now'). Rule scopes via fn.source_id when source_id is provided.",
 		ScopeColumn: "fn.source_id",
 		Query: `
 			SELECT fn.source_id,
@@ -269,6 +268,7 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 		if limit <= 0 {
 			limit = 200
 		}
+		minMetric := int64(request.GetFloat("min_metric", 0))
 
 		if ruleID == "" {
 			// Discovery mode — list rules.
@@ -296,6 +296,19 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 		findings, err := runSmellRule(qg, rule, sourceID, limit)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", ruleID, err)), nil
+		}
+
+		// Server-side metric threshold. Drops findings below the cutoff
+		// before snippet population so we don't waste reads on rows the
+		// agent will discard. min_metric=0 keeps the historical default.
+		if minMetric > 0 {
+			filtered := findings[:0]
+			for _, f := range findings {
+				if f.Metric >= minMetric {
+					filtered = append(filtered, f)
+				}
+			}
+			findings = filtered
 		}
 
 		// Snippet population is best-effort. If `_source` isn't there
@@ -336,7 +349,7 @@ func rulesListing() any {
 		Help  string        `json:"help"`
 		Rules []ruleSummary `json:"rules"`
 	}{
-		Help:  "find_smells runs structural pattern queries against the _ast table. Pass `rule` to scan; omit it (this response) to list available rules. Optional `source_id` filters to one parsed file; `limit` caps results (default 200).",
+		Help:  "find_smells runs structural pattern queries against the _ast table. Pass `rule` to scan; omit it (this response) to list available rules. Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold (default 0).",
 		Rules: out,
 	}
 }
