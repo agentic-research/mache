@@ -130,7 +130,14 @@ jobs:
                 echo ""
                 echo "| Source | Node | Metric |"
                 echo "| --- | --- | ---: |"
-                jq -r '.findings | .[:20] | .[] | "| \(.source_id // "") | \(.node_id // "") | \(.metric // 0) |"' "/tmp/${rule}.json"
+                # Strip the runner workspace prefix from source_id so
+                # the comment shows repo-relative paths (cmd/serve.go)
+                # instead of /home/runner/work/mache/mache/cmd/serve.go.
+                # GITHUB_WORKSPACE is the canonical absolute path of
+                # the checked-out repo on the runner.
+                jq -r --arg ws "$GITHUB_WORKSPACE/" \
+                  '.findings | .[:20] | .[] | "| \((.source_id // "") | sub($ws; "")) | \(.node_id // "") | \(.metric // 0) |"' \
+                  "/tmp/${rule}.json"
                 if [ "$count" -gt 20 ]; then
                   echo ""
                   echo "_(showing top 20 of ${count})_"
