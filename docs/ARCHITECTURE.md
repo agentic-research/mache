@@ -107,7 +107,7 @@ Mache works standalone, but pairs with [ley-line-open](https://github.com/agenti
 source dir → mache (Engine + SitterWalker + CGO tree-sitter) → MemoryStore → MCP / NFS
 ```
 
-Mache parses source itself via the `SitterWalker` (tree-sitter grammars linked via CGO). The ingestion writes a sidecar SQLite with `nodes`, `node_refs`, `node_defs`, `file_index` — enough to power `find_callers`, `find_callees`, `search`, `find_definition`, `get_communities`, `get_impact`, and the four `find_smells` rules that operate on `node_defs`/`node_refs` (`dead_code`, `untested_function`, `fan_out_skew`, `duplicate_definitions`). No `_ast`, `_source`, or `_lsp*` tables are produced — the AST lives in memory, not on disk.
+Mache parses source itself via the `SitterWalker` (tree-sitter grammars linked via CGO). The ingestion writes a sidecar SQLite with `nodes`, `node_refs`, `node_defs`, `file_index` — enough to power `find_callers`, `find_callees`, `search`, `find_definition`, `get_communities`, `get_impact`, and the five `find_smells` rules that operate on `node_defs`/`node_refs`/`nodes` (`dead_code`, `untested_function`, `fan_out_skew`, `duplicate_definitions`, `god_file`). No `_ast`, `_source`, or `_lsp*` tables are produced — the AST lives in memory, not on disk.
 
 ### LLO-paired (pure Go, pre-baked .db)
 
@@ -123,16 +123,16 @@ This is the path under [ADR-0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first
 
 ### Tool capability matrix
 
-| Tool                                                                                                  | Standalone (CGO) | LLO-paired (.db) | Notes                                                                |
-| ----------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | -------------------------------------------------------------------- |
-| `list_directory`, `read_file`, `get_overview`, `get_diagram`                                          | ✓                | ✓                | Topology-only — works on any backend                                 |
-| `find_callers`, `find_callees`, `find_definition`, `search`                                           | ✓                | ✓                | `node_refs` / `node_defs` populated by both paths                    |
-| `get_communities`, `get_impact`, `get_architecture`                                                   | ✓                | ✓                | Derived from refs graph                                              |
-| `write_file`                                                                                          | ✓                | ✓                | Splice pipeline runs on either backend (validate → format → splice)  |
-| `find_smells` rules: `dead_code`, `untested_function`, `duplicate_definitions`, `fan_out_skew`        | ✓                | ✓                | Use `node_defs` / `node_refs` only                                   |
-| `find_smells` rules: `magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file` | ✗                | ✓                | Need `_ast` table — only LLO writes it                               |
-| `get_type_info`, `get_diagnostics`                                                                    | ✗                | ✓ (LSP-enriched) | Need `_lsp*` tables produced by ley-line's `lsp` crate at build time |
-| `semantic_search`                                                                                     | ✗                | ✓ (with daemon)  | Embeddings via the LLO daemon UDS proxy                              |
+| Tool                                                                                                       | Standalone (CGO) | LLO-paired (.db) | Notes                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | -------------------------------------------------------------------- |
+| `list_directory`, `read_file`, `get_overview`, `get_diagram`                                               | ✓                | ✓                | Topology-only — works on any backend                                 |
+| `find_callers`, `find_callees`, `find_definition`, `search`                                                | ✓                | ✓                | `node_refs` / `node_defs` populated by both paths                    |
+| `get_communities`, `get_impact`, `get_architecture`                                                        | ✓                | ✓                | Derived from refs graph                                              |
+| `write_file`                                                                                               | ✓                | ✓                | Splice pipeline runs on either backend (validate → format → splice)  |
+| `find_smells` rules: `dead_code`, `untested_function`, `duplicate_definitions`, `fan_out_skew`, `god_file` | ✓                | ✓                | Use `node_defs` / `node_refs` / `nodes` only                         |
+| `find_smells` rules: `magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`      | ✗                | ✓                | Need `_ast` table — only LLO writes it                               |
+| `get_type_info`, `get_diagnostics`                                                                         | ✗                | ✓ (LSP-enriched) | Need `_lsp*` tables produced by ley-line's `lsp` crate at build time |
+| `semantic_search`                                                                                          | ✗                | ✓ (with daemon)  | Embeddings via the LLO daemon UDS proxy                              |
 
 When a tool falls into the second column without enrichment, the handler returns a friendly error message explaining how to enable it (typically: re-run `leyline parse` with the relevant flag).
 

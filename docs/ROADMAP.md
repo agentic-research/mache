@@ -14,7 +14,7 @@
 - Cross-reference indexing: `node_refs`/`node_defs` SQLite tables backed by tree-sitter (standalone) or LLO (`.db` path)
 - `callers/` and `callees/` virtual directories — self-gating, NFS-served as `graphFile`s
 - `.query/` Plan 9-style SQL query directory with symlink results
-- `find_smells` MCP tool: 8 structural rules (`magic_int_in_comparison`, `dead_code`, `cyclomatic_complexity`, `long_function`, `untested_function`, `duplicate_definitions`, `fan_out_skew`, `long_file`) with optional `min_metric` and `source_id` filters
+- `find_smells` MCP tool: 9 structural rules (`magic_int_in_comparison`, `dead_code`, `cyclomatic_complexity`, `long_function`, `untested_function`, `duplicate_definitions`, `god_file`, `fan_out_skew`, `long_file`) with optional `min_metric` and `source_id` filters; advisory PR comments via `.github/workflows/find-smells.yml`
 - FCA + greedy entropy schema inference: `--infer` auto-generates topology from data
 - Virtual `_schema.json` at mount root exposing the active topology
 - HotSwap graph with control block for live schema reload
@@ -23,7 +23,7 @@
 
 - Memory: ~2GB peak for 323K NVD records (1.6M graph nodes with string IDs) — addressable via [GenerationalGraph](https://github.com/agentic-research/mache) (mache-2f1287)
 - Write-back formatting is Go and HCL/Terraform only; other languages validate but don't auto-format
-- Standalone (CGO) path produces `node_defs`/`node_refs` but not `_ast` — 4 of 8 `find_smells` rules require an LLO-built `.db`
+- Standalone (CGO) path produces `node_defs`/`node_refs` but not `_ast` — 4 of 9 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`) require an LLO-built `.db`
 - bbolt-backed `ext/boltdb` projection is opt-in (not in default `go.work`); used by venturi/trivy-db workflows
 
 ## Near-term
