@@ -490,12 +490,17 @@ func bar() {}
 	assert.Contains(t, calls, "bar")
 }
 
-// TestExtractCalls_GoFunctionValueRefs guards the keyed_element /
-// assignment / short_var_declaration patterns added to the Go ref
-// query for mache-02r9. dead_code used to flag every cobra RunE
-// callback and init-time factory because static call extraction
-// only saw call_expression. Now identifiers used as values get
-// captured too.
+// TestExtractCalls_GoFunctionValueRefs guards the keyed_element
+// pattern in the Go ref query (mache-02r9). dead_code used to flag
+// every cobra RunE callback because static call extraction only saw
+// call_expression. The keyed_element capture lets the value
+// identifier (the function reference) land in node_refs.
+//
+// Earlier versions of this query also matched assignment_statement
+// and short_var_declaration RHS identifiers, but those over-collected
+// every variable read on the RHS of normal assignments — see
+// TestExtractCalls_AssignmentRHSDoesNotPolluteRefs below for the
+// regression guard.
 func TestExtractCalls_GoFunctionValueRefs(t *testing.T) {
 	w := NewSitterWalker()
 	code := []byte(`package main
@@ -503,9 +508,6 @@ func TestExtractCalls_GoFunctionValueRefs(t *testing.T) {
 import "github.com/spf13/cobra"
 
 func runServe() error    { return nil }
-func runInit() error     { return nil }
-func goFactory()         {}
-func someHelper()        {}
 
 func setup() {
 	// keyed_element value (cobra RunE pattern, mache-02r9 case 1).
@@ -513,15 +515,6 @@ func setup() {
 		Use:  "x",
 		RunE: runServe,
 	}
-
-	// assignment_statement RHS (init-registry pattern, case 2).
-	factories := map[string]func(){}
-	factories["go"] = goFactory
-
-	// short_var_declaration RHS (function-value variable, case 3).
-	helper := someHelper
-	_ = helper
-	_ = factories
 }
 `)
 	lang := golang.GetLanguage()
@@ -533,8 +526,6 @@ func setup() {
 	calls, err := w.ExtractCalls(tree.RootNode(), code, lang, "go")
 	require.NoError(t, err)
 	assert.Contains(t, calls, "runServe", "keyed_element value identifier captured")
-	assert.Contains(t, calls, "goFactory", "assignment_statement RHS identifier captured")
-	assert.Contains(t, calls, "someHelper", "short_var_declaration RHS identifier captured")
 
 	// "RunE" is the keyed_element FIELD NAME — must NOT be captured
 	// (we want the value identifier, not the field name).
@@ -542,6 +533,45 @@ func setup() {
 		"struct field name must not leak into refs — only the value identifier should")
 	assert.NotContains(t, calls, "Use",
 		"struct field name must not leak into refs")
+}
+
+// TestExtractCalls_AssignmentRHSDoesNotPolluteRefs guards against
+// over-broad capture: variable reads on the RHS of `=` or `:=` must
+// NOT be added to node_refs. An earlier iteration of the Go ref
+// query matched assignment_statement / short_var_declaration RHS
+// identifiers (intended for `factories[k] = goFactory` shapes), but
+// those captured every `filtered := findings[:0]` too, polluting
+// fan_out_skew with non-callee identifiers.
+func TestExtractCalls_AssignmentRHSDoesNotPolluteRefs(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`package p
+
+func handler(input []int, threshold int) []int {
+	filtered := input[:0]
+	for _, v := range input {
+		if v > threshold {
+			filtered = append(filtered, v)
+		}
+	}
+	return filtered
+}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	calls, err := w.ExtractCalls(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+	// `append` is a real call_expression and SHOULD be captured.
+	assert.Contains(t, calls, "append")
+	// `input`, `filtered`, `threshold`, `v` are local variables read
+	// in expression positions — NOT calls. They must not appear.
+	for _, varName := range []string{"input", "filtered", "threshold", "v"} {
+		assert.NotContains(t, calls, varName,
+			"local variable %q must not appear in node_refs", varName)
+	}
 }
 
 func TestRefQueryRegistry_PythonUsesRegistered(t *testing.T) {
