@@ -188,3 +188,73 @@ func BenchmarkFindSmells_RulesListing(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkFindSmells_UntestedFunction exercises the rule's two
+// LEFT JOINs and the tested_via_call CTE. Worth tracking because
+// each PR in this session added a new clause: TestType* prefix
+// (PR #250), tested_via_call CTE (PR #251), Register* skip (PR
+// #273). Cumulative cost on a 10k-defs fixture is the regression
+// signal we care about.
+func BenchmarkFindSmells_UntestedFunction(b *testing.B) {
+	for _, n := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
+			tg := seedSmellBench(b, n)
+			defer func() { _ = tg.db.Close() }()
+			handler := makeFindSmellsHandler(tg)
+			req := makeRequest(map[string]any{"rule": "untested_function", "limit": float64(10000)})
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, err := handler(context.Background(), req)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkFindSmells_DuplicateDefinitions exercises the inner
+// GROUP BY token + outer JOIN node_defs pattern. Cost scales with
+// distinct-tokens × duplicate-count.
+func BenchmarkFindSmells_DuplicateDefinitions(b *testing.B) {
+	for _, n := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
+			tg := seedSmellBench(b, n)
+			defer func() { _ = tg.db.Close() }()
+			handler := makeFindSmellsHandler(tg)
+			req := makeRequest(map[string]any{"rule": "duplicate_definitions", "limit": float64(10000)})
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, err := handler(context.Background(), req)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkFindSmells_GodFile exercises the per_file aggregate +
+// project-mean CROSS JOIN pattern. Cost dominated by the CTE
+// scanning all node_defs once (tracked separately from
+// duplicate_definitions because the JOIN shape differs).
+func BenchmarkFindSmells_GodFile(b *testing.B) {
+	for _, n := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
+			tg := seedSmellBench(b, n)
+			defer func() { _ = tg.db.Close() }()
+			handler := makeFindSmellsHandler(tg)
+			req := makeRequest(map[string]any{"rule": "god_file", "limit": float64(10000)})
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, err := handler(context.Background(), req)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
