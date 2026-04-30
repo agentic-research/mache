@@ -1971,6 +1971,129 @@ func TestFindSmells_UntestedFunctionSkipsGeneratedFiles(t *testing.T) {
 		"only the non-generated exported func without a TestFoo counterpart is flagged")
 }
 
+// TestFindSmells_UntestedFunctionRegressionFloor exercises every
+// production-relevant facet of the rule against one synthetic
+// graph and pins both the exact node_ids that fire and the count.
+//
+// Mirrors TestFindSmells_DeadCodeRegressionFloor (#284): if a
+// future refactor of the SQL or the engine's def-aliasing
+// silently changes the rule's output, the failing diff is the
+// regression — read it before silencing. untested_function is
+// the second-most-changed rule this session (#250, #251, #273)
+// and accumulates skip clauses faster than a unit-test-per-fix
+// model can catch interaction bugs.
+//
+// Facets covered:
+//   - Same-name TestFoo coverage          (group 1: HelperA)
+//   - Test<Type>* constructor coverage    (group 2: NewStore + TestStore_AddItem)
+//   - tested_via_call coverage             (group 3: SubsystemB called by TestB/source)
+//   - Register* prefix skip                (group 4: RegisterFoo init-time)
+//   - Test*/Benchmark*/Example*/Fuzz* skip (group 5: Test/Benchmark/Example/Fuzz selves)
+//   - Generated-code file skip             (group 6: NewMessage in *.capnp.go)
+//   - Exported-only filter                 (group 7: lowercase 'helper' is skipped silently — Go's unexported convention)
+//   - methods/ skip                        (group 8: Type.Method shape — Go test names use Test<Func>)
+//   - The actual untested control          (group 9: TrulyUntested — must fire)
+func TestFindSmells_UntestedFunctionRegressionFloor(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Group 1: same-name Test counterpart → covered.
+		INSERT INTO node_defs VALUES
+		  ('HelperA',     'pkg/functions/HelperA'),
+		  ('TestHelperA', 'pkg/functions/TestHelperA');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/HelperA',            'pkg/functions',           'HelperA',     1, 0, '',           ''),
+		  ('pkg/functions/HelperA/source',     'pkg/functions/HelperA',   'source',      0, 0, 'a.go',       ''),
+		  ('pkg/functions/TestHelperA',        'pkg/functions',           'TestHelperA', 1, 0, '',           ''),
+		  ('pkg/functions/TestHelperA/source', 'pkg/functions/TestHelperA','source',     0, 0, 'a_test.go',  '');
+
+		-- Group 2: New<Type> + Test<Type>* → covered (constructor pattern, PR #250).
+		INSERT INTO node_defs VALUES
+		  ('NewStore',          'pkg/functions/NewStore'),
+		  ('TestStore_AddItem', 'pkg/functions/TestStore_AddItem');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/NewStore',                'pkg/functions',                 'NewStore',          1, 0, '',          ''),
+		  ('pkg/functions/NewStore/source',         'pkg/functions/NewStore',        'source',            0, 0, 's.go',      ''),
+		  ('pkg/functions/TestStore_AddItem',       'pkg/functions',                 'TestStore_AddItem', 1, 0, '',          ''),
+		  ('pkg/functions/TestStore_AddItem/source','pkg/functions/TestStore_AddItem','source',           0, 0, 's_test.go', '');
+
+		-- Group 3: tested_via_call — SubsystemB has no TestSubsystemB,
+		-- but a Test*/source has a ref to it (PR #251). → covered.
+		INSERT INTO node_defs VALUES ('SubsystemB', 'pkg/functions/SubsystemB');
+		INSERT INTO node_refs VALUES ('SubsystemB', 'pkg/functions/TestB/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/SubsystemB',        'pkg/functions',           'SubsystemB', 1, 0, '',         ''),
+		  ('pkg/functions/SubsystemB/source', 'pkg/functions/SubsystemB','source',     0, 0, 'b.go',     ''),
+		  ('pkg/functions/TestB',             'pkg/functions',           'TestB',      1, 0, '',         ''),
+		  ('pkg/functions/TestB/source',      'pkg/functions/TestB',     'source',     0, 0, 'b_test.go',''),
+		  ('pkg/functions/TestB/source',      'pkg/functions/TestB',     'source',     0, 0, 'b_test.go','') ON CONFLICT(id) DO NOTHING;
+
+		-- Group 4: Register* prefix → skipped (PR #273, init-time registration).
+		INSERT INTO node_defs VALUES ('RegisterFoo', 'pkg/functions/RegisterFoo');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/RegisterFoo',        'pkg/functions',            'RegisterFoo', 1, 0, '',         ''),
+		  ('pkg/functions/RegisterFoo/source', 'pkg/functions/RegisterFoo','source',      0, 0, 'reg.go',   '');
+
+		-- Group 5: testing-framework names themselves → skipped.
+		INSERT INTO node_defs VALUES
+		  ('TestPlain',      'pkg/functions/TestPlain'),
+		  ('BenchmarkPlain', 'pkg/functions/BenchmarkPlain'),
+		  ('ExamplePlain',   'pkg/functions/ExamplePlain'),
+		  ('FuzzPlain',      'pkg/functions/FuzzPlain');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/TestPlain',        'pkg/functions',           'TestPlain',      1, 0, '',                 ''),
+		  ('pkg/functions/TestPlain/source', 'pkg/functions/TestPlain', 'source',         0, 0, 'tp_test.go',       ''),
+		  ('pkg/functions/BenchmarkPlain',         'pkg/functions',                  'BenchmarkPlain',  1, 0, '',          ''),
+		  ('pkg/functions/BenchmarkPlain/source',  'pkg/functions/BenchmarkPlain',   'source',          0, 0, 'b.go',      ''),
+		  ('pkg/functions/ExamplePlain',           'pkg/functions',                  'ExamplePlain',    1, 0, '',          ''),
+		  ('pkg/functions/ExamplePlain/source',    'pkg/functions/ExamplePlain',     'source',          0, 0, 'e.go',      ''),
+		  ('pkg/functions/FuzzPlain',              'pkg/functions',                  'FuzzPlain',       1, 0, '',          ''),
+		  ('pkg/functions/FuzzPlain/source',       'pkg/functions/FuzzPlain',        'source',          0, 0, 'f_test.go', '');
+
+		-- Group 6: generated-code file → skipped.
+		INSERT INTO node_defs VALUES ('NewMessage', 'pkg/functions/NewMessage');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/NewMessage',        'pkg/functions',            'NewMessage', 1, 0, '',                ''),
+		  ('pkg/functions/NewMessage/source', 'pkg/functions/NewMessage', 'source',     0, 0, 'gen.capnp.go',    '');
+
+		-- Group 7: methods/ → skipped (Go test naming targets Test<Func>, not methods).
+		INSERT INTO node_defs VALUES ('Greeter.Greet', 'pkg/methods/Greeter.Greet');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Greeter.Greet',        'pkg/methods',                'Greeter.Greet', 1, 0, '',         ''),
+		  ('pkg/methods/Greeter.Greet/source', 'pkg/methods/Greeter.Greet',  'source',        0, 0, 'g.go',     '');
+
+		-- Group 8 (control): truly untested exported func, no
+		-- counterpart, no test-call ref, no skip-list match.
+		INSERT INTO node_defs VALUES ('TrulyUntested', 'pkg/functions/TrulyUntested');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/TrulyUntested',        'pkg/functions',                'TrulyUntested', 1, 0, '',         ''),
+		  ('pkg/functions/TrulyUntested/source', 'pkg/functions/TrulyUntested',  'source',        0, 0, 'tu.go',    '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function", "limit": 100}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	// Exactly one node fires: TrulyUntested. Every other group is
+	// covered or correctly skipped. Failing diff = regression.
+	assert.Equal(t, []string{"pkg/functions/TrulyUntested"}, gotIDs,
+		"untested_function must surface exactly the truly-untested control; any other diff is a regression")
+	assert.Equal(t, 1, resp.Total)
+}
+
 // TestFindSmells_DuplicateDefinitions seeds three groups: a duplicated
 // helper (two defs, two source files — flagged twice), an interface
 // method on the skip list (two defs — excluded), and a unique symbol
