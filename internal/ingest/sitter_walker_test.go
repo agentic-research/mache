@@ -465,7 +465,8 @@ func TestSitterWalkerGo_FlagQuery(t *testing.T) {
 }
 
 func TestRefQueryRegistry_DispatchesByLanguage(t *testing.T) {
-	// Go (no registered query) should use defaultCallQuery
+	// Go has a registered ref query that captures call_expression
+	// and adds function-value patterns (keyed_element, assignment).
 	w := NewSitterWalker()
 	code := []byte(`package main
 
@@ -487,6 +488,60 @@ func bar() {}
 	require.NoError(t, err)
 	assert.Contains(t, calls, "foo")
 	assert.Contains(t, calls, "bar")
+}
+
+// TestExtractCalls_GoFunctionValueRefs guards the keyed_element /
+// assignment / short_var_declaration patterns added to the Go ref
+// query for mache-02r9. dead_code used to flag every cobra RunE
+// callback and init-time factory because static call extraction
+// only saw call_expression. Now identifiers used as values get
+// captured too.
+func TestExtractCalls_GoFunctionValueRefs(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`package main
+
+import "github.com/spf13/cobra"
+
+func runServe() error    { return nil }
+func runInit() error     { return nil }
+func goFactory()         {}
+func someHelper()        {}
+
+func setup() {
+	// keyed_element value (cobra RunE pattern, mache-02r9 case 1).
+	_ = &cobra.Command{
+		Use:  "x",
+		RunE: runServe,
+	}
+
+	// assignment_statement RHS (init-registry pattern, case 2).
+	factories := map[string]func(){}
+	factories["go"] = goFactory
+
+	// short_var_declaration RHS (function-value variable, case 3).
+	helper := someHelper
+	_ = helper
+	_ = factories
+}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	calls, err := w.ExtractCalls(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+	assert.Contains(t, calls, "runServe", "keyed_element value identifier captured")
+	assert.Contains(t, calls, "goFactory", "assignment_statement RHS identifier captured")
+	assert.Contains(t, calls, "someHelper", "short_var_declaration RHS identifier captured")
+
+	// "RunE" is the keyed_element FIELD NAME — must NOT be captured
+	// (we want the value identifier, not the field name).
+	assert.NotContains(t, calls, "RunE",
+		"struct field name must not leak into refs — only the value identifier should")
+	assert.NotContains(t, calls, "Use",
+		"struct field name must not leak into refs")
 }
 
 func TestRefQueryRegistry_PythonUsesRegistered(t *testing.T) {

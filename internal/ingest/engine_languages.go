@@ -19,6 +19,37 @@ func init() {
 			field: (field_identifier) @call))
 	`)
 
+	// Register Go ref query (used by ExtractCalls, the bare-token
+	// path that populates node_refs). Mirrors defaultCallQuery for
+	// call_expression but adds three function-value patterns so
+	// dead_code stops flagging functions that are referenced as
+	// values rather than called (mache-02r9):
+	//
+	//   &cobra.Command{ RunE: runServe }        — keyed_element value
+	//   factories["go"] = goFactory             — assignment_statement RHS
+	//   shortDecl := someFn                     — short_var_declaration RHS
+	//
+	// We capture the IDENTIFIER inside the SECOND literal_element of
+	// a keyed_element (the value), not the first (the field name).
+	// Field-name identifiers like "RunE" rarely match defined-token
+	// shapes anyway, but this query is precise so node_refs stays
+	// signal-rich.
+	//
+	// Patterns fire on whatever scope ExtractCalls is given. Function-
+	// body scopes catch nested cobra literals; file-level scopes need
+	// the separate ExtractFileLevelFnValueRefs pass — see engine.go.
+	RegisterRefQuery("go", `
+		(call_expression function: (identifier) @call)
+		(call_expression function: (selector_expression field: (field_identifier) @call))
+		(keyed_element
+			(literal_element)
+			(literal_element (identifier) @call))
+		(assignment_statement
+			right: (expression_list (identifier) @call))
+		(short_var_declaration
+			right: (expression_list (identifier) @call))
+	`)
+
 	// ASTWalker context kinds — top-level node kinds whose source bytes
 	// constitute the context blob. Mirrors the Go context query above.
 	RegisterASTContextKinds("go", []string{
