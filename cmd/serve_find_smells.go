@@ -592,7 +592,10 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 		if rule == nil {
-			return mcp.NewToolResultError(fmt.Sprintf("unknown rule %q. Call this tool with no rule for the registry listing.", ruleID)), nil
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"unknown rule %q — available: %s. Call this tool with no rule for full descriptions.",
+				ruleID, strings.Join(allRuleIDs(), ", "),
+			)), nil
 		}
 
 		// Need a *sql.DB to run the rule. Today we hand-shake via the
@@ -648,6 +651,18 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		return mcp.NewToolResultText(jsonOrPanic(resp)), nil
 	}
+}
+
+// allRuleIDs returns the registered rule IDs in alphabetical order.
+// Used by the unknown-rule error message so agents/users see what
+// they could have typed without having to call the registry first.
+func allRuleIDs() []string {
+	ids := make([]string, 0, len(smellRegistry))
+	for _, r := range smellRegistry {
+		ids = append(ids, r.ID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // rulesListing produces the JSON returned when find_smells is called

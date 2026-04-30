@@ -84,7 +84,10 @@ This tool is observability, not a gate. It never exits non-zero on findings.`,
 			}
 		}
 		if rule == nil {
-			return cliExit(3, fmt.Errorf("unknown rule %q — run with no --rule for the registry listing", findSmellsRule))
+			return cliExit(3, fmt.Errorf(
+				"unknown rule %q — available: %s — run with no --rule for full descriptions",
+				findSmellsRule, strings.Join(allRuleIDs(), ", "),
+			))
 		}
 
 		// Pre-flight required tables, same shape as the MCP handler.
