@@ -1034,6 +1034,72 @@ func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 	)
 }
 
+// TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit asserts that
+// the skip list strips package qualifiers before comparing against
+// the leaf-token list. mache build emits both bare ('init') and
+// qualified shapes ('cmd.init', 'lang.init') into node_defs; without
+// qualifier-stripping the qualified shapes leak through and every
+// Go package's init() function shows up as a duplicate definition.
+func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Three init() functions across packages — Go expects one
+		-- per package, so neither bare 'init' nor 'cmd.init' /
+		-- 'lang.init' should surface as a duplicate.
+		INSERT INTO node_defs VALUES
+		  ('init',      'cmd/functions/init'),
+		  ('cmd.init',  'cmd/functions/init'),
+		  ('init',      'lang/functions/init'),
+		  ('lang.init', 'lang/functions/init'),
+		  ('init',      'ingest/functions/init'),
+		  ('ingest.init','ingest/functions/init');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('cmd/functions/init',    'cmd/functions',    'init', 1, 0, 'cmd/x.go',    ''),
+		  ('lang/functions/init',   'lang/functions',   'init', 1, 0, 'lang/x.go',   ''),
+		  ('ingest/functions/init', 'ingest/functions', 'init', 1, 0, 'ingest/x.go', '');
+
+		-- Real duplicate as a control: a same-named helper across
+		-- two packages with no qualifier shape that hits the skip
+		-- list. This must still be flagged.
+		INSERT INTO node_defs VALUES
+		  ('myHelper', 'pkg/a/functions/myHelper'),
+		  ('myHelper', 'pkg/b/functions/myHelper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/functions/myHelper', 'pkg/a/functions', 'myHelper', 1, 0, 'a/h.go', ''),
+		  ('pkg/b/functions/myHelper', 'pkg/b/functions', 'myHelper', 1, 0, 'b/h.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	for _, id := range gotIDs {
+		assert.NotContains(t, id, "/init",
+			"init() nodes must be skipped regardless of qualifier shape")
+	}
+	assert.ElementsMatch(t,
+		[]string{"pkg/a/functions/myHelper", "pkg/b/functions/myHelper"},
+		gotIDs,
+		"only the real myHelper duplicate is flagged",
+	)
+}
+
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)
