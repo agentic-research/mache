@@ -334,5 +334,5 @@ func TestSplice_OpenReaderSeesOldContentAfterSplice(t *testing.T) {
 }
 
 // fileInode returns the platform inode for path, or 0 if unavailable.
-// Defined in splice_inode_unix.go and splice_inode_other.go for build-tag
-// dispatch.
+// Defined in splice_inode_unix_test.go and splice_inode_other_test.go for
+// build-tag dispatch.

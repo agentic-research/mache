@@ -8,9 +8,11 @@ import (
 	"testing"
 )
 
-// fileInode returns the platform inode for path. Returns 0 if Stat fails
-// or Sys() doesn't return a *syscall.Stat_t (the test treats 0 as
-// "platform doesn't expose inodes" and skips).
+// fileInode returns the platform inode for path. Calls t.Fatalf if Stat
+// fails (unix tests assume the file exists — stat failure is a setup bug,
+// not a platform-capability gap). Returns 0 if Sys() doesn't return a
+// *syscall.Stat_t — the caller treats 0 as "platform doesn't expose
+// inodes" and skips.
 func fileInode(t *testing.T, path string) uint64 {
 	t.Helper()
 	info, err := os.Stat(path)
