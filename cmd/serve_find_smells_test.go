@@ -2120,6 +2120,77 @@ func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
 	)
 }
 
+// TestFindSmells_DuplicateDefinitionsExcludesAllMethods asserts that
+// every method def is filtered out structurally (NOT LIKE
+// '%/methods/%'), regardless of whether the bare-leaf token matches
+// the named-skip list. The engine registers a bare-leaf alias
+// ('Method' from 'Receiver.Method') so dead_code's skip list can
+// match interface contracts by name; without the structural exclusion,
+// every interface method (ReadContent, GetNode, custom mache-internal
+// interfaces) collides on the bare token across N implementing types
+// and inflates duplicate_definitions.
+//
+// Surfaced by dogfooding: mache.db's go-schema path had 290
+// duplicate_definitions findings, dominated by Graph-interface
+// methods (ReadContent x24, GetNode x15, ListChildren x15, ...).
+// After this fix: 12.
+func TestFindSmells_DuplicateDefinitionsExcludesAllMethods(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Mache-internal interface (graph.Graph) implemented by 3 types.
+		-- 'ReadContent' is NOT in any named-skip list — only the
+		-- structural methods/ filter saves us.
+		INSERT INTO node_defs VALUES
+		  ('ReadContent',                 'cmd/methods/lazyGraph.ReadContent'),
+		  ('lazyGraph.ReadContent',       'cmd/methods/lazyGraph.ReadContent'),
+		  ('ReadContent',                 'graph/methods/MemoryStore.ReadContent'),
+		  ('MemoryStore.ReadContent',     'graph/methods/MemoryStore.ReadContent'),
+		  ('ReadContent',                 'graph/methods/SQLiteGraph.ReadContent'),
+		  ('SQLiteGraph.ReadContent',     'graph/methods/SQLiteGraph.ReadContent');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('cmd/methods/lazyGraph.ReadContent',    'cmd/methods',   'lazyGraph.ReadContent',    1, 0, 'cmd.go',    ''),
+		  ('graph/methods/MemoryStore.ReadContent','graph/methods', 'MemoryStore.ReadContent',  1, 0, 'mem.go',    ''),
+		  ('graph/methods/SQLiteGraph.ReadContent','graph/methods', 'SQLiteGraph.ReadContent',  1, 0, 'sqlite.go', '');
+
+		-- Real cross-package free-function duplicate as control —
+		-- must still be flagged.
+		INSERT INTO node_defs VALUES
+		  ('Helper', 'pkg/a/functions/Helper'),
+		  ('Helper', 'pkg/b/functions/Helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/h.go', ''),
+		  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/h.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	for _, id := range gotIDs {
+		assert.NotContains(t, id, "/methods/",
+			"method defs must be excluded structurally — they're interface implementations, not duplicates")
+	}
+	assert.ElementsMatch(t,
+		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
+		gotIDs,
+		"only the real free-function duplicate is flagged",
+	)
+}
+
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)

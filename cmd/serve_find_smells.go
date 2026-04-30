@@ -359,7 +359,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "duplicate_definitions",
-		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Excludes 'imports/' (refs to external packages, not defs), non-callable categories types/, constants/, variables/ — short names like 'content', 'src', 'name' duplicate across functions and aren't meaningful 'duplicate definitions' — and generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) where wide method sets are produced by the generator and aren't 'duplication' in the architectural sense. source_id falls back to a child's source_file when the construct dir doesn't carry one. Cross-language since node_defs is populated by every leyline parser.",
+		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Restricted to free functions (`functions/`); methods/ defs are excluded structurally because the engine registers a bare-leaf alias ('Method' from 'Receiver.Method') for the dead_code skip list, which causes every interface method (ReadContent, GetNode, ListChildren, ...) implemented by N types to collide as a 'duplicate' even though the implementations are conceptually distinct. The skip list further excludes interface contracts by name (String/Error/Read/Write/...) for the rare case where free functions match those names. Metric is the duplicate count, sorted descending. Excludes 'imports/' (refs to external packages, not defs), non-callable categories types/, constants/, variables/ — short names like 'content', 'src', 'name' duplicate across functions and aren't meaningful 'duplicate definitions' — and generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) where wide method sets are produced by the generator and aren't 'duplication' in the architectural sense. source_id falls back to a child's source_file when the construct dir doesn't carry one. Cross-language since node_defs is populated by every leyline parser.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
@@ -420,6 +420,19 @@ var smellRegistry = []SmellRule{
 				AND node_id NOT LIKE 'constants/%%'
 				AND node_id NOT LIKE '%%/variables/%%'
 				AND node_id NOT LIKE 'variables/%%'
+				-- Exclude method defs entirely. The Go schema's
+				-- methods/ branch registers a bare-leaf alias
+				-- ('Method' from 'Receiver.Method') so dead_code's
+				-- skip list can match interface contracts by name —
+				-- but every interface method (ReadContent, GetNode,
+				-- ListChildren, ...) implemented by N types then
+				-- collides on the bare token, inflating
+				-- duplicate_definitions. The interface methods are
+				-- conceptually distinct implementations, not
+				-- duplicates. Filter them out structurally rather
+				-- than enumerating an ever-growing skip list.
+				AND node_id NOT LIKE '%%/methods/%%'
+				AND node_id NOT LIKE 'methods/%%'
 				GROUP BY token
 				HAVING copies > 1
 			) c
@@ -437,6 +450,8 @@ var smellRegistry = []SmellRule{
 			  AND d.node_id NOT LIKE 'constants/%%'
 			  AND d.node_id NOT LIKE '%%/variables/%%'
 			  AND d.node_id NOT LIKE 'variables/%%'
+			  AND d.node_id NOT LIKE '%%/methods/%%'
+			  AND d.node_id NOT LIKE 'methods/%%'
 			  -- Generated code (capnp / protobuf / *_generated.go /
 			  -- *.gen.go) intentionally produces wide method sets
 			  -- (DecodeFromPtr, EncodeAsPtr, IsValid, Message, Segment,
