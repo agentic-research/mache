@@ -16,6 +16,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// buildBackend selects the parsing backend for `mache build`.
+//   - "auto" (default): in-process tree-sitter via SitterWalker — current behavior.
+//   - "leyline": shell out to `leyline parse`. Requires leyline on PATH or
+//     ~/.mache/bin/leyline. Produces a richer .db (carries `_ast`, `_source`,
+//     `_imports`, `_lsp*`) that all 9 find_smells rules can run against.
+//     Schema projection at query time (via SQLiteGraph) — the --schema flag
+//     is ignored on this path because leyline doesn't apply it.
+//
+// Opt-in for now per ADR-0012 step 3. A future PR makes this auto-detect
+// and prefer leyline when available.
+var buildBackend string
+
 var buildCmd = &cobra.Command{
 	Use:   "build [source] [output.db]",
 	Short: "Build a Mache SQLite database from a source directory",
@@ -23,6 +35,15 @@ var buildCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		source := args[0]
 		output := args[1]
+
+		// Backend dispatch (ADR-0012). When --backend=leyline, shell out
+		// to `leyline parse` and copy the result to `output`. Schema
+		// flag is ignored on this path — leyline produces raw _ast /
+		// _source / nodes / node_refs / node_defs; schema projection
+		// happens at serve/mount time via SQLiteGraph.
+		if buildBackend == "leyline" {
+			return runBuildViaLeyline(source, output)
+		}
 
 		// Load or infer schema. Falls back to FCA inference when no schema file is provided.
 		var schema *api.Topology
@@ -157,5 +178,38 @@ func init() {
 	// and have to rely on FCA inference — which doesn't yet produce a
 	// methods/ root for Go (mache-5d1o).
 	buildCmd.Flags().StringVarP(&schemaPath, "schema", "s", "", "Path to topology schema (defaults to FCA inference)")
+	buildCmd.Flags().StringVar(&buildBackend, "backend", "auto", "Parsing backend: 'auto' (in-process tree-sitter, current default) or 'leyline' (delegate to ley-line-open's `leyline parse`; produces richer .db with _ast/_source/_lsp* and is the future default per ADR-0012)")
 	rootCmd.AddCommand(buildCmd)
+}
+
+// runBuildViaLeyline implements --backend=leyline: shells out to
+// `leyline parse <source> -o <tmp.db>` and copies the result to
+// `output`. The ADR-0012 step 3 path that future PRs will make
+// the default.
+//
+// Errors are surfaced as-is; callers shouldn't retry with the
+// in-process backend silently — that masks misconfiguration.
+// If the user explicitly passed --backend=leyline, leyline being
+// missing is a real error worth reporting, not a fallback trigger.
+func runBuildViaLeyline(source, output string) error {
+	if schemaPath != "" {
+		log.Printf("--backend=leyline: --schema=%q is ignored on this path; schema projection happens at serve/mount time", schemaPath)
+	}
+	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
+	if err != nil {
+		return fmt.Errorf("leyline backend: %w", err)
+	}
+	defer cleanup()
+
+	// Move the temp .db to the output path. copyFile (cmd/utils.go)
+	// uses copy + close rather than rename so we don't fail across
+	// filesystems (TMPDIR may be on a different mount than the
+	// target). Pre-truncate the destination to match the prior
+	// `os.Remove(output)` behavior in the auto path.
+	_ = os.Remove(output)
+	if err := copyFile(tmpPath, output); err != nil {
+		return fmt.Errorf("copy leyline output to %s: %w", output, err)
+	}
+	log.Printf("Built %s from %s via leyline", output, source)
+	return nil
 }
