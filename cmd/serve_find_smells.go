@@ -78,7 +78,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "dead_code",
-		Description: "Symbols defined in node_defs that have no entries in node_refs — nothing in the indexed graph references them. False positives expected for entry points (main, init), interface methods invoked dynamically (String, Error), and exported API consumed outside the indexed scope. The skip list at the top of the rule excludes the most common offenders; tune by editing the rule.",
+		Description: "Symbols defined in node_defs that have no entries in node_refs — nothing in the indexed graph references them. False positives expected for entry points (main, init), interface methods invoked dynamically (String, Error), and exported API consumed outside the indexed scope. Test*/Benchmark*/Example* are skip-listed because Go's testing framework invokes them via reflection (no static refs). The skip list at the top of the rule excludes the most common offenders; tune by editing the rule.",
 		Requires:    []string{"node_defs", "node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
@@ -94,6 +94,15 @@ var smellRegistry = []SmellRule{
 			LEFT JOIN node_refs refs ON refs.token = defs.token
 			WHERE refs.token IS NULL
 			  AND defs.token NOT IN ('main','init','String','Error','Read','Write','Close','Len','Less','Swap','MarshalJSON','UnmarshalJSON','Format','Scan')
+			  -- Skip-list testing-framework prefixes after stripping any 'pkg.'
+			  -- qualifier — mache writers emit either bare 'TestFoo' or
+			  -- qualified 'pkg.TestFoo'. instr(token, '.') is 0 when there's
+			  -- no dot, and substr(token, 1) is the full token, so this
+			  -- handles both shapes.
+			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Test%%'
+			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Benchmark%%'
+			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Example%%'
+			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Fuzz%%'
 			%s
 			ORDER BY COALESCE(n.source_file, ''), defs.node_id
 		`,

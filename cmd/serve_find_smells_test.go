@@ -334,6 +334,61 @@ func TestFindSmells_DeadCode(t *testing.T) {
 		"source_id comes from the construct dir's source_file column")
 }
 
+// TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes asserts that
+// Test*, Benchmark*, Example*, Fuzz* defs with no static refs are NOT
+// flagged. Go's testing framework invokes them via reflection, so they
+// never appear in node_refs. The skip list pattern is borrowed from
+// untested_function. Surfaced by dogfooding find_smells against mache
+// itself.
+func TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Real dead code (control: the rule must still flag this).
+		INSERT INTO node_defs VALUES ('OrphanFunc', 'pkg/OrphanFunc');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/OrphanFunc', 'pkg', 'OrphanFunc', 1, 0, 'orphan.go', '');
+
+		-- Each of the 4 testing-framework prefixes — none have refs.
+		-- Mix bare and 'pkg.'-qualified tokens to exercise the
+		-- substr/instr leaf-extraction in the skip clause.
+		INSERT INTO node_defs VALUES
+		  ('TestSomething',          'pkg/TestSomething'),
+		  ('cmd.TestQualified',      'pkg/TestQualified'),
+		  ('BenchmarkSomething',     'pkg/BenchmarkSomething'),
+		  ('cmd.BenchmarkQualified', 'pkg/BenchmarkQualified'),
+		  ('ExampleSomething',       'pkg/ExampleSomething'),
+		  ('FuzzSomething',          'pkg/FuzzSomething');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/TestSomething',      'pkg', 'TestSomething',      1, 0, 'a_test.go',     ''),
+		  ('pkg/TestQualified',      'pkg', 'TestQualified',      1, 0, 'q_test.go',     ''),
+		  ('pkg/BenchmarkSomething', 'pkg', 'BenchmarkSomething', 1, 0, 'b_test.go',     ''),
+		  ('pkg/BenchmarkQualified', 'pkg', 'BenchmarkQualified', 1, 0, 'q_test.go',     ''),
+		  ('pkg/ExampleSomething',   'pkg', 'ExampleSomething',   1, 0, 'example_test.go', ''),
+		  ('pkg/FuzzSomething',      'pkg', 'FuzzSomething',      1, 0, 'fuzz_test.go',  '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "dead_code",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "only OrphanFunc should be flagged; testing-framework prefixes are skipped")
+	assert.Equal(t, "pkg/OrphanFunc", resp.Findings[0].NodeID)
+}
+
 // TestFindSmells_DeadCodeSourceIDFilter exercises the per-rule
 // ScopeColumn — for dead_code that's `COALESCE(n.source_file, ”)`,
 // not the magic-int rule's `lit.source_id`.
