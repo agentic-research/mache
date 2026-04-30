@@ -87,6 +87,45 @@ func (c *CompositeGraph) MountPrefixOf(id string) string {
 	return prefix
 }
 
+// defsMapper is the optional interface a sub-graph implements when
+// it has a token → dir IDs definition index. Both MemoryStore and
+// SQLiteGraph implement this; CompositeGraph aggregates over them.
+type defsMapper interface {
+	DefsMap() map[string][]string
+}
+
+// DefsMap aggregates token → dir IDs across every mount that
+// implements DefsMap(), prefixing each dir ID with its mount name.
+// Sub-graphs that don't expose a defs index are skipped.
+//
+// Lets find_definition and search work correctly on a composite
+// graph: a token defined in mount A and mount B returns
+// ["A/path/to/def", "B/path/to/def"] — agents see all definitions
+// across mounts in one query.
+func (c *CompositeGraph) DefsMap() map[string][]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string][]string)
+	for prefix, g := range c.mounts {
+		dp, ok := g.(defsMapper)
+		if !ok {
+			continue
+		}
+		for token, ids := range dp.DefsMap() {
+			for _, id := range ids {
+				var wrapped string
+				if id == "" {
+					wrapped = prefix
+				} else {
+					wrapped = prefix + "/" + id
+				}
+				out[token] = append(out[token], wrapped)
+			}
+		}
+	}
+	return out
+}
+
 // GetNode implements Graph.
 func (c *CompositeGraph) GetNode(id string) (*Node, error) {
 	c.mu.RLock()
