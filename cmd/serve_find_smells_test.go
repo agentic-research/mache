@@ -911,6 +911,68 @@ func TestFindSmells_DuplicateDefinitions(t *testing.T) {
 	}
 }
 
+// TestFindSmells_DuplicateDefinitionsSkipsImports asserts that nodes
+// under '/imports/' don't surface as duplicate definitions, even
+// when the same import path appears across many packages. Imports
+// are external references, not definitions.
+//
+// Surfaced by dogfooding: 559 → 200 findings on mache.db after
+// excluding imports/.
+func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Same import path in three packages — these should NOT
+		-- surface as a duplicate-defs finding.
+		INSERT INTO node_defs VALUES
+		  ('"fmt"', 'pkg/a/imports/"fmt"'),
+		  ('"fmt"', 'pkg/b/imports/"fmt"'),
+		  ('"fmt"', 'pkg/c/imports/"fmt"');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/imports/"fmt"', 'pkg/a/imports', '"fmt"', 1, 0, 'a/main.go', ''),
+		  ('pkg/b/imports/"fmt"', 'pkg/b/imports', '"fmt"', 1, 0, 'b/main.go', ''),
+		  ('pkg/c/imports/"fmt"', 'pkg/c/imports', '"fmt"', 1, 0, 'c/main.go', '');
+
+		-- Real duplicate (functions with the same name in two
+		-- packages) — control: this should still be flagged.
+		INSERT INTO node_defs VALUES
+		  ('Helper', 'pkg/a/functions/Helper'),
+		  ('Helper', 'pkg/b/functions/Helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/helper.go', ''),
+		  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/helper.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	for _, id := range gotIDs {
+		assert.NotContains(t, id, "/imports/",
+			"imports/ nodes must not appear in duplicate_definitions")
+	}
+	assert.ElementsMatch(t,
+		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
+		gotIDs,
+		"only the real Helper duplicate is flagged",
+	)
+}
+
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)
