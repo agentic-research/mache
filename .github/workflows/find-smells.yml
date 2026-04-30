@@ -73,10 +73,14 @@ jobs:
             | jq -R -s -c 'split("\n") | map(select(length > 0))' \
             > /tmp/changed.json
           cat /tmp/changed.json
-          # Make a regex alternation for source_file matching:
-          # /tmp/changed-pattern.txt → "auth/main.go|billing/charge.go"
-          jq -r '. | join("|")' /tmp/changed.json > /tmp/changed-pattern.txt
-          if [ -z "$(cat /tmp/changed-pattern.txt)" ]; then
+          # Set skip=true when the changed-files array is empty.
+          # Filtering against this list happens in the next step via
+          # literal substring `contains()` (not regex), so we don't
+          # need to pre-compute a regex pattern here. Going through
+          # regex alternation would silently mis-match because '.'
+          # in '.go' is a regex metacharacter; literal `contains()`
+          # avoids that class of bug.
+          if [ "$(jq 'length' /tmp/changed.json)" = "0" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -86,17 +90,22 @@ jobs:
         if: steps.changed.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          PATTERN=$(cat /tmp/changed-pattern.txt)
           # Run the five rules that don't need _ast (work on the
           # standalone CGO ingestion path's node_defs / node_refs /
           # nodes tables). The four _ast-only rules
           # (magic_int_in_comparison, cyclomatic_complexity,
           # long_function, long_file) need an LLO-built .db.
+          #
+          # Filter findings by literal substring match against the
+          # changed-files list. We use `contains` rather than `test`
+          # because `.` in '.go' is a regex metacharacter — `test`
+          # against 'cmd/serve.go' would silently match
+          # 'cmd/serveXgo' too. `contains` is literal substring.
           for rule in dead_code untested_function duplicate_definitions fan_out_skew god_file; do
             /tmp/mache find-smells --db /tmp/repo.db --rule "$rule" \
               --format json --limit 1000 \
-              | jq --arg pat "$PATTERN" \
-                  '.findings = (.findings | map(select(.source_id | test($pat))))' \
+              | jq --slurpfile changed /tmp/changed.json \
+                  '.findings = (.findings | map(. as $f | select($changed[0] | any(. as $c | $f.source_id | contains($c)))))' \
               > "/tmp/${rule}.json"
             echo "=== $rule ==="
             jq '.findings | length' "/tmp/${rule}.json"
