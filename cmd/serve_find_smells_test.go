@@ -160,6 +160,50 @@ func TestFindSmells_ListsRulesWhenNoRule(t *testing.T) {
 	assert.Contains(t, byID["dead_code"], "node_defs")
 }
 
+// TestFindSmells_ListsRulesSurfacesDefaultMinMetric pins that the
+// rule listing exposes DefaultMinMetric as a structured field.
+// Agents discovering rules need to know the rule's threshold
+// programmatically — without this, they have to parse the
+// description text to learn what the default is, which is fragile
+// and silent when descriptions evolve.
+func TestFindSmells_ListsRulesSurfacesDefaultMinMetric(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Rules []struct {
+			ID               string `json:"id"`
+			DefaultMinMetric int64  `json:"default_min_metric"`
+		} `json:"rules"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	byID := make(map[string]int64, len(resp.Rules))
+	for _, r := range resp.Rules {
+		byID[r.ID] = r.DefaultMinMetric
+	}
+
+	// Rules with a hardcoded historical floor (lifted to
+	// DefaultMinMetric in #302/#303) must surface the value.
+	assert.Equal(t, int64(81), byID["long_function"],
+		"long_function default threshold (81 = `>= 81` matches old `> 80`) must reach the listing")
+	assert.Equal(t, int64(1501), byID["long_file"],
+		"long_file default threshold (1501 = `>= 1501` matches old `> 1500`) must reach the listing")
+
+	// Rules without a default — caller-set contract — must NOT
+	// surface a stray non-zero value (zero-valued struct field
+	// is fine; the JSON omitempty drops the key entirely).
+	assert.Equal(t, int64(0), byID["dead_code"],
+		"dead_code has no DefaultMinMetric — listing must not invent one")
+	assert.Equal(t, int64(0), byID["cyclomatic_complexity"],
+		"cyclomatic_complexity is caller-threshold by contract — must surface zero")
+}
+
 func TestFindSmells_MagicIntInComparison(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.db.Close() }()
