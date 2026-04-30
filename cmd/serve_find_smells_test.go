@@ -1553,6 +1553,54 @@ func TestFindSmells_UntestedFunctionAcceptsTestCallCoverage(t *testing.T) {
 		"ReadArenaHeader is exercised via call from TestArena_FlipBuffer; only Orphan remains untested")
 }
 
+// TestFindSmells_UntestedFunctionSkipsRegisterPrefix asserts that
+// Register* functions aren't flagged. Go convention: Register* runs
+// at init() time in every consumer — exercised by every test of the
+// package by virtue of import side-effects, but not via a TestFoo
+// counterpart and not from a Test* caller. Static call-graph attributes
+// the caller to functions/init/source, which tested_via_call doesn't
+// recognise. Skip the prefix to avoid the FP.
+func TestFindSmells_UntestedFunctionSkipsRegisterPrefix(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO node_defs VALUES
+		  ('RegisterRefQuery',     'pkg/functions/RegisterRefQuery'),
+		  ('RegisterContextQuery', 'pkg/functions/RegisterContextQuery');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/RegisterRefQuery',        'pkg/functions',           'RegisterRefQuery',     1, 0, '',          ''),
+		  ('pkg/functions/RegisterRefQuery/source', 'pkg/functions/RegisterRefQuery','source',         0, 0, 'r.go',      ''),
+		  ('pkg/functions/RegisterContextQuery',        'pkg/functions',                 'RegisterContextQuery', 1, 0, '',     ''),
+		  ('pkg/functions/RegisterContextQuery/source', 'pkg/functions/RegisterContextQuery', 'source',          0, 0, 'r.go', '');
+
+		-- Real untested helper as control — must still flag.
+		INSERT INTO node_defs VALUES ('OrphanHelper', 'pkg/functions/OrphanHelper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/OrphanHelper',        'pkg/functions',         'OrphanHelper', 1, 0, '',          ''),
+		  ('pkg/functions/OrphanHelper/source', 'pkg/functions/OrphanHelper','source',  0, 0, 'h.go',     '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"pkg/functions/OrphanHelper"}, gotIDs,
+		"Register* functions are init-time registrations and must not be flagged; only OrphanHelper remains")
+}
+
 // TestFindSmells_UntestedFunctionSkipsFuzzPrefix asserts that Fuzz*
 // functions (themselves fuzz-test entry points) aren't flagged.
 // They're covered by the testing framework like Test* and Example*,

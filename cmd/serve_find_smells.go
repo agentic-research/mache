@@ -326,6 +326,16 @@ var smellRegistry = []SmellRule{
 			  AND d.token NOT LIKE 'Benchmark%%'
 			  AND d.token NOT LIKE 'Example%%'
 			  AND d.token NOT LIKE 'Fuzz%%'
+			  -- Register* functions are by-convention init-time
+			  -- registration handlers (RegisterRefQuery,
+			  -- RegisterAddressRefQuery, etc.). They run via
+			  -- init() in every consumer of the package, so they
+			  -- ARE exercised in every test by virtue of importing
+			  -- the package — but the static call-graph view ties
+			  -- their callers to functions/init/source, which the
+			  -- tested_via_call CTE doesn't recognize as a test
+			  -- caller. Excluding the prefix avoids the FP.
+			  AND d.token NOT LIKE 'Register%%'
 			  AND d.token NOT IN ('main','init','String','Error')
 			  AND t.token IS NULL
 			  AND tc.token IS NULL
