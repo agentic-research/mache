@@ -2614,6 +2614,48 @@ func TestFindSmells_DuplicateDefinitionsExcludesAllMethods(t *testing.T) {
 	)
 }
 
+// TestFindSmells_LongFile_MinMetricLowersThreshold pins the same
+// behavior fix as #302 applied to long_file: callers passing
+// min_metric < 1501 now see files between min_metric and 1500
+// lines, where the old SQL `> 1500` floor silently excluded them.
+func TestFindSmells_LongFile_MinMetricLowersThreshold(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  ('huge_root',   'huge.go',   'source_file', 0, 999999, 0, 0, 2000, 0),  -- 2000 lines
+		  ('medium_root', 'medium.go', 'source_file', 0, 600000, 0, 0, 1000, 0),  -- 1000 lines
+		  ('small_root',  'small.go',  'source_file', 0, 1234,   0, 0, 50,   0);  -- 50 lines
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule":       "long_file",
+		"min_metric": float64(800),
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.SourceID
+	}
+	// huge.go (2000) and medium.go (1000) both ≥ 800; small.go (50)
+	// is below. Pre-fix this would have returned only huge.go because
+	// the SQL `> 1500` floor excluded medium.go before min_metric ran.
+	assert.ElementsMatch(t, []string{"huge.go", "medium.go"}, gotIDs,
+		"min_metric=800 must surface 1000-line medium.go (was hidden behind hardcoded `> 1500` SQL floor)")
+}
+
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)
