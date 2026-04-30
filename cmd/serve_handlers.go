@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -821,6 +820,12 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 		result := graph.DetectCommunities(refs, minSize)
 
 		// Push topology to ley-line sheaf cache (fire-and-forget).
+		// Errors are best-effort: the daemon may be missing
+		// (DiscoverOrStart fails), unreachable (DialSocket fails),
+		// or running an older protocol that doesn't support
+		// sheaf_set_topology. None of those are actionable for the
+		// user mid-call; log only once per process to avoid the
+		// every-call spam during benchmarks and non-LLO setups.
 		go func() {
 			sockPath, err := leyline.DiscoverOrStart()
 			if err != nil {
@@ -833,7 +838,7 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 			defer func() { _ = sock.Close() }()
 			sc := leyline.NewSheafClient(sock)
 			if pushErr := sc.PushTopology(result, refs); pushErr != nil {
-				log.Printf("sheaf topology push: %v", pushErr)
+				logSheafPushOnce(pushErr)
 			}
 		}()
 
