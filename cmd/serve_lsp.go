@@ -17,16 +17,15 @@ import (
 // lspEnrichHint is the user-facing guidance shown when LSP data is missing
 // and ley-line daemon is not available. Single definition, used by both
 // get_type_info and get_diagnostics handlers.
-// lspEnrichHint is the user-facing guidance shown when LSP data is missing
-// and ley-line daemon is not available. Single definition, used by both
-// get_type_info and get_diagnostics handlers.
 const lspEnrichHint = "Pre-enrich your database with ll-open, or install ley-line for live enrichment.\n" +
-	"See: github.com/agentic-research/ley-line-open"
+	"See: github.com/agentic-research/ley-line-open\n" +
+	"Capability matrix: docs/ARCHITECTURE.md#interplay-with-ley-line-open"
 
 func lspTableMissing(table, feature string) *mcp.CallToolResult {
 	return mcp.NewToolResultError(fmt.Sprintf("no %s table in database. To get %s, either:\n"+
 		"  1. Pre-enrich with: ll-open enrich-lsp (see github.com/agentic-research/ley-line-open)\n"+
-		"  2. Pass a 'file' param to trigger live enrichment (requires ley-line daemon)", table, feature))
+		"  2. Pass a 'file' param to trigger live enrichment (requires ley-line daemon)\n"+
+		"See docs/ARCHITECTURE.md#interplay-with-ley-line-open for which tools need which tables.", table, feature))
 }
 
 func lspEnrichFailed(feature string) *mcp.CallToolResult {
