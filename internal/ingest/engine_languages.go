@@ -21,13 +21,10 @@ func init() {
 
 	// Register Go ref query (used by ExtractCalls, the bare-token
 	// path that populates node_refs). Mirrors defaultCallQuery for
-	// call_expression but adds three function-value patterns so
-	// dead_code stops flagging functions that are referenced as
-	// values rather than called (mache-02r9):
+	// call_expression and adds the keyed_element pattern so
+	// dead_code stops flagging cobra RunE callbacks (mache-02r9):
 	//
-	//   &cobra.Command{ RunE: runServe }        — keyed_element value
-	//   factories["go"] = goFactory             — assignment_statement RHS
-	//   shortDecl := someFn                     — short_var_declaration RHS
+	//   &cobra.Command{ RunE: runServe }   — keyed_element value
 	//
 	// We capture the IDENTIFIER inside the SECOND literal_element of
 	// a keyed_element (the value), not the first (the field name).
@@ -35,19 +32,26 @@ func init() {
 	// shapes anyway, but this query is precise so node_refs stays
 	// signal-rich.
 	//
-	// Patterns fire on whatever scope ExtractCalls is given. Function-
-	// body scopes catch nested cobra literals; file-level scopes need
-	// the separate ExtractFileLevelFnValueRefs pass — see engine.go.
+	// Earlier iterations of this query also matched
+	// assignment_statement and short_var_declaration RHS identifiers
+	// to catch 'factories[k] = goFactory' and 'h := someFn' shapes
+	// — but those over-collected (every 'filtered := findings[:0]'
+	// in normal Go code added 'findings' to node_refs as a
+	// 'callee'), inflating fan_out_skew and add scoring noise to
+	// every other rule. Drop those two patterns; the remaining
+	// keyed_element shape captures the highest-value cobra/init
+	// case without the over-capture.
+	//
+	// Patterns fire on whatever scope ExtractCalls is given.
+	// Function-body scopes catch nested cobra literals; file-level
+	// cases (top-level var declarations) still need a separate pass
+	// — known follow-up under mache-02r9.
 	RegisterRefQuery("go", `
 		(call_expression function: (identifier) @call)
 		(call_expression function: (selector_expression field: (field_identifier) @call))
 		(keyed_element
 			(literal_element)
 			(literal_element (identifier) @call))
-		(assignment_statement
-			right: (expression_list (identifier) @call))
-		(short_var_declaration
-			right: (expression_list (identifier) @call))
 	`)
 
 	// ASTWalker context kinds — top-level node kinds whose source bytes
