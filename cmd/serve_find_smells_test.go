@@ -118,16 +118,39 @@ func TestFindSmells_ListsRulesWhenNoRule(t *testing.T) {
 			ID          string   `json:"id"`
 			Languages   []string `json:"languages"`
 			Description string   `json:"description"`
+			Requires    []string `json:"requires"`
 		} `json:"rules"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
 	assert.NotEmpty(t, resp.Help)
 
-	gotIDs := make([]string, 0, len(resp.Rules))
+	byID := make(map[string][]string, len(resp.Rules))
 	for _, r := range resp.Rules {
-		gotIDs = append(gotIDs, r.ID)
+		byID[r.ID] = r.Requires
 	}
-	assert.Contains(t, gotIDs, "magic_int_in_comparison")
+	require.Contains(t, byID, "magic_int_in_comparison")
+
+	// Every registered rule must declare what tables it reads — the
+	// listing is the agent's pre-flight check against the active backend.
+	for id, req := range byID {
+		assert.NotEmpty(t, req, "rule %q must declare its required tables in `requires`", id)
+	}
+
+	// Spot-check a few representatives so the categorization stays honest:
+	// _ast rules need leyline parse; node_defs/node_refs rules work on
+	// any backend that populates the cross-ref tables. Use require.Contains
+	// for the rule-ID lookups so a missing rule fails with a clear message
+	// instead of an empty-slice assertion further down.
+	for _, id := range []string{"cyclomatic_complexity", "fan_out_skew", "dead_code"} {
+		require.Contains(t, byID, id, "rule %q missing from listing", id)
+	}
+	assert.Contains(t, byID["cyclomatic_complexity"], "_ast",
+		"cyclomatic_complexity walks the AST and must require _ast")
+	assert.Contains(t, byID["fan_out_skew"], "node_refs",
+		"fan_out_skew aggregates over node_refs and must require it")
+	assert.Contains(t, byID["dead_code"], "node_refs",
+		"dead_code joins defs against refs and must require both tables")
+	assert.Contains(t, byID["dead_code"], "node_defs")
 }
 
 func TestFindSmells_MagicIntInComparison(t *testing.T) {
