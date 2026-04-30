@@ -45,7 +45,18 @@ var buildCmd = &cobra.Command{
 			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
 			log.Println("Inferring schema...")
 
-			// Walk source to find the first .go file for bootstrap inference
+			// Walk source and parse multiple .go files. Single-file
+			// inference misses node types absent from that file —
+			// e.g. parsing a file with only function_declarations
+			// yields no methods/, even when the project has receiver
+			// methods (mache-5d1o). Cap at maxFiles to keep inference
+			// fast on large repos; FCA only needs enough samples to
+			// surface the closures, not exhaustive coverage.
+			const maxFiles = 32
+			parser := sitter.NewParser()
+			parser.SetLanguage(lang.ForName("go").Grammar())
+			var roots []*sitter.Node
+			var trees []*sitter.Tree // keep alive for root lifetime
 			if walkErr := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
 				if err != nil {
 					return err
@@ -59,29 +70,34 @@ var buildCmd = &cobra.Command{
 				content, readErr := os.ReadFile(path)
 				if readErr != nil {
 					log.Printf("schema inference: read %s: %v", path, readErr)
-					return nil // try next file
+					return nil
 				}
-				parser := sitter.NewParser()
-				parser.SetLanguage(lang.ForName("go").Grammar())
 				tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
 				if parseErr != nil {
 					log.Printf("schema inference: parse %s: %v", path, parseErr)
-					return nil // try next file
+					return nil
 				}
 				if tree != nil {
-					var inferErr error
-					schema, inferErr = inf.InferFromTreeSitter(tree.RootNode())
-					if inferErr != nil {
-						log.Printf("schema inference: infer from %s: %v", path, inferErr)
-					}
+					roots = append(roots, tree.RootNode())
+					trees = append(trees, tree)
 				}
-				if schema != nil {
-					return filepath.SkipDir // Stop after first success
+				if len(roots) >= maxFiles {
+					return filepath.SkipDir
 				}
 				return nil
 			}); walkErr != nil && walkErr != filepath.SkipDir {
 				return fmt.Errorf("walk source: %w", walkErr)
 			}
+
+			if len(roots) > 0 {
+				inferred, inferErr := inf.InferFromTreeSitterRoots(roots...)
+				if inferErr != nil {
+					log.Printf("schema inference: %v", inferErr)
+				} else {
+					schema = inferred
+				}
+			}
+			_ = trees // hold trees alive until inference returns
 
 			if schema == nil {
 				schema = &api.Topology{Version: "v1alpha1"}

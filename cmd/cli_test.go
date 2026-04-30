@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 // ---------------------------------------------------------------------------
@@ -52,6 +54,59 @@ func TestBuild_ProducesDB(t *testing.T) {
 	info, err := os.Stat(outDB)
 	require.NoError(t, err)
 	assert.Greater(t, info.Size(), int64(0), "output DB should be non-empty")
+}
+
+// TestBuild_FCAInferenceCoversMethods guards the multi-file FCA
+// inference. The previous bootstrap parsed the first .go file only
+// and stopped — when that file held only function_declarations the
+// inferred schema was missing the 'methods' grouping, which silently
+// dropped every method_declaration at ingest. As a knock-on, dead_code
+// flagged any function only called by a method (mache-5d1o).
+//
+// Layout: two files where the FIRST one walked alphabetically has
+// no methods. Without multi-file accumulation the schema would lack
+// methods/, so the method's call to standaloneFunc would not appear
+// in node_refs.
+func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+
+	// a.go has only standalone funcs — single-file inference would
+	// produce 'functions/' with no 'methods/'.
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "a.go"),
+		[]byte("package p\n\nfunc standaloneFunc() {}\n"), 0o644))
+
+	// b.go has methods that call standaloneFunc. Without methods/
+	// in the schema, the call is silently dropped from node_refs.
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "b.go"),
+		[]byte("package p\n\ntype T struct{}\n\nfunc (T) MethodCallsStandalone() { standaloneFunc() }\n"),
+		0o644))
+
+	outDB := filepath.Join(tmpDir, "out.db")
+
+	// Empty schemaPath forces the FCA-inference branch.
+	oldSchemaPath := schemaPath
+	schemaPath = ""
+	defer func() { schemaPath = oldSchemaPath }()
+
+	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
+
+	db, err := sql.Open("sqlite", outDB)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var methodCount int
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM nodes WHERE id LIKE 'methods/%' AND id NOT LIKE '%/source' AND id NOT LIKE '%/ast.json' AND id NOT LIKE '%/doc'`,
+	).Scan(&methodCount))
+	assert.GreaterOrEqual(t, methodCount, 1, "FCA inference must produce a methods/ root when any file has receiver methods")
+
+	var refCount int
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM node_refs WHERE token = 'standaloneFunc'`,
+	).Scan(&refCount))
+	assert.GreaterOrEqual(t, refCount, 1, "method's call to standaloneFunc must appear in node_refs (dead_code FP fix)")
 }
 
 // TestBuild_SchemaPathRelative guards the resolveSchema call site.

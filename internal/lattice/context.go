@@ -126,8 +126,15 @@ func DecideScaling(stats map[string]*FieldStats, totalRecords int) []Attribute {
 
 		fs := stats[field]
 		switch {
-		case field == "type":
-			// Always scale "type" field for AST inference
+		case field == "type" || strings.HasPrefix(field, "field_") && strings.HasSuffix(field, "_type"):
+			// Always scale "type" and AST field shape attributes
+			// (e.g. field_name_type, field_body_type) — these are
+			// low-cardinality discriminators that ProjectAST relies
+			// on to generate correct tree-sitter selectors. Without
+			// this, small samples that don't pass the enum-ratio
+			// gate produce schemas using the wrong AST node type
+			// (e.g. method_declaration name: (identifier) instead of
+			// (field_identifier), which silently matches nothing).
 			sortedVals := sortedKeys(fs.Values)
 			for _, val := range sortedVals {
 				attrs = append(attrs, Attribute{
