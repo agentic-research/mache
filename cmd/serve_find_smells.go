@@ -256,7 +256,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "untested_function",
 		Languages:   []string{"go"},
-		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is skipped — generated APIs aren't expected to have project tests. source_id falls back to a child's source_file when the construct dir doesn't carry one. Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
+		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. The check accepts two counterpart patterns: exact 'Test<Foo>' for a function named 'Foo', or any 'Test<Bar>...' (prefix) for a constructor named 'NewBar' — Go convention puts constructor coverage under TestBar / TestBar_<MethodName>, not TestNewBar. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is skipped — generated APIs aren't expected to have project tests. source_id falls back to a child's source_file when the construct dir doesn't carry one. Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
@@ -277,7 +277,19 @@ var smellRegistry = []SmellRule{
 			FROM node_defs d
 			JOIN nodes n ON n.id = d.node_id
 			LEFT JOIN child_source cs ON cs.node_id = n.id
-			LEFT JOIN node_defs t ON t.token = 'Test' || d.token
+			-- Accept either an exact 'Test<Foo>' counterpart (the
+			-- canonical Go test name for func Foo) OR — when the
+			-- function name starts with 'New' — any TestBar* prefix
+			-- match for the constructor's bare type name. NewMemoryStore
+			-- is overwhelmingly tested via TestMemoryStore_TracksMtimes
+			-- and friends, never via TestNewMemoryStore.
+			LEFT JOIN node_defs t
+			  ON t.token = 'Test' || d.token
+			  OR (
+			    substr(d.token, 1, 3) = 'New'
+			    AND length(d.token) > 3
+			    AND t.token LIKE 'Test' || substr(d.token, 4) || '%%'
+			  )
 			WHERE substr(d.token, 1, 1) GLOB '[A-Z]'
 			  AND d.token NOT LIKE 'Test%%'
 			  AND d.token NOT LIKE 'Benchmark%%'

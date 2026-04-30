@@ -1318,6 +1318,75 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 		"Dispatcher (production) is flagged; CapnpStruct (generated) is skipped via source_file suffix")
 }
 
+// TestFindSmells_UntestedFunctionAcceptsTestTypePrefix asserts the
+// New<Type> → Test<Type>* alternate counterpart match. Go test code
+// for constructors typically lives under TestType_<Method> — not
+// under TestNewType — so flagging NewType as 'untested' when the
+// type IS tested is a noise FP.
+func TestFindSmells_UntestedFunctionAcceptsTestTypePrefix(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Constructor with companion TestStore_Foo coverage — must NOT be flagged.
+		INSERT INTO node_defs VALUES
+		  ('NewStore',          'pkg/functions/NewStore'),
+		  ('TestStore_AddItem', 'pkg/functions/TestStore_AddItem');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/NewStore',                'pkg/functions', 'NewStore', 1, 0, '',                 ''),
+		  ('pkg/functions/NewStore/source',         'pkg/functions/NewStore', 'source', 0, 0, 's.go',         ''),
+		  ('pkg/functions/TestStore_AddItem',       'pkg/functions', 'TestStore_AddItem', 1, 0, '',         ''),
+		  ('pkg/functions/TestStore_AddItem/source','pkg/functions/TestStore_AddItem','source',0, 0, 's_t.go',     '');
+
+		-- Truly untested constructor — control: must still flag.
+		INSERT INTO node_defs VALUES ('NewOrphan', 'pkg/functions/NewOrphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/NewOrphan',        'pkg/functions',           'NewOrphan', 1, 0, '',          ''),
+		  ('pkg/functions/NewOrphan/source', 'pkg/functions/NewOrphan', 'source',    0, 0, 'o.go',     '');
+
+		-- Untested non-constructor — control: must still flag, since
+		-- the New-prefix lookup specifically requires 'New' prefix.
+		INSERT INTO node_defs VALUES ('Helper', 'pkg/functions/Helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/Helper',        'pkg/functions',         'Helper', 1, 0, '',         ''),
+		  ('pkg/functions/Helper/source', 'pkg/functions/Helper',  'source', 0, 0, 'h.go',    '');
+
+		-- Tested non-constructor (TestHelper exact match) — must NOT flag.
+		INSERT INTO node_defs VALUES
+		  ('Validate',     'pkg/functions/Validate'),
+		  ('TestValidate', 'pkg/functions/TestValidate');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/Validate',         'pkg/functions',           'Validate', 1, 0, '',          ''),
+		  ('pkg/functions/Validate/source',  'pkg/functions/Validate',  'source',   0, 0, 'v.go',    ''),
+		  ('pkg/functions/TestValidate',     'pkg/functions',           'TestValidate', 1, 0, '',     ''),
+		  ('pkg/functions/TestValidate/source','pkg/functions/TestValidate','source',0, 0, 'v_t.go',  '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.ElementsMatch(t,
+		[]string{"pkg/functions/NewOrphan", "pkg/functions/Helper"},
+		gotIDs,
+		"NewStore is satisfied by TestStore_*; Validate is satisfied by exact TestValidate; only NewOrphan and Helper remain",
+	)
+}
+
 // TestFindSmells_UntestedFunctionSkipsGeneratedFiles asserts that
 // exported funcs in generated-code files don't get flagged for
 // missing TestFoo coverage — generated APIs aren't expected to have
