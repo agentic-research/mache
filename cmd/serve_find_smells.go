@@ -376,13 +376,27 @@ var smellRegistry = []SmellRule{
 				-- substr(token, instr(token, '.') + 1) strips the
 				-- 'pkg.' prefix; instr returns 0 when there's no
 				-- dot, so substr(token, 1) returns the full token.
+				-- Skip standard-library and common-external-interface
+				-- contracts. Duplicates of these aren't 'duplication'
+				-- in the architectural sense — they're each type's
+				-- implementation of a shared protocol. Mirror the
+				-- dead_code skip list (PRs #234, #239) so both rules
+				-- treat the same names consistently.
 				WHERE substr(token, instr(token, '.') + 1) NOT IN (
 					'main','init',
 					'String','Error','Format','Scan','GoString',
 					'Read','Write','Close','Open','Seek','ReadAt','WriteAt','ReadFrom','WriteTo',
 					'Len','Less','Swap',
 					'MarshalJSON','UnmarshalJSON','MarshalText','UnmarshalText','MarshalBinary','UnmarshalBinary',
-					'Marshal','Unmarshal','Reset','Clone','Copy','Equal','Hash','Validate'
+					'Marshal','Unmarshal','Reset','Clone','Copy','Equal','Hash','Validate',
+					-- vtab.Module (modernc.org/sqlite/vtab)
+					'BestIndex','Column','Connect','Create','Destroy','Disconnect',
+					'Eof','Filter','Rowid','Next',
+					-- billy.Filesystem (go-git)
+					'Chroot','Readlink','Sys','TempFile','MkdirAll','Symlink',
+					'Lstat','Stat','ReadDir','Capabilities','Root',
+					-- net/http
+					'ServeHTTP'
 				)
 				-- Exclude imports/ (refs TO external packages, not
 				-- defs) and non-callable categories (short names

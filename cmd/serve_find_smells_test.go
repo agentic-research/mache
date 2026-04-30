@@ -1946,6 +1946,66 @@ func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T)
 	)
 }
 
+// TestFindSmells_DuplicateDefinitionsSkipsExternalInterfaceMethods
+// asserts that vtab.Module / billy.Filesystem / http.Handler
+// methods aren't flagged. These are interface contracts shared
+// across multiple types; same-named methods aren't 'duplicates'
+// in the architectural sense — they're each type's implementation.
+// Mirrors the dead_code skip extended in PR #239.
+func TestFindSmells_DuplicateDefinitionsSkipsExternalInterfaceMethods(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Two types each implementing vtab.Module's BestIndex —
+		-- legitimate Go interface implementations, not duplicates.
+		INSERT INTO node_defs VALUES
+		  ('BestIndex', 'pkg/methods/A.BestIndex'),
+		  ('BestIndex', 'pkg/methods/B.BestIndex');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/A.BestIndex', 'pkg/methods', 'A.BestIndex', 1, 0, 'a.go', ''),
+		  ('pkg/methods/B.BestIndex', 'pkg/methods', 'B.BestIndex', 1, 0, 'b.go', '');
+
+		-- Same for billy.Filesystem TempFile.
+		INSERT INTO node_defs VALUES
+		  ('TempFile', 'pkg/methods/X.TempFile'),
+		  ('TempFile', 'pkg/methods/Y.TempFile');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/X.TempFile', 'pkg/methods', 'X.TempFile', 1, 0, 'x.go', ''),
+		  ('pkg/methods/Y.TempFile', 'pkg/methods', 'Y.TempFile', 1, 0, 'y.go', '');
+
+		-- Real cross-package duplicate of a non-interface name.
+		INSERT INTO node_defs VALUES
+		  ('Helper', 'pkg/a/functions/Helper'),
+		  ('Helper', 'pkg/b/functions/Helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/h.go', ''),
+		  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/h.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.ElementsMatch(t,
+		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
+		gotIDs,
+		"only the real Helper duplicate is flagged; interface-implementation namesakes are skipped",
+	)
+}
+
 // TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit asserts that
 // the skip list strips package qualifiers before comparing against
 // the leaf-token list. mache build emits both bare ('init') and
