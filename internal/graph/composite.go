@@ -26,6 +26,14 @@ type CompositeGraph struct {
 	// callerDepth guards against infinite recursion in GetCallers/GetCallees
 	// when a mounted sub-graph delegates back to this CompositeGraph.
 	callerDepth atomic.Int32
+
+	// extractor enables cross-mount callees resolution. When set, GetCallees
+	// extracts calls from the routed source itself (in addition to running
+	// the sub-graph's local resolution) and looks each one up against the
+	// federated DefsMap. Tokens that resolve to a different mount produce
+	// extra results in the merged response. nil means cross-mount callees
+	// are off — sub-graphs still run their own GetCallees as before.
+	extractor CallExtractor
 }
 
 // NewCompositeGraph creates an empty composite graph.
@@ -285,7 +293,12 @@ func (c *CompositeGraph) GetCallers(token string) ([]*Node, error) {
 	return all, nil
 }
 
-// GetCallees implements Graph.
+// GetCallees implements Graph. Routes to the local mount for in-mount
+// resolution; if a cross-mount CallExtractor is configured (via
+// SetCallExtractor), additionally resolves each extracted call against
+// the federated DefsMap so callees living in OTHER mounts surface in
+// the response. Local results win on dedupe; cross-mount results
+// supplement.
 func (c *CompositeGraph) GetCallees(id string) ([]*Node, error) {
 	if c.callerDepth.Add(1) > maxCallerDepth {
 		c.callerDepth.Add(-1)
@@ -294,21 +307,131 @@ func (c *CompositeGraph) GetCallees(id string) ([]*Node, error) {
 	defer c.callerDepth.Add(-1)
 
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	prefix, subPath, g := c.resolve(id)
+	extractor := c.extractor
+	c.mu.RUnlock()
+
 	if g == nil {
 		return nil, ErrNotFound
 	}
+
+	// Phase 1: route to local mount and re-prefix the results.
 	nodes, err := g.GetCallees(subPath)
 	if err != nil {
 		return nil, err
 	}
-	res := make([]*Node, len(nodes))
-	for i, n := range nodes {
-		res[i] = c.reprefixNode(prefix, n)
+	res := make([]*Node, 0, len(nodes))
+	seen := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		wrapped := c.reprefixNode(prefix, n)
+		res = append(res, wrapped)
+		seen[wrapped.ID] = true
+	}
+
+	// Phase 2: cross-mount resolution. Skip if no extractor was wired
+	// or if the local mount didn't expose the construct shape we need
+	// (no source child / no language hint).
+	if extractor != nil {
+		extra := c.crossMountCallees(g, id, subPath, extractor)
+		for _, n := range extra {
+			if seen[n.ID] {
+				continue
+			}
+			res = append(res, n)
+			seen[n.ID] = true
+		}
 	}
 	return res, nil
+}
+
+// crossMountCallees re-extracts calls from id's source content using
+// the composite's own extractor and resolves each against the
+// federated DefsMap. Returns nodes whose IDs are composite-namespaced
+// (mount/path/...). Errors are swallowed — cross-mount resolution is
+// a best-effort supplement, not a replacement for local resolution.
+func (c *CompositeGraph) crossMountCallees(local Graph, fullID, subPath string, extractor CallExtractor) []*Node {
+	// Find the construct node and its source child.
+	node, err := local.GetNode(subPath)
+	if err != nil || node == nil || !node.Mode.IsDir() {
+		return nil
+	}
+	var sourceID string
+	for _, childID := range node.Children {
+		base := childID
+		if i := strings.LastIndex(childID, "/"); i >= 0 {
+			base = childID[i+1:]
+		}
+		if base == "source" {
+			sourceID = childID
+			break
+		}
+	}
+	if sourceID == "" {
+		return nil
+	}
+
+	var langName string
+	if v, ok := node.Properties["lang"]; ok {
+		langName = string(v)
+	}
+	if langName == "" {
+		return nil
+	}
+
+	srcNode, err := local.GetNode(sourceID)
+	if err != nil || srcNode == nil {
+		return nil
+	}
+	buf := make([]byte, srcNode.ContentSize())
+	if _, err := local.ReadContent(sourceID, buf, 0); err != nil {
+		return nil
+	}
+
+	qcalls, err := extractor(buf, sourceID, langName)
+	if err != nil {
+		return nil
+	}
+
+	defs := c.DefsMap()
+	var results []*Node
+	seen := make(map[string]bool)
+	for _, qc := range qcalls {
+		// Resolution order matches MemoryStore: qualified first, then
+		// bare. No import-path fallback here — that's MemoryStore's
+		// per-language refinement, not the cross-mount contract.
+		keys := make([]string, 0, 2)
+		if qc.Qualifier != "" {
+			keys = append(keys, qc.Qualifier+"."+qc.Token)
+		}
+		keys = append(keys, qc.Token)
+
+		for _, key := range keys {
+			defIDs, ok := defs[key]
+			if !ok {
+				continue
+			}
+			for _, defID := range defIDs {
+				if defID == fullID || seen[defID] {
+					continue
+				}
+				results = append(results, &Node{ID: defID})
+				seen[defID] = true
+			}
+			break
+		}
+	}
+	return results
+}
+
+// SetCallExtractor wires a tree-sitter call extractor onto the
+// composite for cross-mount callees resolution. With nil or no
+// extractor set, GetCallees only consults the local mount's defs
+// index — sub-graphs that already have their own extractor still
+// resolve in-mount callees as before.
+func (c *CompositeGraph) SetCallExtractor(fn CallExtractor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.extractor = fn
 }
 
 // Invalidate implements Graph.
