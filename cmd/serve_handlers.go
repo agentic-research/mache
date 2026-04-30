@@ -442,34 +442,16 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 			paths = append(paths, c.ID)
 		}
 
-		// Cross-repo annotation: when running on a CompositeGraph
-		// (mache serve --mount NAME=PATH), each caller ID is prefixed
-		// with its mount name. Surface that explicitly so agents
-		// don't have to parse node IDs themselves.
-		if cg, ok := g.(*graph.CompositeGraph); ok && len(paths) > 0 {
-			type scopedCaller struct {
-				Path  string `json:"path"`
-				Mount string `json:"mount,omitempty"`
+		// Cross-repo annotation: when running on a CompositeGraph,
+		// surface each caller's mount of origin. annotateMounts
+		// returns nil if there's nothing useful to annotate; the
+		// handler then falls through to the legacy []string shape.
+		if scoped := annotateMounts(g, paths); scoped != nil {
+			type callersResult struct {
+				Callers []scopedItem `json:"callers"`
 			}
-			scoped := make([]scopedCaller, 0, len(paths))
-			anyMounted := false
-			for _, p := range paths {
-				m := cg.MountPrefixOf(p)
-				if m != "" {
-					anyMounted = true
-				}
-				scoped = append(scoped, scopedCaller{Path: p, Mount: m})
-			}
-			// Only switch to the annotated shape when at least one
-			// result actually carries a mount prefix — single-mount
-			// or non-composite paths keep the simpler legacy shape.
-			if anyMounted {
-				type callersResult struct {
-					Callers []scopedCaller `json:"callers"`
-				}
-				data, _ := json.MarshalIndent(callersResult{Callers: scoped}, "", "  ")
-				return mcp.NewToolResultText(string(data)), nil
-			}
+			data, _ := json.MarshalIndent(callersResult{Callers: scoped}, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
 		}
 
 		// Supplement with LSP references if available
@@ -560,6 +542,17 @@ func makeFindCalleesHandler(g graph.Graph) server.ToolHandlerFunc {
 					fmt.Sprintf("'%s' is a common name — results may include false positives from unrelated packages. Use find_callers on the specific implementation path to verify.", name),
 				)
 			}
+		}
+
+		// Cross-repo annotation — same pattern as find_callers.
+		if scoped := annotateMounts(g, calleePaths); scoped != nil {
+			type calleesResult struct {
+				Callees  []scopedItem `json:"callees"`
+				Warnings []string     `json:"warnings,omitempty"`
+			}
+			out := calleesResult{Callees: scoped, Warnings: warnings}
+			data, _ := json.MarshalIndent(out, "", "  ")
+			return mcp.NewToolResultText(string(data)), nil
 		}
 
 		type calleesResult struct {
@@ -913,6 +906,9 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		// 1. Anchored exact match — case-sensitive.
 		if dirIDs, ok := defs[symbol]; ok {
+			if r := findDefinitionResultScoped(g, symbol, dirIDs); r != nil {
+				return r, nil
+			}
 			return findDefinitionResult(symbol, dirIDs), nil
 		}
 
@@ -921,6 +917,9 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		symbolLower := strings.ToLower(symbol)
 		for token, ids := range defs {
 			if strings.ToLower(token) == symbolLower {
+				if r := findDefinitionResultScoped(g, symbol, ids); r != nil {
+					return r, nil
+				}
 				return findDefinitionResult(symbol, ids), nil
 			}
 		}
@@ -980,6 +979,25 @@ func findDefinitionResult(symbol string, dirIDs []string) *mcp.CallToolResult {
 		Definitions []string `json:"definitions"`
 	}
 	data, _ := json.MarshalIndent(defResult{Symbol: symbol, Definitions: dirIDs}, "", "  ")
+	return mcp.NewToolResultText(string(data))
+}
+
+// findDefinitionResultScoped is the cross-repo variant: when the
+// active graph is a CompositeGraph and at least one definition
+// carries a mount prefix, emit the {symbol, definitions: [{path,
+// mount}]} shape so agents see which mount each def came from.
+// Returns nil if annotation adds nothing — caller falls through to
+// findDefinitionResult.
+func findDefinitionResultScoped(g graph.Graph, symbol string, dirIDs []string) *mcp.CallToolResult {
+	scoped := annotateMounts(g, dirIDs)
+	if scoped == nil {
+		return nil
+	}
+	type defResult struct {
+		Symbol      string       `json:"symbol"`
+		Definitions []scopedItem `json:"definitions"`
+	}
+	data, _ := json.MarshalIndent(defResult{Symbol: symbol, Definitions: scoped}, "", "  ")
 	return mcp.NewToolResultText(string(data))
 }
 
