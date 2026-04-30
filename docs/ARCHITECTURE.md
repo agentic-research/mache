@@ -158,6 +158,39 @@ Key types:
 
 If validation fails, the write is saved as a **draft** — the node path remains stable, and the error is available via `_diagnostics/ast-errors`. The agent can read its broken code and fix it without losing the file path.
 
+## Cross-repo serve (`--mount`)
+
+`mache serve` accepts repeatable `--mount NAME=PATH` flags to compose multiple per-source graphs into a single `CompositeGraph`. Use it when you want one MCP endpoint to span several codebases — e.g., `auth-svc` and `billing-svc`, or a core library plus its tests, or a mix of source repos and pre-baked `.db` files.
+
+```bash
+mache serve --mount auth=./auth-svc --mount billing=./billing-svc
+```
+
+Under the composite:
+
+- **Each mount becomes a top-level virtual directory.** `list_directory ""` returns `[auth, billing]`. Per-mount paths are namespaced as `mount-name/path/inside/repo`.
+- **`find_callers` federates across mounts.** Calling `find_callers Validate` walks every registered mount and merges the results. The response shape switches to objects carrying an explicit `mount` field so agents don't have to parse node IDs:
+  ```json
+  {
+    "callers": [
+      {"path": "auth/functions/AuthCaller/source", "mount": "auth"},
+      {"path": "billing/functions/Charge/source",  "mount": "billing"}
+    ]
+  }
+  ```
+- **`get_node` / `read_file` / `find_callees` route by prefix.** A path with no recognized mount prefix returns `ErrNotFound`.
+- **Single-source serves are unchanged.** Without `--mount`, the response shape and behavior are byte-identical to before.
+
+`CompositeGraph` is the existing internal primitive that powers this — `internal/graph/composite.go`. It supports dynamic `Mount`/`Unmount`, has a recursion guard against mounted graphs that delegate back, and uses a stable `mountTime` so NFS/FUSE attribute caches don't churn on every readdir.
+
+This is the first concrete implementation of the **`Ref` pointer kind** from [ADR-0011](adr/0011-pointer-abstraction.md): a name-scoped pointer that resolves through a registry of named graphs.
+
+**What's not yet wired (tracked in `mache-iegm`):**
+
+- Cross-repo `find_callees` resolution — when a function in mount A calls a function defined in mount B, the callee resolver doesn't yet walk into B's defs index. Today each mount resolves callees within itself.
+- `find_definition` mount annotation — same shape as `find_callers` annotation but on the def lookup; currently emits the legacy single-string response.
+- `search` and `get_impact` mount annotation — same idea, lower priority.
+
 ## Virtual Directories
 
 ### `_schema.json`

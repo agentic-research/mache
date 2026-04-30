@@ -73,6 +73,29 @@ Once connected, the agent can call `list_directory`, `read_file`, `find_callers`
 
 See the [MCP Server section in ARCHITECTURE.md](docs/ARCHITECTURE.md#core-abstractions) for the full tool inventory and the [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) section for which tools require an LLO-built `.db`.
 
+## Cross-repo serve (`--mount`)
+
+To span multiple codebases from one MCP endpoint, use repeatable `--mount NAME=PATH` flags:
+
+```bash
+mache serve --mount auth=./auth-svc --mount billing=./billing-svc
+```
+
+Each mount becomes a top-level virtual directory. `find_callers Validate` walks both repos and returns results annotated with their mount of origin:
+
+```json
+{
+  "callers": [
+    {"path": "auth/functions/AuthCaller/source", "mount": "auth"},
+    {"path": "billing/functions/Charge/source",  "mount": "billing"}
+  ]
+}
+```
+
+Mounts compose any source `mache serve` accepts — directories, `.db` files, or a mix. `--mount` and a positional source are mutually exclusive (use one or the other).
+
+See [ARCHITECTURE.md § Cross-repo serve](docs/ARCHITECTURE.md#cross-repo-serve---mount) for the design and what's not yet wired (cross-repo `find_callees` resolution lands separately under `mache-iegm`).
+
 ## Mount as a filesystem (optional)
 
 Beyond MCP, the graph can be exposed as a mounted directory tree — useful for `ls`, `cat`, shell scripts, or tools that work with files:

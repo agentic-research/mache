@@ -40,6 +40,7 @@ The graph is the same on either path; MCP and the filesystem are two ways to tal
 | --------------------------------------- | ----------------------------------------------------------------------------- |
 | Tree-sitter parsing (28 langs)          | Stable                                                                        |
 | MCP server (16 tools, stdio + HTTP)     | Stable                                                                        |
+| Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)         |
 | Cross-references (callers/callees)      | Stable                                                                        |
 | `find_smells` (9 structural rules)      | Stable                                                                        |
 | NFS mount + write-back                  | Stable                                                                        |
