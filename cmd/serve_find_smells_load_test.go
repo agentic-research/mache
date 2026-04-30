@@ -117,6 +117,38 @@ func TestLoadExternalSmellRules_RejectsMissingPlaceholder(t *testing.T) {
 	assert.Contains(t, err.Error(), "%s")
 }
 
+func TestLoadExternalSmellRules_RejectsUnescapedPercent(t *testing.T) {
+	dir := t.TempDir()
+	// SQL LIKE with unescaped '%' — would be interpreted as fmt
+	// verb at runtime and corrupt the query (yielding %!f(string=...)
+	// or similar). Must be rejected at load time. Authors should
+	// escape as '%%' (e.g. LIKE '%%foo%%').
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bad_like.json"), []byte(`{
+		"ID": "bad_like_pattern",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes WHERE name LIKE '%foo%' %s"
+	}`), 0o644))
+
+	_, err := LoadExternalSmellRules(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unescaped")
+	assert.Contains(t, err.Error(), "%%")
+}
+
+func TestLoadExternalSmellRules_AcceptsEscapedPercent(t *testing.T) {
+	dir := t.TempDir()
+	// Properly-escaped LIKE patterns must pass validation. This
+	// matches how the built-in rules write their LIKE clauses.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "good_like.json"), []byte(`{
+		"ID": "good_like_pattern",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes WHERE name LIKE '%%foo%%' %s"
+	}`), 0o644))
+
+	rules, err := LoadExternalSmellRules(dir)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "good_like_pattern", rules[0].ID)
+}
+
 func TestLoadExternalSmellRules_IgnoresNonJSONFiles(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# notes"), 0o644))
