@@ -175,7 +175,16 @@ var smellRegistry = []SmellRule{
 			       0  AS metric
 			FROM nodes n
 			LEFT JOIN child_source cs ON cs.node_id = n.id
-			WHERE n.id IN (SELECT DISTINCT node_id FROM node_defs)
+			-- Drop orphan nodes (no resolvable source_file via either
+			-- the dir itself or any leaf child). These are construct
+			-- dirs that survived the engine's processNode but whose
+			-- file-children loop produced nothing — e.g. JS function
+			-- declarations matched against an FCA-inferred Go schema
+			-- where the {{.scope}} render path didn't yield writable
+			-- content. They have no source data and can't be navigated
+			-- to, so flagging them is pure noise.
+			WHERE COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') != ''
+			  AND n.id IN (SELECT DISTINCT node_id FROM node_defs)
 			  AND n.id NOT IN (SELECT node_id FROM alive)
 			  AND n.id NOT IN (SELECT node_id FROM skipped)
 			  -- Skip non-callable categories. node_refs is populated

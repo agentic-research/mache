@@ -581,6 +581,52 @@ func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
 		"only the non-generated dead function is flagged")
 }
 
+// TestFindSmells_DeadCodeSkipsOrphanNodes asserts that construct
+// dir nodes with no resolvable source_file (neither on the dir
+// itself nor on any leaf child) are dropped from dead_code. These
+// orphans appear when the engine's processNode persists the dir
+// but the file-children loop produces nothing — observed when an
+// FCA-inferred Go schema's `{{.scope}}` template runs against a
+// non-Go file (e.g. a JS function_declaration matched against the
+// inferred Go selector). Flagging the orphan is noise — there's no
+// source data to navigate to.
+func TestFindSmells_DeadCodeSkipsOrphanNodes(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Orphan: defined, exists, but no leaf children with source_file.
+		INSERT INTO node_defs VALUES ('processUser', 'functions/processUser');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/processUser', 'functions', 'processUser', 1, 0, '', '');
+
+		-- Real dead function with leaf children — control: must flag.
+		INSERT INTO node_defs VALUES ('Orphan', 'functions/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/Orphan',        'functions',         'Orphan', 1, 0, '',         ''),
+		  ('functions/Orphan/source', 'functions/Orphan',  'source', 0, 0, 'o.go',     '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"functions/Orphan"}, gotIDs,
+		"only the dead function with leaf-resolvable source_file is flagged; orphan dropped")
+}
+
 // TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch asserts
 // that a method defined as 'Receiver.Method' is treated as alive
 // when call-extraction captures the bare 'Method' field_identifier.
