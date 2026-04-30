@@ -295,3 +295,4 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 | [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted   | Validate → format → splice → surgical update (no re-ingest)                  |
 | [0010: Hosted Mache Architecture](adr/0010-hosted-mache-architecture.md)                 | Proposed   | Hosted-mode design (cluster, R2, BYO storage)                                |
 | [0011: Pointer Abstraction](adr/0011-pointer-abstraction.md)                             | Proposed   | Path/token/SHA/range/record/ref/trace/embedding all unified as Pointer       |
+| [0012: CGO Removal Migration](adr/0012-cgo-removal-migration.md)                         | Proposed   | Delegate parsing to ley-line entirely; retire SitterWalker + tree-sitter dep |
