@@ -97,8 +97,16 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 		return nil // no refs table, nothing to do
 	}
 
-	// Read all refs: token -> list of calling node IDs
-	rows, err := tx.Query(`SELECT token, node_id FROM node_refs`)
+	// Read all refs: token -> list of calling node IDs.
+	// Skip the engine's '_file_level:%' sentinel rows (PR #270) —
+	// they're synthetic caller_ids the engine uses to mark
+	// file-level fn-value refs as alive without polluting
+	// per-construct counts. Materializing them as caller entries
+	// would surface internal state ('callers/path' from the
+	// sentinel's path component) and store the sentinel string
+	// itself as caller content. find_callers / search already
+	// filter these; the materializer does so for the same reason.
+	rows, err := tx.Query(`SELECT token, node_id FROM node_refs WHERE node_id NOT LIKE '_file_level:%'`)
 	if err != nil {
 		return fmt.Errorf("query node_refs: %w", err)
 	}
@@ -215,7 +223,12 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	}
 
 	// Read all refs and resolve callees via the pre-loaded defs map.
-	rows, err := tx.Query(`SELECT token, node_id FROM node_refs`)
+	// Skip sentinel rows (see materializeCallers above for the rationale).
+	// extractCallerDir would resolve a sentinel node_id to itself;
+	// the subsequent "exists in nodes" check filters it accidentally,
+	// but we'd rather not depend on that — explicit is better, and
+	// the SQL filter is cheaper than the per-row JOIN check.
+	rows, err := tx.Query(`SELECT token, node_id FROM node_refs WHERE node_id NOT LIKE '_file_level:%'`)
 	if err != nil {
 		return fmt.Errorf("query node_refs: %w", err)
 	}
