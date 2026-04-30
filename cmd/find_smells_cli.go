@@ -108,10 +108,19 @@ This tool is observability, not a gate. It never exits non-zero on findings.`,
 			return cliExit(4, fmt.Errorf("rule %q: %w", findSmellsRule, err))
 		}
 
-		if findSmellsMinMetric > 0 {
+		// Mirror the MCP handler's threshold-default semantics. If
+		// the caller passed --min-metric explicitly, that value wins
+		// (including 0 for "show me everything sorted"). If the flag
+		// wasn't set, fall back to rule.DefaultMinMetric so CLI and
+		// MCP consumers see the same default set.
+		minMetric := findSmellsMinMetric
+		if !cmd.Flags().Changed("min-metric") {
+			minMetric = rule.DefaultMinMetric
+		}
+		if minMetric > 0 {
 			filtered := findings[:0]
 			for _, f := range findings {
-				if f.Metric >= findSmellsMinMetric {
+				if f.Metric >= minMetric {
 					filtered = append(filtered, f)
 				}
 			}
