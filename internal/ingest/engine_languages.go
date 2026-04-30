@@ -55,28 +55,38 @@ func init() {
 	`)
 
 	// Register Go file-level ref query — runs once per FILE against
-	// the source_file root, catching identifiers in positions that
-	// per-scope ExtractCalls can't see. Specifically: function
-	// references in TOP-LEVEL var declarations like
+	// the source_file root, catching tokens in positions that the
+	// per-scope ExtractCalls can't see. Two cases (mache-02r9):
 	//
 	//   var serveCmd = &cobra.Command{ RunE: runServe }
+	//   ^^^ keyed_element value identifier at file root
+	//
+	//   var initCmd = &cobra.Command{
+	//       RunE: func(cmd *cobra.Command, args []string) error {
+	//           return cliExit(4, ...)   <-- call_expression inside
+	//       },                                  func_literal value
+	//   }
 	//
 	// The outer var_declaration is at the file root, NOT inside any
-	// function_declaration, so ExtractCalls — which only walks the
-	// matched scope (function body) — never sees runServe. Re-running
-	// the same keyed_element query at the file root catches those
-	// references (mache-02r9).
+	// function_declaration. Per-scope ExtractCalls (which walks
+	// function bodies) never sees either case.
 	//
-	// Why this is the same query, just at a different scope:
-	// in-function keyed_element captures are already in node_refs
-	// from per-scope ExtractCalls; the engine's merge step
-	// deduplicates per-token before insert, so a token captured in
-	// both scopes lands in node_refs exactly once per caller. The
-	// only NEW tokens this query adds are the file-level ones.
+	// Captures land in node_refs under a SENTINEL caller_id
+	// '_file_level:<path>' — see engine.go's worker phase. dead_code
+	// reads token presence so it's correct; fan_out_skew /
+	// GetCallers exclude the sentinel (PR #270) so per-construct
+	// aggregations stay clean.
+	//
+	// Per-scope-already-captured tokens (a Go function body's normal
+	// call_expressions) are duplicated into the sentinel row — they
+	// also exist as legitimate per-scope rows. Storage waste is
+	// bounded; correctness is unaffected.
 	RegisterFileLevelRefQuery("go", `
 		(keyed_element
 			(literal_element)
 			(literal_element (identifier) @call))
+		(call_expression function: (identifier) @call)
+		(call_expression function: (selector_expression field: (field_identifier) @call))
 	`)
 
 	// ASTWalker context kinds — top-level node kinds whose source bytes
