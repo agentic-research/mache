@@ -36,12 +36,11 @@ type ArenaFlusher struct {
 	ctrl         *control.Controller
 
 	// Coalescing state
-	mu       sync.Mutex
-	dirty    bool
-	flushErr error // last flush error, readable via LastError()
-	tick     *time.Ticker
-	stopCh   chan struct{}
-	stopped  bool
+	mu      sync.Mutex
+	dirty   bool
+	tick    *time.Ticker
+	stopCh  chan struct{}
+	stopped bool
 }
 
 // NewArenaFlusher creates a flusher that targets the given arena file
@@ -80,9 +79,6 @@ func (f *ArenaFlusher) coalesceLoop() {
 				f.dirty = false
 				f.mu.Unlock()
 				if err := f.flushInternal(); err != nil {
-					f.mu.Lock()
-					f.flushErr = err
-					f.mu.Unlock()
 					log.Printf("arena flush: %v", err)
 				}
 			} else {
@@ -109,13 +105,6 @@ func (f *ArenaFlusher) FlushNow() error {
 	f.dirty = false
 	f.mu.Unlock()
 	return f.flushInternal()
-}
-
-// LastError returns the last error from the coalescing goroutine.
-func (f *ArenaFlusher) LastError() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.flushErr
 }
 
 // Close stops the coalescing goroutine and performs a final synchronous

@@ -427,19 +427,6 @@ func (c *SocketClient) Prioritize(files []string) error {
 	return err
 }
 
-// Enrich triggers an enrichment pass on the daemon.
-// Pass name is e.g. "lsp", "tree-sitter". Files is optional (nil = all).
-func (c *SocketClient) Enrich(pass string, files []string) (map[string]any, error) {
-	req := map[string]any{
-		"op":   "enrich",
-		"pass": pass,
-	}
-	if files != nil {
-		req["files"] = files
-	}
-	return c.SendOp(req)
-}
-
 // downloadLeyline fetches the leyline binary from the latest GitHub release
 // to the specified path. Returns the path on success.
 func downloadLeyline(destPath string) (string, error) {
