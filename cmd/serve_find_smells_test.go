@@ -574,6 +574,65 @@ func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
 		"only the non-generated dead function is flagged")
 }
 
+// TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch asserts
+// that a method defined as 'Receiver.Method' is treated as alive
+// when call-extraction captures the bare 'Method' field_identifier.
+// Without the leaf-strip in the alive CTE, every method on a typed
+// receiver under the go-schema methods/ branch looked dead because
+// the call token never matched 'Receiver.Method' verbatim.
+//
+// Surfaced by dogfooding: mache.db's go-schema path had 510 dead_code
+// findings, 494 of them methods/. After this fix: 32.
+func TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Method defined under the Receiver.Method shape (go-schema
+		-- methods/ branch). The corresponding call site captures
+		-- only the field_identifier — bare 'Greet'.
+		INSERT INTO node_defs VALUES
+		  ('Greeter.Greet',     'pkg/methods/Greeter.Greet'),
+		  ('demo.Greeter.Greet','pkg/methods/Greeter.Greet');
+		INSERT INTO node_refs VALUES ('Greet', 'pkg/functions/CallSite/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Greeter.Greet',         'pkg/methods', 'Greeter.Greet', 1, 0, '',         ''),
+		  ('pkg/methods/Greeter.Greet/source',  'pkg/methods/Greeter.Greet','source',0, 0, 'g.go',     ''),
+		  ('pkg/functions/CallSite',            'pkg/functions','CallSite',1, 0, '',                 ''),
+		  ('pkg/functions/CallSite/source',     'pkg/functions/CallSite','source', 0, 0, 'c.go',    '');
+
+		-- Truly dead method (no call to bare leaf, no call to
+		-- Receiver.Method) — control: must still be flagged.
+		INSERT INTO node_defs VALUES
+		  ('Greeter.Sing',      'pkg/methods/Greeter.Sing');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Greeter.Sing',         'pkg/methods', 'Greeter.Sing', 1, 0, '',         ''),
+		  ('pkg/methods/Greeter.Sing/source',  'pkg/methods/Greeter.Sing','source',0, 0, 's.go',    '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"pkg/methods/Greeter.Sing"}, gotIDs,
+		"Greeter.Greet is alive (Greet ref matches the leaf-strip); only Greeter.Sing remains dead")
+}
+
 // TestFindSmells_DeadCodeSourceFileFallsBackToChildren asserts that
 // when the construct dir itself has source_file = ” (the schema
 // engine attaches Origin/source_file to leaf children — source,

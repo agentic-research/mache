@@ -85,10 +85,29 @@ var smellRegistry = []SmellRule{
 			-- A construct is "alive" if ANY of its token aliases appears
 			-- in node_refs. We flag a construct as dead only when every
 			-- one of its tokens is unreferenced.
+			--
+			-- The JOIN also matches when ref.token equals the LEAF of
+			-- def.token after the FIRST '.' — this handles methods
+			-- rendered as 'Receiver.Method' (the go-schema methods
+			-- branch). Call-extraction captures obj.Method() as just
+			-- 'Method', so without the strip every method on a typed
+			-- receiver would look dead. We strip on the first dot only
+			-- (not the last) because that's the receiver boundary in
+			-- 'Receiver.Method'; the package-qualified shape
+			-- 'pkg.Receiver.Method' is also registered as the bare
+			-- rendered alias 'Receiver.Method', whose first-dot strip
+			-- gives 'Method' as expected. Doing it as a JOIN predicate
+			-- rather than registering bare-leaf aliases at ingest time
+			-- avoids inflating duplicate_definitions (every interface
+			-- method like 'AddDef' or 'Read' would show up N copies,
+			-- one per implementing type, even though the implementations
+			-- are conceptually distinct).
 			WITH alive AS (
 				SELECT DISTINCT d.node_id
 				FROM node_defs d
-				JOIN node_refs r ON r.token = d.token
+				JOIN node_refs r
+				  ON r.token = d.token
+				  OR (instr(d.token, '.') > 0 AND r.token = substr(d.token, instr(d.token, '.') + 1))
 			),
 			-- Skip-listed: any token of a construct matches a skip rule.
 			-- ANY-MATCH is the right semantic — a function with both
