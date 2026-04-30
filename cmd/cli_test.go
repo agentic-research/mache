@@ -54,6 +54,51 @@ func TestBuild_ProducesDB(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output DB should be non-empty")
 }
 
+// TestBuild_SchemaPathRelative guards the resolveSchema call site.
+// Passing 'examples/go-schema.json' on the CLI used to double-prepend
+// the directory ('examples/examples/go-schema.json'). Build now passes
+// '.' as the configDir so resolveSchema treats the schemaRef as
+// already cwd-relative.
+//
+// We use a tempdir-relative schema file rather than the real
+// examples/go-schema.json so the test isn't tied to that file's
+// content (it'd break if the schema's JSON shape evolved).
+func TestBuild_SchemaPathRelative(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "main.go"),
+		[]byte("package main\n\nfunc main() {}\n"), 0o644))
+
+	// Lay down a minimal schema in a 'schemas/' subdir so the path
+	// has a non-trivial directory component (mirrors the real
+	// 'examples/go-schema.json' shape that triggered the bug).
+	schemasDir := filepath.Join(tmpDir, "schemas")
+	require.NoError(t, os.MkdirAll(schemasDir, 0o755))
+	schemaFile := filepath.Join(schemasDir, "minimal.json")
+	require.NoError(t, os.WriteFile(schemaFile,
+		[]byte(`{"version": "v1alpha1"}`), 0o644))
+
+	// Run from tmpDir so the schema path is relative — that's the
+	// failure mode (absolute paths don't trigger the double-prepend).
+	oldWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tmpDir))
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	oldSchemaPath := schemaPath
+	schemaPath = "schemas/minimal.json"
+	defer func() { schemaPath = oldSchemaPath }()
+
+	outDB := filepath.Join(tmpDir, "out.db")
+	err = buildCmd.RunE(buildCmd, []string{srcDir, outDB})
+	require.NoError(t, err, "build with relative --schema must not double-prepend the dir")
+
+	info, err := os.Stat(outDB)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(0))
+}
+
 // TestBuild_SchemaFlagRegistered guards the --schema flag binding.
 // rootCmd's --schema lives on Flags() (not PersistentFlags), so it
 // doesn't propagate to children. buildCmd needs its own binding to
