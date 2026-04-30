@@ -1,7 +1,7 @@
 # ADR-0012: CGO Removal — Migration Plan
 
 Date: 2026-04-30
-Status: Proposed
+Status: Accepted (steps 1–3 shipped; step 4 gated on `mache-33dc5f`)
 Supersedes inline mitigation in `mache-2y9w` (PR #257, #299)
 
 ## Context
@@ -105,25 +105,41 @@ replacement. It currently lives alongside SitterWalker, selected via
 The plan is reversible until the commitment point (step 4). Each step
 ships independently and the test suite stays green throughout.
 
-### Step 1 — This ADR (you are here)
+### Step 1 — This ADR (you are here) ✅ shipped (#310)
 
 Documents the plan. Doc-only PR. Sets the contract.
 
-### Step 2 — Switch query handlers to ASTWalker primary
+### Step 2 — Switch query handlers to ASTWalker primary ✅ shipped (#311–#313)
 
 For `find_callers`, `find_callees`, `find_definition`: use ASTWalker
 when `_ast` is present in the active backend. SitterWalker stays as
-fallback for source-code mounts that haven't been re-built. Several
-small PRs (one per handler).
+fallback for source-code mounts that haven't been re-built.
 
-### Step 3 — `mache build` invokes `leyline parse`
+Landed as three PRs:
 
-When `leyline` is on PATH, shell out to it; produce a `.db` with
-`_ast` and friends. SitterWalker fallback for users without leyline.
-One or two PRs depending on how `mache-33dc5f` (leyline bundling)
-lands.
+- **#311** — `newASTCallExtractor`: pure-Go alternative to the CGO
+  call extractor. Reads `_ast` and `_imports` directly via SQL.
+- **#312** — wire AST call extractor for `SQLiteGraph` backends with
+  `_ast`. Adds `SQLiteGraph.DB()` accessor. CGO path still used for
+  `MemoryStore`-backed mounts.
+- **#313** — `CompositeGraph.SetCallExtractorPicker`: per-mount
+  dispatch so cross-mount queries pick the right extractor (AST vs
+  CGO) based on the local mount's backend.
 
-### Step 4 — Make leyline the required path (commitment point)
+### Step 3 — `mache build` invokes `leyline parse` ✅ shipped (#314, #315)
+
+Two PRs:
+
+- **#314** (step 3a) — `--backend=leyline` opt-in. Shells out to
+  `leyline parse` and copies the result; `--backend=leyline` errors
+  if leyline is missing (no silent fallback). Default unchanged.
+- **#315** (step 3b) — `--backend=auto` prefers leyline. New
+  `leylineAvailable()` probe (PATH + `~/.mache/bin/leyline`). When
+  leyline is detected, `mache build` uses it; users without leyline
+  see today's behavior unchanged. `--backend=tree-sitter` is the
+  explicit escape hatch for in-process parsing.
+
+### Step 4 — Make leyline the required path (commitment point) ⏳ gated on `mache-33dc5f`
 
 Drop SitterWalker fallback. Delete:
 
@@ -138,7 +154,7 @@ Drop SitterWalker fallback. Delete:
 
 One large PR (mostly deletions) plus the corresponding test deletions.
 
-### Step 5 — CI cleanup
+### Step 5 — CI cleanup ⏳ pending step 4
 
 Drop `-race -gcflags=all=-d=checkptr=0` workarounds from `Taskfile.yml`
 and `.github/workflows/ci.yml`. Drop the inline `mache-2y9w` notes
@@ -191,7 +207,8 @@ the dep, which is annoying but not fatal.
 
 Before committing to step 4, the following must be true:
 
-- [ ] Steps 2–3 have shipped and `mache-iegm` epic close-out is done
+- [x] Steps 2–3 have shipped (#311, #312, #313, #314, #315);
+  `mache-iegm` epic close-out tracked separately
 - [ ] `mache-33dc5f` (leyline bundling in mache release) has shipped
   OR is explicitly deferred with a documented "install leyline
   separately" path
