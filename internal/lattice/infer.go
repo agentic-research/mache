@@ -104,7 +104,23 @@ func (inf *Inferrer) InferFromRecords(records []any) (*api.Topology, error) {
 // JSONPath selectors which are incompatible with tree-sitter ingestion.
 // ProjectAST generates proper S-expression selectors for tree-sitter queries.
 func (inf *Inferrer) InferFromTreeSitter(root *sitter.Node) (*api.Topology, error) {
-	records := ingest.FlattenAST(root)
+	return inf.InferFromTreeSitterRoots(root)
+}
+
+// InferFromTreeSitterRoots infers a topology by accumulating records from
+// multiple AST roots before running FCA. Single-file inference can miss
+// node types absent from that file (e.g., a file with only top-level
+// functions yields no methods/, even though the rest of the project has
+// receiver methods). Callers that have access to several parsed files
+// should pass them all so the inferred schema covers the project.
+func (inf *Inferrer) InferFromTreeSitterRoots(roots ...*sitter.Node) (*api.Topology, error) {
+	var records []any
+	for _, root := range roots {
+		if root == nil {
+			continue
+		}
+		records = append(records, ingest.FlattenAST(root)...)
+	}
 
 	// Force FCA method for AST data — greedy generates JSONPath selectors
 	// that fail when the engine tries to use them as tree-sitter queries.
