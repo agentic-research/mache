@@ -174,6 +174,83 @@ func TestLoadExternalSmellRules_FilePassedAsDirRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a directory")
 }
 
+// snapshotSmellRegistry captures the current registry so a test
+// that mutates it via appendExternalRulesFromEnv can restore the
+// original state. The package-level smellRegistry is the source
+// of truth for the rules listing — tests that leave it dirty
+// would corrupt subsequent test cases that expect only built-ins.
+func snapshotSmellRegistry(t *testing.T) {
+	t.Helper()
+	saved := make([]SmellRule, len(smellRegistry))
+	copy(saved, smellRegistry)
+	t.Cleanup(func() { smellRegistry = saved })
+}
+
+func TestAppendExternalRulesFromEnv_EmptyEnvIsNoOp(t *testing.T) {
+	snapshotSmellRegistry(t)
+	added, err := appendExternalRulesFromEnv("")
+	require.NoError(t, err)
+	assert.Equal(t, 0, added)
+}
+
+func TestAppendExternalRulesFromEnv_AppendsLoadedRules(t *testing.T) {
+	snapshotSmellRegistry(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ext1.json"), []byte(`{
+		"ID": "test_appender_rule_1",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
+	}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ext2.json"), []byte(`{
+		"ID": "test_appender_rule_2",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
+	}`), 0o644))
+
+	beforeCount := len(smellRegistry)
+	added, err := appendExternalRulesFromEnv(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 2, added)
+	assert.Len(t, smellRegistry, beforeCount+2)
+
+	// Both rules are findable through the listing path.
+	ids := allRuleIDs()
+	assert.Contains(t, ids, "test_appender_rule_1")
+	assert.Contains(t, ids, "test_appender_rule_2")
+}
+
+func TestAppendExternalRulesFromEnv_LoadErrorSkipsAllRules(t *testing.T) {
+	snapshotSmellRegistry(t)
+	dir := t.TempDir()
+	// One valid rule, one collision with a built-in. The whole
+	// load fails (fail-fast), so neither is appended — even the
+	// valid one is dropped, mirroring the init() "skip the whole
+	// extension on any error" contract.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a_valid.json"), []byte(`{
+		"ID": "test_skip_appender_valid",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
+	}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b_collide.json"), []byte(`{
+		"ID": "dead_code",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
+	}`), 0o644))
+
+	beforeCount := len(smellRegistry)
+	added, err := appendExternalRulesFromEnv(dir)
+	require.Error(t, err, "collision must be returned, not swallowed")
+	assert.Equal(t, 0, added)
+	assert.Len(t, smellRegistry, beforeCount, "registry must be untouched after a load error")
+	assert.NotContains(t, allRuleIDs(), "test_skip_appender_valid",
+		"the valid rule must NOT leak in when its sibling fails (atomic load)")
+}
+
+func TestAppendExternalRulesFromEnv_MissingDirIsNoOp(t *testing.T) {
+	snapshotSmellRegistry(t)
+	beforeCount := len(smellRegistry)
+	added, err := appendExternalRulesFromEnv(filepath.Join(t.TempDir(), "no-such-dir"))
+	require.NoError(t, err, "missing dir is treated as 'extension not configured'")
+	assert.Equal(t, 0, added)
+	assert.Len(t, smellRegistry, beforeCount)
+}
+
 // TestLoadExternalSmellRules_ShippedExamplesLoadCleanly is the
 // "don't ship a broken example" regression. Anything we put in
 // examples/smell-rules/ has to round-trip through the loader
