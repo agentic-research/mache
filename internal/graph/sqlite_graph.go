@@ -842,6 +842,15 @@ func (g *SQLiteGraph) Invalidate(id string) {
 	}
 }
 
+// DB returns the main SQLite handle. Exposed so callers can query
+// non-refs tables like `_ast` / `_source` / `_lsp*` that ley-line-built
+// .db files carry. Mirrors NodesTableReader.DB() — same shape, same
+// purpose. The returned handle is owned by SQLiteGraph; do not Close
+// it, and queries should be read-only.
+func (g *SQLiteGraph) DB() *sql.DB {
+	return g.db
+}
+
 // QueryRefs executes a SQL query against the refs database.
 // For nodes-table path: queries the main DB (node_refs has (token, node_id)).
 // For legacy path: queries the sidecar (includes mache_refs virtual table).
