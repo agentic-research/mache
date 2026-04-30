@@ -800,9 +800,18 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				if fi, err := os.Stat(origin.FilePath); err == nil {
 					modTime = fi.ModTime()
 				}
-				_ = store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime)
+				if err := store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime); err != nil {
+					// Splice already touched disk; the graph is now stale.
+					// Surface via WriteStatus so the _diagnostics virtual
+					// dir reflects reality (file on disk is correct,
+					// in-memory graph is wrong, re-read to refresh).
+					log.Printf("writeback: graph update failed after splice for %s: %v", nodeID, err)
+					store.WriteStatus.Store(filepath.Dir(nodeID),
+						fmt.Sprintf("graph stale (splice succeeded, graph update failed): %v", err))
+				} else {
+					store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
+				}
 				store.RecordFileMtime(origin.FilePath, modTime)
-				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
 			}
 
 			// 5. Invalidate cached size/content
