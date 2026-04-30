@@ -381,6 +381,62 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 	assert.Equal(t, []string{"pkg/functions/Orphan"}, gotIDs)
 }
 
+// TestFindSmells_DeadCodeSkipsNonCallableCategories asserts that
+// types/, constants/, and variables/ category nodes don't surface
+// in dead_code. node_refs is populated by call-extraction only;
+// identifiers used in type / const / variable position never land
+// there, so flagging them is pure noise. Surfaced by the explicit
+// go-schema path (PR #240's GHA comment showed dozens of FPs like
+// 'cmd/types/SmellRule', 'cmd/constants/padding').
+func TestFindSmells_DeadCodeSkipsNonCallableCategories(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Non-callable categories — none of these belong in dead_code.
+		INSERT INTO node_defs VALUES
+		  ('SomeType',  'pkg/types/SomeType'),
+		  ('MaxSize',   'pkg/constants/MaxSize'),
+		  ('globalCfg', 'pkg/variables/globalCfg');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/types/SomeType',         'pkg/types',     'SomeType',  1, 0, 'a.go', ''),
+		  ('pkg/constants/MaxSize',      'pkg/constants', 'MaxSize',   1, 0, 'b.go', ''),
+		  ('pkg/variables/globalCfg',    'pkg/variables', 'globalCfg', 1, 0, 'c.go', '');
+
+		-- Real dead function — control: must still be flagged.
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/functions/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/Orphan', 'pkg/functions', 'Orphan', 1, 0, 'orphan.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	for _, id := range gotIDs {
+		assert.NotContains(t, id, "/types/", "types/ nodes must not appear")
+		assert.NotContains(t, id, "/constants/", "constants/ nodes must not appear")
+		assert.NotContains(t, id, "/variables/", "variables/ nodes must not appear")
+	}
+	assert.Equal(t, []string{"pkg/functions/Orphan"}, gotIDs,
+		"only the real dead function in functions/ is flagged")
+}
+
 // TestFindSmells_DeadCodeSkipsExternalInterfaceMethods asserts that
 // methods implementing common external-interface contracts (SQLite
 // vtab, billy.Filesystem, net/http handlers) don't surface in
