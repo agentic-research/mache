@@ -67,6 +67,12 @@ func TestBuild_ProducesDB(t *testing.T) {
 // no methods. Without multi-file accumulation the schema would lack
 // methods/, so the method's call to standaloneFunc would not appear
 // in node_refs.
+//
+// Pinned to --backend=tree-sitter: FCA inference is an in-process
+// feature that doesn't apply to the leyline path. After the
+// ADR-0012 step 3b auto-default flip, "auto" prefers leyline when
+// available; this test explicitly requests the in-process path so
+// the FCA assertions stay valid.
 func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
@@ -85,10 +91,14 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 
 	outDB := filepath.Join(tmpDir, "out.db")
 
-	// Empty schemaPath forces the FCA-inference branch.
+	// Empty schemaPath forces the FCA-inference branch; explicit
+	// --backend=tree-sitter pins the in-process path so leyline
+	// auto-detection (PR #315) doesn't shortcut FCA.
 	oldSchemaPath := schemaPath
+	oldBackend := buildBackend
 	schemaPath = ""
-	defer func() { schemaPath = oldSchemaPath }()
+	buildBackend = "tree-sitter"
+	defer func() { schemaPath = oldSchemaPath; buildBackend = oldBackend }()
 
 	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
 
@@ -133,9 +143,13 @@ func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
 
 	outDB := filepath.Join(tmpDir, "out.db")
 
+	// Pin --backend=tree-sitter: FCA inference is in-process-only;
+	// auto-default-to-leyline (PR #315) would skip it.
 	oldSchemaPath := schemaPath
+	oldBackend := buildBackend
 	schemaPath = ""
-	defer func() { schemaPath = oldSchemaPath }()
+	buildBackend = "tree-sitter"
+	defer func() { schemaPath = oldSchemaPath; buildBackend = oldBackend }()
 
 	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
 
