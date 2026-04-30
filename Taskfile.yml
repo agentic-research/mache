@@ -118,9 +118,13 @@ tasks:
       # against node_defs / node_refs / nodes — the same ones the GHA runs.
       - rm -f {{.DB}}
       - ./{{.BINARY_NAME}} build --schema examples/go-schema.json . {{.DB}}
+      # --limit 1000 matches the GHA so local dogfood produces the
+      # same finding set as a CI run on the same revision (the GHA
+      # then filters to PR-changed files; locally we don't, since
+      # the goal is "see everything in main").
       - for rule in dead_code untested_function duplicate_definitions fan_out_skew god_file; do
           printf "\n=== %s ===\n" "$rule";
-          ./{{.BINARY_NAME}} find-smells --db {{.DB}} --rule "$rule" --format md --limit 200;
+          ./{{.BINARY_NAME}} find-smells --db {{.DB}} --rule "$rule" --format md --limit 1000;
         done
 
   check:
