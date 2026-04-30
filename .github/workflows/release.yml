@@ -19,9 +19,6 @@ permissions: {}
 
 env:
   TAG: ${{ inputs.tag || github.event.client_payload.tag || github.ref_name }}
-  # arduino/setup-task hasn't shipped Node 24 yet — opt into the
-  # forced shim (https://github.com/arduino/setup-task/issues/1359).
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   build:
@@ -62,10 +59,10 @@ jobs:
         run: ${{ matrix.fuse_setup }}
 
       - name: Install Task
-        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        # See ci.yml — go install bypasses GitHub's release CDN.
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
       - name: Exchange OIDC → GitHub token (octo-sts)
         id: octo-sts
