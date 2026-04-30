@@ -381,6 +381,68 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 	assert.Equal(t, []string{"pkg/functions/Orphan"}, gotIDs)
 }
 
+// TestFindSmells_DeadCodeSkipsGeneratedFiles asserts that constructs
+// in generated-code files (capnp, protobuf, _generated.go, .gen.go)
+// don't surface in dead_code. Generated code intentionally exports
+// wide APIs the consumer picks from, so most methods are statically
+// "dead" — flagging them buries real findings under noise (256/305
+// of mache's pre-filter findings came from one capnp.go file).
+func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Defs in generated files — must be skipped.
+		INSERT INTO node_defs VALUES
+		  ('CapnpFn',     'methods/CapnpFn'),
+		  ('PbFn',        'methods/PbFn'),
+		  ('GenFn',       'methods/GenFn'),
+		  ('DotGenFn',    'methods/DotGenFn');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('methods/CapnpFn',         'methods',           'CapnpFn',  1, 0, '',                     ''),
+		  ('methods/CapnpFn/source',  'methods/CapnpFn',   'source',   0, 0, 'a/b/foo.capnp.go',     ''),
+		  ('methods/PbFn',            'methods',           'PbFn',     1, 0, '',                     ''),
+		  ('methods/PbFn/source',     'methods/PbFn',      'source',   0, 0, 'a/b/foo.pb.go',        ''),
+		  ('methods/GenFn',           'methods',           'GenFn',    1, 0, '',                     ''),
+		  ('methods/GenFn/source',    'methods/GenFn',     'source',   0, 0, 'a/b/foo_generated.go', ''),
+		  ('methods/DotGenFn',        'methods',           'DotGenFn', 1, 0, '',                     ''),
+		  ('methods/DotGenFn/source', 'methods/DotGenFn',  'source',   0, 0, 'a/b/foo.gen.go',       '');
+
+		-- Real dead function in normal source file — control: must
+		-- still be flagged.
+		INSERT INTO node_defs VALUES ('Orphan', 'functions/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/Orphan',        'functions',         'Orphan',   1, 0, '',                     ''),
+		  ('functions/Orphan/source', 'functions/Orphan',  'source',   0, 0, 'pkg/x.go',             '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+		assert.NotContains(t, f.SourceID, ".capnp.go", "capnp generated files must be skipped")
+		assert.NotContains(t, f.SourceID, ".pb.go", "protobuf generated files must be skipped")
+		assert.NotContains(t, f.SourceID, "_generated.go", "_generated.go suffix must be skipped")
+		assert.NotContains(t, f.SourceID, ".gen.go", ".gen.go suffix must be skipped")
+	}
+	assert.Equal(t, []string{"functions/Orphan"}, gotIDs,
+		"only the non-generated dead function is flagged")
+}
+
 // TestFindSmells_DeadCodeSourceFileFallsBackToChildren asserts that
 // when the construct dir itself has source_file = ” (the schema
 // engine attaches Origin/source_file to leaf children — source,

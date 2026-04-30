@@ -78,7 +78,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "dead_code",
-		Description: "Constructs whose tokens (any alias — bare 'Foo' or qualified 'pkg.Foo') have NO entries in node_refs. Aggregated per construct, not per token: a function with three token aliases where any one is referenced is treated as live. Skip list rejects entry points (main, init), interface methods invoked dynamically (String, Error, Read, Write, ...), and the testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (the runtime invokes those reflectively). source_id falls back to a child's source_file when the construct dir itself doesn't carry one (the schema engine sets source_file on leaf nodes — `source`, `ast.json`, `doc` — but not on the wrapping construct dir). False positives still expected for exported API consumed outside the indexed scope.",
+		Description: "Constructs whose tokens (any alias — bare 'Foo' or qualified 'pkg.Foo') have NO entries in node_refs. Aggregated per construct, not per token: a function with three token aliases where any one is referenced is treated as live. Skip list rejects entry points (main, init), interface methods invoked dynamically (String, Error, Read, Write, ...), and the testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (the runtime invokes those reflectively). source_id falls back to a child's source_file when the construct dir itself doesn't carry one (the schema engine sets source_file on leaf nodes — `source`, `ast.json`, `doc` — but not on the wrapping construct dir). Generated code files (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) are excluded because they intentionally export wide APIs the consumer picks from. False positives still expected for exported API consumed outside the indexed scope.",
 		Requires:    []string{"node_defs", "node_refs", "nodes"},
 		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
@@ -139,6 +139,17 @@ var smellRegistry = []SmellRule{
 			  -- rule. They aren't — they're how the code references
 			  -- external packages. Skip them.
 			  AND n.id NOT LIKE '%%/imports/%%'
+			  -- Generated code (capnp / protobuf / *_generated.go /
+			  -- *.gen.go) intentionally exports wide APIs that the
+			  -- consumer picks from — most exported methods aren't
+			  -- internally called. Flagging them buries real findings
+			  -- under noise (256/305 of mache's pre-filter findings
+			  -- came from a single capnp.go file). Skip-list by file
+			  -- suffix on the resolved source_id.
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.capnp.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.pb.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%_generated.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.gen.go'
 			%s
 			ORDER BY source_id, n.id
 		`,
