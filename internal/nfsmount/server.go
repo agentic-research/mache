@@ -91,25 +91,43 @@ func Mount(port int, mountpoint string, writable bool, extraOpts string) error {
 }
 
 // Unmount calls the system unmount command on the mountpoint.
+//
+// macOS lifecycle:
+//  1. diskutil unmount        — graceful, no sudo for user NFS mounts.
+//  2. sudo umount             — fallback for non-diskutil-aware mounts.
+//  3. sudo umount -f          — last-resort force, for busy mounts where
+//     a stuck process holds an open handle. The mache unmount command
+//     would otherwise hang here on shutdown (mache-fsi).
+//
+// Linux: try `sudo umount` first, then `sudo umount -f` on busy mounts.
+// `umount -f` on Linux is specifically intended for stuck NFS mounts
+// (it returns ENOTCONN to in-flight ops), which is exactly the busy-
+// mount situation we hit during shutdown.
 func Unmount(mountpoint string) error {
-	var cmd *exec.Cmd
-
 	switch runtime.GOOS {
 	case "darwin":
-		// Try diskutil first (no sudo needed for user NFS mounts)
-		cmd = exec.Command("diskutil", "unmount", mountpoint)
-		if err := cmd.Run(); err == nil {
+		if err := exec.Command("diskutil", "unmount", mountpoint).Run(); err == nil {
 			return nil
 		}
-		// Fallback to sudo umount
-		cmd = exec.Command("sudo", "umount", mountpoint)
-	default:
-		cmd = exec.Command("sudo", "umount", mountpoint)
-	}
+		if err := exec.Command("sudo", "umount", mountpoint).Run(); err == nil {
+			return nil
+		}
+		// Force-unmount as last resort. Output captured so the caller
+		// sees what diskutil/umount complained about if -f also fails.
+		output, err := exec.Command("sudo", "umount", "-f", mountpoint).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("unmount -f failed: %w\n%s", err, string(output))
+		}
+		return nil
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("unmount failed: %w\n%s", err, string(output))
+	default:
+		if err := exec.Command("sudo", "umount", mountpoint).Run(); err == nil {
+			return nil
+		}
+		output, err := exec.Command("sudo", "umount", "-f", mountpoint).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("unmount -f failed: %w\n%s", err, string(output))
+		}
+		return nil
 	}
-	return nil
 }
