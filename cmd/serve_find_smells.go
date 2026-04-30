@@ -94,9 +94,36 @@ var smellRegistry = []SmellRule{
 			-- ANY-MATCH is the right semantic — a function with both
 			-- 'TestFoo' and 'pkg.TestFoo' should be skipped on the
 			-- testing-framework rule even if only one row triggers.
+			--
+			-- Token list includes:
+			--   • entry points: main, init
+			--   • io.Reader/Writer/Closer: Read, Write, Close
+			--   • fmt: String, Error, Format, Scan, GoString
+			--   • sort.Interface: Len, Less, Swap
+			--   • encoding: MarshalJSON, UnmarshalJSON
+			--   • SQLite virtual-table (modernc.org/sqlite/vtab):
+			--     BestIndex, Column, Connect, Create, Destroy,
+			--     Disconnect, Eof, Filter, Rowid, Open, Next
+			--   • billy.Filesystem (go-git): Chroot, Readlink, Sys,
+			--     TempFile, MkdirAll, Symlink, Lstat, Stat, ReadDir,
+			--     Capabilities, Root
+			--   • net/http: ServeHTTP
+			--
+			-- These are interface contracts invoked by external
+			-- runtimes / libraries; static call extraction can't see
+			-- the dispatch site, so the methods always look dead.
 			skipped AS (
 				SELECT DISTINCT node_id FROM node_defs
-				WHERE token IN ('main','init','String','Error','Read','Write','Close','Len','Less','Swap','MarshalJSON','UnmarshalJSON','Format','Scan')
+				WHERE token IN (
+					'main','init',
+					'String','Error','Read','Write','Close','Len','Less','Swap',
+					'MarshalJSON','UnmarshalJSON','Format','Scan','GoString',
+					'BestIndex','Column','Connect','Create','Destroy','Disconnect',
+					'Eof','Filter','Rowid','Open','Next',
+					'Chroot','Readlink','Sys','TempFile','MkdirAll','Symlink',
+					'Lstat','Stat','ReadDir','Capabilities','Root',
+					'ServeHTTP'
+				)
 				   -- Strip any 'pkg.' qualifier when matching prefixes.
 				   -- instr returns 0 if there's no dot; substr(token, 1)
 				   -- is the full token, so bare and qualified shapes both

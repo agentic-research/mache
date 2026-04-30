@@ -381,6 +381,81 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 	assert.Equal(t, []string{"pkg/functions/Orphan"}, gotIDs)
 }
 
+// TestFindSmells_DeadCodeSkipsExternalInterfaceMethods asserts that
+// methods implementing common external-interface contracts (SQLite
+// vtab, billy.Filesystem, net/http handlers) don't surface in
+// dead_code. These are dispatched by external runtimes / libraries
+// rather than via static call sites in the indexed scope.
+func TestFindSmells_DeadCodeSkipsExternalInterfaceMethods(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- vtab interface methods (SQLite virtual-table) — must skip.
+		INSERT INTO node_defs VALUES
+		  ('BestIndex',  'methods/BestIndex'),
+		  ('Filter',     'methods/Filter'),
+		  ('Eof',        'methods/Eof'),
+		  ('Rowid',      'methods/Rowid'),
+		  ('Connect',    'methods/Connect');
+		-- billy.Filesystem methods — must skip.
+		INSERT INTO node_defs VALUES
+		  ('Chroot',     'methods/Chroot'),
+		  ('Readlink',   'methods/Readlink'),
+		  ('TempFile',   'methods/TempFile');
+		-- net/http handler — must skip.
+		INSERT INTO node_defs VALUES
+		  ('ServeHTTP',  'methods/ServeHTTP');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('methods/BestIndex',         'methods', 'BestIndex',  1, 0, '',          ''),
+		  ('methods/BestIndex/source',  'methods/BestIndex',  'source', 0, 0, 'a.go', ''),
+		  ('methods/Filter',            'methods', 'Filter',     1, 0, '',          ''),
+		  ('methods/Filter/source',     'methods/Filter',     'source', 0, 0, 'a.go', ''),
+		  ('methods/Eof',               'methods', 'Eof',        1, 0, '',          ''),
+		  ('methods/Eof/source',        'methods/Eof',        'source', 0, 0, 'a.go', ''),
+		  ('methods/Rowid',             'methods', 'Rowid',      1, 0, '',          ''),
+		  ('methods/Rowid/source',      'methods/Rowid',      'source', 0, 0, 'a.go', ''),
+		  ('methods/Connect',           'methods', 'Connect',    1, 0, '',          ''),
+		  ('methods/Connect/source',    'methods/Connect',    'source', 0, 0, 'a.go', ''),
+		  ('methods/Chroot',            'methods', 'Chroot',     1, 0, '',          ''),
+		  ('methods/Chroot/source',     'methods/Chroot',     'source', 0, 0, 'b.go', ''),
+		  ('methods/Readlink',          'methods', 'Readlink',   1, 0, '',          ''),
+		  ('methods/Readlink/source',   'methods/Readlink',   'source', 0, 0, 'b.go', ''),
+		  ('methods/TempFile',          'methods', 'TempFile',   1, 0, '',          ''),
+		  ('methods/TempFile/source',   'methods/TempFile',   'source', 0, 0, 'b.go', ''),
+		  ('methods/ServeHTTP',         'methods', 'ServeHTTP',  1, 0, '',          ''),
+		  ('methods/ServeHTTP/source',  'methods/ServeHTTP',  'source', 0, 0, 'h.go', '');
+
+		-- Real dead helper as a control — must still be flagged.
+		INSERT INTO node_defs VALUES ('Orphan', 'functions/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/Orphan',        'functions',         'Orphan', 1, 0, '',          ''),
+		  ('functions/Orphan/source', 'functions/Orphan',  'source', 0, 0, 'orphan.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"functions/Orphan"}, gotIDs,
+		"only the non-interface-method dead function is flagged")
+}
+
 // TestFindSmells_DeadCodeSkipsGeneratedFiles asserts that constructs
 // in generated-code files (capnp, protobuf, _generated.go, .gen.go)
 // don't surface in dead_code. Generated code intentionally exports
