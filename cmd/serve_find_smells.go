@@ -611,9 +611,13 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "long_file",
-		Description: "Source files exceeding 1500 lines (end_row reported on the source-file root AST node). Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind. Threshold hard-coded today.",
+		Description: "Source files sorted descending by total line count (end_row of the source_file root AST node). Default threshold is 1501 lines — matches the historical strict `> 1500` SQL floor exactly, so agents calling without min_metric see the same long-file set as before. Pass min_metric to adjust: 3000 for 'definitely review now', 800 for 'noteworthy', 0 to see everything sorted by length. Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind.",
 		Requires:    []string{"_ast"},
 		ScopeColumn: "src.source_id",
+		// 1501 not 1500: old SQL `> 1500` excluded files at exactly
+		// 1500 lines; min_metric is `>=`, so 1501 preserves the
+		// boundary. Same pattern as long_function (#302).
+		DefaultMinMetric: 1501,
 		Query: `
 			SELECT src.source_id,
 			       src.node_id,
@@ -624,7 +628,6 @@ var smellRegistry = []SmellRule{
 			       src.end_row AS metric
 			FROM _ast src
 			WHERE src.node_kind = 'source_file'
-			  AND src.end_row > 1500
 			%s
 			ORDER BY metric DESC, src.source_id
 		`,
