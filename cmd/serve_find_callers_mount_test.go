@@ -101,6 +101,66 @@ func TestFindCallers_CompositeNoCallersKeepsLegacyShape(t *testing.T) {
 		"empty-result path keeps the bare-array response (backward-compat)")
 }
 
+// TestLazyGraph_MountPrefixOf_ForwardsToCompositeInner pins the
+// production wiring: the registry hands MCP handlers a *lazyGraph
+// that wraps the actual CompositeGraph. Earlier code asserted
+// `g.(*graph.CompositeGraph)` directly in annotateMounts, which
+// silently missed every cross-mount call in production (tests
+// passed because they bypassed the wrapper).
+//
+// The fix: lazyGraph.MountPrefixOf forwards to its inner so the
+// mountPrefixer interface assertion sees through the wrapper.
+func TestLazyGraph_MountPrefixOf_ForwardsToCompositeInner(t *testing.T) {
+	auth, billing := twoMountStores(t)
+	cg := graph.NewCompositeGraph()
+	require.NoError(t, cg.Mount("auth", auth))
+	require.NoError(t, cg.Mount("billing", billing))
+
+	// Construct a lazyGraph with inner pre-set, then burn the
+	// once.Do so init() won't overwrite when get() runs.
+	lg := &lazyGraph{inner: cg}
+	lg.once.Do(func() {})
+
+	// Sanity: lazyGraph satisfies mountPrefixer.
+	mp, ok := graph.Graph(lg).(mountPrefixer)
+	require.True(t, ok, "lazyGraph must satisfy mountPrefixer (handlers depend on this)")
+
+	assert.Equal(t, "auth", mp.MountPrefixOf("auth/functions/AuthCaller/source"))
+	assert.Equal(t, "billing", mp.MountPrefixOf("billing/functions/Charge/source"))
+	assert.Equal(t, "", mp.MountPrefixOf("not-a-mount/foo"),
+		"unknown prefix must return '' so handlers can fall back to legacy shape")
+}
+
+// TestFindCallers_AnnotatesMountThroughLazyGraph is the integration
+// counterpart: drive the handler via a lazyGraph wrapper (the
+// production shape) and assert the annotated response surfaces.
+// Caught the regression where lazyGraph swallowed the composite type.
+func TestFindCallers_AnnotatesMountThroughLazyGraph(t *testing.T) {
+	auth, billing := twoMountStores(t)
+	cg := graph.NewCompositeGraph()
+	require.NoError(t, cg.Mount("auth", auth))
+	require.NoError(t, cg.Mount("billing", billing))
+
+	lg := &lazyGraph{inner: cg}
+	lg.once.Do(func() {})
+
+	handler := makeFindCallersHandler(lg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Callers []scopedCallerRow `json:"callers"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Len(t, resp.Callers, 2,
+		"both auth and billing callers must surface — production wraps in lazyGraph")
+
+	mounts := []string{resp.Callers[0].Mount, resp.Callers[1].Mount}
+	assert.Contains(t, mounts, "auth", "auth mount label must reach the response")
+	assert.Contains(t, mounts, "billing", "billing mount label must reach the response")
+}
+
 // TestCompositeGraph_MountPrefixOf is the unit test for the public
 // accessor added in this PR. Empty / virtual-root / unknown-prefix
 // inputs all return "" so handlers can distinguish "this id is
