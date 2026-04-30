@@ -26,7 +26,7 @@ func TestDetectProjectLanguages_Mixed(t *testing.T) {
 	assert.Equal(t, 2, counts["go"])
 	assert.Equal(t, 1, counts["typescript"])
 	assert.Equal(t, 1, counts["terraform"])
-	assert.Zero(t, counts["json"]) // json is not a language in DetectLanguageFromExt
+	assert.Zero(t, counts["json"]) // json has no entry in lang.Registry
 }
 
 func TestDetectProjectLanguages_SkipsHiddenDirs(t *testing.T) {
