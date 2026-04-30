@@ -501,8 +501,16 @@ var smellRegistry = []SmellRule{
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
 			WITH fanout AS (
+				-- Exclude the engine's file-level sentinel caller_ids
+				-- (prefix '_file_level:'). Those are synthetic node_ids
+				-- the engine uses to mark file-level fn-value refs
+				-- (mache-02r9) as alive without polluting per-construct
+				-- callee counts. Counting them here would attribute the
+				-- file-level refs to a 'caller' that isn't a real
+				-- construct, inflating fan_out_skew with virtual rows.
 				SELECT node_id AS caller_id, COUNT(DISTINCT token) AS n
 				FROM node_refs
+				WHERE node_id NOT LIKE '_file_level:%%'
 				GROUP BY node_id
 			),
 			proj AS (

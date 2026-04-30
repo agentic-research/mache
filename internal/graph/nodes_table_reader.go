@@ -250,7 +250,14 @@ func (r *NodesTableReader) renderFromRecord(filePath, recordID string) ([]byte, 
 
 // GetCallers returns nodes that reference the given token via node_refs table.
 func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
-	rows, err := r.db.Query("SELECT node_id FROM node_refs WHERE token = ?", token)
+	// Skip the engine's file-level sentinel caller_ids (prefix
+	// '_file_level:') — they exist so dead_code's alive CTE can
+	// recognise top-level cobra RunE callbacks without polluting
+	// the caller view. They aren't real callers.
+	rows, err := r.db.Query(
+		"SELECT node_id FROM node_refs WHERE token = ? AND node_id NOT LIKE '_file_level:%'",
+		token,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("query node_refs: %w", err)
 	}
