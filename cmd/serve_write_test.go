@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/stretchr/testify/assert"
@@ -187,6 +188,73 @@ func TestWriteFile_ValidationStillRunsWhenFormatFalse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original, after, "validation failure must not touch the source file")
 }
+
+// TestWriteFile_SurfacesStaleGraphAfterSplice pins the post-splice
+// failure contract: if UpdateNodeContent fails (e.g., the node was
+// concurrently invalidated/deleted between GetNode and the update), the
+// splice has already written disk but the in-memory graph is stale.
+// write_file must surface that to the caller via "ok_graph_stale" plus
+// a graph_warning, not silently report "ok".
+func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
+	original := "package main\n\nfunc Hello() {}\n"
+	srcPath := filepath.Join(t.TempDir(), "main.go")
+	require.NoError(t, os.WriteFile(srcPath, []byte(original), 0o644))
+
+	// staleUpdateGraph reports the node on GetNode but errors on
+	// UpdateNodeContent — simulating the race where the node disappears
+	// after splice but before the graph update.
+	g := &staleUpdateGraph{
+		readOnlyGraph: readOnlyGraph{
+			node: &graph.Node{
+				ID:   "pkg/Hello",
+				Mode: 0,
+				Origin: &graph.SourceOrigin{
+					FilePath:  srcPath,
+					StartByte: 14,
+					EndByte:   uint32(len(original)),
+				},
+			},
+		},
+	}
+	handler := makeWriteFileHandler(g)
+
+	// Use the original byte range so Splice succeeds (we already wrote
+	// the source above with that exact length).
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"path":    "pkg/Hello",
+		"content": "func Hello() { return }\n",
+		"format":  false,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "stale-graph is a non-error result with a warning, not a tool error")
+
+	var resp struct {
+		Status       string `json:"status"`
+		GraphWarning string `json:"graph_warning"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	assert.Equal(t, "ok_graph_stale", resp.Status,
+		"UpdateNodeContent failure must downgrade status from ok to ok_graph_stale")
+	assert.Contains(t, resp.GraphWarning, "graph update failed after splice",
+		"graph_warning must explain the on-disk-correct, graph-stale split")
+
+	// Sanity check: splice DID happen — disk has the new content.
+	got, err := os.ReadFile(srcPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "return", "splice must succeed even when the graph update fails")
+}
+
+// staleUpdateGraph extends readOnlyGraph with writeBacker methods that
+// simulate a node disappearing after splice. ShiftOrigins is a no-op;
+// UpdateNodeContent returns ErrNotFound to exercise the stale-graph path.
+type staleUpdateGraph struct {
+	readOnlyGraph
+}
+
+func (*staleUpdateGraph) UpdateNodeContent(string, []byte, *graph.SourceOrigin, time.Time) error {
+	return graph.ErrNotFound
+}
+func (*staleUpdateGraph) ShiftOrigins(string, uint32, int32) {}
 
 // TestWriteFile_RejectsNonWriteBackerBackend pins the fail-fast contract:
 // if the graph backend doesn't implement writeBacker (UpdateNodeContent +

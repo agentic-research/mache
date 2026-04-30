@@ -99,7 +99,17 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		if fi, err := os.Stat(origin.FilePath); err == nil {
 			modTime = fi.ModTime()
 		}
-		_ = wb.UpdateNodeContent(path, formatted, newOrigin, modTime)
+
+		// Splice already touched disk; if the graph update fails (e.g.
+		// node was concurrently invalidated) we surface that explicitly
+		// so callers know to re-read. Status "ok_graph_stale" signals
+		// "file is on disk; in-memory graph state may be wrong".
+		status := "ok"
+		var graphWarning string
+		if err := wb.UpdateNodeContent(path, formatted, newOrigin, modTime); err != nil {
+			status = "ok_graph_stale"
+			graphWarning = fmt.Sprintf("graph update failed after splice: %v (file on disk is correct; re-read to refresh graph)", err)
+		}
 		g.Invalidate(path)
 
 		type writeResult struct {
@@ -109,14 +119,16 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			FormatApplied bool                `json:"format_applied"`           // formatter ran (format=true)
 			FormatChanged bool                `json:"format_changed,omitempty"` // formatter actually altered the bytes
 			BytesDelta    int32               `json:"bytes_delta"`
+			GraphWarning  string              `json:"graph_warning,omitempty"`
 		}
 		data, _ := json.MarshalIndent(writeResult{
-			Status:        "ok",
+			Status:        status,
 			Path:          path,
 			Origin:        newOrigin,
 			FormatApplied: format,
 			FormatChanged: format && string(formatted) != content,
 			BytesDelta:    delta,
+			GraphWarning:  graphWarning,
 		}, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
