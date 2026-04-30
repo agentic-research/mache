@@ -431,6 +431,17 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 	var workerWg sync.WaitGroup
 	for range numWorkers {
 		workerWg.Go(func() {
+			// Pin to one OS thread for the lifetime of the worker.
+			// tree-sitter's CGO bridge is sensitive to goroutine
+			// migration mid-call: when the Go runtime preempts and
+			// resumes a goroutine on a different OS thread while
+			// CGO is in flight, we've seen sporadic SIGSEGVs in
+			// internal/ingest tests on ubuntu-latest (mache-2y9w).
+			// LockOSThread isolates each parser/cursor pair to a
+			// stable thread; UnlockOSThread on exit lets the runtime
+			// reclaim the thread when the worker goroutine ends.
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
 			parser := sitter.NewParser()
 			for job := range jobs {
 				result := parsedTreeSitterFile{job: job}
