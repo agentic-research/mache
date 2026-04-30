@@ -462,6 +462,12 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 	}
 
 	composite := graph.NewCompositeGraph()
+	// Wire a tree-sitter call extractor onto the composite so cross-mount
+	// callees resolve: when a function in mount A calls one defined in
+	// mount B, find_callees on A's function returns B's def via the
+	// federated DefsMap. Without this, callees only route per-mount.
+	composite.SetCallExtractor(newCallExtractor())
+
 	var cleanups []func()
 	runAll := func() {
 		// Reverse order so later mounts close before earlier ones.
