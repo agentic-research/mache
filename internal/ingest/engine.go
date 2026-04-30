@@ -465,9 +465,18 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 
 				parser.SetLanguage(job.lang)
 				tree, err := parser.ParseCtx(context.Background(), nil, result.content)
-				if err != nil {
+				switch {
+				case err != nil:
 					result.parseErr = err
-				} else {
+				case tree == nil:
+					// ParseCtx is documented to return (nil, nil) for
+					// non-error empty inputs. Treat as a no-op parse so
+					// downstream tree.RootNode() can't nil-deref under
+					// the parallel worker (which would surface as a
+					// SIGSEGV in CGO via the tree-sitter call stack —
+					// the same class of failure as mache-2y9w).
+					result.parseErr = fmt.Errorf("tree-sitter returned nil tree")
+				default:
 					result.tree = tree
 					// Extract context (imports, globals) — CPU-bound query execution.
 					if ctxBytes, err := e.sitterWalker.ExtractContext(
