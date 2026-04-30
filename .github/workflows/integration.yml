@@ -17,6 +17,11 @@ on:
 permissions:
   contents: read
 
+# Opt into Node 24 shim until arduino/setup-task ships a Node 24
+# release (https://github.com/arduino/setup-task/issues/1359).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   integration:
     strategy:

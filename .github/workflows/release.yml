@@ -19,6 +19,9 @@ permissions: {}
 
 env:
   TAG: ${{ inputs.tag || github.event.client_payload.tag || github.ref_name }}
+  # arduino/setup-task hasn't shipped Node 24 yet — opt into the
+  # forced shim (https://github.com/arduino/setup-task/issues/1359).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   build:

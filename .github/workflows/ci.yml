@@ -15,6 +15,13 @@ on:
 permissions:
   contents: read
 
+# arduino/setup-task hasn't shipped a Node 24 release yet
+# (https://github.com/arduino/setup-task/issues/1359). The runner
+# warns and will hard-fail in June 2026. Opt in to GitHub's forced
+# Node 24 shim until upstream releases v3.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   test:
     strategy:
