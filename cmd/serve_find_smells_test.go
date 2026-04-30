@@ -1097,6 +1097,87 @@ func TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction(t *testing.T) {
 	assert.Equal(t, 2, len(got), "topif is not under any function — no extra finding")
 }
 
+// TestFindSmells_LongFunction_MinMetricLowersThreshold pins the
+// behavior fix that retired the hardcoded SQL `> 80` floor: when
+// the caller passes min_metric < 81, functions below the historical
+// default surface in the response. Pre-fix, min_metric=50 returned
+// the same set as min_metric=81 because the SQL filtered first.
+func TestFindSmells_LongFunction_MinMetricLowersThreshold(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  ('big_fn',   'main.go', 'function_declaration', 100, 200, 10,  0, 110, 0),  -- 100 lines
+		  ('mid_fn',   'main.go', 'function_declaration', 300, 400, 200, 0, 260, 0),  -- 60 lines
+		  ('small_fn', 'main.go', 'function_declaration', 500, 550, 300, 0, 305, 0);  -- 5 lines
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule":       "long_function",
+		"min_metric": float64(50),
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	// big_fn (100) and mid_fn (60) both ≥ 50; small_fn (5) is below.
+	// Pre-fix this test would have returned only big_fn because the
+	// SQL `> 80` floor excluded mid_fn before min_metric ever ran.
+	assert.ElementsMatch(t, []string{"big_fn", "mid_fn"}, gotIDs,
+		"min_metric=50 must surface 60-line mid_fn (was hidden behind hardcoded `> 80` SQL floor)")
+}
+
+// TestFindSmells_LongFunction_MinMetricZeroDisablesDefault pins
+// that an explicit min_metric=0 disables the rule's
+// DefaultMinMetric — agents that want to see every function
+// sorted by length can opt out of the default threshold.
+func TestFindSmells_LongFunction_MinMetricZeroDisablesDefault(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  ('tiny',  'main.go', 'function_declaration', 100, 200, 10, 0, 12, 0),  -- 2 lines
+		  ('huge',  'main.go', 'function_declaration', 300, 400, 50, 0, 250, 0); -- 200 lines
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule":       "long_function",
+		"min_metric": float64(0),
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.ElementsMatch(t, []string{"tiny", "huge"}, gotIDs,
+		"min_metric=0 must override DefaultMinMetric and return all functions")
+}
+
 // TestFindSmells_LongFunction seeds two functions of different sizes
 // and asserts the rule flags only the one over the threshold (80 lines).
 func TestFindSmells_LongFunction(t *testing.T) {

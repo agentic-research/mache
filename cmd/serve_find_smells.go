@@ -56,6 +56,17 @@ type SmellRule struct {
 	// `_source`, `_imports`, `_lsp*`. See docs/ARCHITECTURE.md
 	// "Interplay with ley-line-open" for the full table.
 	Requires []string
+	// DefaultMinMetric is the rule's recommended metric threshold
+	// when the request omits min_metric. Zero means "no default
+	// threshold; return all rows." Used for metric-bearing rules
+	// where the query's natural output includes a long tail of
+	// uninteresting low-metric rows (e.g. long_function returns
+	// every function regardless of size; without a default
+	// threshold the response is dominated by 1-line setters).
+	// Callers can pass min_metric=0 explicitly to override the
+	// default and see everything; any non-zero min_metric also
+	// overrides.
+	DefaultMinMetric int64
 }
 
 // smellRegistry holds the registered rules. Built-ins below; external
@@ -248,9 +259,15 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "long_function",
 		Languages:   []string{"go"},
-		Description: "Functions and methods whose body spans more than 80 source lines (end_row - start_row). Sorted descending by line count. The 80-line floor is hardcoded in SQL; min_metric raises the cutoff but cannot lower it (e.g. min_metric=50 still returns only >80, since the SQL filter runs before the handler-side min_metric drop). Effective threshold is max(80, min_metric). Use min_metric=200 for 'definitely review now', min_metric=120 for 'noteworthy'. Pair with cyclomatic_complexity for a sister metric on the same nodes.",
+		Description: "Functions and methods sorted descending by body line count (end_row - start_row). Default threshold is 81 lines — matches the historical strict `> 80` SQL floor exactly, so agents calling without min_metric see the same long-function set as before. Pass min_metric to adjust: 200 for 'definitely review now', 120 for 'noteworthy', 0 to see everything sorted by length. Pair with cyclomatic_complexity for a sister metric on the same nodes.",
 		Requires:    []string{"_ast"},
 		ScopeColumn: "fn.source_id",
+		// 81 not 80: the old SQL filter was strict `> 80`, so 80-line
+		// functions were excluded. min_metric is `>=`, so mapping
+		// `> 80` → `>= 81` preserves the boundary exactly. Tests that
+		// assert "only the 100-line one fires when 80-line is at the
+		// boundary" stay green.
+		DefaultMinMetric: 81,
 		Query: `
 			SELECT fn.source_id,
 			       fn.node_id,
@@ -261,7 +278,6 @@ var smellRegistry = []SmellRule{
 			       (fn.end_row - fn.start_row) AS metric
 			FROM _ast fn
 			WHERE fn.node_kind IN ('function_declaration','method_declaration')
-			  AND (fn.end_row - fn.start_row) > 80
 			%s
 			ORDER BY metric DESC, fn.source_id, fn.start_byte
 		`,
@@ -686,7 +702,6 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 		if limit <= 0 {
 			limit = 200
 		}
-		minMetric := int64(request.GetFloat("min_metric", 0))
 
 		if ruleID == "" {
 			// Discovery mode — list rules.
@@ -705,6 +720,20 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 				"unknown rule %q — available: %s. Call this tool with no rule for full descriptions.",
 				ruleID, strings.Join(allRuleIDs(), ", "),
 			)), nil
+		}
+
+		// Resolve min_metric AFTER rule lookup so we can fall back
+		// to the rule's DefaultMinMetric when the request omits it.
+		// An explicit `min_metric=0` from the caller still wins —
+		// it disables the default and returns everything sorted by
+		// metric. Only an absent key activates the default.
+		minMetric := int64(0)
+		if v, ok := request.GetArguments()["min_metric"]; ok {
+			if f, ok := v.(float64); ok {
+				minMetric = int64(f)
+			}
+		} else {
+			minMetric = rule.DefaultMinMetric
 		}
 
 		// Need a *sql.DB to run the rule. Today we hand-shake via the
