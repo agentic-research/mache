@@ -468,6 +468,20 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 	// federated DefsMap. Without this, callees only route per-mount.
 	composite.SetCallExtractor(newCallExtractor())
 
+	// And wire the per-mount picker (ADR-0012): for SQLiteGraph mounts
+	// that carry `_ast`, prefer the pure-Go extractor; the picker
+	// returns nil for other backends so cross-mount resolution falls
+	// through to the global CGO extractor above. Each mount picks
+	// independently — heterogeneous fleets (e.g. one ll-open .db and
+	// one mache-built .db) get the right extractor per mount.
+	composite.SetCallExtractorPicker(func(local graph.Graph) graph.CallExtractor {
+		sg, ok := local.(*graph.SQLiteGraph)
+		if !ok {
+			return nil
+		}
+		return pickCallExtractor(sg.DB())
+	})
+
 	var cleanups []func()
 	runAll := func() {
 		// Reverse order so later mounts close before earlier ones.

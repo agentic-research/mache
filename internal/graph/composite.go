@@ -34,6 +34,15 @@ type CompositeGraph struct {
 	// extra results in the merged response. nil means cross-mount callees
 	// are off — sub-graphs still run their own GetCallees as before.
 	extractor CallExtractor
+
+	// extractorPicker, when set, is consulted at extract time to pick the
+	// right extractor for the local mount (the mount the caller node lives
+	// in). Used to dispatch between the CGO SitterWalker extractor and the
+	// pure-Go ASTWalker extractor based on whether the local mount has an
+	// `_ast` table — see ADR-0012's CGO removal arc. Returning nil from the
+	// picker falls through to `extractor`. nil picker means "use extractor
+	// unconditionally" (legacy behavior).
+	extractorPicker func(local Graph) CallExtractor
 }
 
 // NewCompositeGraph creates an empty composite graph.
@@ -353,10 +362,21 @@ func (c *CompositeGraph) GetCallees(id string) ([]*Node, error) {
 	c.mu.RLock()
 	prefix, subPath, g := c.resolve(id)
 	extractor := c.extractor
+	picker := c.extractorPicker
 	c.mu.RUnlock()
 
 	if g == nil {
 		return nil, ErrNotFound
+	}
+
+	// Per-mount extractor dispatch (ADR-0012): if a picker is wired,
+	// ask it for the right extractor given the local mount g. Picker
+	// returning nil falls through to the global `extractor` set via
+	// SetCallExtractor, preserving legacy behavior.
+	if picker != nil {
+		if perMount := picker(g); perMount != nil {
+			extractor = perMount
+		}
 	}
 
 	// Phase 1: route to local mount and re-prefix the results.
@@ -476,6 +496,22 @@ func (c *CompositeGraph) SetCallExtractor(fn CallExtractor) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.extractor = fn
+}
+
+// SetCallExtractorPicker wires a per-mount extractor selector. At
+// extract time, GetCallees calls picker(localMount); a non-nil
+// return value wins over the global extractor set via
+// SetCallExtractor. Used to dispatch between CGO and pure-Go
+// extractors based on the local mount's capabilities (e.g. presence
+// of an `_ast` table). See ADR-0012.
+//
+// Composing both: the picker is consulted first; if it returns nil,
+// fall through to the SetCallExtractor-supplied global extractor.
+// Callers that don't want per-mount dispatch can leave this unset.
+func (c *CompositeGraph) SetCallExtractorPicker(picker func(local Graph) CallExtractor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.extractorPicker = picker
 }
 
 // Invalidate implements Graph.
