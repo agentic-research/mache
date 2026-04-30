@@ -902,6 +902,19 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 }
 
 func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langName string, modTime time.Time) error {
+	// Pin to one OS thread for the lifetime of this call, mirroring
+	// the parallel worker fix in PR #257. tree-sitter's CGO bridge
+	// is sensitive to goroutine migration mid-call: when the Go
+	// runtime preempts and resumes a goroutine on a different OS
+	// thread while CGO is in flight, sporadic SIGSEGVs appear in
+	// internal/ingest tests (mache-2y9w). The parallel path got
+	// LockOSThread; this synchronous single-file path — used by
+	// ReIngestFile and the dispatch loop's default branch — was
+	// missed and kept producing CGO SIGSEGV reruns on PRs that
+	// touched code unrelated to ingestion (#284, #292, #294, #297).
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
