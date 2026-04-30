@@ -41,8 +41,20 @@ var buildCmd = &cobra.Command{
 			}
 			schema = loaded
 		} else {
-			// No schema — infer via FCA from source tree
-			inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
+			// No schema — infer via FCA from source tree.
+			//
+			// AST records are dense: a single Go file produces hundreds
+			// of named-node records (function/method/var/expression/...).
+			// The default SampleSize of 1000 is sized for sparse JSON
+			// records — for AST it under-samples low-frequency node
+			// kinds. With ~32 files × ~1300 records ≈ 40k records, only
+			// ~2 method_declaration records would land in the reservoir
+			// and the closure-based detection of methods/ silently fails
+			// (mache-5d1o). Bump to 100k so AST inference sees enough
+			// of every kind. Memory is still bounded by maxFiles below.
+			cfg := lattice.DefaultInferConfig()
+			cfg.SampleSize = 100_000
+			inf := &lattice.Inferrer{Config: cfg}
 			log.Println("Inferring schema...")
 
 			// Walk source and parse multiple .go files. Single-file
