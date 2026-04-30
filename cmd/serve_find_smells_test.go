@@ -138,7 +138,12 @@ func TestFindSmells_ListsRulesWhenNoRule(t *testing.T) {
 
 	// Spot-check a few representatives so the categorization stays honest:
 	// _ast rules need leyline parse; node_defs/node_refs rules work on
-	// any backend that populates the cross-ref tables.
+	// any backend that populates the cross-ref tables. Use require.Contains
+	// for the rule-ID lookups so a missing rule fails with a clear message
+	// instead of an empty-slice assertion further down.
+	for _, id := range []string{"cyclomatic_complexity", "fan_out_skew", "dead_code"} {
+		require.Contains(t, byID, id, "rule %q missing from listing", id)
+	}
 	assert.Contains(t, byID["cyclomatic_complexity"], "_ast",
 		"cyclomatic_complexity walks the AST and must require _ast")
 	assert.Contains(t, byID["fan_out_skew"], "node_refs",
