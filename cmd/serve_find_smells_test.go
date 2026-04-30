@@ -1101,6 +1101,88 @@ func TestFindSmells_CyclomaticComplexity(t *testing.T) {
 	assert.Equal(t, int64(0), resp.Findings[1].Metric)
 }
 
+// TestFindSmells_CyclomaticComplexity_RegressionFloor exercises
+// every facet the rule's SQL handles in a single synthetic
+// fixture and pins both the metric values and which functions
+// surface. Mirrors TestFindSmells_DeadCodeRegressionFloor (#284)
+// and TestFindSmells_UntestedFunctionRegressionFloor (#294).
+//
+// cyclomatic_complexity has fewer skip clauses than dead_code or
+// untested_function, but the SQL has subtle correctness asks:
+//   - branches under THIS function (LIKE 'fn.node_id || /%')
+//     not branches in sibling functions or top-level branches
+//   - the seven branch kinds matched by node_kind IN (...)
+//   - both function_declaration AND method_declaration counted
+//   - functions with zero branches still surface (metric=0)
+//
+// If a future SQL refactor (e.g. tightening the JOIN, swapping
+// a kind name, accidentally restricting to function_declaration
+// only) changes the output, the failing diff is the regression.
+func TestFindSmells_CyclomaticComplexity_RegressionFloor(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES
+		  -- High-complexity function: 5 branches across all kinds.
+		  ('hairy_fn',                  'main.go', 'function_declaration', 100, 500, 10, 0, 50, 0),
+		  ('hairy_fn/if_a',             'main.go', 'if_statement',         110, 130, 11, 1, 13, 0),
+		  ('hairy_fn/for_a',            'main.go', 'for_statement',        140, 160, 14, 1, 17, 0),
+		  ('hairy_fn/sw/case_a',        'main.go', 'case_clause',          170, 190, 18, 2, 20, 0),
+		  ('hairy_fn/sw/expression_a',  'main.go', 'expression_case',      200, 210, 21, 2, 23, 0),
+		  ('hairy_fn/sw/communication', 'main.go', 'communication_case',   220, 230, 24, 2, 26, 0),
+
+		  -- Method (not function) — must also surface.
+		  ('Receiver.Method', 'main.go', 'method_declaration', 600, 700, 60, 0, 80, 0),
+		  ('Receiver.Method/if_x', 'main.go', 'if_statement',  620, 640, 62, 1, 65, 0),
+		  ('Receiver.Method/type_y', 'main.go', 'type_case',   650, 670, 66, 1, 68, 0),
+		  ('Receiver.Method/default_z', 'main.go', 'default_case', 680, 690, 70, 1, 72, 0),
+
+		  -- Zero-branch function: must surface with metric=0
+		  -- (caller-set min_metric controls inclusion).
+		  ('trivial_fn', 'main.go', 'function_declaration', 800, 850, 90, 0, 95, 0),
+
+		  -- Top-level if outside any function — must NOT be
+		  -- attributed to any function (LIKE prefix filter).
+		  ('top_if', 'main.go', 'if_statement', 900, 910, 100, 0, 102, 0);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "cyclomatic_complexity",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	got := map[string]int64{}
+	for _, f := range resp.Findings {
+		got[f.NodeID] = f.Metric
+	}
+	// hairy_fn: 5 branches (1 if + 1 for + 1 case + 1 expression + 1 communication).
+	// Receiver.Method: 3 branches (1 if + 1 type + 1 default).
+	// trivial_fn: 0 branches.
+	// top_if: not attributed to any function.
+	assert.Equal(t, int64(5), got["hairy_fn"], "hairy_fn metric: 1 if + 1 for + 1 case + 1 expression + 1 communication = 5")
+	assert.Equal(t, int64(3), got["Receiver.Method"], "method_declaration must be counted; 1 if + 1 type + 1 default = 3")
+	assert.Equal(t, int64(0), got["trivial_fn"], "zero-branch function still surfaces with metric=0 (caller sets threshold)")
+	assert.Len(t, got, 3, "exactly 3 functions surface; the top-level if doesn't get its own row")
+
+	// Sort sanity: hairy_fn (5) ranks before Receiver.Method (3)
+	// ranks before trivial_fn (0).
+	require.Len(t, resp.Findings, 3)
+	assert.Equal(t, "hairy_fn", resp.Findings[0].NodeID, "highest metric ranks first")
+	assert.Equal(t, "Receiver.Method", resp.Findings[1].NodeID)
+	assert.Equal(t, "trivial_fn", resp.Findings[2].NodeID)
+}
+
 // TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction proves
 // the LIKE 'fn.node_id || /%' filter — branches in OTHER functions
 // or top-level branches outside any function don't get attributed.
