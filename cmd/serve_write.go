@@ -42,6 +42,14 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("%s has no source origin — only source-code nodes support write-back", path)), nil
 		}
 
+		// Fail fast on unsupported backends BEFORE splice runs. Otherwise
+		// the unchecked type assertion below panics after the source file
+		// has already been written, leaving disk and graph out of sync.
+		wb, ok := g.(writeBacker)
+		if !ok {
+			return mcp.NewToolResultError("backend does not support write-back"), nil
+		}
+
 		origin := *node.Origin
 		newContent := []byte(content)
 
@@ -76,8 +84,7 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("splice failed: %v", err)), nil
 		}
 
-		// 4. Surgical node update
-		wb := g.(writeBacker)
+		// 4. Surgical node update (wb captured above so we can fail fast).
 		newOrigin := &graph.SourceOrigin{
 			FilePath:  origin.FilePath,
 			StartByte: origin.StartByte,
