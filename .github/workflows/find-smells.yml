@@ -32,6 +32,9 @@ jobs:
         with:
           # Need the merge-base so we can list files changed in the PR.
           fetch-depth: 0
+          # LFS-tracked tree-sitter grammar fixtures are needed for
+          # `go build` to succeed (parser.c is otherwise an LFS pointer).
+          lfs: true
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
