@@ -205,6 +205,37 @@ var smellRegistry = []SmellRule{
 		`,
 	},
 	{
+		ID:          "god_file",
+		Description: "Source files whose distinct-definition count is at least 10 AND more than 3× the project mean — a fuzzy 'god file' detector that surfaces sprawl relative to the codebase's own distribution rather than a hard line-count cutoff. Metric is the def count, sorted descending. Cross-language since node_defs is populated by every backend. Pairs with long_file (line-count via _ast) for a 'lots of code' vs 'lots of API' split.",
+		Requires:    []string{"node_defs", "nodes"},
+		ScopeColumn: "pf.file",
+		Query: `
+			WITH per_file AS (
+				SELECT n.source_file AS file, COUNT(DISTINCT d.token) AS n
+				FROM node_defs d
+				JOIN nodes n ON n.id = d.node_id
+				WHERE COALESCE(n.source_file, '') != ''
+				GROUP BY n.source_file
+			),
+			proj AS (
+				SELECT AVG(n) AS mu FROM per_file
+			)
+			SELECT pf.file AS source_id,
+			       '' AS node_id,
+			       0 AS start_byte,
+			       0 AS end_byte,
+			       0 AS start_row,
+			       0 AS start_col,
+			       pf.n AS metric
+			FROM per_file pf
+			CROSS JOIN proj p
+			WHERE pf.n >= 10
+			  AND CAST(pf.n AS REAL) > 3.0 * p.mu
+			%s
+			ORDER BY metric DESC, source_id
+		`,
+	},
+	{
 		ID:          "fan_out_skew",
 		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
 		Requires:    []string{"node_refs", "nodes"},
