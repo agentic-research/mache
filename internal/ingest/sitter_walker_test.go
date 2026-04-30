@@ -605,6 +605,40 @@ var initCmd = &cobra.Command{
 		"call_expression inside a top-level func_literal value must be captured")
 }
 
+// TestExtractFileLevelRefs_GoFunctionValueAsArgument asserts the
+// argument-list capture. Test runners that take a factory function
+// as a parameter (e.g. RunGraphSuite(t, hotSwapFactory)) pass a bare
+// identifier — captured as part of the file-level argument_list
+// pattern, which lands the factory in node_refs under the sentinel
+// caller_id and prevents dead_code from flagging it.
+func TestExtractFileLevelRefs_GoFunctionValueAsArgument(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`package graph
+
+import "testing"
+
+func hotSwapFactory(t *testing.T) Graph { return nil }
+
+type Graph interface{}
+
+func RunGraphSuite(t *testing.T, factory func(*testing.T) Graph) {}
+
+func TestHotSwap_GraphSuite(t *testing.T) {
+	RunGraphSuite(t, hotSwapFactory)
+}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	refs, err := w.ExtractFileLevelRefs(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+	assert.Contains(t, refs, "hotSwapFactory",
+		"function-value passed as a call argument must be captured")
+}
+
 // TestExtractFileLevelRefs_NoQueryReturnsNil asserts that languages
 // without a registered file-level query get nil-no-error from
 // ExtractFileLevelRefs (caller treats that as 'skip').
