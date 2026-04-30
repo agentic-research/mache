@@ -26,6 +26,16 @@ var ErrSourceChanged = fmt.Errorf("source file changed during splice")
 // file's size and modification time before reading and re-checks them
 // immediately before the rename. If they don't match, Splice returns
 // ErrSourceChanged without touching the source.
+//
+// Side effect: each successful Splice replaces the destination inode (the
+// rename swaps in a fresh file). External consumers — file watchers,
+// IDE language servers, NFS/SMB clients with cached fds — that key on
+// inode rather than path will see the file as "new" and may need to
+// re-arm or re-resolve. Pre-splice readers continue seeing the original
+// content until they close the fd (POSIX keeps the unlinked inode
+// alive). See TestSplice_InodeChangesAfterRename and
+// TestSplice_OpenReaderSeesOldContentAfterSplice for the pinned
+// contract.
 func Splice(origin graph.SourceOrigin, newContent []byte) error {
 	info, err := os.Stat(origin.FilePath)
 	if err != nil {
