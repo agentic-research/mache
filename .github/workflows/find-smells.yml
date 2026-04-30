@@ -1,10 +1,14 @@
 name: find_smells
 
 # Advisory PR review using mache's own find_smells rule registry.
-# Builds the binary, indexes the PR head, runs the rules that work
-# on standalone (no LLO) — node_defs / node_refs only — and posts
-# a comment listing findings whose source_file was touched by this
-# PR. Never fails the build; the rules are heuristic and gating
+# Builds the binary, indexes the PR head, runs the five rules that
+# work on the standalone (no-LLO) cross-ref tables (dead_code,
+# untested_function, duplicate_definitions, fan_out_skew, god_file —
+# all on node_defs / node_refs / nodes), and posts a comment listing
+# findings whose source_id was touched by this PR. The four
+# _ast-only rules (magic_int_in_comparison, cyclomatic_complexity,
+# long_function, long_file) need an LLO-built .db, not exercised
+# here. Never fails the build; the rules are heuristic and gating
 # would produce noise + frustration (mache-iegm / find_smells design).
 
 on:
