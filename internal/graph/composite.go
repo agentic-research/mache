@@ -74,6 +74,19 @@ func (c *CompositeGraph) resolve(id string) (string, string, Graph) {
 	return prefix, subPath, g
 }
 
+// MountPrefixOf returns the mount-name prefix that would route id to
+// a mounted sub-graph, or "" if id doesn't resolve to any mount (the
+// virtual root or an unknown prefix).
+//
+// MCP handlers use this to annotate cross-repo results with their
+// mount of origin without having to parse node IDs themselves.
+func (c *CompositeGraph) MountPrefixOf(id string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	prefix, _, _ := c.resolve(id)
+	return prefix
+}
+
 // GetNode implements Graph.
 func (c *CompositeGraph) GetNode(id string) (*Node, error) {
 	c.mu.RLock()
