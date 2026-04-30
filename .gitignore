@@ -66,3 +66,22 @@ tools/KNOWN_ISSUES.md
 # Beads credential key (per-clone, never committed)
 .beads-credential-key
 .beads/.beads-credential-key
+
+# Root-level dolt server runtime (when bd's dolt server is started here)
+/dolt/
+/dolt-server.lock
+/dolt-server.log
+/dolt-server.pid
+/dolt-server.port
+/dolt-server.activity
+
+# Locally-built helper binaries (not part of the shipped binary)
+/gen-lsp-fixture
+
+# get_diagram MCP tool outputs — generated to current directory on demand
+/diagram.mermaid
+/diagram-*.mermaid
+
+# Session-resume scratch notes (per-clone, ad hoc)
+/resume.txt
+/mache-distrib-resume.txt
