@@ -113,6 +113,9 @@ jobs:
 
       - name: Render comment
         if: steps.changed.outputs.skip != 'true'
+        env:
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           {
@@ -130,13 +133,18 @@ jobs:
                 echo ""
                 echo "| Source | Node | Metric |"
                 echo "| --- | --- | ---: |"
-                # Strip the runner workspace prefix from source_id so
-                # the comment shows repo-relative paths (cmd/serve.go)
-                # instead of /home/runner/work/mache/mache/cmd/serve.go.
-                # GITHUB_WORKSPACE is the canonical absolute path of
-                # the checked-out repo on the runner.
+                # Render each finding row. Strip the runner workspace
+                # prefix from source_id (so paths are repo-relative)
+                # AND wrap the path in a Markdown link to the file at
+                # this PR's head SHA — readers can click straight to
+                # the offending file. GITHUB_WORKSPACE is the
+                # canonical absolute path of the checked-out repo on
+                # the runner.
                 jq -r --arg ws "$GITHUB_WORKSPACE/" \
-                  '.findings | .[:20] | .[] | "| \((.source_id // "") | sub($ws; "")) | \(.node_id // "") | \(.metric // 0) |"' \
+                       --arg base "https://github.com/${REPO}/blob/${HEAD_SHA}" \
+                  '.findings | .[:20] | .[] |
+                     ((.source_id // "") | sub($ws; "")) as $rel |
+                     "| [\($rel)](\($base)/\($rel)) | \(.node_id // "") | \(.metric // 0) |"' \
                   "/tmp/${rule}.json"
                 if [ "$count" -gt 20 ]; then
                   echo ""
