@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -179,10 +180,19 @@ func TestLoadExternalSmellRules_FilePassedAsDirRejected(t *testing.T) {
 // without errors — otherwise the docs lie. If a future contributor
 // adds an example that doesn't validate, this test catches it
 // before merge.
+//
+// Resolves the examples dir via runtime.Caller so the path is
+// anchored to the test source file rather than the package's
+// working directory. macOS CI runners on `go test ./...` produced
+// flaky NotExist errors with a relative `../examples/smell-rules`
+// path; runtime.Caller is invariant across platforms and
+// invocation styles.
 func TestLoadExternalSmellRules_ShippedExamplesLoadCleanly(t *testing.T) {
-	// Path is relative to the package, which sits at cmd/. The
-	// examples dir is at the repo root. Walk up one level.
-	rules, err := LoadExternalSmellRules("../examples/smell-rules")
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller must succeed to resolve the test file path")
+	exampleDir := filepath.Join(filepath.Dir(thisFile), "..", "examples", "smell-rules")
+
+	rules, err := LoadExternalSmellRules(exampleDir)
 	require.NoError(t, err, "examples/smell-rules/ must load without errors — keep the docs honest")
 	require.NotEmpty(t, rules, "at least one example rule should ship")
 	for _, r := range rules {
