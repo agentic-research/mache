@@ -172,3 +172,21 @@ func TestLoadExternalSmellRules_FilePassedAsDirRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a directory")
 }
+
+// TestLoadExternalSmellRules_ShippedExamplesLoadCleanly is the
+// "don't ship a broken example" regression. Anything we put in
+// examples/smell-rules/ has to round-trip through the loader
+// without errors — otherwise the docs lie. If a future contributor
+// adds an example that doesn't validate, this test catches it
+// before merge.
+func TestLoadExternalSmellRules_ShippedExamplesLoadCleanly(t *testing.T) {
+	// Path is relative to the package, which sits at cmd/. The
+	// examples dir is at the repo root. Walk up one level.
+	rules, err := LoadExternalSmellRules("../examples/smell-rules")
+	require.NoError(t, err, "examples/smell-rules/ must load without errors — keep the docs honest")
+	require.NotEmpty(t, rules, "at least one example rule should ship")
+	for _, r := range rules {
+		assert.NotEmpty(t, r.ID)
+		assert.NotEmpty(t, r.Query)
+	}
+}
