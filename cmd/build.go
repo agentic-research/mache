@@ -54,6 +54,17 @@ var buildCmd = &cobra.Command{
 			// of every kind. Memory is still bounded by maxFiles below.
 			cfg := lattice.DefaultInferConfig()
 			cfg.SampleSize = 100_000
+			// Tag the inferred schema with its source language. Without
+			// this, every node has Language='' which makes the engine's
+			// filterNodesByLanguage match the selector against every
+			// language — e.g. JS function_declarations match the
+			// inferred-from-Go selector and produce orphan construct
+			// dirs (no source/ast.json/doc children because the JS
+			// match shape doesn't render the Go templates cleanly).
+			// We currently bootstrap inference from Go files only;
+			// when other-language bootstraps land, this should pick
+			// up the actual language being sampled.
+			cfg.Language = "go"
 			inf := &lattice.Inferrer{Config: cfg}
 			log.Println("Inferring schema...")
 
