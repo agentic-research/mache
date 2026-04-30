@@ -1,0 +1,152 @@
+name: find_smells
+
+# Advisory PR review using mache's own find_smells rule registry.
+# Builds the binary, indexes the PR head, runs the rules that work
+# on standalone (no LLO) — node_defs / node_refs only — and posts
+# a comment listing findings whose source_file was touched by this
+# PR. Never fails the build; the rules are heuristic and gating
+# would produce noise + frustration (mache-iegm / find_smells design).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      # Only run when Go source changes — docs / examples don't
+      # affect smell findings and would just spam the comment thread.
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/find-smells.yml'
+
+permissions:
+  # Required to post / edit the PR comment.
+  pull-requests: write
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # Need the merge-base so we can list files changed in the PR.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build mache
+        run: go build -o /tmp/mache ./
+
+      - name: Index repo
+        # The standalone (CGO) path produces nodes / node_defs /
+        # node_refs but not _ast. The four rules we run here only
+        # need the cross-ref tables, so we don't need an LLO-built
+        # .db.
+        run: /tmp/mache build --schema examples/go-schema.json . /tmp/repo.db
+
+      - name: List files changed in PR
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Diff base...head, keep only Go source files. The list
+          # gates the comment; if nothing Go changed, the workflow's
+          # paths filter would have skipped us already, so we can
+          # assume non-empty here.
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            | grep -E '\.go$' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))' \
+            > /tmp/changed.json
+          cat /tmp/changed.json
+          # Make a regex alternation for source_file matching:
+          # /tmp/changed-pattern.txt → "auth/main.go|billing/charge.go"
+          jq -r '. | join("|")' /tmp/changed.json > /tmp/changed-pattern.txt
+          if [ -z "$(cat /tmp/changed-pattern.txt)" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run find_smells rules
+        if: steps.changed.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          PATTERN=$(cat /tmp/changed-pattern.txt)
+          # Run the four rules that don't need _ast (the rules that
+          # work on the standalone CGO ingestion path).
+          for rule in dead_code untested_function duplicate_definitions fan_out_skew; do
+            /tmp/mache find-smells --db /tmp/repo.db --rule "$rule" \
+              --format json --limit 1000 \
+              | jq --arg pat "$PATTERN" \
+                  '.findings = (.findings | map(select(.source_id | test($pat))))' \
+              > "/tmp/${rule}.json"
+            echo "=== $rule ==="
+            jq '.findings | length' "/tmp/${rule}.json"
+          done
+
+      - name: Render comment
+        if: steps.changed.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "## find_smells (advisory)"
+            echo ""
+            echo "Scoped to files changed in this PR. Rules below run on the standalone (no-LLO) cross-ref tables; \`_ast\` rules (cyclomatic_complexity, long_function, long_file, magic_int_in_comparison, god_file) are not exercised here."
+            echo ""
+            total=0
+            for rule in dead_code untested_function duplicate_definitions fan_out_skew; do
+              count=$(jq '.findings | length' "/tmp/${rule}.json")
+              total=$((total + count))
+              if [ "$count" -gt 0 ]; then
+                echo "<details>"
+                echo "<summary><b>${rule}</b> — ${count} finding(s) in changed files</summary>"
+                echo ""
+                echo "| Source | Node | Metric |"
+                echo "| --- | --- | ---: |"
+                jq -r '.findings | .[:20] | .[] | "| \(.source_id // "") | \(.node_id // "") | \(.metric // 0) |"' "/tmp/${rule}.json"
+                if [ "$count" -gt 20 ]; then
+                  echo ""
+                  echo "_(showing top 20 of ${count})_"
+                fi
+                echo ""
+                echo "</details>"
+                echo ""
+              fi
+            done
+            if [ "$total" -eq 0 ]; then
+              echo "No structural smells in changed files. ✓"
+            fi
+            echo ""
+            echo "_Rules: see [\`docs/ARCHITECTURE.md\`](../blob/main/docs/ARCHITECTURE.md#interplay-with-ley-line-open) for the full registry. Advisory only — these are heuristics, not gates._"
+          } > /tmp/comment.md
+          cat /tmp/comment.md
+
+      - name: Post / update PR comment
+        if: steps.changed.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Find an existing find_smells comment to edit. We tag the
+          # comment body with a hidden marker so subsequent runs of
+          # this workflow on the same PR update in place rather than
+          # accumulating one comment per push.
+          MARKER="<!-- find-smells-gha -->"
+          BODY="$MARKER"$'\n'"$(cat /tmp/comment.md)"
+          existing=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+            --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0].id // empty")
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" \
+              -f body="$BODY"
+            echo "edited existing comment $existing"
+          else
+            gh pr comment "$PR" --body "$BODY"
+            echo "created new comment"
+          fi
