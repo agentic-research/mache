@@ -39,7 +39,15 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
 
-		qg := g.(refsQuerier)
+		// Fail fast on non-SQL backends with a clear message instead
+		// of the generic post-assertion "LSP data not available" which
+		// is the same string we use for "table missing." Today
+		// lazyGraph always satisfies refsQuerier; this guards a future
+		// backend that drops the method.
+		qg, ok := g.(refsQuerier)
+		if !ok {
+			return mcp.NewToolResultError("get_type_info requires a SQL-capable graph backend (mache standalone or leyline-parsed .db)"), nil
+		}
 
 		// Check if _lsp_hover table exists
 		rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_hover'`)
@@ -74,7 +82,12 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		symbol := request.GetString("symbol", "")
 		limit := request.GetInt("limit", 50)
 
-		qg := g.(refsQuerier)
+		// Mirror get_type_info: fail fast with a specific error if
+		// the backend doesn't support SQL queries.
+		qg, ok := g.(refsQuerier)
+		if !ok {
+			return mcp.NewToolResultError("get_diagnostics requires a SQL-capable graph backend (mache standalone or leyline-parsed .db)"), nil
+		}
 
 		// Check if _lsp table exists
 		rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`)

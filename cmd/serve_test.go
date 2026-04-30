@@ -914,6 +914,38 @@ func TestGetDiagnostics_NoLSPTableWithFile(t *testing.T) {
 		"expected LSP or enrichment error, got: %s", text)
 }
 
+// TestGetTypeInfo_RejectsNonRefsQuerierBackend pins the fail-fast
+// contract: if the graph backend doesn't implement refsQuerier
+// (which provides QueryRefs for SQL access), get_type_info must
+// refuse with a clear error mentioning the SQL-backend
+// requirement, not a generic "data not available" message and
+// not an unchecked-assertion panic.
+//
+// Today MemoryStore + lazyGraph both satisfy refsQuerier, so
+// this only fires for a future backend that drops the method.
+// The test uses a minimal Graph implementation that deliberately
+// omits QueryRefs.
+func TestGetTypeInfo_RejectsNonRefsQuerierBackend(t *testing.T) {
+	g := &readOnlyGraph{node: &graph.Node{ID: "x"}}
+	handler := makeGetTypeInfoHandler(g)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Foo"}))
+	require.NoError(t, err)
+	require.True(t, result.IsError, "non-refsQuerier backend must yield an error result")
+	assert.Contains(t, resultText(t, result), "SQL-capable",
+		"error must explain the missing capability, not say 'data not available'")
+}
+
+func TestGetDiagnostics_RejectsNonRefsQuerierBackend(t *testing.T) {
+	g := &readOnlyGraph{node: &graph.Node{ID: "x"}}
+	handler := makeGetDiagnosticsHandler(g)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{}))
+	require.NoError(t, err)
+	require.True(t, result.IsError, "non-refsQuerier backend must yield an error result")
+	assert.Contains(t, resultText(t, result), "SQL-capable")
+}
+
 // ---------------------------------------------------------------------------
 // get_impact handler tests
 // ---------------------------------------------------------------------------
