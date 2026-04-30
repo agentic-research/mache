@@ -442,6 +442,36 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 			paths = append(paths, c.ID)
 		}
 
+		// Cross-repo annotation: when running on a CompositeGraph
+		// (mache serve --mount NAME=PATH), each caller ID is prefixed
+		// with its mount name. Surface that explicitly so agents
+		// don't have to parse node IDs themselves.
+		if cg, ok := g.(*graph.CompositeGraph); ok && len(paths) > 0 {
+			type scopedCaller struct {
+				Path  string `json:"path"`
+				Mount string `json:"mount,omitempty"`
+			}
+			scoped := make([]scopedCaller, 0, len(paths))
+			anyMounted := false
+			for _, p := range paths {
+				m := cg.MountPrefixOf(p)
+				if m != "" {
+					anyMounted = true
+				}
+				scoped = append(scoped, scopedCaller{Path: p, Mount: m})
+			}
+			// Only switch to the annotated shape when at least one
+			// result actually carries a mount prefix — single-mount
+			// or non-composite paths keep the simpler legacy shape.
+			if anyMounted {
+				type callersResult struct {
+					Callers []scopedCaller `json:"callers"`
+				}
+				data, _ := json.MarshalIndent(callersResult{Callers: scoped}, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			}
+		}
+
 		// Supplement with LSP references if available
 		if qg, ok := g.(refsQuerier); ok {
 			lspRefs, lspErr := queryLSPRefs(qg, token)
