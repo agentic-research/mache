@@ -98,6 +98,74 @@ func TestMaterializeCallers(t *testing.T) {
 	}
 }
 
+// TestMaterializeCallers_FiltersFileLevelSentinel pins that
+// engine sentinel rows ('_file_level:%') don't surface as
+// caller entries in the materialized callers/ virtual dirs.
+//
+// Without the filter, a sentinel ref like
+//
+//	('HandleRequest', '_file_level:/abs/path/main.go')
+//
+// would produce a 'callers/path' entry (extractFuncName takes
+// the second-to-last path component, which is "path" for the
+// sentinel string), and the entry's content would be the
+// sentinel itself — surfacing internal engine state to agents.
+func TestMaterializeCallers_FiltersFileLevelSentinel(t *testing.T) {
+	db := setupTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	// Add a sentinel ref alongside the legitimate one.
+	_, err := db.Exec(`INSERT INTO node_refs VALUES ('HandleRequest', '_file_level:/abs/path/main.go')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := materializeCallers(tx, 9999); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Real caller still surfaces.
+	var record string
+	if err := db.QueryRow(
+		`SELECT record FROM nodes WHERE id = 'functions/HandleRequest/callers/ProcessOrder'`,
+	).Scan(&record); err != nil {
+		t.Fatalf("real caller missing: %v", err)
+	}
+	if record != "functions/ProcessOrder/source" {
+		t.Fatalf("real caller content corrupted: %q", record)
+	}
+
+	// Sentinel-derived entry MUST NOT exist. Two possible names
+	// extractFuncName could produce: "path" (penultimate of
+	// "_file_level:/abs/path/main.go") or anything containing
+	// the sentinel marker. Assert neither leaks.
+	var phantomCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM nodes WHERE id LIKE 'functions/HandleRequest/callers/%' AND record LIKE '%_file_level:%'`,
+	).Scan(&phantomCount); err != nil {
+		t.Fatal(err)
+	}
+	if phantomCount != 0 {
+		t.Fatalf("sentinel content leaked into %d caller entries", phantomCount)
+	}
+	// The penultimate-component naming would also produce just
+	// "path" — pin that explicitly.
+	var pathCount int
+	_ = db.QueryRow(
+		`SELECT COUNT(*) FROM nodes WHERE id = 'functions/HandleRequest/callers/path'`,
+	).Scan(&pathCount)
+	if pathCount != 0 {
+		t.Fatalf("phantom callers/path entry created from sentinel row")
+	}
+}
+
 func TestMaterializeCallersNoRefs(t *testing.T) {
 	// If node_refs table doesn't exist, materializeCallers should be a no-op.
 	db, err := sql.Open("sqlite", ":memory:")
