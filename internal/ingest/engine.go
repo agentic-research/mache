@@ -841,12 +841,24 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 			fileAddrRefs = addrRefs
 		}
 	}
-	// Merge file-level fn-value refs (mache-02r9: Go top-level cobra
-	// callbacks etc.) into the same bag as fileAddrRefs. They share
-	// the same merge semantics — the dedup loop in processNode skips
-	// any token already captured at scope level.
+	// File-level refs (mache-02r9: top-level cobra RunE etc.) are
+	// emitted with a SENTINEL caller_id rather than merged into
+	// every construct's calls. Earlier iterations folded them into
+	// fileAddrRefs (per-construct merge), which inflated fan_out_skew
+	// — every function in a cobra-using file picked up the cobra
+	// callback as a 'callee' even though it doesn't actually call it.
+	//
+	// The sentinel form keeps the alive set correct for dead_code
+	// (token-only check) without polluting any rule that aggregates
+	// by caller. fan_out_skew explicitly skips sentinel rows.
+	const fileLevelSentinelPrefix = "_file_level:"
 	if len(result.fileLevelRefs) > 0 {
-		fileAddrRefs = append(fileAddrRefs, result.fileLevelRefs...)
+		sentinel := fileLevelSentinelPrefix + result.realPath
+		for _, token := range result.fileLevelRefs {
+			if err := bt.AddRef(token, sentinel); err != nil {
+				log.Printf("file-level ref %q: %v", token, err)
+			}
+		}
 	}
 
 	// 5. processNode for each applicable schema node.
