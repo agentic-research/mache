@@ -95,9 +95,16 @@ jobs:
         run: go vet ./...
 
       - name: Format check (gofumpt)
+        # Pin gofumpt so CI fails reproducibly. @latest meant a
+        # local pre-commit running an older version could disagree
+        # with CI silently — pin matches the one installed locally
+        # via the Taskfile / pre-commit hooks. Bump together when
+        # we move forward.
+        env:
+          GOTOOLCHAIN: auto
         run: |
           set -euo pipefail
-          go install mvdan.cc/gofumpt@latest
+          go install mvdan.cc/gofumpt@v0.9.2
           gofumpt -d -extra . | tee /dev/stderr | (! grep .)
 
       - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9
