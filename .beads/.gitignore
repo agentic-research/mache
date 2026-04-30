@@ -35,6 +35,27 @@ dolt-server.port
 # Backup data (auto-exported JSONL, local-only)
 backup/
 
+# Per-bd-command audit log (runtime, not a review artifact). Stays on
+# disk for local inspection; just shouldn't fight git on every bd call.
+interactions.jsonl
+
+# Credentials (per-clone, never committed)
+.beads-credential-key
+
+# Daemon state and activity logs
+daemon.*
+dolt-server.activity
+
+# Lockfiles + quarantined backups
+*.lock
+*.corrupt.backup/
+
+# Environment files
+.env
+
+# Sync export state (local-only)
+export-state.json
+
 # Legacy files (from pre-Dolt versions)
 *.db
 *.db?*
