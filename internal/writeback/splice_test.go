@@ -236,3 +236,103 @@ func TestSplice_ErrSourceChangedIsExported(t *testing.T) {
 	require.NotNil(t, ErrSourceChanged)
 	assert.Contains(t, ErrSourceChanged.Error(), "source file changed")
 }
+
+// TestSplice_InodeChangesAfterRename documents the unavoidable consequence
+// of Splice's atomic-write-via-rename: the destination file's inode
+// (kernel-level "file ID") is replaced on every successful splice.
+//
+// This is the standard atomic-write pattern (write-temp + rename) and
+// is the price of crash atomicity — a partial write can never be
+// observed by readers. But it has consumer-visible side effects worth
+// pinning with a test:
+//
+//   - Long-running processes that opened the file BEFORE splice continue
+//     reading the OLD content (POSIX keeps the unlinked inode alive
+//     until the last fd closes). This is intentional — concurrent
+//     readers don't see torn writes.
+//   - File watchers that key on inode (e.g., inotify IN_MODIFY without
+//     IN_MOVE_SELF) miss the change. fsnotify and similar libraries
+//     handle this by watching the parent directory; consumers that don't
+//     will need to re-arm.
+//   - NFS/SMB clients with cached file handles see ESTALE on the next
+//     access and must re-resolve by path.
+//
+// Mache's own NFS layer (`internal/nfsmount/graphfs.go`) derives Fileid
+// from a path-FNV hash, not from the underlying inode, so its file IDs
+// stay stable across splice. This test guards the *contract*: if anyone
+// ever changes Splice to write in place (preserving inode), they should
+// flip this assertion deliberately and audit consumers that rely on the
+// current "new inode per splice" behavior.
+func TestSplice_InodeChangesAfterRename(t *testing.T) {
+	path := tempFile(t, "func A() {}\n")
+	beforeIno := fileInode(t, path)
+
+	err := Splice(graph.SourceOrigin{
+		FilePath:  path,
+		StartByte: 0,
+		EndByte:   12,
+	}, []byte("func B() {}\n"))
+	require.NoError(t, err)
+
+	afterIno := fileInode(t, path)
+
+	// Sanity check: only run the inode assertion if the platform reports
+	// a non-zero inode (Windows, certain virtual filesystems). On those
+	// platforms the test is a no-op.
+	if beforeIno == 0 || afterIno == 0 {
+		t.Skip("platform does not expose inode numbers via os.Stat")
+	}
+	assert.NotEqual(t, beforeIno, afterIno,
+		"Splice currently uses atomic write-via-rename, which replaces the inode. "+
+			"If this assertion fails, Splice was changed to write in place — "+
+			"audit external consumers (file watchers, NFS clients with cached fds) "+
+			"that may have relied on inode change as their invalidation signal.")
+}
+
+// TestSplice_OpenReaderSeesOldContentAfterSplice verifies the read-side
+// safety property of atomic-rename writes: a reader that opened the file
+// BEFORE splice and reads AFTER splice sees the *original* content, not
+// torn or new content.
+//
+// This is the consumer-facing reason we tolerate the inode change in
+// TestSplice_InodeChangesAfterRename — it's the same mechanism. The
+// kernel keeps the original inode alive (unlinked but open) until the
+// reader closes its fd, so concurrent reads always see a consistent
+// snapshot.
+//
+// If Splice ever switches to in-place truncate-and-write (preserving
+// inode), this property is lost: the open reader would see partial /
+// torn content. Pin this in a test so the regression is loud.
+func TestSplice_OpenReaderSeesOldContentAfterSplice(t *testing.T) {
+	original := "func A() {}\nfunc B() {}\nfunc C() {}\n"
+	path := tempFile(t, original)
+
+	// Open BEFORE splice and hold the fd.
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	err = Splice(graph.SourceOrigin{
+		FilePath:  path,
+		StartByte: 12, // start of "func B() {}\n"
+		EndByte:   24,
+	}, []byte("func B() { return 1 }\n"))
+	require.NoError(t, err)
+
+	// Reader opened pre-splice still sees original content.
+	got, err := os.ReadFile(path) // separate path-based read sees new content
+	require.NoError(t, err)
+	assert.NotEqual(t, original, string(got), "path-based read should see new content")
+
+	buf := make([]byte, 4096)
+	n, err := f.ReadAt(buf, 0)
+	if err != nil && n == 0 {
+		t.Fatalf("read pre-splice fd: %v", err)
+	}
+	assert.Equal(t, original, string(buf[:n]),
+		"reader holding pre-splice fd must see original content (atomic-rename invariant)")
+}
+
+// fileInode returns the platform inode for path, or 0 if unavailable.
+// Defined in splice_inode_unix.go and splice_inode_other.go for build-tag
+// dispatch.
