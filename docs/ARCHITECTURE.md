@@ -101,13 +101,15 @@ With `--infer`, the schema itself can be derived automatically: the `lattice` pa
 
 Mache works standalone, but pairs with [ley-line-open](https://github.com/agentic-research/ley-line-open) (LLO) for the modern, CGO-free path. Two modes:
 
-### Standalone (CGO tree-sitter, default for source mounts)
+### Standalone (CGO tree-sitter, fallback when leyline is unavailable)
 
 ```
 source dir → mache (Engine + SitterWalker + CGO tree-sitter) → MemoryStore → MCP / NFS
 ```
 
 Mache parses source itself via the `SitterWalker` (tree-sitter grammars linked via CGO). The ingestion writes a sidecar SQLite with `nodes`, `node_refs`, `node_defs`, `file_index` — enough to power `find_callers`, `find_callees`, `search`, `find_definition`, `get_communities`, `get_impact`, and the five `find_smells` rules that operate on `node_defs`/`node_refs`/`nodes` (`dead_code`, `untested_function`, `fan_out_skew`, `duplicate_definitions`, `god_file`). No `_ast`, `_source`, or `_lsp*` tables are produced — the AST lives in memory, not on disk.
+
+Per [ADR-0012](adr/0012-cgo-removal-migration.md) (steps 1–3 shipped), `mache build --backend=auto` (the default) prefers leyline when it is on `PATH` or at `~/.mache/bin/leyline`, and only falls back to this CGO path when leyline is unavailable. `--backend=tree-sitter` forces this path explicitly. The CGO path is scheduled for removal in step 4 once leyline bundling (`mache-33dc5f`) lands.
 
 ### LLO-paired (pure Go, pre-baked .db)
 
@@ -281,18 +283,18 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 
 ## Architectural Decision Records (ADRs)
 
-| ADR                                                                                      | Status     | Summary                                                                      |
-| ---------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
-| [0001: User-Space FUSE Bridge](adr/0001-user-space-fuse-bridge.md)                       | Superseded | fuse-t + cgofuse for macOS (no kexts) — replaced by NFS in v0.7.0 (see 0006) |
-| [0002: Declarative Topology Schema](adr/0002-declarative-topology-schema.md)             | Accepted   | Schema-driven ingestion with Go templates                                    |
-| [0003: CAS & Layered Overlays](adr/0003-cas-layered-overlays.md)                         | Proposed   | Content-Addressed Storage and Docker-style layers (ideated)                  |
-| [0004: MVCC Memory Ledger](adr/0004-mvcc-memory-ledger.md)                               | Proposed   | ECS + mmap + RCU for 10M+ entities (ideated)                                 |
-| [0005: FCA Schema Inference](adr/0005-fca-schema-inference.md)                           | Accepted   | NextClosure on sampled records, bitmap-accelerated lattice → topology        |
-| [0006: Syntax-Aware Write Protection](adr/0006-syntax-aware-write-protection.md)         | Accepted   | Tree-sitter validation before source splice                                  |
-| [0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md)                                | Accepted   | Drop CGO/FUSE; pre-baked .db via leyline; NFS-only mount (v0.7.0)            |
-| [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed   | Git objects as first-class data source                                       |
-| [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted   | Information-theoretic field scoring for schema inference                     |
-| [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted   | Validate → format → splice → surgical update (no re-ingest)                  |
-| [0010: Hosted Mache Architecture](adr/0010-hosted-mache-architecture.md)                 | Proposed   | Hosted-mode design (cluster, R2, BYO storage)                                |
-| [0011: Pointer Abstraction](adr/0011-pointer-abstraction.md)                             | Proposed   | Path/token/SHA/range/record/ref/trace/embedding all unified as Pointer       |
-| [0012: CGO Removal Migration](adr/0012-cgo-removal-migration.md)                         | Proposed   | Delegate parsing to ley-line entirely; retire SitterWalker + tree-sitter dep |
+| ADR                                                                                      | Status                       | Summary                                                                      |
+| ---------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------- |
+| [0001: User-Space FUSE Bridge](adr/0001-user-space-fuse-bridge.md)                       | Superseded                   | fuse-t + cgofuse for macOS (no kexts) — replaced by NFS in v0.7.0 (see 0006) |
+| [0002: Declarative Topology Schema](adr/0002-declarative-topology-schema.md)             | Accepted                     | Schema-driven ingestion with Go templates                                    |
+| [0003: CAS & Layered Overlays](adr/0003-cas-layered-overlays.md)                         | Proposed                     | Content-Addressed Storage and Docker-style layers (ideated)                  |
+| [0004: MVCC Memory Ledger](adr/0004-mvcc-memory-ledger.md)                               | Proposed                     | ECS + mmap + RCU for 10M+ entities (ideated)                                 |
+| [0005: FCA Schema Inference](adr/0005-fca-schema-inference.md)                           | Accepted                     | NextClosure on sampled records, bitmap-accelerated lattice → topology        |
+| [0006: Syntax-Aware Write Protection](adr/0006-syntax-aware-write-protection.md)         | Accepted                     | Tree-sitter validation before source splice                                  |
+| [0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md)                                | Accepted                     | Drop CGO/FUSE; pre-baked .db via leyline; NFS-only mount (v0.7.0)            |
+| [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed                     | Git objects as first-class data source                                       |
+| [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted                     | Information-theoretic field scoring for schema inference                     |
+| [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted                     | Validate → format → splice → surgical update (no re-ingest)                  |
+| [0010: Hosted Mache Architecture](adr/0010-hosted-mache-architecture.md)                 | Proposed                     | Hosted-mode design (cluster, R2, BYO storage)                                |
+| [0011: Pointer Abstraction](adr/0011-pointer-abstraction.md)                             | Proposed                     | Path/token/SHA/range/record/ref/trace/embedding all unified as Pointer       |
+| [0012: CGO Removal Migration](adr/0012-cgo-removal-migration.md)                         | Accepted (steps 1–3 shipped) | Delegate parsing to ley-line entirely; retire SitterWalker + tree-sitter dep |
