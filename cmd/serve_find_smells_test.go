@@ -334,6 +334,53 @@ func TestFindSmells_DeadCode(t *testing.T) {
 		"source_id comes from the construct dir's source_file column")
 }
 
+// TestFindSmells_DeadCodeSkipsImports asserts that imports/ nodes
+// don't surface in dead_code, mirroring the same skip in
+// duplicate_definitions (#227). Imports are references TO external
+// packages; their "tokens" never appear in node_refs because
+// node_refs tracks function calls, not import paths.
+func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Import token — has no entry in node_refs. The OLD rule would
+		-- flag this as dead; the new filter must skip /imports/.
+		INSERT INTO node_defs VALUES ('"fmt"', 'pkg/imports/"fmt"');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/imports/"fmt"', 'pkg/imports', '"fmt"', 1, 0, 'main.go', '');
+
+		-- Real dead function — control: must still be flagged.
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/functions/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/Orphan', 'pkg/functions', 'Orphan', 1, 0, 'orphan.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	for _, id := range gotIDs {
+		assert.NotContains(t, id, "/imports/", "imports/ nodes must not appear in dead_code")
+	}
+	assert.Equal(t, []string{"pkg/functions/Orphan"}, gotIDs)
+}
+
 // TestFindSmells_DeadCodePerNodeAggregation asserts that dead_code
 // aggregates by node_id, not by token. A function with multiple
 // token aliases (bare + qualified) where ANY token is referenced
