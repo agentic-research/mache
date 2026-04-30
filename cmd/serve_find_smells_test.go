@@ -790,6 +790,76 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 	assert.Equal(t, int64(12), resp.Findings[0].Metric, "fan-out count is reported as metric")
 }
 
+// TestFindSmells_FanOutSkewSkipsTestPrefixes asserts that a Test-
+// prefixed construct with high fan-out is NOT flagged. Mirrors how
+// mache writes data: caller_id is a source-file node whose parent
+// is the construct directory, and ctor.name carries the function
+// name. The new skip-list joins through that parent.
+//
+// Surfaced by dogfooding: mache's own test runners
+// (TestArena_AllTools etc) topped fan_out_skew with 48 callees —
+// tests are *expected* to call many things; no signal there.
+func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Construct hierarchy: parent dir → source-file node.
+		-- caller_id in node_refs is the source-file id (matches mache's
+		-- production write shape), and the parent dir's name is what
+		-- the skip-list checks.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions',                        '',          'functions',          1, 0, '',                        ''),
+		  ('functions/TestRunner',             'functions', 'TestRunner',         1, 0, 'runner_test.go',          ''),
+		  ('functions/TestRunner/source',      'functions/TestRunner', 'source',  0, 0, 'runner_test.go',          ''),
+		  ('functions/Dispatcher',             'functions', 'Dispatcher',         1, 0, 'dispatcher.go',           ''),
+		  ('functions/Dispatcher/source',      'functions/Dispatcher', 'source',  0, 0, 'dispatcher.go',           '');
+
+		-- TestRunner has 12 distinct callees — would normally trip
+		-- fan_out_skew. The new skip-list excludes it on the 'Test'
+		-- prefix of the parent ctor.name.
+		INSERT INTO node_refs VALUES
+		  ('A','functions/TestRunner/source'),('B','functions/TestRunner/source'),('C','functions/TestRunner/source'),
+		  ('D','functions/TestRunner/source'),('E','functions/TestRunner/source'),('F','functions/TestRunner/source'),
+		  ('G','functions/TestRunner/source'),('H','functions/TestRunner/source'),('I','functions/TestRunner/source'),
+		  ('J','functions/TestRunner/source'),('K','functions/TestRunner/source'),('L','functions/TestRunner/source');
+
+		-- Dispatcher also has 12 distinct callees — should be flagged.
+		-- (Production code, not test.)
+		INSERT INTO node_refs VALUES
+		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
+		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
+		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
+		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
+
+		-- Six tiny callers to dilute the project mean below 3× threshold.
+		INSERT INTO node_refs VALUES
+		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
+		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
+		"Dispatcher (production code) is flagged; TestRunner (test) is skipped via parent ctor.name LIKE 'Test%'")
+}
+
 // TestFindSmells_DuplicateDefinitions seeds three groups: a duplicated
 // helper (two defs, two source files — flagged twice), an interface
 // method on the skip list (two defs — excluded), and a unique symbol
