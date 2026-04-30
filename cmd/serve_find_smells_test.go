@@ -610,26 +610,40 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Covered: TestFooBar exists, so FooBar is OK.
-		INSERT INTO node_defs VALUES ('FooBar', 'pkg/funcs/FooBar');
-		INSERT INTO node_defs VALUES ('TestFooBar', 'pkg/funcs/TestFooBar');
+		-- Paths use 'functions/' category dir — the rule restricts to
+		-- that segment to skip methods/, types/, constants/, etc.
+		INSERT INTO node_defs VALUES ('FooBar', 'pkg/functions/FooBar');
+		INSERT INTO node_defs VALUES ('TestFooBar', 'pkg/functions/TestFooBar');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/funcs/FooBar',     'pkg/funcs', 'FooBar',     1, 0, 'foo.go',     ''),
-		  ('pkg/funcs/TestFooBar', 'pkg/funcs', 'TestFooBar', 1, 0, 'foo_test.go', '');
+		  ('pkg/functions/FooBar',     'pkg/functions', 'FooBar',     1, 0, 'foo.go',     ''),
+		  ('pkg/functions/TestFooBar', 'pkg/functions', 'TestFooBar', 1, 0, 'foo_test.go', '');
 
 		-- Uncovered: no TestOrphan anywhere.
-		INSERT INTO node_defs VALUES ('Orphan', 'pkg/funcs/Orphan');
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/functions/Orphan');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/funcs/Orphan', 'pkg/funcs', 'Orphan', 1, 0, 'orphan.go', '');
+		  ('pkg/functions/Orphan', 'pkg/functions', 'Orphan', 1, 0, 'orphan.go', '');
 
 		-- Skip list: capitalized but excluded.
-		INSERT INTO node_defs VALUES ('String', 'pkg/funcs/String');
+		INSERT INTO node_defs VALUES ('String', 'pkg/functions/String');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/funcs/String', 'pkg/funcs', 'String', 1, 0, 'stringer.go', '');
+		  ('pkg/functions/String', 'pkg/functions', 'String', 1, 0, 'stringer.go', '');
 
 		-- Unexported (lowercase): must NOT be flagged.
-		INSERT INTO node_defs VALUES ('helper', 'pkg/funcs/helper');
+		INSERT INTO node_defs VALUES ('helper', 'pkg/functions/helper');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/funcs/helper', 'pkg/funcs', 'helper', 1, 0, 'helpers.go', '');
+		  ('pkg/functions/helper', 'pkg/functions', 'helper', 1, 0, 'helpers.go', '');
+
+		-- A method (uppercase, no Test counterpart) — must NOT be
+		-- flagged because methods/ is outside the rule's scope.
+		INSERT INTO node_defs VALUES ('Receiver.Method', 'pkg/methods/Receiver.Method');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Receiver.Method', 'pkg/methods', 'Receiver.Method', 1, 0, 'receiver.go', '');
+
+		-- A type (uppercase, no Test counterpart) — must NOT be
+		-- flagged for the same reason.
+		INSERT INTO node_defs VALUES ('Config', 'pkg/types/Config');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/types/Config', 'pkg/types', 'Config', 1, 0, 'config.go', '');
 	`)
 	require.NoError(t, err)
 
@@ -645,8 +659,8 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 		Findings []smellFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
-	require.Equal(t, 1, resp.Total, "only Orphan is uncovered + exported + not on skip list")
-	assert.Equal(t, "pkg/funcs/Orphan", resp.Findings[0].NodeID)
+	require.Equal(t, 1, resp.Total, "only Orphan is uncovered + exported + not on skip list + in functions/")
+	assert.Equal(t, "pkg/functions/Orphan", resp.Findings[0].NodeID)
 	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID)
 }
 

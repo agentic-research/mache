@@ -170,7 +170,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "untested_function",
 		Languages:   []string{"go"},
-		Description: "Exported Go functions with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Excludes Test*/Benchmark*/Example* (they ARE tests) and main/init (entry points). The rule's heuristic is Go-specific — running it against a Python or Rust .db will produce mostly noise.",
+		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
@@ -190,6 +190,13 @@ var smellRegistry = []SmellRule{
 			  AND d.token NOT LIKE 'Example%%'
 			  AND d.token NOT IN ('main','init','String','Error')
 			  AND t.token IS NULL
+			  -- Restrict to constructs in a 'functions/' category dir.
+			  -- 'functions/Foo' (auto-inferred flat shape) and
+			  -- 'pkg/functions/Foo' (explicit go-schema package shape)
+			  -- both match. Skips methods/, types/, constants/,
+			  -- variables/, imports/ — those don't follow the
+			  -- TestFoo naming convention.
+			  AND (d.node_id LIKE 'functions/%%' OR d.node_id LIKE '%%/functions/%%')
 			%s
 			ORDER BY COALESCE(n.source_file, ''), d.token
 		`,
