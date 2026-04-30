@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"sort"
 	"strings"
 
@@ -56,7 +58,9 @@ type SmellRule struct {
 	Requires []string
 }
 
-// smellRegistry holds the built-in rules.
+// smellRegistry holds the registered rules. Built-ins below; external
+// rules from $MACHE_SMELL_RULES_DIR are appended in init() so they
+// participate in discovery, listing, and dispatch the same way.
 var smellRegistry = []SmellRule{
 	{
 		ID:          "magic_int_in_comparison",
@@ -609,6 +613,32 @@ var smellRegistry = []SmellRule{
 			ORDER BY metric DESC, src.source_id
 		`,
 	},
+}
+
+func init() {
+	// Append external rules from $MACHE_SMELL_RULES_DIR so they
+	// share the registry with built-ins. A parse error logs and
+	// skips — mache stays up so a typo in an external rule can't
+	// take down the server. Tests load rules directly via
+	// LoadExternalSmellRules to assert errors loudly.
+	dir := os.Getenv(SmellRulesEnvVar)
+	if dir == "" {
+		return
+	}
+	rules, err := LoadExternalSmellRules(dir)
+	if err != nil {
+		log.Printf("smell rules: skipping external rules in %s: %v", dir, err)
+		return
+	}
+	if len(rules) > 0 {
+		smellRegistry = append(smellRegistry, rules...)
+		ids := make([]string, len(rules))
+		for i, r := range rules {
+			ids[i] = r.ID
+		}
+		log.Printf("smell rules: loaded %d external rule(s) from %s: %s",
+			len(rules), dir, strings.Join(ids, ", "))
+	}
 }
 
 // smellFinding is one row of a smell scan. Byte ranges and (1-based)
