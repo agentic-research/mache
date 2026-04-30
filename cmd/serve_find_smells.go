@@ -224,7 +224,13 @@ var smellRegistry = []SmellRule{
 			FROM (
 				SELECT token, COUNT(*) AS copies
 				FROM node_defs
-				WHERE token NOT IN (
+				-- Skip-list match against the unqualified leaf, so
+				-- both bare tokens ('init') and qualified shapes
+				-- ('cmd.init', 'lang.init') get skipped uniformly.
+				-- substr(token, instr(token, '.') + 1) strips the
+				-- 'pkg.' prefix; instr returns 0 when there's no
+				-- dot, so substr(token, 1) returns the full token.
+				WHERE substr(token, instr(token, '.') + 1) NOT IN (
 					'main','init',
 					'String','Error','Format','Scan','GoString',
 					'Read','Write','Close','Open','Seek','ReadAt','WriteAt','ReadFrom','WriteTo',
