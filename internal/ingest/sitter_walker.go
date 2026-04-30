@@ -27,10 +27,28 @@ var contextQueryRegistry sync.Map // string (language name) -> string
 // both @call and @pkg for qualified call resolution (e.g., auth.Validate).
 var qualifiedCallQueryRegistry sync.Map // string (language name) -> string
 
+// fileLevelRefQueryRegistry stores per-language queries run against the
+// FILE root (not function bodies). The use case is patterns whose
+// captures live outside any function_declaration — Go's top-level
+// `var serveCmd = &cobra.Command{ RunE: runServe }` is the
+// motivating case (mache-02r9). Per-scope ExtractCalls would never
+// see runServe because the keyed_element is in a top-level
+// var_declaration, not a function body.
+var fileLevelRefQueryRegistry sync.Map // string (language name) -> string
+
 // RegisterRefQuery registers a reference extraction query for a specific language.
 // This should be called during initialization.
 func RegisterRefQuery(langName, query string) {
 	refQueryRegistry.Store(langName, query)
+}
+
+// RegisterFileLevelRefQuery registers a reference extraction query
+// that runs once per FILE (against the root node), not per function
+// scope. The captures supplement per-scope ExtractCalls — typical use:
+// matching identifiers used as struct field values in top-level
+// composite literals.
+func RegisterFileLevelRefQuery(langName, query string) {
+	fileLevelRefQueryRegistry.Store(langName, query)
 }
 
 // RegisterContextQuery registers a context extraction query for a specific language.
@@ -67,6 +85,8 @@ type SitterWalker struct {
 	// (selector, language) pair. Schema selectors are the same across all
 	// files of the same language, so caching avoids recompilation on every file.
 	schemaQueryCache sync.Map // schemaQueryKey -> *sitter.Query
+	// fileLevelRefQueryCache caches compiled file-level ref queries.
+	fileLevelRefQueryCache sync.Map // string (language name) -> *sitter.Query
 }
 
 func NewSitterWalker() *SitterWalker {
@@ -266,6 +286,77 @@ func (w *SitterWalker) Close() {
 		v.(*sitter.Query).Close()
 		return true
 	})
+	w.fileLevelRefQueryCache.Range(func(_, v any) bool {
+		v.(*sitter.Query).Close()
+		return true
+	})
+}
+
+// getFileLevelRefQuery returns a cached compiled query for file-level
+// ref extraction. Returns nil (no error) when no query is registered
+// for the language — caller treats nil as 'no file-level extraction
+// for this lang' and skips.
+func (w *SitterWalker) getFileLevelRefQuery(lang *sitter.Language, langName string) (*sitter.Query, error) {
+	if cached, ok := w.fileLevelRefQueryCache.Load(langName); ok {
+		return cached.(*sitter.Query), nil
+	}
+	val, ok := fileLevelRefQueryRegistry.Load(langName)
+	if !ok {
+		return nil, nil
+	}
+	q, err := sitter.NewQuery([]byte(val.(string)), lang)
+	if err != nil {
+		return nil, err
+	}
+	actual, loaded := w.fileLevelRefQueryCache.LoadOrStore(langName, q)
+	if loaded {
+		q.Close()
+		return actual.(*sitter.Query), nil
+	}
+	return q, nil
+}
+
+// ExtractFileLevelRefs runs the file-level ref query against the
+// FILE root and returns matched identifier text (deduped). Used to
+// catch identifiers in positions that per-scope ExtractCalls can't
+// see — e.g. function references in top-level cobra var declarations
+// (mache-02r9). Returns nil when no file-level query is registered
+// for the language.
+func (w *SitterWalker) ExtractFileLevelRefs(root *sitter.Node, source []byte, lang *sitter.Language, langName string) ([]string, error) {
+	q, err := w.getFileLevelRefQuery(lang, langName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid file-level ref query: %w", err)
+	}
+	if q == nil {
+		return nil, nil
+	}
+	// Don't close q — owned by the cache.
+	qc := sitter.NewQueryCursor()
+	defer qc.Close()
+	qc.Exec(q, root)
+
+	seen := make(map[string]bool)
+	var refs []string
+	for {
+		m, ok := qc.NextMatch()
+		if !ok {
+			break
+		}
+		m = qc.FilterPredicates(m, source)
+		for _, c := range m.Captures {
+			start := c.Node.StartByte()
+			end := c.Node.EndByte()
+			if start < uint32(len(source)) && end <= uint32(len(source)) {
+				key := unsafe.String(&source[start], int(end-start))
+				if !seen[key] {
+					token := string(source[start:end])
+					seen[token] = true
+					refs = append(refs, token)
+				}
+			}
+		}
+	}
+	return refs, nil
 }
 
 // getContextQuery returns a cached compiled query for context extraction.

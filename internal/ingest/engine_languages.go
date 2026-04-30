@@ -54,6 +54,31 @@ func init() {
 			(literal_element (identifier) @call))
 	`)
 
+	// Register Go file-level ref query — runs once per FILE against
+	// the source_file root, catching identifiers in positions that
+	// per-scope ExtractCalls can't see. Specifically: function
+	// references in TOP-LEVEL var declarations like
+	//
+	//   var serveCmd = &cobra.Command{ RunE: runServe }
+	//
+	// The outer var_declaration is at the file root, NOT inside any
+	// function_declaration, so ExtractCalls — which only walks the
+	// matched scope (function body) — never sees runServe. Re-running
+	// the same keyed_element query at the file root catches those
+	// references (mache-02r9).
+	//
+	// Why this is the same query, just at a different scope:
+	// in-function keyed_element captures are already in node_refs
+	// from per-scope ExtractCalls; the engine's merge step
+	// deduplicates per-token before insert, so a token captured in
+	// both scopes lands in node_refs exactly once per caller. The
+	// only NEW tokens this query adds are the file-level ones.
+	RegisterFileLevelRefQuery("go", `
+		(keyed_element
+			(literal_element)
+			(literal_element (identifier) @call))
+	`)
+
 	// ASTWalker context kinds — top-level node kinds whose source bytes
 	// constitute the context blob. Mirrors the Go context query above.
 	RegisterASTContextKinds("go", []string{
