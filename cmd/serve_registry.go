@@ -449,7 +449,7 @@ func (lg *lazyGraph) init() {
 			}
 		}
 
-		g, cleanup, err := buildServeGraph(dataSource, schema)
+		g, cleanup, err := buildMaybeMultiGraph(dataSource, schema)
 		if err != nil {
 			lg.err = err
 			return

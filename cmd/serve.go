@@ -46,6 +46,7 @@ var (
 	servePath    string
 	serveRepo    string
 	serveControl string
+	serveMounts  []string
 )
 
 func init() {
@@ -55,6 +56,8 @@ func init() {
 	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
 	serveCmd.Flags().StringVar(&serveRepo, "repo", "", "Git repo URL to clone and serve (ephemeral: cleaned up on exit)")
 	serveCmd.Flags().StringVar(&serveControl, "control", "", "Path to ley-line control block (reads from arena, enables hot-swap)")
+	serveCmd.Flags().StringArrayVar(&serveMounts, "mount", nil,
+		"Mount a graph at NAME=PATH; repeatable. Each PATH is loaded via the same path-or-.db resolution as the positional source. NAME becomes a top-level virtual directory. Cross-repo find_callers federates across all mounts. Composes with --schema (applied to every mount).")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -437,6 +440,55 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 		_ = store.Close()
 		resolver.Close()
 	}, nil
+}
+
+// buildMaybeMultiGraph dispatches between single-source and composite
+// (multi-mount) construction. With no --mount flags, it's a thin
+// pass-through to buildServeGraph. With one or more --mount NAME=PATH
+// flags, it builds a CompositeGraph by calling buildServeGraph for
+// each mount path and Mount-ing the result under NAME.
+//
+// When --mount is set, the positional dataSource is rejected — the
+// caller must choose between a single source and a composite.
+//
+// Cleanup runs in reverse-mount order so child graphs are torn down
+// before any shared resources they depend on.
+func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph, func(), error) {
+	if len(serveMounts) == 0 {
+		return buildServeGraph(dataSource, schema)
+	}
+	if dataSource != "" {
+		return nil, func() {}, fmt.Errorf("cannot use both a positional source (%q) and --mount; use one or the other", dataSource)
+	}
+
+	composite := graph.NewCompositeGraph()
+	var cleanups []func()
+	runAll := func() {
+		// Reverse order so later mounts close before earlier ones.
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}
+
+	for _, spec := range serveMounts {
+		name, path, ok := strings.Cut(spec, "=")
+		if !ok || name == "" || path == "" {
+			runAll()
+			return nil, func() {}, fmt.Errorf("invalid --mount spec %q (expected NAME=PATH)", spec)
+		}
+		g, cleanup, err := buildServeGraph(path, schema)
+		if err != nil {
+			runAll()
+			return nil, func() {}, fmt.Errorf("mount %s=%s: %w", name, path, err)
+		}
+		cleanups = append(cleanups, cleanup)
+		if err := composite.Mount(name, g); err != nil {
+			runAll()
+			return nil, func() {}, fmt.Errorf("mount %q: %w", name, err)
+		}
+		log.Printf("mounted %s -> %s", name, path)
+	}
+	return composite, runAll, nil
 }
 
 // openDBGraph opens a .db file as a SQLiteGraph after materializing virtual
