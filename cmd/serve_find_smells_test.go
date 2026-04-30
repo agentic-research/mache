@@ -381,6 +381,92 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 	assert.Equal(t, []string{"pkg/functions/Orphan"}, gotIDs)
 }
 
+// TestFindSmells_DeadCodeSourceFileFallsBackToChildren asserts that
+// when the construct dir itself has source_file = ” (the schema
+// engine attaches Origin/source_file to leaf children — source,
+// ast.json, doc — but not the wrapping dir), the rule resolves the
+// source via any child with a non-empty source_file. Without this
+// the find_smells GHA workflow couldn't filter findings against the
+// PR diff (every finding scoped to ”).
+func TestFindSmells_DeadCodeSourceFileFallsBackToChildren(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		INSERT INTO node_defs VALUES ('Orphan', 'functions/Orphan');
+
+		-- Dir node has source_file = '' (real-world FCA-inferred
+		-- schema). Leaf children carry the actual file path.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/Orphan',          'functions',          'Orphan',    1, 0, '',                ''),
+		  ('functions/Orphan/source',   'functions/Orphan',   'source',    0, 0, 'orphan.go',       ''),
+		  ('functions/Orphan/ast.json', 'functions/Orphan',   'ast.json',  0, 0, 'orphan.go',       ''),
+		  ('functions/Orphan/doc',      'functions/Orphan',   'doc',       0, 0, 'orphan.go',       '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Len(t, resp.Findings, 1)
+	assert.Equal(t, "functions/Orphan", resp.Findings[0].NodeID)
+	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID,
+		"source_id falls back to a child's source_file when the construct dir itself has none")
+}
+
+// TestFindSmells_DeadCodeSourceFileScopeFilter asserts that the
+// child-fallback source_id is the column the source_id query param
+// scopes against — i.e. PR-diff filters in the GHA wrapper still
+// work after the fallback.
+func TestFindSmells_DeadCodeSourceFileScopeFilter(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Two dead constructs in two different files. Same shape:
+		-- dir source_file is empty, child source_file holds the path.
+		INSERT INTO node_defs VALUES
+		  ('OrphanA', 'functions/OrphanA'),
+		  ('OrphanB', 'functions/OrphanB');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/OrphanA',        'functions',         'OrphanA', 1, 0, '',          ''),
+		  ('functions/OrphanA/source', 'functions/OrphanA', 'source',  0, 0, 'a.go',      ''),
+		  ('functions/OrphanB',        'functions',         'OrphanB', 1, 0, '',          ''),
+		  ('functions/OrphanB/source', 'functions/OrphanB', 'source',  0, 0, 'b.go',      '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule":      "dead_code",
+		"source_id": "a.go",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Len(t, resp.Findings, 1, "only the OrphanA in a.go matches the source_id filter")
+	assert.Equal(t, "functions/OrphanA", resp.Findings[0].NodeID)
+	assert.Equal(t, "a.go", resp.Findings[0].SourceID)
+}
+
 // TestFindSmells_DeadCodePerNodeAggregation asserts that dead_code
 // aggregates by node_id, not by token. A function with multiple
 // token aliases (bare + qualified) where ANY token is referenced
