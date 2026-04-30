@@ -306,6 +306,19 @@ func (g *SQLiteGraph) DefsMap() map[string][]string {
 	return cp
 }
 
+// LookupDef returns the dir IDs that define `token` without
+// snapshotting the entire defs map. Returns nil for unknown tokens.
+// Mirrors MemoryStore.LookupDef; see that method's docstring.
+func (g *SQLiteGraph) LookupDef(token string) []string {
+	g.pendingMu.Lock()
+	defer g.pendingMu.Unlock()
+	ids, ok := g.defs[token]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), ids...)
+}
+
 func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
 	if g.useNodesTable {
 		return g.ntr.GetNode(id)

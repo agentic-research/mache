@@ -614,6 +614,14 @@ type defsMapProvider interface {
 	DefsMap() map[string][]string
 }
 
+// defsLookuper is the cheaper alternative to defsMapProvider for the
+// common case of looking up exactly one symbol. Backends that
+// implement it avoid the O(N) snapshot copy of the full defs map
+// when the caller only needs one token's dir IDs.
+type defsLookuper interface {
+	LookupDef(token string) []string
+}
+
 // writeBacker is the subset of Graph backends that support surgical write-back
 // (validate → format → splice → update node).
 type writeBacker interface {

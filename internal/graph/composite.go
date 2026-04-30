@@ -102,6 +102,50 @@ type defsMapper interface {
 	DefsMap() map[string][]string
 }
 
+// LookupDef federates LookupDef across mounts: returns all dir IDs
+// across every mount that defines `token`, prefixed with the mount
+// name. Cheaper than DefsMap when only one token is wanted —
+// MemoryStore + SQLiteGraph both expose LookupDef as O(1).
+func (c *CompositeGraph) LookupDef(token string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	type lookuper interface{ LookupDef(string) []string }
+
+	var out []string
+	for prefix, g := range c.mounts {
+		dl, ok := g.(lookuper)
+		if !ok {
+			// Fall back to DefsMap snapshot for backends without
+			// a direct lookup method. Keeps this method total even
+			// when sub-graphs are heterogeneous.
+			dm, dmOK := g.(defsMapper)
+			if !dmOK {
+				continue
+			}
+			ids, ok := dm.DefsMap()[token]
+			if !ok {
+				continue
+			}
+			for _, id := range ids {
+				out = append(out, c.wrapDefID(prefix, id))
+			}
+			continue
+		}
+		for _, id := range dl.LookupDef(token) {
+			out = append(out, c.wrapDefID(prefix, id))
+		}
+	}
+	return out
+}
+
+// wrapDefID applies the mount-name prefix to a sub-graph's dir ID.
+func (c *CompositeGraph) wrapDefID(prefix, id string) string {
+	if id == "" {
+		return prefix
+	}
+	return prefix + "/" + id
+}
+
 // DefsMap aggregates token → dir IDs across every mount that
 // implements DefsMap(), prefixing each dir ID with its mount name.
 // Sub-graphs that don't expose a defs index are skipped.
