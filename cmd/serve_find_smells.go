@@ -469,7 +469,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "god_file",
-		Description: "Source files whose distinct-definition count is at least 10 AND more than 3× the project mean — a fuzzy 'god file' detector that surfaces sprawl relative to the codebase's own distribution rather than a hard line-count cutoff. Metric is the def count, sorted descending. Cross-language since node_defs is populated by every backend. source_file is resolved via the construct dir's child leaves (the schema engine attaches Origin to source / ast.json / doc, not the wrapping dir), so this works on FCA-inferred mounts too. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded — generators produce wide method sets by design, not by sprawl. Pairs with long_file (line-count via _ast) for a 'lots of code' vs 'lots of API' split.",
+		Description: "Source files whose distinct-definition count is at least 10 AND more than 3× the project mean — a fuzzy 'god file' detector that surfaces sprawl relative to the codebase's own distribution rather than a hard line-count cutoff. Metric is the def count, sorted descending. Cross-language since node_defs is populated by every backend. source_file is resolved via the construct dir's child leaves (the schema engine attaches Origin to source / ast.json / doc, not the wrapping dir), so this works on FCA-inferred mounts too. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) and Go test files (`*_test.go`) are excluded — generators produce wide method sets by design and test files accumulate many TestXxx / setupXxx helpers without representing architectural sprawl. Pairs with long_file (line-count via _ast) for a 'lots of code' vs 'lots of API' split.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "pf.file",
 		Query: `
@@ -515,6 +515,13 @@ var smellRegistry = []SmellRule{
 			  AND pf.file NOT LIKE '%%.pb.go'
 			  AND pf.file NOT LIKE '%%_generated.go'
 			  AND pf.file NOT LIKE '%%.gen.go'
+			  -- Skip Go test files. *_test.go accumulates many
+			  -- TestXxx / setupXxx helpers without representing
+			  -- architectural sprawl — every test func counts as a
+			  -- distinct def. The test-prefix skip in dead_code /
+			  -- untested_function is per-construct; god_file is
+			  -- per-file, so we filter at the file extension level.
+			  AND pf.file NOT LIKE '%%_test.go'
 			%s
 			ORDER BY metric DESC, source_id
 		`,
