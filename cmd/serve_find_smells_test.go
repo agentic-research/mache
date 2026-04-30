@@ -1480,6 +1480,69 @@ func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 	)
 }
 
+// TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles asserts
+// that capnp / protobuf / *_generated.go / *.gen.go method sets
+// don't surface in duplicate_definitions. Generated types share a
+// fixed method set (DecodeFromPtr, EncodeAsPtr, IsValid, Message,
+// Segment, ToPtr) — flagging that as 'duplication' buries real
+// findings under generator output.
+func TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Generated types sharing method 'IsValid' — must be skipped.
+		INSERT INTO node_defs VALUES
+		  ('TypeA.IsValid', 'pkg/methods/TypeA.IsValid'),
+		  ('TypeB.IsValid', 'pkg/methods/TypeB.IsValid'),
+		  ('IsValid',       'pkg/methods/TypeA.IsValid'),
+		  ('IsValid',       'pkg/methods/TypeB.IsValid');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/TypeA.IsValid',         'pkg/methods', 'TypeA.IsValid', 1, 0, '',                ''),
+		  ('pkg/methods/TypeA.IsValid/source',  'pkg/methods/TypeA.IsValid', 'source', 0, 0, 'a.capnp.go', ''),
+		  ('pkg/methods/TypeB.IsValid',         'pkg/methods', 'TypeB.IsValid', 1, 0, '',                ''),
+		  ('pkg/methods/TypeB.IsValid/source',  'pkg/methods/TypeB.IsValid', 'source', 0, 0, 'b.capnp.go', '');
+
+		-- Real duplicate as a control: a same-name method across
+		-- two PRODUCTION (non-generated) types — must still flag.
+		INSERT INTO node_defs VALUES
+		  ('Helper', 'pkg/a/functions/Helper'),
+		  ('Helper', 'pkg/b/functions/Helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/functions/Helper',        'pkg/a/functions', 'Helper', 1, 0, '',         ''),
+		  ('pkg/a/functions/Helper/source', 'pkg/a/functions/Helper', 'source', 0, 0, 'a.go',     ''),
+		  ('pkg/b/functions/Helper',        'pkg/b/functions', 'Helper', 1, 0, '',         ''),
+		  ('pkg/b/functions/Helper/source', 'pkg/b/functions/Helper', 'source', 0, 0, 'b.go',     '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	for _, f := range resp.Findings {
+		assert.NotContains(t, f.SourceID, ".capnp.go", "capnp generated files must be skipped")
+	}
+	assert.ElementsMatch(t,
+		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
+		gotIDs,
+		"only the production-source duplicate is flagged",
+	)
+}
+
 // TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories
 // asserts that types/, constants/, variables/ duplicates don't
 // surface — common short names like 'content', 'src', 'name'

@@ -304,7 +304,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "duplicate_definitions",
-		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Excludes 'imports/' (refs to external packages, not defs) and the non-callable categories types/, constants/, variables/ — short names like 'content', 'src', 'name' duplicate across functions and aren't meaningful 'duplicate definitions'. source_id falls back to a child's source_file when the construct dir doesn't carry one. Cross-language since node_defs is populated by every leyline parser.",
+		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Excludes 'imports/' (refs to external packages, not defs), non-callable categories types/, constants/, variables/ — short names like 'content', 'src', 'name' duplicate across functions and aren't meaningful 'duplicate definitions' — and generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) where wide method sets are produced by the generator and aren't 'duplication' in the architectural sense. source_id falls back to a child's source_file when the construct dir doesn't carry one. Cross-language since node_defs is populated by every leyline parser.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
@@ -368,6 +368,17 @@ var smellRegistry = []SmellRule{
 			  AND d.node_id NOT LIKE 'constants/%%'
 			  AND d.node_id NOT LIKE '%%/variables/%%'
 			  AND d.node_id NOT LIKE 'variables/%%'
+			  -- Generated code (capnp / protobuf / *_generated.go /
+			  -- *.gen.go) intentionally produces wide method sets
+			  -- (DecodeFromPtr, EncodeAsPtr, IsValid, Message, Segment,
+			  -- ToPtr) on every generated type — those aren't
+			  -- "duplicate definitions" in the architectural sense.
+			  -- Match by resolved source file (falling back to a
+			  -- child's source_file when the construct dir has none).
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.capnp.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.pb.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%_generated.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.gen.go'
 			%s
 			ORDER BY metric DESC, source_id, d.node_id
 		`,
