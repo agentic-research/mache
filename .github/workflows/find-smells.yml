@@ -57,12 +57,15 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Diff base...head, keep only Go source files. The list
-          # gates the comment; if nothing Go changed, the workflow's
-          # paths filter would have skipped us already, so we can
-          # assume non-empty here.
+          # Diff base...head, keep only Go source files. The
+          # workflow's paths filter triggers on `.go` AND on its own
+          # `.yml`, so this PR may have zero Go files changed (e.g.
+          # this very PR only edits the workflow). `grep -E '\.go$'`
+          # with `set -e -o pipefail` would fail the step in that
+          # case — append `|| true` so an empty match short-circuits
+          # cleanly to skip=true rather than error.
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | grep -E '\.go$' \
+            | { grep -E '\.go$' || true; } \
             | jq -R -s -c 'split("\n") | map(select(length > 0))' \
             > /tmp/changed.json
           cat /tmp/changed.json
