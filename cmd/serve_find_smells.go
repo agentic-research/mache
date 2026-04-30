@@ -339,6 +339,19 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil
 		}
 
+		// Pre-flight: every rule declares the tables it reads in
+		// rule.Requires. If any are missing on this backend, return a
+		// friendly tool error instead of letting the SQL fail with
+		// "no such table" — agents can then call the tool again with
+		// a different rule, or stop.
+		if missing, err := missingTables(qg, rule.Requires); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("rule %q: pre-flight table check failed: %v", ruleID, err)), nil
+		} else if len(missing) > 0 {
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"rule %q requires SQL tables [%s] which aren't present on the active backend. _ast / _source / _imports / _lsp* are produced by ley-line-open's `leyline parse`; node_defs / node_refs / nodes are produced by both standalone mache and LLO. See docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full table.",
+				ruleID, strings.Join(missing, ", "))), nil
+		}
+
 		findings, err := runSmellRule(qg, rule, sourceID, limit)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", ruleID, err)), nil
@@ -400,6 +413,49 @@ func rulesListing() any {
 		Help:  "find_smells runs structural pattern queries against the _ast / nodes / node_defs / node_refs tables. Pass `rule` to scan; omit it (this response) to list available rules. Each rule entry includes a `requires` list of SQL tables it reads — agents can use it to skip rules whose tables aren't present on the active backend (e.g. _ast is only populated by ley-line-open's leyline parse). Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold (default 0).",
 		Rules: out,
 	}
+}
+
+// missingTables returns the subset of `required` that's not in
+// sqlite_master on the active backend. Returns nil if everything is
+// present (or `required` is empty). The query uses placeholders for
+// the IN list so it works with arbitrary SQLite drivers.
+func missingTables(qg refsQuerier, required []string) ([]string, error) {
+	if len(required) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(required))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(required))
+	for i, t := range required {
+		args[i] = t
+	}
+	rows, err := qg.QueryRefs(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name IN ("+placeholders+")",
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	present := make(map[string]struct{}, len(required))
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		present[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, t := range required {
+		if _, ok := present[t]; !ok {
+			missing = append(missing, t)
+		}
+	}
+	return missing, nil
 }
 
 // runSmellRule executes the rule's SQL, optionally scoped to one source.
