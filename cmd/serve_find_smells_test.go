@@ -54,6 +54,13 @@ func seedSmellAST(t *testing.T) *smellTestGraph {
 			end_row INTEGER, end_col INTEGER
 		);
 		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
+		-- node_defs / node_refs are referenced by most rules. Pre-
+		-- create empty so tests that don't redefine them don't hit
+		-- 'no such table'. Tests that DO seed rows just INSERT;
+		-- IF NOT EXISTS protects the test-level CREATE statements
+		-- already present in many fixtures.
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 	`)
 	require.NoError(t, err)
 
@@ -226,8 +233,8 @@ func TestFindSmells_PreflightFlagsMissingTables(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`
 		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, kind INTEGER, mtime INTEGER, source_file TEXT, record TEXT);
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id));
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id));
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id));
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id));
 	`)
 	require.NoError(t, err)
 	tg := &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
@@ -294,8 +301,8 @@ func TestFindSmells_DeadCode(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Defined + referenced — alive.
 		INSERT INTO node_defs VALUES ('LiveFn', 'pkg/funcs/LiveFn');
@@ -344,8 +351,8 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Import token — has no entry in node_refs. The OLD rule would
 		-- flag this as dead; the new filter must skip /imports/.
@@ -393,8 +400,8 @@ func TestFindSmells_DeadCodeSkipsNonCallableCategories(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Non-callable categories — none of these belong in dead_code.
 		INSERT INTO node_defs VALUES
@@ -447,8 +454,8 @@ func TestFindSmells_DeadCodeSkipsExternalInterfaceMethods(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- vtab interface methods (SQLite virtual-table) — must skip.
 		INSERT INTO node_defs VALUES
@@ -523,8 +530,8 @@ func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Defs in generated files — must be skipped.
 		INSERT INTO node_defs VALUES
@@ -588,8 +595,8 @@ func TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Method defined under the Receiver.Method shape (go-schema
 		-- methods/ branch). The corresponding call site captures
@@ -645,8 +652,8 @@ func TestFindSmells_DeadCodeSourceFileFallsBackToChildren(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		INSERT INTO node_defs VALUES ('Orphan', 'functions/Orphan');
 
@@ -685,8 +692,8 @@ func TestFindSmells_DeadCodeSourceFileScopeFilter(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Two dead constructs in two different files. Same shape:
 		-- dir source_file is empty, child source_file holds the path.
@@ -734,8 +741,8 @@ func TestFindSmells_DeadCodePerNodeAggregation(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Multi-token live construct: 3 aliases, only bare has refs.
 		-- Old per-token query flagged this twice (once per qualified
@@ -788,8 +795,8 @@ func TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Real dead code (control: the rule must still flag this).
 		INSERT INTO node_defs VALUES ('OrphanFunc', 'pkg/OrphanFunc');
@@ -840,8 +847,8 @@ func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		INSERT INTO node_defs VALUES ('OrphanA', 'pkg/A'), ('OrphanB', 'pkg/B');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -992,7 +999,7 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Covered: TestFooBar exists, so FooBar is OK.
 		-- Paths use 'functions/' category dir — the rule restricts to
@@ -1060,7 +1067,7 @@ func TestFindSmells_GodFile(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- God file: 15 distinct defs, all in pkg/god/sprawl.go.
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -1142,7 +1149,7 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- God-function: 12 distinct callees.
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -1203,7 +1210,7 @@ func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Construct hierarchy: parent dir → source-file node.
 		-- caller_id in node_refs is the source-file id (matches mache's
@@ -1269,7 +1276,7 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
 		  ('functions',                       '',                       'functions', 1, 0, '',                ''),
@@ -1318,6 +1325,89 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 		"Dispatcher (production) is flagged; CapnpStruct (generated) is skipped via source_file suffix")
 }
 
+// TestFindSmells_UntestedFunctionAcceptsTestCallCoverage asserts
+// that a function called from inside any Test*/Benchmark*/Example*/
+// Fuzz* construct's source is treated as covered, even without a
+// same-name TestFoo counterpart. ReadArenaHeader is called from
+// TestArenaFlusher_Coalesce / TestArenaFlusher_FlipBuffer /
+// TestCreateArena — that's coverage, even though there's no
+// TestReadArenaHeader.
+func TestFindSmells_UntestedFunctionAcceptsTestCallCoverage(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Function exercised via call from a TestFoo construct's
+		-- source — no same-name TestReadArenaHeader needed.
+		INSERT INTO node_defs VALUES ('ReadArenaHeader', 'pkg/functions/ReadArenaHeader');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/ReadArenaHeader',         'pkg/functions',                 'ReadArenaHeader',     1, 0, '',           ''),
+		  ('pkg/functions/ReadArenaHeader/source',  'pkg/functions/ReadArenaHeader', 'source',              0, 0, 'arena.go',   ''),
+		  ('pkg/functions/TestArena_FlipBuffer',         'pkg/functions',                       'TestArena_FlipBuffer', 1, 0, '',                ''),
+		  ('pkg/functions/TestArena_FlipBuffer/source',  'pkg/functions/TestArena_FlipBuffer',  'source',                0, 0, 'arena_test.go',  '');
+
+		INSERT INTO node_refs VALUES ('ReadArenaHeader', 'pkg/functions/TestArena_FlipBuffer/source');
+
+		-- Truly untested helper — control: must still flag.
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/functions/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/Orphan',        'pkg/functions',         'Orphan', 1, 0, '',          ''),
+		  ('pkg/functions/Orphan/source', 'pkg/functions/Orphan',  'source', 0, 0, 'o.go',      '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"pkg/functions/Orphan"}, gotIDs,
+		"ReadArenaHeader is exercised via call from TestArena_FlipBuffer; only Orphan remains untested")
+}
+
+// TestFindSmells_UntestedFunctionSkipsFuzzPrefix asserts that Fuzz*
+// functions (themselves fuzz-test entry points) aren't flagged.
+// They're covered by the testing framework like Test* and Example*,
+// just under a different prefix.
+func TestFindSmells_UntestedFunctionSkipsFuzzPrefix(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO node_defs VALUES
+		  ('FuzzParseSelector', 'pkg/functions/FuzzParseSelector'),
+		  ('FuzzInferRecords',  'pkg/functions/FuzzInferRecords');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/FuzzParseSelector',        'pkg/functions',                  'FuzzParseSelector', 1, 0, '',         ''),
+		  ('pkg/functions/FuzzParseSelector/source', 'pkg/functions/FuzzParseSelector','source',             0, 0, 'p_test.go', ''),
+		  ('pkg/functions/FuzzInferRecords',         'pkg/functions',                  'FuzzInferRecords',  1, 0, '',         ''),
+		  ('pkg/functions/FuzzInferRecords/source',  'pkg/functions/FuzzInferRecords', 'source',             0, 0, 'i_test.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	assert.Empty(t, resp.Findings, "Fuzz* are themselves test entry points; they shouldn't be flagged as untested")
+}
+
 // TestFindSmells_UntestedFunctionAcceptsTestTypePrefix asserts the
 // New<Type> → Test<Type>* alternate counterpart match. Go test code
 // for constructors typically lives under TestType_<Method> — not
@@ -1328,7 +1418,7 @@ func TestFindSmells_UntestedFunctionAcceptsTestTypePrefix(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Constructor with companion TestStore_Foo coverage — must NOT be flagged.
 		INSERT INTO node_defs VALUES
@@ -1396,7 +1486,7 @@ func TestFindSmells_UntestedFunctionSkipsGeneratedFiles(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Exported funcs in generated files — must be skipped.
 		INSERT INTO node_defs VALUES
@@ -1445,7 +1535,7 @@ func TestFindSmells_DuplicateDefinitions(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Duplicated helper — both should appear in findings.
 		INSERT INTO node_defs VALUES ('Helper', 'pkg/a/Helper'), ('Helper', 'pkg/b/Helper');
@@ -1499,7 +1589,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Same import path in three packages — these should NOT
 		-- surface as a duplicate-defs finding.
@@ -1560,7 +1650,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Generated types sharing method 'IsValid' — must be skipped.
 		INSERT INTO node_defs VALUES
@@ -1623,7 +1713,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T)
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Variable / constant / type duplicates — must NOT surface.
 		INSERT INTO node_defs VALUES
@@ -1689,7 +1779,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
 	defer func() { _ = tg.db.Close() }()
 
 	_, err := tg.db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Three init() functions across packages — Go expects one
 		-- per package, so neither bare 'init' nor 'cmd.init' /
