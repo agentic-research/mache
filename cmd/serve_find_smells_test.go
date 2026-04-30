@@ -215,6 +215,42 @@ func TestFindSmells_BackendWithoutAstReturnsError(t *testing.T) {
 	assert.NotEmpty(t, resultText(t, res))
 }
 
+// TestFindSmells_PreflightFlagsMissingTables ensures that running an
+// _ast-required rule against a backend without _ast surfaces a friendly
+// error naming the missing table — the agent shouldn't have to parse a
+// raw SQL "no such table" string.
+func TestFindSmells_PreflightFlagsMissingTables(t *testing.T) {
+	// Backend with nodes/node_defs/node_refs but NO _ast table.
+	dbPath := filepath.Join(t.TempDir(), "no_ast.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, kind INTEGER, mtime INTEGER, source_file TEXT, record TEXT);
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id));
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id));
+	`)
+	require.NoError(t, err)
+	tg := &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
+	defer func() { _ = tg.db.Close() }()
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "cyclomatic_complexity",
+	}))
+	require.NoError(t, err)
+	require.True(t, res.IsError)
+
+	msg := resultText(t, res)
+	assert.Contains(t, msg, "_ast", "error must name the missing table")
+	assert.Contains(t, msg, "ley-line-open", "error should point users at LLO docs")
+
+	// Sanity: a rule that only needs node_defs/node_refs/nodes runs
+	// fine on the same backend.
+	res, err = handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "dead_code only needs node_defs/node_refs/nodes; pre-flight should pass")
+}
+
 func TestFindSmells_SourceIDFilterScopes(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.db.Close() }()
