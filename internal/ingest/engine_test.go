@@ -217,6 +217,47 @@ func (g Greeter) String() string {
 	assert.Contains(t, string(varSource.Data), "DefaultName")
 }
 
+// TestEngine_MethodReceiverShape_RegistersBareLeafDef asserts that
+// when the schema renders a method's name as 'Receiver.Method' (the
+// go-schema methods/ branch), AddDef registers BOTH the full
+// 'Receiver.Method' shape and the bare 'Method' leaf token. Without
+// the bare leaf, call-extraction (which captures just the
+// field_identifier of obj.Method() as 'Method') fails to resolve to
+// the method's def — so dead_code flags every method on a typed
+// receiver as unreferenced (mache.db go-schema path: 510 → 20 after
+// this fix).
+func TestEngine_MethodReceiverShape_RegistersBareLeafDef(t *testing.T) {
+	schema := loadGoSchema(t)
+
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "demo.go")
+	err := os.WriteFile(goFile, []byte(`package demo
+
+type Greeter struct{ Name string }
+
+func (g *Greeter) Greet() string { return "hi" }
+func (g Greeter)  String() string { return g.Name }
+`), 0o644)
+	require.NoError(t, err)
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	require.NoError(t, engine.Ingest(goFile))
+
+	// Both rendered shapes should be registered.
+	id := "demo/methods/Greeter.Greet"
+	assert.Contains(t, store.LookupDef("Greeter.Greet"), id,
+		"fully-rendered Receiver.Method def must resolve")
+	assert.Contains(t, store.LookupDef("demo.Greeter.Greet"), id,
+		"package-qualified def must resolve")
+	assert.Contains(t, store.LookupDef("Greet"), id,
+		"bare leaf def must resolve so call-extraction (which captures just 'Greet' from obj.Greet()) finds the method")
+
+	// Same for value-receiver methods.
+	assert.Contains(t, store.LookupDef("String"), "demo/methods/Greeter.String",
+		"value-receiver method must also register a bare leaf def")
+}
+
 func TestEngine_IngestTreeSitter_Imports(t *testing.T) {
 	schema := loadGoSchema(t)
 

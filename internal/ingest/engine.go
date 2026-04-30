@@ -1396,6 +1396,22 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 					}
 				}
 			}
+			// When the schema renders a Receiver.Method shape (the
+			// go-schema methods/ branch uses '{{.receiver}}.{{.name}}'),
+			// also register the bare leaf token so call-extraction —
+			// which captures the field_identifier of obj.Method() as
+			// just 'Method' — can resolve to this def. Without this,
+			// every method on a typed receiver looks dead in dead_code
+			// because 'Method' (call) doesn't match 'Receiver.Method'
+			// (def). We don't strip on every dot — only the last one,
+			// since fully-qualified shapes like 'pkg.Receiver.Method'
+			// are added separately above.
+			if dot := strings.LastIndex(name, "."); dot > 0 && dot < len(name)-1 {
+				leaf := name[dot+1:]
+				if err := store.AddDef(leaf, id); err != nil {
+					return fmt.Errorf("add bare leaf def %s -> %s: %w", leaf, id, err)
+				}
+			}
 		}
 
 		// Register schema-declared refs (cross-reference tokens for callers/)
