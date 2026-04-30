@@ -188,6 +188,72 @@ func TestWriteFile_ValidationStillRunsWhenFormatFalse(t *testing.T) {
 	assert.Equal(t, original, after, "validation failure must not touch the source file")
 }
 
+// TestWriteFile_RejectsNonWriteBackerBackend pins the fail-fast contract:
+// if the graph backend doesn't implement writeBacker (UpdateNodeContent +
+// ShiftOrigins), write_file must refuse the request BEFORE running splice.
+// Otherwise the on-disk file is modified, the unchecked type assertion
+// panics, and disk and graph end up out of sync.
+//
+// readOnlyGraph satisfies graph.Graph but not writeBacker, simulating a
+// future backend (or a test harness) that exposes nodes with Origin but
+// can't persist updates.
+func TestWriteFile_RejectsNonWriteBackerBackend(t *testing.T) {
+	original := "package main\n\nfunc Hello() {}\n"
+	srcPath := filepath.Join(t.TempDir(), "main.go")
+	require.NoError(t, os.WriteFile(srcPath, []byte(original), 0o644))
+
+	g := &readOnlyGraph{
+		node: &graph.Node{
+			ID:   "pkg/Hello",
+			Mode: 0,
+			Origin: &graph.SourceOrigin{
+				FilePath:  srcPath,
+				StartByte: 14,
+				EndByte:   uint32(len(original)),
+			},
+		},
+	}
+	handler := makeWriteFileHandler(g)
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"path":    "pkg/Hello",
+		"content": "func Hello() { return }\n",
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError, "non-writeBacker backend must yield an error result")
+	assert.Contains(t, resultText(t, result), "does not support write-back")
+
+	// Source file must be untouched — the splice must not have run.
+	after, err := os.ReadFile(srcPath)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(after), "splice must not run when backend can't accept the update")
+}
+
+// readOnlyGraph satisfies graph.Graph but explicitly omits writeBacker.
+// Used by TestWriteFile_RejectsNonWriteBackerBackend to exercise the
+// fail-fast path in makeWriteFileHandler.
+type readOnlyGraph struct {
+	node *graph.Node
+}
+
+func (g *readOnlyGraph) GetNode(id string) (*graph.Node, error) {
+	if id == g.node.ID {
+		return g.node, nil
+	}
+	return nil, graph.ErrNotFound
+}
+func (*readOnlyGraph) ListChildren(string) ([]string, error)           { return nil, nil }
+func (*readOnlyGraph) ListChildStats(string) ([]graph.NodeStat, error) { return nil, nil }
+func (*readOnlyGraph) ReadContent(string, []byte, int64) (int, error)  { return 0, nil }
+func (*readOnlyGraph) GetCallers(string) ([]*graph.Node, error)        { return nil, nil }
+func (*readOnlyGraph) GetCallees(string) ([]*graph.Node, error)        { return nil, nil }
+func (*readOnlyGraph) Invalidate(string)                               {}
+func (*readOnlyGraph) Act(string, string, string) (*graph.ActionResult, error) {
+	return nil, graph.ErrActNotSupported
+}
+
+var _ graph.Graph = (*readOnlyGraph)(nil)
+
 func TestWriteFile_FormatChangedFalseWhenAlreadyClean(t *testing.T) {
 	// When format=true but the input is already gofumpt-clean,
 	// FormatApplied is true (we ran the formatter) but FormatChanged
