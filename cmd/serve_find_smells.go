@@ -230,7 +230,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "untested_function",
 		Languages:   []string{"go"},
-		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). source_id falls back to a child's source_file when the construct dir doesn't carry one. Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
+		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is skipped — generated APIs aren't expected to have project tests. source_id falls back to a child's source_file when the construct dir doesn't carry one. Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
@@ -265,6 +265,13 @@ var smellRegistry = []SmellRule{
 			  -- variables/, imports/ — those don't follow the
 			  -- TestFoo naming convention.
 			  AND (d.node_id LIKE 'functions/%%' OR d.node_id LIKE '%%/functions/%%')
+			  -- Generated code (capnp / protobuf / *_generated.go /
+			  -- *.gen.go) isn't expected to have a TestFoo counterpart
+			  -- in the consumer's tests — skip it.
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.capnp.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.pb.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%_generated.go'
+			  AND COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') NOT LIKE '%%.gen.go'
 			%s
 			ORDER BY source_id, d.token
 		`,
@@ -357,7 +364,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "fan_out_skew",
-		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). Skip-listed: testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* — tests are expected to call many things, no signal there. The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
+		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). Skip-listed: testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* — tests are expected to call many things, no signal there. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded — generated dispatchers naturally have wide fan-out. The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
 		Requires:    []string{"node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
@@ -392,6 +399,13 @@ var smellRegistry = []SmellRule{
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Benchmark%%'
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Example%%'
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Fuzz%%'
+			  -- Generated dispatchers (capnp / protobuf / *_generated /
+			  -- *.gen) have intentionally wide fan-out; flagging them
+			  -- buries real findings under generated-code noise.
+			  AND COALESCE(n.source_file, '') NOT LIKE '%%.capnp.go'
+			  AND COALESCE(n.source_file, '') NOT LIKE '%%.pb.go'
+			  AND COALESCE(n.source_file, '') NOT LIKE '%%_generated.go'
+			  AND COALESCE(n.source_file, '') NOT LIKE '%%.gen.go'
 			%s
 			ORDER BY metric DESC, source_id, node_id
 		`,
