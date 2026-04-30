@@ -810,18 +810,20 @@ func allRuleIDs() []string {
 // without a rule. Stable order so agents can cache the listing.
 func rulesListing() any {
 	type ruleSummary struct {
-		ID          string   `json:"id"`
-		Languages   []string `json:"languages,omitempty"`
-		Description string   `json:"description"`
-		Requires    []string `json:"requires,omitempty"`
+		ID               string   `json:"id"`
+		Languages        []string `json:"languages,omitempty"`
+		Description      string   `json:"description"`
+		Requires         []string `json:"requires,omitempty"`
+		DefaultMinMetric int64    `json:"default_min_metric,omitempty"`
 	}
 	out := make([]ruleSummary, 0, len(smellRegistry))
 	for _, r := range smellRegistry {
 		out = append(out, ruleSummary{
-			ID:          r.ID,
-			Languages:   r.Languages,
-			Description: r.Description,
-			Requires:    r.Requires,
+			ID:               r.ID,
+			Languages:        r.Languages,
+			Description:      r.Description,
+			Requires:         r.Requires,
+			DefaultMinMetric: r.DefaultMinMetric,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -829,7 +831,7 @@ func rulesListing() any {
 		Help  string        `json:"help"`
 		Rules []ruleSummary `json:"rules"`
 	}{
-		Help:  "find_smells runs structural pattern queries against the _ast / nodes / node_defs / node_refs tables. Pass `rule` to scan; omit it (this response) to list available rules. Each rule entry includes a `requires` list of SQL tables it reads — agents can use it to skip rules whose tables aren't present on the active backend (e.g. _ast is only populated by ley-line-open's leyline parse). Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold (default 0).",
+		Help:  "find_smells runs structural pattern queries against the _ast / nodes / node_defs / node_refs tables. Pass `rule` to scan; omit it (this response) to list available rules. Each rule entry includes a `requires` list of SQL tables it reads — agents can use it to skip rules whose tables aren't present on the active backend (e.g. _ast is only populated by ley-line-open's leyline parse). Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold. Rules that surface a `default_min_metric` apply that as the threshold when the caller omits `min_metric`; an explicit `min_metric=0` overrides the default and returns everything sorted by metric.",
 		Rules: out,
 	}
 }
