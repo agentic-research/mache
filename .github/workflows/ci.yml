@@ -15,13 +15,6 @@ on:
 permissions:
   contents: read
 
-# arduino/setup-task hasn't shipped a Node 24 release yet
-# (https://github.com/arduino/setup-task/issues/1359). The runner
-# warns and will hard-fail in June 2026. Opt in to GitHub's forced
-# Node 24 shim until upstream releases v3.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   test:
     strategy:
@@ -38,10 +31,12 @@ jobs:
           go-version-file: go.mod
 
       - name: Install Task
-        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        # Use `go install` instead of arduino/setup-task to bypass
+        # GitHub's release CDN — that download has 502'd on us
+        # (e.g., PR #284 rerun). Go's module proxy is far more
+        # reliable, and pinning the version here keeps CI
+        # reproducible. Side benefit: no Node 20 deprecation shim.
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
       - name: Build
         run: task build

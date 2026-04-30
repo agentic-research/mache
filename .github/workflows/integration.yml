@@ -17,11 +17,6 @@ on:
 permissions:
   contents: read
 
-# Opt into Node 24 shim until arduino/setup-task ships a Node 24
-# release (https://github.com/arduino/setup-task/issues/1359).
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   integration:
     strategy:
@@ -43,10 +38,8 @@ jobs:
           check-latest: true
 
       - name: Install Task
-        uses: arduino/setup-task@b91d5d2c96a56797b48ac1e0e89220bf64044611 # v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        # See ci.yml — go install bypasses GitHub's release CDN.
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
       - name: Run Integration Tests
         run: task test -- -run TestIntegration -v ./tests/
