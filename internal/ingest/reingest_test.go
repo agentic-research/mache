@@ -13,6 +13,18 @@ import (
 
 // Test that Engine.ReIngestFile re-ingests a single file
 // without changing RootPath (needed for live graph updates).
+//
+// mache-2y9w note: these tests sometimes flake with SIGSEGV
+// during CGO execution under `-race`. PR #257 + #299 added
+// runtime.LockOSThread() to both ingestion paths to address
+// goroutine migration, which dropped the flake rate from 60%
+// to 20% on macOS arm64. The residual flake is specifically
+// the race detector's instrumentation interacting with
+// tree-sitter's CGO bindings (10/10 runs PASS without -race).
+// LockOSThread mitigations are exhausted; the full fix is
+// CGO removal (mache-37ae8b). When this test is the source
+// of a CI rerun, `gh run rerun --failed` is the operational
+// mitigation — don't waste time bisecting.
 
 func TestEngine_ReIngestFile(t *testing.T) {
 	schema := loadGoSchema(t)
