@@ -248,7 +248,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "long_function",
 		Languages:   []string{"go"},
-		Description: "Functions and methods whose body spans more than 80 source lines (end_row - start_row). Sorted descending by line count. Threshold is hard-coded today — use cyclomatic_complexity for a sister metric on the same nodes.",
+		Description: "Functions and methods whose body spans more than 80 source lines (end_row - start_row). Sorted descending by line count. The 80-line floor is hardcoded in SQL; min_metric raises the cutoff but cannot lower it (e.g. min_metric=50 still returns only >80, since the SQL filter runs before the handler-side min_metric drop). Effective threshold is max(80, min_metric). Use min_metric=200 for 'definitely review now', min_metric=120 for 'noteworthy'. Pair with cyclomatic_complexity for a sister metric on the same nodes.",
 		Requires:    []string{"_ast"},
 		ScopeColumn: "fn.source_id",
 		Query: `
