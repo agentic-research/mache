@@ -39,6 +39,8 @@ jobs:
 
       - name: Install Task
         # See ci.yml — go install bypasses GitHub's release CDN.
+        env:
+          GOTOOLCHAIN: auto
         run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
       - name: Run Integration Tests

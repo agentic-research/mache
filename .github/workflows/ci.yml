@@ -36,6 +36,12 @@ jobs:
         # (e.g., PR #284 rerun). Go's module proxy is far more
         # reliable, and pinning the version here keeps CI
         # reproducible. Side benefit: no Node 20 deprecation shim.
+        #
+        # GOTOOLCHAIN=auto so Go can fetch the toolchain task v3.50.0
+        # requires (>=1.25.8) without forcing the same upgrade on
+        # mache itself. setup-go v6 defaults to GOTOOLCHAIN=local.
+        env:
+          GOTOOLCHAIN: auto
         run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
       - name: Build
