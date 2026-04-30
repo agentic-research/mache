@@ -593,6 +593,22 @@ func (lg *lazyGraph) ShiftOrigins(filePath string, afterByte uint32, delta int32
 	}
 }
 
+// MountPrefixOf forwards to the inner CompositeGraph so MCP handlers'
+// annotateMounts() can find a mount-prefix resolver even though the
+// registry hands them a lazyGraph wrapper. Returns "" when the inner
+// isn't a composite (single-source serves) — same semantics agents
+// already see for non-composite shapes.
+func (lg *lazyGraph) MountPrefixOf(id string) string {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return ""
+	}
+	if cg, ok := g.(*graph.CompositeGraph); ok {
+		return cg.MountPrefixOf(id)
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // Interface types for optional graph backend capabilities
 // ---------------------------------------------------------------------------

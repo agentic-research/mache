@@ -686,6 +686,102 @@ func TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch(t *testing.T) {
 		"Greeter.Greet is alive (Greet ref matches the leaf-strip); only Greeter.Sing remains dead")
 }
 
+// TestFindSmells_DeadCodeRegressionFloor exercises the dead_code
+// rule end-to-end against a synthetic graph that combines every
+// production-relevant facet — bare-leaf alias resolution, qualified
+// shapes, the named skip list, the testing-framework prefix skip,
+// generated-code exclusion, the orphan filter, and a real dead
+// construct as the control. Pins both *which* nodes fire and the
+// total count.
+//
+// dead_code is the load-bearing rule of the smell suite — every
+// unintended re-inflation has cost real signal in the past
+// (PR #244 dropped 306→32, PR #246 SQL receiver-strip dropped 510→32,
+// PR #259 orphan filter, PR #281 duplicate_definitions ripple).
+// This test catches future refactors that silently regress the rule
+// by changing only the synthetic fixture's expected output.
+func TestFindSmells_DeadCodeRegressionFloor(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Group 1: live free function (called from another).
+		INSERT INTO node_defs VALUES
+		  ('LiveHelper',     'pkg/functions/LiveHelper'),
+		  ('pkg.LiveHelper', 'pkg/functions/LiveHelper');
+		INSERT INTO node_refs VALUES ('LiveHelper', 'pkg/functions/Caller/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/LiveHelper', 'pkg/functions', 'LiveHelper', 1, 0, 'helper.go', ''),
+		  ('pkg/functions/Caller',     'pkg/functions', 'Caller',     1, 0, 'caller.go', '');
+
+		-- Group 2: live method via SQL receiver-strip (Greet ref → Greeter.Greet def).
+		INSERT INTO node_defs VALUES
+		  ('Greeter.Greet',     'pkg/methods/Greeter.Greet'),
+		  ('pkg.Greeter.Greet', 'pkg/methods/Greeter.Greet'),
+		  ('Greet',             'pkg/methods/Greeter.Greet');
+		INSERT INTO node_refs VALUES ('Greet', 'pkg/functions/CallSite/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Greeter.Greet', 'pkg/methods',   'Greeter.Greet', 1, 0, 'greet.go',     ''),
+		  ('pkg/functions/CallSite',    'pkg/functions', 'CallSite',      1, 0, 'callsite.go',  '');
+
+		-- Group 3: skip-listed interface method (vtab.Module.BestIndex).
+		INSERT INTO node_defs VALUES
+		  ('Cursor.BestIndex', 'pkg/methods/Cursor.BestIndex'),
+		  ('BestIndex',        'pkg/methods/Cursor.BestIndex');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Cursor.BestIndex', 'pkg/methods', 'Cursor.BestIndex', 1, 0, 'vtab.go', '');
+
+		-- Group 4: skip-listed by Test prefix (testing-framework reflection).
+		INSERT INTO node_defs VALUES
+		  ('TestSomething', 'pkg/functions/TestSomething');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/TestSomething', 'pkg/functions', 'TestSomething', 1, 0, 'foo_test.go', '');
+
+		-- Group 5: skip-listed by generated-file suffix (capnp.go).
+		INSERT INTO node_defs VALUES
+		  ('GeneratedFn', 'pkg/functions/GeneratedFn');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/GeneratedFn', 'pkg/functions', 'GeneratedFn', 1, 0, 'foo.capnp.go', '');
+
+		-- Group 6: orphan (no resolvable source_file, even via children) — must be filtered.
+		INSERT INTO node_defs VALUES
+		  ('OrphanFn', 'pkg/functions/OrphanFn');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/OrphanFn', 'pkg/functions', 'OrphanFn', 1, 0, '', '');
+
+		-- Group 7: the actual dead control. Defined, referenced
+		-- nowhere, not skip-listed, has a source_file. Must fire.
+		INSERT INTO node_defs VALUES
+		  ('TrulyDead',     'pkg/functions/TrulyDead'),
+		  ('pkg.TrulyDead', 'pkg/functions/TrulyDead');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/TrulyDead', 'pkg/functions', 'TrulyDead', 1, 0, 'truly_dead.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code", "limit": 100}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	// Exactly one node fires: TrulyDead. Every other group is alive
+	// or correctly skipped. If this assertion ever fails, the
+	// failing diff is the regression — read it before silencing.
+	assert.Equal(t, []string{"pkg/functions/TrulyDead"}, gotIDs,
+		"dead_code must surface exactly the truly-dead control; any other diff is a regression")
+	assert.Equal(t, 1, resp.Total, "dead_code total must match findings length")
+}
+
 // TestFindSmells_DeadCodeSourceFileFallsBackToChildren asserts that
 // when the construct dir itself has source_file = ” (the schema
 // engine attaches Origin/source_file to leaf children — source,
