@@ -62,3 +62,7 @@ tools/KNOWN_ISSUES.md
 
 # Test fixture databases are committed (override the *.db rule above)
 !testdata/*.db
+
+# Beads credential key (per-clone, never committed)
+.beads-credential-key
+.beads/.beads-credential-key
