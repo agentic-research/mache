@@ -54,6 +54,23 @@ func TestBuild_ProducesDB(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output DB should be non-empty")
 }
 
+// TestBuild_SchemaFlagRegistered guards the --schema flag binding.
+// rootCmd's --schema lives on Flags() (not PersistentFlags), so it
+// doesn't propagate to children. buildCmd needs its own binding to
+// the same package-level schemaPath variable so users can pass
+// --schema on the CLI without falling through to FCA inference.
+func TestBuild_SchemaFlagRegistered(t *testing.T) {
+	flag := buildCmd.Flags().Lookup("schema")
+	require.NotNil(t, flag, "buildCmd must register a --schema flag")
+	assert.Equal(t, "s", flag.Shorthand, "shorthand must match the rootCmd convention")
+	// Setting through the flag should mutate schemaPath, since both
+	// flags bind to the same variable.
+	saved := schemaPath
+	defer func() { schemaPath = saved }()
+	require.NoError(t, buildCmd.Flags().Set("schema", "/tmp/test-schema.json"))
+	assert.Equal(t, "/tmp/test-schema.json", schemaPath)
+}
+
 func TestBuild_NonexistentSource(t *testing.T) {
 	tmpDir := t.TempDir()
 	outDB := filepath.Join(tmpDir, "out.db")

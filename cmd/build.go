@@ -104,5 +104,12 @@ var buildCmd = &cobra.Command{
 }
 
 func init() {
+	// schemaPath is shared with rootCmd (mount path) and other subcommands.
+	// `mache build` needs its own flag binding because rootCmd's --schema
+	// lives on Flags(), not PersistentFlags(), so it doesn't propagate to
+	// children. Without this, users can't pass an explicit schema to build
+	// and have to rely on FCA inference — which doesn't yet produce a
+	// methods/ root for Go (mache-5d1o).
+	buildCmd.Flags().StringVarP(&schemaPath, "schema", "s", "", "Path to topology schema (defaults to FCA inference)")
 	rootCmd.AddCommand(buildCmd)
 }
