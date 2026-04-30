@@ -609,6 +609,26 @@ func (lg *lazyGraph) MountPrefixOf(id string) string {
 	return ""
 }
 
+// LookupDef forwards the optional defsLookuper interface so
+// find_definition's anchored-exact path can use the O(1) lookup
+// instead of falling through to the O(N) DefsMap snapshot. Without
+// this passthrough, every find_definition call in production paid
+// the snapshot cost even when the inner backend (MemoryStore,
+// SQLiteGraph, CompositeGraph) had a fast lookup available.
+//
+// Returns nil when the inner doesn't implement defsLookuper —
+// callers fall through to DefsMap as before.
+func (lg *lazyGraph) LookupDef(token string) []string {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil
+	}
+	if dl, ok := g.(interface{ LookupDef(string) []string }); ok {
+		return dl.LookupDef(token)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Interface types for optional graph backend capabilities
 // ---------------------------------------------------------------------------

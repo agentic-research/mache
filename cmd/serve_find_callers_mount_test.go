@@ -161,6 +161,31 @@ func TestFindCallers_AnnotatesMountThroughLazyGraph(t *testing.T) {
 	assert.Contains(t, mounts, "billing", "billing mount label must reach the response")
 }
 
+// TestLazyGraph_LookupDef_ForwardsToInner pins the same
+// wrapper-passthrough invariant as MountPrefixOf, but for the
+// defsLookuper interface used by find_definition. Without
+// passthrough, the production handler always took the O(N)
+// DefsMap snapshot path because lazyGraph doesn't satisfy
+// defsLookuper directly — its inner does.
+func TestLazyGraph_LookupDef_ForwardsToInner(t *testing.T) {
+	store := graph.NewMemoryStore()
+	store.AddRoot(&graph.Node{ID: "pkg/funcs/Foo", Mode: 0})
+	require.NoError(t, store.AddDef("Foo", "pkg/funcs/Foo"))
+
+	lg := &lazyGraph{inner: store}
+	lg.once.Do(func() {})
+
+	// Sanity: lazyGraph satisfies defsLookuper through the wrapper.
+	dl, ok := graph.Graph(lg).(defsLookuper)
+	require.True(t, ok, "lazyGraph must satisfy defsLookuper (find_definition fast path depends on this)")
+
+	got := dl.LookupDef("Foo")
+	assert.Equal(t, []string{"pkg/funcs/Foo"}, got, "Foo def must surface through the wrapper")
+
+	// Unknown token returns nil/empty, not a phantom hit.
+	assert.Empty(t, dl.LookupDef("DoesNotExist"))
+}
+
 // TestCompositeGraph_MountPrefixOf is the unit test for the public
 // accessor added in this PR. Empty / virtual-root / unknown-prefix
 // inputs all return "" so handlers can distinguish "this id is
