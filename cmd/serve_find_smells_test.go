@@ -501,6 +501,89 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID)
 }
 
+// TestFindSmells_GodFile seeds three source files: one with 15
+// definitions (the god file), six with 1 definition each (normal),
+// and one with 8 definitions (busy but under the floor). Project
+// mean is (15 + 6×1 + 8) / 8 ≈ 3.6, so 3× mean ≈ 10.9. Only the
+// god file's 15 defs clears both the 10-def floor AND the 3×-mean
+// threshold.
+func TestFindSmells_GodFile(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- God file: 15 distinct defs, all in pkg/god/sprawl.go.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/god/A','pkg/god','A',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/B','pkg/god','B',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/C','pkg/god','C',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/D','pkg/god','D',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/E','pkg/god','E',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/F','pkg/god','F',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/G','pkg/god','G',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/H','pkg/god','H',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/I','pkg/god','I',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/J','pkg/god','J',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/K','pkg/god','K',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/L','pkg/god','L',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/M','pkg/god','M',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/N','pkg/god','N',1,0,'pkg/god/sprawl.go',''),
+		  ('pkg/god/O','pkg/god','O',1,0,'pkg/god/sprawl.go','');
+		INSERT INTO node_defs VALUES
+		  ('A','pkg/god/A'),('B','pkg/god/B'),('C','pkg/god/C'),
+		  ('D','pkg/god/D'),('E','pkg/god/E'),('F','pkg/god/F'),
+		  ('G','pkg/god/G'),('H','pkg/god/H'),('I','pkg/god/I'),
+		  ('J','pkg/god/J'),('K','pkg/god/K'),('L','pkg/god/L'),
+		  ('M','pkg/god/M'),('N','pkg/god/N'),('O','pkg/god/O');
+
+		-- Borderline file: 8 defs — over 3×mean (~10.9) gate? No, 8 < 10 floor.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/big/B1','pkg/big','B1',1,0,'pkg/big/big.go',''),
+		  ('pkg/big/B2','pkg/big','B2',1,0,'pkg/big/big.go',''),
+		  ('pkg/big/B3','pkg/big','B3',1,0,'pkg/big/big.go',''),
+		  ('pkg/big/B4','pkg/big','B4',1,0,'pkg/big/big.go',''),
+		  ('pkg/big/B5','pkg/big','B5',1,0,'pkg/big/big.go',''),
+		  ('pkg/big/B6','pkg/big','B6',1,0,'pkg/big/big.go',''),
+		  ('pkg/big/B7','pkg/big','B7',1,0,'pkg/big/big.go',''),
+		  ('pkg/big/B8','pkg/big','B8',1,0,'pkg/big/big.go','');
+		INSERT INTO node_defs VALUES
+		  ('B1','pkg/big/B1'),('B2','pkg/big/B2'),('B3','pkg/big/B3'),
+		  ('B4','pkg/big/B4'),('B5','pkg/big/B5'),('B6','pkg/big/B6'),
+		  ('B7','pkg/big/B7'),('B8','pkg/big/B8');
+
+		-- Six normal files, 1 def each — dilutes the project mean.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/ok/N1','pkg/ok','N1',1,0,'pkg/ok/n1.go',''),
+		  ('pkg/ok/N2','pkg/ok','N2',1,0,'pkg/ok/n2.go',''),
+		  ('pkg/ok/N3','pkg/ok','N3',1,0,'pkg/ok/n3.go',''),
+		  ('pkg/ok/N4','pkg/ok','N4',1,0,'pkg/ok/n4.go',''),
+		  ('pkg/ok/N5','pkg/ok','N5',1,0,'pkg/ok/n5.go',''),
+		  ('pkg/ok/N6','pkg/ok','N6',1,0,'pkg/ok/n6.go','');
+		INSERT INTO node_defs VALUES
+		  ('N1','pkg/ok/N1'),('N2','pkg/ok/N2'),('N3','pkg/ok/N3'),
+		  ('N4','pkg/ok/N4'),('N5','pkg/ok/N5'),('N6','pkg/ok/N6');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "god_file",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "only sprawl.go clears the 10-def floor AND 3×mean threshold")
+	assert.Equal(t, "pkg/god/sprawl.go", resp.Findings[0].SourceID)
+	assert.Equal(t, int64(15), resp.Findings[0].Metric, "def count is the metric")
+}
+
 // TestFindSmells_FanOutSkew seeds a god-function and several normal
 // callers and asserts only the god-function is flagged. Mean fan-out
 // is (12 + 6×1) / 7 ≈ 2.57; 3×mean ≈ 7.7, well below the god's 12.
