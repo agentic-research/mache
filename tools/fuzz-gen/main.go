@@ -44,7 +44,7 @@ func main() {
 
 	fmt.Printf("🎯 Targeting %s in %s\n", *fuzzTarget, *targetFile)
 
-	for i := 0; i < maxAttempts; i++ {
+	for i := range maxAttempts {
 		fmt.Printf("Attempt %d/%d: ", i+1, maxAttempts)
 		mutated, desc := mutate(src, rng)
 		if bytes.Equal(mutated, src) {

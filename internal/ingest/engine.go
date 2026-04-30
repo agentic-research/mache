@@ -429,10 +429,8 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 
 	// Phase 1: Workers parse files in parallel (CPU-bound tree-sitter parsing).
 	var workerWg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		workerWg.Add(1)
-		go func() {
-			defer workerWg.Done()
+	for range numWorkers {
+		workerWg.Go(func() {
 			parser := sitter.NewParser()
 			for job := range jobs {
 				result := parsedTreeSitterFile{job: job}
@@ -473,7 +471,7 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 				}
 				parsed <- result
 			}
-		}()
+		})
 	}
 
 	// Walk directory and send jobs. Non-tree-sitter files (raw files) are
@@ -1050,15 +1048,13 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 	diagramCache := &e.diagramTmplCache
 
 	var workerWg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		workerWg.Add(1)
-		go func() {
-			defer workerWg.Done()
+	for range numWorkers {
+		workerWg.Go(func() {
 			w := NewJsonWalker()
 			for job := range jobs {
 				results <- processRecord(e.Schema, w, dbPath, job, diagramFuncs, diagramCache)
 			}
-		}()
+		})
 	}
 
 	// Collector: apply nodes to store (single goroutine, no lock contention).
@@ -1066,9 +1062,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 	// and parent-child links.
 	var collectErr error
 	var collectWg sync.WaitGroup
-	collectWg.Add(1)
-	go func() {
-		defer collectWg.Done()
+	collectWg.Go(func() {
 		parentChildSeen := make(map[string]map[string]bool)
 		count := 0
 		for res := range results {
@@ -1115,7 +1109,7 @@ func (e *Engine) ingestSQLiteStreaming(dbPath string) error {
 			}
 		}
 		log.Printf("Processed %d records total.", count)
-	}()
+	})
 
 	// Reader: stream raw rows from SQLite (I/O bound, single goroutine)
 	readErr := StreamSQLiteRaw(dbPath, func(id, raw string) error {
@@ -1511,7 +1505,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				if err == nil {
 					startLine := byteOffsetToLine(root.Source, extStart)
 					endLine := byteOffsetToLine(root.Source, extEnd)
-					node.Properties["location"] = []byte(fmt.Sprintf("%s:%d:%d", relPath, startLine, endLine))
+					node.Properties["location"] = fmt.Appendf(nil, "%s:%d:%d", relPath, startLine, endLine)
 				}
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -239,10 +240,8 @@ func (w *Watcher) shouldIgnorePath(path string) bool {
 	}
 
 	// Check for .git anywhere in path components.
-	for _, seg := range strings.Split(path, string(filepath.Separator)) {
-		if seg == ".git" {
-			return true
-		}
+	if slices.Contains(strings.Split(path, string(filepath.Separator)), ".git") {
+		return true
 	}
 
 	// Check gitignore rules (file patterns like *.log, directory patterns, etc.).

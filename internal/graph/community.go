@@ -67,7 +67,7 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 	improved := true
 	for improved {
 		improved = false
-		for node := 0; node < n; node++ {
+		for node := range n {
 			bestComm := community[node]
 			bestDelta := 0.0
 			ki := degree[node]
@@ -191,7 +191,7 @@ func buildProjection(refs map[string][]string) ([]map[int]float64, map[string]in
 		for i, n := range nodes {
 			indices[i] = nodeIndex[n]
 		}
-		for i := 0; i < len(indices); i++ {
+		for i := range indices {
 			for j := i + 1; j < len(indices); j++ {
 				a, b := indices[i], indices[j]
 				if a != b {
@@ -222,9 +222,9 @@ func computeModularity(adj []map[int]float64, community []int, degree []float64,
 		return 0
 	}
 	q := 0.0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ki := degree[i]
-		for j := 0; j < n; j++ {
+		for j := range n {
 			if community[i] != community[j] {
 				continue
 			}
@@ -249,7 +249,7 @@ func ConnectedComponents(refs map[string][]string) [][]string {
 	visited := make([]bool, n)
 	var components [][]string
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if visited[i] {
 			continue
 		}

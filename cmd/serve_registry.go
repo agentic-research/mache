@@ -267,8 +267,8 @@ func getGitHead(rootPath string) string {
 	}
 	head := strings.TrimSpace(string(data))
 
-	if strings.HasPrefix(head, "ref: ") {
-		ref := strings.TrimPrefix(head, "ref: ")
+	if after, ok := strings.CutPrefix(head, "ref: "); ok {
+		ref := after
 		refPath := filepath.Join(gitDir, filepath.FromSlash(ref))
 		if data2, err := os.ReadFile(refPath); err == nil {
 			// Loose ref found — use its content.

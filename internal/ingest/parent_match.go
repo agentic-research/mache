@@ -1,5 +1,7 @@
 package ingest
 
+import "maps"
+
 import sitter "github.com/smacker/go-tree-sitter"
 
 // parentAwareMatch wraps a Match and injects a _parent key into Values()
@@ -25,9 +27,7 @@ func (m *parentAwareMatch) Values() map[string]any {
 	}
 	inner := m.inner.Values()
 	v := make(map[string]any, len(inner)+1)
-	for k, val := range inner {
-		v[k] = val
-	}
+	maps.Copy(v, inner)
 	v["_parent"] = m.parentValues
 	m.cached = v
 	return v

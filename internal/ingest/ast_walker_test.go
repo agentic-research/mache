@@ -866,9 +866,7 @@ func TestASTWalker_RaceSelectWalker(t *testing.T) {
 	errs := make(chan error, goroutines)
 
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			w, err := SelectWalker(db)
 			if err != nil {
 				errs <- err
@@ -878,7 +876,7 @@ func TestASTWalker_RaceSelectWalker(t *testing.T) {
 			if _, ok := w.(*ASTWalker); !ok {
 				errs <- fmt.Errorf("expected ASTWalker, got %T", w)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

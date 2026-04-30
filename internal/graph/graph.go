@@ -197,10 +197,7 @@ func SliceContent(data, buf []byte, offset int64) int {
 	if offset < 0 || offset >= int64(len(data)) {
 		return 0
 	}
-	end := offset + int64(len(buf))
-	if end > int64(len(data)) {
-		end = int64(len(data))
-	}
+	end := min(offset+int64(len(buf)), int64(len(data)))
 	return copy(buf, data[offset:end])
 }
 
@@ -226,13 +223,7 @@ func (s *MemoryStore) SetCallExtractor(fn CallExtractor) {
 // Cache size scales with node count: 25% of nodes, floor 1024, ceiling 16384.
 func (s *MemoryStore) SetResolver(fn ContentResolverFunc) {
 	s.resolver = fn
-	size := len(s.nodes) / 4
-	if size < 1024 {
-		size = 1024
-	}
-	if size > 16384 {
-		size = 16384
-	}
+	size := min(max(len(s.nodes)/4, 1024), 16384)
 	s.cache = NewContentCache(size)
 }
 

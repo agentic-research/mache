@@ -127,7 +127,7 @@ func TestArenaFlusher_Coalesce(t *testing.T) {
 	flusher.Start(50 * time.Millisecond)
 
 	// Fire 10 rapid RequestFlush calls (should coalesce into ~1-2 flushes)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		flusher.RequestFlush()
 	}
 
@@ -171,7 +171,7 @@ func BenchmarkArenaFlush(b *testing.B) {
 			stmt, err := tx.Prepare("INSERT INTO t VALUES (?, ?)")
 			require.NoError(b, err)
 			payload := "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // ~90 chars
-			for i := 0; i < rowCount; i++ {
+			for i := range rowCount {
 				_, err = stmt.Exec(i, payload)
 				require.NoError(b, err)
 			}

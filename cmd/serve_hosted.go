@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -83,12 +84,7 @@ func validateRepoURL(repoURL string) error {
 // isValidSchemaPreset returns true if the schema name is a known preset.
 // Prevents arbitrary file reads via ?schema=/etc/passwd.
 func isValidSchemaPreset(schema string) bool {
-	for _, name := range PresetNames() {
-		if schema == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(PresetNames(), schema)
 }
 
 // repoFromContext extracts the repo URL from context, if present.

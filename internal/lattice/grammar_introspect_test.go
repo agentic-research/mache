@@ -2,6 +2,7 @@ package lattice
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -208,17 +209,17 @@ func inspectNode(n *sitter.Node, depth int, t *testing.T) {
 		return
 	}
 
-	indent := ""
-	for i := 0; i < depth; i++ {
-		indent += "  "
+	var indent strings.Builder
+	for range depth {
+		indent.WriteString("  ")
 	}
 
 	if n.IsNamed() {
-		t.Logf("%s%s", indent, n.Type())
+		t.Logf("%s%s", indent.String(), n.Type())
 
 		// Show field names for children
 		count := int(n.ChildCount())
-		for i := 0; i < count; i++ {
+		for i := range count {
 			child := n.Child(i)
 			if child == nil {
 				continue
@@ -226,13 +227,13 @@ func inspectNode(n *sitter.Node, depth int, t *testing.T) {
 
 			fieldName := n.FieldNameForChild(i)
 			if fieldName != "" && child.IsNamed() {
-				t.Logf("%s  field '%s': %s", indent, fieldName, child.Type())
+				t.Logf("%s  field '%s': %s", indent.String(), fieldName, child.Type())
 			}
 		}
 
 		// Only recurse for block types to keep output manageable
 		if n.Type() == "block" || n.Type() == "config_file" || n.Type() == "body" {
-			for i := 0; i < count; i++ {
+			for i := range count {
 				inspectNode(n.Child(i), depth+1, t)
 			}
 		}

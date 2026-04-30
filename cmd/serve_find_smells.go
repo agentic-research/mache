@@ -663,14 +663,8 @@ func populateSnippets(qg refsQuerier, findings []smellFinding) {
 			continue
 		}
 		const padding = 30
-		s := findings[i].StartByte - padding
-		if s < 0 {
-			s = 0
-		}
-		e := findings[i].EndByte + padding
-		if e > len(src) {
-			e = len(src)
-		}
+		s := max(findings[i].StartByte-padding, 0)
+		e := min(findings[i].EndByte+padding, len(src))
 		if s < e {
 			snippet := string(src[s:e])
 			snippet = strings.ReplaceAll(snippet, "\n", " ")

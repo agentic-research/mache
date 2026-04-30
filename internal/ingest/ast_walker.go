@@ -923,12 +923,13 @@ func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID stri
 		// For ancestry=["parameter_list","parameter_declaration"], build:
 		//   LIKE 'parentID/%/%/%'         (3 segments: 2 ancestors + leaf)
 		//   NOT LIKE 'parentID/%/%/%/%'   (exclude deeper nodes)
-		depthPattern := parentID
+		var depthPattern strings.Builder
+		depthPattern.WriteString(parentID)
 		for range len(ancestry) + 1 {
-			depthPattern += "/%"
+			depthPattern.WriteString("/%")
 		}
 		query = baseCols + "n.id LIKE ? AND n.id NOT LIKE ? AND a.node_kind = ?"
-		args = []any{depthPattern, depthPattern + "/%", kind}
+		args = []any{depthPattern.String(), depthPattern.String() + "/%", kind}
 	}
 
 	if sourceID != "" {

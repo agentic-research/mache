@@ -121,8 +121,8 @@ func ProjectAST(concepts []Concept, ctx *FormalContext, config ProjectConfig) *a
 			if attrName == "has_name" {
 				hasName = true
 			}
-			if strings.HasPrefix(attrName, "field_name_type=") {
-				nameType = strings.TrimPrefix(attrName, "field_name_type=")
+			if after, ok := strings.CutPrefix(attrName, "field_name_type="); ok {
+				nameType = after
 			}
 			if attrName == "has_body" {
 				hasBody = true

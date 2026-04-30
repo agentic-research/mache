@@ -198,7 +198,7 @@ func TestSplice_DetectsConcurrentModification(t *testing.T) {
 		defer close(done)
 		// Wait for Splice to be in flight (best-effort), then mutate.
 		// We bump the mtime by writing fresh bytes to the file.
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			info, _ := os.Stat(path)
 			if info != nil && info.ModTime().After(initial) {
 				// Splice may have already finished one Stat; mutate now.

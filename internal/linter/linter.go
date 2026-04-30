@@ -72,7 +72,7 @@ func Lint(content []byte, langName string) ([]Diagnostic, error) {
 			// Simple check: iterate children of var_spec
 			hasValue := false
 			count := int(c.Node.ChildCount())
-			for i := 0; i < count; i++ {
+			for i := range count {
 				// In Go grammar, the value is usually an expression list?
 				// Field names: name, type, value
 				if c.Node.FieldNameForChild(i) == "value" {

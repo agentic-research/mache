@@ -190,7 +190,7 @@ func TestFlushChildSlices_UnsortedInput(t *testing.T) {
 
 func TestMergeSortedDedup_Fuzz(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		a := randomSortedPaths(rng, rng.Intn(100))
 		b := randomSortedPaths(rng, rng.Intn(100))
 		merged := mergeSortedDedup(a, b)

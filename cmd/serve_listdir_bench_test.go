@@ -21,12 +21,12 @@ func buildBenchGraph(b *testing.B, nChildren int) *graph.MemoryStore {
 	rootID := "pkg"
 	root := &graph.Node{ID: rootID, Mode: fs.ModeDir}
 	root.Children = make([]string, nChildren)
-	for i := 0; i < nChildren; i++ {
+	for i := range nChildren {
 		root.Children[i] = fmt.Sprintf("%s/child_%04d", rootID, i)
 	}
 	store.AddRoot(root)
 
-	for i := 0; i < nChildren; i++ {
+	for i := range nChildren {
 		dirID := fmt.Sprintf("%s/child_%04d", rootID, i)
 		store.AddNode(&graph.Node{
 			ID:       dirID,

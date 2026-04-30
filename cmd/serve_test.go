@@ -516,7 +516,7 @@ func TestSearch_RequiredPattern(t *testing.T) {
 func TestSearch_WithLimit(t *testing.T) {
 	store := graph.NewMemoryStore()
 	// Add many refs
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		require.NoError(t, store.AddRef("Token", "path/"+string(rune('A'+i))))
 	}
 	require.NoError(t, store.InitRefsDB())

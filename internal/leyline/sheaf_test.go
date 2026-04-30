@@ -446,7 +446,7 @@ func TestBuildRestrictions_DeterministicOrder(t *testing.T) {
 
 	// Run multiple times to ensure ordering is stable.
 	var prev []restriction
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		r := buildRestrictions(cr, refs)
 		if prev != nil {
 			for j := range r {

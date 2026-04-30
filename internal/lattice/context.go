@@ -340,17 +340,17 @@ func hasAttribute(rec any, attr Attribute) bool {
 		}
 		// Extract the expected suffix from attr.Name beyond the field
 		suffix := strings.TrimPrefix(attr.Name, attr.Field)
-		if strings.HasPrefix(suffix, ".year=") {
-			year := strings.TrimPrefix(suffix, ".year=")
+		if after, ok0 := strings.CutPrefix(suffix, ".year="); ok0 {
+			year := after
 			return len(s) >= 4 && s[:4] == year
 		}
-		if strings.HasPrefix(suffix, ".month=") {
-			month := strings.TrimPrefix(suffix, ".month=")
+		if after, ok0 := strings.CutPrefix(suffix, ".month="); ok0 {
+			month := after
 			return len(s) >= 7 && s[5:7] == month
 		}
 		// Enum: "field=value"
-		if strings.HasPrefix(suffix, "=") {
-			expected := strings.TrimPrefix(suffix, "=")
+		if after, ok0 := strings.CutPrefix(suffix, "="); ok0 {
+			expected := after
 			return s == expected
 		}
 		return false

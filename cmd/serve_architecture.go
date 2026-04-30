@@ -113,10 +113,7 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 			sort.Slice(counts, func(i, j int) bool {
 				return counts[i].count > counts[j].count
 			})
-			limit := 20
-			if len(counts) < limit {
-				limit = len(counts)
-			}
+			limit := min(len(counts), 20)
 			for _, tc := range counts[:limit] {
 				arch.MostReferenced = append(arch.MostReferenced, entryPoint{
 					Symbol: tc.token,
@@ -165,10 +162,7 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 			sort.Slice(syms, func(i, j int) bool {
 				return len(syms[i].ids) > len(syms[j].ids)
 			})
-			limit := 20
-			if len(syms) < limit {
-				limit = len(syms)
-			}
+			limit := min(len(syms), 20)
 			for _, sd := range syms[:limit] {
 				arch.KeyAbstractions = append(arch.KeyAbstractions, keyAbstraction{
 					Symbol: sd.symbol,

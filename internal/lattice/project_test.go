@@ -146,7 +146,7 @@ func makeKEVRecords(n int) []any {
 	records := make([]any, n)
 	vendors := []string{"Acme", "BetaCorp", "GammaInc", "DeltaLLC", "EpsilonSys"}
 	products := []string{"Widget", "Gadget", "Sprocket", "Thingamajig", "Doohickey"}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		records[i] = map[string]any{
 			"schema":     "kev",
 			"identifier": fmt.Sprintf("CVE-2024-%04d", i+1),
@@ -168,7 +168,7 @@ func makeNVDRecords(n int) []any {
 	years := []string{"2023", "2024"}
 	months := []string{"01", "03", "06", "09", "11"}
 	statuses := []string{"Analyzed", "Modified", "Awaiting Analysis"}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		y := years[i%len(years)]
 		m := months[i%len(months)]
 		records[i] = map[string]any{
