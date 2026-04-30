@@ -947,41 +947,61 @@ var unmountCmd = &cobra.Command{
 			mountPoint = filepath.Join(mountsDir, mountName)
 		}
 
-		// Load metadata
-		meta, err := loadMountMetadata(mountPoint)
-		if err != nil {
-			return fmt.Errorf("failed to load mount metadata: %w", err)
+		// Load metadata. The sidecar exists for agent-mode and serve-
+		// mode mounts; direct `mache <path>` and ley-line --control
+		// mounts have no sidecar. Don't fail when it's missing —
+		// unmount the kernel-side NFS first regardless, then clean up
+		// what we can (mache-fsi: 'No agent metadata' case).
+		meta, metaErr := loadMountMetadata(mountPoint)
+
+		isMCPServe := meta != nil && (meta.Type == "mcp-http" || meta.Type == "mcp-stdio")
+
+		// Step 1: kernel-side unmount FIRST (for NFS mounts only).
+		// SIGTERM-then-RemoveAll without an explicit umount races —
+		// if the daemon doesn't finish its own unmount before
+		// RemoveAll runs, we leave a stuck NFS mount that only
+		// `umount -f` can clear (mache-fsi: 'Race' + 'Orphaned mount'
+		// cases). Unmount is idempotent — repeating on an already-
+		// unmounted point logs a warning and we continue.
+		if !isMCPServe {
+			if err := nfsmount.Unmount(mountPoint); err != nil {
+				log.Printf("Note: nfsmount.Unmount(%s): %v (continuing)", mountPoint, err)
+			}
 		}
 
-		// Kill the process
-		if isProcessRunning(meta.PID) {
+		// Step 2: SIGTERM the owning process (only when we have its
+		// PID via the sidecar). For control / sidecar-less mounts
+		// the user is expected to stop the daemon separately.
+		if meta != nil && isProcessRunning(meta.PID) {
 			process, err := os.FindProcess(meta.PID)
-			if err != nil {
-				return fmt.Errorf("failed to find process %d: %w", meta.PID, err)
-			}
+			if err == nil {
+				log.Printf("Stopping mache process (PID %d)...", meta.PID)
+				_ = process.Signal(syscall.SIGTERM)
 
-			log.Printf("Stopping mache process (PID %d)...", meta.PID)
-			if err := process.Signal(syscall.SIGTERM); err != nil {
-				return fmt.Errorf("failed to send SIGTERM: %w", err)
-			}
+				// Wait briefly for graceful shutdown
+				time.Sleep(2 * time.Second)
 
-			// Wait briefly for graceful shutdown
-			time.Sleep(2 * time.Second)
-
-			if isProcessRunning(meta.PID) {
-				log.Printf("Process still running, sending SIGKILL...")
-				_ = process.Signal(syscall.SIGKILL)
+				if isProcessRunning(meta.PID) {
+					log.Printf("Process still running, sending SIGKILL...")
+					_ = process.Signal(syscall.SIGKILL)
+				}
+			} else {
+				log.Printf("Note: failed to find process %d: %v", meta.PID, err)
 			}
 		}
 
-		// Clean up mount directory and sidecar
+		// Step 3: clean up mount directory and sidecar.
 		log.Printf("Removing mount directory: %s", mountPoint)
 		if err := os.RemoveAll(mountPoint); err != nil {
 			return fmt.Errorf("failed to remove mount directory: %w", err)
 		}
 		_ = os.Remove(sidecarPath(mountPoint))
 
-		log.Println("Mount stopped successfully.")
+		if metaErr != nil {
+			log.Printf("Mount stopped (no sidecar metadata; resolved by direct unmount).")
+		} else {
+			log.Println("Mount stopped successfully.")
+		}
 		return nil
 	},
 }
