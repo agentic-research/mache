@@ -118,6 +118,42 @@ func TestLoadExternalSmellRules_RejectsMissingPlaceholder(t *testing.T) {
 	assert.Contains(t, err.Error(), "%s")
 }
 
+// TestLoadExternalSmellRules_HonorsDefaultMinMetric pins that
+// external JSON rules can set DefaultMinMetric and the value
+// round-trips through the loader. Important for rule authors:
+// without this guarantee, a rule that depends on a default
+// threshold (the way long_function does — see #302) couldn't
+// be authored externally and would have to ship in-tree.
+func TestLoadExternalSmellRules_HonorsDefaultMinMetric(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "with_default.json"), []byte(`{
+		"ID": "test_with_default",
+		"Description": "Rule with a default min_metric",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s",
+		"DefaultMinMetric": 42
+	}`), 0o644))
+
+	rules, err := LoadExternalSmellRules(dir)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, int64(42), rules[0].DefaultMinMetric,
+		"DefaultMinMetric must round-trip from JSON to SmellRule")
+}
+
+func TestLoadExternalSmellRules_DefaultMinMetricOmittedDefaultsZero(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "no_default.json"), []byte(`{
+		"ID": "test_no_default",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
+	}`), 0o644))
+
+	rules, err := LoadExternalSmellRules(dir)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, int64(0), rules[0].DefaultMinMetric,
+		"omitted DefaultMinMetric must zero-value (no default → caller's min_metric is sole control)")
+}
+
 func TestLoadExternalSmellRules_RejectsUnescapedPercent(t *testing.T) {
 	dir := t.TempDir()
 	// SQL LIKE with unescaped '%' — would be interpreted as fmt
