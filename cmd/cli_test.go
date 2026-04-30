@@ -109,6 +109,64 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 	assert.GreaterOrEqual(t, refCount, 1, "method's call to standaloneFunc must appear in node_refs (dead_code FP fix)")
 }
 
+// TestBuild_FCAInferenceTagsLanguage guards PR #260: the FCA-inferred
+// schema must be tagged with Language="go" so its selector only
+// applies to .go files. Without the tag, JS function_declarations
+// matched the inferred Go pattern and produced orphan construct dirs
+// (no source/ast.json/doc children) since the Go-shaped templates
+// don't render cleanly against the JS match.
+func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+
+	// a.go provides the inference bootstrap.
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "a.go"),
+		[]byte("package p\n\nfunc onlyGoFunc() {}\n"), 0o644))
+
+	// b.js has a function_declaration with the same shape as Go's.
+	// Without the Language tag, the inferred Go selector matches it
+	// and creates a 'functions/jsFunc' construct dir that becomes an
+	// orphan when {{.scope}} fails to render against the JS shape.
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "b.js"),
+		[]byte("function jsFunc(x) { return x; }\n"), 0o644))
+
+	outDB := filepath.Join(tmpDir, "out.db")
+
+	oldSchemaPath := schemaPath
+	schemaPath = ""
+	defer func() { schemaPath = oldSchemaPath }()
+
+	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
+
+	db, err := sql.Open("sqlite", outDB)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Go func should be present.
+	var hasGoFunc int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM nodes WHERE id = 'functions/onlyGoFunc'`,
+	).Scan(&hasGoFunc))
+	assert.Equal(t, 1, hasGoFunc, "Go function_declaration must be ingested")
+
+	// JS func must NOT be present in functions/ — should be routed to
+	// _project_files/ since the inferred-Go schema is now tagged
+	// Language='go' and won't apply to .js files.
+	var hasJSFunc int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM nodes WHERE id = 'functions/jsFunc'`,
+	).Scan(&hasJSFunc))
+	assert.Equal(t, 0, hasJSFunc, "JS function_declaration must not match the Go-tagged inferred schema (PR #260)")
+
+	// b.js should appear under _project_files/ instead.
+	var inProjectFiles int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM nodes WHERE id LIKE '_project_files/%' AND name = 'b.js'`,
+	).Scan(&inProjectFiles))
+	assert.GreaterOrEqual(t, inProjectFiles, 1, "non-Go files should land in _project_files/")
+}
+
 // TestBuild_SchemaPathRelative guards the resolveSchema call site.
 // Passing 'examples/go-schema.json' on the CLI used to double-prepend
 // the directory ('examples/examples/go-schema.json'). Build now passes
