@@ -484,7 +484,10 @@ func (s *MemoryStore) RefsMap() map[string][]string {
 }
 
 // DefsMap returns a snapshot of the token→dirIDs definition map.
-// Used by find_definition to locate where symbols are defined.
+// Used by find_definition's case-insensitive and fuzzy paths and by
+// search role=definition — anywhere callers need to iterate. The
+// anchored-exact path in find_definition should use LookupDef
+// instead to avoid the O(N) snapshot copy.
 func (s *MemoryStore) DefsMap() map[string][]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -493,6 +496,22 @@ func (s *MemoryStore) DefsMap() map[string][]string {
 		cp[k] = append([]string(nil), v...)
 	}
 	return cp
+}
+
+// LookupDef returns the dir IDs that define `token` without
+// snapshotting the entire defs map. Returns nil for unknown tokens.
+// O(1) under the read lock; the returned slice is a copy so callers
+// can mutate it without races. Pair with DefsMap when the caller
+// needs to iterate (case-insensitive matching, fuzzy substring,
+// etc.); use this when one specific token's IDs are wanted.
+func (s *MemoryStore) LookupDef(token string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids, ok := s.defs[token]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), ids...)
 }
 
 // DeleteFileNodes removes all nodes that originated from the given source file.

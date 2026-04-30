@@ -906,15 +906,35 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		fuzzy := request.GetBool("fuzzy", false)
 
+		// 1. Anchored exact match — case-sensitive. Use LookupDef
+		// when the backend supports it: O(1) map lookup, no
+		// O(N) snapshot copy of the entire defs map. Falls back
+		// to DefsMap for backends that haven't implemented the
+		// optional lookup method.
+		if dl, ok := g.(defsLookuper); ok {
+			if dirIDs := dl.LookupDef(symbol); len(dirIDs) > 0 {
+				if r := findDefinitionResultScoped(g, symbol, dirIDs); r != nil {
+					return r, nil
+				}
+				return findDefinitionResult(symbol, dirIDs), nil
+			}
+		}
+
+		// Backends that ONLY expose DefsMap (older/composite shapes)
+		// or that didn't hit on the LookupDef path fall through to
+		// the snapshot for the case-insensitive + fuzzy paths below.
 		dp := g.(defsMapProvider)
 		defs := dp.DefsMap()
 
-		// 1. Anchored exact match — case-sensitive.
-		if dirIDs, ok := defs[symbol]; ok {
-			if r := findDefinitionResultScoped(g, symbol, dirIDs); r != nil {
-				return r, nil
+		// 1b. Anchored exact via the snapshot — only reached when
+		// the backend lacks a defsLookuper. Mirrors the old behavior.
+		if _, hasLookup := g.(defsLookuper); !hasLookup {
+			if dirIDs, ok := defs[symbol]; ok {
+				if r := findDefinitionResultScoped(g, symbol, dirIDs); r != nil {
+					return r, nil
+				}
+				return findDefinitionResult(symbol, dirIDs), nil
 			}
-			return findDefinitionResult(symbol, dirIDs), nil
 		}
 
 		// 2. Anchored exact match — case-insensitive.
