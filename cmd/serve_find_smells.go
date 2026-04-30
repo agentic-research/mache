@@ -47,6 +47,13 @@ type SmellRule struct {
 	Description string   // shown in the help payload
 	Query       string   // SQL with one `%s` placeholder for the optional scope clause
 	ScopeColumn string   // SQL expression to compare to source_id; empty disables source_id scoping
+	// Requires lists the SQL tables this rule reads. Surfaced in the
+	// rules listing so an agent can decide upfront whether the rule is
+	// usable on the active backend. Standalone mache emits `nodes`,
+	// `node_refs`, `node_defs`; LLO-built .db additionally has `_ast`,
+	// `_source`, `_imports`, `_lsp*`. See docs/ARCHITECTURE.md
+	// "Interplay with ley-line-open" for the full table.
+	Requires []string
 }
 
 // smellRegistry holds the built-in rules.
@@ -55,6 +62,7 @@ var smellRegistry = []SmellRule{
 		ID:          "magic_int_in_comparison",
 		Languages:   []string{"go"},
 		Description: "Go binary expressions where an int_literal appears as a direct operand. Each match is a candidate magic constant — replace with a named const if the value carries domain meaning.",
+		Requires:    []string{"_ast", "nodes"},
 		ScopeColumn: "lit.source_id",
 		Query: `
 			SELECT lit.source_id, lit.node_id, lit.start_byte, lit.end_byte, lit.start_row, lit.start_col, 0 AS metric
@@ -71,6 +79,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "dead_code",
 		Description: "Symbols defined in node_defs that have no entries in node_refs — nothing in the indexed graph references them. False positives expected for entry points (main, init), interface methods invoked dynamically (String, Error), and exported API consumed outside the indexed scope. The skip list at the top of the rule excludes the most common offenders; tune by editing the rule.",
+		Requires:    []string{"node_defs", "node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
 			SELECT COALESCE(n.source_file, '') AS source_id,
@@ -93,6 +102,7 @@ var smellRegistry = []SmellRule{
 		ID:          "cyclomatic_complexity",
 		Languages:   []string{"go"},
 		Description: "Per-function cyclomatic complexity, computed as the count of control-flow AST nodes (if/for/case/select-case) inside each function or method body. Findings are sorted descending by metric — agents typically only care about the top N, so pair with `min_metric` to set a cutoff (e.g. 10 for 'noteworthy', 20 for 'review now'). Rule scopes via fn.source_id when source_id is provided.",
+		Requires:    []string{"_ast"},
 		ScopeColumn: "fn.source_id",
 		Query: `
 			SELECT fn.source_id,
@@ -117,6 +127,7 @@ var smellRegistry = []SmellRule{
 		ID:          "long_function",
 		Languages:   []string{"go"},
 		Description: "Functions and methods whose body spans more than 80 source lines (end_row - start_row). Sorted descending by line count. Threshold is hard-coded today — use cyclomatic_complexity for a sister metric on the same nodes.",
+		Requires:    []string{"_ast"},
 		ScopeColumn: "fn.source_id",
 		Query: `
 			SELECT fn.source_id,
@@ -137,6 +148,7 @@ var smellRegistry = []SmellRule{
 		ID:          "untested_function",
 		Languages:   []string{"go"},
 		Description: "Exported Go functions with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Excludes Test*/Benchmark*/Example* (they ARE tests) and main/init (entry points). The rule's heuristic is Go-specific — running it against a Python or Rust .db will produce mostly noise.",
+		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
 			SELECT COALESCE(n.source_file, '') AS source_id,
@@ -162,6 +174,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "duplicate_definitions",
 		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Cross-language since node_defs is populated by every leyline parser.",
+		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
 			SELECT COALESCE(n.source_file, '') AS source_id,
@@ -194,6 +207,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "fan_out_skew",
 		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
+		Requires:    []string{"node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
 			WITH fanout AS (
@@ -223,6 +237,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "long_file",
 		Description: "Source files exceeding 1500 lines (end_row reported on the source-file root AST node). Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind. Threshold hard-coded today.",
+		Requires:    []string{"_ast"},
 		ScopeColumn: "src.source_id",
 		Query: `
 			SELECT src.source_id,
@@ -335,6 +350,7 @@ func rulesListing() any {
 		ID          string   `json:"id"`
 		Languages   []string `json:"languages,omitempty"`
 		Description string   `json:"description"`
+		Requires    []string `json:"requires,omitempty"`
 	}
 	out := make([]ruleSummary, 0, len(smellRegistry))
 	for _, r := range smellRegistry {
@@ -342,6 +358,7 @@ func rulesListing() any {
 			ID:          r.ID,
 			Languages:   r.Languages,
 			Description: r.Description,
+			Requires:    r.Requires,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -349,7 +366,7 @@ func rulesListing() any {
 		Help  string        `json:"help"`
 		Rules []ruleSummary `json:"rules"`
 	}{
-		Help:  "find_smells runs structural pattern queries against the _ast table. Pass `rule` to scan; omit it (this response) to list available rules. Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold (default 0).",
+		Help:  "find_smells runs structural pattern queries against the _ast / nodes / node_defs / node_refs tables. Pass `rule` to scan; omit it (this response) to list available rules. Each rule entry includes a `requires` list of SQL tables it reads — agents can use it to skip rules whose tables aren't present on the active backend (e.g. _ast is only populated by ley-line-open's leyline parse). Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold (default 0).",
 		Rules: out,
 	}
 }
