@@ -334,6 +334,64 @@ func TestFindSmells_DeadCode(t *testing.T) {
 		"source_id comes from the construct dir's source_file column")
 }
 
+// TestFindSmells_DeadCodePerNodeAggregation asserts that dead_code
+// aggregates by node_id, not by token. A function with multiple
+// token aliases (bare + qualified) where ANY token is referenced
+// must NOT be flagged dead, and the response never contains
+// duplicate node_id entries.
+//
+// Surfaced by dogfooding mache against itself: 'functions/Unmount'
+// has three tokens (Unmount, mount.Unmount, nfsmount.Unmount); only
+// the bare 'Unmount' has refs, so the old per-token query flagged
+// the construct twice (once per qualified-but-unreferenced token).
+func TestFindSmells_DeadCodePerNodeAggregation(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Multi-token live construct: 3 aliases, only bare has refs.
+		-- Old per-token query flagged this twice (once per qualified
+		-- alias). New per-node query treats it as live (any-token-
+		-- referenced means live).
+		INSERT INTO node_defs VALUES
+		  ('Unmount',          'pkg/Unmount'),
+		  ('mount.Unmount',    'pkg/Unmount'),
+		  ('nfsmount.Unmount', 'pkg/Unmount');
+		INSERT INTO node_refs VALUES ('Unmount', 'pkg/Caller/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/Unmount', 'pkg', 'Unmount', 1, 0, 'unmount.go', '');
+
+		-- Truly dead: 2 token aliases, neither referenced.
+		INSERT INTO node_defs VALUES
+		  ('Orphan',     'pkg/Orphan'),
+		  ('pkg.Orphan', 'pkg/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/Orphan', 'pkg', 'Orphan', 1, 0, 'orphan.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"pkg/Orphan"}, gotIDs,
+		"only Orphan is flagged; Unmount has a referenced bare token; no duplicate node_ids")
+}
+
 // TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes asserts that
 // Test*, Benchmark*, Example*, Fuzz* defs with no static refs are NOT
 // flagged. Go's testing framework invokes them via reflection, so they

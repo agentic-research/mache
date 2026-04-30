@@ -78,33 +78,47 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "dead_code",
-		Description: "Symbols defined in node_defs that have no entries in node_refs — nothing in the indexed graph references them. False positives expected for entry points (main, init), interface methods invoked dynamically (String, Error), and exported API consumed outside the indexed scope. Test*/Benchmark*/Example* are skip-listed because Go's testing framework invokes them via reflection (no static refs). The skip list at the top of the rule excludes the most common offenders; tune by editing the rule.",
+		Description: "Constructs whose tokens (any alias — bare 'Foo' or qualified 'pkg.Foo') have NO entries in node_refs. Aggregated per construct, not per token: a function with three token aliases where any one is referenced is treated as live. Skip list rejects entry points (main, init), interface methods invoked dynamically (String, Error, Read, Write, ...), and the testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (the runtime invokes those reflectively). False positives still expected for exported API consumed outside the indexed scope.",
 		Requires:    []string{"node_defs", "node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
+			-- A construct is "alive" if ANY of its token aliases appears
+			-- in node_refs. We flag a construct as dead only when every
+			-- one of its tokens is unreferenced.
+			WITH alive AS (
+				SELECT DISTINCT d.node_id
+				FROM node_defs d
+				JOIN node_refs r ON r.token = d.token
+			),
+			-- Skip-listed: any token of a construct matches a skip rule.
+			-- ANY-MATCH is the right semantic — a function with both
+			-- 'TestFoo' and 'pkg.TestFoo' should be skipped on the
+			-- testing-framework rule even if only one row triggers.
+			skipped AS (
+				SELECT DISTINCT node_id FROM node_defs
+				WHERE token IN ('main','init','String','Error','Read','Write','Close','Len','Less','Swap','MarshalJSON','UnmarshalJSON','Format','Scan')
+				   -- Strip any 'pkg.' qualifier when matching prefixes.
+				   -- instr returns 0 if there's no dot; substr(token, 1)
+				   -- is the full token, so bare and qualified shapes both
+				   -- get the same leaf check.
+				   OR substr(token, instr(token, '.') + 1) LIKE 'Test%%'
+				   OR substr(token, instr(token, '.') + 1) LIKE 'Benchmark%%'
+				   OR substr(token, instr(token, '.') + 1) LIKE 'Example%%'
+				   OR substr(token, instr(token, '.') + 1) LIKE 'Fuzz%%'
+			)
 			SELECT COALESCE(n.source_file, '') AS source_id,
-			       defs.node_id,
+			       n.id AS node_id,
 			       0  AS start_byte,
 			       0  AS end_byte,
 			       0  AS start_row,
 			       0  AS start_col,
 			       0  AS metric
-			FROM node_defs defs
-			JOIN nodes n ON n.id = defs.node_id
-			LEFT JOIN node_refs refs ON refs.token = defs.token
-			WHERE refs.token IS NULL
-			  AND defs.token NOT IN ('main','init','String','Error','Read','Write','Close','Len','Less','Swap','MarshalJSON','UnmarshalJSON','Format','Scan')
-			  -- Skip-list testing-framework prefixes after stripping any 'pkg.'
-			  -- qualifier — mache writers emit either bare 'TestFoo' or
-			  -- qualified 'pkg.TestFoo'. instr(token, '.') is 0 when there's
-			  -- no dot, and substr(token, 1) is the full token, so this
-			  -- handles both shapes.
-			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Test%%'
-			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Benchmark%%'
-			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Example%%'
-			  AND substr(defs.token, instr(defs.token, '.') + 1) NOT LIKE 'Fuzz%%'
+			FROM nodes n
+			WHERE n.id IN (SELECT DISTINCT node_id FROM node_defs)
+			  AND n.id NOT IN (SELECT node_id FROM alive)
+			  AND n.id NOT IN (SELECT node_id FROM skipped)
 			%s
-			ORDER BY COALESCE(n.source_file, ''), defs.node_id
+			ORDER BY COALESCE(n.source_file, ''), n.id
 		`,
 	},
 	{
