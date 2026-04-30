@@ -256,7 +256,7 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "untested_function",
 		Languages:   []string{"go"},
-		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. The check accepts two counterpart patterns: exact 'Test<Foo>' for a function named 'Foo', or any 'Test<Bar>...' (prefix) for a constructor named 'NewBar' — Go convention puts constructor coverage under TestBar / TestBar_<MethodName>, not TestNewBar. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is skipped — generated APIs aren't expected to have project tests. source_id falls back to a child's source_file when the construct dir doesn't carry one. Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
+		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no test coverage. Static proxy: a function is considered covered if EITHER a same-named 'Test<Foo>' counterpart exists in node_defs OR the function is referenced from inside any 'Test*'/'Benchmark*'/'Example*' construct's source (i.e. a test calls it). Constructors named 'NewBar' are also satisfied by any 'TestBar*' prefix match — Go convention puts constructor coverage under TestBar_<MethodName>, not TestNewBar. False positives expected for tests that exercise functions only via reflection or shell-out. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>. Excludes Test*/Benchmark*/Example* tokens themselves, plus main/init. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is skipped. source_id falls back to a child's source_file when the construct dir doesn't carry one.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
@@ -266,6 +266,25 @@ var smellRegistry = []SmellRule{
 				FROM nodes
 				WHERE source_file IS NOT NULL AND source_file != ''
 				GROUP BY parent_id
+			),
+			-- Test-call coverage: a function is exercised if any
+			-- ref to its token comes from a caller node whose
+			-- construct dir name matches Test*/Benchmark*/Example*.
+			-- Captures both schema shapes:
+			--   functions/TestFoo/source            (FCA-inferred)
+			--   pkg/functions/TestFoo/source        (go-schema)
+			-- 'BenchmarkFoo' / 'ExampleFoo' / 'FuzzFoo' too.
+			tested_via_call AS (
+				SELECT DISTINCT token
+				FROM node_refs
+				WHERE node_id LIKE '%%/Test%%/source'
+				   OR node_id LIKE 'Test%%/source'
+				   OR node_id LIKE '%%/Benchmark%%/source'
+				   OR node_id LIKE 'Benchmark%%/source'
+				   OR node_id LIKE '%%/Example%%/source'
+				   OR node_id LIKE 'Example%%/source'
+				   OR node_id LIKE '%%/Fuzz%%/source'
+				   OR node_id LIKE 'Fuzz%%/source'
 			)
 			SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') AS source_id,
 			       d.node_id,
@@ -290,12 +309,17 @@ var smellRegistry = []SmellRule{
 			    AND length(d.token) > 3
 			    AND t.token LIKE 'Test' || substr(d.token, 4) || '%%'
 			  )
+			-- Static-call test coverage. Token referenced from inside
+			-- any Test*/Benchmark*/Example*/Fuzz* construct's source.
+			LEFT JOIN tested_via_call tc ON tc.token = d.token
 			WHERE substr(d.token, 1, 1) GLOB '[A-Z]'
 			  AND d.token NOT LIKE 'Test%%'
 			  AND d.token NOT LIKE 'Benchmark%%'
 			  AND d.token NOT LIKE 'Example%%'
+			  AND d.token NOT LIKE 'Fuzz%%'
 			  AND d.token NOT IN ('main','init','String','Error')
 			  AND t.token IS NULL
+			  AND tc.token IS NULL
 			  -- Restrict to constructs in a 'functions/' category dir.
 			  -- 'functions/Foo' (auto-inferred flat shape) and
 			  -- 'pkg/functions/Foo' (explicit go-schema package shape)
