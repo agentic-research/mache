@@ -285,7 +285,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "duplicate_definitions",
-		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Excludes 'imports/' nodes — they're references TO external packages, not definitions. source_id falls back to a child's source_file when the construct dir doesn't carry one. Cross-language since node_defs is populated by every leyline parser.",
+		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Excludes 'imports/' (refs to external packages, not defs) and the non-callable categories types/, constants/, variables/ — short names like 'content', 'src', 'name' duplicate across functions and aren't meaningful 'duplicate definitions'. source_id falls back to a child's source_file when the construct dir doesn't carry one. Cross-language since node_defs is populated by every leyline parser.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
@@ -320,20 +320,35 @@ var smellRegistry = []SmellRule{
 					'MarshalJSON','UnmarshalJSON','MarshalText','UnmarshalText','MarshalBinary','UnmarshalBinary',
 					'Marshal','Unmarshal','Reset','Clone','Copy','Equal','Hash','Validate'
 				)
-				-- Exclude imports/ nodes — those are references TO
-				-- external packages (e.g. '"fmt"' appears in many
-				-- imports), not duplicate definitions.
+				-- Exclude imports/ (refs TO external packages, not
+				-- defs) and non-callable categories (short names
+				-- like 'content', 'src', 'name' duplicate across
+				-- functions and aren't meaningful 'duplicates').
 				AND node_id NOT LIKE '%%/imports/%%'
+				AND node_id NOT LIKE 'imports/%%'
+				AND node_id NOT LIKE '%%/types/%%'
+				AND node_id NOT LIKE 'types/%%'
+				AND node_id NOT LIKE '%%/constants/%%'
+				AND node_id NOT LIKE 'constants/%%'
+				AND node_id NOT LIKE '%%/variables/%%'
+				AND node_id NOT LIKE 'variables/%%'
 				GROUP BY token
 				HAVING copies > 1
 			) c
 			JOIN node_defs d ON d.token = c.token
 			JOIN nodes n ON n.id = d.node_id
 			LEFT JOIN child_source cs ON cs.node_id = n.id
-			-- Apply the same import filter to the join so partial
-			-- matches (where one repo's imports overlap with a real
-			-- def in another repo) don't leak through.
+			-- Apply the same filters to the join so partial matches
+			-- (where one repo's imports overlap with a real def in
+			-- another repo) don't leak through.
 			WHERE d.node_id NOT LIKE '%%/imports/%%'
+			  AND d.node_id NOT LIKE 'imports/%%'
+			  AND d.node_id NOT LIKE '%%/types/%%'
+			  AND d.node_id NOT LIKE 'types/%%'
+			  AND d.node_id NOT LIKE '%%/constants/%%'
+			  AND d.node_id NOT LIKE 'constants/%%'
+			  AND d.node_id NOT LIKE '%%/variables/%%'
+			  AND d.node_id NOT LIKE 'variables/%%'
 			%s
 			ORDER BY metric DESC, source_id, d.node_id
 		`,
