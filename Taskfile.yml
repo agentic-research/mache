@@ -106,6 +106,23 @@ tasks:
     cmds:
       - go run main.go -file subject/parser.go -target FuzzParseToken
 
+  smells:
+    desc: Dogfood — index this repo and run the standalone find_smells rules locally
+    deps: [build]
+    vars:
+      DB: /tmp/mache-smells.db
+    cmds:
+      # Mirror what the find-smells GHA does (.github/workflows/find-smells.yml)
+      # so local results match what the workflow will report on a PR.
+      # The five rules below are the standalone (no-LLO) set that work
+      # against node_defs / node_refs / nodes — the same ones the GHA runs.
+      - rm -f {{.DB}}
+      - ./{{.BINARY_NAME}} build --schema examples/go-schema.json . {{.DB}}
+      - for rule in dead_code untested_function duplicate_definitions fan_out_skew god_file; do
+          printf "\n=== %s ===\n" "$rule";
+          ./{{.BINARY_NAME}} find-smells --db {{.DB}} --rule "$rule" --format md --limit 200;
+        done
+
   check:
     desc: Run all checks (fmt, vet, lint, test, validate)
     cmds:
