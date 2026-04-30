@@ -1317,6 +1317,65 @@ func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
 	assert.Empty(t, resp.Findings, "generated capnp.go file must be skipped despite high def count")
 }
 
+// TestFindSmells_GodFileSkipsTestFiles asserts that *_test.go files
+// aren't flagged even with hundreds of test functions — test files
+// accumulate TestXxx + setupXxx helpers without representing
+// architectural sprawl.
+//
+// Surfaced by dogfood: cmd/serve_test.go had 340 defs and topped
+// god_file. After this fix that finding is filtered.
+func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- 12 defs in a *_test.go file — would normally trigger
+		-- god_file, but must be skipped by the *_test.go suffix.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/TestA','pkg/functions','TestA',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestB','pkg/functions','TestB',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestC','pkg/functions','TestC',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestD','pkg/functions','TestD',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestE','pkg/functions','TestE',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestF','pkg/functions','TestF',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestG','pkg/functions','TestG',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestH','pkg/functions','TestH',1,0,'foo_test.go',''),
+		  ('pkg/functions/TestI','pkg/functions','TestI',1,0,'foo_test.go',''),
+		  ('pkg/functions/setupX','pkg/functions','setupX',1,0,'foo_test.go',''),
+		  ('pkg/functions/setupY','pkg/functions','setupY',1,0,'foo_test.go',''),
+		  ('pkg/functions/setupZ','pkg/functions','setupZ',1,0,'foo_test.go','');
+		INSERT INTO node_defs VALUES
+		  ('TestA','pkg/functions/TestA'),('TestB','pkg/functions/TestB'),
+		  ('TestC','pkg/functions/TestC'),('TestD','pkg/functions/TestD'),
+		  ('TestE','pkg/functions/TestE'),('TestF','pkg/functions/TestF'),
+		  ('TestG','pkg/functions/TestG'),('TestH','pkg/functions/TestH'),
+		  ('TestI','pkg/functions/TestI'),
+		  ('setupX','pkg/functions/setupX'),('setupY','pkg/functions/setupY'),
+		  ('setupZ','pkg/functions/setupZ');
+
+		-- A few normal files to populate the project mean.
+		INSERT INTO node_defs VALUES
+		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/N1','functions','N1',1,0,'a.go',''),
+		  ('functions/N2','functions','N2',1,0,'b.go',''),
+		  ('functions/N3','functions','N3',1,0,'c.go','');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	assert.Empty(t, resp.Findings, "*_test.go file must be skipped despite high def count")
+}
+
 // TestFindSmells_FanOutSkew seeds a god-function and several normal
 // callers and asserts only the god-function is flagged. Mean fan-out
 // is (12 + 6×1) / 7 ≈ 2.57; 3×mean ≈ 7.7, well below the god's 12.
