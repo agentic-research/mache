@@ -78,9 +78,9 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "dead_code",
-		Description: "Constructs whose tokens (any alias — bare 'Foo' or qualified 'pkg.Foo') have NO entries in node_refs. Aggregated per construct, not per token: a function with three token aliases where any one is referenced is treated as live. Skip list rejects entry points (main, init), interface methods invoked dynamically (String, Error, Read, Write, ...), and the testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (the runtime invokes those reflectively). False positives still expected for exported API consumed outside the indexed scope.",
+		Description: "Constructs whose tokens (any alias — bare 'Foo' or qualified 'pkg.Foo') have NO entries in node_refs. Aggregated per construct, not per token: a function with three token aliases where any one is referenced is treated as live. Skip list rejects entry points (main, init), interface methods invoked dynamically (String, Error, Read, Write, ...), and the testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (the runtime invokes those reflectively). source_id falls back to a child's source_file when the construct dir itself doesn't carry one (the schema engine sets source_file on leaf nodes — `source`, `ast.json`, `doc` — but not on the wrapping construct dir). False positives still expected for exported API consumed outside the indexed scope.",
 		Requires:    []string{"node_defs", "node_refs", "nodes"},
-		ScopeColumn: "COALESCE(n.source_file, '')",
+		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
 			-- A construct is "alive" if ANY of its token aliases appears
 			-- in node_refs. We flag a construct as dead only when every
@@ -105,8 +105,22 @@ var smellRegistry = []SmellRule{
 				   OR substr(token, instr(token, '.') + 1) LIKE 'Benchmark%%'
 				   OR substr(token, instr(token, '.') + 1) LIKE 'Example%%'
 				   OR substr(token, instr(token, '.') + 1) LIKE 'Fuzz%%'
+			),
+			-- Resolve source_file via children when the construct dir
+			-- itself has none. The schema engine attaches Origin (and
+			-- thus source_file) to the leaf rendered files (source,
+			-- ast.json, doc) but not to the wrapping construct dir.
+			-- Without this fallback every dead_code finding scopes to
+			-- '' (the empty string) and the find_smells GHA filters
+			-- nothing against the PR diff.
+			child_source AS (
+				SELECT parent_id AS node_id,
+				       MIN(source_file) AS source_file
+				FROM nodes
+				WHERE source_file IS NOT NULL AND source_file != ''
+				GROUP BY parent_id
 			)
-			SELECT COALESCE(n.source_file, '') AS source_id,
+			SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') AS source_id,
 			       n.id AS node_id,
 			       0  AS start_byte,
 			       0  AS end_byte,
@@ -114,6 +128,7 @@ var smellRegistry = []SmellRule{
 			       0  AS start_col,
 			       0  AS metric
 			FROM nodes n
+			LEFT JOIN child_source cs ON cs.node_id = n.id
 			WHERE n.id IN (SELECT DISTINCT node_id FROM node_defs)
 			  AND n.id NOT IN (SELECT node_id FROM alive)
 			  AND n.id NOT IN (SELECT node_id FROM skipped)
@@ -125,7 +140,7 @@ var smellRegistry = []SmellRule{
 			  -- external packages. Skip them.
 			  AND n.id NOT LIKE '%%/imports/%%'
 			%s
-			ORDER BY COALESCE(n.source_file, ''), n.id
+			ORDER BY source_id, n.id
 		`,
 	},
 	{
@@ -177,11 +192,18 @@ var smellRegistry = []SmellRule{
 	{
 		ID:          "untested_function",
 		Languages:   []string{"go"},
-		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
+		Description: "Exported Go standalone functions (only constructs under a 'functions/' category) with no Test<Foo> counterpart anywhere in node_defs. Static proxy for test coverage — false positives expected for table-driven tests (one TestFoo covers multiple Foos), test helpers, and exported functions intentionally tested at integration boundaries. Methods, types, constants, variables, and imports are skipped: Go test names use Test<Func> not Test<Receiver>.<Method>, and types/constants don't follow the Test<Name> convention. Excludes Test*/Benchmark*/Example* tokens (they ARE tests) and main/init (entry points). source_id falls back to a child's source_file when the construct dir doesn't carry one. Heuristic is Go-specific — running against a Python or Rust .db will produce mostly noise.",
 		Requires:    []string{"node_defs", "nodes"},
-		ScopeColumn: "COALESCE(n.source_file, '')",
+		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
-			SELECT COALESCE(n.source_file, '') AS source_id,
+			WITH child_source AS (
+				SELECT parent_id AS node_id,
+				       MIN(source_file) AS source_file
+				FROM nodes
+				WHERE source_file IS NOT NULL AND source_file != ''
+				GROUP BY parent_id
+			)
+			SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') AS source_id,
 			       d.node_id,
 			       0 AS start_byte,
 			       0 AS end_byte,
@@ -190,6 +212,7 @@ var smellRegistry = []SmellRule{
 			       0 AS metric
 			FROM node_defs d
 			JOIN nodes n ON n.id = d.node_id
+			LEFT JOIN child_source cs ON cs.node_id = n.id
 			LEFT JOIN node_defs t ON t.token = 'Test' || d.token
 			WHERE substr(d.token, 1, 1) GLOB '[A-Z]'
 			  AND d.token NOT LIKE 'Test%%'
@@ -205,16 +228,23 @@ var smellRegistry = []SmellRule{
 			  -- TestFoo naming convention.
 			  AND (d.node_id LIKE 'functions/%%' OR d.node_id LIKE '%%/functions/%%')
 			%s
-			ORDER BY COALESCE(n.source_file, ''), d.token
+			ORDER BY source_id, d.token
 		`,
 	},
 	{
 		ID:          "duplicate_definitions",
-		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Excludes 'imports/' nodes — they're references TO external packages, not definitions. Cross-language since node_defs is populated by every leyline parser.",
+		Description: "Symbols defined under more than one node_id in node_defs — same token, multiple definition sites. Common for genuinely-redundant helpers re-implemented per package; routine for Go interface methods like String/Error/Read/Write where one type per package is expected. The skip list excludes those interface contracts; tune by editing the rule. Metric is the duplicate count, sorted descending. Excludes 'imports/' nodes — they're references TO external packages, not definitions. source_id falls back to a child's source_file when the construct dir doesn't carry one. Cross-language since node_defs is populated by every leyline parser.",
 		Requires:    []string{"node_defs", "nodes"},
-		ScopeColumn: "COALESCE(n.source_file, '')",
+		ScopeColumn: "COALESCE(NULLIF(n.source_file, ''), cs.source_file, '')",
 		Query: `
-			SELECT COALESCE(n.source_file, '') AS source_id,
+			WITH child_source AS (
+				SELECT parent_id AS node_id,
+				       MIN(source_file) AS source_file
+				FROM nodes
+				WHERE source_file IS NOT NULL AND source_file != ''
+				GROUP BY parent_id
+			)
+			SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') AS source_id,
 			       d.node_id,
 			       0 AS start_byte,
 			       0 AS end_byte,
@@ -247,12 +277,13 @@ var smellRegistry = []SmellRule{
 			) c
 			JOIN node_defs d ON d.token = c.token
 			JOIN nodes n ON n.id = d.node_id
+			LEFT JOIN child_source cs ON cs.node_id = n.id
 			-- Apply the same import filter to the join so partial
 			-- matches (where one repo's imports overlap with a real
 			-- def in another repo) don't leak through.
 			WHERE d.node_id NOT LIKE '%%/imports/%%'
 			%s
-			ORDER BY metric DESC, n.source_file, d.node_id
+			ORDER BY metric DESC, source_id, d.node_id
 		`,
 	},
 	{
