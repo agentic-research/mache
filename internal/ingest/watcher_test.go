@@ -27,7 +27,17 @@ func TestWatcher_Debounce(t *testing.T) {
 	}
 	onDelete := func(path string) {}
 
-	w, err := NewWatcher(tmpDir, onChange, onDelete, WithDebounce(50*time.Millisecond))
+	// Larger debounce window so the inter-write gap is reliably
+	// shorter than the debounce timer even on slow CI runners.
+	// Original 50ms / 10ms ratio (5x headroom) flaked when
+	// scheduler latency stretched a 10ms sleep past 50ms,
+	// causing the timer to fire mid-stream — see PR #294 retry.
+	// 250ms / 25ms keeps the same 10x ratio in absolute terms but
+	// gives ~5x more headroom for jittery runners.
+	const debounce = 250 * time.Millisecond
+	const interWriteGap = 25 * time.Millisecond
+
+	w, err := NewWatcher(tmpDir, onChange, onDelete, WithDebounce(debounce))
 	require.NoError(t, err)
 	defer w.Stop()
 
@@ -36,15 +46,23 @@ func TestWatcher_Debounce(t *testing.T) {
 	for i := range 5 {
 		err := os.WriteFile(goFile, []byte("package main // v"+string(rune('0'+i))), 0o644)
 		require.NoError(t, err)
-		time.Sleep(10 * time.Millisecond) // faster than debounce
+		time.Sleep(interWriteGap)
 	}
 
-	// Wait for debounce to settle.
-	time.Sleep(200 * time.Millisecond)
+	// Wait several debounce windows to be confident the timer
+	// fired AND no late callbacks are still pending. Using a
+	// fixed 4× window instead of polling because the post-condition
+	// is "no MORE callbacks fire after this point" — polling for
+	// "exactly 1" would race with a possible second callback.
+	time.Sleep(4 * debounce)
 
-	// Should have coalesced into a single callback.
+	// Should have coalesced into a single callback. Use LessOrEqual
+	// + GreaterOrEqual to give a clear failure message that
+	// distinguishes "0 fired" (timer leak) from "2+ fired"
+	// (debounce misconfigured / inter-write gap too long).
 	count := callCount.Load()
-	assert.Equal(t, int32(1), count, "rapid writes should produce exactly 1 callback, got %d", count)
+	assert.GreaterOrEqual(t, count, int32(1), "at least one callback must fire")
+	assert.LessOrEqual(t, count, int32(1), "rapid writes within %v should coalesce to 1 callback (got %d) — inter-write gap %v too close to debounce window?", debounce, count, interWriteGap)
 
 	mu.Lock()
 	assert.Equal(t, goFile, lastPath)
