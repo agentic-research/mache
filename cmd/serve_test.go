@@ -482,6 +482,55 @@ func TestSearch_Found(t *testing.T) {
 	assert.Equal(t, "Helper", results[0].Token)
 }
 
+// TestSearch_FiltersFileLevelSentinel pins that search results
+// from role=reference (the default) never include the engine's
+// '_file_level:<path>' sentinel rows added in PR #270 to mark
+// file-level fn-value refs as alive without polluting per-construct
+// caller counts.
+//
+// Without the filter, an agent searching for a token referenced
+// only at file scope (e.g. cobra var declarations using
+// RunE: someFunc) would see results like:
+//
+//	{"token": "someFunc", "path": "_file_level:/abs/path/file.go"}
+//
+// — surfacing internal sentinel state as if it were a real
+// caller location. NodesTableReader.GetCallers already filters
+// these for find_callers; this puts search/role=reference in
+// agreement.
+func TestSearch_FiltersFileLevelSentinel(t *testing.T) {
+	store := buildTestGraph(t)
+	require.NoError(t, store.InitRefsDB())
+	defer func() { _ = store.Close() }()
+
+	// Add a sentinel ref alongside the legitimate one. The token
+	// "Helper" already has one real caller (pkg/main/source) from
+	// buildTestGraph; adding the sentinel mirrors what the engine
+	// produces when a file-level pattern (e.g. cobra var decl)
+	// references the same token at file scope.
+	require.NoError(t, store.AddRef("Helper", "_file_level:/some/file.go"))
+	require.NoError(t, store.FlushRefs())
+
+	handler := makeSearchHandler(store)
+	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "Helper"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	type searchResult struct {
+		Token string `json:"token"`
+		Path  string `json:"path"`
+	}
+	var results []searchResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+
+	for _, r := range results {
+		assert.NotContains(t, r.Path, "_file_level:",
+			"sentinel rows must be filtered from search results")
+	}
+	// Sanity: the legitimate caller is still surfaced.
+	require.NotEmpty(t, results, "real caller must still be returned")
+}
+
 func TestSearch_NoResults(t *testing.T) {
 	store := buildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())

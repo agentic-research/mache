@@ -621,6 +621,14 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		// Reference search (default): query mache_refs (vtab) or node_refs (real table).
 		// Leyline-parsed .dbs have node_refs (token, node_id); legacy sidecar has mache_refs (token, path).
+		//
+		// `path NOT LIKE '_file_level:%'` filters the engine's
+		// file-level sentinel rows (from PR #270) — synthetic
+		// caller_ids the engine uses to mark file-level fn-value
+		// refs (mache-02r9) as alive. They're not real source
+		// locations and would surface as fake "/path/file.go"
+		// results. NodesTableReader.GetCallers applies the same
+		// filter; this puts search/role=reference in agreement.
 		qg, ok := g.(refsQuerier)
 		if !ok {
 			return mcp.NewToolResultError("reference search requires a SQLite-backed graph; use role=definition for in-memory search"), nil
@@ -629,12 +637,12 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		var err error
 		if typeFilter != "" {
 			rows, err = qg.QueryRefs(
-				"SELECT token, path FROM mache_refs WHERE token LIKE ? AND path LIKE ? LIMIT ?",
+				"SELECT token, path FROM mache_refs WHERE token LIKE ? AND path LIKE ? AND path NOT LIKE '_file_level:%' LIMIT ?",
 				pattern, "%/"+typeFilter+"/%", limit,
 			)
 		} else {
 			rows, err = qg.QueryRefs(
-				"SELECT token, path FROM mache_refs WHERE token LIKE ? LIMIT ?",
+				"SELECT token, path FROM mache_refs WHERE token LIKE ? AND path NOT LIKE '_file_level:%' LIMIT ?",
 				pattern, limit,
 			)
 		}
@@ -642,12 +650,12 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		if err != nil && strings.Contains(err.Error(), "no such table") {
 			if typeFilter != "" {
 				rows, err = qg.QueryRefs(
-					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? AND node_id LIKE ? LIMIT ?",
+					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? AND node_id LIKE ? AND node_id NOT LIKE '_file_level:%' LIMIT ?",
 					pattern, "%/"+typeFilter+"/%", limit,
 				)
 			} else {
 				rows, err = qg.QueryRefs(
-					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? LIMIT ?",
+					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? AND node_id NOT LIKE '_file_level:%' LIMIT ?",
 					pattern, limit,
 				)
 			}
