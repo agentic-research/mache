@@ -10,167 +10,29 @@ Point it at a codebase. It parses the code, discovers the structure, and lets yo
 
 ## Quick start
 
-### Install
-
-Build from source (requires [Go 1.23+](https://go.dev/dl/) and [Task](https://taskfile.dev/installation/)):
-
 ```bash
 git clone https://github.com/agentic-research/mache.git
-cd mache
-task build
-task install   # copies to ~/.local/bin
-```
-
-**macOS:** `brew install go-task` for Task.
-**Linux:** [Install Task](https://taskfile.dev/installation/). NFS mount requires `nfs-common` (`apt-get install nfs-common`).
-
-### Use with Claude Code
-
-Start the server, then register it:
-
-```bash
-mache serve .                    # starts on localhost:7532
+cd mache && task build && task install
+mache serve .
 claude mcp add --transport http mache http://localhost:7532/mcp
 ```
 
-Mache auto-infers the schema from your codebase. One server shared across all sessions.
+That's the 30-second path. For the full first-run flow — install on Linux/macOS, Claude Desktop / stdio configs, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
 
-## MCP tools
+## What it gives an agent
 
-13 tools work out of the box. 3 optional tools provide LSP type info and semantic search when [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment is available — without it, they return a message explaining how to enable them. `find_smells` partially degrades on tree-sitter-only mounts (rules that need `_ast` tables require an LLO-built `.db`); see [Architecture](docs/ARCHITECTURE.md#interplay-with-ley-line-open) for details.
+Sixteen MCP tools wrap the projected graph. Thirteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) require [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require an LLO-built `.db`.
 
-| Tool               | What it does                                                                                                        |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `get_overview`     | Top-level structure, node counts, entry points                                                                      |
-| `list_directory`   | Browse the graph by path                                                                                            |
-| `read_file`        | Read source content (supports batch reads)                                                                          |
-| `find_definition`  | Jump to where a symbol is defined                                                                                   |
-| `find_callers`     | Who calls this?                                                                                                     |
-| `find_callees`     | What does this call?                                                                                                |
-| `search`           | Pattern match across symbols                                                                                        |
-| `get_communities`  | Find clusters of tightly-coupled code                                                                               |
-| `get_impact`       | Blast radius of changing a symbol                                                                                   |
-| `get_architecture` | Entry points, abstractions, dependency layers                                                                       |
-| `get_diagram`      | Mermaid diagram of system structure                                                                                 |
-| `write_file`       | Edit through the splice pipeline: validate, format, splice                                                          |
-| `find_smells`      | Run structural code-smell rules (cyclomatic, dead code, fan-out skew, duplicate defs, etc.) — `_ast` rules need LLO |
-| `semantic_search`  | Natural-language search via embeddings *(optional — ley-line)*                                                      |
-| `get_type_info`    | LSP type info and hover data *(optional — ley-line)*                                                                |
-| `get_diagnostics`  | LSP errors and warnings *(optional — ley-line)*                                                                     |
+For the full tool inventory and capability matrix (which tools need which tables), see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
 ## How it works
 
 1. **Parse** — tree-sitter parses source into AST nodes (28 languages)
-1. **Infer** — schema inference (FCA) discovers the natural groupings (`functions/`, `types/`, `classes/`)
+1. **Infer** — schema inference (FCA + greedy entropy) discovers the natural groupings (`functions/`, `types/`, `classes/`)
 1. **Link** — cross-reference extraction builds a call graph from identifiers and imports
 1. **Project** — the graph is exposed as MCP tools (primary) or a mounted filesystem (optional)
 
-## Mount as a filesystem (optional)
-
-The graph can also be browsed as a mounted directory tree — useful for `ls`, `cat`, shell scripts, or tools that work with files:
-
-```bash
-mache --infer -d ./src --writable /tmp/mache-src
-```
-
-```
-/tmp/mache-src/
-  functions/
-    HandleRequest/
-      source        # the function body
-      context       # imports, types visible to this scope
-      callers/      # who calls this function
-      callees/      # what this function calls
-    ValidateToken/
-      source
-  types/
-    Config/
-      source        # type Config struct { ... }
-  _project_files/
-    README.md
-    go.mod
-```
-
-Navigate by function name, not file path. `callers/` and `callees/` are virtual directories that appear only when references exist.
-
-<details>
-<summary>More mount examples</summary>
-
-```bash
-# Mount with agent mode (generates PROMPT.txt for LLMs)
-mache --agent -d ~/my-project
-
-# Mount a SQLite database (zero-copy)
-mache --schema examples/nvd-schema.json --data results.db /tmp/nvd
-```
-
-</details>
-
-<details>
-<summary>Write-back</summary>
-
-With `--writable`, edits to `source` files go through a pipeline before touching your actual source:
-
-1. **Validate** — tree-sitter checks syntax
-1. **Format** — gofumpt (Go), hclwrite (HCL)
-1. **Splice** — atomic byte-range replacement in the source file
-1. **Update** — node content updated in-place, no re-ingest
-
-If the syntax is wrong, the write is saved as a draft. The node path stays stable. Errors show up in `_diagnostics/`.
-
-</details>
-
-## MCP server options
-
-```bash
-# HTTP (recommended) — one server, multiple clients
-mache serve .
-mache serve --http localhost:9000 -s examples/nvd-schema.json results.db
-
-# stdio — for tools that manage the subprocess lifecycle
-mache serve --stdio .
-```
-
-<details>
-<summary>Claude Code setup (detailed)</summary>
-
-**HTTP (recommended)** — register once, shared across sessions:
-
-```bash
-mache serve /path/to/data &
-claude mcp add --transport http mache http://localhost:7532/mcp
-```
-
-**stdio** — `.mcp.json` (spawns a subprocess per session):
-
-```json
-{
-  "mcpServers": {
-    "mache": {
-      "command": "mache",
-      "args": ["serve", "--stdio", "."]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary>Claude Desktop setup</summary>
-
-```json
-{
-  "mcpServers": {
-    "mache": {
-      "command": "/path/to/mache",
-      "args": ["serve", "--stdio", "/path/to/code"]
-    }
-  }
-}
-```
-
-</details>
+The graph is the same on either path; MCP and the filesystem are two ways to talk to it.
 
 ## Status
 
@@ -179,6 +41,7 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 | Tree-sitter parsing (28 langs)          | Stable                                                                        |
 | MCP server (16 tools, stdio + HTTP)     | Stable                                                                        |
 | Cross-references (callers/callees)      | Stable                                                                        |
+| `find_smells` (9 structural rules)      | Stable                                                                        |
 | NFS mount + write-back                  | Stable                                                                        |
 | Schema inference (FCA)                  | Beta                                                                          |
 | Community detection (Louvain)           | Beta                                                                          |
@@ -207,16 +70,20 @@ Operating systems never formalized this mapping. Mache does:
 - Schema defines topology — the formal specification of how source nodes map to filesystem nodes
 - The filesystem exposes traversal primitives: `cd` traverses an edge, `ls` enumerates children, `cat` reads node data
 
+[ADR-0011](docs/adr/0011-pointer-abstraction.md) takes this further: every navigable thing in mache (path, token, SHA, range, record, ref) is a Pointer; the graph is a network of pointers; mache resolves them on demand.
+
 See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
 ## Docs
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Prior Art & Landscape](docs/PRIOR_ART.md)
-- [Example Schemas](examples/README.md)
-- [ADRs](docs/adr/)
+- [Getting started](GETTING-STARTED.md) — install + first run
+- [Architecture](docs/ARCHITECTURE.md) — graph backends, write pipeline, virtual directories, LLO interplay
+- [Roadmap](docs/ROADMAP.md) — what's landed, near-term, long-term
+- [ADRs](docs/adr/) — Architectural Decision Records
+- [Prior art & landscape](docs/PRIOR_ART.md) — what mache builds on, how it compares
+- [Example schemas](examples/README.md) — NVD, KEV, Go source, MCP registry
 - [Contributing](CONTRIBUTING.md)
 
 ## License
