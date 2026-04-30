@@ -27,8 +27,15 @@ var buildCmd = &cobra.Command{
 		// Load or infer schema. Falls back to FCA inference when no schema file is provided.
 		var schema *api.Topology
 		if schemaPath != "" {
-			// Explicit schema file — load it
-			loaded, err := resolveSchema(schemaPath, filepath.Dir(schemaPath))
+			// Explicit schema file — load it. resolveSchema joins
+			// schemaRef with configDir when schemaRef is relative,
+			// so passing filepath.Dir(schemaPath) double-prepends
+			// the directory ("examples" + "examples/go-schema.json"
+			// = "examples/examples/..."). The schemaPath flag is
+			// already relative-to-cwd or absolute by user intent;
+			// pass "." so resolveSchema only touches the path when
+			// it's preset-ref (no slash).
+			loaded, err := resolveSchema(schemaPath, ".")
 			if err != nil {
 				return fmt.Errorf("load schema: %w", err)
 			}
