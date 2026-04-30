@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -17,15 +18,19 @@ import (
 )
 
 // buildBackend selects the parsing backend for `mache build`.
-//   - "auto" (default): in-process tree-sitter via SitterWalker — current behavior.
-//   - "leyline": shell out to `leyline parse`. Requires leyline on PATH or
-//     ~/.mache/bin/leyline. Produces a richer .db (carries `_ast`, `_source`,
-//     `_imports`, `_lsp*`) that all 9 find_smells rules can run against.
-//     Schema projection at query time (via SQLiteGraph) — the --schema flag
-//     is ignored on this path because leyline doesn't apply it.
+//   - "auto" (default): prefer leyline when on PATH or at
+//     ~/.mache/bin/leyline; otherwise fall back to in-process
+//     tree-sitter. The detection runs once per invocation; users
+//     without leyline see today's behavior unchanged.
+//   - "leyline": force the leyline path. Errors if leyline is missing
+//     (no silent fallback — explicit-flag misconfiguration should be loud).
+//   - "tree-sitter": force the in-process path even if leyline is
+//     available. Escape hatch for users debugging the legacy ingest
+//     or comparing outputs.
 //
-// Opt-in for now per ADR-0012 step 3. A future PR makes this auto-detect
-// and prefer leyline when available.
+// ADR-0012 step 3 — auto-detect with leyline preference. Step 4
+// (CGO removal commitment point) deletes "tree-sitter" / "auto"
+// fallback once leyline is bundled in mache releases (mache-33dc5f).
 var buildBackend string
 
 var buildCmd = &cobra.Command{
@@ -36,13 +41,21 @@ var buildCmd = &cobra.Command{
 		source := args[0]
 		output := args[1]
 
-		// Backend dispatch (ADR-0012). When --backend=leyline, shell out
-		// to `leyline parse` and copy the result to `output`. Schema
-		// flag is ignored on this path — leyline produces raw _ast /
-		// _source / nodes / node_refs / node_defs; schema projection
-		// happens at serve/mount time via SQLiteGraph.
-		if buildBackend == "leyline" {
+		// Backend dispatch (ADR-0012):
+		//   leyline      → force leyline path (errors if missing)
+		//   tree-sitter  → force in-process path (skip detection)
+		//   auto / ""    → prefer leyline when available, else in-process
+		switch buildBackend {
+		case "leyline":
 			return runBuildViaLeyline(source, output)
+		case "tree-sitter":
+			// Fall through to in-process path below.
+		default: // "auto" or empty
+			if leylineAvailable() {
+				log.Printf("--backend=auto: leyline detected, using leyline path; pass --backend=tree-sitter to force in-process")
+				return runBuildViaLeyline(source, output)
+			}
+			// No leyline → use in-process. Same as today's behavior.
 		}
 
 		// Load or infer schema. Falls back to FCA inference when no schema file is provided.
@@ -178,8 +191,31 @@ func init() {
 	// and have to rely on FCA inference — which doesn't yet produce a
 	// methods/ root for Go (mache-5d1o).
 	buildCmd.Flags().StringVarP(&schemaPath, "schema", "s", "", "Path to topology schema (defaults to FCA inference)")
-	buildCmd.Flags().StringVar(&buildBackend, "backend", "auto", "Parsing backend: 'auto' (in-process tree-sitter, current default) or 'leyline' (delegate to ley-line-open's `leyline parse`; produces richer .db with _ast/_source/_lsp* and is the future default per ADR-0012)")
+	buildCmd.Flags().StringVar(&buildBackend, "backend", "auto", "Parsing backend: 'auto' (prefer leyline when on PATH, else in-process tree-sitter), 'leyline' (force leyline; errors if missing), 'tree-sitter' (force in-process even when leyline is available). Per ADR-0012; step 4 deletes the in-process fallback.")
 	rootCmd.AddCommand(buildCmd)
+}
+
+// leylineAvailable returns true when `leyline` is on PATH or at
+// ~/.mache/bin/leyline. Mirrors the lookup autoInvokeLeylineParse
+// does, but as a probe: callers use it to choose between the
+// leyline path and the in-process fallback before any I/O.
+//
+// Cheap call: exec.LookPath consults PATH only; the home-dir check
+// is a single os.Stat. No subprocess invocation. Safe to call
+// repeatedly.
+func leylineAvailable() bool {
+	if _, err := exec.LookPath("leyline"); err == nil {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	bundled := filepath.Join(home, ".mache", "bin", "leyline")
+	if _, err := os.Stat(bundled); err == nil {
+		return true
+	}
+	return false
 }
 
 // runBuildViaLeyline implements --backend=leyline: shells out to
