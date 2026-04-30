@@ -513,7 +513,7 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 		extraCleanup()
 		return nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)
 	}
-	sg.SetCallExtractor(newCallExtractor())
+	sg.SetCallExtractor(pickCallExtractor(sg.DB()))
 	if err := sg.EagerScan(); err != nil {
 		_ = sg.Close()
 		extraCleanup()

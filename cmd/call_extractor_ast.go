@@ -2,10 +2,42 @@ package cmd
 
 import (
 	"database/sql"
+	"log"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 )
+
+// pickCallExtractor returns the pure-Go ASTWalker-backed extractor
+// when `_ast` is present in the active .db, falling back to the
+// CGO SitterWalker-backed extractor otherwise. This is the per-site
+// dispatch point used by mache serve / mache mount when wiring a
+// CallExtractor onto a SQLiteGraph.
+//
+// Detection is a single SQL query against sqlite_master. Errors
+// during detection log + fall through to the CGO extractor — never
+// take down the wiring on a transient SQL hiccup.
+//
+// ADR-0012 step 3 makes this picker unconditional (always AST) once
+// `mache build` invokes `leyline parse`. Step 4 deletes the CGO
+// branch entirely along with newCallExtractor and SitterWalker.
+func pickCallExtractor(db *sql.DB) graph.CallExtractor {
+	if db == nil {
+		return newCallExtractor()
+	}
+	var hasAST int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_ast'`,
+	).Scan(&hasAST)
+	if err != nil {
+		log.Printf("call extractor: _ast detection failed (%v); using CGO fallback", err)
+		return newCallExtractor()
+	}
+	if hasAST == 0 {
+		return newCallExtractor()
+	}
+	return newASTCallExtractor(db)
+}
 
 // newASTCallExtractor returns a graph.CallExtractor backed by SQL queries
 // against the `_ast` table — no CGO, no tree-sitter parser. The DB must

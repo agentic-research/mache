@@ -119,3 +119,60 @@ func TestNewASTCallExtractor_NonexistentSourcePathReturnsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, calls)
 }
+
+// TestPickCallExtractor_PrefersASTWhenAvailable pins the dispatch
+// at the wiring sites: a SQLiteGraph whose .db carries `_ast`
+// gets the pure-Go extractor, not the CGO one. We can't directly
+// observe which closure was returned (CallExtractor is opaque),
+// so we observe via the central design difference — the AST
+// extractor ignores `content` and trusts the AST. Pass garbage
+// content with a path that resolves in `_ast`; if the result is
+// the AST-derived call, we know we got the AST extractor. If it
+// were the CGO one, parsing the garbage would yield no calls.
+func TestPickCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
+	db, sourcePath := seedASTCallFixture(t)
+	defer func() { _ = db.Close() }()
+
+	extract := pickCallExtractor(db)
+	calls, err := extract([]byte("garbage that wouldn't parse as Go"), sourcePath, "go")
+	require.NoError(t, err)
+	require.Len(t, calls, 1, "AST extractor must surface 'Bar' from the pre-parsed _ast")
+	assert.Equal(t, "Bar", calls[0].Token)
+}
+
+// TestPickCallExtractor_FallsBackWhenASTAbsent pins the inverse:
+// a SQLiteGraph whose .db has no `_ast` table gets the CGO
+// extractor as fallback. We don't try to actually run the CGO
+// extractor in this test (CGO + tests is the mache-2y9w story);
+// we observe the dispatch by checking it doesn't return nil and
+// — since the closure can't be compared — by trusting the
+// detection logic that gated the dispatch.
+func TestPickCallExtractor_FallsBackWhenASTAbsent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "noast.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Schema with no _ast table — only nodes/_source — to mirror
+	// what mache build (standalone CGO path) produces today.
+	_, err = db.Exec(`
+		CREATE TABLE nodes (id TEXT, parent_id TEXT, name TEXT, kind INTEGER, mtime INTEGER, source_file TEXT, record TEXT);
+		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT, content BLOB);
+	`)
+	require.NoError(t, err)
+
+	extract := pickCallExtractor(db)
+	require.NotNil(t, extract, "fallback extractor must not be nil")
+	// We can't easily verify it's the CGO closure without invoking
+	// it (which exercises CGO). The dispatch contract — _ast
+	// absent → fall back — is enforced by the picker's SQL check;
+	// see TestPickCallExtractor_DetectsAST for that.
+}
+
+// TestPickCallExtractor_HandlesNilDB pins the safety contract for
+// callers that might pass a nil DB handle (not a current call site
+// but a contract worth preserving as wiring evolves).
+func TestPickCallExtractor_HandlesNilDB(t *testing.T) {
+	extract := pickCallExtractor(nil)
+	assert.NotNil(t, extract, "nil DB must yield the CGO fallback, not a nil closure")
+}

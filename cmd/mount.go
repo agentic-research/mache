@@ -336,7 +336,7 @@ var rootCmd = &cobra.Command{
 				}
 				defer func() { _ = sg.Close() }()
 
-				sg.SetCallExtractor(newCallExtractor())
+				sg.SetCallExtractor(pickCallExtractor(sg.DB()))
 
 				start := time.Now()
 				log.Print("Scanning records...")
@@ -424,7 +424,7 @@ var rootCmd = &cobra.Command{
 					// Keep the index file for incremental re-ingestion on next mount.
 				}()
 
-				sg.SetCallExtractor(newCallExtractor())
+				sg.SetCallExtractor(pickCallExtractor(sg.DB()))
 				g = sg
 			} else {
 				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
