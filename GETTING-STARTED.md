@@ -94,7 +94,7 @@ Each mount becomes a top-level virtual directory. `find_callers Validate` walks 
 
 Mounts compose any source `mache serve` accepts — directories, `.db` files, or a mix. `--mount` and a positional source are mutually exclusive (use one or the other).
 
-See [ARCHITECTURE.md § Cross-repo serve](docs/ARCHITECTURE.md#cross-repo-serve---mount) for the design and what's not yet wired (cross-repo `find_callees` resolution lands separately under `mache-iegm`).
+See [ARCHITECTURE.md § Cross-repo serve](docs/ARCHITECTURE.md#cross-repo-serve---mount) for the full design. Cross-mount `find_callees` / `find_definition` / `find_callers` all resolve and annotate today; `search` and `get_impact` still emit the legacy single-string shape on cross-mount results.
 
 ## Mount as a filesystem (optional)
 

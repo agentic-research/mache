@@ -185,11 +185,15 @@ Under the composite:
 
 This is the first concrete implementation of the **`Ref` pointer kind** from [ADR-0011](adr/0011-pointer-abstraction.md): a name-scoped pointer that resolves through a registry of named graphs.
 
-**What's not yet wired (tracked in `mache-iegm`):**
+**What's wired today (was tracked under `mache-iegm`):**
 
-- Cross-repo `find_callees` resolution — when a function in mount A calls a function defined in mount B, the callee resolver doesn't yet walk into B's defs index. Today each mount resolves callees within itself.
-- `find_definition` mount annotation — same shape as `find_callers` annotation but on the def lookup; currently emits the legacy single-string response.
-- `search` and `get_impact` mount annotation — same idea, lower priority.
+- **Cross-repo `find_callees` resolution.** When a function in mount A calls a function defined in mount B, `CompositeGraph.GetCallees` runs a phase-2 cross-mount pass via `crossMountCallees()` (`internal/graph/composite.go`): re-extracts calls from the source, resolves each token against the federated `DefsMap` across all mounts, and returns the cross-mount matches alongside any local resolution. Pinned by `TestFindCallees_CrossMountResolvesAndAnnotates`.
+- **`find_definition` mount annotation.** Same `{path, mount}` shape as `find_callers`. The wiring goes through `lazyGraph.MountPrefixOf` so the annotation reaches handlers despite the wrapper.
+- **`find_callers` mount annotation.** Federates across mounts and emits the annotated shape when any result carries a mount prefix.
+
+**What's still not wired:**
+
+- `search` and `get_impact` mount annotation — same idea, lower priority. `search role=reference` and `get_impact` still emit the legacy single-string shape on cross-mount results.
 
 ## Virtual Directories
 
