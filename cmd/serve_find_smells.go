@@ -260,7 +260,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "fan_out_skew",
-		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
+		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). Skip-listed: testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* — tests are expected to call many things, no signal there. The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
 		Requires:    []string{"node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
@@ -281,9 +281,20 @@ var smellRegistry = []SmellRule{
 			       f.n AS metric
 			FROM fanout f
 			JOIN nodes n ON n.id = f.caller_id
+			-- Construct directory is the parent of the source node.
+			-- Match against ctor.name so the test-prefix filter checks
+			-- the construct name directly, not arbitrary substrings of
+			-- the path. ctor will be NULL for top-level callers (rare);
+			-- the LEFT JOIN keeps those rows so the test-prefix filter
+			-- only excludes when we positively identify a test name.
+			LEFT JOIN nodes ctor ON ctor.id = n.parent_id
 			CROSS JOIN proj p
 			WHERE f.n >= 5
 			  AND CAST(f.n AS REAL) > 3.0 * p.mu
+			  AND COALESCE(ctor.name, '') NOT LIKE 'Test%%'
+			  AND COALESCE(ctor.name, '') NOT LIKE 'Benchmark%%'
+			  AND COALESCE(ctor.name, '') NOT LIKE 'Example%%'
+			  AND COALESCE(ctor.name, '') NOT LIKE 'Fuzz%%'
 			%s
 			ORDER BY metric DESC, source_id, node_id
 		`,
