@@ -190,6 +190,14 @@ func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
 // We use a tempdir-relative schema file rather than the real
 // examples/go-schema.json so the test isn't tied to that file's
 // content (it'd break if the schema's JSON shape evolved).
+//
+// Pinned to --backend=tree-sitter: resolveSchema only runs on the
+// in-process path. After the ADR-0012 step 3b auto-default flip
+// (#315), --backend=auto prefers leyline when available and logs
+// "--schema is ignored on this path." That short-circuits the very
+// code we're trying to test, so the test would silently stop
+// guarding the double-prepend regression on machines with leyline
+// installed.
 func TestBuild_SchemaPathRelative(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
@@ -214,8 +222,10 @@ func TestBuild_SchemaPathRelative(t *testing.T) {
 	defer func() { _ = os.Chdir(oldWD) }()
 
 	oldSchemaPath := schemaPath
+	oldBackend := buildBackend
 	schemaPath = "schemas/minimal.json"
-	defer func() { schemaPath = oldSchemaPath }()
+	buildBackend = "tree-sitter"
+	defer func() { schemaPath = oldSchemaPath; buildBackend = oldBackend }()
 
 	outDB := filepath.Join(tmpDir, "out.db")
 	err = buildCmd.RunE(buildCmd, []string{srcDir, outDB})
