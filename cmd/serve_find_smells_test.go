@@ -1139,6 +1139,138 @@ func TestFindSmells_GodFile(t *testing.T) {
 	assert.Equal(t, int64(15), resp.Findings[0].Metric, "def count is the metric")
 }
 
+// TestFindSmells_GodFileFallsBackToChildSource asserts that god_file
+// resolves source_file via the construct dir's child leaves when
+// the dir itself has none — the FCA-inferred shape used by `mache
+// build` without --schema. Before this fix, per_file's GROUP BY
+// found zero rows on the FCA path because the dir's source_file
+// is ”, so god_file silently returned no findings on mache.db.
+func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- 11 distinct defs all attributed (via leaf source_file) to
+		-- the same file. Project mean across the 5 normal files +
+		-- this one is (11 + 5) / 6 ≈ 2.7; 3× ≈ 8 — the god file
+		-- clears the 10-def floor and the 3× threshold.
+		INSERT INTO node_defs VALUES
+		  ('A','functions/A'),('B','functions/B'),('C','functions/C'),
+		  ('D','functions/D'),('E','functions/E'),('F','functions/F'),
+		  ('G','functions/G'),('H','functions/H'),('I','functions/I'),
+		  ('J','functions/J'),('K','functions/K');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/A','functions','A',1,0,'',''),
+		  ('functions/A/source','functions/A','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/B','functions','B',1,0,'',''),
+		  ('functions/B/source','functions/B','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/C','functions','C',1,0,'',''),
+		  ('functions/C/source','functions/C','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/D','functions','D',1,0,'',''),
+		  ('functions/D/source','functions/D','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/E','functions','E',1,0,'',''),
+		  ('functions/E/source','functions/E','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/F','functions','F',1,0,'',''),
+		  ('functions/F/source','functions/F','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/G','functions','G',1,0,'',''),
+		  ('functions/G/source','functions/G','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/H','functions','H',1,0,'',''),
+		  ('functions/H/source','functions/H','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/I','functions','I',1,0,'',''),
+		  ('functions/I/source','functions/I','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/J','functions','J',1,0,'',''),
+		  ('functions/J/source','functions/J','source',0,0,'pkg/god/sprawl.go',''),
+		  ('functions/K','functions','K',1,0,'',''),
+		  ('functions/K/source','functions/K','source',0,0,'pkg/god/sprawl.go','');
+
+		-- Five normal files (1 def each) to dilute the project mean.
+		INSERT INTO node_defs VALUES
+		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3'),
+		  ('N4','functions/N4'),('N5','functions/N5');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/N1','functions','N1',1,0,'',''),
+		  ('functions/N1/source','functions/N1','source',0,0,'a.go',''),
+		  ('functions/N2','functions','N2',1,0,'',''),
+		  ('functions/N2/source','functions/N2','source',0,0,'b.go',''),
+		  ('functions/N3','functions','N3',1,0,'',''),
+		  ('functions/N3/source','functions/N3','source',0,0,'c.go',''),
+		  ('functions/N4','functions','N4',1,0,'',''),
+		  ('functions/N4/source','functions/N4','source',0,0,'d.go',''),
+		  ('functions/N5','functions','N5',1,0,'',''),
+		  ('functions/N5/source','functions/N5','source',0,0,'e.go','');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Len(t, resp.Findings, 1, "FCA-shape fixture: source_file is on the leaf, not the construct dir")
+	assert.Equal(t, "pkg/god/sprawl.go", resp.Findings[0].SourceID)
+	assert.Equal(t, int64(11), resp.Findings[0].Metric)
+}
+
+// TestFindSmells_GodFileSkipsGeneratedFiles asserts that *.capnp.go,
+// *.pb.go, *_generated.go, and *.gen.go aren't flagged even with
+// hundreds of definitions — generators produce wide method sets by
+// design, not architectural sprawl.
+func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- 12 defs in a generated file — would normally trigger
+		-- god_file, but must be skipped by the *.capnp.go suffix.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/A.x','pkg/methods','A.x',1,0,'a.capnp.go',''),
+		  ('pkg/methods/A.y','pkg/methods','A.y',1,0,'a.capnp.go',''),
+		  ('pkg/methods/B.x','pkg/methods','B.x',1,0,'a.capnp.go',''),
+		  ('pkg/methods/B.y','pkg/methods','B.y',1,0,'a.capnp.go',''),
+		  ('pkg/methods/C.x','pkg/methods','C.x',1,0,'a.capnp.go',''),
+		  ('pkg/methods/C.y','pkg/methods','C.y',1,0,'a.capnp.go',''),
+		  ('pkg/methods/D.x','pkg/methods','D.x',1,0,'a.capnp.go',''),
+		  ('pkg/methods/D.y','pkg/methods','D.y',1,0,'a.capnp.go',''),
+		  ('pkg/methods/E.x','pkg/methods','E.x',1,0,'a.capnp.go',''),
+		  ('pkg/methods/E.y','pkg/methods','E.y',1,0,'a.capnp.go',''),
+		  ('pkg/methods/F.x','pkg/methods','F.x',1,0,'a.capnp.go',''),
+		  ('pkg/methods/F.y','pkg/methods','F.y',1,0,'a.capnp.go','');
+		INSERT INTO node_defs VALUES
+		  ('A.x','pkg/methods/A.x'),('A.y','pkg/methods/A.y'),
+		  ('B.x','pkg/methods/B.x'),('B.y','pkg/methods/B.y'),
+		  ('C.x','pkg/methods/C.x'),('C.y','pkg/methods/C.y'),
+		  ('D.x','pkg/methods/D.x'),('D.y','pkg/methods/D.y'),
+		  ('E.x','pkg/methods/E.x'),('E.y','pkg/methods/E.y'),
+		  ('F.x','pkg/methods/F.x'),('F.y','pkg/methods/F.y');
+
+		-- A few normal files to populate the project mean.
+		INSERT INTO node_defs VALUES
+		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/N1','functions','N1',1,0,'a.go',''),
+		  ('functions/N2','functions','N2',1,0,'b.go',''),
+		  ('functions/N3','functions','N3',1,0,'c.go','');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	assert.Empty(t, resp.Findings, "generated capnp.go file must be skipped despite high def count")
+}
+
 // TestFindSmells_FanOutSkew seeds a god-function and several normal
 // callers and asserts only the god-function is flagged. Mean fan-out
 // is (12 + 6×1) / 7 ≈ 2.57; 3×mean ≈ 7.7, well below the god's 12.

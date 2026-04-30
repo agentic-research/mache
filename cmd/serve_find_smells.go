@@ -421,16 +421,31 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "god_file",
-		Description: "Source files whose distinct-definition count is at least 10 AND more than 3× the project mean — a fuzzy 'god file' detector that surfaces sprawl relative to the codebase's own distribution rather than a hard line-count cutoff. Metric is the def count, sorted descending. Cross-language since node_defs is populated by every backend. Pairs with long_file (line-count via _ast) for a 'lots of code' vs 'lots of API' split.",
+		Description: "Source files whose distinct-definition count is at least 10 AND more than 3× the project mean — a fuzzy 'god file' detector that surfaces sprawl relative to the codebase's own distribution rather than a hard line-count cutoff. Metric is the def count, sorted descending. Cross-language since node_defs is populated by every backend. source_file is resolved via the construct dir's child leaves (the schema engine attaches Origin to source / ast.json / doc, not the wrapping dir), so this works on FCA-inferred mounts too. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded — generators produce wide method sets by design, not by sprawl. Pairs with long_file (line-count via _ast) for a 'lots of code' vs 'lots of API' split.",
 		Requires:    []string{"node_defs", "nodes"},
 		ScopeColumn: "pf.file",
 		Query: `
-			WITH per_file AS (
-				SELECT n.source_file AS file, COUNT(DISTINCT d.token) AS n
+			-- Resolve source_file via leaf children when the dir
+			-- itself has none. The schema engine attaches Origin
+			-- (and thus source_file) to leaf rendered files (source,
+			-- ast.json, doc) but not to the wrapping construct dir.
+			-- Without this fallback per_file groups by '' (empty)
+			-- and produces zero rows on the FCA-inferred path.
+			WITH child_source AS (
+				SELECT parent_id AS node_id,
+				       MIN(source_file) AS source_file
+				FROM nodes
+				WHERE source_file IS NOT NULL AND source_file != ''
+				GROUP BY parent_id
+			),
+			per_file AS (
+				SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file) AS file,
+				       COUNT(DISTINCT d.token) AS n
 				FROM node_defs d
 				JOIN nodes n ON n.id = d.node_id
-				WHERE COALESCE(n.source_file, '') != ''
-				GROUP BY n.source_file
+				LEFT JOIN child_source cs ON cs.node_id = n.id
+				WHERE COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') != ''
+				GROUP BY COALESCE(NULLIF(n.source_file, ''), cs.source_file)
 			),
 			proj AS (
 				SELECT AVG(n) AS mu FROM per_file
@@ -446,6 +461,12 @@ var smellRegistry = []SmellRule{
 			CROSS JOIN proj p
 			WHERE pf.n >= 10
 			  AND CAST(pf.n AS REAL) > 3.0 * p.mu
+			  -- Skip generated code: capnp / protobuf / *_generated /
+			  -- *.gen produce wide method sets by design, not sprawl.
+			  AND pf.file NOT LIKE '%%.capnp.go'
+			  AND pf.file NOT LIKE '%%.pb.go'
+			  AND pf.file NOT LIKE '%%_generated.go'
+			  AND pf.file NOT LIKE '%%.gen.go'
 			%s
 			ORDER BY metric DESC, source_id
 		`,
