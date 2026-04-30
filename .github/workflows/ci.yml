@@ -53,6 +53,13 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test, lint]
     runs-on: ubuntu-latest
+    # Best-effort cross-repo dispatch. The OIDC exchange against
+    # octo-sts depends on a trust policy in the kiln repo; if that
+    # trust isn't established yet, the step fails and we don't
+    # want to mark the whole CI run as failed (the test + lint jobs
+    # are the gate). Continue-on-error keeps the run green when
+    # this is the only failing job.
+    continue-on-error: true
     permissions:
       id-token: write
       contents: read
