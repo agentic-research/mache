@@ -11,6 +11,15 @@ on:
       - '.gitignore'
   pull_request:
     branches: [main]
+    # Mirror push's paths-ignore so doc-only PRs don't run full CI
+    # (test + integration ≈ 5 min per matrix entry + exposure to
+    # known CGO flakes on changes that don't touch code).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'examples/**'
+      - 'LICENSE'
+      - '.gitignore'
 
 permissions:
   contents: read

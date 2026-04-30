@@ -4,6 +4,14 @@ on:
   pull_request:
     branches:
       - main
+    # Mirror push's paths-ignore so doc-only PRs don't pay
+    # the integration suite cost (~3 min per OS).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'examples/**'
+      - 'LICENSE'
+      - '.gitignore'
   push:
     branches:
       - main
