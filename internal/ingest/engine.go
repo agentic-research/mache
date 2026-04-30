@@ -107,14 +107,15 @@ type treeSitterJob struct {
 // parsedTreeSitterFile is the result of tree-sitter parsing (parallel or sequential).
 // Contains the pre-parsed AST and file content, ready for processTreeSitterResult.
 type parsedTreeSitterFile struct {
-	job      treeSitterJob
-	realPath string
-	content  []byte
-	tree     *sitter.Tree
-	context  []byte            // extracted imports/globals context
-	imports  map[string]string // structured imports: alias → path (Go only, nil for others)
-	parseErr error             // non-nil if tree-sitter parsing failed
-	readErr  error             // non-nil if file read failed
+	job           treeSitterJob
+	realPath      string
+	content       []byte
+	tree          *sitter.Tree
+	context       []byte            // extracted imports/globals context
+	imports       map[string]string // structured imports: alias → path (Go only, nil for others)
+	fileLevelRefs []string          // identifiers captured at the file root (Go: top-level cobra refs etc., mache-02r9)
+	parseErr      error             // non-nil if tree-sitter parsing failed
+	readErr       error             // non-nil if file read failed
 }
 
 // langForExt is a thin wrapper over the lang registry.
@@ -488,6 +489,15 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 					if job.langName == "go" {
 						result.imports = e.sitterWalker.ExtractGoImports(tree.RootNode(), result.content, job.lang)
 					}
+					// Extract file-level refs (identifiers in positions
+					// that per-scope ExtractCalls can't see, e.g. Go
+					// top-level cobra var declarations — mache-02r9).
+					// nil-OK for languages with no registered query.
+					if refs, err := e.sitterWalker.ExtractFileLevelRefs(
+						tree.RootNode(), result.content, job.lang, job.langName,
+					); err == nil {
+						result.fileLevelRefs = refs
+					}
 				}
 				parsed <- result
 			}
@@ -830,6 +840,13 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 		if addrRefs, err := wt.ExtractAddressRefs(result.job.path, result.job.langName); err == nil {
 			fileAddrRefs = addrRefs
 		}
+	}
+	// Merge file-level fn-value refs (mache-02r9: Go top-level cobra
+	// callbacks etc.) into the same bag as fileAddrRefs. They share
+	// the same merge semantics — the dedup loop in processNode skips
+	// any token already captured at scope level.
+	if len(result.fileLevelRefs) > 0 {
+		fileAddrRefs = append(fileAddrRefs, result.fileLevelRefs...)
 	}
 
 	// 5. processNode for each applicable schema node.

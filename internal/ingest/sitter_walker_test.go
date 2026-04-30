@@ -535,6 +535,62 @@ func setup() {
 		"struct field name must not leak into refs")
 }
 
+// TestExtractFileLevelRefs_GoTopLevelCobraVar guards the file-level
+// ref extraction path (mache-02r9). Per-scope ExtractCalls only sees
+// call_expressions within a matched function body — top-level
+// `var serveCmd = &cobra.Command{ RunE: runServe }` is outside any
+// function_declaration, so runServe never lands in node_refs and
+// gets flagged as dead by find_smells.
+//
+// File-level extraction runs the same keyed_element query against
+// the source_file root, so the top-level keyed_element value
+// identifier is captured.
+func TestExtractFileLevelRefs_GoTopLevelCobraVar(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`package cmd
+
+import "github.com/spf13/cobra"
+
+func runServe() error { return nil }
+
+var serveCmd = &cobra.Command{
+	Use:  "serve",
+	RunE: runServe,
+}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	refs, err := w.ExtractFileLevelRefs(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+	assert.Contains(t, refs, "runServe",
+		"top-level keyed_element value identifier must be captured by file-level extraction")
+	assert.NotContains(t, refs, "RunE",
+		"struct field name (RunE) must not leak into refs — only the value identifier")
+}
+
+// TestExtractFileLevelRefs_NoQueryReturnsNil asserts that languages
+// without a registered file-level query get nil-no-error from
+// ExtractFileLevelRefs (caller treats that as 'skip').
+func TestExtractFileLevelRefs_NoQueryReturnsNil(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`def main():
+    print("hi")
+`)
+	lang := python.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	refs, err := w.ExtractFileLevelRefs(tree.RootNode(), code, lang, "python")
+	require.NoError(t, err)
+	assert.Nil(t, refs, "no file-level query registered for python; should return nil cleanly")
+}
+
 // TestExtractCalls_AssignmentRHSDoesNotPolluteRefs guards against
 // over-broad capture: variable reads on the RHS of `=` or `:=` must
 // NOT be added to node_refs. An earlier iteration of the Go ref
