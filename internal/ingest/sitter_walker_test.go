@@ -572,6 +572,39 @@ var serveCmd = &cobra.Command{
 		"struct field name (RunE) must not leak into refs — only the value identifier")
 }
 
+// TestExtractFileLevelRefs_GoCallsInsideTopLevelClosure asserts the
+// closure-body half of mache-02r9. The Go file-level query also
+// includes call_expression patterns so calls inside top-level
+// func_literal values (cobra RunE: func() { cliExit(...) }) are
+// captured. Per-scope ExtractCalls would never see them because
+// the func_literal lives outside any function_declaration.
+func TestExtractFileLevelRefs_GoCallsInsideTopLevelClosure(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`package cmd
+
+import "github.com/spf13/cobra"
+
+func cliExit(code int, err error) error { return err }
+
+var initCmd = &cobra.Command{
+	Use: "init",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cliExit(4, nil)
+	},
+}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	refs, err := w.ExtractFileLevelRefs(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+	assert.Contains(t, refs, "cliExit",
+		"call_expression inside a top-level func_literal value must be captured")
+}
+
 // TestExtractFileLevelRefs_NoQueryReturnsNil asserts that languages
 // without a registered file-level query get nil-no-error from
 // ExtractFileLevelRefs (caller treats that as 'skip').
