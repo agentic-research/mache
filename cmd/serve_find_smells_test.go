@@ -1421,6 +1421,72 @@ func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 	)
 }
 
+// TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories
+// asserts that types/, constants/, variables/ duplicates don't
+// surface — common short names like 'content', 'src', 'name'
+// legitimately duplicate as local variables across functions and
+// aren't meaningful "duplicate definitions". Surfaced by PR #243's
+// GHA comment showing 9 variable-shape duplicate findings.
+func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Variable / constant / type duplicates — must NOT surface.
+		INSERT INTO node_defs VALUES
+		  ('content', 'pkg/variables/content'),
+		  ('content', 'pkg/other/variables/content'),
+		  ('MaxSize', 'pkg/constants/MaxSize'),
+		  ('MaxSize', 'pkg/other/constants/MaxSize'),
+		  ('Result',  'pkg/types/Result'),
+		  ('Result',  'pkg/other/types/Result');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/variables/content',       'pkg/variables', 'content', 1, 0, 'a.go', ''),
+		  ('pkg/other/variables/content', 'pkg/other/variables', 'content', 1, 0, 'b.go', ''),
+		  ('pkg/constants/MaxSize',       'pkg/constants', 'MaxSize', 1, 0, 'c.go', ''),
+		  ('pkg/other/constants/MaxSize', 'pkg/other/constants', 'MaxSize', 1, 0, 'd.go', ''),
+		  ('pkg/types/Result',            'pkg/types',     'Result',  1, 0, 'e.go', ''),
+		  ('pkg/other/types/Result',      'pkg/other/types', 'Result', 1, 0, 'f.go', '');
+
+		-- Real function duplicate — control: must still flag.
+		INSERT INTO node_defs VALUES
+		  ('Helper', 'pkg/a/functions/Helper'),
+		  ('Helper', 'pkg/b/functions/Helper');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/h.go', ''),
+		  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/h.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	for _, id := range gotIDs {
+		assert.NotContains(t, id, "/types/", "types/ must be skipped")
+		assert.NotContains(t, id, "/constants/", "constants/ must be skipped")
+		assert.NotContains(t, id, "/variables/", "variables/ must be skipped")
+	}
+	assert.ElementsMatch(t,
+		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
+		gotIDs,
+		"only the real function duplicate is flagged",
+	)
+}
+
 // TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit asserts that
 // the skip list strips package qualifiers before comparing against
 // the leaf-token list. mache build emits both bare ('init') and
