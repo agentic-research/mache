@@ -1,0 +1,7 @@
+{
+  "ID": "long_unexported_function",
+  "Description": "Unexported Go functions whose body exceeds 200 source lines. Long unexported helpers tend to grow without review pressure — they're hidden from the package API surface and nobody complains until they break. Threshold of 200 is deliberately higher than the built-in long_function (80) because a long unexported function is a softer signal than a long exported one.",
+  "Requires": ["_ast", "nodes"],
+  "ScopeColumn": "fn.source_id",
+  "Query": "SELECT fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col, (fn.end_row - fn.start_row) AS metric FROM _ast fn JOIN nodes n ON n.id = fn.node_id WHERE fn.node_kind = 'function_declaration' AND substr(n.name, 1, 1) = lower(substr(n.name, 1, 1)) AND (fn.end_row - fn.start_row) > 200 %s ORDER BY metric DESC, fn.source_id"
+}
