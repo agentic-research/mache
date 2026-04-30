@@ -117,6 +117,13 @@ var smellRegistry = []SmellRule{
 			WHERE n.id IN (SELECT DISTINCT node_id FROM node_defs)
 			  AND n.id NOT IN (SELECT node_id FROM alive)
 			  AND n.id NOT IN (SELECT node_id FROM skipped)
+			  -- Imports are external references, not defs. Their
+			  -- "tokens" (e.g. '"fmt"') never appear in node_refs
+			  -- because node_refs tracks function calls, not import
+			  -- paths, so every imports/ node looks dead by this
+			  -- rule. They aren't — they're how the code references
+			  -- external packages. Skip them.
+			  AND n.id NOT LIKE '%%/imports/%%'
 			%s
 			ORDER BY COALESCE(n.source_file, ''), n.id
 		`,
