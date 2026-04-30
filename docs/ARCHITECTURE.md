@@ -1,5 +1,16 @@
 # Mache Architecture
 
+This document is the architectural reference. If you're getting started for the first time, read [GETTING-STARTED.md](../GETTING-STARTED.md) first — it covers install, first-run, and common workflows.
+
+If you're looking for:
+
+- **Where things go** — see [Core Abstractions](#core-abstractions) and [Key File Reference](#key-file-reference)
+- **Why mache works without LLO and what changes when you have it** — see [Interplay with ley-line-open](#interplay-with-ley-line-open)
+- **The write pipeline** — see [Write Pipeline](#write-pipeline)
+- **Virtual directories (`callers/`, `callees/`, `_diagnostics/`, `.query/`)** — see [Virtual Directories](#virtual-directories)
+- **Past decisions** — see [Architectural Decision Records (ADRs)](#architectural-decision-records-adrs)
+- **Where things are going** — see [ROADMAP.md](ROADMAP.md)
+
 ## High-Level Design
 
 ```mermaid
@@ -245,3 +256,5 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 | [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed   | Git objects as first-class data source                                       |
 | [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted   | Information-theoretic field scoring for schema inference                     |
 | [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted   | Validate → format → splice → surgical update (no re-ingest)                  |
+| [0010: Hosted Mache Architecture](adr/0010-hosted-mache-architecture.md)                 | Proposed   | Hosted-mode design (cluster, R2, BYO storage)                                |
+| [0011: Pointer Abstraction](adr/0011-pointer-abstraction.md)                             | Proposed   | Path/token/SHA/range/record/ref/trace/embedding all unified as Pointer       |
