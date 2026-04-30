@@ -60,23 +60,19 @@ func TestHotSwapGraph_ConcurrentReadsDuringSwap(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 500 {
 				_, _ = h.GetNode("pkg/auth/source")
 				_, _ = h.ListChildren("pkg")
 				_, _ = h.ListChildStats("pkg")
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 100 {
 			h.Swap(memoryStoreFactory(t))
 		}
-	}()
+	})
 
 	wg.Wait()
 }

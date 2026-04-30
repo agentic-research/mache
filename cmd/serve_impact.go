@@ -35,13 +35,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 		if symbol == "" {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
-		maxDepth := request.GetInt("depth", 2)
-		if maxDepth < 1 {
-			maxDepth = 1
-		}
-		if maxDepth > 5 {
-			maxDepth = 5
-		}
+		maxDepth := min(max(request.GetInt("depth", 2), 1), 5)
 		direction := request.GetString("direction", "both")
 		if direction != "callers" && direction != "callees" && direction != "both" {
 			return mcp.NewToolResultError("direction must be 'callers', 'callees', or 'both'"), nil

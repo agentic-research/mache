@@ -194,8 +194,8 @@ func matchPattern(pattern, relPath string) bool {
 	}
 
 	// Also match each path component for directory patterns.
-	parts := strings.Split(relPath, "/")
-	for _, part := range parts {
+	parts := strings.SplitSeq(relPath, "/")
+	for part := range parts {
 		if ok, _ := filepath.Match(pattern, part); ok {
 			return true
 		}
@@ -243,7 +243,7 @@ func matchDoublestar(pattern, relPath string) bool {
 		rest := relPath[len(prefix)+1:]
 		// Try matching suffix at each depth
 		relParts := strings.Split(rest, "/")
-		for i := 0; i < len(relParts); i++ {
+		for i := range relParts {
 			sub := strings.Join(relParts[i:], "/")
 			if matchPattern(suffix, sub) {
 				return true

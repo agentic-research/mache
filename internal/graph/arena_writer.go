@@ -203,10 +203,7 @@ func (f *ArenaFlusher) flushInternal() error {
 
 		// Write only changed pages within DB content
 		for off := int64(0); off < int64(len(dbBytes)); off += int64(pageSize) {
-			end := off + int64(pageSize)
-			if end > int64(len(dbBytes)) {
-				end = int64(len(dbBytes))
-			}
+			end := min(off+int64(pageSize), int64(len(dbBytes)))
 			if !bytes.Equal(dbBytes[off:end], oldBuf[off:end]) {
 				if _, err := af.WriteAt(dbBytes[off:end], inactiveOffset+off); err != nil {
 					return fmt.Errorf("write page at offset %d: %w", off, err)
@@ -218,10 +215,7 @@ func (f *ArenaFlusher) flushInternal() error {
 		// Allocate the zero page once and reuse for each write.
 		zeroPage := make([]byte, pageSize)
 		for off := int64(len(dbBytes)); off < bufferSize; off += int64(pageSize) {
-			end := off + int64(pageSize)
-			if end > bufferSize {
-				end = bufferSize
-			}
+			end := min(off+int64(pageSize), bufferSize)
 			if !isZeroPage(oldBuf[off:end]) {
 				if _, err := af.WriteAt(zeroPage[:end-off], inactiveOffset+off); err != nil {
 					return fmt.Errorf("zero-pad at offset %d: %w", off, err)

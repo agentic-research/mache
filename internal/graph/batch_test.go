@@ -106,7 +106,7 @@ func TestMemoryStore_AddFileChildren_Atomicity(t *testing.T) {
 		}
 	}
 
-	for cycle := 0; cycle < cycles; cycle++ {
+	for cycle := range cycles {
 		dirID := fmt.Sprintf("pkg/atomic_%d", cycle)
 		dir := &Node{ID: dirID, Mode: fs.ModeDir}
 		store.AddNode(dir)
@@ -174,7 +174,7 @@ func TestMemoryStore_AddFileChildren_NodeMapConsistency(t *testing.T) {
 
 	const cycles = 100
 
-	for cycle := 0; cycle < cycles; cycle++ {
+	for cycle := range cycles {
 		store := NewMemoryStore()
 		dirID := "pkg/cons"
 		dir := &Node{ID: dirID, Mode: fs.ModeDir}
@@ -254,7 +254,7 @@ func TestMemoryStore_AddFileChildren_NoRaceOnGetNodeChildren(t *testing.T) {
 	go func() {
 		defer close(done)
 		close(ready)
-		for k := 0; k < 5000; k++ {
+		for range 5000 {
 			n, err := store.GetNode("pkg/race")
 			if err != nil {
 				continue
@@ -367,7 +367,7 @@ func TestListChildStats_SnapshotConsistency(t *testing.T) {
 
 	// Reader: take snapshots repeatedly. Each snapshot must be all-10 or all-99.
 	// Never a mix — that would prove non-atomic reads.
-	for attempt := 0; attempt < 500; attempt++ {
+	for attempt := range 500 {
 		stats, err := store.ListChildStats("snap")
 		require.NoError(t, err)
 		require.Len(t, stats, N)
@@ -404,24 +404,20 @@ func TestListChildStats_RaceDetectorClean(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Writer: continuously mutate node Data (changes ContentSize)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 1000; i++ {
+	wg.Go(func() {
+		for i := range 1000 {
 			store.AddNode(&Node{
 				ID: "race/a", Mode: 0o444,
 				Data: make([]byte, 10+i%50),
 			})
 		}
-	}()
+	})
 
 	// Reader: continuously read stats and access ALL fields.
 	// With []*Node, accessing n.ContentSize() after RLock release races.
 	// With []NodeStat, all fields are value copies — no race.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 1000; i++ {
+	wg.Go(func() {
+		for range 1000 {
 			stats, err := store.ListChildStats("race")
 			if err != nil {
 				continue
@@ -435,7 +431,7 @@ func TestListChildStats_RaceDetectorClean(t *testing.T) {
 				_ = s.HasOrigin
 			}
 		}
-	}()
+	})
 
 	wg.Wait()
 	// If this test passes with -race, snapshot semantics are proven.

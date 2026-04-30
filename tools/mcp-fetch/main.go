@@ -178,9 +178,9 @@ func normalizeEntry(raw map[string]any) map[string]any {
 	fullName, _ := server["name"].(string)
 	namespace := fullName
 	shortName := fullName
-	if idx := strings.Index(fullName, "/"); idx >= 0 {
-		namespace = fullName[:idx]
-		shortName = fullName[idx+1:]
+	if before, after, ok := strings.Cut(fullName, "/"); ok {
+		namespace = before
+		shortName = after
 	}
 
 	item := map[string]any{

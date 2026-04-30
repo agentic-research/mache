@@ -654,7 +654,7 @@ func BenchmarkScanRoot_Synthetic(b *testing.B) {
 	// Build a 10K record DB
 	const numRecords = 10000
 	records := make(map[string]string, numRecords)
-	for i := 0; i < numRecords; i++ {
+	for i := range numRecords {
 		id := fmt.Sprintf("CVE-2024-%04d", i)
 		records[id] = fmt.Sprintf(
 			`{"schema":"kev","identifier":"%s","item":{"cveID":"%s","vendorProject":"Vendor%d","product":"Product%d","shortDescription":"Desc %d"}}`,

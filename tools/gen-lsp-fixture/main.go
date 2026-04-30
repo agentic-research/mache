@@ -255,7 +255,7 @@ func Helper() string {
 	}
 
 	for _, n := range nodesData {
-		var parentID, record, sf interface{}
+		var parentID, record, sf any
 		if n.parentID != "" {
 			parentID = n.parentID
 		}
@@ -349,7 +349,7 @@ func Helper() string {
 	}
 
 	for _, l := range lspData {
-		var diag interface{}
+		var diag any
 		if l.diagnostics != "" {
 			diag = l.diagnostics
 		}

@@ -57,7 +57,7 @@ func seedManyCalls(b *testing.B, dir string, nCalls int) *sql.DB {
 			b.Fatalf("seed: %v\nquery=%s\nargs=%v", err, query, args)
 		}
 	}
-	for i := 0; i < nCalls; i++ {
+	for i := range nCalls {
 		callID := fmt.Sprintf("call_expression_%d", i)
 		if i%2 == 0 {
 			selID := callID + "/selector_expression"

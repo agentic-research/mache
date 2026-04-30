@@ -35,7 +35,7 @@ func walkAST(n *sitter.Node, records *[]any, enrichFn func(*sitter.Node, map[str
 
 		// Inspect children to gather structural properties
 		count := int(n.ChildCount())
-		for i := 0; i < count; i++ {
+		for i := range count {
 			child := n.Child(i)
 			if child == nil {
 				continue
@@ -61,7 +61,7 @@ func walkAST(n *sitter.Node, records *[]any, enrichFn func(*sitter.Node, map[str
 
 	// Recurse
 	count := int(n.ChildCount())
-	for i := 0; i < count; i++ {
+	for i := range count {
 		walkAST(n.Child(i), records, enrichFn)
 	}
 }

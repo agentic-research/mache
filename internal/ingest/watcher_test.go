@@ -249,10 +249,10 @@ func TestShouldIgnoreDir(t *testing.T) {
 
 func TestWatcher_VendorIgnored(t *testing.T) {
 	dir := t.TempDir()
-	var called int32
+	var called atomic.Int32
 
 	w, err := NewWatcher(dir, func(path string) {
-		atomic.AddInt32(&called, 1)
+		called.Add(1)
 	}, nil, WithDebounce(20*time.Millisecond))
 	require.NoError(t, err)
 	defer w.Stop()
@@ -265,7 +265,7 @@ func TestWatcher_VendorIgnored(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(vendorDir, "dep.go"), []byte("package dep"), 0o644))
 	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, int32(0), atomic.LoadInt32(&called), "vendor/ files should be ignored")
+	assert.Equal(t, int32(0), called.Load(), "vendor/ files should be ignored")
 }
 
 // TestWatcher_TargetIgnored is a regression test for the FD leak where the
@@ -274,10 +274,10 @@ func TestWatcher_VendorIgnored(t *testing.T) {
 // a Rust target/ tree with 11K+ subdirectories leaked thousands of FDs.
 func TestWatcher_TargetIgnored(t *testing.T) {
 	dir := t.TempDir()
-	var called int32
+	var called atomic.Int32
 
 	w, err := NewWatcher(dir, func(path string) {
-		atomic.AddInt32(&called, 1)
+		called.Add(1)
 	}, nil, WithDebounce(20*time.Millisecond))
 	require.NoError(t, err)
 	defer w.Stop()
@@ -305,7 +305,7 @@ func TestWatcher_TargetIgnored(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, int32(0), atomic.LoadInt32(&called),
+	assert.Equal(t, int32(0), called.Load(),
 		"files in target/, dist/, build/ should be ignored by watcher")
 }
 
@@ -320,9 +320,9 @@ func TestWatcher_GitignoreSkipsDirs(t *testing.T) {
 	gi := LoadGitignore(dir)
 	require.NotNil(t, gi)
 
-	var called int32
+	var called atomic.Int32
 	w, err := NewWatcher(dir, func(path string) {
-		atomic.AddInt32(&called, 1)
+		called.Add(1)
 	}, nil, WithDebounce(20*time.Millisecond), WithGitignore(gi))
 	require.NoError(t, err)
 	defer w.Stop()
@@ -336,13 +336,13 @@ func TestWatcher_GitignoreSkipsDirs(t *testing.T) {
 		[]byte("package gen"), 0o644))
 	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, int32(0), atomic.LoadInt32(&called),
+	assert.Equal(t, int32(0), called.Load(),
 		"gitignored directories should not trigger watcher callbacks")
 
 	// Verify non-ignored files still trigger callbacks
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644))
 	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, int32(1), atomic.LoadInt32(&called),
+	assert.Equal(t, int32(1), called.Load(),
 		"non-ignored source files should still trigger callbacks")
 }

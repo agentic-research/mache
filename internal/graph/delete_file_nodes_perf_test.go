@@ -42,10 +42,10 @@ func buildBenchStore(b *testing.B, nFiles, perFile int) (*MemoryStore, []string)
 	store.AddRoot(parent)
 
 	files := make([]string, 0, nFiles)
-	for f := 0; f < nFiles; f++ {
+	for f := range nFiles {
 		filePath := fmt.Sprintf("/src/file_%04d.go", f)
 		files = append(files, filePath)
-		for i := 0; i < perFile; i++ {
+		for i := range perFile {
 			id := fmt.Sprintf("%s/file%04d_node%03d", parentID, f, i)
 			parent.Children = append(parent.Children, id)
 			store.AddNode(&Node{
@@ -102,7 +102,7 @@ func readdFile(store *MemoryStore, filePath string, perFile int) {
 	parentClone.Children = append([]string(nil), parent.Children...)
 
 	idPrefix := fmt.Sprintf("pkg/%s_node", lastSegment(filePath))
-	for i := 0; i < perFile; i++ {
+	for i := range perFile {
 		id := fmt.Sprintf("%s%03d", idPrefix, i)
 		parentClone.Children = append(parentClone.Children, id)
 		store.AddNode(&Node{

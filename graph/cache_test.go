@@ -249,7 +249,7 @@ func TestGraphCache_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	// Concurrent writers.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -259,14 +259,12 @@ func TestGraphCache_ConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 	// Concurrent readers.
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 10 {
+		wg.Go(func() {
 			c.GetNode("root")
 			c.ListChildren("root")
 			c.RootIDs()
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -402,7 +400,7 @@ func TestGraphCache_NoRaceOnGetNodeChildren(t *testing.T) {
 	go func() {
 		defer close(done)
 		close(ready)
-		for k := 0; k < 5000; k++ {
+		for range 5000 {
 			n, ok := c.GetNode("pkg")
 			if !ok {
 				continue
@@ -414,7 +412,7 @@ func TestGraphCache_NoRaceOnGetNodeChildren(t *testing.T) {
 	}()
 
 	<-ready
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		id := fmt.Sprintf("pkg/f_%03d", i)
 		c.PutFile(id, []byte("v"))
 		c.AppendChild("pkg", id)

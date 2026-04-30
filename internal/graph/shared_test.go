@@ -247,36 +247,30 @@ func TestContentCache_ConcurrentReadWrite(t *testing.T) {
 
 	// Writers
 	for i := range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for j := range 100 {
 				key := fmt.Sprintf("key_%d_%d", i, j)
 				c.Put(key, []byte(key))
 			}
-		}()
+		})
 	}
 
 	// Readers
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 100 {
 				c.Get("key_0_0") // may or may not exist
 			}
-		}()
+		})
 	}
 
 	// Deleters
 	for range 5 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for j := range 50 {
 				c.Delete(fmt.Sprintf("key_0_%d", j))
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

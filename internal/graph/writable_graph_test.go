@@ -143,7 +143,7 @@ func TestWritableGraph_UpdateRecord_ConcurrentSerialised(t *testing.T) {
 	const b = "BBBBBBBBBBBBBBBB"
 
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()

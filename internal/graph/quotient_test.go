@@ -829,7 +829,7 @@ func TestMermaid_EdgeLabelsAreValidSyntax(t *testing.T) {
 	out := q.Mermaid("TD")
 
 	// Must not contain parentheses in edge labels (breaks mermaid parser).
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "-->|") {
 			assert.NotContains(t, line, "(", "edge label must not contain '(' — breaks mermaid syntax")
 			assert.NotContains(t, line, ")", "edge label must not contain ')' — breaks mermaid syntax")

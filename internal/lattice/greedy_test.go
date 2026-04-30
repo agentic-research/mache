@@ -1,6 +1,7 @@
 package lattice
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -97,7 +98,7 @@ func TestIntegration(t *testing.T) {
 	// So with 2 records it returns leaf.
 
 	// Let's override for test or provide more records.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		records = append(records, map[string]any{"a": 1})
 		records = append(records, map[string]any{"b": 2})
 	}
@@ -116,14 +117,12 @@ func TestGreedyInference_WithHints(t *testing.T) {
 	}
 	// Duplicate records to exceed min threshold (10)
 	baseLen := len(records)
-	for i := 0; i < 3; i++ {
-		for j := 0; j < baseLen; j++ {
+	for range 3 {
+		for j := range baseLen {
 			// Deep copy map to avoid reference issues if modified (though strictly not needed here)
 			orig := records[j].(map[string]any)
 			dup := make(map[string]any)
-			for k, v := range orig {
-				dup[k] = v
-			}
+			maps.Copy(dup, orig)
 			records = append(records, dup)
 		}
 	}

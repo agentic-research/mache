@@ -371,14 +371,14 @@ func parseAttribute(attr string) (string, string) {
 		parts := strings.Split(attr, ":")
 		return parts[0], parts[1]
 	}
-	if strings.HasSuffix(attr, "_year") {
-		return strings.TrimSuffix(attr, "_year"), "year"
+	if before, ok := strings.CutSuffix(attr, "_year"); ok {
+		return before, "year"
 	}
-	if strings.HasSuffix(attr, "_month") {
-		return strings.TrimSuffix(attr, "_month"), "month"
+	if before, ok := strings.CutSuffix(attr, "_month"); ok {
+		return before, "month"
 	}
-	if strings.HasSuffix(attr, "_day") {
-		return strings.TrimSuffix(attr, "_day"), "day"
+	if before, ok := strings.CutSuffix(attr, "_day"); ok {
+		return before, "day"
 	}
 	return attr, ""
 }
