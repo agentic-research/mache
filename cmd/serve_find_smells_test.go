@@ -1562,6 +1562,70 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 		"Dispatcher (production) is flagged; CapnpStruct (generated) is skipped via source_file suffix")
 }
 
+// TestFindSmells_FanOutSkewSkipsTestFiles asserts that test helpers
+// in *_test.go files (e.g., setup, RunSuite, runParityTest) aren't
+// flagged. The Test*/Benchmark*/Example*/Fuzz* per-construct filter
+// catches actual test functions, but test helpers with non-test
+// names slip through — match god_file's per-file extension filter.
+//
+// Surfaced by dogfood: 4 of 50 fan_out_skew findings were test
+// helpers (RunGraphSuiteWithOpts, runParityTest, setup,
+// realWriteBack). After this fix: 46.
+func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions',                  '',                  'functions', 1, 0, '',              ''),
+		  ('functions/setup',            'functions',         'setup',     1, 0, '',              ''),
+		  ('functions/setup/source',     'functions/setup',   'source',    0, 0, 'foo_test.go',   ''),
+		  ('functions/Dispatcher',       'functions',         'Dispatcher',1, 0, '',              ''),
+		  ('functions/Dispatcher/source','functions/Dispatcher','source', 0, 0, 'dispatcher.go', '');
+
+		-- Both have 12 distinct callees. setup is in *_test.go (test
+		-- helper, non-test name) so must be skipped; Dispatcher is
+		-- production code and must be flagged.
+		INSERT INTO node_refs VALUES
+		  ('A','functions/setup/source'),('B','functions/setup/source'),('C','functions/setup/source'),
+		  ('D','functions/setup/source'),('E','functions/setup/source'),('F','functions/setup/source'),
+		  ('G','functions/setup/source'),('H','functions/setup/source'),('I','functions/setup/source'),
+		  ('J','functions/setup/source'),('K','functions/setup/source'),('L','functions/setup/source');
+
+		INSERT INTO node_refs VALUES
+		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
+		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
+		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
+		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
+
+		-- Tiny callers to bring project mean down so 12 trips the threshold.
+		INSERT INTO node_refs VALUES
+		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
+		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
+		"Dispatcher (production) is flagged; setup (test helper in *_test.go) is skipped")
+}
+
 // TestFindSmells_UntestedFunctionAcceptsTestCallCoverage asserts
 // that a function called from inside any Test*/Benchmark*/Example*/
 // Fuzz* construct's source is treated as covered, even without a
