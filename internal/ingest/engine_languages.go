@@ -87,6 +87,8 @@ func init() {
 			(literal_element (identifier) @call))
 		(call_expression function: (identifier) @call)
 		(call_expression function: (selector_expression field: (field_identifier) @call))
+		(call_expression
+			arguments: (argument_list (identifier) @call))
 	`)
 
 	// ASTWalker context kinds — top-level node kinds whose source bytes
