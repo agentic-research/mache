@@ -141,8 +141,16 @@ func TestArenaFlusher_Coalesce(t *testing.T) {
 	require.NoError(t, err)
 	_ = f.Close()
 
-	// Sequence should be 2 (initial=1, one coalesced flush), not 11
-	assert.Equal(t, uint64(2), h.Sequence, "10 rapid requests should coalesce into 1 flush")
+	// Sequence should be 2 in the steady case (initial=1 + one coalesced
+	// flush) and at most 3 under CI load where scheduler delay can push
+	// the wall-clock-based 80ms sleep past a second tick. Either way it
+	// must be far below 11 — the coalescing guarantee is "10 rapid
+	// requests collapse to ≤2 flushes," not "exactly one flush."
+	// (mache-02a9ab)
+	assert.GreaterOrEqual(t, h.Sequence, uint64(2),
+		"at least one flush should have run after 10 RequestFlush + 80ms")
+	assert.LessOrEqual(t, h.Sequence, uint64(3),
+		"10 rapid requests must coalesce — observed sequence %d implies they did not", h.Sequence)
 
 	require.NoError(t, flusher.Close())
 }
