@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -15,15 +14,6 @@ import (
 // output format.
 type Materializer interface {
 	Materialize(srcDB, outPath string) error
-}
-
-// formatRegistry holds optional materializer constructors registered via init().
-var formatRegistry = map[string]func() Materializer{}
-
-// registerFormat adds a materializer factory. Used by build-tag gated files
-// (e.g., boltdb.go with //go:build boltdb).
-func registerFormat(name string, fn func() Materializer) { //nolint:unused // called from build-tag gated init()
-	formatRegistry[name] = fn
 }
 
 // ForFormat returns the appropriate Materializer for the given format string.
@@ -36,18 +26,7 @@ func ForFormat(format string) (Materializer, error) {
 	case "json":
 		return &JSONMaterializer{}, nil
 	}
-
-	// Check optional (build-tag gated) formats.
-	if fn, ok := formatRegistry[format]; ok {
-		return fn(), nil
-	}
-
-	// Build the supported-format list dynamically (core + registered).
-	supported := []string{"sqlite", "zip", "json"}
-	for name := range formatRegistry {
-		supported = append(supported, name)
-	}
-	return nil, fmt.Errorf("unknown output format: %q (supported: %s)", format, strings.Join(supported, ", "))
+	return nil, fmt.Errorf("unknown output format: %q (supported: sqlite, zip, json)", format)
 }
 
 // ---------------------------------------------------------------------------
