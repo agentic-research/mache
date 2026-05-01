@@ -7,7 +7,7 @@ If you're looking for:
 - **Where things go** — see [Core Abstractions](#core-abstractions) and [Key File Reference](#key-file-reference)
 - **Why mache works without LLO and what changes when you have it** — see [Interplay with ley-line-open](#interplay-with-ley-line-open)
 - **The write pipeline** — see [Write Pipeline](#write-pipeline)
-- **Virtual directories (`callers/`, `callees/`, `_diagnostics/`, `.query/`)** — see [Virtual Directories](#virtual-directories)
+- **Virtual directories (`callers/`, `callees/`, `_diagnostics/`)** — see [Virtual Directories](#virtual-directories)
 - **Past decisions** — see [Architectural Decision Records (ADRs)](#architectural-decision-records-adrs)
 - **Where things are going** — see [ROADMAP.md](ROADMAP.md)
 
@@ -210,10 +210,6 @@ Per-directory virtual dir (writable mounts only) with `last-write-status`, `ast-
 ### `context`
 
 Per-directory virtual file exposing imports/globals visible to that scope. Critical for agents to understand dependencies without reading the whole file.
-
-### `.query/`
-
-Plan 9-style query directory at root. Create a query dir (`mkdir /.query/my_search`), write SQL to `ctl`, and results appear as symlinks back into the graph. Powered by the `mache_refs` virtual table.
 
 ### `callers/`
 

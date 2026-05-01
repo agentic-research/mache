@@ -67,7 +67,7 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 - **ContentRef**: Large content (>4KB) uses lazy `ContentRef` with DBPath/RecordID/Template instead of inline bytes.
 - **Write-back pipeline**: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins`. No re-ingest.
 - **Draft mode**: Invalid writes save as drafts; node path stays stable. Errors via `_diagnostics/ast-errors`.
-- **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `.query/` (SQL → symlinks), `callers/` (cross-refs, self-gating).
+- **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `callers/` (cross-refs, self-gating), `callees/` (forward refs, self-gating).
 - **NFS mount**: Only mount backend (FUSE removed in v0.7.0). Pure Go via `go-nfs`.
 - **LSP enrichment**: When a `.db` has `_lsp*` tables (produced by ley-line's `ll-open/lsp` crate), `find_definition` falls back to `_lsp_defs` and `find_callers` supplements with `_lsp_refs`. `get_type_info` reads `_lsp_hover`, `get_diagnostics` reads `_lsp`. No runtime daemon needed — all pre-baked at build time by ley-line.
 

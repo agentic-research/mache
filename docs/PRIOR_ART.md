@@ -8,18 +8,18 @@ This positions Mache at the intersection of several traditions — filesystem-as
 
 ## Comparison Table
 
-| Tool | Schema-Driven Projection | AST-Aware Decomposition | Identity-Preserving Write-Back | On-Demand Content | Cross-References | Real FS Mount |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Mache** | Yes | Yes (8 langs) | Yes | Yes | Yes (`callers/`, `callees/`) | Yes (NFS/FUSE) |
-| **codebase-memory-mcp** | No | Yes (64 langs) | No | No | Yes (call graph) | No |
-| **AgentFS** (Turso) | No | No | Yes (KV store) | No | No | No |
-| **Dust** | No | No | No | No | No | No (synthetic FS via tool calls) |
-| **Vercel bash-tool** | No | No | No | No | No | No (manual file staging) |
-| **MCP** | No | No | Varies by server | N/A | N/A | No (protocol layer) |
-| **LlamaIndex / LangChain** | No | No | No | Yes (retrievers) | No | No |
-| **AIGNE / AFS** | No | No | No | No | No | No (namespace metaphor) |
-| **FUSE-DB tools** (FusqlFS, DBFS, wddbfs) | No | No | Some | Yes | No | Yes |
-| **Plan 9 / 9P** | Yes (per-server) | No | Yes | Yes | No | Yes |
+| Tool                                      | Schema-Driven Projection | AST-Aware Decomposition | Identity-Preserving Write-Back | On-Demand Content |       Cross-References       |          Real FS Mount           |
+| ----------------------------------------- | :----------------------: | :---------------------: | :----------------------------: | :---------------: | :--------------------------: | :------------------------------: |
+| **Mache**                                 |           Yes            |      Yes (8 langs)      |              Yes               |        Yes        | Yes (`callers/`, `callees/`) |          Yes (NFS/FUSE)          |
+| **codebase-memory-mcp**                   |            No            |     Yes (64 langs)      |               No               |        No         |       Yes (call graph)       |                No                |
+| **AgentFS** (Turso)                       |            No            |           No            |         Yes (KV store)         |        No         |              No              |                No                |
+| **Dust**                                  |            No            |           No            |               No               |        No         |              No              | No (synthetic FS via tool calls) |
+| **Vercel bash-tool**                      |            No            |           No            |               No               |        No         |              No              |     No (manual file staging)     |
+| **MCP**                                   |            No            |           No            |        Varies by server        |        N/A        |             N/A              |       No (protocol layer)        |
+| **LlamaIndex / LangChain**                |            No            |           No            |               No               | Yes (retrievers)  |              No              |                No                |
+| **AIGNE / AFS**                           |            No            |           No            |               No               |        No         |              No              |     No (namespace metaphor)      |
+| **FUSE-DB tools** (FusqlFS, DBFS, wddbfs) |            No            |           No            |              Some              |        Yes        |              No              |               Yes                |
+| **Plan 9 / 9P**                           |     Yes (per-server)     |           No            |              Yes               |        Yes        |              No              |               Yes                |
 
 ## Detailed Analysis
 
@@ -36,7 +36,7 @@ This positions Mache at the intersection of several traditions — filesystem-as
 - **Real filesystem mount.** codebase-memory-mcp is MCP-only. Mache mounts as a real NFS/FUSE filesystem — agents can use standard `ls`/`cat`/`echo` without any MCP client.
 - **Language breadth vs. depth.** codebase-memory-mcp supports 64 languages with a uniform graph schema. Mache supports 8 languages but provides deeper structural features: context files (imports/globals per scope), doc comment extraction, write-back formatting, and configurable AST queries per language.
 - **Data generality.** codebase-memory-mcp is code-only. Mache handles JSON, SQLite databases, and source code through the same schema-driven pipeline — e.g., projecting 323K NVD vulnerability records or 9.4K MCP registry entries alongside source code.
-- **Query language.** codebase-memory-mcp offers Cypher-like queries over its graph. Mache uses SQL via the `mache_refs` virtual table and `.query/` magic directory.
+- **Query language.** codebase-memory-mcp offers Cypher-like queries over its graph. Mache uses SQL directly against the SQLite-backed graph (the `mache_refs` virtual table is available to MCP tools that need ad-hoc structural queries, e.g. `search`).
 
 ### AgentFS (Turso)
 
