@@ -48,3 +48,22 @@ func runGit(t *testing.T, dir string, args ...string) {
 	err := cmd.Run()
 	require.NoError(t, err, "git %v failed", args)
 }
+
+// TestGetGitHints pins the inference hint contract that ties git
+// commit fields to FCA scaling kinds. The map is small and static
+// today, but its keys are part of the schema-inference public
+// surface — losing or renaming an entry here silently changes
+// what attributes BuildContext treats as identifier / reference /
+// temporal. The test documents the wire shape and catches
+// accidental edits.
+func TestGetGitHints(t *testing.T) {
+	hints := GetGitHints()
+	want := map[string]string{
+		"sha":     "id",
+		"tree":    "reference",
+		"parents": "reference",
+		"date":    "temporal",
+	}
+	assert.Equal(t, want, hints,
+		"GetGitHints map is part of the schema-inference public surface; updates require a deliberate change to the inferrer contract")
+}
