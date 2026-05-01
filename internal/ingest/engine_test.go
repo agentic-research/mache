@@ -567,3 +567,78 @@ func Other() {}
 	}
 	assert.True(t, found, "Main/source should be a caller of Other")
 }
+
+// TestSchemaUsesTreeSitter pins the dispatch heuristic in
+// engine.go: a schema whose selectors start with `(` is a
+// tree-sitter S-expression and routes through SitterWalker; a
+// schema whose selectors are JSONPath strings (`$.foo`) routes
+// through JsonWalker. Engine.Ingest reads this at line 345 to
+// pick the walker and to decide whether to take the parallel
+// CGO path. Wrong answer = wrong walker = silent ingestion drop.
+func TestSchemaUsesTreeSitter(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema *api.Topology
+		want   bool
+	}{
+		{
+			name: "tree-sitter S-expression at root",
+			schema: &api.Topology{
+				Nodes: []api.Node{{Selector: "(function_declaration) @fn"}},
+			},
+			want: true,
+		},
+		{
+			name: "JSONPath at root",
+			schema: &api.Topology{
+				Nodes: []api.Node{{Selector: "$.records[*]"}},
+			},
+			want: false,
+		},
+		{
+			name: "tree-sitter nested under JSONPath parent",
+			schema: &api.Topology{
+				Nodes: []api.Node{{
+					Selector: "$.records[*]",
+					Children: []api.Node{{Selector: "(method_declaration) @m"}},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "JSONPath nested under JSONPath parent",
+			schema: &api.Topology{
+				Nodes: []api.Node{{
+					Selector: "$.outer",
+					Children: []api.Node{{Selector: "$.inner"}},
+				}},
+			},
+			want: false,
+		},
+		{
+			name:   "empty topology",
+			schema: &api.Topology{},
+			want:   false,
+		},
+		{
+			name: "leading whitespace before paren still counts as tree-sitter",
+			schema: &api.Topology{
+				Nodes: []api.Node{{Selector: "  (call_expression) @c"}},
+			},
+			want: true,
+		},
+		{
+			name: "empty selector is neither",
+			schema: &api.Topology{
+				Nodes: []api.Node{{Selector: ""}},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, SchemaUsesTreeSitter(tc.schema))
+		})
+	}
+}
