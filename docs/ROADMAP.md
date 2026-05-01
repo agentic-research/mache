@@ -13,7 +13,6 @@
 - Context awareness: virtual `context` files expose imports/globals to agents
 - Cross-reference indexing: `node_refs`/`node_defs` SQLite tables backed by tree-sitter (standalone) or LLO (`.db` path)
 - `callers/` and `callees/` virtual directories — self-gating, NFS-served as `graphFile`s
-- `.query/` Plan 9-style SQL query directory with symlink results
 - `find_smells` MCP tool: 9 structural rules (`magic_int_in_comparison`, `dead_code`, `cyclomatic_complexity`, `long_function`, `untested_function`, `duplicate_definitions`, `god_file`, `fan_out_skew`, `long_file`) with optional `min_metric` and `source_id` filters; advisory PR comments via `.github/workflows/find-smells.yml`
 - FCA + greedy entropy schema inference: `--infer` auto-generates topology from data
 - Virtual `_schema.json` at mount root exposing the active topology

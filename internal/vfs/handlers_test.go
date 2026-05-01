@@ -157,26 +157,6 @@ func TestContextHandler_DirExtras(t *testing.T) {
 	assert.Nil(t, h.DirExtras("/pkg/Foo", nil))
 }
 
-func TestQueryHandler(t *testing.T) {
-	h := &QueryHandler{Enabled: false}
-	assert.False(t, h.Match("/.query"))
-
-	h.Enabled = true
-	assert.True(t, h.Match("/.query"))
-	assert.True(t, h.Match("/.query/foo"))
-	assert.False(t, h.Match("/other"))
-
-	// Stat always returns nil (backend handles it)
-	assert.Nil(t, h.Stat("/.query"))
-
-	extras := h.DirExtras("/", nil)
-	require.Len(t, extras, 1)
-	assert.Equal(t, ".query", extras[0].Name)
-	assert.Equal(t, KindDir, extras[0].Kind)
-
-	assert.Nil(t, h.DirExtras("/sub", nil))
-}
-
 func TestLocationHandler(t *testing.T) {
 	store := graph.NewMemoryStore()
 	store.AddNode(&graph.Node{

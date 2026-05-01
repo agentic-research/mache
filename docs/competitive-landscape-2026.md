@@ -368,7 +368,7 @@ ______________________________________________________________________
 
 Seven of nine competitors offer embedding-based semantic search (Augment, Cody, Cursor, Continue, CodeRabbit, Greptile via code graph, Aider via PageRank). Mache has none. This is the most consistent gap.
 
-**Recommendation:** Add vector search to mache. Options: SQLite-vec (pure Go, stays in the SQLite ecosystem), LanceDB (proven in Continue and CodeRabbit), or a custom embedding pipeline. The `search` MCP tool and `.query/` magic directory are natural integration points.
+**Recommendation:** Add vector search to mache. Options: SQLite-vec (pure Go, stays in the SQLite ecosystem), LanceDB (proven in Continue and CodeRabbit), or a custom embedding pipeline. The `search` MCP tool is the natural integration point.
 
 ### 2. Incremental Re-Indexing / Live Updates
 

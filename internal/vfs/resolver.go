@@ -12,10 +12,9 @@ type Resolver struct {
 	handlers []VHandler
 
 	// Typed references for post-construction configuration.
-	// Backends call SetPromptContent/EnableQuery/SetWritable
-	// instead of holding direct handler pointers.
+	// Backends call SetPromptContent/SetWritable instead of holding
+	// direct handler pointers.
 	promptH *PromptHandler
-	queryH  *QueryHandler
 	diagH   *DiagnosticsHandler
 }
 
@@ -25,12 +24,11 @@ func NewResolver(handlers ...VHandler) *Resolver {
 	return &Resolver{handlers: handlers}
 }
 
-// NewDefaultResolver builds the standard handler chain for both FUSE and NFS
-// backends. Callers configure behaviour via SetPromptContent, EnableQuery,
-// and SetWritable rather than accessing individual handlers.
+// NewDefaultResolver builds the standard handler chain for the NFS
+// backend. Callers configure behaviour via SetPromptContent and
+// SetWritable rather than accessing individual handlers.
 func NewDefaultResolver(g graph.Graph, schemaJSON []byte) *Resolver {
 	promptH := &PromptHandler{}
-	queryH := &QueryHandler{}
 	diagH := &DiagnosticsHandler{DiagStatus: &sync.Map{}}
 	schemaH := &SchemaHandler{Content: schemaJSON}
 	contextH := &ContextHandler{Graph: g}
@@ -38,12 +36,10 @@ func NewDefaultResolver(g graph.Graph, schemaJSON []byte) *Resolver {
 	callersH := &CallersHandler{Graph: g}
 	calleesH := &CalleesHandler{Graph: g}
 
-	// Order matters: query before callers/callees (both can have "/" paths).
 	r := NewResolver(
-		schemaH, promptH, queryH, diagH, contextH, locationH, callersH, calleesH,
+		schemaH, promptH, diagH, contextH, locationH, callersH, calleesH,
 	)
 	r.promptH = promptH
-	r.queryH = queryH
 	r.diagH = diagH
 	return r
 }
@@ -52,13 +48,6 @@ func NewDefaultResolver(g graph.Graph, schemaJSON []byte) *Resolver {
 func (r *Resolver) SetPromptContent(content []byte) {
 	if r.promptH != nil {
 		r.promptH.Content = content
-	}
-}
-
-// EnableQuery marks the /.query/ magic directory as active.
-func (r *Resolver) EnableQuery() {
-	if r.queryH != nil {
-		r.queryH.Enabled = true
 	}
 }
 
