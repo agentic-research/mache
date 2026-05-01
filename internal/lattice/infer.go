@@ -1,7 +1,6 @@
 package lattice
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
@@ -164,51 +163,6 @@ func (inf *Inferrer) InferFromSQLite(dbPath string) (*api.Topology, error) {
 	}
 
 	return inf.InferFromRecords(reservoir)
-}
-
-// InferFromSQLiteJSON is like InferFromSQLite but works with raw JSON strings.
-// Used when records need custom parsing.
-func (inf *Inferrer) InferFromSQLiteJSON(dbPath string) (*api.Topology, error) {
-	sampleSize := inf.Config.SampleSize
-	if sampleSize <= 0 {
-		sampleSize = 1000
-	}
-
-	type rawRecord struct {
-		raw string
-	}
-
-	rawReservoir := make([]rawRecord, 0, sampleSize)
-	rng := rand.New(rand.NewSource(inf.Config.Seed))
-	count := 0
-
-	err := ingest.StreamSQLiteRaw(dbPath, func(_, raw string) error {
-		if count < sampleSize {
-			rawReservoir = append(rawReservoir, rawRecord{raw: raw})
-		} else {
-			j := rng.Intn(count + 1)
-			if j < sampleSize {
-				rawReservoir[j] = rawRecord{raw: raw}
-			}
-		}
-		count++
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("sample sqlite raw: %w", err)
-	}
-
-	// Parse sampled records
-	records := make([]any, len(rawReservoir))
-	for i, r := range rawReservoir {
-		var parsed any
-		if err := json.Unmarshal([]byte(r.raw), &parsed); err != nil {
-			return nil, fmt.Errorf("parse sample %d: %w", i, err)
-		}
-		records[i] = parsed
-	}
-
-	return inf.InferFromRecords(records)
 }
 
 // InferMultiLanguage infers a multi-language schema from per-language record sets.
