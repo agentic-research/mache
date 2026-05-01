@@ -1764,17 +1764,6 @@ func extractGoPackageName(fileRoot *sitter.Node, source []byte, lang *sitter.Lan
 	return ""
 }
 
-// GetLanguage returns the tree-sitter language for a language name string.
-// Returns nil for unsupported languages.
-// Deprecated: use lang.ForName(name).Grammar() instead.
-func GetLanguage(langName string) *sitter.Language {
-	l := lang.ForName(langName)
-	if l == nil {
-		return nil
-	}
-	return l.Grammar()
-}
-
 // RenderTemplate delegates to internal/template.Render.
 // Kept as a public alias for backward compatibility with existing callers.
 func RenderTemplate(tmpl string, values map[string]any) (string, error) {
