@@ -1,6 +1,8 @@
 package vfs
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/graph"
@@ -80,4 +82,75 @@ func TestResolver_FirstMatchWins(t *testing.T) {
 	e := r.Resolve("/dup")
 	require.NotNil(t, e)
 	assert.Equal(t, int64(1), e.Size) // h1 wins
+}
+
+// TestNewDefaultResolver pins the chain shape that mounts depend on:
+// the standard handler set, in registration order, with typed
+// references for post-construction configuration. The order matters
+// because Resolve uses first-match-wins — _schema.json before paths
+// that could shadow it, callers/callees last so they fall through to
+// the graph lookup when no virtual entry matches.
+func TestNewDefaultResolver_ChainShape(t *testing.T) {
+	g := graph.NewMemoryStore()
+	r := NewDefaultResolver(g, []byte(`{"version":"v1"}`))
+	require.NotNil(t, r)
+
+	// Seven handlers in this order: schema, prompt, diag, context,
+	// location, callers, callees (one for each * Handler type below
+	// the SchemaHandler).
+	require.Len(t, r.handlers, 7, "default chain length is fixed at 7")
+	wantTypes := []string{
+		"*vfs.SchemaHandler",
+		"*vfs.PromptHandler",
+		"*vfs.DiagnosticsHandler",
+		"*vfs.ContextHandler",
+		"*vfs.LocationHandler",
+		"*vfs.CallersHandler",
+		"*vfs.CalleesHandler",
+	}
+	for i, h := range r.handlers {
+		// fmt.Sprintf("%T", ...) renders the concrete type; checking
+		// it pins the chain shape without committing the test to the
+		// internal layout of each handler struct.
+		assert.Equal(t, wantTypes[i], typeName(h),
+			"handler[%d] should be %s", i, wantTypes[i])
+	}
+
+	// Typed references are wired so SetPromptContent/SetWritable
+	// reach the right handler instance.
+	require.NotNil(t, r.promptH, "promptH typed ref must be wired")
+	require.NotNil(t, r.diagH, "diagH typed ref must be wired")
+}
+
+func TestNewDefaultResolver_SetPromptContent(t *testing.T) {
+	r := NewDefaultResolver(graph.NewMemoryStore(), nil)
+	r.SetPromptContent([]byte("hello"))
+	assert.Equal(t, []byte("hello"), r.promptH.Content,
+		"SetPromptContent must mutate the typed-ref handler")
+}
+
+func TestNewDefaultResolver_SetWritable(t *testing.T) {
+	r := NewDefaultResolver(graph.NewMemoryStore(), nil)
+
+	// Default: not writable.
+	assert.False(t, r.diagH.Writable)
+
+	// Enable writable + supply a fresh diagStatus map.
+	var diagStatus sync.Map
+	r.SetWritable(true, &diagStatus)
+	assert.True(t, r.diagH.Writable)
+	assert.Same(t, &diagStatus, r.diagH.DiagStatus,
+		"diag handler should hold the caller-provided status map")
+
+	// SetWritable(_, nil) preserves the existing status map.
+	r.SetWritable(false, nil)
+	assert.False(t, r.diagH.Writable)
+	assert.Same(t, &diagStatus, r.diagH.DiagStatus,
+		"nil diagStatus must not stomp the previously-set map")
+}
+
+// typeName returns "*vfs.FooHandler" for h. Used to pin the chain
+// shape without depending on each handler's internal layout.
+func typeName(h any) string {
+	return fmt.Sprintf("%T", h)
 }
