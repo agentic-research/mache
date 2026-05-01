@@ -251,6 +251,88 @@ func TestFormalContext_Closure(t *testing.T) {
 	assert.True(t, result.IsEmpty())
 }
 
+// TestBuildContext exercises the records-+-explicit-attributes
+// path that BuildContextFromRecords wraps. This is the production
+// shape callers use when they've already analyzed fields and
+// decided on a scaling — e.g. mixed Presence + ScaledValue
+// attributes for date sharding.
+//
+// We assert the column-major incidence directly: each attribute
+// must produce exactly the right object set, not just "≥1" as
+// the existing FromRecords test does.
+func TestBuildContext_PresenceAndScaledMix(t *testing.T) {
+	records := []any{
+		// 0: full record
+		map[string]any{"id": "a", "vendor": "Acme", "published": "2024-01-15"},
+		// 1: same year, different vendor
+		map[string]any{"id": "b", "vendor": "Beta", "published": "2024-06-20"},
+		// 2: different year, no vendor
+		map[string]any{"id": "c", "published": "2025-03-10"},
+	}
+	attrs := []Attribute{
+		{Name: "id", Kind: Presence, Field: "id"},
+		{Name: "vendor", Kind: Presence, Field: "vendor"},
+		{Name: "published.year=2024", Kind: ScaledValue, Field: "published"},
+		{Name: "published.year=2025", Kind: ScaledValue, Field: "published"},
+		{Name: "vendor=Acme", Kind: ScaledValue, Field: "vendor"},
+	}
+
+	ctx := BuildContext(records, attrs)
+	require.NotNil(t, ctx)
+	assert.Equal(t, 3, ctx.ObjectCount)
+	require.Len(t, ctx.Attributes, 5)
+	require.Len(t, ctx.columns, 5)
+
+	// Each attribute's column should be a bitmap with exactly the
+	// right object indices set.
+	expect := []struct {
+		name  string
+		index int
+		want  []uint32
+	}{
+		{"id", 0, []uint32{0, 1, 2}},               // present in all
+		{"vendor", 1, []uint32{0, 1}},              // missing from rec 2
+		{"published.year=2024", 2, []uint32{0, 1}}, // 2024 only
+		{"published.year=2025", 3, []uint32{2}},    // 2025 only
+		{"vendor=Acme", 4, []uint32{0}},            // only rec 0
+	}
+	for _, e := range expect {
+		t.Run(e.name, func(t *testing.T) {
+			require.Equal(t, e.name, ctx.Attributes[e.index].Name)
+			col := ctx.columns[e.index]
+			assert.Equal(t, uint64(len(e.want)), col.GetCardinality(),
+				"unexpected cardinality for attr %s", e.name)
+			for _, want := range e.want {
+				assert.True(t, col.Contains(want),
+					"attr %s should contain object %d", e.name, want)
+			}
+		})
+	}
+
+	// attrIndex must let lookups by name return the right column.
+	for j, attr := range ctx.Attributes {
+		assert.Equal(t, j, ctx.attrIndex[attr.Name],
+			"attrIndex must round-trip for %s", attr.Name)
+	}
+}
+
+func TestBuildContext_EmptyInputs(t *testing.T) {
+	t.Run("no records", func(t *testing.T) {
+		ctx := BuildContext(nil, []Attribute{
+			{Name: "x", Kind: Presence, Field: "x"},
+		})
+		assert.Equal(t, 0, ctx.ObjectCount)
+		require.Len(t, ctx.columns, 1)
+		assert.Equal(t, uint64(0), ctx.columns[0].GetCardinality())
+	})
+	t.Run("no attributes", func(t *testing.T) {
+		ctx := BuildContext([]any{map[string]any{"x": 1}}, nil)
+		assert.Equal(t, 1, ctx.ObjectCount)
+		assert.Empty(t, ctx.columns)
+		assert.Empty(t, ctx.Attributes)
+	})
+}
+
 func TestFormalContext_FromRecords(t *testing.T) {
 	records := []any{
 		map[string]any{
