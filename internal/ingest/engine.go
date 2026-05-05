@@ -890,11 +890,16 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 		}
 	}
 
-	// 9. Record file metadata for incremental re-ingestion.
+	// 9. Record file metadata for incremental re-ingestion + coverage row
+	//    for ADR-0013's _index_coverage table (mention-fidelity, since
+	//    tree-sitter is the L_0 producer in the fidelity poset). LSP and
+	//    SSA producers will write their own (binding/reachability) rows
+	//    for the same source_id.
 	if sw, ok := e.Store.(*SQLiteWriter); ok {
 		info, err := os.Stat(result.realPath)
 		if err == nil {
 			sw.RecordFile(result.realPath, info.ModTime(), info.Size())
+			sw.RecordIndexCoverage(result.realPath, "tree-sitter", "mention", time.Now(), true)
 		}
 	}
 
