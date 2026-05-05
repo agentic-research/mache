@@ -45,6 +45,14 @@ _agent_logs/
 SESSION_SUMMARY.md
 HANDOFF.md
 
+# Internal project notes (anything `_`-prefixed at root is project-local
+# unless deliberately allowlisted). Catches _project_files/, _internal/,
+# _private/, _scratch/, etc. — same convention as _agent_log/.
+_project_files/
+_internal/
+_private/
+_scratch/
+
 # Experiment tracking (local)
 experiments/
 
