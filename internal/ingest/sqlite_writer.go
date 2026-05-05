@@ -20,16 +20,17 @@ const defaultBatchSize = 10_000
 
 // SQLiteWriter implements IngestionTarget for the new high-performance schema.
 type SQLiteWriter struct {
-	db        *sql.DB
-	tx        *sql.Tx
-	stmtNode  *sql.Stmt
-	stmtRef   *sql.Stmt // For adding refs
-	stmtDef   *sql.Stmt // For adding defs
-	stmtFile  *sql.Stmt // For recording file metadata (incremental index)
-	batchSize int
-	count     int
-	firstErr  error // first insert/batch error, surfaced by Close
-	mu        sync.Mutex
+	db           *sql.DB
+	tx           *sql.Tx
+	stmtNode     *sql.Stmt
+	stmtRef      *sql.Stmt // For adding refs
+	stmtDef      *sql.Stmt // For adding defs
+	stmtFile     *sql.Stmt // For recording file metadata (incremental index)
+	stmtCoverage *sql.Stmt // For recording per-source _index_coverage rows
+	batchSize    int
+	count        int
+	firstErr     error // first insert/batch error, surfaced by Close
+	mu           sync.Mutex
 }
 
 // NewSQLiteWriter creates a new writer and initializes the schema.
@@ -82,6 +83,26 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		mod_time INTEGER NOT NULL,
 		size INTEGER NOT NULL
 	);
+
+	-- _index_coverage records which producer indexed each source file at
+	-- which fidelity level, per ADR-0013. Consumers that need to
+	-- distinguish "no binding row exists" from "no binding row was looked
+	-- for" join against this. PRIMARY KEY (source_id, producer) means a
+	-- re-index replaces the prior coverage row for that producer.
+	--
+	-- fidelity values: 'mention' (tree-sitter), 'binding' (LSP),
+	-- 'reachability' (future SSA / call-graph).
+	-- complete: 1 if the indexer claims full coverage of the source,
+	-- 0 if it gave up partway (out-of-memory, timeout, parse errors
+	-- prevented analysis, etc.).
+	CREATE TABLE IF NOT EXISTS _index_coverage (
+		source_id TEXT NOT NULL,
+		producer TEXT NOT NULL,
+		fidelity TEXT NOT NULL,
+		indexed_at INTEGER NOT NULL,
+		complete INTEGER NOT NULL,
+		PRIMARY KEY (source_id, producer)
+	) WITHOUT ROWID;
 	`
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -127,6 +148,14 @@ func (w *SQLiteWriter) beginTx() error {
 	}
 
 	w.stmtFile, err = w.tx.Prepare(`INSERT OR REPLACE INTO file_index (path, mod_time, size) VALUES (?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+
+	w.stmtCoverage, err = w.tx.Prepare(
+		`INSERT OR REPLACE INTO _index_coverage (source_id, producer, fidelity, indexed_at, complete)
+		 VALUES (?, ?, ?, ?, ?)`,
+	)
 	return err
 }
 
@@ -142,6 +171,9 @@ func (w *SQLiteWriter) commitTx() error {
 	}
 	if w.stmtFile != nil {
 		_ = w.stmtFile.Close()
+	}
+	if w.stmtCoverage != nil {
+		_ = w.stmtCoverage.Close()
 	}
 	if err := w.tx.Commit(); err != nil {
 		return err
@@ -160,6 +192,29 @@ func (w *SQLiteWriter) RecordFile(path string, modTime time.Time, size int64) {
 		log.Printf("SQLiteWriter: record file failed for %s: %v", path, err)
 		if w.firstErr == nil {
 			w.firstErr = fmt.Errorf("record file %s: %w", path, err)
+		}
+	}
+}
+
+// RecordIndexCoverage stores a coverage row for a (source_id, producer)
+// pair, per ADR-0013 Step 2. The fidelity argument is one of "mention",
+// "binding", or "reachability"; complete=true means the indexer claims
+// full coverage of source_id at that fidelity. A re-index replaces the
+// prior row for the same (source_id, producer) — different producers
+// keep distinct rows.
+func (w *SQLiteWriter) RecordIndexCoverage(sourceID, producer, fidelity string, indexedAt time.Time, complete bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	completeInt := 0
+	if complete {
+		completeInt = 1
+	}
+	_, err := w.stmtCoverage.Exec(sourceID, producer, fidelity, indexedAt.UnixNano(), completeInt)
+	if err != nil {
+		log.Printf("SQLiteWriter: record coverage failed for %s/%s: %v", sourceID, producer, err)
+		if w.firstErr == nil {
+			w.firstErr = fmt.Errorf("record coverage %s/%s: %w", sourceID, producer, err)
 		}
 	}
 }
@@ -209,6 +264,66 @@ func LoadFileIndex(dbPath string) (map[string]FileIndexEntry, error) {
 type FileIndexEntry struct {
 	ModTime time.Time
 	Size    int64
+}
+
+// CoverageEntry is one (source_id, producer) row from _index_coverage.
+// A consumer that needs to distinguish "no binding row exists for this
+// source" from "no producer at the binding level ever indexed this
+// source" joins against this — see ADR-0013 wedge case 1.
+type CoverageEntry struct {
+	Producer  string    // 'tree-sitter' | 'lsp' | future
+	Fidelity  string    // 'mention' | 'binding' | 'reachability'
+	IndexedAt time.Time // when the indexer wrote the row
+	Complete  bool      // indexer claims full coverage of source_id at this fidelity
+}
+
+// LoadIndexCoverage reads the _index_coverage table from an existing
+// index database. Returns a map keyed by source_id whose values are the
+// per-producer entries that touched that source. Returns (nil, nil)
+// when the table doesn't exist — the caller treats that as "no
+// coverage info; assume any absence is unknown."
+func LoadIndexCoverage(dbPath string) (map[string][]CoverageEntry, error) {
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = db.Close() }()
+
+	var tableName string
+	err = db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='_index_coverage'",
+	).Scan(&tableName)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(
+		"SELECT source_id, producer, fidelity, indexed_at, complete FROM _index_coverage",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[string][]CoverageEntry)
+	for rows.Next() {
+		var sourceID, producer, fidelity string
+		var indexedAtNano int64
+		var completeInt int
+		if err := rows.Scan(&sourceID, &producer, &fidelity, &indexedAtNano, &completeInt); err != nil {
+			return nil, err
+		}
+		out[sourceID] = append(out[sourceID], CoverageEntry{
+			Producer:  producer,
+			Fidelity:  fidelity,
+			IndexedAt: time.Unix(0, indexedAtNano),
+			Complete:  completeInt != 0,
+		})
+	}
+	return out, rows.Err()
 }
 
 // AddNode writes a node to the database.
