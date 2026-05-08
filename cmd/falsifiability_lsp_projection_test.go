@@ -60,16 +60,75 @@ type projectionDiscrepancy struct {
 	RefURI         string
 }
 
-// runProjectionRoundTrip computes π_{1→0} for every _lsp_refs row in
-// the given .db and returns the discrepancies — _lsp_refs rows whose
-// (referrer_node_id, ref_token) pair is not in node_refs.
+// projectionWalker maps an _lsp_refs.referrer_node_id to the AST node
+// shape used by node_refs. LLO writes referrer_node_id pointing at the
+// LEAF identifier (field_identifier/identifier/type_identifier — wherever
+// the symbol token textually appears), but mache's node_refs writes the
+// enclosing call_expression. Without a walk-up step the projection
+// would compare leaf paths to call paths and report 100% noise.
+//
+// Returns (callNodeID, true) when the leaf is inside a call_expression;
+// (_, false) when it's a non-call reference (type-only, function value,
+// embedded type) — those rows are documented exceptions per the ADR
+// taxonomy and don't count as discrepancies.
+type projectionWalker func(leafNodeID string) (string, bool, error)
+
+// identityWalker assumes _lsp_refs.referrer_node_id is already in the
+// node_refs shape. Used by the synthetic harness tests that wire
+// matching shapes directly. NOT correct for real LLO-built .dbs.
+func identityWalker(_ *sql.DB) projectionWalker {
+	return func(leaf string) (string, bool, error) {
+		return leaf, true, nil
+	}
+}
+
+// astCallSiteWalker walks UP from the leaf identifier to its enclosing
+// call_expression via the _ast table. Returns (call_node_id, true) when
+// such an ancestor exists; (_, false) when the leaf isn't part of any
+// call_expression (e.g. a type_identifier in `var x SomeType`).
+//
+// Implementation: node_ids are slash-separated AST paths, so the
+// enclosing call_expression is the LONGEST prefix of the leaf's
+// node_id whose _ast.node_kind is 'call_expression'. SQLite's
+// `:leaf LIKE node_id || '/%'` filter expresses descendant-of cleanly.
+func astCallSiteWalker(db *sql.DB) projectionWalker {
+	stmt, err := db.Prepare(`SELECT node_id FROM _ast
+	                         WHERE node_kind = 'call_expression'
+	                           AND ? LIKE node_id || '/%'
+	                         ORDER BY length(node_id) DESC
+	                         LIMIT 1`)
+	if err != nil {
+		// Table missing — fall back to identity. Surfaces as 100%
+		// discrepancy on shape mismatch rather than a hard error,
+		// keeping test output legible when the producer schema drifts.
+		return identityWalker(db)
+	}
+	return func(leaf string) (string, bool, error) {
+		var callID string
+		switch err := stmt.QueryRow(leaf).Scan(&callID); err {
+		case nil:
+			return callID, true, nil
+		case sql.ErrNoRows:
+			return "", false, nil
+		default:
+			return "", false, fmt.Errorf("walk to call_expression for %q: %w", leaf, err)
+		}
+	}
+}
+
+// runProjectionRoundTrip computes π_{1→0} for every _lsp_refs row and
+// returns the discrepancies — _lsp_refs rows whose projection is not
+// in node_refs. The walker handles the leaf-identifier → call_expression
+// shape conversion; pass identityWalker for fixtures that already use
+// matching shapes.
 //
 // Rows with empty ref_token or NULL referrer_node_id are skipped (the
 // projection is undefined; producer didn't have source bytes available
 // to extract a token, or the referrer wasn't in scope).
-func runProjectionRoundTrip(db *sql.DB) ([]projectionDiscrepancy, error) {
-	// Pull the (token, node_id) pairs from node_refs into a hash set.
-	// At mache scale (~30k refs on this repo), this fits in memory.
+//
+// Rows whose walker returns isCallSite=false are also skipped — they're
+// non-call references (ADR exception taxonomy), not discrepancies.
+func runProjectionRoundTrip(db *sql.DB, walker projectionWalker) ([]projectionDiscrepancy, error) {
 	nodeRefsRows, err := db.Query(`SELECT token, node_id FROM node_refs`)
 	if err != nil {
 		return nil, fmt.Errorf("read node_refs: %w", err)
@@ -88,7 +147,6 @@ func runProjectionRoundTrip(db *sql.DB) ([]projectionDiscrepancy, error) {
 		return nil, err
 	}
 
-	// Iterate _lsp_refs and check each non-trivial row.
 	lspRows, err := db.Query(`SELECT node_id, referrer_node_id, ref_token, ref_uri
 	                          FROM _lsp_refs
 	                          WHERE referrer_node_id IS NOT NULL AND ref_token != ''`)
@@ -103,7 +161,16 @@ func runProjectionRoundTrip(db *sql.DB) ([]projectionDiscrepancy, error) {
 		if err := lspRows.Scan(&target, &referrer, &token, &refURI); err != nil {
 			return nil, fmt.Errorf("scan _lsp_refs: %w", err)
 		}
-		if _, ok := have[[2]string{referrer, token}]; !ok {
+		callID, isCallSite, err := walker(referrer)
+		if err != nil {
+			return nil, err
+		}
+		if !isCallSite {
+			// Non-call reference — type-only, function value, embedded
+			// type. Documented ADR exception, not a discrepancy.
+			continue
+		}
+		if _, ok := have[[2]string{callID, token}]; !ok {
 			diff = append(diff, projectionDiscrepancy{
 				ReferrerNodeID: referrer,
 				RefToken:       token,
@@ -158,7 +225,7 @@ func TestFalsifiabilityB_SyntheticHarness(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	diff, err := runProjectionRoundTrip(db)
+	diff, err := runProjectionRoundTrip(db, identityWalker(db))
 	require.NoError(t, err)
 	assert.Empty(t, diff,
 		"every projectable _lsp_refs row appears in node_refs in this fixture")
@@ -195,7 +262,7 @@ func TestFalsifiabilityB_DiscrepancyShape(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	diff, err := runProjectionRoundTrip(db)
+	diff, err := runProjectionRoundTrip(db, identityWalker(db))
 	require.NoError(t, err)
 	require.Len(t, diff, 1, "the synthetic function-value reference must surface as a discrepancy")
 	assert.Equal(t, "pkg/functions/Caller", diff[0].ReferrerNodeID)
@@ -215,6 +282,9 @@ func TestFalsifiabilityB_IntegrationOnLeylineParse(t *testing.T) {
 	if _, err := exec.LookPath("leyline"); err != nil {
 		t.Skip("leyline binary not on PATH")
 	}
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH — leyline lsp needs it")
+	}
 
 	srcDir, err := os.Getwd()
 	require.NoError(t, err)
@@ -222,21 +292,63 @@ func TestFalsifiabilityB_IntegrationOnLeylineParse(t *testing.T) {
 	repoRoot := filepath.Dir(srcDir)
 	dbPath := filepath.Join(t.TempDir(), "self.db")
 
-	cmd := exec.Command("leyline", "parse", repoRoot, "-o", dbPath, "--lang", "go", "--lsp")
+	// Step 1: parse — produces nodes / _ast / node_refs / node_defs.
+	cmd := exec.Command("leyline", "parse", repoRoot, "-o", dbPath, "--lang", "go")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "leyline parse failed: %s", out)
+
+	// Step 2: enrich one source file via gopls — populates _lsp_*.
+	// Pick a small file from the repo so this completes quickly. We
+	// only need the LSP rows to exist so the harness has something
+	// to project; we don't need full-repo coverage to validate the
+	// projection's soundness.
+	enrichTarget := filepath.Join(repoRoot, "validate", "validate.go")
+	if _, statErr := os.Stat(enrichTarget); statErr != nil {
+		t.Skipf("expected fixture %s missing — skip rather than guess at substitute", enrichTarget)
+	}
+	enriched := filepath.Join(t.TempDir(), "enriched.db")
+	cmd = exec.Command("leyline", "lsp",
+		"--server", "gopls",
+		"--input", enrichTarget,
+		"--output", enriched,
+		"--merge-db", dbPath)
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "leyline lsp failed: %s", out)
+	dbPath = enriched
 
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	diff, err := runProjectionRoundTrip(db)
+	walker := astCallSiteWalker(db)
+	diff, err := runProjectionRoundTrip(db, walker)
 	require.NoError(t, err)
 
-	// Expect SOME discrepancies (function values and type-only
-	// references in mache's source), but NOT a wholesale failure
-	// pattern that'd indicate the projection is broken.
-	t.Logf("Falsifiability B: %d discrepancies / projected rows on mache self-build", len(diff))
+	// Sanity check: the AST walker must classify SOME _lsp_refs rows
+	// as call-sites. If not, _ast is missing or the walker query is
+	// wrong — silently treating everything as a non-call exception
+	// would falsely report "no discrepancies" instead of validating
+	// the projection.
+	var callSiteCount, nonCallCount int
+	walkRows, err := db.Query(`SELECT referrer_node_id FROM _lsp_refs
+	                           WHERE referrer_node_id IS NOT NULL AND ref_token != ''`)
+	require.NoError(t, err)
+	for walkRows.Next() {
+		var leaf string
+		require.NoError(t, walkRows.Scan(&leaf))
+		_, isCall, werr := walker(leaf)
+		require.NoError(t, werr)
+		if isCall {
+			callSiteCount++
+		} else {
+			nonCallCount++
+		}
+	}
+	require.NoError(t, walkRows.Close())
+	t.Logf("Falsifiability B: %d call-site refs, %d non-call refs (type-only / function value), %d discrepancies",
+		callSiteCount, nonCallCount, len(diff))
+	require.Greater(t, callSiteCount, 0,
+		"AST walker found zero call-sites — _ast missing call_expression rows or walker SQL broken")
 
 	// Group by token to make the failure mode legible if it triggers.
 	byToken := map[string]int{}
@@ -252,24 +364,22 @@ func TestFalsifiabilityB_IntegrationOnLeylineParse(t *testing.T) {
 		t.Logf("  %s: %d discrepancies", tok, byToken[tok])
 	}
 
-	// Soft assertion: if discrepancies dominate, the projection is
-	// likely wrong. Choose a generous threshold; tighten in a
-	// follow-up bead once we've seen real numbers.
-	var totalLSPRows int
-	require.NoError(t, db.QueryRow(
-		`SELECT COUNT(*) FROM _lsp_refs WHERE referrer_node_id IS NOT NULL AND ref_token != ''`,
-	).Scan(&totalLSPRows))
-
-	if totalLSPRows == 0 {
-		t.Skip("no projectable _lsp_refs rows — leyline didn't enrich; nothing to falsify")
+	// Denominator is call-site rows only. Non-call refs (type-only,
+	// function values) are documented ADR exceptions — the projection
+	// doesn't claim to round-trip them, so including them would
+	// inflate the noise-floor and mask genuine bugs.
+	if callSiteCount == 0 {
+		t.Skip("no call-site _lsp_refs rows — leyline didn't enrich; nothing to falsify")
 	}
-	pctMissing := float64(len(diff)) / float64(totalLSPRows) * 100
-	t.Logf("Falsifiability B: %.1f%% (%d/%d) of projectable _lsp_refs rows have no node_refs match",
-		pctMissing, len(diff), totalLSPRows)
+	pctMissing := float64(len(diff)) / float64(callSiteCount) * 100
+	t.Logf("Falsifiability B: %.1f%% (%d/%d) of call-site _lsp_refs rows have no node_refs match",
+		pctMissing, len(diff), callSiteCount)
 
-	// 50% is the soft ceiling. Function values + type-only refs are
-	// expected slack but shouldn't dominate. Real-world Go code
-	// reaches LSP via call sites the vast majority of the time.
-	assert.LessOrEqual(t, pctMissing, 50.0,
-		"more than half of LSP refs aren't textually mentioned — projection π_{1→0} suspect")
+	// 25% is the soft ceiling on call-site discrepancies. With the
+	// AST walk-up in place, the remaining slack is function values
+	// (m := r.Read; m()) and macro-expanded code — neither dominates
+	// idiomatic Go. Higher than 25% means the producer at L_1 is
+	// inventing call edges or the walker has a bug.
+	assert.LessOrEqual(t, pctMissing, 25.0,
+		"more than a quarter of call-site LSP refs lack node_refs match — projection π_{1→0} suspect")
 }
