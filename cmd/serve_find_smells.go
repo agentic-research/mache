@@ -145,32 +145,69 @@ var smellRegistry = []SmellRule{
 				       OR (instr(d.token, '.') > 0 AND r.token = substr(d.token, instr(d.token, '.') + 1))
 				     ))
 			),
-			-- Skip-listed: any token of a construct matches a skip rule.
-			-- ANY-MATCH is the right semantic — a function with both
-			-- 'TestFoo' and 'pkg.TestFoo' should be skipped on the
-			-- testing-framework rule even if only one row triggers.
+			-- Skip-list: defs whose alive-status this rule shouldn't try
+			-- to determine textually. Two categories, with different
+			-- conditions on whether they apply:
 			--
-			-- Token list includes:
-			--   • entry points: main, init
-			--   • io.Reader/Writer/Closer: Read, Write, Close
-			--   • fmt: String, Error, Format, Scan, GoString
-			--   • sort.Interface: Len, Less, Swap
-			--   • encoding: MarshalJSON, UnmarshalJSON
-			--   • SQLite virtual-table (modernc.org/sqlite/vtab):
-			--     BestIndex, Column, Connect, Create, Destroy,
-			--     Disconnect, Eof, Filter, Rowid, Open, Next
-			--   • billy.Filesystem (go-git): Chroot, Readlink, Sys,
-			--     TempFile, MkdirAll, Symlink, Lstat, Stat, ReadDir,
-			--     Capabilities, Root
-			--   • net/http: ServeHTTP
+			-- 1. Runtime-invoked entry points and test prefixes:
+			--      main, init, Test*, Benchmark*, Example*, Fuzz*
+			--    The Go runtime (loader, test harness) calls these
+			--    reflectively. Neither tree-sitter NOR LSP synthesizes
+			--    a reference for those dispatches — nothing static can
+			--    see them. Lattice ceiling — skipped unconditionally.
 			--
-			-- These are interface contracts invoked by external
-			-- runtimes / libraries; static call extraction can't see
-			-- the dispatch site, so the methods always look dead.
+			-- 2. Interface-contract method names:
+			--      Read/Write/Close (io), String/Error (fmt),
+			--      Len/Less/Swap (sort.Interface), MarshalJSON,
+			--      ServeHTTP, the SQLite vtab interface, the
+			--      billy.Filesystem interface, ...
+			--    External runtimes / libraries dispatch to these via
+			--    interface, which tree-sitter's call extractor can't
+			--    see. But LSP can — gopls knows r.Read() on an
+			--    io.Reader resolves to the implementing type's Read
+			--    method. ADR-0013 Falsifiability A confirmed the
+			--    alive-check binding arm (r.target_node_id =
+			--    d.node_id) handles these cases when LSP coverage is
+			--    present. So: skip a def with one of these tokens
+			--    only if NO binding row (v_refs.fidelity='binding')
+			--    points at that specific def. With LSP coverage, the
+			--    alive-check decides; without LSP coverage, the
+			--    skip-list compensates as before. Net: precise
+			--    retreat — skip-list shrinks automatically as LSP
+			--    coverage grows, and a genuinely dead method whose
+			--    name happens to match the list can now be flagged
+			--    when LSP saw the type but no references to that
+			--    method.
 			skipped AS (
-				SELECT DISTINCT node_id FROM v_defs
-				WHERE token IN (
-					'main','init',
+				-- Category 1: always skipped (runtime / test harness).
+				SELECT DISTINCT v_defs.node_id FROM v_defs
+				WHERE v_defs.token IN ('main', 'init')
+				   OR substr(v_defs.token, instr(v_defs.token, '.') + 1) LIKE 'Test%%'
+				   OR substr(v_defs.token, instr(v_defs.token, '.') + 1) LIKE 'Benchmark%%'
+				   OR substr(v_defs.token, instr(v_defs.token, '.') + 1) LIKE 'Example%%'
+				   OR substr(v_defs.token, instr(v_defs.token, '.') + 1) LIKE 'Fuzz%%'
+
+				UNION
+
+				-- Category 2: interface contracts — skipped only when
+				-- LSP did NOT index this def at all. The presence of
+				-- a binding-fidelity v_defs row means LSP saw the
+				-- def; absence means LSP either didn't run or
+				-- couldn't resolve the source file. Three states:
+				--   (a) No binding v_defs row → LSP didn't see this
+				--       def. Tree-sitter compensation still load-
+				--       bearing → SKIP.
+				--   (b) Binding v_defs row exists, NO binding v_refs
+				--       row targets it → LSP saw the def, found no
+				--       references. CONFIRMED DEAD by LSP. Don't
+				--       skip — let alive-check flag it.
+				--   (c) Binding v_defs row exists, ≥1 binding v_refs
+				--       row targets it → ALIVE via alive-check
+				--       binding arm. Don't skip; alive-check makes
+				--       the call via target_node_id match.
+				-- The NOT EXISTS gate triggers (a) only.
+				SELECT DISTINCT v_defs.node_id FROM v_defs
+				WHERE v_defs.token IN (
 					'String','Error','Read','Write','Close','Len','Less','Swap',
 					'MarshalJSON','UnmarshalJSON','Format','Scan','GoString',
 					'BestIndex','Column','Connect','Create','Destroy','Disconnect',
@@ -179,14 +216,11 @@ var smellRegistry = []SmellRule{
 					'Lstat','Stat','ReadDir','Capabilities','Root',
 					'ServeHTTP'
 				)
-				   -- Strip any 'pkg.' qualifier when matching prefixes.
-				   -- instr returns 0 if there's no dot; substr(token, 1)
-				   -- is the full token, so bare and qualified shapes both
-				   -- get the same leaf check.
-				   OR substr(token, instr(token, '.') + 1) LIKE 'Test%%'
-				   OR substr(token, instr(token, '.') + 1) LIKE 'Benchmark%%'
-				   OR substr(token, instr(token, '.') + 1) LIKE 'Example%%'
-				   OR substr(token, instr(token, '.') + 1) LIKE 'Fuzz%%'
+				  AND NOT EXISTS (
+					SELECT 1 FROM v_defs lsp_d
+					WHERE lsp_d.node_id = v_defs.node_id
+					  AND lsp_d.fidelity = 'binding'
+				  )
 			),
 			-- Resolve source_file via children when the construct dir
 			-- itself has none. The schema engine attaches Origin (and
