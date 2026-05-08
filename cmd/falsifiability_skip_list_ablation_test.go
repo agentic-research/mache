@@ -289,15 +289,35 @@ func TestFalsifiabilityA_IntegrationOnLeylineParse(t *testing.T) {
 	if _, err := exec.LookPath("leyline"); err != nil {
 		t.Skip("leyline binary not on PATH")
 	}
+	if _, err := exec.LookPath("gopls"); err != nil {
+		t.Skip("gopls not on PATH — leyline lsp needs it")
+	}
 
 	srcDir, err := os.Getwd()
 	require.NoError(t, err)
 	repoRoot := filepath.Dir(srcDir)
 	dbPath := filepath.Join(t.TempDir(), "self.db")
 
-	cmd := exec.Command("leyline", "parse", repoRoot, "-o", dbPath, "--lang", "go", "--lsp")
+	// Two-step: parse builds the AST/refs tables, lsp merges in the
+	// _lsp_* enrichment. The integration meaningfully exercises the
+	// design only when both have run.
+	cmd := exec.Command("leyline", "parse", repoRoot, "-o", dbPath, "--lang", "go")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "leyline parse failed: %s", out)
+
+	enrichTarget := filepath.Join(repoRoot, "validate", "validate.go")
+	if _, statErr := os.Stat(enrichTarget); statErr != nil {
+		t.Skipf("expected fixture %s missing — skip rather than guess at substitute", enrichTarget)
+	}
+	enriched := filepath.Join(t.TempDir(), "enriched.db")
+	cmd = exec.Command("leyline", "lsp",
+		"--server", "gopls",
+		"--input", enrichTarget,
+		"--output", enriched,
+		"--merge-db", dbPath)
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "leyline lsp failed: %s", out)
+	dbPath = enriched
 
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
