@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -913,29 +914,71 @@ func missingTables(qg refsQuerier, required []string) ([]string, error) {
 	return missing, nil
 }
 
-// ensureCanonicalViews installs v_defs / v_refs (ADR-0013 Step 3) on the
-// active database via the refsQuerier interface. Idempotent — uses
-// CREATE VIEW IF NOT EXISTS — so safe to call before every rule
-// execution. Necessary because rules query the views (Step 4); .dbs
-// produced by anything other than mache's NewSQLiteWriter (e.g.
-// ley-line-open's `leyline parse`) don't have the views yet, and we
-// don't want consumers to need a separate migration step.
+// ensureCanonicalViews installs v_defs / v_refs (ADR-0013 Step 3) as
+// TEMP views scoped to the active connection. Probes for ley-line-open's
+// post-Step-1 _lsp_* columns (referrer_node_id, ref_token, def_token)
+// and includes a UNION ALL with binding-fidelity rows when those
+// columns are available; otherwise falls back to mention-only.
 //
-// Mirrors EnsureCanonicalViews in internal/ingest, but plumbed through
-// the QueryRefs interface rather than *sql.DB so it works against any
-// graph backend that satisfies refsQuerier.
+// Why TEMP views rather than persistent ones:
+//
+//   - SQLiteGraph opens .dbs read-only (mode=ro). Persistent DDL fails;
+//     TEMP objects live in a per-connection in-memory schema and work
+//     even on RO connections.
+//   - The view body depends on what columns the producer wrote. With
+//     TEMP views we can recompute the body per-connection rather than
+//     locking in a stale shape on disk.
+//   - Temp objects shadow same-named main-schema objects for the
+//     current connection, so the legacy persistent mention-only views
+//     installed by NewSQLiteWriter (PR #341) get overridden cleanly
+//     without a migration.
+//
+// Idempotent — DROP VIEW IF EXISTS before each CREATE — so safe to
+// call before every rule execution.
 func ensureCanonicalViews(qg refsQuerier) error {
+	hasLSPDefsToken, err := tableHasColumn(qg, "_lsp_defs", "def_token")
+	if err != nil {
+		return fmt.Errorf("probe _lsp_defs: %w", err)
+	}
+	hasLSPRefsCols, err := tableHasColumn(qg, "_lsp_refs", "ref_token")
+	if err != nil {
+		return fmt.Errorf("probe _lsp_refs: %w", err)
+	}
+
+	defsBody := `SELECT token, node_id, 'mention' AS fidelity FROM node_defs`
+	if hasLSPDefsToken {
+		defsBody += `
+			UNION ALL
+			SELECT def_token AS token, node_id, 'binding' AS fidelity
+			FROM _lsp_defs
+			WHERE def_token != ''`
+	}
+
+	refsBody := `SELECT node_id AS referrer_node_id,
+	       token,
+	       NULL  AS target_node_id,
+	       NULL  AS ref_uri,
+	       NULL  AS ref_line,
+	       'mention' AS fidelity
+	FROM node_refs`
+	if hasLSPRefsCols {
+		refsBody += `
+			UNION ALL
+			SELECT referrer_node_id,
+			       ref_token AS token,
+			       node_id   AS target_node_id,
+			       ref_uri,
+			       ref_start_line AS ref_line,
+			       'binding' AS fidelity
+			FROM _lsp_refs
+			WHERE ref_token != '' AND referrer_node_id IS NOT NULL`
+	}
+
 	stmts := []string{
-		`CREATE VIEW IF NOT EXISTS v_defs AS
-			SELECT token, node_id, 'mention' AS fidelity FROM node_defs`,
-		`CREATE VIEW IF NOT EXISTS v_refs AS
-			SELECT node_id AS referrer_node_id,
-			       token,
-			       NULL  AS target_node_id,
-			       NULL  AS ref_uri,
-			       NULL  AS ref_line,
-			       'mention' AS fidelity
-			FROM node_refs`,
+		"DROP VIEW IF EXISTS temp.v_defs",
+		"DROP VIEW IF EXISTS temp.v_refs",
+		"CREATE TEMP VIEW v_defs AS " + defsBody,
+		"CREATE TEMP VIEW v_refs AS " + refsBody,
 	}
 	for _, s := range stmts {
 		rows, err := qg.QueryRefs(s)
@@ -945,6 +988,71 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		_ = rows.Close()
 	}
 	return nil
+}
+
+// tableHasColumn returns true iff the given table exists AND contains
+// a column of the given name. Implemented via PRAGMA table_info, which
+// returns zero rows for missing tables (rather than erroring), so this
+// helper collapses "table missing" and "column missing" into false.
+//
+// Used by ensureCanonicalViews to decide whether to add the binding-
+// fidelity UNION ALL clause to the v_defs / v_refs body. A pre-Step-1
+// _lsp_refs table (without referrer_node_id / ref_token) reads as
+// "no binding-fidelity rows available" and the views fall back to
+// mention-only — same shape as today.
+func tableHasColumn(qg refsQuerier, table, col string) (bool, error) {
+	// Table name is interpolated directly; PRAGMA table_info doesn't
+	// accept positional parameters. table comes from a hardcoded
+	// constant in this file (not user input), so injection risk is
+	// nil — but assert anyway via a defensive check.
+	if !isSimpleIdent(table) {
+		return false, fmt.Errorf("invalid table name: %q", table)
+	}
+	rows, err := qg.QueryRefs(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		// SQLite returns rows (possibly zero) for valid PRAGMA calls
+		// whether or not the table exists; an error here is genuine.
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			typ       string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// isSimpleIdent guards against SQL injection in PRAGMA table_info
+// where the table name can't be parameterized. Allows ASCII letters,
+// digits, and underscores — the shape of every table mache writes.
+func isSimpleIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case 'a' <= r && r <= 'z':
+		case 'A' <= r && r <= 'Z':
+		case '0' <= r && r <= '9':
+		case r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // runSmellRule executes the rule's SQL, optionally scoped to one source.
