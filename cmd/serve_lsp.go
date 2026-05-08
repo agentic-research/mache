@@ -54,12 +54,12 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError("LSP data not available for this data source"), nil
 		}
-		var tableExists int
+		var refsTableExists int
 		if rows.Next() {
-			_ = rows.Scan(&tableExists)
+			_ = rows.Scan(&refsTableExists)
 		}
 		_ = rows.Close()
-		if tableExists == 0 {
+		if refsTableExists == 0 {
 			filePath := request.GetString("file", "")
 			if filePath == "" {
 				return lspTableMissing("_lsp_hover", "type info"), nil
@@ -94,12 +94,12 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError("LSP data not available for this data source"), nil
 		}
-		var tableExists int
+		var refsTableExists int
 		if rows.Next() {
-			_ = rows.Scan(&tableExists)
+			_ = rows.Scan(&refsTableExists)
 		}
 		_ = rows.Close()
-		if tableExists == 0 {
+		if refsTableExists == 0 {
 			filePath := request.GetString("file", "")
 			if filePath == "" {
 				return lspTableMissing("_lsp", "diagnostics"), nil
@@ -383,32 +383,110 @@ type lspRefLocation struct {
 	EndCol    int    `json:"end_col"`
 }
 
-// queryLSPDefs queries the _lsp_defs table for definition locations of a symbol.
-// Returns nil, nil if the table does not exist.
+// queryLSPDefs queries the _lsp_defs table for definition locations
+// of a symbol. Returns (nil, nil) if the table does not exist.
+//
+// Per ADR-0013 Step 5 (mache-346d2b), this prefers the direct
+// def_token match when ley-line-open's post-Step-1 column is
+// present. The legacy suffix-then-broader-LIKE fallback survives
+// for pre-Step-1 .dbs that still have only the (node_id, def_uri,
+// ...) columns.
 func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
-	// Check if _lsp_defs table exists
-	rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_defs'`)
+	hasDefToken, err := tableHasColumn(qg, "_lsp_defs", "def_token")
 	if err != nil {
-		return nil, fmt.Errorf("check _lsp_defs existence: %w", err)
+		return nil, fmt.Errorf("probe _lsp_defs schema: %w", err)
 	}
-	var tableExists int
-	if rows.Next() {
-		_ = rows.Scan(&tableExists)
+	if !hasDefToken {
+		// Pre-Step-1 schema (or table missing entirely). Fall back to
+		// node_id LIKE matching against the trailing component, with
+		// a broader substring fallback if that returns nothing.
+		return queryLSPDefsLegacy(qg, symbol)
 	}
-	_ = rows.Close()
-	if tableExists == 0 {
+
+	rows, err := qg.QueryRefs(
+		`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
+		 FROM _lsp_defs
+		 WHERE def_token = ?`,
+		symbol,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query _lsp_defs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []lspDefLocation
+	for rows.Next() {
+		var r lspDefLocation
+		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// queryLSPRefs queries the _lsp_refs table for reference locations
+// of a symbol. Returns (nil, nil) if the table does not exist.
+//
+// Per ADR-0013 Step 5 (mache-346d2b), prefers the direct ref_token
+// match when ley-line-open's post-Step-1 column is present. Legacy
+// LIKE fallback survives for pre-Step-1 .dbs.
+func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
+	hasRefToken, err := tableHasColumn(qg, "_lsp_refs", "ref_token")
+	if err != nil {
+		return nil, fmt.Errorf("probe _lsp_refs schema: %w", err)
+	}
+	if !hasRefToken {
+		return queryLSPRefsLegacy(qg, symbol)
+	}
+
+	rows, err := qg.QueryRefs(
+		`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
+		 FROM _lsp_refs
+		 WHERE ref_token = ?`,
+		symbol,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query _lsp_refs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []lspRefLocation
+	for rows.Next() {
+		var r lspRefLocation
+		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// queryLSPDefsLegacy is the pre-Step-1 query path: node_id suffix
+// match, then broader substring LIKE if that returns nothing. Kept
+// for .dbs that still have the legacy _lsp_defs schema (no def_token
+// column). New consumers should rely on queryLSPDefs which prefers
+// the direct token match when available.
+func queryLSPDefsLegacy(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
+	// First confirm the table exists at all — tableHasColumn returns
+	// false for both "no table" and "table without column", so we
+	// have to disambiguate here for the legacy code path.
+	exists, err := refsTableExists(qg, "_lsp_defs")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
 		return nil, nil
 	}
 
-	// Try node_id suffix match (symbol is the trailing component of node_id)
 	escaped := escapeLikeMeta(symbol)
-	rows, err = qg.QueryRefs(
+	rows, err := qg.QueryRefs(
 		`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
 		 FROM _lsp_defs WHERE node_id LIKE ? ESCAPE '\'`,
 		"%/"+escaped,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query _lsp_defs: %w", err)
+		return nil, fmt.Errorf("query _lsp_defs (legacy suffix): %w", err)
 	}
 
 	var results []lspDefLocation
@@ -421,7 +499,6 @@ func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
 	}
 	_ = rows.Close()
 
-	// Fallback: broader LIKE match
 	if len(results) == 0 {
 		rows, err = qg.QueryRefs(
 			`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
@@ -429,7 +506,7 @@ func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
 			"%"+escaped+"%",
 		)
 		if err != nil {
-			return nil, fmt.Errorf("query _lsp_defs (broad): %w", err)
+			return nil, fmt.Errorf("query _lsp_defs (legacy broad): %w", err)
 		}
 		for rows.Next() {
 			var r lspDefLocation
@@ -440,36 +517,27 @@ func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
 		}
 		_ = rows.Close()
 	}
-
 	return results, nil
 }
 
-// queryLSPRefs queries the _lsp_refs table for reference locations of a symbol.
-// Returns nil, nil if the table does not exist.
-func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
-	// Check if _lsp_refs table exists
-	rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp_refs'`)
+// queryLSPRefsLegacy mirrors queryLSPDefsLegacy for the refs table.
+func queryLSPRefsLegacy(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
+	exists, err := refsTableExists(qg, "_lsp_refs")
 	if err != nil {
-		return nil, fmt.Errorf("check _lsp_refs existence: %w", err)
+		return nil, err
 	}
-	var tableExists int
-	if rows.Next() {
-		_ = rows.Scan(&tableExists)
-	}
-	_ = rows.Close()
-	if tableExists == 0 {
+	if !exists {
 		return nil, nil
 	}
 
-	// Try node_id suffix match
 	escaped := escapeLikeMeta(symbol)
-	rows, err = qg.QueryRefs(
+	rows, err := qg.QueryRefs(
 		`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
 		 FROM _lsp_refs WHERE node_id LIKE ? ESCAPE '\'`,
 		"%/"+escaped,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query _lsp_refs: %w", err)
+		return nil, fmt.Errorf("query _lsp_refs (legacy suffix): %w", err)
 	}
 
 	var results []lspRefLocation
@@ -482,7 +550,6 @@ func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
 	}
 	_ = rows.Close()
 
-	// Fallback: broader LIKE match
 	if len(results) == 0 {
 		rows, err = qg.QueryRefs(
 			`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
@@ -490,7 +557,7 @@ func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
 			"%"+escaped+"%",
 		)
 		if err != nil {
-			return nil, fmt.Errorf("query _lsp_refs (broad): %w", err)
+			return nil, fmt.Errorf("query _lsp_refs (legacy broad): %w", err)
 		}
 		for rows.Next() {
 			var r lspRefLocation
@@ -501,8 +568,26 @@ func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
 		}
 		_ = rows.Close()
 	}
-
 	return results, nil
+}
+
+// refsTableExists returns true iff the named SQLite table is present in
+// the active database. Used by queryLSP*Legacy to short-circuit when
+// the table doesn't exist (consistent with the original "(nil, nil)
+// = no table" contract).
+func refsTableExists(qg refsQuerier, name string) (bool, error) {
+	if !isSimpleIdent(name) {
+		return false, fmt.Errorf("invalid table name: %q", name)
+	}
+	rows, err := qg.QueryRefs(
+		`SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?`,
+		name,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	return rows.Next(), rows.Err()
 }
 
 // escapeLikeMeta escapes SQL LIKE metacharacters (%, _, \) only.
