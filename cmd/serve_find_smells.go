@@ -117,12 +117,32 @@ var smellRegistry = []SmellRule{
 			-- method like 'AddDef' or 'Read' would show up N copies,
 			-- one per implementing type, even though the implementations
 			-- are conceptually distinct).
+			-- Per ADR-0013 Step 4: query v_defs / v_refs (the canonical
+			-- views) rather than node_defs / node_refs directly. The
+			-- alive-check has two arms:
+			--   L_1 binding: r.target_node_id = d.node_id — exact match
+			--                from an LSP-resolved reference. Only fires
+			--                on rows where Step 1 (ley-line-453f7e) wrote
+			--                referrer_node_id + ref_token to _lsp_refs.
+			--   L_0 mention: token-textual fallback for tree-sitter rows
+			--                (target_node_id IS NULL). Includes the
+			--                first-dot strip for 'Receiver.Method' →
+			--                'Method' that handles methods rendered as
+			--                'Receiver.Method'.
+			-- Today (pre-Step-1), v_refs only surfaces L_0 rows so the
+			-- fallback always runs and the result is identical to the
+			-- legacy node_refs query. Once binding rows arrive, the
+			-- L_1 arm dominates and the skip-list below becomes
+			-- redundant for the cases LSP actually sees.
 			WITH alive AS (
 				SELECT DISTINCT d.node_id
-				FROM node_defs d
-				JOIN node_refs r
-				  ON r.token = d.token
-				  OR (instr(d.token, '.') > 0 AND r.token = substr(d.token, instr(d.token, '.') + 1))
+				FROM v_defs d
+				JOIN v_refs r
+				  ON r.target_node_id = d.node_id
+				  OR (r.target_node_id IS NULL AND (
+				       r.token = d.token
+				       OR (instr(d.token, '.') > 0 AND r.token = substr(d.token, instr(d.token, '.') + 1))
+				     ))
 			),
 			-- Skip-listed: any token of a construct matches a skip rule.
 			-- ANY-MATCH is the right semantic — a function with both
@@ -147,7 +167,7 @@ var smellRegistry = []SmellRule{
 			-- runtimes / libraries; static call extraction can't see
 			-- the dispatch site, so the methods always look dead.
 			skipped AS (
-				SELECT DISTINCT node_id FROM node_defs
+				SELECT DISTINCT node_id FROM v_defs
 				WHERE token IN (
 					'main','init',
 					'String','Error','Read','Write','Close','Len','Less','Swap',
@@ -199,7 +219,7 @@ var smellRegistry = []SmellRule{
 			-- content. They have no source data and can't be navigated
 			-- to, so flagging them is pure noise.
 			WHERE COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') != ''
-			  AND n.id IN (SELECT DISTINCT node_id FROM node_defs)
+			  AND n.id IN (SELECT DISTINCT node_id FROM v_defs)
 			  AND n.id NOT IN (SELECT node_id FROM alive)
 			  AND n.id NOT IN (SELECT node_id FROM skipped)
 			  -- Skip non-callable categories. node_refs is populated
@@ -304,16 +324,22 @@ var smellRegistry = []SmellRule{
 			--   pkg/functions/TestFoo/source        (go-schema)
 			-- 'BenchmarkFoo' / 'ExampleFoo' / 'FuzzFoo' too.
 			tested_via_call AS (
+				-- Per ADR-0013 Step 4: query v_refs. The referrer column
+				-- in the view is referrer_node_id (was node_id on
+				-- node_refs); LSP-resolved binding rows will populate it
+				-- the same way mention-fidelity rows do today, so this
+				-- query naturally picks up both fidelities once Step 1
+				-- (ley-line-453f7e) ships.
 				SELECT DISTINCT token
-				FROM node_refs
-				WHERE node_id LIKE '%%/Test%%/source'
-				   OR node_id LIKE 'Test%%/source'
-				   OR node_id LIKE '%%/Benchmark%%/source'
-				   OR node_id LIKE 'Benchmark%%/source'
-				   OR node_id LIKE '%%/Example%%/source'
-				   OR node_id LIKE 'Example%%/source'
-				   OR node_id LIKE '%%/Fuzz%%/source'
-				   OR node_id LIKE 'Fuzz%%/source'
+				FROM v_refs
+				WHERE referrer_node_id LIKE '%%/Test%%/source'
+				   OR referrer_node_id LIKE 'Test%%/source'
+				   OR referrer_node_id LIKE '%%/Benchmark%%/source'
+				   OR referrer_node_id LIKE 'Benchmark%%/source'
+				   OR referrer_node_id LIKE '%%/Example%%/source'
+				   OR referrer_node_id LIKE 'Example%%/source'
+				   OR referrer_node_id LIKE '%%/Fuzz%%/source'
+				   OR referrer_node_id LIKE 'Fuzz%%/source'
 			)
 			SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') AS source_id,
 			       d.node_id,
@@ -322,7 +348,7 @@ var smellRegistry = []SmellRule{
 			       0 AS start_row,
 			       0 AS start_col,
 			       0 AS metric
-			FROM node_defs d
+			FROM v_defs d
 			JOIN nodes n ON n.id = d.node_id
 			LEFT JOIN child_source cs ON cs.node_id = n.id
 			-- Accept either an exact 'Test<Foo>' counterpart (the
@@ -331,7 +357,7 @@ var smellRegistry = []SmellRule{
 			-- match for the constructor's bare type name. NewMemoryStore
 			-- is overwhelmingly tested via TestMemoryStore_TracksMtimes
 			-- and friends, never via TestNewMemoryStore.
-			LEFT JOIN node_defs t
+			LEFT JOIN v_defs t
 			  ON t.token = 'Test' || d.token
 			  OR (
 			    substr(d.token, 1, 3) = 'New'
@@ -399,7 +425,7 @@ var smellRegistry = []SmellRule{
 			       c.copies AS metric
 			FROM (
 				SELECT token, COUNT(*) AS copies
-				FROM node_defs
+				FROM v_defs
 				-- Skip-list match against the unqualified leaf, so
 				-- both bare tokens ('init') and qualified shapes
 				-- ('cmd.init', 'lang.init') get skipped uniformly.
@@ -456,7 +482,7 @@ var smellRegistry = []SmellRule{
 				GROUP BY token
 				HAVING copies > 1
 			) c
-			JOIN node_defs d ON d.token = c.token
+			JOIN v_defs d ON d.token = c.token
 			JOIN nodes n ON n.id = d.node_id
 			LEFT JOIN child_source cs ON cs.node_id = n.id
 			-- Apply the same filters to the join so partial matches
@@ -509,7 +535,7 @@ var smellRegistry = []SmellRule{
 			per_file AS (
 				SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file) AS file,
 				       COUNT(DISTINCT d.token) AS n
-				FROM node_defs d
+				FROM v_defs d
 				JOIN nodes n ON n.id = d.node_id
 				LEFT JOIN child_source cs ON cs.node_id = n.id
 				WHERE COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') != ''
@@ -560,10 +586,18 @@ var smellRegistry = []SmellRule{
 				-- callee counts. Counting them here would attribute the
 				-- file-level refs to a 'caller' that isn't a real
 				-- construct, inflating fan_out_skew with virtual rows.
-				SELECT node_id AS caller_id, COUNT(DISTINCT token) AS n
-				FROM node_refs
-				WHERE node_id NOT LIKE '_file_level:%%'
-				GROUP BY node_id
+				--
+				-- Per ADR-0013 Step 4: query v_refs. The referrer column
+				-- in the view is referrer_node_id (was node_id on the
+				-- raw table). Counting DISTINCT token preserves today's
+				-- semantics; once Step 1 ships LSP rows, the metric
+				-- could refine to COUNT(DISTINCT COALESCE(target_node_id,
+				-- token)) for binding-aware deduplication, but that's a
+				-- semantic shift left for a follow-up bead.
+				SELECT referrer_node_id AS caller_id, COUNT(DISTINCT token) AS n
+				FROM v_refs
+				WHERE referrer_node_id NOT LIKE '_file_level:%%'
+				GROUP BY referrer_node_id
 			),
 			proj AS (
 				SELECT AVG(n) AS mu FROM fanout
@@ -879,8 +913,46 @@ func missingTables(qg refsQuerier, required []string) ([]string, error) {
 	return missing, nil
 }
 
+// ensureCanonicalViews installs v_defs / v_refs (ADR-0013 Step 3) on the
+// active database via the refsQuerier interface. Idempotent — uses
+// CREATE VIEW IF NOT EXISTS — so safe to call before every rule
+// execution. Necessary because rules query the views (Step 4); .dbs
+// produced by anything other than mache's NewSQLiteWriter (e.g.
+// ley-line-open's `leyline parse`) don't have the views yet, and we
+// don't want consumers to need a separate migration step.
+//
+// Mirrors EnsureCanonicalViews in internal/ingest, but plumbed through
+// the QueryRefs interface rather than *sql.DB so it works against any
+// graph backend that satisfies refsQuerier.
+func ensureCanonicalViews(qg refsQuerier) error {
+	stmts := []string{
+		`CREATE VIEW IF NOT EXISTS v_defs AS
+			SELECT token, node_id, 'mention' AS fidelity FROM node_defs`,
+		`CREATE VIEW IF NOT EXISTS v_refs AS
+			SELECT node_id AS referrer_node_id,
+			       token,
+			       NULL  AS target_node_id,
+			       NULL  AS ref_uri,
+			       NULL  AS ref_line,
+			       'mention' AS fidelity
+			FROM node_refs`,
+	}
+	for _, s := range stmts {
+		rows, err := qg.QueryRefs(s)
+		if err != nil {
+			return fmt.Errorf("ensure canonical views: %w", err)
+		}
+		_ = rows.Close()
+	}
+	return nil
+}
+
 // runSmellRule executes the rule's SQL, optionally scoped to one source.
 func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
+	if err := ensureCanonicalViews(qg); err != nil {
+		return nil, err
+	}
+
 	scope := ""
 	args := []any{}
 	if sourceID != "" && rule.ScopeColumn != "" {
