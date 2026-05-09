@@ -103,11 +103,21 @@ tasks:
   gen-bindings:
     desc: Regenerate Go bindings from schemas/*.capnp (run after schema sync from LLO)
     vars:
+      # Pin both the toolchain version and the include-path source-of-
+      # truth to go.mod. `@latest` would let the codegen drift from
+      # the runtime library; `$(go env GOPATH)/pkg/mod` would break
+      # under GOMODCACHE overrides or multi-entry GOPATH.
+      CAPNP_VERSION:
+        sh: go list -m -f '{{`{{.Version}}`}}' capnproto.org/go/capnp/v3
       CAPNP_INC:
-        sh: echo "$(go env GOPATH)/pkg/mod/$(grep -E 'capnproto.org/go/capnp/v3 v' go.mod | awk '{print $1"@"$2}')/std"
+        sh: echo "$(go env GOMODCACHE)/capnproto.org/go/capnp/v3@$(go list -m -f '{{`{{.Version}}`}}' capnproto.org/go/capnp/v3)/std"
     cmds:
-      - test -x "$(go env GOPATH)/bin/capnpc-go" || go install capnproto.org/go/capnp/v3/capnpc-go@latest
+      - go install capnproto.org/go/capnp/v3/capnpc-go@{{.CAPNP_VERSION}}
       - cd schemas && PATH="$(go env GOPATH)/bin:$PATH" capnp compile -I"{{.CAPNP_INC}}" --src-prefix=. -ogo:../internal/lsp/bindings common.capnp binding.capnp
+      # Final formatting is delegated to the pre-commit gofumpt pass
+      # so this task and the commit pipeline agree on output. Running
+      # `task gen-bindings && git commit` reaches a stable state in
+      # one cycle.
 
   fuzz-gen:
     desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target
