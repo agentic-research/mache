@@ -609,7 +609,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "fan_out_skew",
-		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). Skip-listed: testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (per-construct) and Go test files *_test.go (per-file) — tests and test helpers are expected to call many things, no signal there. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded — generated dispatchers naturally have wide fan-out. The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
+		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). Skip-listed: testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (per-construct) and Go test files *_test.go (per-file) — tests and test helpers are expected to call many things, no signal there. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded — generated dispatchers naturally have wide fan-out. **Projection-function naming convention** is also exempt: names matching `*FromRecord`, `*FromMessage`, `*FromCapnp`, `*ToRecord`, `*ToMessage`, `*ToCapnp`, or `Project*` are mechanical translators between wire formats and Go-native types. Capnp's accessor-per-field API forces N calls to project N fields onto one receiver — that's structurally required, not a code-smell. Adopt the convention for new projection functions to suppress this signal at the call site rather than at the rule level. The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
 		Requires:    []string{"node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
@@ -660,6 +660,21 @@ var smellRegistry = []SmellRule{
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Benchmark%%'
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Example%%'
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Fuzz%%'
+			  -- Projection-function naming convention — mechanical
+			  -- wire-format ↔ Go-native translators. Capnp / protobuf
+			  -- generators produce one accessor per field, so a
+			  -- function projecting an N-field record makes N calls
+			  -- on one receiver. That's not orchestration; it's
+			  -- structural translation. Adopt the convention for new
+			  -- projection functions to suppress this signal at the
+			  -- call site (and have a self-documenting name).
+			  AND COALESCE(ctor.name, '') NOT LIKE '%%FromRecord'
+			  AND COALESCE(ctor.name, '') NOT LIKE '%%FromMessage'
+			  AND COALESCE(ctor.name, '') NOT LIKE '%%FromCapnp'
+			  AND COALESCE(ctor.name, '') NOT LIKE '%%ToRecord'
+			  AND COALESCE(ctor.name, '') NOT LIKE '%%ToMessage'
+			  AND COALESCE(ctor.name, '') NOT LIKE '%%ToCapnp'
+			  AND COALESCE(ctor.name, '') NOT LIKE 'Project%%'
 			  -- Generated dispatchers (capnp / protobuf / *_generated /
 			  -- *.gen) have intentionally wide fan-out; flagging them
 			  -- buries real findings under generated-code noise.
