@@ -69,9 +69,9 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 }
 ```
 
-Once connected, the agent can call `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, `get_impact`, `get_architecture`, `get_diagram`, `write_file`, and `find_smells`. With [ley-line-open](https://github.com/agentic-research/ley-line-open) installed, three more tools become available: `semantic_search`, `get_type_info`, `get_diagnostics`.
+Once connected, the agent can call `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, `get_impact`, `get_architecture`, `get_diagram`, `write_file`, `find_smells`, and `resolve_ref`. With [ley-line-open](https://github.com/agentic-research/ley-line-open) installed, three more tools become available: `semantic_search`, `get_type_info`, `get_diagnostics`.
 
-See the [MCP Server section in ARCHITECTURE.md](docs/ARCHITECTURE.md#core-abstractions) for the full tool inventory and the [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) section for which tools require an ley-line-open-built `.db`.
+See the [MCP Server section in ARCHITECTURE.md](docs/ARCHITECTURE.md#core-abstractions) for the full tool inventory and the [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) section for which tools require a `.db` built by ley-line-open.
 
 ## Cross-repo serve (`--mount`)
 
@@ -178,9 +178,9 @@ See [ADR-0005](docs/adr/0005-fca-schema-inference.md) and [ADR-0008](docs/adr/00
 
 ## Troubleshooting
 
-**`get_diagnostics` returns "no \_lsp table in database"** — the LSP-enrichment tools require an [ley-line-open](https://github.com/agentic-research/ley-line-open)-built `.db`. Either pre-enrich with `ll-open enrich-lsp`, pass a `file` param to trigger live enrichment (requires the ley-line daemon), or skip those three tools — the other 13 work without ley-line-open. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
+**`get_diagnostics` returns "no \_lsp table in database"** — the LSP-enrichment tools require a `.db` built by [ley-line-open](https://github.com/agentic-research/ley-line-open). Either pre-enrich with `ll-open enrich-lsp`, pass a `file` param to trigger live enrichment (requires the ley-line daemon), or skip those three tools — the other 14 work without ley-line-open. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
-**`find_smells` rule "requires SQL tables [\_ast]" error** — same root cause. The four `_ast`-based smell rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`) need an ley-line-open-built `.db`. The other five rules (`dead_code`, `untested_function`, `duplicate_definitions`, `god_file`, `fan_out_skew`) run on standalone mache.
+**`find_smells` rule "requires SQL tables [\_ast]" error** — same root cause. The four `_ast`-based smell rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`) need a `.db` built by ley-line-open. The other five rules (`dead_code`, `untested_function`, `duplicate_definitions`, `god_file`, `fan_out_skew`) run on standalone mache.
 
 **Mount stuck or `umount` complains "device busy"** — see `mache unmount <mountpoint>` and the open-bead ergonomics in `mache-fsi`. macOS sometimes needs `diskutil unmount force`.
 

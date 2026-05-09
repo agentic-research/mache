@@ -129,13 +129,13 @@ The `v_refs` and `v_defs` views (created TEMP per-connection by `cmd/serve_find_
 ```mermaid
 sequenceDiagram
     participant Source as Source Code
-    participant ley-line-open as ley-line-open leyline parse + lsp
+    participant Leyline as ley-line-open (leyline parse + lsp)
     participant Log as ${db}.bindings.capnp<br/>(typed event log)
     participant Mache as mache.serve / find-smells
     participant View as v_refs (canonical)
 
-    Source->>ley-line-open: AST + LSP enrichment
-    ley-line-open->>Log: emit BindingRecord<br/>(targetNodeId, refToken,<br/>constructNodeId, qualifier, ...)
+    Source->>Leyline: AST + LSP enrichment
+    Leyline->>Log: emit BindingRecord<br/>(targetNodeId, refToken,<br/>constructNodeId, qualifier, ...)
     Log->>Mache: lsp.ReadBindingLog(path)
     Mache->>Mache: LoadCapnpBindings →<br/>_capnp_binding_refs TEMP
     Mache->>View: UNION ALL binding arm
@@ -239,7 +239,7 @@ Under the composite:
 - **`get_node` / `read_file` / `find_callees` route by prefix.** A path with no recognized mount prefix returns `ErrNotFound`.
 - **Single-source serves are unchanged.** Without `--mount`, the response shape and behavior are byte-identical to before.
 
-`CompositeGraph` is the existing internal primitive that powers this — `internal/graph/composite.go`. It supports dynamic `Mount`/`Unmount`, has a recursion guard against mounted graphs that delegate back, and uses a stable `mountTime` so NFS/FUSE attribute caches don't churn on every readdir.
+`CompositeGraph` is the existing internal primitive that powers this — `internal/graph/composite.go`. It supports dynamic `Mount`/`Unmount`, has a recursion guard against mounted graphs that delegate back, and uses a stable `mountTime` so NFS attribute caches don't churn on every readdir.
 
 This is the first concrete implementation of the **`Ref` pointer kind** from [ADR-0011](adr/0011-pointer-abstraction.md): a name-scoped pointer that resolves through a registry of named graphs.
 

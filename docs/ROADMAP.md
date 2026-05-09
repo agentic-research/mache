@@ -9,7 +9,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - 28-language tree-sitter parsing via the standalone CGO path; pure-Go path via [ley-line-open](https://github.com/agentic-research/ley-line-open) `.db` files (see [ARCHITECTURE.md § Interplay with ley-line-open](ARCHITECTURE.md#interplay-with-ley-line-open))
 - Two graph backends: `MemoryStore` (in-memory map for source ingestion) and `SQLiteGraph` (zero-copy SQL over ley-line-open `.db`)
 - NFS-only mount via `go-nfs` + `billy` (FUSE was removed in v0.7.0 per ADR-0006; for FUSE today, use `leyline serve` from ley-line-open)
-- MCP server with **17 tools**: 14 work standalone, 3 require ley-line-open enrichment (`semantic_search`, `get_type_info`, `get_diagnostics`); `find_smells` partially degrades on tree-sitter-only mounts (rules requiring `_ast` need an ley-line-open-built `.db`). The full list: `get_overview`, `find_callers`, `find_callees`, `find_definition`, `search`, `list_directory`, `read_file`, `semantic_search`, `write_file`, `get_type_info`, `get_diagnostics`, `get_impact`, `get_communities`, `get_diagram`, `get_architecture`, `find_smells`, `resolve_ref`.
+- MCP server with **17 tools**: 14 work standalone, 3 require ley-line-open enrichment (`semantic_search`, `get_type_info`, `get_diagnostics`); `find_smells` partially degrades on tree-sitter-only mounts (rules requiring `_ast` need a `.db` built by ley-line-open). The full list: `get_overview`, `find_callers`, `find_callees`, `find_definition`, `search`, `list_directory`, `read_file`, `semantic_search`, `write_file`, `get_type_info`, `get_diagnostics`, `get_impact`, `get_communities`, `get_diagram`, `get_architecture`, `find_smells`, `resolve_ref`.
 - Write-back pipeline: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins` (no re-ingest)
 - Draft mode: invalid writes save as drafts, node path stays stable, errors surface via `_diagnostics/`
 - Context awareness: virtual `context` files expose imports/globals to agents
@@ -28,7 +28,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 
 - Memory: ~2GB peak for 323K NVD records (1.6M graph nodes with string IDs) — addressable via [GenerationalGraph](https://github.com/agentic-research/mache) (mache-2f1287)
 - Write-back formatting is Go and HCL/Terraform only; other languages validate but don't auto-format
-- Standalone (CGO) path produces `node_defs`/`node_refs` but not `_ast` — 4 of 9 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`) require an ley-line-open-built `.db`
+- Standalone (CGO) path produces `node_defs`/`node_refs` but not `_ast` — 4 of 9 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`) require a `.db` built by ley-line-open
 - bbolt-backed `ext/boltdb` projection is opt-in (not in default `go.work`); used by venturi/trivy-db workflows
 
 ## Near-term
