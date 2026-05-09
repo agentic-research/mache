@@ -307,35 +307,65 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 
 ## Key File Reference
 
-| Concern                       | File                                                   | Key functions/types                                                                     |
-| ----------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| CLI + mount wiring            | `cmd/mount.go`                                         | `rootCmd`, `--writable`, `--infer`, `--backend` flags                                   |
-| MCP server                    | `cmd/serve.go`                                         | `mache serve`, `registerMCPTools`, `buildServeGraph`, `lazyGraph`, 15 tool handlers     |
-| Community detection           | `internal/graph/community.go`                          | `DetectCommunities` (Louvain), `ConnectedComponents`, `buildProjection`                 |
-| Schema types                  | `api/schema.go`                                        | `Topology`, `Node`, `Leaf`                                                              |
-| Ingestion orchestration       | `internal/ingest/engine.go`                            | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `ingestRawFileUnder`, `dedupSuffix` |
-| JSON queries                  | `internal/ingest/json_walker.go`                       | `JsonWalker.Query`                                                                      |
-| Tree-sitter queries           | `internal/ingest/sitter_walker.go`                     | `SitterWalker.Query`, `sitterMatch.CaptureOrigin`                                       |
-| Walker/Match contracts        | `internal/ingest/interfaces.go`                        | `Walker`, `Match`, `OriginProvider`                                                     |
-| SQLite streaming              | `internal/ingest/sqlite_loader.go`                     | `StreamSQLiteRaw`                                                                       |
-| Graph (in-memory)             | `internal/graph/graph.go`                              | `MemoryStore`, `Node`, `SourceOrigin`, `ContentRef`, `GetCallees`, `AddDef`             |
-| Graph (SQLite direct)         | `internal/graph/sqlite_graph.go`                       | `SQLiteGraph`, `EagerScan`, `GetCallers`, `GetCallees`                                  |
-| NFS backend                   | `internal/nfsmount/graphfs.go`                         | `GraphFS`, `graphFile`, `writeFile`, `callers/`                                         |
-| NFS server                    | `internal/nfsmount/server.go`                          | `NewServer`, NFS listener                                                               |
-| Source splicing               | `internal/writeback/splice.go`                         | `Splice`                                                                                |
-| Validation                    | `internal/writeback/validate.go`                       | `Validate`                                                                              |
-| Formatting                    | `internal/writeback/format.go`                         | `FormatBuffer` (Go: gofumpt, HCL: hclwrite)                                             |
-| Cross-ref vtab                | `internal/refsvtab/refs_module.go`                     | `mache_refs` virtual table                                                              |
-| Capnp binding-log reader      | `internal/lsp/binding_log.go`                          | `Binding`, `ReadBindingLog`, `IterateBindingLog`, `SiblingBindingLogPath`               |
-| Capnp generated bindings      | `internal/lsp/bindings/`                               | `BindingRecord`, `Range`, `Position` (regenerate via `task gen-bindings`)               |
-| Vendored capnp schemas        | `schemas/{common,binding}.capnp`                       | byte-identical to LLO upstream + 3-line Go annotation block                             |
-| Canonical views + readthrough | `cmd/serve_find_smells.go`                             | `ensureCanonicalViews`, `LoadCapnpBindings`, `_capnp_binding_refs` TEMP table           |
-| Control block                 | `internal/control/`                                    | HotSwapGraph, live schema reload                                                        |
-| Go schema                     | `examples/go-schema.json`                              | functions, methods, types, constants, variables, imports                                |
-| MCP schemas                   | `examples/mcp-schema.json`, `mcp-registry-schema.json` | MCP server manifest and registry projection                                             |
-| FCA inference                 | `internal/lattice/`                                    | `FormalContext`, `NextClosure`, `Project`, `Inferrer`                                   |
-| ProjectAST / friendly names   | `internal/lattice/project_ast.go`                      | `ProjectAST`, `friendlyTypeNames`, containment rules                                    |
-| Build/test                    | `Taskfile.yml`                                         | `task build`, `task test`, `task check`                                                 |
+| Concern                       | File                                                   | Key functions/types                                                                          |
+| ----------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| CLI + mount wiring            | `cmd/mount.go`                                         | `rootCmd`, `--writable`, `--infer`, `--backend` flags                                        |
+| MCP server                    | `cmd/serve.go`                                         | `mache serve`, `registerMCPTools`, `buildServeGraph`, `lazyGraph`, 15 tool handlers          |
+| Community detection           | `internal/graph/community.go`                          | `DetectCommunities` (Louvain), `ConnectedComponents`, `buildProjection`                      |
+| Schema types                  | `api/schema.go`                                        | `Topology`, `Node`, `Leaf`                                                                   |
+| Ingestion orchestration       | `internal/ingest/engine.go`                            | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `ingestRawFileUnder`, `dedupSuffix`      |
+| JSON queries                  | `internal/ingest/json_walker.go`                       | `JsonWalker.Query`                                                                           |
+| Tree-sitter queries           | `internal/ingest/sitter_walker.go`                     | `SitterWalker.Query`, `sitterMatch.CaptureOrigin`                                            |
+| Walker/Match contracts        | `internal/ingest/interfaces.go`                        | `Walker`, `Match`, `OriginProvider`                                                          |
+| SQLite streaming              | `internal/ingest/sqlite_loader.go`                     | `StreamSQLiteRaw`                                                                            |
+| Graph (in-memory)             | `internal/graph/graph.go`                              | `MemoryStore`, `Node`, `SourceOrigin`, `ContentRef`, `GetCallees`, `AddDef`                  |
+| Graph (SQLite direct)         | `internal/graph/sqlite_graph.go`                       | `SQLiteGraph`, `EagerScan`, `GetCallers`, `GetCallees`                                       |
+| NFS backend                   | `internal/nfsmount/graphfs.go`                         | `GraphFS`, `graphFile`, `writeFile`, `callers/`                                              |
+| NFS server                    | `internal/nfsmount/server.go`                          | `NewServer`, NFS listener                                                                    |
+| Source splicing               | `internal/writeback/splice.go`                         | `Splice`                                                                                     |
+| Validation                    | `internal/writeback/validate.go`                       | `Validate`                                                                                   |
+| Formatting                    | `internal/writeback/format.go`                         | `FormatBuffer` (Go: gofumpt, HCL: hclwrite)                                                  |
+| Cross-ref vtab                | `internal/refsvtab/refs_module.go`                     | `mache_refs` virtual table                                                                   |
+| Capnp binding-log reader      | `internal/lsp/binding_log.go`                          | `Binding`, `ReadBindingLog`, `IterateBindingLog`, `SiblingBindingLogPath`                    |
+| Capnp generated bindings      | `internal/lsp/bindings/`                               | `BindingRecord`, `Range`, `Position` (regenerate via `task gen-bindings`)                    |
+| Vendored capnp schemas        | `schemas/{common,binding}.capnp`                       | byte-identical to LLO upstream + 3-line Go annotation block                                  |
+| Canonical views + readthrough | `cmd/serve_find_smells.go`                             | `ensureCanonicalViews`, `LoadCapnpBindings`, `_capnp_binding_refs` TEMP table                |
+| E2E tool harness              | `cmd/all_tools_e2e_test.go`                            | `TestE2E_AllMCPTools`, `profileTool`, `capturePprof`, `writeE2EFixture`                      |
+| Snapshot caching contract     | `internal/graph/snapshot_cache_test.go`                | `TestDefsMap_*`, `TestRefsMap_*`, `TestSnapshotCache_ConcurrentReadersGetConsistentSnapshot` |
+| Control block                 | `internal/control/`                                    | HotSwapGraph, live schema reload                                                             |
+| Go schema                     | `examples/go-schema.json`                              | functions, methods, types, constants, variables, imports                                     |
+| MCP schemas                   | `examples/mcp-schema.json`, `mcp-registry-schema.json` | MCP server manifest and registry projection                                                  |
+| FCA inference                 | `internal/lattice/`                                    | `FormalContext`, `NextClosure`, `Project`, `Inferrer`                                        |
+| ProjectAST / friendly names   | `internal/lattice/project_ast.go`                      | `ProjectAST`, `friendlyTypeNames`, containment rules                                         |
+| Build/test                    | `Taskfile.yml`                                         | `task build`, `task test`, `task check`                                                      |
+
+## E2E Tool Harness + Profiling
+
+Per `mache-6b6da6` (phases 1-3 shipped), `cmd/all_tools_e2e_test.go` exercises every registered MCP tool against a multi-package Go fixture and emits per-tool latency + allocation deltas. Two task entry points:
+
+- **`task profile-tools`** — latency + alloc-delta only. ~0.6s. Suitable for fast pre-merge feedback.
+- **`task profile-tools-pprof`** — adds `runtime/pprof` CPU + heap capture per tool. Three artifacts per tool: `<tool>.cpu.pprof`, `<tool>.heap.pprof` (after iteration loop), `<tool>.heap.baseline.pprof` (before loop, for delta).
+- **`task flamegraphs`** — renders SVG flamegraphs from the pprof artifacts via brendangregg's `flamegraph.pl` + `stackcollapse-go.pl` (install: `brew install flamegraph` on macOS). Heap flamegraphs use the baseline + `pprof -alloc_space -base=...` to subtract package-init noise; CPU flamegraphs use raw stacks.
+
+Outputs land under `.e2e/` (gitignored). `INDEX.md` links each tool to its profiles + flamegraphs.
+
+The harness is gated under `-short` so the default `go test ./...` cycle skips it. CI gates the cache contract via `internal/graph/snapshot_cache_test.go` (see below) — not the empirical numbers, which would be flaky across runners.
+
+### `MemoryStore.{Defs,Refs}Map` memoization
+
+Surfaced by the harness's heap-delta flamegraphs: `DefsMap` was 52% of `get_impact`'s heap delta and 32% of `get_overview`'s. Each call deep-copied the whole map plus one slice per entry; on real workloads (10K+ constructs, 50K+ ref tokens) that's millions of allocs per call.
+
+Implementation: `atomic.Pointer` holds the cached snapshot. AddDef / AddRef / DeleteFileNodes invalidate under the existing write lock; readers double-check inside RLock to prevent torn snapshots. Returned map must be treated as read-only — every existing caller is.
+
+Empirical impact (post-cache, same fixture):
+
+| Tool                               | Heap-delta drop                                                                   |
+| ---------------------------------- | --------------------------------------------------------------------------------- |
+| `get_impact`                       | -45% (DefsMap dropped from top-3 allocators)                                      |
+| `get_architecture`                 | -34%                                                                              |
+| `get_overview` / `get_communities` | shape change — DefsMap/RefsMap gone, harness pprof + JSON marshaling now dominate |
+
+The remaining heap is harness overhead (`runtime/pprof.StartCPUProfile`, `compress/flate` from profile writing) and `encoding/json.MarshalIndent` for response serialization — not caching candidates we control.
 
 ## Architectural Decision Records (ADRs)
 
