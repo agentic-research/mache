@@ -21,6 +21,7 @@ graph TD
 
     subgraph "Data Sources"
         SQLiteFile[".db (SQLite)"]
+        BindingLog["sibling .bindings.capnp<br/>(LLO event log, T8.7+)"]
         FlatFile[".json"]
         SourceCode[".go / .py / .js / .ts / .rs / .sql / .tf / .yaml"]
     end
@@ -36,6 +37,10 @@ graph TD
         end
 
         MemoryStore["MemoryStore Graph"]
+
+        BindingReader["lsp.ReadBindingLog<br/>(internal/lsp)"]
+        CapnpTemp["_capnp_binding_refs<br/>TEMP table"]
+        CanonView["v_defs / v_refs<br/>(fidelity poset:<br/>mention | binding)"]
     end
 
     subgraph "System Interface"
@@ -61,10 +66,17 @@ graph TD
     Engine -->|"Non-AST files"| ProjectFiles["_project_files/"]
     ProjectFiles -->|Builds| MemoryStore
 
+    BindingLog -->|Decode| BindingReader
+    BindingReader -->|LoadCapnpBindings| CapnpTemp
+    CapnpTemp -->|UNION binding| CanonView
+    SQLiteGraph -->|node_refs UNION mention| CanonView
+    MemoryStore -->|node_refs UNION mention| CanonView
+
     SQLiteGraph -->|Graph Interface| NFS
     MemoryStore -->|Graph Interface| NFS
     SQLiteGraph -->|Graph Interface| MCP
     MemoryStore -->|Graph Interface| MCP
+    CanonView -->|find_smells rules query| MCP
 
     NFS --- Tools
     MCP --- Tools
@@ -97,6 +109,49 @@ With `--infer`, the schema itself can be derived automatically: the `lattice` pa
 - **MCP Server** (`cmd/serve.go`) — `mache serve` exposes any graph as an MCP (Model Context Protocol) server. Two transports: stdio (default, client spawns mache as subprocess) and Streamable HTTP (`--http :PORT`, mache runs as an independent always-on process with stateful sessions). Sixteen tools wrap the `Graph` interface: `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `semantic_search`, `get_communities`, `get_overview`, `get_type_info`, `get_diagnostics`, `get_impact`, `get_architecture`, `get_diagram`, `write_file`, and `find_smells`. Several are conditional on backend capabilities (e.g., `search` requires `QueryRefs`, `write_file` requires `writeBacker`, LSP tools require `_lsp*` tables produced by ley-line-open). Uses `mark3labs/mcp-go` with lazy graph initialization for instant health-check response. No filesystem mount needed.
 - **Community Detection** (`internal/graph/community.go`) — Louvain modularity optimization on the refs graph. Projects the bipartite token→nodeID refs into a unipartite co-reference graph (edge weight = shared tokens), then iteratively moves nodes between communities to maximize modularity. Also provides `ConnectedComponents` as a simpler baseline. Exposed via the `get_communities` MCP tool.
 
+## Canonical Views & Capnp Event Log
+
+Per [ADR-0013](adr/0013-refs-defs-canonical-schema.md) (fidelity poset over producers) and the cross-repo [LLO ADR-0014](https://github.com/agentic-research/ley-line-open/blob/main/docs/adr/0014-capnp-as-protocol.md) (capnp as the consumer/producer contract), refs and defs flow through a **canonical view** layer that is producer-agnostic and pulls binding-fidelity data from a **typed capnp event log** rather than mache-specific SQL columns.
+
+### Fidelity poset
+
+```
+L₀ (mention)  ⊑  L₁ (binding)  ⊑  L₂ (reachability — future)
+```
+
+- **`mention`** rows come from tree-sitter call extraction (`node_refs` table). Token textually appears at a referrer node; resolution to a target is best-effort (token equality + first-dot strip).
+- **`binding`** rows come from LLO's LSP pass via the sibling `.bindings.capnp` event log. Each `BindingRecord` carries `targetNodeId`, `refToken`, `constructNodeId`, `refSiteNodeId`, `refUri`, `refRange`, `parseGen`, and `qualifier` (T8.7).
+
+The `v_refs` and `v_defs` views (created TEMP per-connection by `cmd/serve_find_smells.go::ensureCanonicalViews`) UNION the two arms with a `fidelity` discriminator column. Every `find_smells` rule queries `v_refs`/`v_defs` rather than `node_refs`/`node_defs` directly — adding a new producer (e.g. SSA) is a new UNION arm, not a fan-out across rules.
+
+### Capnp event log as protocol
+
+```mermaid
+sequenceDiagram
+    participant Source as Source Code
+    participant LLO as LLO leyline parse + lsp
+    participant Log as ${db}.bindings.capnp<br/>(typed event log)
+    participant Mache as mache.serve / find-smells
+    participant View as v_refs (canonical)
+
+    Source->>LLO: AST + LSP enrichment
+    LLO->>Log: emit BindingRecord<br/>(targetNodeId, refToken,<br/>constructNodeId, qualifier, ...)
+    Log->>Mache: lsp.ReadBindingLog(path)
+    Mache->>Mache: LoadCapnpBindings →<br/>_capnp_binding_refs TEMP
+    Mache->>View: UNION ALL binding arm
+    View->>Mache: find_smells / queryLSPRefs
+```
+
+The wire format is back-to-back capnp segment messages; LLO produces them via `capnp::serialize::write_message` and mache consumes them via `capnp.NewDecoder` (see `internal/lsp/binding_log.go`). The schema is byte-stable across additive field changes (LLO ADR-0014; canonical encoding pinned at the capnp toolchain level).
+
+### Why this matters
+
+Before T8.8 (mache-6bd4d8), `v_refs` UNIONed an `_lsp_refs` SQL arm that depended on column names being the same on the producer and consumer side. A one-byte path mismatch in `_source.path` (the `be6136` incident) made every JOIN miss, silently degrading binding-fidelity rows to zero. Today the SQL `_lsp_refs` consumer arm is gone — all binding data flows through capnp records with typed accessors. A consumer typo on a field name fails at compile time, not at query-time on a misshapen JOIN.
+
+### Schema vendoring
+
+The `.capnp` schemas live in `schemas/` (vendored from LLO with three Go-annotation lines added; otherwise byte-identical). Generated Go bindings live in `internal/lsp/bindings/`. Regenerate with `task gen-bindings` (pinned to the `capnpc-go` version in `go.mod`).
+
 ## Interplay with ley-line-open
 
 Mache works standalone, but pairs with [ley-line-open](https://github.com/agentic-research/ley-line-open) (LLO) for the modern, CGO-free path. Two modes:
@@ -125,16 +180,17 @@ This is the path under [ADR-0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first
 
 ### Tool capability matrix
 
-| Tool                                                                                                       | Standalone (CGO) | LLO-paired (.db) | Notes                                                                |
-| ---------------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | -------------------------------------------------------------------- |
-| `list_directory`, `read_file`, `get_overview`, `get_diagram`                                               | ✓                | ✓                | Topology-only — works on any backend                                 |
-| `find_callers`, `find_callees`, `find_definition`, `search`                                                | ✓                | ✓                | `node_refs` / `node_defs` populated by both paths                    |
-| `get_communities`, `get_impact`, `get_architecture`                                                        | ✓                | ✓                | Derived from refs graph                                              |
-| `write_file`                                                                                               | ✓                | ✓                | Splice pipeline runs on either backend (validate → format → splice)  |
-| `find_smells` rules: `dead_code`, `untested_function`, `duplicate_definitions`, `fan_out_skew`, `god_file` | ✓                | ✓                | Use `node_defs` / `node_refs` / `nodes` only                         |
-| `find_smells` rules: `magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`      | ✗                | ✓                | Need `_ast` table — only LLO writes it                               |
-| `get_type_info`, `get_diagnostics`                                                                         | ✗                | ✓ (LSP-enriched) | Need `_lsp*` tables produced by ley-line's `lsp` crate at build time |
-| `semantic_search`                                                                                          | ✗                | ✓ (with daemon)  | Embeddings via the LLO daemon UDS proxy                              |
+| Tool                                                                                                       | Standalone (CGO) | LLO-paired (.db) | Notes                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------------- | ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_directory`, `read_file`, `get_overview`, `get_diagram`                                               | ✓                | ✓                | Topology-only — works on any backend                                                                                                                                                                                                                            |
+| `find_callers`, `find_callees`, `find_definition`, `search`                                                | ✓                | ✓                | `node_refs` / `node_defs` populated by both paths                                                                                                                                                                                                               |
+| `get_communities`, `get_impact`, `get_architecture`                                                        | ✓                | ✓                | Derived from refs graph                                                                                                                                                                                                                                         |
+| `write_file`                                                                                               | ✓                | ✓                | Splice pipeline runs on either backend (validate → format → splice)                                                                                                                                                                                             |
+| `find_smells` rules: `dead_code`, `untested_function`, `duplicate_definitions`, `fan_out_skew`, `god_file` | ✓                | ✓                | Mention arm uses `node_defs` / `node_refs` / `nodes`. Binding arm consumes `${db}.bindings.capnp` when present (mache-6bd4d8). `fan_out_skew` is qualifier-aware via T8.7 (mache-6c0d07): projection-shape calls collapse to one qualifier instead of N tokens. |
+| `find_smells` rules: `magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`      | ✗                | ✓                | Need `_ast` table — only LLO writes it                                                                                                                                                                                                                          |
+| `get_type_info`, `get_diagnostics`                                                                         | ✗                | ✓ (LSP-enriched) | Need `_lsp*` tables produced by ley-line's `lsp` crate at build time                                                                                                                                                                                            |
+| `find_callers` (LSP-resolved targets via `queryLSPRefs`)                                                   | ✓ (mention only) | ✓                | Reads sibling `.bindings.capnp` first; legacy SQL `_lsp_refs` only as fallback for pre-T8.2 `.db`s.                                                                                                                                                             |
+| `semantic_search`                                                                                          | ✗                | ✓ (with daemon)  | Embeddings via the LLO daemon UDS proxy                                                                                                                                                                                                                         |
 
 When a tool falls into the second column without enrichment, the handler returns a friendly error message explaining how to enable it (typically: re-run `leyline parse` with the relevant flag).
 
@@ -251,46 +307,52 @@ cat /functions/HandleRequest/callees/functions_ValidateToken_source
 
 ## Key File Reference
 
-| Concern                     | File                                                   | Key functions/types                                                                     |
-| --------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| CLI + mount wiring          | `cmd/mount.go`                                         | `rootCmd`, `--writable`, `--infer`, `--backend` flags                                   |
-| MCP server                  | `cmd/serve.go`                                         | `mache serve`, `registerMCPTools`, `buildServeGraph`, `lazyGraph`, 15 tool handlers     |
-| Community detection         | `internal/graph/community.go`                          | `DetectCommunities` (Louvain), `ConnectedComponents`, `buildProjection`                 |
-| Schema types                | `api/schema.go`                                        | `Topology`, `Node`, `Leaf`                                                              |
-| Ingestion orchestration     | `internal/ingest/engine.go`                            | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `ingestRawFileUnder`, `dedupSuffix` |
-| JSON queries                | `internal/ingest/json_walker.go`                       | `JsonWalker.Query`                                                                      |
-| Tree-sitter queries         | `internal/ingest/sitter_walker.go`                     | `SitterWalker.Query`, `sitterMatch.CaptureOrigin`                                       |
-| Walker/Match contracts      | `internal/ingest/interfaces.go`                        | `Walker`, `Match`, `OriginProvider`                                                     |
-| SQLite streaming            | `internal/ingest/sqlite_loader.go`                     | `StreamSQLiteRaw`                                                                       |
-| Graph (in-memory)           | `internal/graph/graph.go`                              | `MemoryStore`, `Node`, `SourceOrigin`, `ContentRef`, `GetCallees`, `AddDef`             |
-| Graph (SQLite direct)       | `internal/graph/sqlite_graph.go`                       | `SQLiteGraph`, `EagerScan`, `GetCallers`, `GetCallees`                                  |
-| NFS backend                 | `internal/nfsmount/graphfs.go`                         | `GraphFS`, `graphFile`, `writeFile`, `callers/`                                         |
-| NFS server                  | `internal/nfsmount/server.go`                          | `NewServer`, NFS listener                                                               |
-| Source splicing             | `internal/writeback/splice.go`                         | `Splice`                                                                                |
-| Validation                  | `internal/writeback/validate.go`                       | `Validate`                                                                              |
-| Formatting                  | `internal/writeback/format.go`                         | `FormatBuffer` (Go: gofumpt, HCL: hclwrite)                                             |
-| Cross-ref vtab              | `internal/refsvtab/refs_module.go`                     | `mache_refs` virtual table                                                              |
-| Control block               | `internal/control/`                                    | HotSwapGraph, live schema reload                                                        |
-| Go schema                   | `examples/go-schema.json`                              | functions, methods, types, constants, variables, imports                                |
-| MCP schemas                 | `examples/mcp-schema.json`, `mcp-registry-schema.json` | MCP server manifest and registry projection                                             |
-| FCA inference               | `internal/lattice/`                                    | `FormalContext`, `NextClosure`, `Project`, `Inferrer`                                   |
-| ProjectAST / friendly names | `internal/lattice/project_ast.go`                      | `ProjectAST`, `friendlyTypeNames`, containment rules                                    |
-| Build/test                  | `Taskfile.yml`                                         | `task build`, `task test`, `task check`                                                 |
+| Concern                       | File                                                   | Key functions/types                                                                     |
+| ----------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| CLI + mount wiring            | `cmd/mount.go`                                         | `rootCmd`, `--writable`, `--infer`, `--backend` flags                                   |
+| MCP server                    | `cmd/serve.go`                                         | `mache serve`, `registerMCPTools`, `buildServeGraph`, `lazyGraph`, 15 tool handlers     |
+| Community detection           | `internal/graph/community.go`                          | `DetectCommunities` (Louvain), `ConnectedComponents`, `buildProjection`                 |
+| Schema types                  | `api/schema.go`                                        | `Topology`, `Node`, `Leaf`                                                              |
+| Ingestion orchestration       | `internal/ingest/engine.go`                            | `Engine.Ingest`, `processNode`, `ingestTreeSitter`, `ingestRawFileUnder`, `dedupSuffix` |
+| JSON queries                  | `internal/ingest/json_walker.go`                       | `JsonWalker.Query`                                                                      |
+| Tree-sitter queries           | `internal/ingest/sitter_walker.go`                     | `SitterWalker.Query`, `sitterMatch.CaptureOrigin`                                       |
+| Walker/Match contracts        | `internal/ingest/interfaces.go`                        | `Walker`, `Match`, `OriginProvider`                                                     |
+| SQLite streaming              | `internal/ingest/sqlite_loader.go`                     | `StreamSQLiteRaw`                                                                       |
+| Graph (in-memory)             | `internal/graph/graph.go`                              | `MemoryStore`, `Node`, `SourceOrigin`, `ContentRef`, `GetCallees`, `AddDef`             |
+| Graph (SQLite direct)         | `internal/graph/sqlite_graph.go`                       | `SQLiteGraph`, `EagerScan`, `GetCallers`, `GetCallees`                                  |
+| NFS backend                   | `internal/nfsmount/graphfs.go`                         | `GraphFS`, `graphFile`, `writeFile`, `callers/`                                         |
+| NFS server                    | `internal/nfsmount/server.go`                          | `NewServer`, NFS listener                                                               |
+| Source splicing               | `internal/writeback/splice.go`                         | `Splice`                                                                                |
+| Validation                    | `internal/writeback/validate.go`                       | `Validate`                                                                              |
+| Formatting                    | `internal/writeback/format.go`                         | `FormatBuffer` (Go: gofumpt, HCL: hclwrite)                                             |
+| Cross-ref vtab                | `internal/refsvtab/refs_module.go`                     | `mache_refs` virtual table                                                              |
+| Capnp binding-log reader      | `internal/lsp/binding_log.go`                          | `Binding`, `ReadBindingLog`, `IterateBindingLog`, `SiblingBindingLogPath`               |
+| Capnp generated bindings      | `internal/lsp/bindings/`                               | `BindingRecord`, `Range`, `Position` (regenerate via `task gen-bindings`)               |
+| Vendored capnp schemas        | `schemas/{common,binding}.capnp`                       | byte-identical to LLO upstream + 3-line Go annotation block                             |
+| Canonical views + readthrough | `cmd/serve_find_smells.go`                             | `ensureCanonicalViews`, `LoadCapnpBindings`, `_capnp_binding_refs` TEMP table           |
+| Control block                 | `internal/control/`                                    | HotSwapGraph, live schema reload                                                        |
+| Go schema                     | `examples/go-schema.json`                              | functions, methods, types, constants, variables, imports                                |
+| MCP schemas                   | `examples/mcp-schema.json`, `mcp-registry-schema.json` | MCP server manifest and registry projection                                             |
+| FCA inference                 | `internal/lattice/`                                    | `FormalContext`, `NextClosure`, `Project`, `Inferrer`                                   |
+| ProjectAST / friendly names   | `internal/lattice/project_ast.go`                      | `ProjectAST`, `friendlyTypeNames`, containment rules                                    |
+| Build/test                    | `Taskfile.yml`                                         | `task build`, `task test`, `task check`                                                 |
 
 ## Architectural Decision Records (ADRs)
 
-| ADR                                                                                      | Status                       | Summary                                                                      |
-| ---------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------- |
-| [0001: User-Space FUSE Bridge](adr/0001-user-space-fuse-bridge.md)                       | Superseded                   | fuse-t + cgofuse for macOS (no kexts) — replaced by NFS in v0.7.0 (see 0006) |
-| [0002: Declarative Topology Schema](adr/0002-declarative-topology-schema.md)             | Accepted                     | Schema-driven ingestion with Go templates                                    |
-| [0003: CAS & Layered Overlays](adr/0003-cas-layered-overlays.md)                         | Proposed                     | Content-Addressed Storage and Docker-style layers (ideated)                  |
-| [0004: MVCC Memory Ledger](adr/0004-mvcc-memory-ledger.md)                               | Proposed                     | ECS + mmap + RCU for 10M+ entities (ideated)                                 |
-| [0005: FCA Schema Inference](adr/0005-fca-schema-inference.md)                           | Accepted                     | NextClosure on sampled records, bitmap-accelerated lattice → topology        |
-| [0006: Syntax-Aware Write Protection](adr/0006-syntax-aware-write-protection.md)         | Accepted                     | Tree-sitter validation before source splice                                  |
-| [0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md)                                | Accepted                     | Drop CGO/FUSE; pre-baked .db via leyline; NFS-only mount (v0.7.0)            |
-| [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed                     | Git objects as first-class data source                                       |
-| [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted                     | Information-theoretic field scoring for schema inference                     |
-| [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted                     | Validate → format → splice → surgical update (no re-ingest)                  |
-| [0010: Hosted Mache Architecture](adr/0010-hosted-mache-architecture.md)                 | Proposed                     | Hosted-mode design (cluster, R2, BYO storage)                                |
-| [0011: Pointer Abstraction](adr/0011-pointer-abstraction.md)                             | Proposed                     | Path/token/SHA/range/record/ref/trace/embedding all unified as Pointer       |
-| [0012: CGO Removal Migration](adr/0012-cgo-removal-migration.md)                         | Accepted (steps 1–3 shipped) | Delegate parsing to ley-line entirely; retire SitterWalker + tree-sitter dep |
+| ADR                                                                                      | Status                        | Summary                                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [0001: User-Space FUSE Bridge](adr/0001-user-space-fuse-bridge.md)                       | Superseded                    | fuse-t + cgofuse for macOS (no kexts) — replaced by NFS in v0.7.0 (see 0006)                                                                                                                                   |
+| [0002: Declarative Topology Schema](adr/0002-declarative-topology-schema.md)             | Accepted                      | Schema-driven ingestion with Go templates                                                                                                                                                                      |
+| [0003: CAS & Layered Overlays](adr/0003-cas-layered-overlays.md)                         | Proposed                      | Content-Addressed Storage and Docker-style layers (ideated)                                                                                                                                                    |
+| [0004: MVCC Memory Ledger](adr/0004-mvcc-memory-ledger.md)                               | Proposed                      | ECS + mmap + RCU for 10M+ entities (ideated)                                                                                                                                                                   |
+| [0005: FCA Schema Inference](adr/0005-fca-schema-inference.md)                           | Accepted                      | NextClosure on sampled records, bitmap-accelerated lattice → topology                                                                                                                                          |
+| [0006: Syntax-Aware Write Protection](adr/0006-syntax-aware-write-protection.md)         | Accepted                      | Tree-sitter validation before source splice                                                                                                                                                                    |
+| [0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md)                                | Accepted                      | Drop CGO/FUSE; pre-baked .db via leyline; NFS-only mount (v0.7.0)                                                                                                                                              |
+| [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed                      | Git objects as first-class data source                                                                                                                                                                         |
+| [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted                      | Information-theoretic field scoring for schema inference                                                                                                                                                       |
+| [0009: AST-Aware Write Pipeline](adr/0009-ast-aware-write-pipeline.md)                   | Accepted                      | Validate → format → splice → surgical update (no re-ingest)                                                                                                                                                    |
+| [0010: Hosted Mache Architecture](adr/0010-hosted-mache-architecture.md)                 | Proposed                      | Hosted-mode design (cluster, R2, BYO storage)                                                                                                                                                                  |
+| [0011: Pointer Abstraction](adr/0011-pointer-abstraction.md)                             | Proposed                      | Path/token/SHA/range/record/ref/trace/embedding all unified as Pointer                                                                                                                                         |
+| [0012: CGO Removal Migration](adr/0012-cgo-removal-migration.md)                         | Accepted (steps 1–3 shipped)  | Delegate parsing to ley-line entirely; retire SitterWalker + tree-sitter dep                                                                                                                                   |
+| [0013: Refs/Defs Canonical Schema](adr/0013-refs-defs-canonical-schema.md)               | Accepted (shipped end-to-end) | Fidelity poset (`mention` ⊑ `binding`), `v_refs`/`v_defs` views, capnp readthrough                                                                                                                             |
+| LLO 0014: Capnp as Protocol (cross-repo)                                                 | Accepted (LLO)                | Producer-side: typed event log replaces SQL columns as cross-runtime contract; canonical encoding gives byte-stability across additive schema changes. See `ley-line-open/docs/adr/0014-capnp-as-protocol.md`. |

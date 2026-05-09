@@ -27,9 +27,20 @@ For the full tool inventory and capability matrix (which tools need which tables
 
 ## How it works
 
-1. **Parse** — tree-sitter parses source into AST nodes (28 languages)
+```mermaid
+flowchart LR
+    Source["source dir"] -->|"tree-sitter (CGO)<br/>OR leyline parse"| Graph
+    LSP["LLO leyline lsp<br/>(LSP enrichment)"] -->|"sibling .bindings.capnp<br/>(typed event log)"| BindingLog
+    BindingLog -->|"ReadBindingLog"| Graph["Graph<br/>(MemoryStore or<br/>SQLiteGraph)"]
+    Graph -->|"v_refs / v_defs<br/>(canonical views,<br/>fidelity poset)"| MCP["MCP tools"]
+    Graph -->|"NFS server"| FS["mounted fs"]
+    MCP -. "primary" .- Agent["Agent<br/>(Claude Code, etc)"]
+    FS -.- Agent
+```
+
+1. **Parse** — tree-sitter parses source into AST nodes (28 languages). LLO's `leyline parse` is the modern path; CGO `SitterWalker` is the fallback.
 1. **Infer** — schema inference (FCA + greedy entropy) discovers the natural groupings (`functions/`, `types/`, `classes/`)
-1. **Link** — cross-reference extraction builds a call graph from identifiers and imports
+1. **Link** — cross-reference extraction builds a call graph from identifiers and imports. When LLO's LSP pass has run, refs flow through a sibling `.bindings.capnp` typed event log (per [ADR-0013](docs/adr/0013-refs-defs-canonical-schema.md)) rather than SQL columns — the wire format is the cross-runtime contract.
 1. **Project** — the graph is exposed as MCP tools (primary) or a mounted filesystem (optional)
 
 The graph is the same on either path; MCP and the filesystem are two ways to talk to it.
@@ -42,7 +53,9 @@ The graph is the same on either path; MCP and the filesystem are two ways to tal
 | MCP server (16 tools, stdio + HTTP)     | Stable                                                                        |
 | Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)         |
 | Cross-references (callers/callees)      | Stable                                                                        |
-| `find_smells` (9 structural rules)      | Stable                                                                        |
+| `find_smells` (9 structural rules)      | Stable. `fan_out_skew` is qualifier-aware via LLO `BindingRecord.qualifier`   |
+| Canonical views (ADR-0013)              | Stable. `v_refs`/`v_defs` with fidelity poset (`mention` ⊑ `binding`)         |
+| Capnp event-log readthrough             | Stable. `${db}.bindings.capnp` is the cross-runtime contract for binding refs |
 | NFS mount + write-back                  | Stable                                                                        |
 | Schema inference (FCA)                  | Beta                                                                          |
 | Community detection (Louvain)           | Beta                                                                          |
