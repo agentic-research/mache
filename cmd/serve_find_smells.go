@@ -987,13 +987,14 @@ func missingTables(qg refsQuerier, required []string) ([]string, error) {
 // Idempotent — DROP VIEW IF EXISTS before each CREATE — so safe to
 // call before every rule execution.
 func ensureCanonicalViews(qg refsQuerier) error {
+	// _lsp_defs probe still runs because v_defs's binding-fidelity
+	// arm has not yet migrated to capnp — BindingRecord covers refs
+	// (the link from a call site to a definition), not standalone
+	// def metadata. _lsp_defs migration is tracked separately; for
+	// now the def-side dual-read mirrors the pre-mache-6bd4d8 shape.
 	hasLSPDefsToken, err := tableHasColumn(qg, "_lsp_defs", "def_token")
 	if err != nil {
 		return fmt.Errorf("probe _lsp_defs: %w", err)
-	}
-	hasLSPRefsCols, err := tableHasColumn(qg, "_lsp_refs", "ref_token")
-	if err != nil {
-		return fmt.Errorf("probe _lsp_refs: %w", err)
 	}
 
 	defsBody := `SELECT token, node_id, 'mention' AS fidelity FROM node_defs`
@@ -1012,33 +1013,20 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	       NULL  AS ref_line,
 	       'mention' AS fidelity
 	FROM node_refs`
-	if hasLSPRefsCols {
-		refsBody += `
-			UNION ALL
-			SELECT referrer_node_id,
-			       ref_token AS token,
-			       node_id   AS target_node_id,
-			       ref_uri,
-			       ref_start_line AS ref_line,
-			       'binding' AS fidelity
-			FROM _lsp_refs
-			WHERE ref_token != '' AND referrer_node_id IS NOT NULL`
-	}
-
-	// Capnp readthrough (mache-190508 step 3): every connection that
-	// gets canonical views also gets an empty _capnp_binding_refs
-	// TEMP table that v_refs UNIONs over. When LoadCapnpBindings is
-	// called for this connection, the table fills with binding-
-	// fidelity rows from the sibling .bindings.capnp event log; when
-	// it's not called, the table stays empty and the UNION arm
-	// contributes nothing — legacy behavior preserved.
+	// Binding-fidelity rows come from the per-connection
+	// _capnp_binding_refs TEMP table, populated from the sibling
+	// .bindings.capnp event log by LoadCapnpBindings (mache-190508).
+	// When LoadCapnpBindings hasn't run for this connection, the
+	// table stays empty and v_refs surfaces only mention-fidelity
+	// rows from node_refs — same as the pre-LSP behavior.
 	//
-	// The capnp rows are surfaced AS WELL AS the legacy _lsp_refs SQL
-	// arm rather than instead of it. Producers that write both will
-	// produce duplicate rows; that's fine for find_smells consumers
-	// (alive-check is set membership, deduplicates naturally) and
-	// gives us a transition window to validate the capnp source
-	// before retiring the SQL one.
+	// The legacy _lsp_refs SQL UNION arm was retired in mache-6bd4d8
+	// (T8.8 mirror): SQL columns are no longer the consumer-side
+	// contract, the capnp event log is. Removing the arm structurally
+	// precludes be6136-class column-name-as-protocol disagreements
+	// between LLO writer and mache reader (rather than only
+	// preventing them by flag). LLO continues writing _lsp_refs in
+	// the transition window; mache no longer reads it.
 	refsBody += `
 		UNION ALL
 		SELECT referrer_node_id,

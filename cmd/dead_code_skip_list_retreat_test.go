@@ -4,13 +4,47 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
+	capnp "capnproto.org/go/capnp/v3"
+	"github.com/agentic-research/mache/internal/lsp"
+	"github.com/agentic-research/mache/internal/lsp/bindings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+// writeBindingLogForTest writes a single-record .bindings.capnp log
+// next to dbPath for the test. Mirrors LLO's wire format (back-to-back
+// capnp segment messages). Used by tests that need binding-fidelity
+// rows in v_refs after mache-6bd4d8 retired the SQL _lsp_refs UNION
+// arm.
+func writeBindingLogForTest(t *testing.T, dbPath, target, token, construct, refURI string) {
+	t.Helper()
+	logPath := lsp.SiblingBindingLogPath(dbPath)
+	f, err := os.Create(logPath)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	enc := capnp.NewEncoder(f)
+	msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
+	require.NoError(t, err)
+	rec, err := bindings.NewRootBindingRecord(seg)
+	require.NoError(t, err)
+	require.NoError(t, rec.SetTargetNodeId(target))
+	require.NoError(t, rec.SetRefToken(token))
+	require.NoError(t, rec.SetConstructNodeId(construct))
+	require.NoError(t, rec.SetRefSiteNodeId(""))
+	require.NoError(t, rec.SetRefUri(refURI))
+	rng, err := rec.NewRefRange()
+	require.NoError(t, err)
+	_, err = rng.NewStart()
+	require.NoError(t, err)
+	_, err = rng.NewEnd()
+	require.NoError(t, err)
+	require.NoError(t, enc.Encode(msg))
+}
 
 // dead_code skip-list precise retreat — ADR-0013 follow-up after
 // Falsifiability A passed empirically. The skip-list now has two
@@ -197,13 +231,19 @@ func TestDeadCode_InterfaceMethodAliveWhenLSPSeesRefs(t *testing.T) {
 		INSERT INTO node_defs VALUES ('Read', 'pkg/methods/MyType.Read');
 		INSERT INTO _lsp_defs VALUES
 			('pkg/methods/MyType.Read', 'Read', 'file:///pkg/mytype.go', 10, 5, 10, 9);
-		INSERT INTO _lsp_refs VALUES
-			('pkg/methods/MyType.Read', 'pkg/functions/Caller', 'Read',
-			 'file:///pkg/caller.go', 30, 11, 30, 15);
 	`)
 	require.NoError(t, err)
 
-	tg := &smellTestGraph{db: db}
+	// Post-mache-6bd4d8: binding-fidelity refs come from the sibling
+	// .bindings.capnp event log, not the legacy _lsp_refs SQL table.
+	// Write the equivalent record there.
+	writeBindingLogForTest(t, dbPath,
+		"pkg/methods/MyType.Read", // targetNodeId
+		"Read",                    // refToken
+		"pkg/functions/Caller",    // constructNodeId (referrer)
+		"file:///pkg/caller.go")   // refUri
+
+	tg := &smellTestGraph{db: db, path: dbPath}
 	handler := makeFindSmellsHandler(tg)
 
 	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
@@ -217,7 +257,7 @@ func TestDeadCode_InterfaceMethodAliveWhenLSPSeesRefs(t *testing.T) {
 
 	for _, f := range resp.Findings {
 		assert.NotEqual(t, "pkg/methods/MyType.Read", f.NodeID,
-			"alive-check binding arm matches the LSP ref → 'Read' is alive, not dead")
+			"alive-check binding arm matches the capnp ref → 'Read' is alive, not dead")
 	}
 }
 

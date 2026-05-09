@@ -3,13 +3,16 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/lsp"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -425,41 +428,82 @@ func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
 	return results, rows.Err()
 }
 
-// queryLSPRefs queries the _lsp_refs table for reference locations
-// of a symbol. Returns (nil, nil) if the table does not exist.
+// queryLSPRefs returns reference locations for a symbol.
 //
-// Per ADR-0013 Step 5 (mache-346d2b), prefers the direct ref_token
-// match when ley-line-open's post-Step-1 column is present. Legacy
-// LIKE fallback survives for pre-Step-1 .dbs.
+// Per mache-6bd4d8 (T8.8 mirror): the primary source is the sibling
+// `.bindings.capnp` event log, read via internal/lsp.ReadBindingLog.
+// `_lsp_refs` SQL columns were retired as the consumer-side contract
+// — capnp records carry the full (refToken, refUri, refRange) tuple
+// without a SQL JOIN, structurally precluding be6136-class column-
+// name-as-protocol disagreements.
+//
+// Falls back to the legacy SQL path (queryLSPRefsLegacy) only when
+// the sibling capnp log is absent AND the .db has the pre-Step-1
+// `_lsp_refs` schema (no ref_token column). That window is narrow:
+// post-LLO-T8.2 builds always emit the capnp log.
+//
+// Returns (nil, nil) when neither source has data for the symbol.
 func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
-	hasRefToken, err := tableHasColumn(qg, "_lsp_refs", "ref_token")
-	if err != nil {
-		return nil, fmt.Errorf("probe _lsp_refs schema: %w", err)
-	}
-	if !hasRefToken {
-		return queryLSPRefsLegacy(qg, symbol)
+	// Capnp source: requires the querier to know its dbPath
+	// (dbPathProvider opt-in, mache-190508 step 3). When available,
+	// it's the canonical source.
+	if dp, ok := qg.(dbPathProvider); ok {
+		if results, err := readLSPRefsFromCapnp(dp.DBPath(), symbol); err != nil {
+			return nil, err
+		} else if results != nil {
+			return results, nil
+		}
+		// Capnp present but no match for this symbol → empty slice
+		// vs nil distinction handled by readLSPRefsFromCapnp:
+		// nil means "no log to consult", []lspRefLocation{} means
+		// "log present, zero matches". Fall through only on nil.
 	}
 
-	rows, err := qg.QueryRefs(
-		`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
-		 FROM _lsp_refs
-		 WHERE ref_token = ?`,
-		symbol,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query _lsp_refs: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
+	// Legacy path: only fires when capnp is absent. queryLSPRefsLegacy
+	// handles both the post-Step-1 schema (with ref_token column) and
+	// the pre-Step-1 LIKE-suffix shape.
+	return queryLSPRefsLegacy(qg, symbol)
+}
 
-	var results []lspRefLocation
-	for rows.Next() {
-		var r lspRefLocation
-		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
+// readLSPRefsFromCapnp reads the sibling .bindings.capnp event log and
+// filters records by RefToken == symbol. Returns:
+//
+//	(nil, nil)      — no sibling log exists; caller should fall back
+//	([]..., nil)    — log exists; slice contains all matches (possibly empty)
+//	(nil, err)      — log exists but couldn't be read
+//
+// dbPath empty string is treated as "no source" (nil, nil).
+func readLSPRefsFromCapnp(dbPath, symbol string) ([]lspRefLocation, error) {
+	if dbPath == "" {
+		return nil, nil
+	}
+	logPath := lsp.SiblingBindingLogPath(dbPath)
+	records, err := lsp.ReadBindingLog(logPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read binding log %s: %w", logPath, err)
+	}
+
+	// Intentional empty (not nil) slice: "log present, zero matches"
+	// is meaningfully different from "no log to consult" — see the
+	// caller's nil-check.
+	results := []lspRefLocation{}
+	for _, r := range records {
+		if r.RefToken != symbol {
 			continue
 		}
-		results = append(results, r)
+		results = append(results, lspRefLocation{
+			NodeID:    r.TargetNodeID,
+			URI:       r.RefURI,
+			StartLine: int(r.RefRange.StartLine),
+			StartCol:  int(r.RefRange.StartColumn),
+			EndLine:   int(r.RefRange.EndLine),
+			EndCol:    int(r.RefRange.EndColumn),
+		})
 	}
-	return results, rows.Err()
+	return results, nil
 }
 
 // queryLSPDefsLegacy is the pre-Step-1 query path: node_id suffix

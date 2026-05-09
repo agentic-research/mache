@@ -38,14 +38,18 @@ func (q *sqlDBQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 // keep the legacy mention + SQL-binding view shape.
 func (q *sqlDBQuerier) DBPath() string { return q.path }
 
-func TestEnsureCanonicalViews_BindingFidelityWhenLSPColumnsPresent(t *testing.T) {
+// TestEnsureCanonicalViews_DefBindingFidelityFromLSPSQL pins the
+// def-side binding arm, which still reads from the SQL `_lsp_defs`
+// table (BindingRecord covers refs only — the def-side migration is
+// tracked separately, post-mache-6bd4d8). The ref-side binding arm
+// is exercised by TestLoadCapnpBindings_PopulatesViewFromSiblingLog,
+// which uses the sibling .bindings.capnp event log instead.
+func TestEnsureCanonicalViews_DefBindingFidelityFromLSPSQL(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "binding.db")
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	// Mention-fidelity tables (mache's own schema) + post-Step-1
-	// _lsp_* shape (referrer_node_id, ref_token, def_token).
 	_, err = db.Exec(`
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -56,34 +60,16 @@ func TestEnsureCanonicalViews_BindingFidelityWhenLSPColumnsPresent(t *testing.T)
 			def_start_line INTEGER NOT NULL, def_start_col INTEGER NOT NULL,
 			def_end_line INTEGER NOT NULL, def_end_col INTEGER NOT NULL
 		);
-		CREATE TABLE _lsp_refs (
-			node_id TEXT NOT NULL,
-			referrer_node_id TEXT,
-			ref_token TEXT NOT NULL DEFAULT '',
-			ref_uri TEXT NOT NULL,
-			ref_start_line INTEGER NOT NULL, ref_start_col INTEGER NOT NULL,
-			ref_end_line INTEGER NOT NULL, ref_end_col INTEGER NOT NULL
-		);
 
-		-- Mention-fidelity: tree-sitter saw 'Validate' textually.
 		INSERT INTO node_defs VALUES ('Validate', 'auth/functions/Validate');
-		INSERT INTO node_refs VALUES ('Validate', 'billing/functions/Charge');
-
-		-- Binding-fidelity: gopls resolved obj.Validate() at billing's
-		-- byte range to auth/functions/Validate. ref_token = 'Validate'
-		-- because that's the textual lemma at the source byte range.
 		INSERT INTO _lsp_defs VALUES
 			('auth/functions/Validate', 'Validate', 'file:///auth/auth.go', 10, 5, 10, 13);
-		INSERT INTO _lsp_refs VALUES
-			('auth/functions/Validate', 'billing/functions/Charge', 'Validate',
-			 'file:///billing/billing.go', 42, 11, 42, 19);
 	`)
 	require.NoError(t, err)
 
 	qg := &sqlDBQuerier{db: db}
 	require.NoError(t, ensureCanonicalViews(qg))
 
-	// v_defs: one mention row + one binding row.
 	type defRow struct {
 		token, nodeID, fidelity string
 	}
@@ -96,35 +82,11 @@ func TestEnsureCanonicalViews_BindingFidelityWhenLSPColumnsPresent(t *testing.T)
 		defs = append(defs, r)
 	}
 	require.NoError(t, rows.Close())
-	require.Len(t, defs, 2)
+	require.Len(t, defs, 2, "one mention row from node_defs + one binding row from _lsp_defs")
 	assert.Equal(t, "binding", defs[0].fidelity)
 	assert.Equal(t, "Validate", defs[0].token)
 	assert.Equal(t, "auth/functions/Validate", defs[0].nodeID)
 	assert.Equal(t, "mention", defs[1].fidelity)
-
-	// v_refs: one mention row + one binding row. Binding row carries
-	// the resolved target_node_id; mention row has NULL there.
-	type refRow struct {
-		referrer, token, fidelity string
-		target                    sql.NullString
-	}
-	rrows, err := db.Query(`SELECT referrer_node_id, token, target_node_id, fidelity FROM v_refs ORDER BY fidelity, token`)
-	require.NoError(t, err)
-	var refs []refRow
-	for rrows.Next() {
-		var r refRow
-		require.NoError(t, rrows.Scan(&r.referrer, &r.token, &r.target, &r.fidelity))
-		refs = append(refs, r)
-	}
-	require.NoError(t, rrows.Close())
-	require.Len(t, refs, 2)
-	assert.Equal(t, "binding", refs[0].fidelity)
-	assert.Equal(t, "billing/functions/Charge", refs[0].referrer)
-	assert.Equal(t, "Validate", refs[0].token)
-	assert.True(t, refs[0].target.Valid, "binding row must populate target_node_id")
-	assert.Equal(t, "auth/functions/Validate", refs[0].target.String)
-	assert.Equal(t, "mention", refs[1].fidelity)
-	assert.False(t, refs[1].target.Valid, "mention row's target_node_id is NULL")
 }
 
 func TestEnsureCanonicalViews_HandlesMissingLSPTables(t *testing.T) {
@@ -204,12 +166,18 @@ func TestEnsureCanonicalViews_HandlesLegacyLSPTables(t *testing.T) {
 	assert.Zero(t, bindingDefs, "legacy _lsp_defs (no def_token) must not produce binding rows")
 }
 
-func TestEnsureCanonicalViews_SkipsEmptyTokenRows(t *testing.T) {
-	// LSP_REFS_DDL declares ref_token NOT NULL DEFAULT ''. Rows where
-	// the producer couldn't extract the byte range (cross-repo refs,
-	// missing source) carry empty tokens. The view body filters those
+func TestEnsureCanonicalViews_SkipsEmptyDefTokenRows(t *testing.T) {
+	// _lsp_defs.def_token is NOT NULL DEFAULT ''. Rows where the
+	// producer couldn't extract a token (cross-repo defs, missing
+	// source) carry empty tokens. v_defs's binding arm filters them
 	// out — they'd contribute false matches in token-keyed rule
-	// queries (especially dead_code's mention fallback arm).
+	// queries (dead_code's mention fallback arm in particular).
+	//
+	// Post-mache-6bd4d8 this assertion is def-side only. The
+	// equivalent ref-side filter is now enforced at the producer
+	// boundary (LLO's BindingRecord generation skips empty refToken)
+	// — see TestReadBindingLog_RealLLOOutput which pins refToken
+	// non-empty as a producer invariant.
 	dbPath := filepath.Join(t.TempDir(), "empty_token.db")
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
@@ -225,37 +193,20 @@ func TestEnsureCanonicalViews_SkipsEmptyTokenRows(t *testing.T) {
 			def_start_line INTEGER NOT NULL, def_start_col INTEGER NOT NULL,
 			def_end_line INTEGER NOT NULL, def_end_col INTEGER NOT NULL
 		);
-		CREATE TABLE _lsp_refs (
-			node_id TEXT NOT NULL,
-			referrer_node_id TEXT,
-			ref_token TEXT NOT NULL DEFAULT '',
-			ref_uri TEXT NOT NULL,
-			ref_start_line INTEGER NOT NULL, ref_start_col INTEGER NOT NULL,
-			ref_end_line INTEGER NOT NULL, ref_end_col INTEGER NOT NULL
-		);
 
 		-- One def row with a real token (kept), one with empty (dropped).
 		INSERT INTO _lsp_defs VALUES
 			('pkg/Real',  'Real',  'file:///x.go', 1, 0, 1, 3),
 			('pkg/Empty', '',      'file:///x.go', 5, 0, 5, 3);
-
-		-- One ref with token + referrer (kept), one with empty token
-		-- (dropped), one with NULL referrer (dropped).
-		INSERT INTO _lsp_refs VALUES
-			('pkg/Real',  'pkg/Caller',  'Real',  'file:///c.go', 9, 0, 9, 3),
-			('pkg/Empty', 'pkg/Caller',  '',      'file:///c.go', 10, 0, 10, 3),
-			('pkg/Real',  NULL,           'Real',  'file:///c.go', 11, 0, 11, 3);
 	`)
 	require.NoError(t, err)
 
 	qg := &sqlDBQuerier{db: db}
 	require.NoError(t, ensureCanonicalViews(qg))
 
-	var bindingDefs, bindingRefs int
+	var bindingDefs int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_defs WHERE fidelity = 'binding'`).Scan(&bindingDefs))
-	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'binding'`).Scan(&bindingRefs))
 	assert.Equal(t, 1, bindingDefs, "only the row with non-empty def_token survives")
-	assert.Equal(t, 1, bindingRefs, "only the row with non-empty ref_token AND non-NULL referrer survives")
 }
 
 // TestLoadCapnpBindings_PopulatesViewFromSiblingLog asserts the
