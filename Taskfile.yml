@@ -144,16 +144,125 @@ tasks:
       # Total runtime ~3-8s depending on iteration count.
       #
       # Open with `go tool pprof .e2e/pprof/<tool>.cpu.pprof` for
-      # the interactive REPL, or `go tool pprof -svg <profile>` to
-      # render a CALL GRAPH (not a flamegraph — pprof's -svg emits
-      # a graph, not a flame view). Phase 3 will add a separate
-      # task for true flamegraphs via brendangregg/flamegraph.pl
-      # or `go tool pprof -http=:0` (which serves a flamegraph
-      # view alongside the call graph).
+      # the interactive REPL, or run `task flamegraphs` to render
+      # SVG flamegraphs (real flamegraphs, not call graphs — needs
+      # brendangregg's FlameGraph scripts on PATH; the task checks
+      # for them and prints install instructions if missing).
       - mkdir -p {{.ROOT_DIR}}/.e2e/pprof
       - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json E2E_CAPTURE_PPROF=1 go test -v -run 'TestE2E_AllMCPTools' ./cmd/
       - echo "manifest -> .e2e/tool-profile.json"
       - echo "pprof    -> .e2e/pprof/*.{cpu,heap}.pprof"
+      - echo "next     -> task flamegraphs"
+
+  flamegraphs:
+    desc: Render SVG flamegraphs from .e2e/pprof/*.pprof (mache-6b6da6 phase 3)
+    cmds:
+      # Real flamegraphs via brendangregg/FlameGraph scripts.
+      # `pprof -svg` emits a call graph, not a flamegraph (Copilot
+      # caught this on PR #361). The standard tool for static
+      # flamegraph SVGs is brendangregg/FlameGraph; not vendored
+      # here because it's CDDL+GPL perl into an Apache 2.0 Go
+      # project — license fragmentation isn't worth the convenience.
+      #
+      # Install:
+      #   macOS:  brew install flamegraph
+      #   Linux:  git clone https://github.com/brendangregg/FlameGraph
+      #           and add the dir to PATH
+      #
+      # Pipeline per profile:
+      #   go tool pprof -raw <profile>
+      #     | stackcollapse-go.pl    # collapse Go stacks
+      #     | flamegraph.pl --title  # render SVG
+      #     > <tool>.<kind>.svg
+      - cmd: |
+          if ! command -v flamegraph.pl >/dev/null 2>&1 || ! command -v stackcollapse-go.pl >/dev/null 2>&1; then
+            echo "flamegraph.pl + stackcollapse-go.pl required — install via:"
+            echo "  macOS: brew install flamegraph"
+            echo "  Linux: git clone https://github.com/brendangregg/FlameGraph && add to PATH"
+            exit 1
+          fi
+      - cmd: |
+          if [ ! -d {{.ROOT_DIR}}/.e2e/pprof ]; then
+            echo "no pprof artifacts in .e2e/pprof/ — run 'task profile-tools-pprof' first"
+            exit 1
+          fi
+      - cmd: |
+          cd {{.ROOT_DIR}}/.e2e/pprof
+          # CPU profiles: pprof -raw → stackcollapse-go.pl
+          # → flamegraph.pl. Some tools have 0 CPU samples (their
+          # 500-iteration loop completed under the 10ms sampler
+          # tick); skip those quietly with a placeholder note in
+          # the SVG so INDEX.md stays consistent.
+          for prof in *.cpu.pprof; do
+            [ -f "$prof" ] || continue
+            tool=$(basename "$prof" .cpu.pprof)
+            collapsed=$(go tool pprof -raw "$prof" 2>/dev/null | stackcollapse-go.pl 2>/dev/null)
+            if [ -z "$collapsed" ]; then
+              echo "<svg xmlns='http://www.w3.org/2000/svg'><text y='20'>$tool: no CPU samples (tool too fast for 100Hz sampler at this iteration count)</text></svg>" > "$tool.cpu.svg"
+              continue
+            fi
+            echo "$collapsed" \
+              | flamegraph.pl --title="$tool CPU" --colors=go \
+              > "$tool.cpu.svg"
+          done
+          # Heap profiles use a baseline + diff to filter out
+          # init-time allocation noise (jsonschema, sqlite,
+          # tree-sitter package init dominate the cumulative view
+          # otherwise — see Image #2 reading on PR #361). Each
+          # tool has two snapshots: <tool>.heap.baseline.pprof
+          # captured before the iteration loop, <tool>.heap.pprof
+          # captured after.
+          #
+          # Use `-alloc_space -base=baseline` to surface BYTES
+          # ALLOCATED DURING THE LOOP (column 2 of the 4-column
+          # heap raw format). `-inuse_space` would show "live at
+          # snapshot but not live at baseline" which is near-zero
+          # for short loops where allocs get GC'd before the
+          # second snapshot — the real signal is alloc_space.
+          #
+          # Pprof's raw still emits the 4-column format even with
+          # the -alloc_space filter; sed drops cols 3-4 so
+          # stackcollapse-go.pl's 2-column regex matches.
+          for prof in *.heap.pprof; do
+            [ -f "$prof" ] || continue
+            # Skip the baseline files — only iterate the AFTER snapshots.
+            case "$prof" in *.heap.baseline.pprof) continue ;; esac
+            tool=$(basename "$prof" .heap.pprof)
+            baseline="$tool.heap.baseline.pprof"
+            if [ ! -f "$baseline" ]; then
+              echo "<svg xmlns='http://www.w3.org/2000/svg'><text y='20'>$tool: missing baseline; cannot compute heap delta</text></svg>" > "$tool.heap.svg"
+              continue
+            fi
+            collapsed=$(
+              go tool pprof -alloc_space -base="$baseline" -raw "$prof" 2>/dev/null \
+                | sed -E 's/^( *[0-9]+ +[0-9]+) +[0-9]+ +[0-9]+:/\1:/' \
+                | stackcollapse-go.pl 2>/dev/null
+            )
+            if [ -z "$collapsed" ]; then
+              echo "<svg xmlns='http://www.w3.org/2000/svg'><text y='20'>$tool: no heap delta (loop allocations were fully GC'd)</text></svg>" > "$tool.heap.svg"
+              continue
+            fi
+            echo "$collapsed" \
+              | flamegraph.pl --title="$tool heap delta (alloc_space, baseline-subtracted)" --colors=mem --countname=bytes \
+              > "$tool.heap.svg"
+          done
+      - cmd: |
+          cd {{.ROOT_DIR}}/.e2e
+          {
+            echo "# E2E tool flamegraphs"
+            echo ""
+            echo "Generated by \`task flamegraphs\` from .e2e/pprof/*.pprof artifacts."
+            echo "See [tool-profile.json](tool-profile.json) for the per-tool manifest."
+            echo ""
+            echo "| Tool | CPU | Heap | Profile |"
+            echo "|------|-----|------|---------|"
+            for prof in pprof/*.cpu.pprof; do
+              tool=$(basename "$prof" .cpu.pprof)
+              echo "| $tool | [cpu.svg](pprof/$tool.cpu.svg) | [heap.svg](pprof/$tool.heap.svg) | [pprof](pprof/$tool.cpu.pprof) |"
+            done
+          } > INDEX.md
+      - echo "flamegraphs -> .e2e/pprof/*.{cpu,heap}.svg"
+      - echo "index       -> .e2e/INDEX.md"
 
   fuzz-gen:
     desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target

@@ -99,3 +99,8 @@ tools/KNOWN_ISSUES.md
 
 # E2E tool-profile harness output (mache-6b6da6)
 /.e2e/
+
+# Playwright MCP scratch (used for inspecting flamegraph SVGs)
+/.playwright-mcp/
+/architecture-heap-rendered.png
+/flamegraph-architecture-heap.png

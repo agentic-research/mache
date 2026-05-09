@@ -296,17 +296,40 @@ func profileTool(t *testing.T, name string, h server.ToolHandlerFunc, args map[s
 	return p
 }
 
-// capturePprof writes <name>.cpu.pprof + <name>.heap.pprof under
-// opts.dir. CPU profile spans a K-iteration loop; heap is a single
-// snapshot taken after the loop. Sets p.CPUProfile / p.HeapProfile
-// paths on the toolProfile so the manifest links them.
+// capturePprof writes:
+//
+//   - <name>.cpu.pprof — CPU profile over the iteration loop
+//   - <name>.heap.baseline.pprof — heap snapshot BEFORE the loop
+//   - <name>.heap.pprof — heap snapshot AFTER the loop
+//
+// The two heap snapshots let consumers (the flamegraphs task, any
+// regression detector) compute the delta via `pprof -base=baseline`.
+// Without that, heap profiles show cumulative allocation since
+// process start — dominated by init-time noise (jsonschema, sqlite,
+// tree-sitter package init) that buries the actual per-tool signal.
+//
+// Sets p.CPUProfile / p.HeapProfile (the AFTER snapshot) on the
+// toolProfile. The baseline path is derived from HeapProfile by
+// the consumer (sibling .heap.baseline.pprof file).
 //
 // Errors are logged via t.Logf but don't fail the test — the
 // harness's primary job is the latency/alloc measurement; pprof
-// is a bonus. A slot machine I/O failure shouldn't break the
-// observability story.
+// is a bonus. An I/O failure shouldn't break the observability
+// story.
 func capturePprof(t *testing.T, name string, h server.ToolHandlerFunc, args map[string]any, opts pprofOpts, p *toolProfile) {
 	t.Helper()
+
+	// Baseline heap snapshot BEFORE the iteration loop. GC first
+	// so the snapshot reflects steady-state live allocations
+	// rather than pending garbage from previous tools.
+	runtime.GC()
+	baselinePath := filepath.Join(opts.dir, name+".heap.baseline.pprof")
+	if baselineFile, err := os.Create(baselinePath); err == nil {
+		_ = pprof.WriteHeapProfile(baselineFile)
+		_ = baselineFile.Close()
+	} else {
+		t.Logf("pprof: could not create %s: %v", baselinePath, err)
+	}
 
 	// CPU profile over K iterations.
 	cpuPath := filepath.Join(opts.dir, name+".cpu.pprof")
