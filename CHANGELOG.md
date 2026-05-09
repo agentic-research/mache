@@ -17,7 +17,7 @@ perf hygiene pass.
   `.ctrl` (control block) and `.arena` headers bump VERSION 1 → 2.
   Pre-v2 files are rejected with a clear error rather than silently
   misinterpreted. Pairs with **ley-line-open v0.2.0** — these must
-  ship together; mixing v0.7.x mache with v0.2.0 LLO (or vice versa)
+  ship together; mixing v0.7.x mache with v0.2.0 ley-line-open (or vice versa)
   fails loudly on first read. (#365, mache-1afff0)
 
   Public Go API changes:
@@ -55,7 +55,7 @@ perf hygiene pass.
   Memoized snapshots invalidated on `AddDef` / `AddRef` /
   `DeleteFileNodes`. (#362, mache-6b6da6 phase 3)
 - **ADR-0014** documenting mache's role in the wider ART constellation
-  as a structural-observation **consumer/projector** of LLO's capnp
+  as a structural-observation **consumer/projector** of ley-line-open's capnp
   event-log canonical encoding (Σ-anchored). The `.db` projection is
   derivative; the event log is the contract. (#364)
 - **Falsifiability harnesses.** Skip-list ablation experiment +
@@ -82,7 +82,7 @@ perf hygiene pass.
 - **ADR-0013** — refs/defs canonical schema (fidelity poset). (#339)
 - **ADR-0014** — mache in the constellation. (#364)
 - **ADR-0012 status update** — steps 1–3 shipped, step 4 (CGO removal)
-  gated on `mache-33dc5f` (LLO release-bundling). (#316)
+  gated on `mache-33dc5f` (ley-line-open release-bundling). (#316)
 - **README + ARCHITECTURE** capture T8 canonical views + capnp event
   log + e2e harness + cache memoization. (#359, #363)
 
@@ -105,7 +105,7 @@ perf hygiene pass.
 ### Not in this release (queued for next)
 
 - **CGO tree-sitter removal** (mache-36d961, ADR-0012 step 4). Gated on
-  `mache-33dc5f` (release-bundling the LLO `leyline` binary so mache
+  `mache-33dc5f` (release-bundling the ley-line-open `leyline` binary so mache
   can hard-fail when leyline isn't available, instead of falling back
   to in-process CGO). The migration inventory is filed on
   `mache-37ae8b` and is shovel-ready: 16 production sources to delete,
