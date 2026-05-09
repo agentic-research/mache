@@ -120,13 +120,23 @@ func ReadBindingLog(path string) ([]Binding, error) {
 // the consumer can short-circuit (e.g. early-exit on first match).
 // Returning a non-nil error from fn aborts iteration; the error is
 // propagated up wrapped with the record index for diagnostics.
+//
+// Decode and projection errors are wrapped with both the record
+// index AND the file path so streaming callers can identify which
+// log failed when they're consuming several. Callback (fn) errors
+// are wrapped with the record index only — the caller already
+// knows what they passed in, but they don't necessarily know the
+// record number where they aborted.
 func IterateBindingLog(path string, fn func(Binding) error) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open binding log %q: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
-	return iterateDecoder(f, fn)
+	if err := iterateDecoder(f, fn); err != nil {
+		return fmt.Errorf("binding log %q: %w", path, err)
+	}
+	return nil
 }
 
 func iterateDecoder(r io.Reader, fn func(Binding) error) error {
@@ -148,7 +158,7 @@ func iterateDecoder(r io.Reader, fn func(Binding) error) error {
 			return fmt.Errorf("project record %d: %w", i, err)
 		}
 		if err := fn(b); err != nil {
-			return err
+			return fmt.Errorf("callback at record %d: %w", i, err)
 		}
 	}
 }

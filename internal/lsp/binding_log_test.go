@@ -2,7 +2,6 @@ package lsp_test
 
 import (
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -265,8 +264,3 @@ func TestReadBindingLog_RealLLOOutput(t *testing.T) {
 	}
 	t.Logf("ReadBindingLog: %d records from %s", len(got), logPath)
 }
-
-// Sanity check that the reader doesn't accidentally consume from
-// arbitrary readers without buffering. Not a functional requirement;
-// just a tripwire for an obvious foot-gun.
-var _ io.Reader = (*os.File)(nil)
