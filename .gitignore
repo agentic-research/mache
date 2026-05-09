@@ -96,3 +96,6 @@ tools/KNOWN_ISSUES.md
 
 # macOS Finder metadata
 .DS_Store
+
+# E2E tool-profile harness output (mache-6b6da6)
+/.e2e/
