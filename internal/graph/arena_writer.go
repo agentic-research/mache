@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/internal/control"
+	"github.com/zeebo/blake3"
 )
 
 // ArenaFlusher writes a serialized .db file into the double-buffered arena
@@ -155,6 +156,16 @@ func (f *ArenaFlusher) flushInternal() error {
 		return fmt.Errorf("read arena header: %w", err)
 	}
 
+	// Reject legacy arenas before writing — flushing into a v1 arena
+	// would leave its Version byte at 1, producing a file that new
+	// readers reject. Loud failure here beats silent corruption.
+	if header.Magic != ArenaMagic {
+		return fmt.Errorf("flush: invalid arena magic 0x%x (file is not a mache arena)", header.Magic)
+	}
+	if header.Version != ArenaVersion {
+		return fmt.Errorf("flush: unsupported arena version: file is v%d, expected v%d — recreate this arena with a current writer", header.Version, ArenaVersion)
+	}
+
 	// Calculate buffer geometry
 	bufferSize := (info.Size() - ArenaHeaderSize) / 2
 	if int64(len(dbBytes)) > bufferSize {
@@ -213,9 +224,15 @@ func (f *ArenaFlusher) flushInternal() error {
 		}
 	}
 
-	// Flip header: active_buffer ^= 1, sequence++
+	// Flip header: active_buffer ^= 1, sequence++, record exact data size
+	// so readers can hash buf[..DataSize] without parsing SQLite internals.
+	// Force Version to the current expected value so readers can't see a
+	// stale v1 byte even if the file on disk somehow drifted.
+	header.Magic = ArenaMagic
+	header.Version = ArenaVersion
 	header.ActiveBuffer = inactive
 	header.Sequence++
+	header.DataSize = uint64(len(dbBytes))
 	if err := WriteArenaHeader(af, header); err != nil {
 		return fmt.Errorf("write arena header: %w", err)
 	}
@@ -224,9 +241,13 @@ func (f *ArenaFlusher) flushInternal() error {
 		return fmt.Errorf("sync arena: %w", err)
 	}
 
-	// Update control block so ley-line detects the change
+	// Publish the new payload's BLAKE3 root atomically alongside the
+	// path+size update. Readers polling current_root for hot-swap
+	// detection will see this transition; SetArena (no root) would
+	// have advertised a stale root for a changed payload.
 	if f.ctrl != nil {
-		if err := f.ctrl.SetArena(f.arenaPath, uint64(info.Size()), header.Sequence); err != nil {
+		root := blake3.Sum256(dbBytes)
+		if err := f.ctrl.SetArenaWithRoot(f.arenaPath, uint64(info.Size()), root); err != nil {
 			return fmt.Errorf("update control block: %w", err)
 		}
 	}
