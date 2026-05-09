@@ -284,6 +284,14 @@ func (g *SQLiteGraph) SetCallExtractor(fn CallExtractor) {
 	g.extractor = fn
 }
 
+// DBPath returns the source .db file path. Implements the cmd-side
+// dbPathProvider opt-in (see cmd/serve_find_smells.go) so canonical-
+// view setup can locate the sibling .bindings.capnp event log next
+// to this .db (mache-190508 step 3).
+func (g *SQLiteGraph) DBPath() string {
+	return g.dbPath
+}
+
 // AddDef records that a construct (dirID) defines the given token.
 func (g *SQLiteGraph) AddDef(token, dirID string) error {
 	g.pendingMu.Lock()

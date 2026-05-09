@@ -16,11 +16,19 @@ import (
 // interface runSmellRule / missingTables / populateSnippets need.
 // Lets the CLI run rules against any SQLite db (mache-built or
 // LLO-built) without touching the graph stack.
-type dbQuerier struct{ db *sql.DB }
+type dbQuerier struct {
+	db   *sql.DB
+	path string // mache-190508 step 3: source for sibling .bindings.capnp lookup
+}
 
 func (q *dbQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return q.db.Query(query, args...)
 }
+
+// DBPath implements the dbPathProvider opt-in (cmd/serve_find_smells.go)
+// so canonical-view setup can find the sibling .bindings.capnp event
+// log next to this .db.
+func (q *dbQuerier) DBPath() string { return q.path }
 
 var (
 	findSmellsDBPath    string
@@ -74,7 +82,14 @@ This tool is observability, not a gate. It never exits non-zero on findings.`,
 		if err := db.Ping(); err != nil {
 			return cliExit(4, fmt.Errorf("ping db: %w", err))
 		}
-		qg := &dbQuerier{db: db}
+		// SetMaxOpenConns(1) pins all queries to a single connection so
+		// the TEMP _capnp_binding_refs table created by ensureCanonicalViews
+		// + LoadCapnpBindings stays visible to subsequent queries.
+		// modernc/sqlite spreads queries across the pool by default,
+		// which would put the TEMP-table population on a connection
+		// the rule SELECT never sees.
+		db.SetMaxOpenConns(1)
+		qg := &dbQuerier{db: db, path: findSmellsDBPath}
 
 		var rule *SmellRule
 		for i := range smellRegistry {
