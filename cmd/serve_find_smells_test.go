@@ -1929,6 +1929,118 @@ func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
 		"Dispatcher (production) is flagged; setup (test helper in *_test.go) is skipped")
 }
 
+// TestFindSmells_FanOutSkewSkipsProjectionFunctions asserts that
+// functions following the projection-naming convention
+// (`*FromRecord`, `*FromMessage`, `*FromCapnp`, `*ToRecord`,
+// `*ToMessage`, `*ToCapnp`, `Project*`) are NOT flagged regardless
+// of fan-out. Capnp / protobuf generators emit one accessor per
+// field; a function projecting an N-field record makes N method
+// calls on one receiver — that's structural translation, not
+// orchestration.
+//
+// Surfaced by mache-190508 step 2 (PR #354): bindingFromRecord
+// projects the BindingRecord capnp struct's 7 fields + nested
+// Range's 6 fields onto Go-native types. 18 distinct callees
+// against a project mean of ~3.5; the rule fired despite the
+// function being trivially mechanical.
+func TestFindSmells_FanOutSkewSkipsProjectionFunctions(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions',                              '',                          'functions',         1, 0, '',                ''),
+		  -- One representative of each name shape covered by the new
+		  -- exemption. Keeping the count low so the project mean
+		  -- stays below the negative control's threshold.
+		  ('functions/bindingFromRecord',            'functions',                 'bindingFromRecord', 1, 0, 'binding_log.go',  ''),
+		  ('functions/bindingFromRecord/source',     'functions/bindingFromRecord','source',           0, 0, 'binding_log.go',  ''),
+		  ('functions/decodeFromMessage',            'functions',                 'decodeFromMessage', 1, 0, 'codec.go',        ''),
+		  ('functions/decodeFromMessage/source',     'functions/decodeFromMessage','source',           0, 0, 'codec.go',        ''),
+		  ('functions/recordFromCapnp',              'functions',                 'recordFromCapnp',   1, 0, 'shim.go',         ''),
+		  ('functions/recordFromCapnp/source',       'functions/recordFromCapnp', 'source',            0, 0, 'shim.go',         ''),
+		  ('functions/ProjectAst',                   'functions',                 'ProjectAst',        1, 0, 'project.go',      ''),
+		  ('functions/ProjectAst/source',            'functions/ProjectAst',      'source',            0, 0, 'project.go',      ''),
+		  -- Negative control: production code with the same fan-out
+		  -- that should still be flagged.
+		  ('functions/Dispatcher',                   'functions',                 'Dispatcher',        1, 0, 'dispatcher.go',   ''),
+		  ('functions/Dispatcher/source',            'functions/Dispatcher',      'source',            0, 0, 'dispatcher.go',   '');
+
+		-- Each projection function and the negative control gets 12
+		-- distinct callees. With enough tiny callers, the project mean
+		-- stays around ~3.5 so 12 trips the 3× threshold for everyone
+		-- — only the naming-convention skip-list saves the projections.
+		INSERT INTO node_refs VALUES
+		  ('a01','functions/bindingFromRecord/source'),('a02','functions/bindingFromRecord/source'),
+		  ('a03','functions/bindingFromRecord/source'),('a04','functions/bindingFromRecord/source'),
+		  ('a05','functions/bindingFromRecord/source'),('a06','functions/bindingFromRecord/source'),
+		  ('a07','functions/bindingFromRecord/source'),('a08','functions/bindingFromRecord/source'),
+		  ('a09','functions/bindingFromRecord/source'),('a10','functions/bindingFromRecord/source'),
+		  ('a11','functions/bindingFromRecord/source'),('a12','functions/bindingFromRecord/source');
+		INSERT INTO node_refs VALUES
+		  ('b01','functions/decodeFromMessage/source'),('b02','functions/decodeFromMessage/source'),
+		  ('b03','functions/decodeFromMessage/source'),('b04','functions/decodeFromMessage/source'),
+		  ('b05','functions/decodeFromMessage/source'),('b06','functions/decodeFromMessage/source'),
+		  ('b07','functions/decodeFromMessage/source'),('b08','functions/decodeFromMessage/source'),
+		  ('b09','functions/decodeFromMessage/source'),('b10','functions/decodeFromMessage/source'),
+		  ('b11','functions/decodeFromMessage/source'),('b12','functions/decodeFromMessage/source');
+		INSERT INTO node_refs VALUES
+		  ('c01','functions/recordFromCapnp/source'),('c02','functions/recordFromCapnp/source'),
+		  ('c03','functions/recordFromCapnp/source'),('c04','functions/recordFromCapnp/source'),
+		  ('c05','functions/recordFromCapnp/source'),('c06','functions/recordFromCapnp/source'),
+		  ('c07','functions/recordFromCapnp/source'),('c08','functions/recordFromCapnp/source'),
+		  ('c09','functions/recordFromCapnp/source'),('c10','functions/recordFromCapnp/source'),
+		  ('c11','functions/recordFromCapnp/source'),('c12','functions/recordFromCapnp/source');
+		INSERT INTO node_refs VALUES
+		  ('g01','functions/ProjectAst/source'),('g02','functions/ProjectAst/source'),
+		  ('g03','functions/ProjectAst/source'),('g04','functions/ProjectAst/source'),
+		  ('g05','functions/ProjectAst/source'),('g06','functions/ProjectAst/source'),
+		  ('g07','functions/ProjectAst/source'),('g08','functions/ProjectAst/source'),
+		  ('g09','functions/ProjectAst/source'),('g10','functions/ProjectAst/source'),
+		  ('g11','functions/ProjectAst/source'),('g12','functions/ProjectAst/source');
+
+		-- Negative control: Dispatcher (no convention name, production
+		-- code) gets the same 12 callees and MUST still be flagged.
+		INSERT INTO node_refs VALUES
+		  ('h01','functions/Dispatcher/source'),('h02','functions/Dispatcher/source'),
+		  ('h03','functions/Dispatcher/source'),('h04','functions/Dispatcher/source'),
+		  ('h05','functions/Dispatcher/source'),('h06','functions/Dispatcher/source'),
+		  ('h07','functions/Dispatcher/source'),('h08','functions/Dispatcher/source'),
+		  ('h09','functions/Dispatcher/source'),('h10','functions/Dispatcher/source'),
+		  ('h11','functions/Dispatcher/source'),('h12','functions/Dispatcher/source');
+
+		-- Tiny callers to bring project mean low enough that 12 trips
+		-- the 3× threshold (mean ~3.3 with 5 high + 15 tiny callers).
+		INSERT INTO node_refs VALUES
+		  ('z01','functions/n01'),('z02','functions/n02'),('z03','functions/n03'),
+		  ('z04','functions/n04'),('z05','functions/n05'),('z06','functions/n06'),
+		  ('z07','functions/n07'),('z08','functions/n08'),('z09','functions/n09'),
+		  ('z10','functions/n10'),('z11','functions/n11'),('z12','functions/n12'),
+		  ('z13','functions/n13'),('z14','functions/n14'),('z15','functions/n15');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
+		"Only Dispatcher (no convention name) is flagged; the seven projection functions are skipped via name patterns")
+}
+
 // TestFindSmells_UntestedFunctionAcceptsTestCallCoverage asserts
 // that a function called from inside any Test*/Benchmark*/Example*/
 // Fuzz* construct's source is treated as covered, even without a
