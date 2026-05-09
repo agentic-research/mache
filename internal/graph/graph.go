@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -140,6 +141,26 @@ type MemoryStore struct {
 	cache    *ContentCache
 	refs     map[string][]string // token -> []nodeID (callers: who calls token)
 	defs     map[string][]string // token -> []construct_dir_id (definitions: where token is defined)
+
+	// Memoized deep-copy snapshots of refs and defs.
+	//
+	// Without this, every DefsMap/RefsMap call re-allocates the
+	// whole map + a new slice per entry. find_smells e2e profiling
+	// (mache-6b6da6 phase 3) showed `MemoryStore.DefsMap` at 52% of
+	// `get_impact`'s heap delta and 32% of `get_overview`'s — the
+	// copies were dominating these tools' allocation budgets even
+	// on a 4-package toy fixture.
+	//
+	// Snapshots are populated lazily on first access after each
+	// invalidation (under RLock) and stored atomically. AddDef /
+	// AddRef / DeleteFileNodes invalidate by storing nil before
+	// releasing their write lock; the next reader rebuilds. The
+	// returned map is shared across concurrent readers — callers
+	// must NOT mutate (every existing caller is read-only;
+	// LookupDef is the right API for callers who want to mutate
+	// the result).
+	defsSnap atomic.Pointer[map[string][]string]
+	refsSnap atomic.Pointer[map[string][]string]
 
 	// Roaring bitmap index: file path → set of node internal IDs.
 	// Enables O(k) DeleteFileNodes and ShiftOrigins instead of O(N) full scan.
@@ -444,6 +465,8 @@ func (s *MemoryStore) AddRef(token, nodeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refs[token] = append(s.refs[token], nodeID)
+	// Invalidate the RefsMap snapshot — see RefsMap doc.
+	s.refsSnap.Store(nil)
 	return nil
 }
 
@@ -459,18 +482,39 @@ func (s *MemoryStore) AddDef(token, dirID string) error {
 	copy(newSlice, existing)
 	newSlice[len(existing)] = dirID
 	s.defs[token] = newSlice
+	// Invalidate the DefsMap snapshot — the next reader rebuilds.
+	// Done under the write lock so the invalidation cannot race
+	// with a concurrent DefsMap-snapshot store (which holds RLock,
+	// blocking this Lock until the store completes).
+	s.defsSnap.Store(nil)
 	return nil
 }
 
 // RefsMap returns a snapshot of the token→nodeIDs reference map.
 // Used by community detection to build the co-reference graph.
+//
+// Memoized: the first call after an invalidation builds the deep-
+// copy snapshot; subsequent calls return the same instance until
+// the next AddRef / DeleteFileNodes. Callers MUST treat the
+// returned map as read-only — mutating it corrupts the cache for
+// the next caller. Every existing caller (community detection,
+// composite graph wiring) is read-only.
 func (s *MemoryStore) RefsMap() map[string][]string {
+	if cached := s.refsSnap.Load(); cached != nil {
+		return *cached
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	// Re-check under RLock — another goroutine may have built the
+	// snapshot between our Load above and the lock acquisition.
+	if cached := s.refsSnap.Load(); cached != nil {
+		return *cached
+	}
 	cp := make(map[string][]string, len(s.refs))
 	for k, v := range s.refs {
 		cp[k] = append([]string(nil), v...)
 	}
+	s.refsSnap.Store(&cp)
 	return cp
 }
 
@@ -479,13 +523,25 @@ func (s *MemoryStore) RefsMap() map[string][]string {
 // search role=definition — anywhere callers need to iterate. The
 // anchored-exact path in find_definition should use LookupDef
 // instead to avoid the O(N) snapshot copy.
+//
+// Memoized — see RefsMap for the cache contract. Same read-only
+// constraint applies. Callers that need a mutable copy should
+// either deep-copy the result themselves or use LookupDef for
+// per-token lookups.
 func (s *MemoryStore) DefsMap() map[string][]string {
+	if cached := s.defsSnap.Load(); cached != nil {
+		return *cached
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if cached := s.defsSnap.Load(); cached != nil {
+		return *cached
+	}
 	cp := make(map[string][]string, len(s.defs))
 	for k, v := range s.defs {
 		cp[k] = append([]string(nil), v...)
 	}
+	s.defsSnap.Store(&cp)
 	return cp
 }
 
@@ -638,6 +694,13 @@ func (s *MemoryStore) deleteFileNodes(filePath string) {
 			s.defs[token] = filtered
 		}
 	}
+
+	// Invalidate both snapshots — DeleteFileNodes can mutate either
+	// or both maps. Done at end so any partial-write window doesn't
+	// surface to a concurrent reader; the AddDef/AddRef invariant
+	// (write lock held during invalidate) holds here too.
+	s.defsSnap.Store(nil)
+	s.refsSnap.Store(nil)
 }
 
 // ShiftOrigins adjusts StartByte/EndByte for all nodes from filePath whose
