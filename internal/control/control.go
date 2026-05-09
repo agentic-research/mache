@@ -122,8 +122,12 @@ func (c *Controller) GetCurrentRoot() [32]byte {
 	return out
 }
 
-// GetArenaPath returns the path to the currently active arena.
+// GetArenaPath returns the path to the currently active arena. The
+// Acquire-load on the sync atom fences the subsequent path-byte reads
+// against the writer's Release-store, so concurrent SetArena callers
+// can't be observed mid-update (zeroed prefix, partial copy).
 func (c *Controller) GetArenaPath() string {
+	atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offSync])))
 	b := c.data[offArenaPath : offArenaPath+arenaPathLen]
 	for i, v := range b {
 		if v == 0 {
@@ -156,7 +160,7 @@ func (c *Controller) SetArena(path string, size uint64) error {
 	}
 	copy(pathBuf, path)
 
-	*(*uint64)(unsafe.Pointer(&c.data[offArenaSize])) = size
+	atomic.StoreUint64((*uint64)(unsafe.Pointer(&c.data[offArenaSize])), size)
 
 	atomic.AddUint64((*uint64)(unsafe.Pointer(&c.data[offSync])), 1)
 	return nil
@@ -177,7 +181,7 @@ func (c *Controller) SetArenaWithRoot(path string, size uint64, root [32]byte) e
 	}
 	copy(pathBuf, path)
 
-	*(*uint64)(unsafe.Pointer(&c.data[offArenaSize])) = size
+	atomic.StoreUint64((*uint64)(unsafe.Pointer(&c.data[offArenaSize])), size)
 
 	copy(c.data[offCurrentRoot:offCurrentRoot+currentRootLen], root[:])
 

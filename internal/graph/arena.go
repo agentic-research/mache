@@ -157,8 +157,14 @@ func ExtractActiveDB(arenaPath string) (string, error) {
 		return "", err
 	}
 
-	// Calculate size (half of arena minus header)
-	size := (info.Size() - ArenaHeaderSize) / 2
+	// Prefer the explicit DataSize from the header — it's the exact
+	// payload length the writer published. Fall back to the full
+	// half-buffer only when DataSize is missing or out of range.
+	bufferSize := (info.Size() - ArenaHeaderSize) / 2
+	size := int64(header.DataSize)
+	if size <= 0 || size > bufferSize {
+		size = bufferSize
+	}
 
 	// Create temp file — remove on any error after this point.
 	tmp, err := os.CreateTemp("", "mache-arena-*.db")

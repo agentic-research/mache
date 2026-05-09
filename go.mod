@@ -14,6 +14,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/willscott/go-nfs v0.0.4
+	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/sys v0.43.0
 	golang.org/x/text v0.36.0
 	modernc.org/sqlite v1.50.0
@@ -32,6 +33,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
