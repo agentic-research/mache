@@ -611,7 +611,7 @@ var smellRegistry = []SmellRule{
 	},
 	{
 		ID:          "fan_out_skew",
-		Description: "Constructs whose distinct callee count via node_refs is at least 5 AND more than 3× the project mean — likely god-functions / orchestrators that touch too many neighbors. Metric is the fan-out count, sorted descending. Language-agnostic (every leyline parser populates node_refs by token). Skip-listed: testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (per-construct) and Go test files *_test.go (per-file) — tests and test helpers are expected to call many things, no signal there. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded — generated dispatchers naturally have wide fan-out. **Projection-function naming convention** is also exempt: names matching `*FromRecord`, `*FromMessage`, `*FromCapnp`, `*ToRecord`, `*ToMessage`, `*ToCapnp`, or `Project*` are mechanical translators between wire formats and Go-native types. Capnp's accessor-per-field API forces N calls to project N fields onto one receiver — that's structurally required, not a code-smell. Adopt the convention for new projection functions to suppress this signal at the call site rather than at the rule level. The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body. Pairs with get_communities for 'this construct sprawls across community boundaries' analysis.",
+		Description: "Constructs whose distinct callee QUALIFIER count via v_refs is at least 5 AND more than 3× the project mean — god-functions / orchestrators that touch too many distinct receiver types or packages. Metric is COUNT(DISTINCT COALESCE(NULLIF(qualifier, ''), token)) per referrer, sorted descending. Qualifier comes from LLO's BindingRecord (T8.7) — the LHS of the selector_expression at the ref site, so projection functions calling N methods on one receiver score 1 (one qualifier) instead of N (N tokens). Pre-T8.7 records and tree-sitter mention rows have empty qualifier; the COALESCE falls back to token, preserving the pre-T8.7 metric on legacy .dbs. Language-agnostic. Skip-listed: testing-framework prefixes Test*/Benchmark*/Example*/Fuzz* (per-construct) and Go test files *_test.go (per-file). Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded — generated dispatchers naturally have wide fan-out. The previous projection-function naming-pattern exemption (mache-6c0d07's predecessor #355) is now structurally subsumed by the qualifier metric and was retired. The 3× threshold and 5-call floor are heuristics; adjust by editing the rule body.",
 		Requires:    []string{"node_refs", "nodes"},
 		ScopeColumn: "COALESCE(n.source_file, '')",
 		Query: `
@@ -624,14 +624,21 @@ var smellRegistry = []SmellRule{
 				-- file-level refs to a 'caller' that isn't a real
 				-- construct, inflating fan_out_skew with virtual rows.
 				--
-				-- Per ADR-0013 Step 4: query v_refs. The referrer column
-				-- in the view is referrer_node_id (was node_id on the
-				-- raw table). Counting DISTINCT token preserves today's
-				-- semantics; once Step 1 ships LSP rows, the metric
-				-- could refine to COUNT(DISTINCT COALESCE(target_node_id,
-				-- token)) for binding-aware deduplication, but that's a
-				-- semantic shift left for a follow-up bead.
-				SELECT referrer_node_id AS caller_id, COUNT(DISTINCT token) AS n
+				-- Metric: COUNT DISTINCT qualifier per referrer.
+				-- Qualifier is the LHS of the selector_expression at
+				-- the ref site (per LLO BindingRecord.qualifier, T8.7).
+				-- Counting distinct qualifiers — receiver/package
+				-- origins — distinguishes orchestration (calls across
+				-- many packages) from projection (N method calls on
+				-- one receiver, N distinct tokens but ONE qualifier).
+				--
+				-- Pre-T8.7 records and tree-sitter mention rows have
+				-- empty qualifier; the COALESCE falls back to token
+				-- so the metric degrades gracefully to the pre-T8.7
+				-- behavior on those records (no regression for legacy
+				-- .dbs without the qualifier field).
+				SELECT referrer_node_id AS caller_id,
+				       COUNT(DISTINCT COALESCE(NULLIF(qualifier, ''), token)) AS n
 				FROM v_refs
 				WHERE referrer_node_id NOT LIKE '_file_level:%%'
 				GROUP BY referrer_node_id
@@ -662,21 +669,6 @@ var smellRegistry = []SmellRule{
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Benchmark%%'
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Example%%'
 			  AND COALESCE(ctor.name, '') NOT LIKE 'Fuzz%%'
-			  -- Projection-function naming convention — mechanical
-			  -- wire-format ↔ Go-native translators. Capnp / protobuf
-			  -- generators produce one accessor per field, so a
-			  -- function projecting an N-field record makes N calls
-			  -- on one receiver. That's not orchestration; it's
-			  -- structural translation. Adopt the convention for new
-			  -- projection functions to suppress this signal at the
-			  -- call site (and have a self-documenting name).
-			  AND COALESCE(ctor.name, '') NOT LIKE '%%FromRecord'
-			  AND COALESCE(ctor.name, '') NOT LIKE '%%FromMessage'
-			  AND COALESCE(ctor.name, '') NOT LIKE '%%FromCapnp'
-			  AND COALESCE(ctor.name, '') NOT LIKE '%%ToRecord'
-			  AND COALESCE(ctor.name, '') NOT LIKE '%%ToMessage'
-			  AND COALESCE(ctor.name, '') NOT LIKE '%%ToCapnp'
-			  AND COALESCE(ctor.name, '') NOT LIKE 'Project%%'
 			  -- Generated dispatchers (capnp / protobuf / *_generated /
 			  -- *.gen) have intentionally wide fan-out; flagging them
 			  -- buries real findings under generated-code noise.
@@ -1006,12 +998,19 @@ func ensureCanonicalViews(qg refsQuerier) error {
 			WHERE def_token != ''`
 	}
 
+	// v_refs columns: referrer_node_id, token, target_node_id,
+	// ref_uri, ref_line, fidelity, qualifier. The qualifier column
+	// is empty for mention-fidelity rows (tree-sitter call extractor
+	// doesn't populate it) and for pre-T8.7 capnp records (default
+	// '' per schema-evolution invariant). See mache-6c0d07 for the
+	// fan_out_skew metric that consumes it.
 	refsBody := `SELECT node_id AS referrer_node_id,
 	       token,
 	       NULL  AS target_node_id,
 	       NULL  AS ref_uri,
 	       NULL  AS ref_line,
-	       'mention' AS fidelity
+	       'mention' AS fidelity,
+	       ''    AS qualifier
 	FROM node_refs`
 	// Binding-fidelity rows come from the per-connection
 	// _capnp_binding_refs TEMP table, populated from the sibling
@@ -1034,19 +1033,27 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		       target_node_id,
 		       ref_uri,
 		       ref_line,
-		       'binding' AS fidelity
+		       'binding' AS fidelity,
+		       qualifier
 		FROM _capnp_binding_refs`
 
 	stmts := []string{
 		"DROP VIEW IF EXISTS temp.v_defs",
 		"DROP VIEW IF EXISTS temp.v_refs",
 		"DROP TABLE IF EXISTS temp._capnp_binding_refs",
+		// qualifier column added in mache-6c0d07 (T8.7 mirror).
+		// Empty string when LLO didn't see a selector_expression
+		// upstream of the ref site, OR when the record came from a
+		// pre-T8.7 .bindings.capnp log. fan_out_skew uses
+		// COALESCE(NULLIF(qualifier, ''), token) so both shapes
+		// degrade gracefully.
 		`CREATE TEMP TABLE _capnp_binding_refs (
 			referrer_node_id TEXT NOT NULL,
 			token TEXT NOT NULL,
 			target_node_id TEXT,
 			ref_uri TEXT,
-			ref_line INTEGER
+			ref_line INTEGER,
+			qualifier TEXT NOT NULL DEFAULT ''
 		)`,
 		"CREATE TEMP VIEW v_defs AS " + defsBody,
 		"CREATE TEMP VIEW v_refs AS " + refsBody,
@@ -1097,10 +1104,10 @@ func LoadCapnpBindings(qg refsQuerier, dbPath string) error {
 	// switch to a multi-row INSERT or a prepared-stmt loop.
 	for _, r := range records {
 		stmt := `INSERT INTO _capnp_binding_refs
-			(referrer_node_id, token, target_node_id, ref_uri, ref_line)
-			VALUES (?, ?, ?, ?, ?)`
+			(referrer_node_id, token, target_node_id, ref_uri, ref_line, qualifier)
+			VALUES (?, ?, ?, ?, ?, ?)`
 		rows, err := qg.QueryRefs(stmt, r.ConstructNodeID, r.RefToken,
-			r.TargetNodeID, r.RefURI, int64(r.RefRange.StartLine))
+			r.TargetNodeID, r.RefURI, int64(r.RefRange.StartLine), r.Qualifier)
 		if err != nil {
 			return fmt.Errorf("insert capnp binding: %w", err)
 		}

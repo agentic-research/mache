@@ -13,12 +13,12 @@ type BindingRecord capnp.Struct
 const BindingRecord_TypeID = 0xb25434baab461394
 
 func NewBindingRecord(s *capnp.Segment) (BindingRecord, error) {
-	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 6})
+	st, err := capnp.NewStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 7})
 	return BindingRecord(st), err
 }
 
 func NewRootBindingRecord(s *capnp.Segment) (BindingRecord, error) {
-	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 6})
+	st, err := capnp.NewRootStruct(s, capnp.ObjectSize{DataSize: 8, PointerCount: 7})
 	return BindingRecord(st), err
 }
 
@@ -178,12 +178,30 @@ func (s BindingRecord) SetParseGen(v uint64) {
 	capnp.Struct(s).SetUint64(0, v)
 }
 
+func (s BindingRecord) Qualifier() (string, error) {
+	p, err := capnp.Struct(s).Ptr(6)
+	return p.Text(), err
+}
+
+func (s BindingRecord) HasQualifier() bool {
+	return capnp.Struct(s).HasPtr(6)
+}
+
+func (s BindingRecord) QualifierBytes() ([]byte, error) {
+	p, err := capnp.Struct(s).Ptr(6)
+	return p.TextBytes(), err
+}
+
+func (s BindingRecord) SetQualifier(v string) error {
+	return capnp.Struct(s).SetText(6, v)
+}
+
 // BindingRecord_List is a list of BindingRecord.
 type BindingRecord_List = capnp.StructList[BindingRecord]
 
 // NewBindingRecord creates a new list of BindingRecord.
 func NewBindingRecord_List(s *capnp.Segment, sz int32) (BindingRecord_List, error) {
-	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 8, PointerCount: 6}, sz)
+	l, err := capnp.NewCompositeList(s, capnp.ObjectSize{DataSize: 8, PointerCount: 7}, sz)
 	return capnp.StructList[BindingRecord](l), err
 }
 

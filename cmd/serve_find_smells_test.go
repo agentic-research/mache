@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -1935,106 +1936,106 @@ func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
 		"Dispatcher (production) is flagged; setup (test helper in *_test.go) is skipped")
 }
 
-// TestFindSmells_FanOutSkewSkipsProjectionFunctions asserts that
-// functions following the projection-naming convention
-// (`*FromRecord`, `*FromMessage`, `*FromCapnp`, `*ToRecord`,
-// `*ToMessage`, `*ToCapnp`, `Project*`) are NOT flagged regardless
-// of fan-out. Capnp / protobuf generators emit one accessor per
-// field; a function projecting an N-field record makes N method
-// calls on one receiver — that's structural translation, not
-// orchestration.
+// TestFindSmells_FanOutSkewQualifierAware asserts that the metric
+// counts distinct qualifiers (receiver/package origins) rather than
+// distinct tokens. Replaces the naming-pattern exemption from #355
+// with a structural signal: a function calling N methods on ONE
+// receiver scores 1 (one qualifier), while a function calling N
+// distinct things across N packages still scores N.
+//
+// Closes mache-6c0d07 — uses LLO BindingRecord.qualifier (T8.7) via
+// the _capnp_binding_refs TEMP table populated by LoadCapnpBindings
+// from a sibling .bindings.capnp event log written by the test.
 //
 // Surfaced by mache-190508 step 2 (PR #354): bindingFromRecord
 // projects the BindingRecord capnp struct's 7 fields + nested
-// Range's 6 fields onto Go-native types. 18 distinct callees
-// against a project mean of ~3.5; the rule fired despite the
-// function being trivially mechanical.
-func TestFindSmells_FanOutSkewSkipsProjectionFunctions(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+// Range's 6 fields onto Go-native types. Every method called shares
+// a single receiver (`rec` / `rng` / `start` / `end`); under the new
+// metric all 13 calls collapse to ~3-4 distinct qualifiers, well
+// below the threshold.
+func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "smells.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1) // pin connection so TEMP table from canonical-view setup persists
 
-	_, err := tg.db.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+	// Schema mirrors what `mache build` produces: nodes + node_defs +
+	// node_refs. ensureCanonicalViews adds the _capnp_binding_refs
+	// TEMP table when it runs, and LoadCapnpBindings populates it
+	// from the sibling .bindings.capnp this test creates below.
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
+			record_id TEXT, record JSON, source_file TEXT
+		);
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                              '',                          'functions',         1, 0, '',                ''),
-		  -- One representative of each name shape covered by the new
-		  -- exemption. Keeping the count low so the project mean
-		  -- stays below the negative control's threshold.
-		  ('functions/bindingFromRecord',            'functions',                 'bindingFromRecord', 1, 0, 'binding_log.go',  ''),
-		  ('functions/bindingFromRecord/source',     'functions/bindingFromRecord','source',           0, 0, 'binding_log.go',  ''),
-		  ('functions/decodeFromMessage',            'functions',                 'decodeFromMessage', 1, 0, 'codec.go',        ''),
-		  ('functions/decodeFromMessage/source',     'functions/decodeFromMessage','source',           0, 0, 'codec.go',        ''),
-		  ('functions/recordFromCapnp',              'functions',                 'recordFromCapnp',   1, 0, 'shim.go',         ''),
-		  ('functions/recordFromCapnp/source',       'functions/recordFromCapnp', 'source',            0, 0, 'shim.go',         ''),
-		  ('functions/ProjectAst',                   'functions',                 'ProjectAst',        1, 0, 'project.go',      ''),
-		  ('functions/ProjectAst/source',            'functions/ProjectAst',      'source',            0, 0, 'project.go',      ''),
-		  -- Negative control: production code with the same fan-out
-		  -- that should still be flagged.
-		  ('functions/Dispatcher',                   'functions',                 'Dispatcher',        1, 0, 'dispatcher.go',   ''),
-		  ('functions/Dispatcher/source',            'functions/Dispatcher',      'source',            0, 0, 'dispatcher.go',   '');
-
-		-- Each projection function and the negative control gets 12
-		-- distinct callees. With enough tiny callers, the project mean
-		-- stays around ~3.5 so 12 trips the 3× threshold for everyone
-		-- — only the naming-convention skip-list saves the projections.
-		INSERT INTO node_refs VALUES
-		  ('a01','functions/bindingFromRecord/source'),('a02','functions/bindingFromRecord/source'),
-		  ('a03','functions/bindingFromRecord/source'),('a04','functions/bindingFromRecord/source'),
-		  ('a05','functions/bindingFromRecord/source'),('a06','functions/bindingFromRecord/source'),
-		  ('a07','functions/bindingFromRecord/source'),('a08','functions/bindingFromRecord/source'),
-		  ('a09','functions/bindingFromRecord/source'),('a10','functions/bindingFromRecord/source'),
-		  ('a11','functions/bindingFromRecord/source'),('a12','functions/bindingFromRecord/source');
-		INSERT INTO node_refs VALUES
-		  ('b01','functions/decodeFromMessage/source'),('b02','functions/decodeFromMessage/source'),
-		  ('b03','functions/decodeFromMessage/source'),('b04','functions/decodeFromMessage/source'),
-		  ('b05','functions/decodeFromMessage/source'),('b06','functions/decodeFromMessage/source'),
-		  ('b07','functions/decodeFromMessage/source'),('b08','functions/decodeFromMessage/source'),
-		  ('b09','functions/decodeFromMessage/source'),('b10','functions/decodeFromMessage/source'),
-		  ('b11','functions/decodeFromMessage/source'),('b12','functions/decodeFromMessage/source');
-		INSERT INTO node_refs VALUES
-		  ('c01','functions/recordFromCapnp/source'),('c02','functions/recordFromCapnp/source'),
-		  ('c03','functions/recordFromCapnp/source'),('c04','functions/recordFromCapnp/source'),
-		  ('c05','functions/recordFromCapnp/source'),('c06','functions/recordFromCapnp/source'),
-		  ('c07','functions/recordFromCapnp/source'),('c08','functions/recordFromCapnp/source'),
-		  ('c09','functions/recordFromCapnp/source'),('c10','functions/recordFromCapnp/source'),
-		  ('c11','functions/recordFromCapnp/source'),('c12','functions/recordFromCapnp/source');
-		INSERT INTO node_refs VALUES
-		  ('g01','functions/ProjectAst/source'),('g02','functions/ProjectAst/source'),
-		  ('g03','functions/ProjectAst/source'),('g04','functions/ProjectAst/source'),
-		  ('g05','functions/ProjectAst/source'),('g06','functions/ProjectAst/source'),
-		  ('g07','functions/ProjectAst/source'),('g08','functions/ProjectAst/source'),
-		  ('g09','functions/ProjectAst/source'),('g10','functions/ProjectAst/source'),
-		  ('g11','functions/ProjectAst/source'),('g12','functions/ProjectAst/source');
-
-		-- Negative control: Dispatcher (no convention name, production
-		-- code) gets the same 12 callees and MUST still be flagged.
-		INSERT INTO node_refs VALUES
-		  ('h01','functions/Dispatcher/source'),('h02','functions/Dispatcher/source'),
-		  ('h03','functions/Dispatcher/source'),('h04','functions/Dispatcher/source'),
-		  ('h05','functions/Dispatcher/source'),('h06','functions/Dispatcher/source'),
-		  ('h07','functions/Dispatcher/source'),('h08','functions/Dispatcher/source'),
-		  ('h09','functions/Dispatcher/source'),('h10','functions/Dispatcher/source'),
-		  ('h11','functions/Dispatcher/source'),('h12','functions/Dispatcher/source');
-
-		-- Tiny callers to bring project mean low enough that 12 trips
-		-- the 3× threshold (mean ~3.3 with 5 high + 15 tiny callers).
-		INSERT INTO node_refs VALUES
-		  ('z01','functions/n01'),('z02','functions/n02'),('z03','functions/n03'),
-		  ('z04','functions/n04'),('z05','functions/n05'),('z06','functions/n06'),
-		  ('z07','functions/n07'),('z08','functions/n08'),('z09','functions/n09'),
-		  ('z10','functions/n10'),('z11','functions/n11'),('z12','functions/n12'),
-		  ('z13','functions/n13'),('z14','functions/n14'),('z15','functions/n15');
+		  ('functions',                          '',                           'functions',         1, 0, '',                ''),
+		  -- Projection function: 12 method calls all on receiver 'rec'.
+		  -- Under the new metric: 1 distinct qualifier → not flagged.
+		  ('functions/bindingFromRecord',        'functions',                  'bindingFromRecord', 1, 0, 'binding_log.go',  ''),
+		  ('functions/bindingFromRecord/source', 'functions/bindingFromRecord','source',            0, 0, 'binding_log.go',  ''),
+		  -- Orchestrator: 12 calls across 12 different packages.
+		  -- Under the new metric: 12 distinct qualifiers → flagged.
+		  ('functions/Dispatcher',               'functions',                  'Dispatcher',        1, 0, 'dispatcher.go',   ''),
+		  ('functions/Dispatcher/source',        'functions/Dispatcher',       'source',            0, 0, 'dispatcher.go',   '');
 	`)
 	require.NoError(t, err)
 
+	// Tiny callers via node_refs so the project mean stays low.
+	// These rows have empty qualifier (mention arm of v_refs), so
+	// they exercise the COALESCE fallback to token.
+	for i := 1; i <= 15; i++ {
+		_, err := db.Exec(
+			`INSERT INTO node_refs VALUES (?, ?)`,
+			fmt.Sprintf("z%02d", i), fmt.Sprintf("functions/n%02d", i),
+		)
+		require.NoError(t, err)
+	}
+
+	// Write the sibling .bindings.capnp with 24 records: 12 projection-
+	// shaped (qualifier='rec'), 12 orchestrator-shaped (12 distinct
+	// qualifiers). LoadCapnpBindings reads this when runSmellRule
+	// fires (via dbPathProvider opt-in on smellTestGraph).
+	writeMultiBindingLogForTest(t, dbPath, []bindingRec{
+		{construct: "functions/bindingFromRecord/source", token: "Method01", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method02", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method03", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method04", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method05", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method06", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method07", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method08", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method09", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method10", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method11", qualifier: "rec"},
+		{construct: "functions/bindingFromRecord/source", token: "Method12", qualifier: "rec"},
+		{construct: "functions/Dispatcher/source", token: "Action01", qualifier: "pkg01"},
+		{construct: "functions/Dispatcher/source", token: "Action02", qualifier: "pkg02"},
+		{construct: "functions/Dispatcher/source", token: "Action03", qualifier: "pkg03"},
+		{construct: "functions/Dispatcher/source", token: "Action04", qualifier: "pkg04"},
+		{construct: "functions/Dispatcher/source", token: "Action05", qualifier: "pkg05"},
+		{construct: "functions/Dispatcher/source", token: "Action06", qualifier: "pkg06"},
+		{construct: "functions/Dispatcher/source", token: "Action07", qualifier: "pkg07"},
+		{construct: "functions/Dispatcher/source", token: "Action08", qualifier: "pkg08"},
+		{construct: "functions/Dispatcher/source", token: "Action09", qualifier: "pkg09"},
+		{construct: "functions/Dispatcher/source", token: "Action10", qualifier: "pkg10"},
+		{construct: "functions/Dispatcher/source", token: "Action11", qualifier: "pkg11"},
+		{construct: "functions/Dispatcher/source", token: "Action12", qualifier: "pkg12"},
+	})
+
+	tg := &smellTestGraph{db: db, path: dbPath}
 	handler := makeFindSmellsHandler(tg)
 	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
-		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
@@ -2044,7 +2045,7 @@ func TestFindSmells_FanOutSkewSkipsProjectionFunctions(t *testing.T) {
 		gotIDs[i] = f.NodeID
 	}
 	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
-		"Only Dispatcher (no convention name) is flagged; the seven projection functions are skipped via name patterns")
+		"Only Dispatcher (12 distinct qualifiers) is flagged; bindingFromRecord (1 qualifier 'rec') is structurally exempt by the qualifier-aware metric")
 }
 
 // TestFindSmells_UntestedFunctionAcceptsTestCallCoverage asserts

@@ -59,6 +59,18 @@ type Binding struct {
 	// ParseGen is the parse generation that emitted this record.
 	// T8.5 will replace this with a content hash linked into Σ root.
 	ParseGen uint64
+
+	// Qualifier is the LHS of the selector_expression containing the
+	// ref site. In `pkg.Method`, qualifier is `pkg`; in `obj.method`,
+	// `obj`; for a bare-identifier call (`Foo()`) qualifier is empty.
+	// Distinguishes structurally equivalent shapes (qualified vs
+	// unqualified) without consumer-side AST re-walks. Source for the
+	// qualifier-aware fan_out_skew metric (mache-6c0d07).
+	//
+	// Empty when the producer didn't see a selector_expression
+	// upstream of the ref site OR when this record came from a
+	// pre-T8.7 .bindings.capnp log.
+	Qualifier string
 }
 
 // Range is the Go-native projection of common.Range — inclusive-start,
@@ -196,6 +208,15 @@ func bindingFromRecord(rec bindings.BindingRecord) (Binding, error) {
 	if err != nil {
 		return Binding{}, fmt.Errorf("refRange.end: %w", err)
 	}
+	// Qualifier was added at @7 in T8.7 (post-mache-190508 step 2).
+	// Reading it from a pre-T8.7 record returns "" (capnp default
+	// for unset Text fields), which the consumer SQL handles via
+	// COALESCE(NULLIF(qualifier, ''), token). No version probe
+	// needed — the schema-evolution invariant guarantees safety.
+	qualifier, err := rec.Qualifier()
+	if err != nil {
+		return Binding{}, fmt.Errorf("qualifier: %w", err)
+	}
 	return Binding{
 		TargetNodeID:    target,
 		RefToken:        tok,
@@ -203,6 +224,7 @@ func bindingFromRecord(rec bindings.BindingRecord) (Binding, error) {
 		RefSiteNodeID:   refSite,
 		RefURI:          uri,
 		ParseGen:        rec.ParseGen(),
+		Qualifier:       qualifier,
 		RefRange: Range{
 			StartLine:   start.Line(),
 			StartColumn: start.Column(),
