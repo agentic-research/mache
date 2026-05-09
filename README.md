@@ -21,7 +21,7 @@ That's the 30-second path. For the full first-run flow — install on Linux/macO
 
 ## What it gives an agent
 
-Sixteen MCP tools wrap the projected graph. Thirteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) require [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require an LLO-built `.db`.
+Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) require [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require an LLO-built `.db`.
 
 For the full tool inventory and capability matrix (which tools need which tables), see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
@@ -47,20 +47,22 @@ The graph is the same on either path; MCP and the filesystem are two ways to tal
 
 ## Status
 
-| Capability                              | Status                                                                        |
-| --------------------------------------- | ----------------------------------------------------------------------------- |
-| Tree-sitter parsing (28 langs)          | Stable                                                                        |
-| MCP server (16 tools, stdio + HTTP)     | Stable                                                                        |
-| Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)         |
-| Cross-references (callers/callees)      | Stable                                                                        |
-| `find_smells` (9 structural rules)      | Stable. `fan_out_skew` is qualifier-aware via LLO `BindingRecord.qualifier`   |
-| Canonical views (ADR-0013)              | Stable. `v_refs`/`v_defs` with fidelity poset (`mention` ⊑ `binding`)         |
-| Capnp event-log readthrough             | Stable. `${db}.bindings.capnp` is the cross-runtime contract for binding refs |
-| NFS mount + write-back                  | Stable                                                                        |
-| Schema inference (FCA)                  | Beta                                                                          |
-| Community detection (Louvain)           | Beta                                                                          |
-| LSP enrichment (type info, diagnostics) | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open) |
-| Semantic search (embeddings)            | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open) |
+| Capability                              | Status                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Tree-sitter parsing (28 langs)          | Stable                                                                                           |
+| MCP server (17 tools, stdio + HTTP)     | Stable                                                                                           |
+| Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)                            |
+| Cross-references (callers/callees)      | Stable                                                                                           |
+| `find_smells` (9 structural rules)      | Stable. `fan_out_skew` is qualifier-aware via LLO `BindingRecord.qualifier`                      |
+| Canonical views (ADR-0013)              | Stable. `v_refs`/`v_defs` with fidelity poset (`mention` ⊑ `binding`)                            |
+| Capnp event-log readthrough             | Stable. `${db}.bindings.capnp` is the cross-runtime contract for binding refs                    |
+| E2E tool harness + flamegraphs          | Stable. `task profile-tools-pprof` + `task flamegraphs` produce per-tool pprof + SVG flamegraphs |
+| `MemoryStore.{Defs,Refs}Map` cache      | Stable. Memoized snapshots; invalidated on AddDef / AddRef / DeleteFileNodes                     |
+| NFS mount + write-back                  | Stable                                                                                           |
+| Schema inference (FCA)                  | Beta                                                                                             |
+| Community detection (Louvain)           | Beta                                                                                             |
+| LSP enrichment (type info, diagnostics) | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open)                    |
+| Semantic search (embeddings)            | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open)                    |
 
 <details>
 <summary>Why this exists</summary>
