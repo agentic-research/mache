@@ -38,9 +38,10 @@ func TestCreateArena(t *testing.T) {
 	h, err := ReadArenaHeader(f)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(ArenaMagic), h.Magic)
-	assert.Equal(t, uint8(1), h.Version)
+	assert.Equal(t, uint8(ArenaVersion), h.Version)
 	assert.Equal(t, uint8(0), h.ActiveBuffer)
 	assert.Equal(t, uint64(1), h.Sequence)
+	assert.NotZero(t, h.DataSize, "DataSize must be populated by CreateArena — readers hash buf[..DataSize] to verify against the controller's current_root")
 
 	// Verify we can extract the DB back
 	extractedPath, err := ExtractActiveDB(arenaPath)

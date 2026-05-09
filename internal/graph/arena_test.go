@@ -25,9 +25,10 @@ func TestArenaHeader_RoundTrip(t *testing.T) {
 
 	want := &ArenaHeader{
 		Magic:        ArenaMagic,
-		Version:      1,
+		Version:      ArenaVersion,
 		ActiveBuffer: 1,
 		Sequence:     42,
+		DataSize:     8192,
 	}
 	require.NoError(t, WriteArenaHeader(f, want))
 
@@ -37,6 +38,7 @@ func TestArenaHeader_RoundTrip(t *testing.T) {
 	assert.Equal(t, want.Version, got.Version)
 	assert.Equal(t, want.ActiveBuffer, got.ActiveBuffer)
 	assert.Equal(t, want.Sequence, got.Sequence)
+	assert.Equal(t, want.DataSize, got.DataSize, "DataSize must round-trip — readers hash buf[..DataSize] to verify against the controller's current_root")
 }
 
 func TestArenaHeader_CalculateActiveOffset_HappyPath(t *testing.T) {
@@ -55,7 +57,7 @@ func TestArenaHeader_CalculateActiveOffset_HappyPath(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &ArenaHeader{
-				Magic: ArenaMagic, Version: 1, ActiveBuffer: tc.active,
+				Magic: ArenaMagic, Version: ArenaVersion, ActiveBuffer: tc.active,
 			}
 			got, err := h.CalculateActiveOffset(fileSize)
 			require.NoError(t, err)
@@ -65,7 +67,7 @@ func TestArenaHeader_CalculateActiveOffset_HappyPath(t *testing.T) {
 }
 
 func TestArenaHeader_CalculateActiveOffset_RejectsInvalidMagic(t *testing.T) {
-	h := &ArenaHeader{Magic: 0xDEADBEEF, Version: 1}
+	h := &ArenaHeader{Magic: 0xDEADBEEF, Version: ArenaVersion}
 	_, err := h.CalculateActiveOffset(ArenaHeaderSize + 8192)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid arena magic")
@@ -78,9 +80,19 @@ func TestArenaHeader_CalculateActiveOffset_RejectsUnsupportedVersion(t *testing.
 	assert.Contains(t, err.Error(), "unsupported arena version")
 }
 
+func TestArenaHeader_CalculateActiveOffset_RejectsLegacyV1(t *testing.T) {
+	// Pre-v2 arenas must be rejected loudly so a binary reading a stale
+	// .arena (or vice versa) fails with a clear message rather than
+	// silently misinterpreting DataSize bytes.
+	h := &ArenaHeader{Magic: ArenaMagic, Version: 1}
+	_, err := h.CalculateActiveOffset(ArenaHeaderSize + 8192)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported arena version")
+}
+
 func TestArenaHeader_CalculateActiveOffset_RejectsInvalidActiveBuffer(t *testing.T) {
 	// Only 0 and 1 are valid (double-buffered). Anything else is corruption.
-	h := &ArenaHeader{Magic: ArenaMagic, Version: 1, ActiveBuffer: 2}
+	h := &ArenaHeader{Magic: ArenaMagic, Version: ArenaVersion, ActiveBuffer: 2}
 	_, err := h.CalculateActiveOffset(ArenaHeaderSize + 8192)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid active buffer index")
@@ -89,7 +101,7 @@ func TestArenaHeader_CalculateActiveOffset_RejectsInvalidActiveBuffer(t *testing
 func TestArenaHeader_CalculateActiveOffset_RejectsTooSmallFile(t *testing.T) {
 	// File is only the header — no buffer space. Treating bufferSize=0
 	// as "valid offset 4096" would let callers read past EOF.
-	h := &ArenaHeader{Magic: ArenaMagic, Version: 1}
+	h := &ArenaHeader{Magic: ArenaMagic, Version: ArenaVersion}
 	_, err := h.CalculateActiveOffset(ArenaHeaderSize)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid arena size")

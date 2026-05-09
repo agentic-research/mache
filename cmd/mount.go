@@ -518,12 +518,14 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	}
 	defer func() { _ = ctrl.Close() }()
 
-	// Initial Load
-	gen := ctrl.GetGeneration()
+	// Initial Load: read the controller's current arena pointer + root.
+	// The root is the substrate identity; a zero root means no snapshot
+	// has been published yet (fresh controller).
+	initialRoot := ctrl.GetCurrentRoot()
 	arenaPath := ctrl.GetArenaPath()
-	log.Printf("Control Block: Gen %d -> %s", gen, arenaPath)
+	log.Printf("Control Block: root %s -> %s", shortRoot(initialRoot), arenaPath)
 
-	// Wait for first valid generation if empty
+	// Wait for first valid arena if empty
 	if arenaPath == "" {
 		log.Println("Waiting for initial arena...")
 		deadline := time.After(30 * time.Second)
@@ -535,7 +537,7 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 			}
 			if p := ctrl.GetArenaPath(); p != "" {
 				arenaPath = p
-				gen = ctrl.GetGeneration()
+				initialRoot = ctrl.GetCurrentRoot()
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -577,7 +579,7 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	// Start Watcher — event-driven with polling fallback.
 	// Runs for the lifetime of the NFS mount (mountNFS blocks below).
 	go func() {
-		lastGen := gen
+		lastRoot := initialRoot
 		prevDBPath := dbPath
 
 		// Try to subscribe to daemon events for instant hot-swap.
@@ -609,13 +611,13 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 				time.Sleep(100 * time.Millisecond)
 			}
 
-			currentGen := ctrl.GetGeneration()
-			if currentGen <= lastGen {
+			currentRoot := ctrl.GetCurrentRoot()
+			if currentRoot == lastRoot {
 				continue
 			}
 
 			newPath := ctrl.GetArenaPath()
-			log.Printf("Hot Swap Detected: Gen %d -> %d (%s)", lastGen, currentGen, newPath)
+			log.Printf("Hot Swap Detected: root %s -> %s (%s)", shortRoot(lastRoot), shortRoot(currentRoot), newPath)
 
 			newDBPath, err := graph.ExtractActiveDB(newPath)
 			if err != nil {
@@ -631,7 +633,7 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 			}
 
 			hotSwap.Swap(newGraph)
-			lastGen = currentGen
+			lastRoot = currentRoot
 
 			// Defer removal of the old DB file. Swap() closes the SQLite
 			// connection synchronously, but on macOS the NFS page cache
@@ -652,6 +654,16 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	}()
 
 	return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
+}
+
+// shortRoot renders the first 4 bytes of a 32-byte BLAKE3 root as 8 hex
+// chars, or "<zero>" for the all-zero sentinel — readable enough for log
+// lines without dragging full 64-char hex everywhere.
+func shortRoot(root [32]byte) string {
+	if control.IsZeroRoot(root) {
+		return "<zero>"
+	}
+	return fmt.Sprintf("%02x%02x%02x%02x", root[0], root[1], root[2], root[3])
 }
 
 // trySubscribe attempts to connect to the daemon's UDS socket and subscribe

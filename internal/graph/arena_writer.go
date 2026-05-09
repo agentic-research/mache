@@ -213,9 +213,11 @@ func (f *ArenaFlusher) flushInternal() error {
 		}
 	}
 
-	// Flip header: active_buffer ^= 1, sequence++
+	// Flip header: active_buffer ^= 1, sequence++, record exact data size
+	// so readers can hash buf[..DataSize] without parsing SQLite internals.
 	header.ActiveBuffer = inactive
 	header.Sequence++
+	header.DataSize = uint64(len(dbBytes))
 	if err := WriteArenaHeader(af, header); err != nil {
 		return fmt.Errorf("write arena header: %w", err)
 	}
@@ -224,9 +226,15 @@ func (f *ArenaFlusher) flushInternal() error {
 		return fmt.Errorf("sync arena: %w", err)
 	}
 
-	// Update control block so ley-line detects the change
+	// Update control block so ley-line detects the change. We don't compute
+	// a BLAKE3 root here — mache as a writer hasn't traditionally needed
+	// content-addressable identity, so SetArena (no root) preserves the
+	// previous current_root value while bumping the sync atom enough for
+	// readers to fence and re-read path/size. If a future change wants
+	// content-addressable identity even when mache is the writer, swap to
+	// SetArenaWithRoot and pass blake3.Sum256(dbBytes).
 	if f.ctrl != nil {
-		if err := f.ctrl.SetArena(f.arenaPath, uint64(info.Size()), header.Sequence); err != nil {
+		if err := f.ctrl.SetArena(f.arenaPath, uint64(info.Size())); err != nil {
 			return fmt.Errorf("update control block: %w", err)
 		}
 	}

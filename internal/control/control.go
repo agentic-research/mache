@@ -1,6 +1,7 @@
 package control
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,35 +15,48 @@ import (
 const (
 	ControlSize = 4096       // 1 page
 	Magic       = 0x4C455943 // 'LEYC'
+	// Version 2 is the current control-block layout: identity is the BLAKE3
+	// `current_root` of the arena payload. Old (v1) controllers — which
+	// exposed a monotonic `generation` counter instead — are rejected with
+	// a descriptive error so cross-version mismatches fail loudly.
+	Version = 2
 )
 
-// Block represents the memory-mapped control file.
-// It must match the C layout exactly for interoperability.
-type Block struct {
-	Magic      uint32
-	Version    uint32
-	Generation uint64 // Atomic
-	ArenaPath  [256]byte
-	ArenaSize  uint64
-	Padding    [ControlSize - 272]byte // Pad to 4096 bytes
-}
+// Field offsets must match LLO `rs/ll-core/core/src/control.rs` exactly.
+// Bytes 8..16 (the old `Generation` slot) are now used as a private
+// sync atom for Acquire/Release fencing — no public surface.
+const (
+	offMagic          = 0
+	offVersion        = 4
+	offSync           = 8 // private fence atom (formerly Generation)
+	offArenaPath      = 16
+	arenaPathLen      = 256
+	offArenaSize      = 272
+	offInterruptFlags = 280
+	offInterruptEpoch = 288
+	offInterruptAck   = 296
+	offPayloadOffset  = 304
+	offPayloadLen     = 312
+	offCurrentRoot    = 320
+	currentRootLen    = 32
+)
 
 // Controller manages the memory-mapped control file.
 type Controller struct {
 	path string
 	file *os.File
 	data []byte
-	ptr  *Block
 }
 
 // OpenOrCreate opens or creates a control file at the given path.
+// Rejects mismatched VERSION with a clear error so old mache binaries
+// reading new control blocks (or vice versa) fail loudly rather than
+// silently misinterpreting the layout.
 func OpenOrCreate(path string) (*Controller, error) {
-	// Validate path security
 	if err := validatePath(path); err != nil {
 		return nil, err
 	}
 
-	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir: %w", err)
 	}
@@ -71,35 +85,46 @@ func OpenOrCreate(path string) (*Controller, error) {
 		return nil, fmt.Errorf("mmap: %w", err)
 	}
 
-	ptr := (*Block)(unsafe.Pointer(&data[0]))
-
-	// Initialize if new
-	if ptr.Magic == 0 {
-		ptr.Magic = Magic
-		ptr.Version = 1
-	} else if ptr.Magic != Magic {
+	existingMagic := *(*uint32)(unsafe.Pointer(&data[offMagic]))
+	switch {
+	case existingMagic == 0:
+		*(*uint32)(unsafe.Pointer(&data[offMagic])) = Magic
+		*(*uint32)(unsafe.Pointer(&data[offVersion])) = Version
+	case existingMagic != Magic:
 		_ = unix.Munmap(data)
 		_ = f.Close()
-		return nil, fmt.Errorf("invalid magic: %x", ptr.Magic)
+		return nil, fmt.Errorf("invalid control block magic: 0x%08X", existingMagic)
+	default:
+		existingVersion := *(*uint32)(unsafe.Pointer(&data[offVersion]))
+		if existingVersion != Version {
+			_ = unix.Munmap(data)
+			_ = f.Close()
+			return nil, fmt.Errorf(
+				"control block version mismatch: file is v%d, expected v%d — "+
+					"remove the stale .ctrl file and let a current writer (ley-line-open ≥ 0.2.0) recreate it",
+				existingVersion, Version,
+			)
+		}
 	}
 
-	return &Controller{
-		path: path,
-		file: f,
-		data: data,
-		ptr:  ptr,
-	}, nil
+	return &Controller{path: path, file: f, data: data}, nil
 }
 
-// GetGeneration returns the current generation ID atomically.
-func (c *Controller) GetGeneration() uint64 {
-	return atomic.LoadUint64(&c.ptr.Generation)
+// GetCurrentRoot returns the BLAKE3 root hash of the arena payload that
+// the writer most recently published. An Acquire-load on the private
+// sync atom fences the subsequent root-byte reads against the writer's
+// Release-store + write. The zero sentinel `[32]byte{}` means no
+// snapshot has been published yet (fresh controller).
+func (c *Controller) GetCurrentRoot() [32]byte {
+	atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offSync])))
+	var out [32]byte
+	copy(out[:], c.data[offCurrentRoot:offCurrentRoot+currentRootLen])
+	return out
 }
 
 // GetArenaPath returns the path to the currently active arena.
 func (c *Controller) GetArenaPath() string {
-	// Simple null-terminated string read
-	b := c.ptr.ArenaPath[:]
+	b := c.data[offArenaPath : offArenaPath+arenaPathLen]
 	for i, v := range b {
 		if v == 0 {
 			return string(b[:i])
@@ -108,24 +133,63 @@ func (c *Controller) GetArenaPath() string {
 	return string(b)
 }
 
-// SetArena atomically updates the control block to point to a new arena.
-func (c *Controller) SetArena(path string, size, generation uint64) error {
-	if len(path) >= len(c.ptr.ArenaPath) {
-		return fmt.Errorf("path too long (max %d)", len(c.ptr.ArenaPath)-1)
+// GetArenaSize returns the size in bytes of the currently active arena file.
+func (c *Controller) GetArenaSize() uint64 {
+	return atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offArenaSize])))
+}
+
+// SetArena atomically updates the control block to point to a new arena
+// without changing `current_root`. Bumps the private sync atom so
+// readers fence and re-read path/size.
+//
+// Use SetArenaWithRoot when publishing a new snapshot (i.e. when the
+// payload bytes changed). Use SetArena when only the path/size moved
+// but the root remains the previous value.
+func (c *Controller) SetArena(path string, size uint64) error {
+	if len(path) >= arenaPathLen {
+		return fmt.Errorf("path too long (max %d)", arenaPathLen-1)
 	}
 
-	// Update fields
-	copy(c.ptr.ArenaPath[:], path)
-	c.ptr.ArenaPath[len(path)] = 0 // Null terminate
-	c.ptr.ArenaSize = size
+	pathBuf := c.data[offArenaPath : offArenaPath+arenaPathLen]
+	for i := range pathBuf {
+		pathBuf[i] = 0
+	}
+	copy(pathBuf, path)
 
-	// Memory barrier before generation update (Go atomic handles this)
-	atomic.StoreUint64(&c.ptr.Generation, generation)
+	*(*uint64)(unsafe.Pointer(&c.data[offArenaSize])) = size
 
-	// msync to ensure durability (optional but good for crash consistency)
-	// unix.Msync(c.data, unix.MS_SYNC)
-
+	atomic.AddUint64((*uint64)(unsafe.Pointer(&c.data[offSync])), 1)
 	return nil
+}
+
+// SetArenaWithRoot atomically publishes a new arena and the BLAKE3 root
+// of its payload. Readers polling GetCurrentRoot observe a coherent
+// (path, size, root) triple thanks to the Release-store fence on the
+// sync atom.
+func (c *Controller) SetArenaWithRoot(path string, size uint64, root [32]byte) error {
+	if len(path) >= arenaPathLen {
+		return fmt.Errorf("path too long (max %d)", arenaPathLen-1)
+	}
+
+	pathBuf := c.data[offArenaPath : offArenaPath+arenaPathLen]
+	for i := range pathBuf {
+		pathBuf[i] = 0
+	}
+	copy(pathBuf, path)
+
+	*(*uint64)(unsafe.Pointer(&c.data[offArenaSize])) = size
+
+	copy(c.data[offCurrentRoot:offCurrentRoot+currentRootLen], root[:])
+
+	atomic.AddUint64((*uint64)(unsafe.Pointer(&c.data[offSync])), 1)
+	return nil
+}
+
+// IsZeroRoot reports whether root is the all-zero sentinel that
+// indicates "no snapshot has been published yet."
+func IsZeroRoot(root [32]byte) bool {
+	var zero [32]byte
+	return subtle.ConstantTimeCompare(root[:], zero[:]) == 1
 }
 
 // Close unmaps and closes the control file.
