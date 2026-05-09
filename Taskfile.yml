@@ -100,6 +100,15 @@ tasks:
     cmds:
       - go test -tags leyline -v -run 'TestASTParity' ./internal/ingest/
 
+  gen-bindings:
+    desc: Regenerate Go bindings from schemas/*.capnp (run after schema sync from LLO)
+    vars:
+      CAPNP_INC:
+        sh: echo "$(go env GOPATH)/pkg/mod/$(grep -E 'capnproto.org/go/capnp/v3 v' go.mod | awk '{print $1"@"$2}')/std"
+    cmds:
+      - test -x "$(go env GOPATH)/bin/capnpc-go" || go install capnproto.org/go/capnp/v3/capnpc-go@latest
+      - cd schemas && PATH="$(go env GOPATH)/bin:$PATH" capnp compile -I"{{.CAPNP_INC}}" --src-prefix=. -ogo:../internal/lsp/bindings common.capnp binding.capnp
+
   fuzz-gen:
     desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target
     dir: tools/fuzz-gen
