@@ -122,10 +122,16 @@ func (c *Controller) GetCurrentRoot() [32]byte {
 	return out
 }
 
-// GetArenaPath returns the path to the currently active arena. The
-// Acquire-load on the sync atom fences the subsequent path-byte reads
-// against the writer's Release-store, so concurrent SetArena callers
-// can't be observed mid-update (zeroed prefix, partial copy).
+// GetArenaPath returns the path to the currently active arena.
+//
+// The Acquire-load on the sync atom only fences the subsequent path-byte
+// reads against publishes that have completed (sync bumped) by the time
+// we load it; a writer that begins after the load and writes bytes before
+// bumping sync can still produce a torn read here. End-to-end safety
+// against torn reads relies on the BLAKE3 current_root check at the
+// callsite — the path bytes alone are advisory. If a stronger guarantee
+// is needed, the writer needs a seqlock-style protocol (bump-then-write-
+// then-bump, with reader retry on odd / mismatched seq).
 func (c *Controller) GetArenaPath() string {
 	atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offSync])))
 	b := c.data[offArenaPath : offArenaPath+arenaPathLen]
