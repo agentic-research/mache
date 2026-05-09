@@ -21,7 +21,7 @@ That's the 30-second path. For the full first-run flow — install on Linux/macO
 
 ## What it gives an agent
 
-Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) require [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require an LLO-built `.db`.
+Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) require [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require a `.db` built by ley-line-open.
 
 For the full tool inventory and capability matrix (which tools need which tables), see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
@@ -30,7 +30,7 @@ For the full tool inventory and capability matrix (which tools need which tables
 ```mermaid
 flowchart LR
     Source["source dir"] -->|"tree-sitter (CGO)<br/>OR leyline parse"| Graph
-    LSP["LLO leyline lsp<br/>(LSP enrichment)"] -->|"sibling .bindings.capnp<br/>(typed event log)"| BindingLog
+    LSP["leyline lsp<br/>(LSP enrichment from<br/>ley-line-open)"] -->|"sibling .bindings.capnp<br/>(typed event log)"| BindingLog
     BindingLog -->|"ReadBindingLog"| Graph["Graph<br/>(MemoryStore or<br/>SQLiteGraph)"]
     Graph -->|"v_refs / v_defs<br/>(canonical views,<br/>fidelity poset)"| MCP["MCP tools"]
     Graph -->|"NFS server"| FS["mounted fs"]
@@ -38,9 +38,9 @@ flowchart LR
     FS -.- Agent
 ```
 
-1. **Parse** — tree-sitter parses source into AST nodes (28 languages). LLO's `leyline parse` is the modern path; CGO `SitterWalker` is the fallback.
+1. **Parse** — tree-sitter parses source into AST nodes (28 languages). The modern path is `leyline parse` (from ley-line-open); CGO `SitterWalker` is the fallback.
 1. **Infer** — schema inference (FCA + greedy entropy) discovers the natural groupings (`functions/`, `types/`, `classes/`)
-1. **Link** — cross-reference extraction builds a call graph from identifiers and imports. When LLO's LSP pass has run, refs flow through a sibling `.bindings.capnp` typed event log (per [ADR-0013](docs/adr/0013-refs-defs-canonical-schema.md)) rather than SQL columns — the wire format is the cross-runtime contract.
+1. **Link** — cross-reference extraction builds a call graph from identifiers and imports. When the LSP pass from ley-line-open has run, refs flow through a sibling `.bindings.capnp` typed event log (per [ADR-0013](docs/adr/0013-refs-defs-canonical-schema.md)) rather than SQL columns — the wire format is the cross-runtime contract.
 1. **Project** — the graph is exposed as MCP tools (primary) or a mounted filesystem (optional)
 
 The graph is the same on either path; MCP and the filesystem are two ways to talk to it.
@@ -53,7 +53,7 @@ The graph is the same on either path; MCP and the filesystem are two ways to tal
 | MCP server (17 tools, stdio + HTTP)     | Stable                                                                                           |
 | Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)                            |
 | Cross-references (callers/callees)      | Stable                                                                                           |
-| `find_smells` (9 structural rules)      | Stable. `fan_out_skew` is qualifier-aware via LLO `BindingRecord.qualifier`                      |
+| `find_smells` (9 structural rules)      | Stable. `fan_out_skew` is qualifier-aware via ley-line-open `BindingRecord.qualifier`            |
 | Canonical views (ADR-0013)              | Stable. `v_refs`/`v_defs` with fidelity poset (`mention` ⊑ `binding`)                            |
 | Capnp event-log readthrough             | Stable. `${db}.bindings.capnp` is the cross-runtime contract for binding refs                    |
 | E2E tool harness + flamegraphs          | Stable. `task profile-tools-pprof` + `task flamegraphs` produce per-tool pprof + SVG flamegraphs |
@@ -95,7 +95,7 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 ## Docs
 
 - [Getting started](GETTING-STARTED.md) — install + first run
-- [Architecture](docs/ARCHITECTURE.md) — graph backends, write pipeline, virtual directories, LLO interplay
+- [Architecture](docs/ARCHITECTURE.md) — graph backends, write pipeline, virtual directories, ley-line-open interplay
 - [Roadmap](docs/ROADMAP.md) — what's landed, near-term, long-term
 - [ADRs](docs/adr/) — Architectural Decision Records
 - [Prior art & landscape](docs/PRIOR_ART.md) — what mache builds on, how it compares

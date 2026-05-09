@@ -2,16 +2,19 @@
 
 ## Introduction
 
-Mache is a **projection engine**: it takes structured data (JSON, SQLite, source code) and mounts it as a real POSIX filesystem. A declarative schema defines the topology — how source nodes map to directories and files — or, with `--infer`, the schema is derived automatically via Formal Concept Analysis (FCA). The engine handles ingestion, on-demand content resolution, cross-references, and write-back.
+Mache is an **AI-native projection engine** that turns structured data (JSON, SQLite, source code) into a navigable graph. A declarative schema defines the topology — how source nodes map to a tree of constructs — or, with `--infer`, the schema is derived automatically via Formal Concept Analysis (FCA). The engine handles ingestion, on-demand content resolution, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings), structural analysis (`find_smells`), schema inference, identity-preserving write-back, and hot-swap on a substrate-identity (`current_root`) primitive paired with [ley-line-open](https://github.com/agentic-research/ley-line-open).
 
-This positions Mache at the intersection of several traditions — filesystem-as-interface (Plan 9), data virtualization (FUSE-DB tools), and AI-agent context engineering — but no existing tool combines all of its properties: schema-driven projection, AST decomposition, identity-preserving write-back, and a real OS-level mount.
+The graph is the product. Two equal-footing surfaces expose it: an **MCP server** (primary; 17 tools) and an optional **embedded NFS server** (via `go-nfs` + `billy`, in-process — not an OS export). The NFS choice is AI-native: agents already speak filesystem operations, so giving them a real path tree is the lowest-friction interface. Calling Mache "a filesystem" undersells it — the filesystem is one expression layer over a graph engine that also ships canonical refs/defs views, content-addressable substrate identity, AST-aware write-back, and structural-rule analysis.
+
+This positions Mache at the intersection of several traditions — filesystem-as-interface (Plan 9), data virtualization (FUSE-DB tools), and AI-agent context engineering — but no existing tool combines all of its properties: schema-driven projection, AST decomposition, identity-preserving write-back, content-addressable substrate identity, and dual MCP+FS expressions of the same graph designed for agent consumption from day one.
 
 ## Comparison Table
 
 | Tool                                      | Schema-Driven Projection | AST-Aware Decomposition | Identity-Preserving Write-Back | On-Demand Content |       Cross-References       |          Real FS Mount           |
 | ----------------------------------------- | :----------------------: | :---------------------: | :----------------------------: | :---------------: | :--------------------------: | :------------------------------: |
-| **Mache**                                 |           Yes            |      Yes (8 langs)      |              Yes               |        Yes        | Yes (`callers/`, `callees/`) |          Yes (NFS/FUSE)          |
+| **Mache**                                 |           Yes            |     Yes (28 langs)      |              Yes               |        Yes        | Yes (`callers/`, `callees/`) |            Yes (NFS)             |
 | **codebase-memory-mcp**                   |            No            |     Yes (64 langs)      |               No               |        No         |       Yes (call graph)       |                No                |
+| **lean-ctx**                              |    No (4 fixed modes)    |    Yes (signatures)     |               No               |   Yes (cached)    |    Yes (multi-edge graph)    |                No                |
 | **AgentFS** (Turso)                       |            No            |           No            |         Yes (KV store)         |        No         |              No              |                No                |
 | **Dust**                                  |            No            |           No            |               No               |        No         |              No              | No (synthetic FS via tool calls) |
 | **Vercel bash-tool**                      |            No            |           No            |               No               |        No         |              No              |     No (manual file staging)     |
@@ -33,10 +36,24 @@ This positions Mache at the intersection of several traditions — filesystem-as
 
 - **Projection vs. indexing.** codebase-memory-mcp indexes code into a fixed graph schema (Function → CALLS → Function). Mache projects data through a user-defined topology schema — the same engine handles JSON, SQLite, and source code, and the directory structure is configurable rather than predetermined.
 - **Write-back.** codebase-memory-mcp is read-only. Mache supports identity-preserving write-back: validate → format → splice → surgical node update, all through the MCP `write_file` tool or the mounted filesystem.
-- **Real filesystem mount.** codebase-memory-mcp is MCP-only. Mache mounts as a real NFS/FUSE filesystem — agents can use standard `ls`/`cat`/`echo` without any MCP client.
-- **Language breadth vs. depth.** codebase-memory-mcp supports 64 languages with a uniform graph schema. Mache supports 8 languages but provides deeper structural features: context files (imports/globals per scope), doc comment extraction, write-back formatting, and configurable AST queries per language.
+- **Real filesystem mount.** codebase-memory-mcp is MCP-only. Mache mounts as a real NFS filesystem (in-process `go-nfs` + `billy` server) — agents can use standard `ls`/`cat`/`echo` without any MCP client.
+- **Language breadth vs. depth.** codebase-memory-mcp supports 64 languages with a uniform graph schema. Mache supports 28 languages and provides deeper structural features per language: context files (imports/globals per scope), doc comment extraction, write-back formatting, and configurable AST queries.
 - **Data generality.** codebase-memory-mcp is code-only. Mache handles JSON, SQLite databases, and source code through the same schema-driven pipeline — e.g., projecting 323K NVD vulnerability records or 9.4K MCP registry entries alongside source code.
 - **Query language.** codebase-memory-mcp offers Cypher-like queries over its graph. Mache uses SQL directly against the SQLite-backed graph (the `mache_refs` virtual table is available to MCP tools that need ad-hoc structural queries, e.g. `search`).
+
+### lean-ctx
+
+[lean-ctx](https://github.com/yvgude/lean-ctx) is a context-runtime layer for AI coding agents — a single Rust binary that compresses what reaches the LLM. It works at two layers: an MCP server that returns mode-aware file reads (`full`, `map`, `signatures`, `diff`), and a shell hook that compresses noisy CLI output (`git`, `npm`, `cargo`, `docker`, etc.) via 95+ patterns. Cached re-reads drop to ~13 tokens. It also ships a multi-edge property graph (imports, calls, exports, type_ref) with hybrid BM25 + embedding + graph-proximity search.
+
+**Relationship to Mache:** the closest tool *philosophically* aimed at the same agent-context-shrinking problem, but with an inverted structure. Lean-ctx wraps every byte that reaches the LLM and shrinks it; Mache exposes a navigable filesystem and lets the agent pick its own granularity.
+
+**Key differences:**
+
+- **Modes are hardcoded vs. schema-driven.** Lean-ctx's 4 modes are baked in. Mache's planned mode-aware reads (bead `mache-qzsk`) will be schema-driven — each schema can ship its own modes (`mode=public-api`, `mode=protocol-only`) without code changes.
+- **Layer.** Lean-ctx is in the LLM-tool path (MCP) and the shell-output path (hook). Mache is in the filesystem layer (NFS) plus MCP. Different layers — they could even compose (lean-ctx as middleware in front of mache).
+- **Write-back.** Lean-ctx is read-only; mache supports identity-preserving write-back.
+- **Filesystem mount.** Lean-ctx is MCP-only with no filesystem mount; mache mounts as real NFS so any tool that speaks paths works without an MCP client.
+- **Data scope.** Lean-ctx is code-only. Mache projects arbitrary structured data through the same engine.
 
 ### AgentFS (Turso)
 
@@ -91,6 +108,7 @@ Based on 9,649 experiments across multiple LLMs, this paper demonstrates that do
 ## Sources
 
 - codebase-memory-mcp (DeusData): https://github.com/DeusData/codebase-memory-mcp
+- lean-ctx: https://github.com/yvgude/lean-ctx
 - AgentFS (Turso): https://github.com/tursodatabase/agentfs
 - "FUSE is All You Need": https://blog.philipmemmerling.com/fuse-is-all-you-need/
 - Dust: https://dust.tt/

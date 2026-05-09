@@ -1,10 +1,10 @@
-# Competitive Landscape: Code Intelligence Tools (March 2026)
+# Competitive Landscape: Code Intelligence Tools (May 2026)
 
 ## Purpose
 
 This document surveys nine tools that overlap with mache's territory -- code intelligence, codebase understanding, and AI-agent context engineering. For each tool we capture: what it does, how it works, what it does that mache doesn't, what mache does that it doesn't, and feature gaps worth closing.
 
-Mache is a **projection engine**: declarative JSON schemas drive how structured data (JSON, SQLite, source code) is mounted as a real POSIX filesystem (NFS/FUSE) or exposed via MCP. It supports AST decomposition (8 languages via tree-sitter), identity-preserving write-back, cross-references (`callers/`, `callees/`), community detection, and schema inference via FCA.
+Mache is an **AI-native projection engine**: declarative JSON schemas turn structured data (JSON, SQLite, source code) into a navigable graph, exposed equally as a primary MCP server (17 tools) or an in-process NFS server (`go-nfs` + `billy` — an embedded server, not an OS export). The filesystem is one expression layer; the graph engine is the product. It supports AST decomposition (28 languages via tree-sitter or ley-line-open `leyline parse`), identity-preserving write-back with tree-sitter validation, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings via the ley-line-open event log), `find_smells` structural rules (qualifier-aware), Louvain community detection, schema inference via FCA + greedy entropy, and content-addressable substrate identity (`current_root`) for hot-swap — paired with ley-line-open as a coordinated release wave.
 
 ______________________________________________________________________
 
@@ -12,10 +12,10 @@ ______________________________________________________________________
 
 | Capability                       |      Mache       |      Serena      |  Augment Code   | Sourcegraph Cody |     Cursor      |    Continue.dev    |      Aider       | CodeRabbit |  Greptile  | codebase-memory-mcp |
 | -------------------------------- | :--------------: | :--------------: | :-------------: | :--------------: | :-------------: | :----------------: | :--------------: | :--------: | :--------: | :-----------------: |
-| **Real FS mount**                |     NFS/FUSE     |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |         --          |
+| **Real FS mount**                |  NFS (embedded)  |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |         --          |
 | **Schema-driven projection**     |       Yes        |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |         --          |
 | **Write-back**                   |       Yes        |    Yes (LSP)     |       --        |        --        |       IDE       |         --         |    Git diffs     |     --     |     --     |         --          |
-| **AST decomposition**            |     8 langs      |    30+ (LSP)     |       --        |  Graph context   |   AST chunks    | tree-sitter chunks | tree-sitter tags |  ast-grep  |     --     |      64 langs       |
+| **AST decomposition**            |     28 langs     |    30+ (LSP)     |       --        |  Graph context   |   AST chunks    | tree-sitter chunks | tree-sitter tags |  ast-grep  |     --     |      64 langs       |
 | **Semantic search (embeddings)** |        --        |        --        |  Yes (custom)   |   Yes (hybrid)   | Yes (vector DB) |   Yes (LanceDB)    |        --        |  LanceDB   |     --     |         --          |
 | **Cross-references**             | callers/callees  | find_referencing |       --        |    Code graph    |       --        |         --         |  PageRank refs   |  GraphRAG  | Code graph |    25 edge types    |
 | **Multi-repo**                   |        --        |        --        |       Yes       | Yes (@-mentions) |       --        |         --         |        --        |     --     |    Yes     |         --          |
