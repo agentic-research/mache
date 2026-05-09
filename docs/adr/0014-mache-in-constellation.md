@@ -43,15 +43,15 @@ re-litigating the framing.
 
 ## The constellation, summarized
 
-| Sibling ADR                                        | What it locks in                                                                                                                  | Mache's relationship                                                                                                                                                        |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **rosary ADR-0010** Observation Lattice            | Append-only set of authenticated observations + per-field deterministic fold. Webhook-first, idempotent under replay/reorder      | Mache reading source code IS observation in this algebra. `(repo_state, source_file) → ast/refs/defs` is a per-field fold over file-level observations                      |
-| **rosary ADR-0009** Cross-Repo Linkage             | Stratified acyclicity (per-repo DAG, cross-repo cycles allowed). `MultiRepoGraph` (mache-iegm) federates per-repo `.db` artifacts | Mache `.db`s are the federation primitive. Cross-repo edges land at this layer, not inside individual mache instances                                                       |
-| **cloister ADR-0003** Content-Addressed Bead Store | Two-layer abstraction: immutable CAS DAG + mutable refs. Substrate-portable (workerd / native / KV)                               | Mache `.db` files are content-addressable per LLO ADR-0014's Σ root; they fit cloister's CAS layer directly. Mache becomes a producer of objects that live in the CAS store |
-| **cloister ADR-0004** Capnp Manifest               | Declarative routes + backends, capnp because workerd parses it. Constellation-wide composition mechanism                          | The path for serving mache MCP via cloister-routed bundles. Mache contributes a manifest fragment, not a runtime registration                                               |
-| **cloister ADR-0010** Vault + Bundle Clusters      | Cloister is a v8 hypervisor; bundles are units of trust; capability-scoped via `VaultSliceGrant`                                  | When mache runs as a bundle, its credentials (LLO daemon access, R2 keys, signet identity) come from a vault slice, not env vars                                            |
-| **cloister ADR-0011** Hypervisor-Bundle Boundary   | Hypervisor owns trust + routing + capability mediation; bundles are workloads. External services reached via `httpForward`        | Mache running externally (today's typical deployment) is reached via `httpForward`; mache running as a cloister bundle gets vault-scoped capabilities                       |
-| **LLO ADR-0014** Capnp as Protocol                 | Typed cross-runtime contract via capnp. Canonical encoding for byte-stability                                                     | Already shipping. Mache reads `.bindings.capnp` per T8.8 (mache-6bd4d8). Producer-side stability gives mache stable input identity                                          |
+| Sibling ADR                                        | What it locks in                                                                                                                  | Mache's relationship                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **rosary ADR-0010** Observation Lattice            | Append-only set of authenticated observations + per-field deterministic fold. Webhook-first, idempotent under replay/reorder      | Mache reading source code IS observation in this algebra. `(repo_state, source_file) → ast/refs/defs` is a per-field fold over file-level observations                                                                                                                                                                                                    |
+| **rosary ADR-0009** Cross-Repo Linkage             | Stratified acyclicity (per-repo DAG, cross-repo cycles allowed). `MultiRepoGraph` (mache-iegm) federates per-repo `.db` artifacts | Mache `.db`s are the federation primitive. Cross-repo edges land at this layer, not inside individual mache instances                                                                                                                                                                                                                                     |
+| **cloister ADR-0003** Content-Addressed Bead Store | Two-layer abstraction: immutable CAS DAG + mutable refs. Substrate-portable (workerd / native / KV)                               | Mache's **capnp event log set** is content-addressable per LLO ADR-0014's Σ root and fits cloister's CAS layer directly. The `.db` projection is a derivative — it can also be cached but its identity is `(Σ_root × schema × parser_version)`, not Σ_root alone, because two `.db`s built from the same logs on different machines aren't byte-identical |
+| **cloister ADR-0004** Capnp Manifest               | Declarative routes + backends, capnp because workerd parses it. Constellation-wide composition mechanism                          | The path for serving mache MCP via cloister-routed bundles. Mache contributes a manifest fragment, not a runtime registration                                                                                                                                                                                                                             |
+| **cloister ADR-0010** Vault + Bundle Clusters      | Cloister is a v8 hypervisor; bundles are units of trust; capability-scoped via `VaultSliceGrant`                                  | When mache runs as a bundle, its credentials (LLO daemon access, R2 keys, signet identity) come from a vault slice, not env vars                                                                                                                                                                                                                          |
+| **cloister ADR-0011** Hypervisor-Bundle Boundary   | Hypervisor owns trust + routing + capability mediation; bundles are workloads. External services reached via `httpForward`        | Mache running externally (today's typical deployment) is reached via `httpForward`; mache running as a cloister bundle gets vault-scoped capabilities                                                                                                                                                                                                     |
+| **LLO ADR-0014** Capnp as Protocol                 | Typed cross-runtime contract via capnp. Canonical encoding for byte-stability                                                     | Already shipping. Mache reads `.bindings.capnp` per T8.8 (mache-6bd4d8). Producer-side stability gives mache stable input identity                                                                                                                                                                                                                        |
 
 The framework is already there. Mache is the structural-observation
 producer that hasn't been written into the picture.
@@ -60,49 +60,69 @@ producer that hasn't been written into the picture.
 
 ### Mache's role in the constellation
 
-Mache is the **structural-observation producer** for source code:
+Mache is the **structural-observation consumer/projector** for source code:
 
 ```
 source bytes
-  → tree-sitter / leyline parse (current path)
-  → AST / nodes / refs / defs (current output)
-  → .db file (current artifact)
+  → tree-sitter / leyline parse
+  → capnp event logs (.bindings.capnp, future .ast.capnp,
+                      .source.capnp — the canonical wire format
+                      per LLO ADR-0014, Σ-anchored)
+  → mache projects into queryable form (.db / MemoryStore / NFS)
 ```
 
-The `.db` artifact is mache's contract with the rest of the
-constellation. Three properties make it fit:
+**Critical correction surfaced in Copilot review (2026-05-09):**
+the canonical artifact in the constellation is the **capnp event
+log set**, not the `.db`. LLO ADR-0014 §1: *"SQLite tables are
+local projections, not the contract. Σ root advances are computed
+over the producer's emitted segments — the bytes-on-wire are the
+substrate."* An earlier draft of this ADR conflated the two. The
+correction below takes the LLO ADR's framing as load-bearing: the
+`.db` is one possible projection of the canonical capnp record
+set; mache's contract with the constellation is the **upstream
+event log chain**, not its local SQL projection.
 
-1. **Content-addressable identity.** Per LLO ADR-0014's canonical
-   encoding (Σ root = BLAKE3 over canonical bytes of the segment
-   chain), mache's `.db` outputs have a stable hash. Same source +
-   same parse generation → same hash. This is what makes the CAS
-   layer work — two consumers asking for the same repo state get
-   the same `.db`.
+Three properties make this fit:
 
-1. **Per-file delta locality.** Mache's existing `DeleteFileNodes`
-   (and the upstream `DefsMap`/`RefsMap` invalidation it triggers)
-   is file-scoped: a per-file source change invalidates exactly
-   the nodes/refs/defs derived from that file. This matches git's
+1. **Content-addressable identity at the event-log layer.** Per
+   LLO ADR-0014's canonical encoding, the capnp event log set
+   for a given source state has a stable Σ root
+   (`BLAKE3(canonical_bytes(segment_files))`). Same source +
+   same parser version → same Σ root, regardless of the local
+   projection (mache `.db`, future MemoryStore variant, future
+   alternative graph backend). The CAS layer (cloister ADR-0003)
+   keys on the Σ root of the log set; the `.db` is regenerable
+   from that set + the schema/parser version.
+
+1. **Per-file delta locality (in the projection).** Mache's
+   existing `DeleteFileNodes` (and the upstream `DefsMap`/`RefsMap`
+   invalidation it triggers) is file-scoped within the local
+   projection: a per-file source change invalidates exactly the
+   nodes/refs/defs derived from that file. This matches git's
    natural diff granularity (`git diff old new` → file paths) and
    the rosary observation-lattice's per-source-event idempotence.
+   The event-log layer above mache also sees per-file deltas,
+   but at the source-segment record level rather than the SQL
+   row level.
 
 1. **Producer-agnostic consumption.** Per ADR-0013 (canonical
    views), every `find_smells` rule and MCP tool reads `v_refs` /
    `v_defs` rather than `node_refs` / `node_defs` directly.
    Adding a new producer (LSP via capnp event log, future SSA via
    `_lsp2_refs`, etc.) is a new UNION arm, not a fan-out across
-   consumers. The same shape generalizes to "another mache
-   instance fed me this `.db`" or "the cache served me a stale
-   `.db` and I'm enriching it with a delta."
+   consumers. The same shape generalizes upward: "the CAS layer
+   served me an event-log chain, project it locally" is the same
+   read-path as "I just produced this event-log chain locally."
 
 ### State identity and diff
 
-| Question                                 | Decision                                                                                                                                                                                                                                                                |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **What identifies a mache state?**       | The `.db`'s Σ root (LLO ADR-0014 canonical encoding). When git ingestion lands (ADR-0007), the git tree SHA + the mache parse-generation become a richer state-id, but the `.db` hash is the canonical authority for "is this output cached?"                           |
-| **What's the diff granularity?**         | File-level. Matches git's natural unit, matches mache's existing `DeleteFileNodes` API, matches the rosary observation-lattice's per-event boundary. Within-file changes go through the existing splice + ShiftOrigins path                                             |
-| **What's the invalidation alphabet?**    | Sheaf restrictions (mache-b37cff). When file F changes, the set of regions touching F's tokens are dirty; sheaf restriction edges propagate the dirty set across cross-file references. This is the per-process layer; the cross-process layer is `.db` Σ root identity |
-| **What's the state-transition channel?** | Git, when ADR-0007 ships. Until then, file-system events (the existing fsnotify watcher) plus explicit re-ingest via the writeback pipeline. The shape is the same — both produce file-level deltas                                                                     |
+| Question                                 | Decision                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **What identifies a mache state?**       | The Σ root over the **capnp event log set** for the source state (per LLO ADR-0014). The `.db` projection is reproducible from `(event log set, schema, parser version)` and is therefore not itself the canonical authority — two `.db`s built from the same event log set on different machines are not byte-identical (SQLite page layout, write order). The event log set IS byte-identical. |
+| **Cache key for the CAS layer?**         | Σ root of the event log set, optionally extended with `(schema_hash, parser_version)` when the projection is what's being cached. "Did this exact source state produce this exact projection?" is `Σ_root × schema × parser_version → projection`.                                                                                                                                               |
+| **What's the diff granularity?**         | File-level. Matches git's natural unit, matches mache's existing `DeleteFileNodes` API, matches the rosary observation-lattice's per-event boundary. Within-file changes go through the existing splice + ShiftOrigins path. The event-log layer's natural granularity is the segment record; file-level diffs are the consumer-facing aggregation.                                              |
+| **What's the invalidation alphabet?**    | Sheaf restrictions (mache-b37cff) at the per-process projection layer. When file F changes, the set of regions touching F's tokens are dirty; sheaf restriction edges propagate the dirty set across cross-file references. The cross-process / CAS layer keys on event-log Σ root identity; the projection layer keys on sheaf restrictions over the local SQL/in-memory derivative.            |
+| **What's the state-transition channel?** | Git, when ADR-0007 ships. Until then, file-system events (the existing fsnotify watcher) plus explicit re-ingest via the writeback pipeline. The shape is the same — both produce file-level deltas that bubble up to event-log advances.                                                                                                                                                        |
 
 ### How the existing mache beads compose
 
@@ -110,13 +130,13 @@ The current mache backlog has 5 beads that each looked
 independently filed before this ADR; they're actually 5 steps
 of one arc:
 
-| Bead                                   | What it builds                                                                              | Where it lands in the constellation                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| **mache-b37cff** Sheaf cache reads     | Per-process cache of `DetectCommunities`/`DefsMap`/projection, served by sheaf restrictions | The invalidation algebra inside one mache instance. Below `.db` identity                              |
-| **mache-2f0075** R2 StorageBackend     | Durable `.db` storage in Cloudflare R2                                                      | The CAS layer (cloister ADR-0003) substrate for mache outputs                                         |
-| **mache ADR-0007** Git object graph    | Git as a queryable mache source                                                             | The state-transition channel. Each commit is a new `.db` keyed by tree SHA                            |
-| **mache ADR-0010** Hosted Mache        | Hosted-mode: cluster, R2, BYO storage                                                       | Mache running as a cloister bundle (ADR-0010 + ADR-0011), consuming vault slices                      |
-| **mache ADR-0011** Pointer Abstraction | Path/token/SHA/range/record/ref unified as Pointer                                          | The Pointer kind that resolves through this cache: `cas:<Σ-root>` for content-addressed `.db` lookups |
+| Bead                                   | What it builds                                                                              | Where it lands in the constellation                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **mache-b37cff** Sheaf cache reads     | Per-process cache of `DetectCommunities`/`DefsMap`/projection, served by sheaf restrictions | The invalidation algebra inside one mache instance. Below `.db` identity                                                                                                                        |
+| **mache-2f0075** R2 StorageBackend     | Durable `.db` storage in Cloudflare R2                                                      | The CAS layer (cloister ADR-0003) substrate for mache outputs                                                                                                                                   |
+| **mache ADR-0007** Git object graph    | Git as a queryable mache source                                                             | The state-transition channel. Each commit is a new `.db` keyed by tree SHA                                                                                                                      |
+| **mache ADR-0010** Hosted Mache        | Hosted-mode: cluster, R2, BYO storage                                                       | Mache running as a cloister bundle (ADR-0010 + ADR-0011), consuming vault slices                                                                                                                |
+| **mache ADR-0011** Pointer Abstraction | Path/token/SHA/range/record/ref unified as Pointer                                          | Two new Pointer kinds: `cas:<Σ-root>` for content-addressed event-log-set lookups, and `proj:<Σ-root>:<schema>:<parser-version>` for the derivative `.db` lookup keyed on the projection triple |
 
 Each can ship as a step. None re-invent the framework.
 
@@ -171,11 +191,16 @@ Deliberately deferred:
 **Constellation-scope coupling:**
 
 - Mache-side decisions can leak into rosary/cloister/LLO if
-  this ADR's contracts drift. Specifically: changing the
-  `.db` Σ root canonical encoding requires LLO buy-in (per
-  LLO ADR-0014's evolution rules); changing the file-level
-  diff granularity requires rosary's observation-lattice
-  fold to accept the new granularity.
+  this ADR's contracts drift. Specifically: the **canonical
+  encoding** of capnp event logs is owned by LLO ADR-0014;
+  mache as a consumer/projector inherits Σ root identity from
+  upstream and cannot independently change it. Changing
+  mache's projection format (`.db` schema, MemoryStore layout)
+  is mache-internal — those derivatives are not Σ-anchored
+  and consumers query the canonical view layer (ADR-0013), not
+  the storage. Changing the file-level diff granularity
+  requires rosary's observation-lattice fold to accept the
+  new granularity.
 
 ## Open questions
 
@@ -199,10 +224,15 @@ These are flagged for follow-up, not blocked here:
    next one wants to skip recomputation," but the protocol
    for that handoff isn't sketched yet.
 
-1. **Pointer kind for CAS lookups.** ADR-0011 says every
-   navigable thing is a Pointer. A `cas:<Σ-root>` Pointer
-   resolving to a `.db` would be the natural shape; concrete
-   syntax / resolver chain design TBD.
+1. **Pointer kinds for CAS + projection lookups.** ADR-0011
+   says every navigable thing is a Pointer. Two related kinds
+   are implied: `cas:<Σ-root>` resolves to the canonical capnp
+   event-log set, and `proj:<Σ-root>:<schema>:<parser-version>`
+   resolves to the derivative `.db` projection. Concrete
+   syntax + resolver chain design TBD; also TBD whether to
+   carry separate kinds at all vs. resolve "give me the
+   projection" through the resolver chain on a `cas:` pointer
+   plus a context-supplied projection spec.
 
 ## Refs
 
