@@ -58,18 +58,26 @@ type toolProfile struct {
 	Reason   string `json:"reason,omitempty"`    // when Status != ok
 	BodySize int    `json:"body_size,omitempty"` // bytes, ok-status only
 	// Optional pprof artifacts (phase 2). Empty string when capture
-	// is disabled (E2E_CAPTURE_PPROF unset). Path is relative to
-	// the test's cwd at run time; the manifest writer leaves it as
-	// emitted so consumers (flamegraph step, dashboards) can resolve
-	// against ROOT_DIR or the manifest's parent.
+	// is disabled (E2E_CAPTURE_PPROF unset).
+	//
+	// Recorded as ABSOLUTE paths because E2E_PPROF_DIR / the
+	// manifest-sibling default both resolve to absolute. Manifests
+	// are therefore not portable across machines as-is — consumers
+	// running on a different host should resolve via the manifest's
+	// parent directory and the trailing `<name>.{cpu,heap}.pprof`
+	// filename. Phase 4 may switch to manifest-relative when
+	// regression-detection consumes baseline manifests; keeping
+	// absolute for phase 2 since flamegraph generation runs on the
+	// same host that produced the profiles.
 	CPUProfile  string `json:"cpu_profile,omitempty"`
 	HeapProfile string `json:"heap_profile,omitempty"`
 	// CPUIterations is the count of handler calls run under the
 	// CPU profile boundary. Single-call profiles are too short for
 	// the runtime sampler (~100Hz, 10ms tick) to record meaningful
 	// stacks, so the harness loops K times inside one profile to
-	// give the sampler something to chew on. K defaults to 50 and
-	// is overridable via E2E_CPU_ITERATIONS.
+	// give the sampler something to chew on. K defaults to 500 (see
+	// readPprofOpts for why) and is overridable via
+	// E2E_CPU_ITERATIONS.
 	CPUIterations int `json:"cpu_iterations,omitempty"`
 }
 
@@ -98,7 +106,14 @@ func readPprofOpts(t *testing.T) pprofOpts {
 			dir = t.TempDir()
 		}
 	}
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	// Match capturePprof's best-effort posture: if the dir can't
+	// be created, log and disable capture rather than failing the
+	// whole harness. Phase-1 latency/alloc capture still runs and
+	// the manifest still emits — pprof is a bonus, not a gate.
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Logf("pprof: could not create dir %s: %v (capture disabled for this run)", dir, err)
+		return pprofOpts{}
+	}
 
 	// Default iterations: 500. Mache's tools complete in <1ms each
 	// (phase 1 baseline), and the runtime CPU sampler runs at
@@ -306,6 +321,20 @@ func capturePprof(t *testing.T, name string, h server.ToolHandlerFunc, args map[
 		t.Logf("pprof: StartCPUProfile %s: %v", name, err)
 		return
 	}
+	// Defer StopCPUProfile so it runs even if a handler panics
+	// during the iteration loop. Go's testing framework recovers
+	// panics and continues running other tests; without this
+	// defer, profiling stays enabled and the next tool's
+	// StartCPUProfile fails with "already profiling", cascading
+	// the failure across the whole harness.
+	//
+	// The explicit StopCPUProfile() below the loop runs on the
+	// happy path and tightens the CPU profile boundary to just
+	// the iterations (excludes the GC+heap-write tail). The defer
+	// is then a no-op on the happy path and the panic-safety
+	// fallback otherwise.
+	defer pprof.StopCPUProfile()
+
 	for i := 0; i < opts.iterations; i++ {
 		// Ignore result/error: the canonical call above already
 		// recorded ok-status. Iterations exist to give the sampler

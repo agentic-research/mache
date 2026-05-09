@@ -143,9 +143,13 @@ tasks:
       # Per-tool .cpu.pprof + .heap.pprof land in .e2e/pprof/.
       # Total runtime ~3-8s depending on iteration count.
       #
-      # Open with `go tool pprof .e2e/pprof/<tool>.cpu.pprof`
-      # or `go tool pprof -svg .e2e/pprof/<tool>.heap.pprof`
-      # to render a flamegraph.
+      # Open with `go tool pprof .e2e/pprof/<tool>.cpu.pprof` for
+      # the interactive REPL, or `go tool pprof -svg <profile>` to
+      # render a CALL GRAPH (not a flamegraph — pprof's -svg emits
+      # a graph, not a flame view). Phase 3 will add a separate
+      # task for true flamegraphs via brendangregg/flamegraph.pl
+      # or `go tool pprof -http=:0` (which serves a flamegraph
+      # view alongside the call graph).
       - mkdir -p {{.ROOT_DIR}}/.e2e/pprof
       - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json E2E_CAPTURE_PPROF=1 go test -v -run 'TestE2E_AllMCPTools' ./cmd/
       - echo "manifest -> .e2e/tool-profile.json"
