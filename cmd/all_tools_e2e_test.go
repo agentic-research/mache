@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -55,6 +57,84 @@ type toolProfile struct {
 	Status   string `json:"status"`              // ok | tool_error | skipped
 	Reason   string `json:"reason,omitempty"`    // when Status != ok
 	BodySize int    `json:"body_size,omitempty"` // bytes, ok-status only
+	// Optional pprof artifacts (phase 2). Empty string when capture
+	// is disabled (E2E_CAPTURE_PPROF unset).
+	//
+	// Recorded as ABSOLUTE paths because E2E_PPROF_DIR / the
+	// manifest-sibling default both resolve to absolute. Manifests
+	// are therefore not portable across machines as-is — consumers
+	// running on a different host should resolve via the manifest's
+	// parent directory and the trailing `<name>.{cpu,heap}.pprof`
+	// filename. Phase 4 may switch to manifest-relative when
+	// regression-detection consumes baseline manifests; keeping
+	// absolute for phase 2 since flamegraph generation runs on the
+	// same host that produced the profiles.
+	CPUProfile  string `json:"cpu_profile,omitempty"`
+	HeapProfile string `json:"heap_profile,omitempty"`
+	// CPUIterations is the count of handler calls run under the
+	// CPU profile boundary. Single-call profiles are too short for
+	// the runtime sampler (~100Hz, 10ms tick) to record meaningful
+	// stacks, so the harness loops K times inside one profile to
+	// give the sampler something to chew on. K defaults to 500 (see
+	// readPprofOpts for why) and is overridable via
+	// E2E_CPU_ITERATIONS.
+	CPUIterations int `json:"cpu_iterations,omitempty"`
+}
+
+// pprofOpts is the per-test-run pprof capture configuration.
+// Empty .dir means "do not capture pprof" — phase 1 default.
+type pprofOpts struct {
+	dir        string // .e2e/ or whatever; empty disables capture
+	iterations int    // CPU profile loop count (heap is single-shot)
+}
+
+// readPprofOpts parses the env-var-driven pprof config. Returns
+// zero-value opts (no capture) when E2E_CAPTURE_PPROF is unset.
+func readPprofOpts(t *testing.T) pprofOpts {
+	t.Helper()
+	if os.Getenv("E2E_CAPTURE_PPROF") != "1" {
+		return pprofOpts{}
+	}
+	dir := os.Getenv("E2E_PPROF_DIR")
+	if dir == "" {
+		// Default to a sibling of the manifest, or to a tempdir if
+		// neither is set. Prefer co-locating with the manifest so
+		// `task profile-tools` ends up with one tidy output dir.
+		if mf := os.Getenv("E2E_PROFILE_OUT"); mf != "" {
+			dir = filepath.Join(filepath.Dir(mf), "pprof")
+		} else {
+			dir = t.TempDir()
+		}
+	}
+	// Match capturePprof's best-effort posture: if the dir can't
+	// be created, log and disable capture rather than failing the
+	// whole harness. Phase-1 latency/alloc capture still runs and
+	// the manifest still emits — pprof is a bonus, not a gate.
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Logf("pprof: could not create dir %s: %v (capture disabled for this run)", dir, err)
+		return pprofOpts{}
+	}
+
+	// Default iterations: 500. Mache's tools complete in <1ms each
+	// (phase 1 baseline), and the runtime CPU sampler runs at
+	// ~100Hz (10ms tick). Below ~200 iterations the CPU profile
+	// records zero samples — the loop exits before any tick.
+	// 500 × ~1ms ≈ 500ms per tool, so a full pprof run takes
+	// ~8s for the 16-tool surface. Heap profiling has no
+	// equivalent sampling-rate constraint and is meaningful at
+	// any iteration count; CPU is the dimensioning concern.
+	//
+	// On larger fixtures with slower tools, lower iterations work;
+	// users can tune via E2E_CPU_ITERATIONS.
+	iterations := 500
+	if v := os.Getenv("E2E_CPU_ITERATIONS"); v != "" {
+		n, err := strconv.Atoi(v)
+		require.NoError(t, err, "E2E_CPU_ITERATIONS must be int")
+		require.Positive(t, n, "E2E_CPU_ITERATIONS must be > 0")
+		iterations = n
+	}
+	t.Logf("pprof capture enabled: dir=%s cpu_iterations=%d", dir, iterations)
+	return pprofOpts{dir: dir, iterations: iterations}
 }
 
 // TestE2E_AllMCPTools is the harness. See file header.
@@ -114,9 +194,10 @@ func TestE2E_AllMCPTools(t *testing.T) {
 		// is the right fit. Phase 1 pins the read surface.
 	}
 
+	opts := readPprofOpts(t)
 	profiles := make([]toolProfile, 0, len(invocations))
 	for _, inv := range invocations {
-		profiles = append(profiles, profileTool(t, inv.name, inv.handler(g), inv.args))
+		profiles = append(profiles, profileTool(t, inv.name, inv.handler(g), inv.args, opts))
 	}
 
 	printProfileSummary(t, profiles)
@@ -153,7 +234,15 @@ func TestE2E_AllMCPTools(t *testing.T) {
 // profileTool calls one tool handler and records latency + alloc
 // deltas. Forces a GC before the call so the alloc delta reflects
 // only the tool's work, not the previous tool's still-live objects.
-func profileTool(t *testing.T, name string, h server.ToolHandlerFunc, args map[string]any) toolProfile {
+//
+// When opts.dir is set, additionally captures CPU + heap pprof
+// artifacts. The latency/alloc measurement still comes from a
+// single canonical call so the manifest numbers are comparable
+// run-over-run regardless of pprof being on. The CPU profile is
+// captured over a separate K-iteration loop because single-call
+// profiles are too short for the runtime sampler (~100Hz tick) to
+// record meaningful stacks.
+func profileTool(t *testing.T, name string, h server.ToolHandlerFunc, args map[string]any, opts pprofOpts) toolProfile {
 	t.Helper()
 	var startMem, endMem runtime.MemStats
 	runtime.GC()
@@ -197,7 +286,104 @@ func profileTool(t *testing.T, name string, h server.ToolHandlerFunc, args map[s
 		p.Status = "ok"
 		p.BodySize = len(resultText(t, res))
 	}
+
+	// Phase 2: optional pprof capture. Skip on tools that errored
+	// or were skipped — profiling an LSP-tool that immediately
+	// returns "no _lsp_* table" is profile noise, not signal.
+	if opts.dir != "" && p.Status == "ok" {
+		capturePprof(t, name, h, args, opts, &p)
+	}
 	return p
+}
+
+// capturePprof writes:
+//
+//   - <name>.cpu.pprof — CPU profile over the iteration loop
+//   - <name>.heap.baseline.pprof — heap snapshot BEFORE the loop
+//   - <name>.heap.pprof — heap snapshot AFTER the loop
+//
+// The two heap snapshots let consumers (the flamegraphs task, any
+// regression detector) compute the delta via `pprof -base=baseline`.
+// Without that, heap profiles show cumulative allocation since
+// process start — dominated by init-time noise (jsonschema, sqlite,
+// tree-sitter package init) that buries the actual per-tool signal.
+//
+// Sets p.CPUProfile / p.HeapProfile (the AFTER snapshot) on the
+// toolProfile. The baseline path is derived from HeapProfile by
+// the consumer (sibling .heap.baseline.pprof file).
+//
+// Errors are logged via t.Logf but don't fail the test — the
+// harness's primary job is the latency/alloc measurement; pprof
+// is a bonus. An I/O failure shouldn't break the observability
+// story.
+func capturePprof(t *testing.T, name string, h server.ToolHandlerFunc, args map[string]any, opts pprofOpts, p *toolProfile) {
+	t.Helper()
+
+	// Baseline heap snapshot BEFORE the iteration loop. GC first
+	// so the snapshot reflects steady-state live allocations
+	// rather than pending garbage from previous tools.
+	runtime.GC()
+	baselinePath := filepath.Join(opts.dir, name+".heap.baseline.pprof")
+	if baselineFile, err := os.Create(baselinePath); err == nil {
+		_ = pprof.WriteHeapProfile(baselineFile)
+		_ = baselineFile.Close()
+	} else {
+		t.Logf("pprof: could not create %s: %v", baselinePath, err)
+	}
+
+	// CPU profile over K iterations.
+	cpuPath := filepath.Join(opts.dir, name+".cpu.pprof")
+	cpuFile, err := os.Create(cpuPath)
+	if err != nil {
+		t.Logf("pprof: could not create %s: %v", cpuPath, err)
+		return
+	}
+	defer func() { _ = cpuFile.Close() }()
+
+	if err := pprof.StartCPUProfile(cpuFile); err != nil {
+		t.Logf("pprof: StartCPUProfile %s: %v", name, err)
+		return
+	}
+	// Defer StopCPUProfile so it runs even if a handler panics
+	// during the iteration loop. Go's testing framework recovers
+	// panics and continues running other tests; without this
+	// defer, profiling stays enabled and the next tool's
+	// StartCPUProfile fails with "already profiling", cascading
+	// the failure across the whole harness.
+	//
+	// The explicit StopCPUProfile() below the loop runs on the
+	// happy path and tightens the CPU profile boundary to just
+	// the iterations (excludes the GC+heap-write tail). The defer
+	// is then a no-op on the happy path and the panic-safety
+	// fallback otherwise.
+	defer pprof.StopCPUProfile()
+
+	for i := 0; i < opts.iterations; i++ {
+		// Ignore result/error: the canonical call above already
+		// recorded ok-status. Iterations exist to give the sampler
+		// enough work to record stacks.
+		_, _ = h(context.Background(), makeRequest(args))
+	}
+	pprof.StopCPUProfile()
+	p.CPUProfile = cpuPath
+	p.CPUIterations = opts.iterations
+
+	// Heap snapshot after the loop. GC first so the snapshot
+	// reflects steady-state allocations rather than interim
+	// garbage from the iteration loop.
+	runtime.GC()
+	heapPath := filepath.Join(opts.dir, name+".heap.pprof")
+	heapFile, err := os.Create(heapPath)
+	if err != nil {
+		t.Logf("pprof: could not create %s: %v", heapPath, err)
+		return
+	}
+	defer func() { _ = heapFile.Close() }()
+	if err := pprof.WriteHeapProfile(heapFile); err != nil {
+		t.Logf("pprof: WriteHeapProfile %s: %v", name, err)
+		return
+	}
+	p.HeapProfile = heapPath
 }
 
 // printProfileSummary emits a human-readable table to test output.
