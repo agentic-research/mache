@@ -46,6 +46,47 @@ func writeBindingLogForTest(t *testing.T, dbPath, target, token, construct, refU
 	require.NoError(t, enc.Encode(msg))
 }
 
+// bindingRec describes one record for writeMultiBindingLogForTest.
+// Fields use the same vocabulary as the BindingRecord schema; empty
+// fields default per the schema-evolution invariant (qualifier="" is
+// the pre-T8.7 default and exercises the COALESCE fallback to token
+// in the qualifier-aware fan_out_skew metric).
+type bindingRec struct {
+	target, token, construct, qualifier string
+}
+
+// writeMultiBindingLogForTest writes N records to one .bindings.capnp
+// log next to dbPath. Used by tests that need the qualifier signal
+// across multiple referrers (mache-6c0d07 fan_out_skew), where the
+// single-record helper would overwrite each record.
+func writeMultiBindingLogForTest(t *testing.T, dbPath string, recs []bindingRec) {
+	t.Helper()
+	logPath := lsp.SiblingBindingLogPath(dbPath)
+	f, err := os.Create(logPath)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	enc := capnp.NewEncoder(f)
+	for _, r := range recs {
+		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
+		require.NoError(t, err)
+		rec, err := bindings.NewRootBindingRecord(seg)
+		require.NoError(t, err)
+		require.NoError(t, rec.SetTargetNodeId(r.target))
+		require.NoError(t, rec.SetRefToken(r.token))
+		require.NoError(t, rec.SetConstructNodeId(r.construct))
+		require.NoError(t, rec.SetRefSiteNodeId(""))
+		require.NoError(t, rec.SetRefUri(""))
+		require.NoError(t, rec.SetQualifier(r.qualifier))
+		rng, err := rec.NewRefRange()
+		require.NoError(t, err)
+		_, err = rng.NewStart()
+		require.NoError(t, err)
+		_, err = rng.NewEnd()
+		require.NoError(t, err)
+		require.NoError(t, enc.Encode(msg))
+	}
+}
+
 // dead_code skip-list precise retreat — ADR-0013 follow-up after
 // Falsifiability A passed empirically. The skip-list now has two
 // halves:

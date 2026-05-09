@@ -58,4 +58,17 @@ struct BindingRecord {
   # consumers correlate a binding to a specific Σ root advance.
   # T8.5 will hash segments per-generation into Σ root.
   parseGen @6 :UInt64;
+
+  # T8.7: the LHS of a `selector_expression` containing the ref site.
+  # In `pkg.Method`, qualifier is `pkg`; in `obj.method`, qualifier is
+  # `obj`; for a bare-identifier call (`Foo()`) qualifier is empty.
+  # Distinguishes structurally equivalent shapes (qualified vs
+  # unqualified) without consumer-side AST re-walks. Resolves
+  # mache-42118e (qualifier-aware fan_out_skew metric).
+  #
+  # Text-scan extraction: scan the byte immediately before the ref
+  # site; if it's `.`, scan back through identifier characters. This
+  # captures `pkg`/`obj` for the *immediate* qualifier; for chained
+  # selectors `a.b.c`, qualifier is `b` (the immediate predecessor).
+  qualifier @7 :Text;
 }
