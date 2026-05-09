@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
+	capnp "capnproto.org/go/capnp/v3"
+	"github.com/agentic-research/mache/internal/lsp"
+	"github.com/agentic-research/mache/internal/lsp/bindings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -20,11 +24,19 @@ import (
 // sqlDBQuerier wraps a *sql.DB as a refsQuerier. The smellTestGraph
 // in serve_find_smells_test.go is heavier than these tests need
 // (full graph + AST plumbing); a thin wrapper is enough.
-type sqlDBQuerier struct{ db *sql.DB }
+type sqlDBQuerier struct {
+	db   *sql.DB
+	path string // optional: when set, exposed via DBPath() for capnp readthrough
+}
 
 func (q *sqlDBQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return q.db.Query(query, args...)
 }
+
+// DBPath implements dbPathProvider when path is set, opting this
+// querier into the capnp-readthrough path. Tests that don't set path
+// keep the legacy mention + SQL-binding view shape.
+func (q *sqlDBQuerier) DBPath() string { return q.path }
 
 func TestEnsureCanonicalViews_BindingFidelityWhenLSPColumnsPresent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "binding.db")
@@ -244,6 +256,156 @@ func TestEnsureCanonicalViews_SkipsEmptyTokenRows(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'binding'`).Scan(&bindingRefs))
 	assert.Equal(t, 1, bindingDefs, "only the row with non-empty def_token survives")
 	assert.Equal(t, 1, bindingRefs, "only the row with non-empty ref_token AND non-NULL referrer survives")
+}
+
+// TestLoadCapnpBindings_PopulatesViewFromSiblingLog asserts the
+// step 3 capnp readthrough end-to-end: ensureCanonicalViews creates
+// the empty _capnp_binding_refs TEMP table, LoadCapnpBindings reads
+// the sibling .bindings.capnp event log and inserts records, and
+// the v_refs UNION arm surfaces them as binding-fidelity rows
+// alongside the mention-only node_refs rows.
+func TestLoadCapnpBindings_PopulatesViewFromSiblingLog(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "self.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	// Per-connection TEMP table — pin to one connection so the table
+	// LoadCapnpBindings populates is the same one the v_refs SELECT
+	// reads from.
+	db.SetMaxOpenConns(1)
+
+	_, err = db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		INSERT INTO node_refs VALUES ('Validate', 'billing/functions/Charge');
+	`)
+	require.NoError(t, err)
+
+	// Write a sibling .bindings.capnp with two records: one for the
+	// same Validate call billing makes (so we get a binding-fidelity
+	// confirmation alongside the mention) and one for a totally new
+	// reference (so we know the capnp arm is genuinely contributing
+	// rows the SQL doesn't have).
+	logPath := lsp.SiblingBindingLogPath(dbPath)
+	f, err := os.Create(logPath)
+	require.NoError(t, err)
+	enc := capnp.NewEncoder(f)
+	for _, r := range []struct {
+		target, token, construct, refSite, uri string
+		startLine                              uint32
+	}{
+		{"auth/functions/Validate", "Validate", "billing/functions/Charge", "billing/.../field_identifier", "file:///billing.go", 42},
+		{"stdlib/io/Reader.Read", "Read", "pkg/functions/Loop", "pkg/.../field_identifier", "file:///pkg.go", 17},
+	} {
+		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
+		require.NoError(t, err)
+		rec, err := bindings.NewRootBindingRecord(seg)
+		require.NoError(t, err)
+		require.NoError(t, rec.SetTargetNodeId(r.target))
+		require.NoError(t, rec.SetRefToken(r.token))
+		require.NoError(t, rec.SetConstructNodeId(r.construct))
+		require.NoError(t, rec.SetRefSiteNodeId(r.refSite))
+		require.NoError(t, rec.SetRefUri(r.uri))
+		rng, err := rec.NewRefRange()
+		require.NoError(t, err)
+		start, err := rng.NewStart()
+		require.NoError(t, err)
+		start.SetLine(r.startLine)
+		_, err = rng.NewEnd()
+		require.NoError(t, err)
+		require.NoError(t, enc.Encode(msg))
+	}
+	require.NoError(t, f.Close())
+
+	qg := &sqlDBQuerier{db: db, path: dbPath}
+	require.NoError(t, ensureCanonicalViews(qg))
+	require.NoError(t, LoadCapnpBindings(qg, qg.DBPath()))
+
+	// v_refs should now surface 1 mention row + 2 binding rows.
+	var mentionRefs, bindingRefs int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'mention'`).Scan(&mentionRefs))
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'binding'`).Scan(&bindingRefs))
+	assert.Equal(t, 1, mentionRefs, "mention arm preserved (node_refs row)")
+	assert.Equal(t, 2, bindingRefs, "capnp arm contributes both records")
+
+	// Pin the projection: capnp's constructNodeId becomes
+	// referrer_node_id in v_refs (matches node_refs.node_id shape).
+	// This is the structural fix for Falsifiability B.
+	rows, err := db.Query(`SELECT referrer_node_id, token, target_node_id
+	                       FROM v_refs WHERE fidelity = 'binding' ORDER BY token`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	type bindingRow struct{ ref, tok, tgt string }
+	var got []bindingRow
+	for rows.Next() {
+		var b bindingRow
+		require.NoError(t, rows.Scan(&b.ref, &b.tok, &b.tgt))
+		got = append(got, b)
+	}
+	require.Equal(t, []bindingRow{
+		{"pkg/functions/Loop", "Read", "stdlib/io/Reader.Read"},
+		{"billing/functions/Charge", "Validate", "auth/functions/Validate"},
+	}, got, "constructNodeId → referrer_node_id projection (the Falsifiability B fix)")
+}
+
+// TestLoadCapnpBindings_NoSiblingLogIsNoOp asserts the function is a
+// silent no-op when the sibling .bindings.capnp file doesn't exist.
+// LLO doesn't write the log when no LSP-resolved refs exist; mache
+// must treat that as "no enrichment", not as an error.
+func TestLoadCapnpBindings_NoSiblingLogIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "no-log.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+
+	_, err = db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		INSERT INTO node_refs VALUES ('Foo', 'pkg/functions/Bar');
+	`)
+	require.NoError(t, err)
+
+	qg := &sqlDBQuerier{db: db, path: dbPath}
+	require.NoError(t, ensureCanonicalViews(qg))
+	// Should not error even though no sibling .bindings.capnp exists.
+	require.NoError(t, LoadCapnpBindings(qg, qg.DBPath()))
+
+	var bindingRefs, mentionRefs int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'binding'`).Scan(&bindingRefs))
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'mention'`).Scan(&mentionRefs))
+	assert.Equal(t, 0, bindingRefs, "no capnp log → no binding rows")
+	assert.Equal(t, 1, mentionRefs, "mention arm still works")
+}
+
+// TestLoadCapnpBindings_EmptyDBPathIsNoOp asserts a refsQuerier
+// without a known path (e.g. in-memory test fixtures) skips the
+// capnp readthrough silently. This is the "querier doesn't implement
+// dbPathProvider" branch as exercised through the CLI/MCP entry
+// points.
+func TestLoadCapnpBindings_EmptyDBPathIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "empty.db"))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+
+	_, err = db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+	`)
+	require.NoError(t, err)
+
+	qg := &sqlDBQuerier{db: db}
+	require.NoError(t, ensureCanonicalViews(qg))
+	require.NoError(t, LoadCapnpBindings(qg, ""))
+
+	var bindingRefs int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'binding'`).Scan(&bindingRefs))
+	assert.Equal(t, 0, bindingRefs, "no path → silent skip, no binding rows")
 }
 
 func TestTableHasColumn(t *testing.T) {

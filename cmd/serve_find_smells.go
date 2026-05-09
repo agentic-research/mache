@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/lsp"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -1023,9 +1025,41 @@ func ensureCanonicalViews(qg refsQuerier) error {
 			WHERE ref_token != '' AND referrer_node_id IS NOT NULL`
 	}
 
+	// Capnp readthrough (mache-190508 step 3): every connection that
+	// gets canonical views also gets an empty _capnp_binding_refs
+	// TEMP table that v_refs UNIONs over. When LoadCapnpBindings is
+	// called for this connection, the table fills with binding-
+	// fidelity rows from the sibling .bindings.capnp event log; when
+	// it's not called, the table stays empty and the UNION arm
+	// contributes nothing — legacy behavior preserved.
+	//
+	// The capnp rows are surfaced AS WELL AS the legacy _lsp_refs SQL
+	// arm rather than instead of it. Producers that write both will
+	// produce duplicate rows; that's fine for find_smells consumers
+	// (alive-check is set membership, deduplicates naturally) and
+	// gives us a transition window to validate the capnp source
+	// before retiring the SQL one.
+	refsBody += `
+		UNION ALL
+		SELECT referrer_node_id,
+		       token,
+		       target_node_id,
+		       ref_uri,
+		       ref_line,
+		       'binding' AS fidelity
+		FROM _capnp_binding_refs`
+
 	stmts := []string{
 		"DROP VIEW IF EXISTS temp.v_defs",
 		"DROP VIEW IF EXISTS temp.v_refs",
+		"DROP TABLE IF EXISTS temp._capnp_binding_refs",
+		`CREATE TEMP TABLE _capnp_binding_refs (
+			referrer_node_id TEXT NOT NULL,
+			token TEXT NOT NULL,
+			target_node_id TEXT,
+			ref_uri TEXT,
+			ref_line INTEGER
+		)`,
 		"CREATE TEMP VIEW v_defs AS " + defsBody,
 		"CREATE TEMP VIEW v_refs AS " + refsBody,
 	}
@@ -1033,6 +1067,54 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		rows, err := qg.QueryRefs(s)
 		if err != nil {
 			return fmt.Errorf("ensure canonical views: %w", err)
+		}
+		_ = rows.Close()
+	}
+	return nil
+}
+
+// LoadCapnpBindings populates the per-connection _capnp_binding_refs
+// TEMP table from the sibling .bindings.capnp event log of dbPath.
+// Must be called AFTER ensureCanonicalViews on the same connection
+// (the TEMP table is created there).
+//
+// No-op when the sibling log is missing (returns nil) — the canonical
+// view's UNION arm just stays empty. Returns an error when the log
+// exists but is corrupt.
+//
+// Producers that write to BOTH _lsp_refs AND .bindings.capnp will
+// produce duplicate-shaped rows in v_refs (one per producer); set-
+// membership consumers (alive-check in dead_code) deduplicate
+// naturally, so this isn't a correctness issue. Once the capnp event
+// log is the canonical producer (post-T8.5), the _lsp_refs UNION arm
+// in ensureCanonicalViews can be removed.
+func LoadCapnpBindings(qg refsQuerier, dbPath string) error {
+	if dbPath == "" {
+		return nil
+	}
+	logPath := lsp.SiblingBindingLogPath(dbPath)
+	records, err := lsp.ReadBindingLog(logPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load capnp bindings: %w", err)
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	// Single-row INSERTs are ~30K syscalls on a typical mache-scale
+	// log. Acceptable for the first pass; if it shows up in profiles
+	// switch to a multi-row INSERT or a prepared-stmt loop.
+	for _, r := range records {
+		stmt := `INSERT INTO _capnp_binding_refs
+			(referrer_node_id, token, target_node_id, ref_uri, ref_line)
+			VALUES (?, ?, ?, ?, ?)`
+		rows, err := qg.QueryRefs(stmt, r.ConstructNodeID, r.RefToken,
+			r.TargetNodeID, r.RefURI, int64(r.RefRange.StartLine))
+		if err != nil {
+			return fmt.Errorf("insert capnp binding: %w", err)
 		}
 		_ = rows.Close()
 	}
@@ -1104,10 +1186,30 @@ func isSimpleIdent(s string) bool {
 	return true
 }
 
+// dbPathProvider is the opt-in interface a refsQuerier implements
+// when it knows its backing .db file path. The path is only used to
+// locate the sibling .bindings.capnp event log for capnp-readthrough
+// (mache-190508 step 3); queriers that don't know the path (in-memory
+// test fixtures, the in-process arena) skip the capnp source
+// silently. The mention + legacy SQL binding paths still apply.
+type dbPathProvider interface {
+	DBPath() string
+}
+
 // runSmellRule executes the rule's SQL, optionally scoped to one source.
 func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
 	if err := ensureCanonicalViews(qg); err != nil {
 		return nil, err
+	}
+	// Capnp readthrough (mache-190508 step 3): if this querier knows
+	// its dbPath AND a sibling .bindings.capnp event log exists, load
+	// its records into the per-connection _capnp_binding_refs TEMP
+	// table. v_refs is already configured to UNION over that table
+	// (in ensureCanonicalViews); empty table → no extra rows.
+	if dp, ok := qg.(dbPathProvider); ok {
+		if err := LoadCapnpBindings(qg, dp.DBPath()); err != nil {
+			return nil, err
+		}
 	}
 
 	scope := ""
