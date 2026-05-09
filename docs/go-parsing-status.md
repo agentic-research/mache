@@ -20,6 +20,7 @@ Whether the source is `const X = 1` or `const ( X = 1 )`, the Agent sees and wri
 ```
 
 This contract applies to:
+
 - `constants/{name}/source` — no `const` keyword
 - `variables/{name}/source` — no `var` keyword
 - `types/{name}/source` — no `type` keyword
@@ -30,23 +31,23 @@ in Go with no grouped form.
 
 ## Construct Status
 
-| Construct | Status | Isolated | Keyword in source | Refactoring ready | Notes |
-|-----------|--------|----------|-------------------|-------------------|-------|
-| Functions | complete | yes | yes (`func`) | yes | Atomic, standalone |
-| Methods (pointer) | complete | yes | yes (`func (r *T)`) | yes | Receiver captured without `*` |
-| Methods (value) | complete | yes | yes (`func (r T)`) | yes | Receiver captured as type name |
-| Types (single) | complete | yes | no (normalized) | yes | `type` stripped |
-| Types (grouped) | complete | yes | no (normalized) | yes | Each type_spec isolated |
-| Constants (single) | complete | yes | no (normalized) | yes | `const` stripped |
-| Constants (grouped) | complete | yes | no (normalized) | yes | Each const_spec isolated |
-| Variables (single) | complete | yes | no (normalized) | yes | `var` stripped |
-| Variables (grouped) | complete | yes | no (normalized) | yes | Each var_spec isolated |
-| `init()` functions | partial | **no** | yes | **no** | Multiple init() in same package collide (last-writer-wins). Needs engine-level dedup. |
-| Generic functions | complete | yes | yes | partial | Source includes type params. Directory name lacks them (`Foo` not `Foo[T any]`). Acceptable for navigation. |
-| Generic types | complete | yes | no (normalized) | partial | Same as generic functions. |
-| Imports | **not captured** | n/a | n/a | **no** | Cannot add/remove imports during refactoring. Needs `/imports/` directory or dedicated mechanism. |
-| Struct fields | **not decomposed** | n/a | n/a | n/a | Fields are in the type source but not individually addressable. |
-| Interface methods | **not decomposed** | n/a | n/a | n/a | Method signatures are in the type source but not individually addressable. |
+| Construct           | Status         | Isolated | Keyword in source   | Refactoring ready | Notes                                                                                                                                                               |
+| ------------------- | -------------- | -------- | ------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Functions           | complete       | yes      | yes (`func`)        | yes               | Atomic, standalone                                                                                                                                                  |
+| Methods (pointer)   | complete       | yes      | yes (`func (r *T)`) | yes               | Receiver captured without `*`                                                                                                                                       |
+| Methods (value)     | complete       | yes      | yes (`func (r T)`)  | yes               | Receiver captured as type name                                                                                                                                      |
+| Types (single)      | complete       | yes      | no (normalized)     | yes               | `type` stripped                                                                                                                                                     |
+| Types (grouped)     | complete       | yes      | no (normalized)     | yes               | Each type_spec isolated                                                                                                                                             |
+| Constants (single)  | complete       | yes      | no (normalized)     | yes               | `const` stripped                                                                                                                                                    |
+| Constants (grouped) | complete       | yes      | no (normalized)     | yes               | Each const_spec isolated                                                                                                                                            |
+| Variables (single)  | complete       | yes      | no (normalized)     | yes               | `var` stripped                                                                                                                                                      |
+| Variables (grouped) | complete       | yes      | no (normalized)     | yes               | Each var_spec isolated                                                                                                                                              |
+| `init()` functions  | complete       | yes      | yes                 | yes               | Engine dedups colliding names by appending `.from_<sourcefile>` (`engine.go::dedupSuffix`). Multiple `init()` in the same package each get a stable, isolated path. |
+| Generic functions   | complete       | yes      | yes                 | partial           | Source includes type params. Directory name lacks them (`Foo` not `Foo[T any]`). Acceptable for navigation.                                                         |
+| Generic types       | complete       | yes      | no (normalized)     | partial           | Same as generic functions.                                                                                                                                          |
+| Imports             | complete       | yes      | n/a                 | yes               | Captured under `{package}/imports/` per the Go schema; agents can list, read, add, and remove import entries.                                                       |
+| Struct fields       | not decomposed | n/a      | n/a                 | n/a               | Fields live in the type source but aren't individually addressable. By design — coarse granularity is sufficient for current refactoring use cases.                 |
+| Interface methods   | not decomposed | n/a      | n/a                 | n/a               | Method signatures live in the type source but aren't individually addressable. Same rationale as struct fields.                                                     |
 
 ## Filesystem Layout
 
@@ -57,24 +58,8 @@ in Go with no grouped form.
   types/{Name}/source
   constants/{name}/source
   variables/{name}/source
+  imports/{path}/source
 ```
-
-## Blocking Issues for Refactoring
-
-### 1. `init()` collision (engine-level)
-
-Multiple `init()` functions in the same package produce the same path
-(`{pkg}/functions/init/source`). The last file processed wins, silently
-dropping earlier init functions. Fix requires engine-level same-name dedup
-(e.g., counter suffix, filename suffix).
-
-### 2. Imports not captured
-
-An Agent that renames `http.Get` to `client.Get` cannot add the new import.
-Options:
-- Add `{package}/imports/` virtual directory listing each import
-- Add a writable `{package}/imports` file mapping to the import block
-- Rely on external tooling (`goimports`) as a post-write hook
 
 ## Not Blocking
 
