@@ -119,6 +119,21 @@ tasks:
       # `task gen-bindings && git commit` reaches a stable state in
       # one cycle.
 
+  profile-tools:
+    desc: E2E harness — exercise every MCP tool, emit per-tool latency/alloc manifest (mache-6b6da6)
+    cmds:
+      # E2E_PROFILE_OUT controls manifest emission; the test always
+      # logs a summary table to stdout regardless. Phase 1 captures
+      # latency + alloc deltas; phase 2 will add pprof CPU/heap and
+      # SVG flamegraphs.
+      #
+      # Use absolute path because `go test ./cmd/` runs with cwd
+      # set to cmd/, not the project root — relative paths land
+      # under cmd/.e2e/ otherwise.
+      - mkdir -p {{.ROOT_DIR}}/.e2e
+      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json go test -v -run 'TestE2E_AllMCPTools' ./cmd/
+      - echo "manifest -> .e2e/tool-profile.json"
+
   fuzz-gen:
     desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target
     dir: tools/fuzz-gen
