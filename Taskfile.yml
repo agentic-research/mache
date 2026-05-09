@@ -123,9 +123,9 @@ tasks:
     desc: E2E harness — exercise every MCP tool, emit per-tool latency/alloc manifest (mache-6b6da6)
     cmds:
       # E2E_PROFILE_OUT controls manifest emission; the test always
-      # logs a summary table to stdout regardless. Phase 1 captures
-      # latency + alloc deltas; phase 2 will add pprof CPU/heap and
-      # SVG flamegraphs.
+      # logs a summary table to stdout regardless. Latency + alloc
+      # only; rerun with `task profile-tools-pprof` to also capture
+      # pprof CPU/heap artifacts.
       #
       # Use absolute path because `go test ./cmd/` runs with cwd
       # set to cmd/, not the project root — relative paths land
@@ -133,6 +133,23 @@ tasks:
       - mkdir -p {{.ROOT_DIR}}/.e2e
       - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json go test -v -run 'TestE2E_AllMCPTools' ./cmd/
       - echo "manifest -> .e2e/tool-profile.json"
+
+  profile-tools-pprof:
+    desc: E2E harness with per-tool pprof CPU + heap capture (mache-6b6da6 phase 2)
+    cmds:
+      # Adds pprof capture: each tool runs through E2E_CPU_ITERATIONS
+      # calls under runtime/pprof.StartCPUProfile (default 500 to
+      # cross the 100Hz sampler threshold) plus a heap snapshot.
+      # Per-tool .cpu.pprof + .heap.pprof land in .e2e/pprof/.
+      # Total runtime ~3-8s depending on iteration count.
+      #
+      # Open with `go tool pprof .e2e/pprof/<tool>.cpu.pprof`
+      # or `go tool pprof -svg .e2e/pprof/<tool>.heap.pprof`
+      # to render a flamegraph.
+      - mkdir -p {{.ROOT_DIR}}/.e2e/pprof
+      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json E2E_CAPTURE_PPROF=1 go test -v -run 'TestE2E_AllMCPTools' ./cmd/
+      - echo "manifest -> .e2e/tool-profile.json"
+      - echo "pprof    -> .e2e/pprof/*.{cpu,heap}.pprof"
 
   fuzz-gen:
     desc: Generate a new "Fuzz-Mutate-Repair" task by breaking a target
