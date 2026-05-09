@@ -244,17 +244,22 @@ func TestFalsifiabilityA_SyntheticHarness(t *testing.T) {
 
 		-- node_refs: empty. tree-sitter call-extraction can't resolve
 		-- io.Reader.Read() back to MyType, so NO mention rows.
-
-		-- _lsp_refs: gopls resolved a call site for MyType.Read but
-		-- not Quux (Quux is unused even by LSP's eyes).
-		INSERT INTO _lsp_refs VALUES
-			('pkg/methods/MyType.Read', 'pkg/functions/Caller', 'Read',
-			 'file:///caller.go', 30, 11, 30, 15);
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	// Post-mache-6bd4d8: binding-fidelity rows come from the capnp
+	// event log, not the legacy _lsp_refs SQL table. Write a single
+	// record for MyType.Read (Quux deliberately omitted — it's the
+	// "LSP didn't see this" wedge-case 1 control).
+	writeBindingLogForTest(t, dbPath,
+		"pkg/methods/MyType.Read", // targetNodeId
+		"Read",                    // refToken
+		"pkg/functions/Caller",    // constructNodeId (referrer)
+		"file:///caller.go")       // refUri
+
+	qg := &sqlDBQuerier{db: db, path: dbPath}
 	require.NoError(t, ensureCanonicalViews(qg))
+	require.NoError(t, LoadCapnpBindings(qg, qg.DBPath()))
 
 	withSkip, withoutSkip := runDeadCodeWithAndWithout(t, db)
 

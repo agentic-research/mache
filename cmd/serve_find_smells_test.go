@@ -18,12 +18,18 @@ import (
 // don't want to spin up a full SQLiteGraph just to run a SQL pattern.
 type smellTestGraph struct {
 	*graph.MemoryStore
-	db *sql.DB
+	db   *sql.DB
+	path string // optional: when set, exposed via DBPath() for capnp readthrough
 }
 
 func (s *smellTestGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return s.db.Query(query, args...)
 }
+
+// DBPath implements dbPathProvider when path is set, opting this
+// test graph into capnp readthrough (mache-190508 step 3 / mache-6bd4d8).
+// Tests that don't set path keep the legacy mention-only view shape.
+func (s *smellTestGraph) DBPath() string { return s.path }
 
 // seedSmellAST creates a minimal _ast database modeling the Go statements
 //
