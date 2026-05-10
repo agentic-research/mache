@@ -1,0 +1,63 @@
+# apko.yaml — assemble mache OCI image
+#
+#   apko build apko.yaml mache:0.8.0 mache.tar --keyring-append melange.rsa.pub
+#
+# Produces a distroless OCI image with just the mache binary.
+# No shell, no package manager, no kernel privileges — mache is a plain
+# subprocess that serves over UDS / stdio / HTTP. FUSE was removed in
+# mache v0.7.0 (see docs/adr/0006-pure-go-mcp-first.md).
+
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+    # Local APK index produced by `task image` (melange build → ./packages).
+    # Must be listed last so wolfi-baselayout / ca-certs resolve upstream.
+    - "@local ./packages"
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./melange.rsa.pub
+  packages:
+    - ca-certificates-bundle
+    - wolfi-baselayout
+    - mache@local
+
+accounts:
+  groups:
+    - groupname: mache
+      gid: 65532
+  users:
+    - username: mache
+      uid: 65532
+      gid: 65532
+      shell: /sbin/nologin
+  run-as: 65532
+
+# Directory the cluster bind-mounts for the UDS socket.
+# When running standalone, mount any host dir here:
+#   docker run -v /tmp:/run/cloister-uds mache:0.8.0 ...
+paths:
+  - path: /run/cloister-uds
+    type: directory
+    uid: 65532
+    gid: 65532
+    permissions: 0o755
+
+entrypoint:
+  command: /usr/bin/mache
+
+# Default to stdio — the cloister manifest overrides args at deploy time.
+# Cluster manifest (cloister/cluster.capnp) uses:
+#   args = ["serve", "--ipc-socket", "/run/cloister-uds/mache.sock"]
+# That flag is not yet wired in mache's CLI (only --http and --stdio exist
+# today, see cmd/serve.go) — flagged in mache-172a50 for a follow-up.
+cmd: serve --stdio
+
+archs:
+  - x86_64
+  - aarch64
+
+annotations:
+  org.opencontainers.image.title: mache
+  org.opencontainers.image.description: "mache — structural code intelligence as MCP"
+  org.opencontainers.image.source: https://github.com/agentic-research/mache
+  org.opencontainers.image.licenses: Apache-2.0

@@ -83,6 +83,19 @@ tasks:
     cmds:
       - rm -f {{.BINARY_NAME}}
       - rm -f coverage.out coverage.html
+      - rm -rf packages mache.tar
+      - rm -f melange.rsa melange.rsa.pub
+
+  image:
+    desc: Build OCI image (melange + apko) → mache.tar (mache:0.8.0)
+    cmds:
+      # Reproducible keygen: only generate if the signing key is missing.
+      # `melange build` requires --signing-key, so this is the cheapest
+      # local-dev path; CI should use a fixed keypair from a secret.
+      - test -f melange.rsa || melange keygen melange.rsa
+      - melange build melange.yaml --arch x86_64,aarch64 --signing-key melange.rsa --out-dir ./packages
+      - apko build apko.yaml mache:0.8.0 mache.tar --keyring-append melange.rsa.pub
+      - 'echo "Built mache.tar — load with: docker load -i mache.tar"'
 
   validate:
     desc: Validate example schemas against synthetic SQLite fixtures
