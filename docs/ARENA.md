@@ -1,53 +1,56 @@
-# Mache Arena: Agent Benchmark Guide
+---
+status: current
+covers-version: v0.8.0
+last-verified: 2026-05-10
+sources-of-truth:
+  - scripts/arena.sh
+audience: [contributors, evaluators, agent developers]
+supersedes: []
+---
 
-This guide explains how to run the Mache Arena to test an AI Agent's ability to refactor code via the filesystem overlay.
+# Mache Arena: 6-Level Agent Benchmark
 
-## 1. Start the Arena
+The Arena is a custom benchmark that tests whether an LLM-driven agent can operate on real code **only through mache's filesystem abstraction** — no direct file access. The target code is intentionally bespoke so memorized patterns don't help.
 
-Run this command in your terminal:
+The driver is [`scripts/arena.sh`](../scripts/arena.sh); this doc explains what the levels measure and how to run them. For the agent-facing briefing, see the `PROMPT.txt` that the script writes into the sandbox.
+
+## Running the Arena
 
 ```bash
-bash scripts/arena.sh interactive
+# Interactive (script mounts the sandbox, you bring your own agent):
+bash scripts/arena.sh
+
+# Same flow with automated verification when you press ENTER:
+bash scripts/arena.sh --verify
+
+# Pre-canned demo (no agent, no verification — just shows the mount):
+bash scripts/arena.sh --demo
 ```
 
-**What happens:**
-1.  Mache builds and creates a disposable sandbox at `/tmp/mache-arena`.
-2.  It mounts the virtual filesystem at `/tmp/mache-arena/mnt`.
-3.  It pauses and waits for you to run your Agent.
+The script builds mache, creates a disposable sandbox at `/tmp/mache-arena/`, ingests a hand-crafted Go codebase, and NFS-mounts it at `/tmp/mache-arena/mnt/`. Drop your agent into the sandbox with the generated `PROMPT.txt` and let it work through the levels.
 
-## 2. Deploy the Agent
+## The Six Levels
 
-Once the script says **"Interactive Mode"**, paste the following System Prompt into your LLM's context.
+| #   | Name                          | What it measures                                                                                                    |
+| --- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 1   | Orientation                   | Can the agent discover the codebase by listing virtual directories and writing a summary?                           |
+| 2   | Bug Hunt                      | Can the agent locate and fix a logic bug (off-by-one) by reading and rewriting `source` files?                      |
+| 3   | Needle in a Haystack          | Can the agent find a subtle empty-input edge case by inspecting multiple functions?                                 |
+| 4   | Cross-Function Refactor       | Can the agent change two related functions consistently (checksum: XOR → addition mod 256) without breaking syntax? |
+| 5   | Adversarial Write             | Does the agent correctly use `_diagnostics/last-write-status` to recover from rejected writes (Draft mode)?         |
+| 6   | Reverse Call-Chain Navigation | Can the agent use `callers/` virtual directories to trace dependencies and find zero-caller constructs?             |
 
-### System Prompt
+Levels 1–4 exercise the read + write-back loop. Level 5 verifies the agent understands the validate → format → splice pipeline and Draft mode. Level 6 specifically tests the `callers/` self-gating virtual-dir model.
 
-> You are an autonomous software engineer participating in the **Mache Arena** refactoring challenge.
->
-> **Your Environment:**
-> 1.  You are operating inside a sandbox.
-> 2.  The target codebase is mounted as a virtual filesystem at:
->     `MOUNT_POINT="/tmp/mache-arena/mnt"`
-> 3.  This filesystem exposes the code's **Abstract Syntax Tree (AST)**.
->     *   Top-level functions are directories (e.g., `$MOUNT_POINT/Calculate`).
->     *   The implementation of a node is in a file named `source`.
->
-> **Your Mission:**
-> The `Calculate` function in the codebase is undocumented. You must add a Go-style comment to it.
->
-> **Instructions:**
-> 1.  **Explore:** List the contents of `$MOUNT_POINT` to confirm the function exists.
-> 2.  **Read:** Read the current implementation of `Calculate` from its `source` file.
-> 3.  **Refactor:** Overwrite the `source` file with the **full new content**, which must include:
->     *   The comment: `// Calculate adds two numbers`
->     *   The original function signature and body.
->
-> **Constraints:**
-> *   Do NOT attempt to find or edit `.go` files directly.
-> *   Use ONLY standard shell commands (`ls`, `cat`, `echo`, `printf`) on the paths within `$MOUNT_POINT`.
-> *   Your goal is to trigger the Mache engine to splice your changes back into the source.
+## Scoring
 
-## 3. Verify
+After each level the agent appends notes to `/tmp/mache-arena/agent-notes.md`. `--verify` runs automated checks against the sandbox state (file contents, presence/absence of constructs, notes content) and prints a per-level pass/fail summary.
 
-1.  Let the Agent run.
-2.  When it says "I am done", press **ENTER** in your terminal running `arena.sh`.
-3.  The script will verify if the comment was successfully inserted into the source code.
+## What This Doesn't Test
+
+- Multi-file source-of-truth files outside the Arena's hand-crafted codebase.
+- `find_smells`, `get_impact`, `get_architecture`, `semantic_search` MCP tools (Arena is filesystem-only; these are MCP-only surfaces).
+- Hot-swap behavior (`current_root` substrate identity from v0.8.0).
+- The `--mount` cross-repo serve path.
+
+For end-to-end MCP-tool coverage see [`cmd/all_tools_e2e_test.go`](../cmd/all_tools_e2e_test.go) and the `task profile-tools` / `task flamegraphs` harness described in [ARCHITECTURE.md § E2E Tool Harness](ARCHITECTURE.md#e2e-tool-harness--profiling).

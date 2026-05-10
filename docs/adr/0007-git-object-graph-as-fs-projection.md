@@ -20,23 +20,23 @@ Rebase/squash operations become filesystem operations (mv, rm, cp)
 Implementation Approach:
 Add internal/ingest/git_walker.go implementing the Walker interface:
 gotype GitWalker struct {
-    repoPath string
-    objects  map[string]GitObject
+repoPath string
+objects map[string]GitObject
 }
 
 type GitObject struct {
-    Type     string   // "commit", "tree", "blob"
-    SHA      string
-    Parent   []string
-    Tree     string
-    Message  string
-    Author   string
-    // ... other metadata
+Type string // "commit", "tree", "blob"
+SHA string
+Parent []string
+Tree string
+Message string
+Author string
+// ... other metadata
 }
 
-func (gw *GitWalker) Query(selector string) ([]Match, error) {
-    // Walk git objects, return as records
-    // FCA inference discovers optimal projection
+func (gw \*GitWalker) Query(selector string) ([]Match, error) {
+// Walk git objects, return as records
+// FCA inference discovers optimal projection
 }
 The existing FCA inference will automatically discover:
 
@@ -87,7 +87,7 @@ Positive:
 Git operations accessible to agents without parsing git CLI output
 Visual, navigable commit history
 Composable with existing AST projection (view code at any commit)
-Rebase/merge conflicts become BROKEN_ nodes
+Rebase/merge conflicts become BROKEN\_ nodes
 
 Negative:
 
@@ -98,4 +98,4 @@ Conflict resolution UX needs design
 Related:
 
 ADR-0002: Declarative Topology (git objects fit the schema model)
-ADR-0006: Syntax-Aware Write Protection (extends to semantic correctness of git graphs)
+ADR-0015: Syntax-Aware Write Protection (extends to semantic correctness of git graphs)

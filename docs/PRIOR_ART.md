@@ -1,12 +1,28 @@
+---
+status: current
+covers-version: v0.8.0
+last-verified: 2026-05-10
+sources-of-truth:
+  - CHANGELOG.md
+  - docs/ROADMAP.md
+  - internal/lang/lang.go
+audience: [contributors, evaluators, prospective users]
+supersedes: []
+---
+
 # Prior Art & Landscape
 
 ## Introduction
 
-Mache is an **AI-native projection engine** that turns structured data (JSON, SQLite, source code) into a navigable graph. A declarative schema defines the topology — how source nodes map to a tree of constructs — or, with `--infer`, the schema is derived automatically via Formal Concept Analysis (FCA). The engine handles ingestion, on-demand content resolution, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings), structural analysis (`find_smells`), schema inference, identity-preserving write-back, and hot-swap on a substrate-identity (`current_root`) primitive paired with [ley-line-open](https://github.com/agentic-research/ley-line-open).
+Mache is an **AI-native projection engine** that turns structured data (JSON, SQLite, source code) into a navigable graph. A declarative schema defines the topology — how source nodes map to a tree of constructs — or, with `--infer`, the schema is derived automatically via Formal Concept Analysis (FCA). The engine handles ingestion, on-demand content resolution, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings), structural analysis (`find_smells`), schema inference, identity-preserving write-back, semantic search over `all-MiniLM-L6-v2` embeddings, pre-baked LSP results (defs/refs/hover/diagnostics), and hot-swap on a substrate-identity (`current_root`) primitive — paired with [ley-line-open](https://github.com/agentic-research/ley-line-open) as a coordinated release wave (v0.8.0 ↔ ley-line-open v0.2.0).
+
+The unit of comparison throughout this document is **mache (+ ley-line-open)**, not standalone mache. ley-line-open ships the substrate mache consumes: AST tables, capnp binding event log, LSP outputs, and fastembed embeddings. A few mache tools (`semantic_search`, `get_type_info`, `get_diagnostics`, and parts of `find_smells`) only light up when a `.db` is present; the other thirteen MCP tools work standalone. See [ADR-0014](adr/0014-mache-in-constellation.md) for the architectural framing.
 
 The graph is the product. Two equal-footing surfaces expose it: an **MCP server** (primary; 17 tools) and an optional **embedded NFS server** (via `go-nfs` + `billy`, in-process — not an OS export). The NFS choice is AI-native: agents already speak filesystem operations, so giving them a real path tree is the lowest-friction interface. Calling Mache "a filesystem" undersells it — the filesystem is one expression layer over a graph engine that also ships canonical refs/defs views, content-addressable substrate identity, AST-aware write-back, and structural-rule analysis.
 
 This positions Mache at the intersection of several traditions — filesystem-as-interface (Plan 9), data virtualization (FUSE-DB tools), and AI-agent context engineering — but no existing tool combines all of its properties: schema-driven projection, AST decomposition, identity-preserving write-back, content-addressable substrate identity, and dual MCP+FS expressions of the same graph designed for agent consumption from day one.
+
+> See [`competitive-landscape-2026.md`](competitive-landscape-2026.md) for the current commercial-tool comparison (Cursor, Cody, Augment, etc.). This document focuses on **intellectual lineage** — the academic and open-source traditions Mache descends from — rather than head-to-head feature comparison.
 
 ## Comparison Table
 

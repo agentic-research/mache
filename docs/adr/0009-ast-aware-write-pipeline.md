@@ -12,11 +12,11 @@ Mache's write-back pipeline is byte-wise: splice content at `[StartByte:EndByte]
 
 1. **Stale offsets**: After splicing node A, all sibling nodes in the same file have wrong `StartByte/EndByte`. A second write before re-ingest completes corrupts the source. The re-ingest fixes offsets but is slow (full re-parse). We need instant arithmetic offset shifting.
 
-2. **No validation gate**: An agent can write broken syntax and mache splices it blindly. The source file becomes invalid. The agent doesn't know until compilation fails later.
+1. **No validation gate**: An agent can write broken syntax and mache splices it blindly. The source file becomes invalid. The agent doesn't know until compilation fails later.
 
 Both problems have high-leverage fixes. The infrastructure (roaring bitmaps, tree-sitter) already exists in the codebase.
 
-Depends on: ADR-0004 (serialized writes), ADR-0006 (syntax-aware protection).
+Depends on: ADR-0004 (serialized writes), ADR-0015 (syntax-aware protection).
 
 ## Decision
 
@@ -25,6 +25,7 @@ Depends on: ADR-0004 (serialized writes), ADR-0006 (syntax-aware protection).
 Add a roaring bitmap index to MemoryStore mapping source file paths to the set of node IDs originating from each file. This replaces the O(N) full scan in `DeleteFileNodes` with O(k) bitmap iteration (where k = nodes in the file).
 
 Fields added to MemoryStore:
+
 - `fileToNodes map[string]*roaring.Bitmap` — FilePath → bitmap of internal node IDs
 - `nodeIntID map[string]uint32` — Node.ID → internal bitmap uint32 ID
 - `intToNodeID []string` — reverse: uint32 → Node.ID
@@ -35,6 +36,7 @@ Wired into `AddNode()` (assign ID, set bit) and `DeleteFileNodes()` (iterate bit
 ### Part 2: ShiftOrigins
 
 New method on MemoryStore:
+
 ```go
 func (s *MemoryStore) ShiftOrigins(filePath string, afterByte uint32, delta int32)
 ```
@@ -44,6 +46,7 @@ After a splice, called from the write-back callback BEFORE re-ingest. Iterates t
 ### Part 3: Tree-sitter Validation Gate
 
 New function in `internal/writeback/validate.go`:
+
 ```go
 func Validate(content []byte, filePath string) error
 ```
@@ -55,7 +58,8 @@ Inserted in the write-back callback BEFORE splice. On failure, returns error (NF
 ### Part 4: `_diagnostics/` Virtual Directory
 
 For each node directory that has writable children, expose a virtual `_diagnostics/` subdirectory:
-- `_diagnostics/last-write-status` — "ok\n" or last error message
+
+- `_diagnostics/last-write-status` — "ok\\n" or last error message
 - `_diagnostics/ast-errors` — tree-sitter ERROR node locations (if any)
 
 Implementation: intercept in `ReadDir`/`Stat`/`Open` — when path contains `_diagnostics/`, generate content dynamically. Store last-write status in a `sync.Map` keyed by node path.
@@ -63,12 +67,14 @@ Implementation: intercept in `ReadDir`/`Stat`/`Open` — when path contains `_di
 ## Consequences
 
 ### Positive
+
 - **Immediate offset correction**: ShiftOrigins makes rapid sequential writes safe without waiting for re-ingest.
 - **Syntax safety**: Broken code is rejected at the filesystem boundary; source files remain valid.
 - **Agent feedback loop**: Agents get immediate EIO on bad writes and can read `_diagnostics/` to understand why.
 - **Performance**: Roaring bitmap index makes DeleteFileNodes O(k) instead of O(N).
 
 ### Negative
+
 - **Memory overhead**: Roaring bitmaps and reverse-ID maps add memory proportional to node count.
 - **Validation latency**: Tree-sitter parse on every write adds ~1-5ms per file.
 - **Complexity**: The `_diagnostics/` virtual directory adds intercept logic to both FUSE and NFS paths.

@@ -1,3 +1,15 @@
+---
+status: current
+covers-version: v0.8.0
+last-verified: 2026-05-10
+sources-of-truth:
+  - internal/lang/lang.go
+  - cmd/serve_handlers.go
+  - CHANGELOG.md
+audience: [contributors, maintainers]
+supersedes: []
+---
+
 # Mache Architecture
 
 This document is the architectural reference. If you're getting started for the first time, read [GETTING-STARTED.md](../GETTING-STARTED.md) first — it covers install, first-run, and common workflows.
@@ -85,10 +97,9 @@ graph TD
 There are two data paths depending on the source:
 
 1. **SQLite direct (`.db` files)** — `SQLiteGraph` queries the source database directly. A one-pass scan builds the directory tree (~12s for 323K records), then content is resolved on demand via primary key lookup. No data is copied.
-1. **Ingestion** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`. Supported formats include:
-   - **Data**: `.json`, `.db` (SQLite)
-   - **Code**: `.go`, `.py`, `.js`, `.ts`, `.tsx`, `.rs`, `.sql`
-   - **Config**: `.tf`, `.hcl`, `.yaml`, `.yml`
+1. **Ingestion** — The `Engine` dispatches to the appropriate `Walker`, renders templates, and bulk-loads nodes into `MemoryStore`. Two broad input classes:
+   - **Structured data**: `.json`, `.db` (SQLite — handled by the streaming SQLite loader)
+   - **Source code & config**: 28 tree-sitter languages, registered in [`internal/lang/lang.go`](../internal/lang/lang.go) — the single source of truth. Ingestion, the file watcher, schema presets, and write-back format gating all derive their dispatch tables from this one registry; consult it (not this doc) for the current language list.
 
 Both paths are fronted by the same `Graph` interface and served via an **NFS server** (`go-nfs` + `billy`, pure Go, cross-platform). A **Topology Schema** declares the directory structure using selectors and Go template strings for names/content.
 
@@ -376,7 +387,7 @@ The remaining heap is harness overhead (`runtime/pprof.StartCPUProfile`, `compre
 | [0003: CAS & Layered Overlays](adr/0003-cas-layered-overlays.md)                         | Proposed                      | Content-Addressed Storage and Docker-style layers (ideated)                                                                                                                                                                                                        |
 | [0004: MVCC Memory Ledger](adr/0004-mvcc-memory-ledger.md)                               | Proposed                      | ECS + mmap + RCU for 10M+ entities (ideated)                                                                                                                                                                                                                       |
 | [0005: FCA Schema Inference](adr/0005-fca-schema-inference.md)                           | Accepted                      | NextClosure on sampled records, bitmap-accelerated lattice → topology                                                                                                                                                                                              |
-| [0006: Syntax-Aware Write Protection](adr/0006-syntax-aware-write-protection.md)         | Accepted                      | Tree-sitter validation before source splice                                                                                                                                                                                                                        |
+| [0015: Syntax-Aware Write Protection](adr/0015-syntax-aware-write-protection.md)         | Accepted                      | Tree-sitter validation before source splice (renumbered from 0006 to resolve a collision with the pure-Go/MCP-first ADR)                                                                                                                                           |
 | [0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md)                                | Accepted                      | Drop CGO/FUSE; pre-baked .db via leyline; NFS-only mount (v0.7.0)                                                                                                                                                                                                  |
 | [0007: Git Object Graph as FS Projection](adr/0007-git-object-graph-as-fs-projection.md) | Proposed                      | Git objects as first-class data source                                                                                                                                                                                                                             |
 | [0008: Greedy Entropy Schema Inference](adr/0008-greedy-entropy-schema-inference.md)     | Accepted                      | Information-theoretic field scoring for schema inference                                                                                                                                                                                                           |
