@@ -393,6 +393,36 @@ Note on tool parity: mache has `get_architecture` (first-contact orientation), `
 
 ______________________________________________________________________
 
+### 10. stack-graphs (GitHub)
+
+**What it is.** GitHub's framework for declaratively building "stack graphs" — a tree-sitter-based name resolution model that composes across files (and in principle across languages). Powers GitHub's code-navigation precision tier for the languages they ship support for.
+
+**How it works.** Per-language scope/path rules expressed in a tree-sitter query DSL. Each source file is independently lowered to an "open" partial graph; name resolution is then a pushdown-automaton walk over the composed graph. Polyglot in principle because composition is a graph operation, not a compiler invocation. Languages shipped today: Python, JavaScript, TypeScript, Java.
+
+**Why it's noted here separately.** Two independent reviews of mache's planned cross-language references work (May 2026) identified stack-graphs as the **closest neighbor** mache hasn't been explicitly comparing itself to. The earlier per-tool matrix focuses on AI-agent context engineering tools; stack-graphs is a structural code-intelligence library — different category, adjacent slice.
+
+**What stack-graphs does that mache doesn't:**
+
+- Provably-correct *incremental* composition of partial graphs under name resolution. Mache's `CompositeGraph` mounts subgraphs under path prefixes (a coproduct); stack-graphs composes scope graphs over name overlaps (closer to a fiber product). The math is more rigorous.
+- Pure-structural cross-file resolution without an LSP or compiler. Mache reaches binding-fidelity by consuming ley-line-open's `_lsp_*` tables; stack-graphs reaches similar fidelity from tree-sitter alone via the scope-graph formalism.
+- A declarative rule language for *scope* (open/closed scopes, push/pop symbol stack edges) — analogous to mache's `RegisterAddressRefQuery` but for intra-language structural resolution rather than cross-system address refs.
+
+**What mache (+ leyline) does that stack-graphs doesn't:**
+
+- Fidelity stratification (ADR-0013 poset). Stack-graphs is monolithic — every binding is the same kind of binding.
+- Data-format agnostic (JSON, SQLite, source). Stack-graphs is code only.
+- Real filesystem mount (NFS). Stack-graphs is a library, not an agent surface.
+- Schema-driven projection. Stack-graphs gives you name resolution, not a configurable directory topology.
+- Identity-preserving write-back.
+- MCP server.
+- Cross-*system* address refs (`mod:`, `npm:`, `git:`, OCI, OpenAPI `$ref`) — stack-graphs resolves names within the source code universe; mache's intended cross-language refs work spans to non-source artifacts.
+
+**Honest positioning vs stack-graphs.** Where mache's planned cross-language refs work overlaps with stack-graphs is the *intra-source polyglot* case — and stack-graphs occupies that slice cleanly with a stronger formal model. Mache's defensible adjacent slice is **graph-integrated address-level cross-system refs** (Terraform module → Go repo, `package.json` → npm package, `Dockerfile FROM` → OCI image), where the references cross artifact boundaries rather than just file boundaries within one language family. Polyglot at the address layer, not the type layer — see ADR-0016 (proposed).
+
+**Sources:** [stack-graphs GitHub](https://github.com/github/stack-graphs), [stack-graphs paper / blog](https://github.blog/2021-12-09-introducing-stack-graphs/).
+
+______________________________________________________________________
+
 ## Cross-Cutting Themes
 
 ### 1. PageRank-style Importance Ranking
