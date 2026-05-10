@@ -6,10 +6,16 @@
 #   1. Frontmatter block exists.
 #   2. `covers-version` matches the latest `## [vX.Y.Z]` heading in CHANGELOG.md.
 #   3. `last-verified` is within LINT_MAX_AGE_DAYS (default 90).
-#   4. Any "N languages" / "N tree-sitter languages" / "N langs" claim in
-#      prose matches the count in internal/lang/lang.go.
+#   4. Prose language-count claims that explicitly reference mache (patterns
+#      like "mache supports N languages", "mache's N tree-sitter languages",
+#      "mache (+ leyline) N langs") match the count in internal/lang/lang.go.
+#      Narrow on purpose: docs in this tree compare mache against competitors
+#      with their own language counts ("Aider supports 100+"), and a broader
+#      regex would false-positive on those. Use <!-- docs-lint:ignore --> on
+#      a line to suppress an intentional historical quote.
 #
-# Skips: docs/adr/, docs/archive/, docs/superpowers/, docs/schemas/.
+# Scope: top-level docs/*.md only. Subdirectories (adr/, archive/, schemas/,
+# superpowers/) are skipped.
 
 set -euo pipefail
 
@@ -36,8 +42,6 @@ if [[ "$LANG_COUNT" -lt 1 ]]; then
     exit 2
 fi
 
-# Today as YYYY-MM-DD (portable across BSD/GNU date).
-TODAY=$(date -u +%Y-%m-%d)
 # Date LINT_MAX_AGE_DAYS ago. macOS date and GNU date differ; try both.
 if date -v-1d +%Y-%m-%d >/dev/null 2>&1; then
     CUTOFF=$(date -u -v-"${LINT_MAX_AGE_DAYS}d" +%Y-%m-%d)
