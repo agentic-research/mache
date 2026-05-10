@@ -1,7 +1,19 @@
-# Go Parsing Status
+---
+status: current
+covers-version: v0.8.0
+last-verified: 2026-05-10
+sources-of-truth:
+  - examples/go-schema.json
+  - internal/writeback/splice.go
+audience: [agents, contributors]
+supersedes: [docs/go-parsing-status.md]
+---
 
-Tracks what the Go schema (`examples/go-schema.json`) captures, its limitations,
-and the contracts that the write-back path (ADR-004) must respect.
+# Go Schema Reference
+
+Reference for the Go example schema (`examples/go-schema.json`) — what it captures, its limitations, and the contracts the write-back path ([ADR-0009](../adr/0009-ast-aware-write-pipeline.md), [ADR-0015](../adr/0015-syntax-aware-write-protection.md)) must respect.
+
+This is **one schema among many**; see [`internal/lang/lang.go`](../../internal/lang/lang.go) for the full registry of 28 supported languages. The behaviors documented below are Go-schema-specific; analogous reference docs for other schemas can live alongside this file as they're written.
 
 ## The Normalization Contract
 

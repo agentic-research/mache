@@ -1,3 +1,14 @@
+---
+status: current
+covers-version: v0.8.0
+last-verified: 2026-05-10
+sources-of-truth:
+  - CHANGELOG.md
+  - .beads/
+audience: [contributors, maintainers, users]
+supersedes: []
+---
+
 # Roadmap
 
 ## Current state (as of May 2026, post-v0.8.0)

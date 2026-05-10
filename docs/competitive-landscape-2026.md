@@ -1,29 +1,56 @@
+---
+status: current
+covers-version: v0.8.0
+last-verified: 2026-05-10
+sources-of-truth:
+  - CHANGELOG.md
+  - docs/ROADMAP.md
+  - internal/lang/lang.go
+  - cmd/serve_handlers.go
+audience: [contributors, maintainers, evaluators]
+supersedes: []
+---
+
 # Competitive Landscape: Code Intelligence Tools (May 2026)
 
 ## Purpose
 
-This document surveys nine tools that overlap with mache's territory -- code intelligence, codebase understanding, and AI-agent context engineering. For each tool we capture: what it does, how it works, what it does that mache doesn't, what mache does that it doesn't, and feature gaps worth closing.
+This document surveys nine tools that overlap with mache's territory — code intelligence, codebase understanding, and AI-agent context engineering. For each tool we capture: what it does, how it works, what it does that mache doesn't, what mache does that it doesn't, and feature gaps worth closing.
 
-Mache is an **AI-native projection engine**: declarative JSON schemas turn structured data (JSON, SQLite, source code) into a navigable graph, exposed equally as a primary MCP server (17 tools) or an in-process NFS server (`go-nfs` + `billy` — an embedded server, not an OS export). The filesystem is one expression layer; the graph engine is the product. It supports AST decomposition (28 languages via tree-sitter or ley-line-open `leyline parse`), identity-preserving write-back with tree-sitter validation, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings via the ley-line-open event log), `find_smells` structural rules (qualifier-aware), Louvain community detection, schema inference via FCA + greedy entropy, and content-addressable substrate identity (`current_root`) for hot-swap — paired with ley-line-open as a coordinated release wave.
+## What "Mache" Means Here
+
+The unit of comparison is **mache paired with [ley-line-open](https://github.com/agentic-research/ley-line-open)**, not standalone mache. This pairing is the supported configuration shipped together as a coordinated release wave (v0.8.0 ↔ ley-line-open v0.2.0), and the architectural framing was made explicit in [ADR-0014](adr/0014-mache-in-constellation.md) and the CGO-removal path of [ADR-0012](adr/0012-cgo-removal-migration.md).
+
+- **mache** is the projection engine, MCP server (17 tools), NFS expression layer, and write-back pipeline. Pure Go on the paired path; falls back to a CGO tree-sitter walker when leyline-built `.db` artifacts aren't available.
+- **ley-line-open** produces the substrate mache consumes: the AST tables, the capnp binding event log, LSP outputs (`_lsp_defs` / `_lsp_refs` / `_lsp_hover` / `_lsp`), and fastembed embeddings (`all-MiniLM-L6-v2`, the same model Continue.dev ships).
+
+A few mache tools only light up when a ley-line-open `.db` is present: `semantic_search`, `get_type_info`, `get_diagnostics`, and four of the nine `find_smells` rules. The other thirteen MCP tools work standalone. Throughout this doc, "mache" means the paired configuration unless a row or comparison is explicitly called out as standalone-only.
+
+Mache is an **AI-native projection engine**: declarative JSON schemas turn structured data (JSON, SQLite, source code) into a navigable graph, exposed equally as a primary MCP server (17 tools) or an in-process NFS server (`go-nfs` + `billy` — an embedded server, not an OS export). The filesystem is one expression layer; the graph engine is the product. It supports AST decomposition (28 languages via tree-sitter or ley-line-open `leyline parse`), identity-preserving write-back with tree-sitter validation, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings via the ley-line-open event log), `find_smells` structural rules (qualifier-aware), Louvain community detection, schema inference via FCA + greedy entropy, semantic search over `all-MiniLM-L6-v2` embeddings (via ley-line-open), pre-baked LSP results (defs/refs/hover/diagnostics) without a runtime daemon, an `fsnotify` file watcher for incremental re-ingest (`cmd/serve.go`), and content-addressable substrate identity (`current_root`) for hot-swap.
 
 ______________________________________________________________________
 
 ## Comparison Matrix
 
-| Capability                       |      Mache       |      Serena      |  Augment Code   | Sourcegraph Cody |     Cursor      |    Continue.dev    |      Aider       | CodeRabbit |  Greptile  | codebase-memory-mcp |
-| -------------------------------- | :--------------: | :--------------: | :-------------: | :--------------: | :-------------: | :----------------: | :--------------: | :--------: | :--------: | :-----------------: |
-| **Real FS mount**                |  NFS (embedded)  |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |         --          |
-| **Schema-driven projection**     |       Yes        |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |         --          |
-| **Write-back**                   |       Yes        |    Yes (LSP)     |       --        |        --        |       IDE       |         --         |    Git diffs     |     --     |     --     |         --          |
-| **AST decomposition**            |     28 langs     |    30+ (LSP)     |       --        |  Graph context   |   AST chunks    | tree-sitter chunks | tree-sitter tags |  ast-grep  |     --     |      64 langs       |
-| **Semantic search (embeddings)** |        --        |        --        |  Yes (custom)   |   Yes (hybrid)   | Yes (vector DB) |   Yes (LanceDB)    |        --        |  LanceDB   |     --     |         --          |
-| **Cross-references**             | callers/callees  | find_referencing |       --        |    Code graph    |       --        |         --         |  PageRank refs   |  GraphRAG  | Code graph |    25 edge types    |
-| **Multi-repo**                   |        --        |        --        |       Yes       | Yes (@-mentions) |       --        |         --         |        --        |     --     |    Yes     |         --          |
-| **PR/diff review**               |        --        |        --        | review_git_diff |        --        |       --        |     CI checks      |        --        | Yes (core) | Yes (core) |   detect_changes    |
-| **Community detection**          |     Louvain      |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |       Louvain       |
-| **Data-format agnostic**         | JSON/SQLite/code |    Code only     |    Code only    |    Code only     |    Code only    |    Code + docs     |    Code only     | Code only  | Code only  |      Code only      |
-| **MCP server**                   |       Yes        |       Yes        |       Yes       |        --        |       --        |     MCP client     |        --        |     --     |     --     |         Yes         |
-| **Open source**                  |       Yes        |       Yes        |       No        |    Partially     |       No        |        Yes         |       Yes        |     No     |     No     |         Yes         |
+| Capability                       |    Mache (+ leyline)    |      Serena      |  Augment Code   | Sourcegraph Cody |     Cursor      |    Continue.dev    |      Aider       | CodeRabbit |  Greptile  | codebase-memory-mcp |
+| -------------------------------- | :---------------------: | :--------------: | :-------------: | :--------------: | :-------------: | :----------------: | :--------------: | :--------: | :--------: | :-----------------: |
+| **Real FS mount**                |     NFS (embedded)      |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |         --          |
+| **Schema-driven projection**     |           Yes           |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |         --          |
+| **Write-back**                   |           Yes           |    Yes (LSP)     |       --        |        --        |       IDE       |         --         |    Git diffs     |     --     |     --     |         --          |
+| **AST decomposition**            |        28 langs         |    30+ (LSP)     |       --        |  Graph context   |   AST chunks    | tree-sitter chunks | tree-sitter tags |  ast-grep  |     --     |      64 langs       |
+| **Semantic search (embeddings)** | Yes (fastembed via .db) |        --        |  Yes (custom)   |   Yes (hybrid)   | Yes (vector DB) |   Yes (LanceDB)    |        --        |  LanceDB   |     --     |         --          |
+| **LSP-grade defs/refs/hover**    | Yes (pre-baked via .db) |  Yes (live LSP)  |       --        |    Yes (SCIP)    |       --        |         --         |        --        |     --     |     --     |         --          |
+| **File watcher / live reindex**  |  fsnotify (serve mode)  |    Live (LSP)    |  Yes (seconds)  |    Continuous    | Merkle diffing  |         --         |        --        |     --     | Continuous |      Git-based      |
+| **Cross-references**             |     callers/callees     | find_referencing |       --        |    Code graph    |       --        |         --         |  PageRank refs   |  GraphRAG  | Code graph |    25 edge types    |
+| **Change impact analysis**       |       get_impact        |        --        |       --        |        --        |       --        |         --         |        --        |  GraphRAG  | Multi-hop  |   detect_changes    |
+| **First-contact orientation**    |    get_architecture     |        --        |       --        |        --        |       --        |         --         |     Repo map     |     --     |     --     |  get_architecture   |
+| **Structural rules**             |  find_smells (9 rules)  |        --        |       --        |        --        |       --        |         --         |        --        |  ast-grep  |     --     |         --          |
+| **Multi-repo**                   |           --            |        --        |       Yes       | Yes (@-mentions) |       --        |         --         |        --        |     --     |    Yes     |         --          |
+| **PR/diff review**               |           --            |        --        | review_git_diff |        --        |       --        |     CI checks      |        --        | Yes (core) | Yes (core) |   detect_changes    |
+| **Community detection**          |         Louvain         |        --        |       --        |        --        |       --        |         --         |        --        |     --     |     --     |       Louvain       |
+| **Data-format agnostic**         |    JSON/SQLite/code     |    Code only     |    Code only    |    Code only     |    Code only    |    Code + docs     |    Code only     | Code only  | Code only  |      Code only      |
+| **MCP server**                   |           Yes           |       Yes        |       Yes       |        --        |       --        |     MCP client     |        --        |     --     |     --     |         Yes         |
+| **Open source**                  |           Yes           |       Yes        |       No        |    Partially     |       No        |        Yes         |       Yes        |     No     |     No     |         Yes         |
 
 ______________________________________________________________________
 
@@ -41,24 +68,25 @@ ______________________________________________________________________
 
 **What Serena does that mache doesn't:**
 
-- Live LSP backend means zero stale data -- always reflects disk state
-- 30+ language support vs mache's 8
-- Symbol-level editing with scope/indentation awareness
-- JetBrains plugin alternative leverages full IDE analysis
+- Live LSP backend — query-time always reflects current disk state. Mache's LSP results are pre-baked into the `.db` at ley-line-open build time, so changes between builds are stale until the next leyline run.
+- Symbol-level editing with scope/indentation awareness (mache writes back at byte ranges with tree-sitter validation, not symbol-aware indentation rules).
+- JetBrains plugin alternative leverages full IDE analysis.
 
 **What mache does that Serena doesn't:**
 
-- Schema-driven projection -- topology is configurable, not fixed
-- Real filesystem mount (NFS/FUSE) -- works with any Unix tool
-- Data-format agnostic -- handles JSON, SQLite alongside source code
-- Community detection (Louvain clustering)
-- FCA-based schema inference
-- `callees/` virtual directories (forward call graph)
+- Schema-driven projection — topology is configurable, not fixed.
+- Real filesystem mount (NFS) — works with any Unix tool.
+- Data-format agnostic — handles JSON, SQLite alongside source code.
+- Community detection (Louvain clustering).
+- FCA-based schema inference.
+- Semantic search via embeddings (`semantic_search` MCP tool, fastembed-backed via ley-line-open).
+- `callees/` virtual directories (forward call graph) and the `callers/` self-gating virtual dirs.
+- `find_smells` structural rules (9, qualifier-aware).
 
 **Gaps worth closing:**
 
-- Language breadth: mache's 8 tree-sitter languages vs Serena's 30+ LSP languages. Adding more tree-sitter grammars is straightforward.
-- Live refresh: Serena's LSP queries always reflect current disk state. Mache requires re-mount or watcher-based re-ingest for source changes.
+- Live refresh on the leyline-paired path: mache's `_lsp_*` tables are pre-baked, so query-time correctness depends on rebuild cadence. The fsnotify watcher (`cmd/serve.go:411`) covers source-directory ingestion; closing the gap on the `.db` path needs either an incremental leyline rebuild or a Serena-style on-demand LSP fallback.
+- Symbol-level editing primitives. Mache's `write_file` operates at the projected-file level (which is symbol-scoped for AST nodes), but Serena's `insert_after_symbol` style of targeted edit is more ergonomic for some flows.
 
 **Sources:** [GitHub](https://github.com/oraios/serena), [SmartScope review](https://smartscope.blog/en/generative-ai/claude/serena-mcp-coding-agent/)
 
@@ -76,27 +104,27 @@ ______________________________________________________________________
 
 **What Augment does that mache doesn't:**
 
-- Semantic search via custom code-trained embeddings
-- Real-time incremental re-indexing (seconds, not re-mount)
-- Multi-repo awareness
-- Git diff review tooling
-- Enterprise certifications (ISO 42001, SOC 2 Type II)
+- Code-specific embedding model trained for code retrieval (mache uses ley-line-open's general-purpose `all-MiniLM-L6-v2` — solid for symbol/comment proximity, not custom-tuned for code semantics).
+- Real-time incremental re-indexing at seconds-level latency (mache has fsnotify watching for source dirs but ley-line-open `.db` artifacts rebuild on a coarser cadence).
+- Multi-repo awareness.
+- Git diff review tooling.
+- Enterprise certifications (ISO 42001, SOC 2 Type II).
 
 **What mache does that Augment doesn't:**
 
-- Real filesystem mount -- no API needed, any tool works
-- Schema-driven projection -- user defines topology
-- AST decomposition into navigable directory trees
-- Identity-preserving write-back
-- Cross-reference virtual directories (callers/callees)
-- Data-format agnostic (JSON, SQLite, not just code)
-- Open source
-- Community detection
+- Real filesystem mount — no API needed, any tool works.
+- Schema-driven projection — user defines topology.
+- AST decomposition into navigable directory trees.
+- Identity-preserving write-back.
+- Cross-reference virtual directories (callers/callees).
+- Data-format agnostic (JSON, SQLite, not just code).
+- Open source.
+- Community detection, `find_smells` structural rules.
 
 **Gaps worth closing:**
 
-- Semantic search: mache has no embedding-based retrieval. Adding vector search (e.g., via LanceDB or SQLite-vec) for the `search` MCP tool would close this gap.
-- Incremental re-indexing: mache currently requires re-mount for source changes.
+- Code-specific embeddings. Worth evaluating whether ley-line-open should ship a code-tuned model alongside the general one, or whether the general model + a re-ranking pass closes the gap cheaper.
+- Sub-second incremental indexing on the leyline-paired path (see Serena entry — same gap).
 
 **Sources:** [Augment Code](https://www.augmentcode.com), [Context Engine](https://www.augmentcode.com/context-engine), [Context Engine MCP](https://www.augmentcode.com/product/context-engine-mcp), [SiliconANGLE](https://siliconangle.com/2026/02/06/augment-code-makes-semantic-coding-capability-available-ai-agent/)
 
@@ -110,26 +138,27 @@ ______________________________________________________________________
 
 **What Cody does that mache doesn't:**
 
-- Hybrid vector retrieval (dense + sparse embeddings)
-- Multi-repository @-mention context aggregation
-- Deep Search subagent for broad codebase exploration
-- Decade of code graph infrastructure (SCIP indexers for precise code navigation)
-- 1M-token context windows
+- Hybrid dense-sparse vector retrieval (mache's `semantic_search` is dense-only via fastembed).
+- Multi-repository @-mention context aggregation.
+- Deep Search subagent for broad codebase exploration.
+- Decade of SCIP indexers — compiler-grade precision for cross-language navigation.
+- 1M-token context windows.
 
 **What mache does that Cody doesn't:**
 
-- Real filesystem mount
-- Schema-driven projection with user-defined topology
-- Identity-preserving write-back
-- Data-format agnostic (JSON, SQLite)
-- Community detection
-- Open source (Cody client is open; server infrastructure is proprietary)
-- MCP server exposure (Cody is an MCP client, not server)
+- Real filesystem mount.
+- Schema-driven projection with user-defined topology.
+- Identity-preserving write-back.
+- Data-format agnostic (JSON, SQLite).
+- Community detection.
+- Open source (Cody client is open; server infrastructure is proprietary).
+- MCP server exposure (Cody is an MCP client, not server).
 
 **Gaps worth closing:**
 
-- Precise code navigation: Sourcegraph's SCIP indexers provide compiler-grade precision for go-to-definition and find-references. Mache's tree-sitter approach is faster but less precise for complex type resolution.
+- Hybrid sparse retrieval. mache's `semantic_search` is dense embeddings only; adding a BM25 / ripgrep-style sparse leg with re-ranking would match Cody's hybrid approach and is local-friendly.
 - Multi-repo support: mache currently operates on single-mount targets.
+- SCIP-grade precision. ley-line-open's `_lsp_*` tables already give us per-language LSP results; surfacing them through `find_definition` as the default path (rather than tree-sitter heuristics) would close most of the precision gap.
 
 **Sources:** [Sourcegraph Cody docs](https://sourcegraph.com/docs/cody), [Cody GA blog](https://sourcegraph.com/blog/cody-is-generally-available), [Cody in 2026 review](https://devapps.uk/reviews/sourcegraph-cody-in-2026-the-ai-assistant-for-big-code-problems/)
 
@@ -143,28 +172,26 @@ ______________________________________________________________________
 
 **What Cursor does that mache doesn't:**
 
-- Embedding-based semantic search (Turbopuffer vector DB)
-- Real-time incremental indexing via Merkle tree diffing
-- IDE-integrated completions, inline editing, agent mode
-- Multi-step reasoning with dependency tracking (v3.2 context engine, 2026)
-- Cross-user deduplication for teams
+- Remote vector DB (Turbopuffer) and cross-user deduplication — mache's embeddings live in the ley-line-open `.db`, locally.
+- Real-time incremental indexing via Merkle tree diffing — finer-grained than mache's per-file fsnotify watcher.
+- IDE-integrated completions, inline editing, agent mode (a different product category).
+- Multi-step reasoning with dependency tracking (v3.2 context engine, 2026).
 
 **What mache does that Cursor doesn't:**
 
-- Real filesystem mount -- usable outside any IDE
-- Schema-driven projection
-- Identity-preserving write-back through the filesystem
-- Data-format agnostic
-- Cross-reference virtual directories
-- Community detection
-- MCP server (Cursor is a client, not server)
-- Open source
-- Self-hosted / no cloud dependency
+- Real filesystem mount — usable outside any IDE.
+- Schema-driven projection.
+- Identity-preserving write-back through the filesystem.
+- Data-format agnostic.
+- Cross-reference virtual directories.
+- Community detection, `find_smells` structural rules.
+- MCP server (Cursor is a client, not server).
+- Open source.
+- Self-hosted / no cloud dependency.
 
 **Gaps worth closing:**
 
-- Semantic search via embeddings is the most consistent gap across competitors. Cursor's approach (tree-sitter chunking + vector DB) is well-proven.
-- Incremental sync: Cursor's Merkle tree approach for detecting changed files is elegant and could inform mache's watcher design.
+- Merkle-tree-style change detection. mache's fsnotify watcher re-ingests per-file; a content-hash-based diff would let it skip unchanged files inside a touched directory.
 
 **Sources:** [Cursor](https://cursor.com/), [How Cursor Indexes Codebases (Engineer's Codex)](https://read.engineerscodex.com/p/how-cursor-indexes-codebases-fast), [Cursor Deep Dive 2026](https://dasroot.net/posts/2026/02/cursor-ai-deep-dive-technical-architecture-advanced-features-best-practices/)
 
@@ -178,28 +205,29 @@ ______________________________________________________________________
 
 **What Continue does that mache doesn't:**
 
-- Local embedding-based semantic search (LanceDB + transformers.js)
-- Re-ranking pipeline for retrieval refinement
-- IDE integration (VS Code, JetBrains)
-- CI-enforceable AI checks via CLI
-- Configurable model selection (local or cloud)
-- MCP client integration with external services (GitHub, Sentry, Linear)
+- Re-ranking pipeline for retrieval refinement (25 → 5 candidates).
+- IDE integration (VS Code, JetBrains).
+- CI-enforceable AI checks via CLI.
+- Configurable model selection (local or cloud) — mache's embedding model is whatever ley-line-open shipped.
+- MCP client integration with external services (GitHub, Sentry, Linear).
 
 **What mache does that Continue doesn't:**
 
-- Real filesystem mount
-- Schema-driven projection
-- Identity-preserving write-back
-- Data-format agnostic
-- Cross-reference virtual directories
-- Community detection
-- MCP server (Continue is a client)
-- Deeper AST decomposition (full function/type directory trees vs chunks)
+- Real filesystem mount.
+- Schema-driven projection.
+- Identity-preserving write-back.
+- Data-format agnostic.
+- Cross-reference virtual directories (`callers/`, `callees/`).
+- Community detection, `find_smells`, `get_impact`, `get_architecture`.
+- MCP **server** (Continue is a client).
+- Deeper AST decomposition (full function/type directory trees vs chunks).
+
+> Note: mache and Continue both use `all-MiniLM-L6-v2` as the local embedding model (Continue via transformers.js, mache via ley-line-open's fastembed crate). The retrieval surface differs (mache exposes a `semantic_search` MCP tool over the projected graph; Continue serves chunks into an in-IDE chat context), but the underlying embeddings are the same.
 
 **Gaps worth closing:**
 
-- Local vector search: Continue's LanceDB approach is attractive -- embedded, TypeScript-native, disk-backed, SQL-like filtering. Could be adapted for mache's Go stack.
-- Re-ranking: a two-stage retrieve-then-rerank pipeline would improve search quality.
+- Re-ranking. A two-stage retrieve-then-rerank pipeline would improve `semantic_search` quality without changing the embedding model.
+- Configurable embedding model. Today the model is fixed by what ley-line-open ships; letting users plug in code-tuned models would be a small ley-line-open change.
 
 **Sources:** [Continue.dev](https://www.continue.dev/), [GitHub](https://github.com/continuedev/continue), [Codebase indexing docs](https://docs.continue.dev/walkthroughs/codebase-embeddings), [LanceDB integration blog](https://lancedb.com/blog/the-future-of-ai-native-development-is-local-inside-continues-lancedb-powered-evolution/)
 
@@ -213,27 +241,28 @@ ______________________________________________________________________
 
 **What Aider does that mache doesn't:**
 
-- PageRank-based importance ranking for context selection
-- Token-budget-aware context packing (binary search for optimal fill)
-- Git-native workflow (changes as tracked diffs/commits)
-- 100+ language support (tree-sitter)
-- Efficient context utilization: 4.3-6.5% of context window vs 54-70% for iterative search agents
+- PageRank-based importance ranking for context selection.
+- Token-budget-aware context packing (binary search for optimal fill).
+- Git-native workflow (changes as tracked diffs/commits).
+- 100+ language support (tree-sitter).
+- Efficient context utilization: 4.3-6.5% of context window vs 54-70% for iterative search agents.
 
 **What mache does that Aider doesn't:**
 
-- Real filesystem mount
-- Schema-driven projection
-- Identity-preserving write-back (surgical byte-range replacement, not whole-file diffs)
-- Data-format agnostic
-- Cross-reference virtual directories with navigable content
-- Community detection
-- MCP server exposure
-- On-demand content resolution (lazy loading)
+- Real filesystem mount.
+- Schema-driven projection.
+- Identity-preserving write-back (surgical byte-range replacement, not whole-file diffs).
+- Data-format agnostic.
+- Cross-reference virtual directories with navigable content.
+- Community detection, `find_smells`, semantic search via embeddings.
+- MCP server exposure.
+- On-demand content resolution (lazy loading).
 
 **Gaps worth closing:**
 
-- Importance ranking: Aider's PageRank over the reference graph is a simple, effective heuristic for "what matters most." Mache's refs graph already has the data; adding a PageRank-based ranking to `search` or `get_overview` would improve context selection.
-- Token-budget-aware output: mache's MCP tools don't currently optimize for token budgets.
+- Importance ranking: Aider's PageRank over the reference graph is a simple, effective heuristic for "what matters most." Mache's `node_refs` table already has the data; adding a PageRank-based ranking to `search` or `get_overview` would improve context selection. This is the highest-leverage open gap in this survey.
+- Token-budget-aware output: mache's MCP tools return full results; a `--max-tokens` knob with priority-packing would help low-context-budget agents.
+- Language breadth: 28 → 100+. Adding more tree-sitter grammars is mechanical; ley-line-open's per-language LSP pipeline is the harder side to extend.
 
 **Sources:** [Aider](https://aider.chat/), [Repo map docs](https://aider.chat/docs/repomap.html), [Building a better repo map](https://aider.chat/2023/10/22/repomap.html), [GitHub](https://github.com/Aider-AI/aider)
 
@@ -257,19 +286,19 @@ ______________________________________________________________________
 
 **What mache does that CodeRabbit doesn't:**
 
-- Real filesystem mount
-- Schema-driven projection
-- Identity-preserving write-back
-- Data-format agnostic
-- Navigable directory-tree decomposition
-- Community detection
-- MCP server exposure
-- Open source
+- Real filesystem mount.
+- Schema-driven projection.
+- Identity-preserving write-back.
+- Data-format agnostic.
+- Navigable directory-tree decomposition.
+- Community detection.
+- MCP server exposure.
+- Open source.
 
 **Gaps worth closing:**
 
-- Change impact analysis: CodeRabbit's "this change breaks N callers" is a natural extension of mache's callers/callees graph. Exposing a `get_impact` MCP tool that traces from a changed symbol through the refs graph would be valuable.
-- ast-grep integration: ast-grep's pattern-matching could complement tree-sitter queries for more expressive code search.
+- PR-review productization. mache exposes the primitives — `get_impact` (already shipped) traces change blast radius through `callers/callees`, and `find_smells` flags structural issues. What's missing is the GitHub PR workflow on top: a bot that reads diffs, calls `get_impact` + `find_smells`, and posts inline review comments. (`.github/workflows/find-smells.yml` exists for advisory PR comments — a starting point.)
+- ast-grep integration: ast-grep's pattern-matching could complement tree-sitter queries for more expressive structural search beyond the 9 `find_smells` rules.
 
 **Sources:** [CodeRabbit](https://www.coderabbit.ai/), [CodeRabbit docs](https://docs.coderabbit.ai/), [Architecture blog](https://learnwithparam.com/blog/architecting-coderabbit-ai-agent-at-scale), [Google Cloud blog](https://cloud.google.com/blog/products/ai-machine-learning/how-coderabbit-built-its-ai-code-review-agent-with-google-cloud-run)
 
@@ -294,19 +323,19 @@ ______________________________________________________________________
 
 **What mache does that Greptile doesn't:**
 
-- Real filesystem mount
-- Schema-driven projection
-- Identity-preserving write-back
-- Data-format agnostic
-- Community detection
-- MCP server exposure
-- Open source
-- Self-hostable without enterprise plan
+- Real filesystem mount.
+- Schema-driven projection.
+- Identity-preserving write-back.
+- Data-format agnostic.
+- Community detection, semantic search via embeddings, `find_smells` structural rules.
+- MCP server exposure.
+- Open source.
+- Self-hostable without enterprise plan.
 
 **Gaps worth closing:**
 
-- Git history integration: understanding how code evolved over time would enrich mache's context. A `git_context` virtual directory or MCP tool could surface recent changes per function.
-- Multi-hop investigation: mache's callers/callees graph supports one-hop traversal; multi-hop tracing (A calls B calls C) would match Greptile's depth.
+- Git history as a first-class data source. mache treats git as out of band today; a `git/` virtual directory exposing commits/blame per construct would let agents reason about change history without leaving the filesystem. ADR-0007 sketches this; not yet implemented.
+- Multi-hop investigation. `get_impact` traces blast radius one hop today; a transitive `trace/` virtual directory (mache-ok2, queued in [ROADMAP.md](ROADMAP.md)) would match Greptile's depth.
 
 **Sources:** [Greptile](https://www.greptile.com/), [Graph-based context docs](https://www.greptile.com/docs/how-greptile-works/graph-based-codebase-context), [YC profile](https://www.ycombinator.com/companies/greptile), [Benchmarks](https://www.greptile.com/benchmarks)
 
@@ -328,35 +357,37 @@ ______________________________________________________________________
 
 **What codebase-memory-mcp does that mache doesn't:**
 
-- 64 languages vs mache's 8
-- `get_architecture` tool (10 architectural aspects in one call)
-- Risk-labeled call traces
-- Git diff change impact analysis (`detect_changes`)
-- Custom Cypher-like query language
-- 25 edge types (CALLS, HTTP_CALLS, IMPORTS, READS, WRITES, THROWS, etc.)
-- ADR management (`manage_adr`)
-- 4 auto-triggering skills based on conversation context
-- Background watcher for auto-reindex
+- 64 languages vs mache's 28.
+- Risk-labeled call traces.
+- `detect_changes` — explicit git-diff → blast-radius MCP tool (mache has the building blocks via `get_impact` but no git-diff entry point yet; queued as `mache-bsq` in [ROADMAP.md](ROADMAP.md)).
+- Custom Cypher-like query language. mache exposes SQL directly against the SQLite-backed graph (via the `mache_refs` vtab) — different ergonomics; Cypher is more readable for graph traversals.
+- 25 edge types (CALLS, HTTP_CALLS, IMPORTS, READS, WRITES, THROWS, etc.). mache's refs graph is single-edge (token → node), with edge semantics implicit in the projection schema.
+- ADR management (`manage_adr`).
+- 4 auto-triggering skills based on conversation context.
 
 **What mache does that codebase-memory-mcp doesn't:**
 
-- Real filesystem mount (NFS/FUSE)
-- Schema-driven projection -- user-defined topology, not hardcoded graph schema
-- Identity-preserving write-back
-- Data-format agnostic (JSON, SQLite, not just code)
-- On-demand content resolution (lazy loading, not bulk indexing)
-- FCA-based schema inference
-- `callees/` forward call graph (not just callers)
-- Configurable AST queries per language
-- Doc comment extraction
-- Context files (imports/globals per scope)
+- Real filesystem mount (NFS).
+- Schema-driven projection — user-defined topology, not hardcoded graph schema.
+- Identity-preserving write-back.
+- Data-format agnostic (JSON, SQLite, not just code).
+- On-demand content resolution (lazy loading, not bulk indexing).
+- FCA-based schema inference.
+- `callees/` forward call graph (not just callers).
+- Configurable AST queries per language.
+- Doc comment extraction.
+- Context files (imports/globals per scope).
+- Semantic search via embeddings (`semantic_search`).
+- LSP-grade defs/refs/hover (via ley-line-open `_lsp_*` tables).
+- `find_smells` structural rules with capnp event-log readthrough.
+
+Note on tool parity: mache has `get_architecture` (first-contact orientation), `get_impact` (change blast radius), `get_communities` (Louvain), and a background fsnotify watcher in serve mode. These were sometimes treated as gaps in older comparisons; they shipped in v0.7.x–v0.8.0.
 
 **Gaps worth closing:**
 
-- `get_architecture` equivalent: a first-contact orientation tool that summarizes key architectural aspects
-- Change impact analysis: leveraging the refs graph to show what a diff affects
-- Background watcher: automatic re-ingest on file changes
-- Language breadth: adding more tree-sitter grammars
+- `detect_changes`-style git-diff entry point. mache has `get_impact`; wiring a git-diff parser in front of it would match codebase-memory-mcp's UX.
+- Multi-edge-type refs graph. The single-token-edge model is simple but loses information (a `CALLS` edge and an `IMPORTS` edge collapse into the same token resolution). Schema-driven edge typing is a plausible extension.
+- Language breadth: 28 → 64.
 
 **Sources:** [GitHub](https://github.com/DeusData/codebase-memory-mcp), [Documentation site](https://deusdata.github.io/codebase-memory-mcp/)
 
@@ -364,60 +395,80 @@ ______________________________________________________________________
 
 ## Cross-Cutting Themes
 
-### 1. Semantic Search is Table Stakes
+### 1. PageRank-style Importance Ranking
 
-Seven of nine competitors offer embedding-based semantic search (Augment, Cody, Cursor, Continue, CodeRabbit, Greptile via code graph, Aider via PageRank). Mache has none. This is the most consistent gap.
+Aider's PageRank over the reference graph ranks symbols by importance and packs the highest-value ones into a configurable token budget. Token efficiency is 4.3–6.5% of context window versus 54–70% for iterative search agents — a 10x gap. Mache's `node_refs` table has the graph; ranking is missing.
 
-**Recommendation:** Add vector search to mache. Options: SQLite-vec (pure Go, stays in the SQLite ecosystem), LanceDB (proven in Continue and CodeRabbit), or a custom embedding pipeline. The `search` MCP tool is the natural integration point.
+**Recommendation:** Add a PageRank pass over `node_refs` and expose it as a sort key on `search` / `get_overview`. Highest-leverage open gap in this survey.
 
-### 2. Incremental Re-Indexing / Live Updates
+### 2. Hybrid Sparse + Dense Retrieval
 
-Most competitors update their index automatically as files change (Augment: seconds, Cursor: Merkle tree diffing, codebase-memory-mcp: git-based watcher, Greptile: continuous). Mache requires re-mount.
+`semantic_search` is dense embeddings only (fastembed `all-MiniLM-L6-v2` via ley-line-open). Cody, Continue, and CodeRabbit all blend dense with sparse (BM25, keyword) and re-rank. Pure dense retrieval misses exact-match queries that sparse trivially solves.
 
-**Recommendation:** Add a file watcher (fsnotify) that triggers incremental re-ingest for changed files. The MemoryStore already supports surgical node updates via write-back; extending this to file-change events is natural.
+**Recommendation:** Add a ripgrep-style sparse leg to `semantic_search` and a re-ranking step. Both are local-friendly.
 
-### 3. Multi-Repo Awareness
+### 3. Incremental Indexing on the Leyline-Paired Path
 
-Augment, Cody, and Greptile support cross-repository context. Mache operates on single mount targets.
+Mache's fsnotify watcher (`cmd/serve.go:411`) covers source-directory ingestion. The leyline-paired path is rebuilt on a coarser cadence — `_lsp_*` and embedding tables are stale until the next `leyline parse` run. Augment claims sub-second; Cursor uses Merkle-tree diffing.
 
-**Recommendation:** Lower priority. Mache can mount multiple sources simultaneously by composing schemas, but explicit multi-repo tooling is a future concern.
+**Recommendation:** Either an incremental `leyline parse` mode (tracked upstream), or an on-demand LSP fallback in mache when the `.db` is stale relative to source mtime.
 
-### 4. Change Impact Analysis
+### 4. Multi-Repo Awareness
 
-codebase-memory-mcp (`detect_changes`), CodeRabbit (GraphRAG impact), and Greptile (multi-hop investigation) all analyze how changes propagate through the codebase. Mache's callers/callees graph has the data but doesn't expose an impact analysis tool.
+Augment, Cody, and Greptile support cross-repository context. Mache operates on single mount targets, though it can mount multiple sources simultaneously via composed schemas.
 
-**Recommendation:** Add a `get_impact` MCP tool that takes a file path or symbol and traces through the refs graph to show affected callers/callees, similar to codebase-memory-mcp's `detect_changes`.
+**Recommendation:** Lower priority. The `--mount` / cross-repo serve path (ARCHITECTURE.md § Cross-repo serve) is the seed for this; making it a first-class agent-facing primitive is queued.
 
 ### 5. Language Breadth
 
-codebase-memory-mcp supports 64 languages, Serena supports 30+, Aider supports 100+. Mache supports 8.
+Aider supports 100+ via tree-sitter; codebase-memory-mcp claims 64; Serena offers 30+ via LSP. Mache supports 28 ([`internal/lang/lang.go`](../internal/lang/lang.go)).
 
-**Recommendation:** Adding tree-sitter grammars is mechanical work. Prioritize languages by user demand. The sitter_walker architecture makes this straightforward.
+**Recommendation:** Adding tree-sitter grammars is mechanical (one entry in the language registry); the harder side is extending ley-line-open's per-language LSP pipeline to match. Prioritize by user demand.
 
-### 6. First-Contact Orientation
+### 6. Git History as a Data Source
 
-codebase-memory-mcp's `get_architecture` (10 aspects) and Greptile's full code graph provide immediate orientation for agents encountering a new codebase. Mache's `get_overview` serves this role but is less structured.
+Greptile threads git history into investigations; codebase-memory-mcp surfaces commit context. Mache treats git as out of band. ADR-0007 sketches "git object graph as FS projection" but it isn't implemented.
 
-**Recommendation:** Enhance `get_overview` or add a dedicated `get_architecture` tool that returns structured architectural aspects (entry points, key abstractions, dependency layers, test coverage, configuration patterns).
+**Recommendation:** A `git/` virtual directory projecting commits/blame per construct would let agents reason about change history through the same filesystem interface. Natural extension of the schema model.
+
+### 7. Code-Tuned Embeddings
+
+Augment ships custom code-trained embeddings; mache uses ley-line-open's general-purpose `all-MiniLM-L6-v2` (same model Continue uses). Code-tuned models tend to do better on symbol/identifier proximity.
+
+**Recommendation:** Worth evaluating whether ley-line-open should ship a code-tuned model alongside, or whether re-ranking closes the gap cheaper.
 
 ______________________________________________________________________
 
 ## Positioning Summary
 
-Mache occupies a unique position: it is the **only tool** that combines schema-driven projection, real filesystem mount, AST decomposition, identity-preserving write-back, and data-format agnosticism. No competitor offers even three of these five properties together.
+Mache (+ ley-line-open) occupies a unique position: it is the **only tool** that combines schema-driven projection, real filesystem mount, AST decomposition, identity-preserving write-back, and data-format agnosticism. No competitor offers even three of these five properties together.
 
-The primary gaps are:
+The primary remaining gaps:
 
-1. **Semantic search** (embeddings/vector DB) -- the most universal capability mache lacks
-1. **Incremental re-indexing** -- automatic updates on file changes
-1. **Change impact analysis** -- leveraging the existing refs graph
-1. **Language breadth** -- 8 vs 30-64 languages
-1. **First-contact orientation** -- structured architecture summary tool
+1. **PageRank-style importance ranking** — Aider's biggest win; the graph data is already in mache.
+1. **Hybrid sparse + dense retrieval with re-ranking** — `semantic_search` is dense-only today.
+1. **Incremental indexing on the leyline-paired path** — the source-dir watcher works; the `.db` rebuild is coarser.
+1. **Multi-repo first-class support** — the primitive exists (`--mount`); not yet a first-class agent surface.
+1. **Language breadth** — 28 vs 30–100+.
+1. **Git history as a data source** — ADR-0007 sketched, not implemented.
 
-The primary strengths competitors cannot easily replicate:
+Strengths competitors cannot easily replicate:
 
-1. **Real filesystem mount** -- requires deep OS integration (NFS/FUSE), not an API wrapper
-1. **Schema-driven projection** -- topology is configurable, not hardcoded
-1. **Data-format agnosticism** -- no competitor handles JSON + SQLite + source code through one engine
-1. **Identity-preserving write-back** -- validate, format, splice, update -- through the filesystem
-1. **FCA schema inference** -- automatic topology derivation from data structure
+1. **Real filesystem mount** — requires deep OS integration (NFS), not an API wrapper.
+1. **Schema-driven projection** — topology is configurable, not hardcoded.
+1. **Data-format agnosticism** — no competitor handles JSON + SQLite + source code through one engine.
+1. **Identity-preserving write-back** — validate, format, splice, update — through the filesystem.
+1. **FCA schema inference** — automatic topology derivation from data structure.
+1. **Substrate-identity hot-swap** — `current_root` (BLAKE3 of the arena payload) gives readers cache-aware swap detection without coordinator state, paired with ley-line-open as a coordinated release wave.
+
+## What Was Wrong in Earlier Versions of This Doc
+
+For honesty's sake: prior revisions of this document treated several capabilities as gaps when they actually existed. Recording the corrections here so the pattern doesn't recur:
+
+- `semantic_search` was listed as missing. It exists ([`cmd/serve_handlers.go:85`](../cmd/serve_handlers.go), `all-MiniLM-L6-v2` via ley-line-open fastembed).
+- LSP support was framed as a Serena-only advantage. Mache reads `_lsp_defs` / `_lsp_refs` / `_lsp_hover` / `_lsp` from the ley-line-open `.db`; the tradeoff is build-time vs query-time, not absent vs present.
+- `get_impact` and `get_architecture` were recommended as future tools. Both ship today.
+- The file watcher was listed as a recommendation. `internal/ingest/watcher.go` exists and is wired in `cmd/serve.go:411`.
+- "Mache supports 8 languages." <!-- docs-lint:ignore --> Today: 28, per [`internal/lang/lang.go`](../internal/lang/lang.go).
+
+The underlying reason: the doc was written before ley-line-open was fully paired in, and it evaluated mache as a standalone product instead of as the projection layer in a paired system. The constellation framing ([ADR-0014](adr/0014-mache-in-constellation.md)) is the correction.
