@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/leyline"
@@ -73,8 +74,9 @@ func (g *udsGraph) GetNode(id string) (*graph.Node, error) {
 // daemon returns `[{id, name, kind, size}, ...]` per child (single-shot
 // stats, see rs/ll-open/cli-lib/src/daemon/ops.rs::op_list_children) —
 // not bare ID strings. ListChildren and ListChildStats both consume the
-// same payload; this helper centralizes the JSON parse so the two stay
-// in lock-step.
+// same payload; this helper centralizes the JSON parse + error envelope
+// so the two stay in lock-step and don't misread a daemon error as an
+// empty directory.
 func (g *udsGraph) listChildrenResponse(id string) ([]map[string]any, error) {
 	resp, err := g.sock.SendOp(map[string]any{
 		"op": "list_children",
@@ -82,6 +84,19 @@ func (g *udsGraph) listChildrenResponse(id string) ([]map[string]any, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Daemon signals failure via {"ok": false, "error": "..."}. Match the
+	// shape SQLiteGraph uses — missing-node returns graph.ErrNotFound so
+	// readdir on a stale ID surfaces cleanly instead of looking like a
+	// successful read of an empty dir.
+	if ok, _ := resp["ok"].(bool); !ok {
+		if msg, _ := resp["error"].(string); msg != "" {
+			if strings.Contains(strings.ToLower(msg), "not found") {
+				return nil, graph.ErrNotFound
+			}
+			return nil, fmt.Errorf("list_children %q: %s", id, msg)
+		}
+		return nil, fmt.Errorf("list_children %q: daemon returned ok=false", id)
 	}
 	raw, _ := resp["children"].([]any)
 	out := make([]map[string]any, 0, len(raw))

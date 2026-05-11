@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/graph"
@@ -92,7 +93,7 @@ func TestListChildStats_SingleShotFromListChildrenResponse(t *testing.T) {
 	// build NodeStats directly from that payload rather than calling
 	// GetNode per entry (the previous N+1 pattern). This test asserts
 	// no get_node ops fire during a ListChildStats call.
-	var sawGetNode bool
+	var sawGetNode atomic.Bool
 	sock := stubDaemon(t, func(req map[string]any) map[string]any {
 		switch req["op"] {
 		case "list_children":
@@ -104,7 +105,7 @@ func TestListChildStats_SingleShotFromListChildrenResponse(t *testing.T) {
 				},
 			}
 		case "get_node":
-			sawGetNode = true
+			sawGetNode.Store(true)
 			return map[string]any{"ok": false}
 		}
 		return map[string]any{"ok": false}
@@ -117,7 +118,7 @@ func TestListChildStats_SingleShotFromListChildrenResponse(t *testing.T) {
 	stats, err := g.ListChildStats("/root")
 	require.NoError(t, err)
 	require.Len(t, stats, 2)
-	require.False(t, sawGetNode, "ListChildStats must not fan out to GetNode per child — kind+size are in the list_children response")
+	require.False(t, sawGetNode.Load(), "ListChildStats must not fan out to GetNode per child — kind+size are in the list_children response")
 
 	// Index by ID so the assertions don't depend on map iteration order.
 	byID := map[string]graph.NodeStat{}

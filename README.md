@@ -100,9 +100,9 @@ Mache has two supported deployment shapes:
 [apko](https://github.com/chainguard-dev/apko) +
 [melange](https://github.com/chainguard-dev/melange) configs to produce a
 distroless OCI image (`mache:0.8.0`, ~33MB, x86_64 + aarch64). This is the
-unit a cluster orchestrator (e.g. cloister) deploys; inside the bundle,
-mache speaks to a co-located ley-line daemon over a UDS socket and is
-unreachable except via the orchestrator-mediated wire.
+unit that a cluster orchestrator (e.g. cloister) deploys; inside the
+bundle, mache speaks to a co-located ley-line daemon over a UDS socket
+and is unreachable except via the orchestrator-mediated wire.
 
 ```bash
 task image                          # → mache.tar (mache:0.8.0)

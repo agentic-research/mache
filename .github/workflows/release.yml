@@ -1,6 +1,11 @@
 name: Release
 
-# Build mache binaries linked against ley-line-open, publish GH release.
+# Build mache binaries linked against the ley-line FFI artifacts and
+# publish a GitHub release. The FFI library still comes from the private
+# `agentic-research/ley-line` repo (downloaded via the octo-sts OIDC
+# exchange below); the public `ley-line-open` repo carries the schemas
+# + daemon, not the linker artifacts. When ley-line-open ships the FFI
+# binaries, this workflow should switch its scope and download.
 # Golden path: use `task` commands, never raw go/cargo.
 
 on:
