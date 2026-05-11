@@ -101,8 +101,12 @@ func (g *udsGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
 		return nil, err
 	}
 
-	// list_children returns IDs. We need stats. Use get_node for each.
-	// TODO: add a list_child_stats op to the daemon for efficiency.
+	// N+1 over UDS: list_children returns IDs, then we GetNode per child.
+	// For `readdir`/`ls` over the read-only --control NFS mount this is
+	// chatty — each entry is a round-trip. Acceptable on small directories;
+	// large dirs benefit from a daemon-side list_child_stats op that
+	// returns Node values in one shot. Tracked under mache-75d847 (paired
+	// with LLO Bead C); fix lands when both sides implement the op.
 	rawChildren, _ := resp["children"].([]any)
 	stats := make([]graph.NodeStat, 0, len(rawChildren))
 	for _, c := range rawChildren {
@@ -169,6 +173,20 @@ func (g *udsGraph) GetCallers(token string) ([]*graph.Node, error) {
 	return nodes, nil
 }
 
+// GetCallees is not yet implemented on the UDS backend. The LLO daemon's
+// `base_op_names` exposes `find_callers` and `find_defs` but no
+// `find_callees` op — there's no daemon-side query that returns the
+// constructs called by a given node. Returning `(nil, nil)` matches the
+// "no callees found" path other Graph backends use for nodes that
+// genuinely have no outgoing edges, so consumers (`/callees` vfs handler,
+// `find_impact`, `find_smells`) degrade gracefully into "this construct
+// has no callees on record" rather than erroring out.
+//
+// Regression versus the previous SQLiteGraph path in read-only --control
+// mount: the SQL path scanned source content to extract calls; this
+// backend doesn't (and shouldn't — that's daemon-side work). Tracked
+// under mache-75d847 (paired with LLO Bead B). Once the daemon exposes
+// `find_callees`, this stub goes away.
 func (g *udsGraph) GetCallees(id string) ([]*graph.Node, error) {
 	return nil, nil
 }

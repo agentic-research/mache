@@ -111,6 +111,12 @@ func DiscoverOrStart() (string, error) {
 		localBin := filepath.Join(home, ".mache", "bin", "leyline")
 		if _, statErr := os.Stat(localBin); statErr == nil {
 			leylineBin = localBin
+		} else if os.Getenv("MACHE_NO_LEYLINE") != "" {
+			// CI / bundle deployments set this to opt out of the
+			// network-fetch path entirely. Surface a clear error
+			// rather than attempting a download that's likely to
+			// 404 against an unpublished ley-line-open release.
+			return "", fmt.Errorf("leyline not on PATH and MACHE_NO_LEYLINE is set; install leyline or unset MACHE_NO_LEYLINE")
 		} else {
 			// Auto-download from GitHub releases
 			downloaded, dlErr := downloadLeyline(localBin)
@@ -455,12 +461,15 @@ func downloadLeyline(destPath string) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	// 404 = "no releases published yet on ley-line-open". This is the
-	// expected steady state until LLO cuts its first release, so don't
-	// surface it as an error — the caller falls through to the CGO
-	// tree-sitter / non-leyline path. Bundle deployments skip this entire
-	// flow (leyline ships in the image).
+	// expected steady state until LLO cuts its first release. The error
+	// is still returned (DiscoverOrStart's caller decides what to do),
+	// but with explicit "no release available" wording so logs/UI can
+	// distinguish "not published yet" from "real download failure" and
+	// optionally degrade gracefully (e.g. fall back to CGO tree-sitter).
+	// Bundle deployments don't exercise this code path (leyline ships in
+	// the image); CI can set MACHE_NO_LEYLINE=1 to skip download entirely.
 	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("no leyline release available (HTTP 404 from %s); falling back", url)
+		return "", fmt.Errorf("no leyline release available yet on ley-line-open (HTTP 404 from %s)", url)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
