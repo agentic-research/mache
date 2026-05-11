@@ -104,10 +104,14 @@ docker load -i mache.tar
 docker run --rm -i mache:0.8.0 serve --stdio /path/to/source
 ```
 
-The build is reproducible — same input git tree, same image hash. The
-melange recipe builds with `CGO_ENABLED=1` (required for the elixir
-tree-sitter binding); the leyline FFI client is gated behind the `leyline`
-build tag and is **not** compiled into the image (see [ADR-0006](docs/adr/0006-pure-go-mcp-first.md)).
+Given a fixed `melange.rsa` signing key and pinned toolchain, the build is
+reproducible — same input git tree, same image hash. `task image`
+auto-generates a dev keypair when one is missing (APK signatures will
+differ across freshly-generated keys), so for byte-stable artifacts in CI
+inject a fixed keypair from a secret. The melange recipe builds with
+`CGO_ENABLED=1` (required for the elixir tree-sitter binding); the leyline
+FFI client is gated behind the `leyline` build tag and is **not** compiled
+into the image (see [ADR-0006](docs/adr/0006-pure-go-mcp-first.md)).
 
 ## Docs
 

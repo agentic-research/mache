@@ -23,11 +23,11 @@ import (
 	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
 )
 
-// Binding is the Go-native projection of one bindings.BindingRecord.
-// Decoupling consumers from the generated capnp types means swapping
-// the underlying schema (e.g. when LLO ships T8.5's parseGen → Hash
-// reframe) is a one-file change here, not a fan-out across the rule
-// engine.
+// Binding is the Go-native projection of one binding.BindingRecord
+// (leyline-schema/binding package). Decoupling consumers from the
+// generated capnp types means swapping the underlying schema (e.g.
+// when LLO ships T8.5's parseGen → Hash reframe) is a one-file
+// change here, not a fan-out across the rule engine.
 type Binding struct {
 	// TargetNodeID is the symbol's defining node — what the LSP
 	// resolved to. Same as `_lsp_refs.node_id` in the SQL projection.
