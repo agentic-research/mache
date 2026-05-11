@@ -113,25 +113,6 @@ tasks:
     cmds:
       - go test -tags leyline -v -run 'TestASTParity' ./internal/ingest/
 
-  gen-bindings:
-    desc: Regenerate Go bindings from schemas/*.capnp (run after schema sync from LLO)
-    vars:
-      # Pin both the toolchain version and the include-path source-of-
-      # truth to go.mod. `@latest` would let the codegen drift from
-      # the runtime library; `$(go env GOPATH)/pkg/mod` would break
-      # under GOMODCACHE overrides or multi-entry GOPATH.
-      CAPNP_VERSION:
-        sh: go list -m -f '{{`{{.Version}}`}}' capnproto.org/go/capnp/v3
-      CAPNP_INC:
-        sh: echo "$(go env GOMODCACHE)/capnproto.org/go/capnp/v3@$(go list -m -f '{{`{{.Version}}`}}' capnproto.org/go/capnp/v3)/std"
-    cmds:
-      - go install capnproto.org/go/capnp/v3/capnpc-go@{{.CAPNP_VERSION}}
-      - cd schemas && PATH="$(go env GOPATH)/bin:$PATH" capnp compile -I"{{.CAPNP_INC}}" --src-prefix=. -ogo:../internal/lsp/bindings common.capnp binding.capnp
-      # Final formatting is delegated to the pre-commit gofumpt pass
-      # so this task and the commit pipeline agree on output. Running
-      # `task gen-bindings && git commit` reaches a stable state in
-      # one cycle.
-
   profile-tools:
     desc: E2E harness — exercise every MCP tool, emit per-tool latency/alloc manifest (mache-6b6da6)
     cmds:

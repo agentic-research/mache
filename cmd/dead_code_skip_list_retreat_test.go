@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	capnp "capnproto.org/go/capnp/v3"
+	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
 	"github.com/agentic-research/mache/internal/lsp"
-	"github.com/agentic-research/mache/internal/lsp/bindings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -30,7 +30,7 @@ func writeBindingLogForTest(t *testing.T, dbPath, target, token, construct, refU
 	enc := capnp.NewEncoder(f)
 	msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
 	require.NoError(t, err)
-	rec, err := bindings.NewRootBindingRecord(seg)
+	rec, err := binding.NewRootBindingRecord(seg)
 	require.NoError(t, err)
 	require.NoError(t, rec.SetTargetNodeId(target))
 	require.NoError(t, rec.SetRefToken(token))
@@ -69,7 +69,7 @@ func writeMultiBindingLogForTest(t *testing.T, dbPath string, recs []bindingRec)
 	for _, r := range recs {
 		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
 		require.NoError(t, err)
-		rec, err := bindings.NewRootBindingRecord(seg)
+		rec, err := binding.NewRootBindingRecord(seg)
 		require.NoError(t, err)
 		require.NoError(t, rec.SetTargetNodeId(r.target))
 		require.NoError(t, rec.SetRefToken(r.token))

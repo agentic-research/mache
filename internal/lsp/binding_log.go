@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	capnp "capnproto.org/go/capnp/v3"
-	"github.com/agentic-research/mache/internal/lsp/bindings"
+	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
 )
 
 // Binding is the Go-native projection of one bindings.BindingRecord.
@@ -161,7 +161,7 @@ func iterateDecoder(r io.Reader, fn func(Binding) error) error {
 		if err != nil {
 			return fmt.Errorf("decode record %d: %w", i, err)
 		}
-		rec, err := bindings.ReadRootBindingRecord(msg)
+		rec, err := binding.ReadRootBindingRecord(msg)
 		if err != nil {
 			return fmt.Errorf("read root of record %d: %w", i, err)
 		}
@@ -175,7 +175,7 @@ func iterateDecoder(r io.Reader, fn func(Binding) error) error {
 	}
 }
 
-func bindingFromRecord(rec bindings.BindingRecord) (Binding, error) {
+func bindingFromRecord(rec binding.BindingRecord) (Binding, error) {
 	target, err := rec.TargetNodeId()
 	if err != nil {
 		return Binding{}, fmt.Errorf("targetNodeId: %w", err)
