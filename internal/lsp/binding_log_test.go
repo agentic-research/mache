@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	capnp "capnproto.org/go/capnp/v3"
+	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
 	"github.com/agentic-research/mache/internal/lsp"
-	"github.com/agentic-research/mache/internal/lsp/bindings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +29,7 @@ func writeBindingLog(t *testing.T, path string, recs []lsp.Binding) {
 	for _, r := range recs {
 		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
 		require.NoError(t, err)
-		rec, err := bindings.NewRootBindingRecord(seg)
+		rec, err := binding.NewRootBindingRecord(seg)
 		require.NoError(t, err)
 		require.NoError(t, rec.SetTargetNodeId(r.TargetNodeID))
 		require.NoError(t, rec.SetRefToken(r.RefToken))

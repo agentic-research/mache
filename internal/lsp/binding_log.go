@@ -20,14 +20,14 @@ import (
 	"strings"
 
 	capnp "capnproto.org/go/capnp/v3"
-	"github.com/agentic-research/mache/internal/lsp/bindings"
+	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
 )
 
-// Binding is the Go-native projection of one bindings.BindingRecord.
-// Decoupling consumers from the generated capnp types means swapping
-// the underlying schema (e.g. when LLO ships T8.5's parseGen → Hash
-// reframe) is a one-file change here, not a fan-out across the rule
-// engine.
+// Binding is the Go-native projection of one binding.BindingRecord
+// (leyline-schema/binding package). Decoupling consumers from the
+// generated capnp types means swapping the underlying schema (e.g.
+// when LLO ships T8.5's parseGen → Hash reframe) is a one-file
+// change here, not a fan-out across the rule engine.
 type Binding struct {
 	// TargetNodeID is the symbol's defining node — what the LSP
 	// resolved to. Same as `_lsp_refs.node_id` in the SQL projection.
@@ -161,7 +161,7 @@ func iterateDecoder(r io.Reader, fn func(Binding) error) error {
 		if err != nil {
 			return fmt.Errorf("decode record %d: %w", i, err)
 		}
-		rec, err := bindings.ReadRootBindingRecord(msg)
+		rec, err := binding.ReadRootBindingRecord(msg)
 		if err != nil {
 			return fmt.Errorf("read root of record %d: %w", i, err)
 		}
@@ -175,7 +175,7 @@ func iterateDecoder(r io.Reader, fn func(Binding) error) error {
 	}
 }
 
-func bindingFromRecord(rec bindings.BindingRecord) (Binding, error) {
+func bindingFromRecord(rec binding.BindingRecord) (Binding, error) {
 	target, err := rec.TargetNodeId()
 	if err != nil {
 		return Binding{}, fmt.Errorf("targetNodeId: %w", err)

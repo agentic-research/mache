@@ -83,6 +83,21 @@ tasks:
     cmds:
       - rm -f {{.BINARY_NAME}}
       - rm -f coverage.out coverage.html
+      - rm -rf packages mache.tar
+      - rm -f melange.rsa melange.rsa.pub
+
+  image:
+    desc: Build OCI image (melange + apko) → mache.tar (mache:0.8.0)
+    cmds:
+      # Reproducible keygen: regenerate when either half of the keypair
+      # is missing — `melange build` needs `melange.rsa` and `apko build`
+      # needs `melange.rsa.pub` in the keyring, so they must exist together
+      # or both be (re)generated. CI should inject a fixed keypair from a
+      # secret for byte-stable artifacts.
+      - test -f melange.rsa -a -f melange.rsa.pub || melange keygen melange.rsa
+      - melange build melange.yaml --arch x86_64,aarch64 --signing-key melange.rsa --out-dir ./packages
+      - apko build apko.yaml mache:0.8.0 mache.tar --keyring-append melange.rsa.pub
+      - 'echo "Built mache.tar — load with: docker load -i mache.tar"'
 
   validate:
     desc: Validate example schemas against synthetic SQLite fixtures
@@ -99,25 +114,6 @@ tasks:
     desc: Run ASTWalker ↔ SitterWalker parity tests (requires leyline on PATH)
     cmds:
       - go test -tags leyline -v -run 'TestASTParity' ./internal/ingest/
-
-  gen-bindings:
-    desc: Regenerate Go bindings from schemas/*.capnp (run after schema sync from LLO)
-    vars:
-      # Pin both the toolchain version and the include-path source-of-
-      # truth to go.mod. `@latest` would let the codegen drift from
-      # the runtime library; `$(go env GOPATH)/pkg/mod` would break
-      # under GOMODCACHE overrides or multi-entry GOPATH.
-      CAPNP_VERSION:
-        sh: go list -m -f '{{`{{.Version}}`}}' capnproto.org/go/capnp/v3
-      CAPNP_INC:
-        sh: echo "$(go env GOMODCACHE)/capnproto.org/go/capnp/v3@$(go list -m -f '{{`{{.Version}}`}}' capnproto.org/go/capnp/v3)/std"
-    cmds:
-      - go install capnproto.org/go/capnp/v3/capnpc-go@{{.CAPNP_VERSION}}
-      - cd schemas && PATH="$(go env GOPATH)/bin:$PATH" capnp compile -I"{{.CAPNP_INC}}" --src-prefix=. -ogo:../internal/lsp/bindings common.capnp binding.capnp
-      # Final formatting is delegated to the pre-commit gofumpt pass
-      # so this task and the commit pipeline agree on output. Running
-      # `task gen-bindings && git commit` reaches a stable state in
-      # one cycle.
 
   profile-tools:
     desc: E2E harness — exercise every MCP tool, emit per-tool latency/alloc manifest (mache-6b6da6)

@@ -92,6 +92,27 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
+## Building the image
+
+Mache ships its own [apko](https://github.com/chainguard-dev/apko) +
+[melange](https://github.com/chainguard-dev/melange) configs to produce a
+distroless OCI image (`mache:0.8.0`, ~33MB, x86_64 + aarch64).
+
+```bash
+task image                          # → mache.tar (mache:0.8.0)
+docker load -i mache.tar
+docker run --rm -i mache:0.8.0 serve --stdio /path/to/source
+```
+
+Given a fixed `melange.rsa` signing key and pinned toolchain, the build is
+reproducible — same input git tree, same image hash. `task image`
+auto-generates a dev keypair when one is missing (APK signatures will
+differ across freshly-generated keys), so for byte-stable artifacts in CI
+inject a fixed keypair from a secret. The melange recipe builds with
+`CGO_ENABLED=1` (required for the elixir tree-sitter binding); the leyline
+FFI client is gated behind the `leyline` build tag and is **not** compiled
+into the image (see [ADR-0006](docs/adr/0006-pure-go-mcp-first.md)).
+
 ## Docs
 
 - [Getting started](GETTING-STARTED.md) — install + first run

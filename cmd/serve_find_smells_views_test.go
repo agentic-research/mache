@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	capnp "capnproto.org/go/capnp/v3"
+	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
 	"github.com/agentic-research/mache/internal/lsp"
-	"github.com/agentic-research/mache/internal/lsp/bindings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -251,7 +251,7 @@ func TestLoadCapnpBindings_PopulatesViewFromSiblingLog(t *testing.T) {
 	} {
 		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
 		require.NoError(t, err)
-		rec, err := bindings.NewRootBindingRecord(seg)
+		rec, err := binding.NewRootBindingRecord(seg)
 		require.NoError(t, err)
 		require.NoError(t, rec.SetTargetNodeId(r.target))
 		require.NoError(t, rec.SetRefToken(r.token))

@@ -104,3 +104,10 @@ tools/KNOWN_ISSUES.md
 /.playwright-mcp/
 /architecture-heap-rendered.png
 /flamegraph-architecture-heap.png
+
+# apko + melange build artifacts (`task image`)
+/mache.tar
+/packages/
+/melange.rsa
+/melange.rsa.pub
+/sbom-*.spdx.json
