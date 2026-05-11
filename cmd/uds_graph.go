@@ -69,9 +69,13 @@ func (g *udsGraph) GetNode(id string) (*graph.Node, error) {
 	return node, nil
 }
 
-func (g *udsGraph) ListChildren(id string) ([]string, error) {
-	id = graph.NormalizeID(id)
-
+// listChildrenResponse fetches the daemon's `list_children` response. The
+// daemon returns `[{id, name, kind, size}, ...]` per child (single-shot
+// stats, see rs/ll-open/cli-lib/src/daemon/ops.rs::op_list_children) —
+// not bare ID strings. ListChildren and ListChildStats both consume the
+// same payload; this helper centralizes the JSON parse so the two stay
+// in lock-step.
+func (g *udsGraph) listChildrenResponse(id string) ([]map[string]any, error) {
 	resp, err := g.sock.SendOp(map[string]any{
 		"op": "list_children",
 		"id": id,
@@ -79,50 +83,47 @@ func (g *udsGraph) ListChildren(id string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	rawChildren, _ := resp["children"].([]any)
-	children := make([]string, 0, len(rawChildren))
-	for _, c := range rawChildren {
-		if s, ok := c.(string); ok {
-			children = append(children, s)
+	raw, _ := resp["children"].([]any)
+	out := make([]map[string]any, 0, len(raw))
+	for _, c := range raw {
+		if m, ok := c.(map[string]any); ok {
+			out = append(out, m)
 		}
 	}
-	return children, nil
+	return out, nil
+}
+
+func (g *udsGraph) ListChildren(id string) ([]string, error) {
+	id = graph.NormalizeID(id)
+	children, err := g.listChildrenResponse(id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(children))
+	for _, c := range children {
+		if s, ok := c["id"].(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 func (g *udsGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
 	id = graph.NormalizeID(id)
-
-	resp, err := g.sock.SendOp(map[string]any{
-		"op": "list_children",
-		"id": id,
-	})
+	children, err := g.listChildrenResponse(id)
 	if err != nil {
 		return nil, err
 	}
-
-	// N+1 over UDS: list_children returns IDs, then we GetNode per child.
-	// For `readdir`/`ls` over the read-only --control NFS mount this is
-	// chatty — each entry is a round-trip. Acceptable on small directories;
-	// large dirs benefit from a daemon-side list_child_stats op that
-	// returns Node values in one shot. Tracked under mache-75d847 (paired
-	// with LLO Bead C); fix lands when both sides implement the op.
-	rawChildren, _ := resp["children"].([]any)
-	stats := make([]graph.NodeStat, 0, len(rawChildren))
-	for _, c := range rawChildren {
-		childID, ok := c.(string)
-		if !ok {
-			continue
-		}
-		n, err := g.GetNode(childID)
-		if err != nil {
+	stats := make([]graph.NodeStat, 0, len(children))
+	for _, c := range children {
+		cid, _ := c["id"].(string)
+		if cid == "" {
 			continue
 		}
 		stats = append(stats, graph.NodeStat{
-			ID:          n.ID,
-			IsDir:       n.Mode.IsDir(),
-			ContentSize: n.ContentSize(),
-			ModTime:     n.ModTime,
+			ID:          cid,
+			IsDir:       toInt(c["kind"]) == graph.NodeKindDir,
+			ContentSize: toInt64(c["size"]),
 		})
 	}
 	return stats, nil
@@ -173,20 +174,15 @@ func (g *udsGraph) GetCallers(token string) ([]*graph.Node, error) {
 	return nodes, nil
 }
 
-// GetCallees is not yet implemented on the UDS backend. The LLO daemon's
+// GetCallees is not yet implemented on the UDS backend — the daemon's
 // `base_op_names` exposes `find_callers` and `find_defs` but no
-// `find_callees` op — there's no daemon-side query that returns the
-// constructs called by a given node. Returning `(nil, nil)` matches the
-// "no callees found" path other Graph backends use for nodes that
-// genuinely have no outgoing edges, so consumers (`/callees` vfs handler,
-// `find_impact`, `find_smells`) degrade gracefully into "this construct
-// has no callees on record" rather than erroring out.
-//
-// Regression versus the previous SQLiteGraph path in read-only --control
-// mount: the SQL path scanned source content to extract calls; this
-// backend doesn't (and shouldn't — that's daemon-side work). Tracked
-// under mache-75d847 (paired with LLO Bead B). Once the daemon exposes
-// `find_callees`, this stub goes away.
+// `find_callees` op. Consumers of `serve --control` see empty callees
+// results today; `mount --control` is gated on this and stays on the
+// SQLiteGraph path. Tracked: mache-a5e4ea (mache-side consumer), which
+// is gated on LLO Bead B ley-line-open-a47d7d (daemon-side
+// `find_callees`). Returning `(nil, nil)` matches the "no callees
+// found" semantics of other backends so consumers degrade silently
+// rather than erroring out.
 func (g *udsGraph) GetCallees(id string) ([]*graph.Node, error) {
 	return nil, nil
 }
