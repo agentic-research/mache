@@ -189,17 +189,63 @@ func (g *udsGraph) GetCallers(token string) ([]*graph.Node, error) {
 	return nodes, nil
 }
 
-// GetCallees is not yet implemented on the UDS backend — the daemon's
-// `base_op_names` exposes `find_callers` and `find_defs` but no
-// `find_callees` op. Consumers of `serve --control` see empty callees
-// results today; `mount --control` is gated on this and stays on the
-// SQLiteGraph path. Tracked: mache-a5e4ea (mache-side consumer), which
-// is gated on LLO Bead B ley-line-open-a47d7d (daemon-side
-// `find_callees`). Returning `(nil, nil)` matches the "no callees
-// found" semantics of other backends so consumers degrade silently
-// rather than erroring out.
+// GetCallees resolves a construct's forward references to their
+// definitions via the daemon's `find_callees` op (added in LLO 0.2.2 /
+// daemon op_find_callees). The daemon executes
+//
+//	SELECT DISTINCT d.node_id, d.source_id
+//	FROM node_refs r JOIN node_defs d ON r.token = d.token
+//	WHERE r.node_id = ?
+//
+// and returns `{callees: [{node_id, source_id}, ...]}`. Unlike
+// SQLiteGraph's client-side extractor (tree-sitter on source bytes),
+// this path is purely SQL — no CGO grammar walk required.
 func (g *udsGraph) GetCallees(id string) ([]*graph.Node, error) {
-	return nil, nil
+	id = graph.NormalizeID(id)
+	if id == "" {
+		return nil, nil
+	}
+
+	resp, err := g.sock.SendOp(map[string]any{
+		"op": "find_callees",
+		"id": id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if ok, _ := resp["ok"].(bool); !ok {
+		// Match the "no callees found" semantics other backends use —
+		// missing-node or empty-result is not an error condition for
+		// this query, just an empty edge set.
+		return nil, nil
+	}
+
+	rawCallees, _ := resp["callees"].([]any)
+	nodes := make([]*graph.Node, 0, len(rawCallees))
+	// Compare in normalized form so daemon-returned "/pkg/X" matches our
+	// already-normalized input id "pkg/X" — otherwise the self-edge slip
+	// past and `find_callees(F)` lists F itself.
+	seen := map[string]bool{id: true}
+	for _, c := range rawCallees {
+		row, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		nodeID, _ := row["node_id"].(string)
+		if nodeID == "" {
+			continue
+		}
+		key := graph.NormalizeID(nodeID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		nodes = append(nodes, &graph.Node{
+			ID:   nodeID,
+			Mode: os.ModeDir | 0o555,
+		})
+	}
+	return nodes, nil
 }
 
 func (g *udsGraph) Invalidate(id string) {}

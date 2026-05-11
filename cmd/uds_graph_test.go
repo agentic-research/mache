@@ -130,3 +130,65 @@ func TestListChildStats_SingleShotFromListChildrenResponse(t *testing.T) {
 	require.False(t, byID["/root/file.go"].IsDir)
 	require.EqualValues(t, 128, byID["/root/file.go"].ContentSize)
 }
+
+func TestGetCallees_ResolvesViaDaemonFindCalleesOp(t *testing.T) {
+	// LLO 0.2.2 added the `find_callees` daemon op. Mache's udsGraph
+	// consumes it directly — no client-side tree-sitter extraction
+	// (unlike SQLiteGraph). This test pins the wire shape and
+	// asserts dedup + self-edge skipping.
+	var calleesCalls atomic.Int32
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		switch req["op"] {
+		case "find_callees":
+			calleesCalls.Add(1)
+			// daemon op_find_callees returns DISTINCT (node_id, source_id)
+			// pairs joined from node_refs ⋈ node_defs.
+			return map[string]any{
+				"ok": true,
+				"callees": []any{
+					map[string]any{"node_id": "/pkg/auth/Validate", "source_id": "/pkg/auth/Validate/source"},
+					map[string]any{"node_id": "/pkg/auth/Hash", "source_id": "/pkg/auth/Hash/source"},
+					// dup of Validate — must be filtered out client-side
+					// even though daemon also de-dups; defense in depth.
+					map[string]any{"node_id": "/pkg/auth/Validate", "source_id": "/pkg/auth/Validate/source"},
+					// self-edge — must be skipped (consumers don't want
+					// `find_callees(F)` to list F itself).
+					map[string]any{"node_id": "/pkg/auth/Login", "source_id": "/pkg/auth/Login/source"},
+				},
+			}
+		}
+		return map[string]any{"ok": false}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	callees, err := g.GetCallees("/pkg/auth/Login")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, calleesCalls.Load(), "GetCallees should round-trip exactly one find_callees op")
+
+	ids := make([]string, 0, len(callees))
+	for _, n := range callees {
+		ids = append(ids, n.ID)
+	}
+	require.ElementsMatch(t, []string{"/pkg/auth/Validate", "/pkg/auth/Hash"}, ids,
+		"self-edge to /pkg/auth/Login skipped; duplicate Validate deduped")
+}
+
+func TestGetCallees_EmptyResultIsNotAnError(t *testing.T) {
+	// Daemon returning {ok: false} (e.g. unknown node, no refs) should
+	// not propagate as an error — other Graph backends treat empty
+	// callees as a normal case, not a failure.
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": false, "error": "node not found"}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	callees, err := g.GetCallees("/unknown")
+	require.NoError(t, err)
+	require.Empty(t, callees)
+}
