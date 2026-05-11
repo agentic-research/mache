@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/leyline"
@@ -69,9 +70,14 @@ func (g *udsGraph) GetNode(id string) (*graph.Node, error) {
 	return node, nil
 }
 
-func (g *udsGraph) ListChildren(id string) ([]string, error) {
-	id = graph.NormalizeID(id)
-
+// listChildrenResponse fetches the daemon's `list_children` response. The
+// daemon returns `[{id, name, kind, size}, ...]` per child (single-shot
+// stats, see rs/ll-open/cli-lib/src/daemon/ops.rs::op_list_children) —
+// not bare ID strings. ListChildren and ListChildStats both consume the
+// same payload; this helper centralizes the JSON parse + error envelope
+// so the two stay in lock-step and don't misread a daemon error as an
+// empty directory.
+func (g *udsGraph) listChildrenResponse(id string) ([]map[string]any, error) {
 	resp, err := g.sock.SendOp(map[string]any{
 		"op": "list_children",
 		"id": id,
@@ -79,46 +85,60 @@ func (g *udsGraph) ListChildren(id string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	rawChildren, _ := resp["children"].([]any)
-	children := make([]string, 0, len(rawChildren))
-	for _, c := range rawChildren {
-		if s, ok := c.(string); ok {
-			children = append(children, s)
+	// Daemon signals failure via {"ok": false, "error": "..."}. Match the
+	// shape SQLiteGraph uses — missing-node returns graph.ErrNotFound so
+	// readdir on a stale ID surfaces cleanly instead of looking like a
+	// successful read of an empty dir.
+	if ok, _ := resp["ok"].(bool); !ok {
+		if msg, _ := resp["error"].(string); msg != "" {
+			if strings.Contains(strings.ToLower(msg), "not found") {
+				return nil, graph.ErrNotFound
+			}
+			return nil, fmt.Errorf("list_children %q: %s", id, msg)
+		}
+		return nil, fmt.Errorf("list_children %q: daemon returned ok=false", id)
+	}
+	raw, _ := resp["children"].([]any)
+	out := make([]map[string]any, 0, len(raw))
+	for _, c := range raw {
+		if m, ok := c.(map[string]any); ok {
+			out = append(out, m)
 		}
 	}
-	return children, nil
+	return out, nil
+}
+
+func (g *udsGraph) ListChildren(id string) ([]string, error) {
+	id = graph.NormalizeID(id)
+	children, err := g.listChildrenResponse(id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(children))
+	for _, c := range children {
+		if s, ok := c["id"].(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 func (g *udsGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
 	id = graph.NormalizeID(id)
-
-	resp, err := g.sock.SendOp(map[string]any{
-		"op": "list_children",
-		"id": id,
-	})
+	children, err := g.listChildrenResponse(id)
 	if err != nil {
 		return nil, err
 	}
-
-	// list_children returns IDs. We need stats. Use get_node for each.
-	// TODO: add a list_child_stats op to the daemon for efficiency.
-	rawChildren, _ := resp["children"].([]any)
-	stats := make([]graph.NodeStat, 0, len(rawChildren))
-	for _, c := range rawChildren {
-		childID, ok := c.(string)
-		if !ok {
-			continue
-		}
-		n, err := g.GetNode(childID)
-		if err != nil {
+	stats := make([]graph.NodeStat, 0, len(children))
+	for _, c := range children {
+		cid, _ := c["id"].(string)
+		if cid == "" {
 			continue
 		}
 		stats = append(stats, graph.NodeStat{
-			ID:          n.ID,
-			IsDir:       n.Mode.IsDir(),
-			ContentSize: n.ContentSize(),
-			ModTime:     n.ModTime,
+			ID:          cid,
+			IsDir:       toInt(c["kind"]) == graph.NodeKindDir,
+			ContentSize: toInt64(c["size"]),
 		})
 	}
 	return stats, nil
@@ -169,8 +189,63 @@ func (g *udsGraph) GetCallers(token string) ([]*graph.Node, error) {
 	return nodes, nil
 }
 
+// GetCallees resolves a construct's forward references to their
+// definitions via the daemon's `find_callees` op (added in LLO 0.2.2 /
+// daemon op_find_callees). The daemon executes
+//
+//	SELECT DISTINCT d.node_id, d.source_id
+//	FROM node_refs r JOIN node_defs d ON r.token = d.token
+//	WHERE r.node_id = ?
+//
+// and returns `{callees: [{node_id, source_id}, ...]}`. Unlike
+// SQLiteGraph's client-side extractor (tree-sitter on source bytes),
+// this path is purely SQL — no CGO grammar walk required.
 func (g *udsGraph) GetCallees(id string) ([]*graph.Node, error) {
-	return nil, nil
+	id = graph.NormalizeID(id)
+	if id == "" {
+		return nil, nil
+	}
+
+	resp, err := g.sock.SendOp(map[string]any{
+		"op": "find_callees",
+		"id": id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if ok, _ := resp["ok"].(bool); !ok {
+		// Match the "no callees found" semantics other backends use —
+		// missing-node or empty-result is not an error condition for
+		// this query, just an empty edge set.
+		return nil, nil
+	}
+
+	rawCallees, _ := resp["callees"].([]any)
+	nodes := make([]*graph.Node, 0, len(rawCallees))
+	// Compare in normalized form so daemon-returned "/pkg/X" matches our
+	// already-normalized input id "pkg/X" — otherwise the self-edge slip
+	// past and `find_callees(F)` lists F itself.
+	seen := map[string]bool{id: true}
+	for _, c := range rawCallees {
+		row, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		nodeID, _ := row["node_id"].(string)
+		if nodeID == "" {
+			continue
+		}
+		key := graph.NormalizeID(nodeID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		nodes = append(nodes, &graph.Node{
+			ID:   nodeID,
+			Mode: os.ModeDir | 0o555,
+		})
+	}
+	return nodes, nil
 }
 
 func (g *udsGraph) Invalidate(id string) {}

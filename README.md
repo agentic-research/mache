@@ -92,11 +92,17 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
-## Building the image
+## Deployment modes
 
-Mache ships its own [apko](https://github.com/chainguard-dev/apko) +
+Mache has two supported deployment shapes:
+
+**Bundle / image (canonical production path).** Mache ships its own
+[apko](https://github.com/chainguard-dev/apko) +
 [melange](https://github.com/chainguard-dev/melange) configs to produce a
-distroless OCI image (`mache:0.8.0`, ~33MB, x86_64 + aarch64).
+distroless OCI image (`mache:0.8.0`, ~33MB, x86_64 + aarch64). This is the
+unit that a cluster orchestrator (e.g. cloister) deploys; inside the
+bundle, mache speaks to a co-located ley-line daemon over a UDS socket
+and is unreachable except via the orchestrator-mediated wire.
 
 ```bash
 task image                          # → mache.tar (mache:0.8.0)
@@ -112,6 +118,16 @@ inject a fixed keypair from a secret. The melange recipe builds with
 `CGO_ENABLED=1` (required for the elixir tree-sitter binding); the leyline
 FFI client is gated behind the `leyline` build tag and is **not** compiled
 into the image (see [ADR-0006](docs/adr/0006-pure-go-mcp-first.md)).
+
+**Local / dev path** — running `mache serve` or `mache mount` directly on
+your machine. Useful for laptop work, debugging, and writing schemas. In
+this mode mache may auto-discover or auto-download a `leyline` binary
+(legacy code path; the bundle ships everything, so this only kicks in for
+non-bundle invocations). Set `MACHE_NO_LEYLINE=1` to disable auto-download
+in CI or when leyline-open hasn't published a release for your platform.
+Exposing this mode externally requires a reverse proxy in front for auth;
+mache itself does not implement perimeter auth (the bundle gets it from
+the orchestrator).
 
 ## Docs
 

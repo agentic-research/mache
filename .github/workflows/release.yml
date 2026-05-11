@@ -1,6 +1,11 @@
 name: Release
 
-# Build mache binaries linked against ley-line, publish GH release, notify kiln.
+# Build mache binaries linked against the ley-line FFI artifacts and
+# publish a GitHub release. The FFI library still comes from the private
+# `agentic-research/ley-line` repo (downloaded via the octo-sts OIDC
+# exchange below); the public `ley-line-open` repo carries the schemas
+# + daemon, not the linker artifacts. When ley-line-open ships the FFI
+# binaries, this workflow should switch its scope and download.
 # Golden path: use `task` commands, never raw go/cargo.
 
 on:
@@ -143,19 +148,3 @@ jobs:
           files: |
             dist/mache-*
             dist/checksums-sha256.txt
-
-      - name: Exchange OIDC → GitHub token for kiln dispatch (octo-sts)
-        id: octo-sts
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
-        with:
-          scope: agentic-research/kiln
-          identity: mache-release
-
-      - name: Dispatch to kiln
-        env:
-          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
-        run: |
-          gh api repos/agentic-research/kiln/dispatches \
-            -f event_type=mache-release \
-            -f "client_payload[tag]=${TAG}" \
-            -f 'client_payload[repo]=agentic-research/mache'

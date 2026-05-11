@@ -111,6 +111,12 @@ func DiscoverOrStart() (string, error) {
 		localBin := filepath.Join(home, ".mache", "bin", "leyline")
 		if _, statErr := os.Stat(localBin); statErr == nil {
 			leylineBin = localBin
+		} else if os.Getenv("MACHE_NO_LEYLINE") != "" {
+			// CI / bundle deployments set this to opt out of the
+			// network-fetch path entirely. Surface a clear error
+			// rather than attempting a download that's likely to
+			// 404 against an unpublished ley-line-open release.
+			return "", fmt.Errorf("leyline not on PATH and MACHE_NO_LEYLINE is set; install leyline or unset MACHE_NO_LEYLINE")
 		} else {
 			// Auto-download from GitHub releases
 			downloaded, dlErr := downloadLeyline(localBin)
@@ -427,16 +433,24 @@ func (c *SocketClient) Prioritize(files []string) error {
 	return err
 }
 
+// leylineReleaseURLTemplate is the GitHub releases URL for the public
+// ley-line-open repository. The earlier private-repo URL (agentic-research/ley-line)
+// was retired when mache integrated against ley-line-open per the T8 work.
+//
+// Note: as of 2026-05, ley-line-open has no releases yet — a fresh-clone
+// `mache serve` will get a 404 here and fall through to the no-leyline path.
+// Once LLO cuts its first release, this URL starts serving. The bundle
+// deployment path (apko + melange image) is the canonical way to ship
+// mache+leyline together and does not exercise this download flow.
+const leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-open/releases/latest/download/%s"
+
 // downloadLeyline fetches the leyline binary from the latest GitHub release
 // to the specified path. Returns the path on success.
 func downloadLeyline(destPath string) (string, error) {
 	osName := runtime.GOOS // "darwin" or "linux"
 	arch := runtime.GOARCH // "arm64" or "amd64"
 	assetName := fmt.Sprintf("leyline-%s-%s", osName, arch)
-	url := fmt.Sprintf(
-		"https://github.com/agentic-research/ley-line/releases/latest/download/%s",
-		assetName,
-	)
+	url := fmt.Sprintf(leylineReleaseURLTemplate, assetName)
 
 	log.Printf("downloading leyline binary from %s", url)
 
@@ -446,6 +460,17 @@ func downloadLeyline(destPath string) (string, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// 404 = "no releases published yet on ley-line-open". This is the
+	// expected steady state until LLO cuts its first release. The error
+	// is still returned (DiscoverOrStart's caller decides what to do),
+	// but with explicit "no release available" wording so logs/UI can
+	// distinguish "not published yet" from "real download failure" and
+	// optionally degrade gracefully (e.g. fall back to CGO tree-sitter).
+	// Bundle deployments don't exercise this code path (leyline ships in
+	// the image); CI can set MACHE_NO_LEYLINE=1 to skip download entirely.
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("no leyline release available yet on ley-line-open (HTTP 404 from %s)", url)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
