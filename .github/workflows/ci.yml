@@ -59,36 +59,6 @@ jobs:
       - name: Test
         run: task test
 
-  notify-kiln:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, lint]
-    runs-on: ubuntu-latest
-    # Best-effort cross-repo dispatch. The OIDC exchange against
-    # octo-sts depends on a trust policy in the kiln repo; if that
-    # trust isn't established yet, the step fails and we don't
-    # want to mark the whole CI run as failed (the test + lint jobs
-    # are the gate). Continue-on-error keeps the run green when
-    # this is the only failing job.
-    continue-on-error: true
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Exchange OIDC → GitHub token (octo-sts)
-        id: octo-sts
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
-        with:
-          scope: agentic-research/kiln
-          identity: mache-ci
-
-      - name: Trigger kiln rebuild
-        env:
-          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
-        run: |
-          gh api repos/agentic-research/kiln/dispatches \
-            -f event_type=upstream-update \
-            -f 'client_payload[repo]=agentic-research/mache'
-
   lint:
     runs-on: ubuntu-latest
     steps:
