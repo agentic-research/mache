@@ -578,22 +578,26 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	// call-graph rules) work over UDS too. Closes mache-98b9bf.
 	sockPath := strings.TrimSuffix(path, ".ctrl") + ".sock"
 	log.Printf("Waiting for daemon socket %s...", sockPath)
-	sockDeadline := time.After(30 * time.Second)
+	// Loop on the dial itself rather than stat'ing the socket file:
+	// (a) a stale leftover .sock from a previous daemon will pass stat
+	//     but fail to dial — retry lets us wait through the new daemon
+	//     re-creating it;
+	// (b) the file can exist before the daemon has actually started
+	//     accepting connections (bind-then-listen race), so the first
+	//     dial often hits ECONNREFUSED even when subsequent ones work.
+	// 30s deadline matches the prior stat-based loop.
+	var g *udsGraph
+	sockDeadline := time.Now().Add(30 * time.Second)
 	for {
-		if _, statErr := os.Stat(sockPath); statErr == nil {
+		var dialErr error
+		g, dialErr = newUDSGraph(sockPath)
+		if dialErr == nil {
 			break
 		}
-		select {
-		case <-sockDeadline:
-			return fmt.Errorf("timed out waiting for daemon socket %s (30s)", sockPath)
-		default:
+		if time.Now().After(sockDeadline) {
+			return fmt.Errorf("timed out connecting to daemon socket %s after 30s: %w", sockPath, dialErr)
 		}
 		time.Sleep(100 * time.Millisecond)
-	}
-
-	g, err := newUDSGraph(sockPath)
-	if err != nil {
-		return fmt.Errorf("connect to daemon: %w", err)
 	}
 	defer func() { _ = g.Close() }()
 	log.Printf("Connected to ley-line daemon at %s", sockPath)

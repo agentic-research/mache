@@ -265,6 +265,35 @@ func TestDiscoverOrStart_NoBinaryOnPath(t *testing.T) {
 	}
 }
 
+func TestDiscoverOrStart_NoLeylineEnv_SkipsDownload(t *testing.T) {
+	// Regression guard: when MACHE_NO_LEYLINE=1 (the documented CI /
+	// bundle-deployment switch), DiscoverOrStart must NOT attempt a
+	// network download even if leyline is absent from every fallback
+	// location. Without this gate a clean-clone CI run can hit a
+	// non-deterministic network fetch (potentially 404s from ley-line-
+	// open's not-yet-published releases endpoint).
+	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	// Steer the ~/.mache/bin fallback at a tempdir guaranteed to have
+	// no leyline binary, so the auto-download branch is the only path
+	// that the test could fall into.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	_, err := DiscoverOrStart()
+	if err == nil {
+		t.Fatal("expected error when MACHE_NO_LEYLINE is set and no leyline available")
+	}
+	if !strings.Contains(err.Error(), "MACHE_NO_LEYLINE") {
+		t.Errorf("expected 'MACHE_NO_LEYLINE' in error, got: %v", err)
+	}
+	// Negative assertion: the error must NOT mention a download attempt —
+	// that would mean the env var didn't gate the download path.
+	if strings.Contains(err.Error(), "auto-download failed") || strings.Contains(err.Error(), "no leyline release available") {
+		t.Errorf("MACHE_NO_LEYLINE should short-circuit BEFORE downloadLeyline; got: %v", err)
+	}
+}
+
 func TestStopManaged_SafeWhenNoDaemon(t *testing.T) {
 	// Should not panic when no managed daemon exists
 	StopManaged()
