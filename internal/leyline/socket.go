@@ -427,16 +427,24 @@ func (c *SocketClient) Prioritize(files []string) error {
 	return err
 }
 
+// leylineReleaseURLTemplate is the GitHub releases URL for the public
+// ley-line-open repository. The earlier private-repo URL (agentic-research/ley-line)
+// was retired when mache integrated against ley-line-open per the T8 work.
+//
+// Note: as of 2026-05, ley-line-open has no releases yet — a fresh-clone
+// `mache serve` will get a 404 here and fall through to the no-leyline path.
+// Once LLO cuts its first release, this URL starts serving. The bundle
+// deployment path (apko + melange image) is the canonical way to ship
+// mache+leyline together and does not exercise this download flow.
+const leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-open/releases/latest/download/%s"
+
 // downloadLeyline fetches the leyline binary from the latest GitHub release
 // to the specified path. Returns the path on success.
 func downloadLeyline(destPath string) (string, error) {
 	osName := runtime.GOOS // "darwin" or "linux"
 	arch := runtime.GOARCH // "arm64" or "amd64"
 	assetName := fmt.Sprintf("leyline-%s-%s", osName, arch)
-	url := fmt.Sprintf(
-		"https://github.com/agentic-research/ley-line/releases/latest/download/%s",
-		assetName,
-	)
+	url := fmt.Sprintf(leylineReleaseURLTemplate, assetName)
 
 	log.Printf("downloading leyline binary from %s", url)
 
@@ -446,6 +454,14 @@ func downloadLeyline(destPath string) (string, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// 404 = "no releases published yet on ley-line-open". This is the
+	// expected steady state until LLO cuts its first release, so don't
+	// surface it as an error — the caller falls through to the CGO
+	// tree-sitter / non-leyline path. Bundle deployments skip this entire
+	// flow (leyline ships in the image).
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("no leyline release available (HTTP 404 from %s); falling back", url)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}

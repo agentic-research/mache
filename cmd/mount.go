@@ -537,123 +537,66 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 			}
 			if p := ctrl.GetArenaPath(); p != "" {
 				arenaPath = p
-				initialRoot = ctrl.GetCurrentRoot()
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 
-	// Wait for valid arena header
-	log.Println("Waiting for valid arena header...")
-	var dbPath string
-	deadline := time.After(30 * time.Second)
-	for {
-		dbPath, err = graph.ExtractActiveDB(arenaPath)
-		if err == nil {
-			break
-		}
-		select {
-		case <-deadline:
-			return fmt.Errorf("timed out waiting for valid arena header (30s): %w", err)
-		default:
-		}
-		// Retry until header is valid (written by Leyline atomic swap)
-		time.Sleep(500 * time.Millisecond)
-	}
-	log.Println("Arena header valid. Initializing graph.")
-
-	// Writable arena mode: mache IS the writer, no hot-swap watcher.
+	// Writable mode still extracts the active buffer to a temp file because
+	// the WritableGraph splices edits into a real SQLite connection before
+	// flushing back to the arena — the daemon doesn't expose write ops over
+	// UDS, so the local-copy path is unavoidable here. Read-only mode skips
+	// this entirely and queries the daemon via UDS instead.
 	if writable {
+		log.Println("Waiting for valid arena header (writable mode)...")
+		var dbPath string
+		deadline := time.After(30 * time.Second)
+		for {
+			var extractErr error
+			dbPath, extractErr = graph.ExtractActiveDB(arenaPath)
+			if extractErr == nil {
+				break
+			}
+			select {
+			case <-deadline:
+				return fmt.Errorf("timed out waiting for valid arena header (30s): %w", extractErr)
+			default:
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		log.Println("Arena header valid. Initializing writable graph.")
 		return mountControlWritable(dbPath, arenaPath, schema, ctrl, mountPoint)
 	}
 
-	// Read-only hot-swap mode (existing logic)
-	initialGraph, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
-	if err != nil {
-		return fmt.Errorf("open initial graph %s: %w", dbPath, err)
+	// Read-only mode: query the daemon over UDS. The daemon owns SQLite
+	// (zero-copy via sqlite3_deserialize on the arena); mache never opens
+	// a local SQLite file. Hot-swap is implicit — each query reflects the
+	// daemon's current snapshot, so root bumps don't need a graph swap on
+	// the mache side.
+	sockPath := strings.TrimSuffix(path, ".ctrl") + ".sock"
+	log.Printf("Waiting for daemon socket %s...", sockPath)
+	sockDeadline := time.After(30 * time.Second)
+	for {
+		if _, statErr := os.Stat(sockPath); statErr == nil {
+			break
+		}
+		select {
+		case <-sockDeadline:
+			return fmt.Errorf("timed out waiting for daemon socket %s (30s)", sockPath)
+		default:
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	hotSwap := graph.NewHotSwapGraph(initialGraph)
+	g, err := newUDSGraph(sockPath)
+	if err != nil {
+		return fmt.Errorf("connect to daemon: %w", err)
+	}
+	defer func() { _ = g.Close() }()
+	log.Printf("Connected to ley-line daemon at %s", sockPath)
 
-	// Start Watcher — event-driven with polling fallback.
-	// Runs for the lifetime of the NFS mount (mountNFS blocks below).
-	go func() {
-		lastRoot := initialRoot
-		prevDBPath := dbPath
-
-		// Try to subscribe to daemon events for instant hot-swap.
-		sockPath := strings.TrimSuffix(path, ".ctrl") + ".sock"
-		eventCh, subClient := trySubscribe(sockPath)
-		defer func() {
-			if subClient != nil {
-				_ = subClient.Close()
-			}
-		}()
-
-		for {
-			if eventCh != nil {
-				// Event-driven: wait for daemon push.
-				ev, ok := <-eventCh
-				if !ok {
-					// Connection lost — fall back to polling.
-					log.Println("event subscription lost, falling back to polling")
-					if subClient != nil {
-						_ = subClient.Close()
-						subClient = nil
-					}
-					eventCh = nil
-					continue
-				}
-				_ = ev // event received — check generation below
-			} else {
-				// Polling fallback.
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			currentRoot := ctrl.GetCurrentRoot()
-			if currentRoot == lastRoot {
-				continue
-			}
-
-			newPath := ctrl.GetArenaPath()
-			log.Printf("Hot Swap Detected: root %s -> %s (%s)", shortRoot(lastRoot), shortRoot(currentRoot), newPath)
-
-			newDBPath, err := graph.ExtractActiveDB(newPath)
-			if err != nil {
-				log.Printf("Error extracting new db: %v", err)
-				continue
-			}
-
-			newGraph, err := graph.OpenSQLiteGraph(newDBPath, schema, machetmpl.Render)
-			if err != nil {
-				log.Printf("Error opening new graph %s: %v", newDBPath, err)
-				_ = os.Remove(newDBPath)
-				continue
-			}
-
-			hotSwap.Swap(newGraph)
-			lastRoot = currentRoot
-
-			// Defer removal of the old DB file. Swap() closes the SQLite
-			// connection synchronously, but on macOS the NFS page cache
-			// may still hold stale file mappings (WAL/SHM). A brief delay
-			// lets the kernel release them, avoiding SQLITE_IOERR_SHORT_READ
-			// on any in-flight reads that raced with the swap.
-			if prevDBPath != "" {
-				old := prevDBPath
-				go func() {
-					time.Sleep(2 * time.Second)
-					_ = os.Remove(old)
-					_ = os.Remove(old + "-wal")
-					_ = os.Remove(old + "-shm")
-				}()
-			}
-			prevDBPath = newDBPath
-		}
-	}()
-
-	return mountNFS(schema, hotSwap, nil, mountPoint, false, nil)
+	return mountNFS(schema, g, nil, mountPoint, false, nil)
 }
 
 // shortRoot renders the first 4 bytes of a 32-byte BLAKE3 root as 8 hex
@@ -664,27 +607,6 @@ func shortRoot(root [32]byte) string {
 		return "<zero>"
 	}
 	return fmt.Sprintf("%02x%02x%02x%02x", root[0], root[1], root[2], root[3])
-}
-
-// trySubscribe attempts to connect to the daemon's UDS socket and subscribe
-// to snapshot events. Returns a channel of events and the client (for cleanup),
-// or nil if subscription fails (caller should fall back to polling).
-func trySubscribe(sockPath string) (<-chan map[string]any, *leyline.SocketClient) {
-	sc, err := leyline.DialSocket(sockPath)
-	if err != nil {
-		log.Printf("event subscription: dial failed (%v), using polling", err)
-		return nil, nil
-	}
-
-	ch, err := sc.Subscribe([]string{"daemon.snapshot", "daemon.reparse.**"})
-	if err != nil {
-		log.Printf("event subscription: subscribe failed (%v), using polling", err)
-		_ = sc.Close()
-		return nil, nil
-	}
-
-	log.Println("event subscription active — instant hot-swap enabled")
-	return ch, sc
 }
 
 // mountControlWritable opens the extracted DB in read-write mode and

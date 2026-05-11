@@ -269,3 +269,16 @@ func TestStopManaged_SafeWhenNoDaemon(t *testing.T) {
 	// Should not panic when no managed daemon exists
 	StopManaged()
 }
+
+func TestLeylineReleaseURL_PointsAtPublicRepo(t *testing.T) {
+	// Regression guard for mache-9051f0: the auto-download URL must point
+	// at the public ley-line-open repo, not the private ley-line one. The
+	// earlier URL pre-dated the public/private split; consumers without
+	// access to the private repo got 404s on every fresh-clone download.
+	if !strings.Contains(leylineReleaseURLTemplate, "ley-line-open") {
+		t.Errorf("leylineReleaseURLTemplate must point at ley-line-open (the public repo), got %q", leylineReleaseURLTemplate)
+	}
+	if strings.Contains(leylineReleaseURLTemplate, "/ley-line/") {
+		t.Errorf("leylineReleaseURLTemplate still references the private ley-line repo: %q", leylineReleaseURLTemplate)
+	}
+}
