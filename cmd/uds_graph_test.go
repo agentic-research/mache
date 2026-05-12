@@ -65,6 +65,9 @@ func stubDaemon(t *testing.T, handler func(map[string]any) map[string]any) strin
 // returns (rs/ll-open/cli-lib/src/daemon/ops.rs::op_list_children). The
 // old code did `c.(string)` on each entry, so every non-empty directory
 // listing came back as an empty slice.
+//
+// Size values are JSON-string-encoded to match the post-b0ea2e capnp-json
+// wire shape (Int64 emitted as quoted strings for JS Number compatibility).
 func TestListChildren_ParsesObjectsNotStrings(t *testing.T) {
 	sock := stubDaemon(t, func(req map[string]any) map[string]any {
 		if req["op"] != "list_children" {
@@ -73,8 +76,8 @@ func TestListChildren_ParsesObjectsNotStrings(t *testing.T) {
 		return map[string]any{
 			"ok": true,
 			"children": []any{
-				map[string]any{"id": "/root/a", "name": "a", "kind": 1, "size": 0},
-				map[string]any{"id": "/root/b", "name": "b", "kind": 0, "size": 42},
+				map[string]any{"id": "/root/a", "name": "a", "kind": 1, "size": "0"},
+				map[string]any{"id": "/root/b", "name": "b", "kind": 0, "size": "42"},
 			},
 		}
 	})
@@ -100,8 +103,8 @@ func TestListChildStats_SingleShotFromListChildrenResponse(t *testing.T) {
 			return map[string]any{
 				"ok": true,
 				"children": []any{
-					map[string]any{"id": "/root/dir", "name": "dir", "kind": 1, "size": 0},
-					map[string]any{"id": "/root/file.go", "name": "file.go", "kind": 0, "size": 128},
+					map[string]any{"id": "/root/dir", "name": "dir", "kind": 1, "size": "0"},
+					map[string]any{"id": "/root/file.go", "name": "file.go", "kind": 0, "size": "128"},
 				},
 			}
 		case "get_node":
