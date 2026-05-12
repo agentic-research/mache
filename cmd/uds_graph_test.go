@@ -179,6 +179,198 @@ func TestGetCallees_ResolvesViaDaemonFindCalleesOp(t *testing.T) {
 		"self-edge to /pkg/auth/Login skipped; duplicate Validate deduped")
 }
 
+// TestGetNode_DirKindNoContentRef pins the kind=dir branch of GetNode:
+// directories must NOT carry a ContentRef (they have no content to read).
+// Asserts the dir-mode bit is set and Ref stays nil. Counterpart of the
+// file-kind coverage in TestGetNode_DecodesSizeAsJSONString.
+func TestGetNode_DirKindNoContentRef(t *testing.T) {
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"ok": true,
+			"node": map[string]any{
+				"id":   "/pkg",
+				"name": "pkg",
+				"kind": 1, // dir
+				"size": "0",
+			},
+		}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	node, err := g.GetNode("/pkg")
+	require.NoError(t, err)
+	require.True(t, node.Mode.IsDir(), "kind=1 must set ModeDir")
+	require.Nil(t, node.Ref, "directories must not carry a ContentRef")
+}
+
+// TestGetNode_RecordPopulatesData pins the `record` → `node.Data` path.
+// When the daemon returns a non-empty `record` (the rendered file content
+// from SQLite), GetNode must surface it as `node.Data` so callers like
+// ReadContent can short-circuit through the in-band bytes.
+func TestGetNode_RecordPopulatesData(t *testing.T) {
+	const wantRecord = "package main\n\nfunc main() {}\n"
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"ok": true,
+			"node": map[string]any{
+				"id":     "/pkg/main.go",
+				"name":   "main.go",
+				"kind":   0,
+				"size":   "30",
+				"record": wantRecord,
+			},
+		}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	node, err := g.GetNode("/pkg/main.go")
+	require.NoError(t, err)
+	require.Equal(t, wantRecord, string(node.Data),
+		"non-empty `record` field must populate node.Data verbatim")
+}
+
+// TestGetNode_MissingNodeIsNotFound pins the {ok:true, node:null} edge:
+// daemon ack but no node payload must surface as graph.ErrNotFound, not
+// a successful empty-node return.
+func TestGetNode_MissingNodeIsNotFound(t *testing.T) {
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": true} // no `node` key
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	_, err = g.GetNode("/missing")
+	require.ErrorIs(t, err, graph.ErrNotFound,
+		"ok:true with no node payload must surface as ErrNotFound")
+}
+
+// TestReadContent_DecodesContentField pins the typed-decode round-trip
+// for the read_content op. The daemon emits `{"ok":true,"content":"..."}`;
+// the consumer must slice the returned bytes into the caller's buffer.
+// No test existed for this path before — silent regressions in the
+// content decode would not have been caught.
+func TestReadContent_DecodesContentField(t *testing.T) {
+	const wantContent = "hello mache\n"
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		if req["op"] != "read_content" {
+			return map[string]any{"ok": false, "error": "unexpected op"}
+		}
+		return map[string]any{
+			"ok":      true,
+			"content": wantContent,
+		}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	buf := make([]byte, 64)
+	n, err := g.ReadContent("/file.txt", buf, 0)
+	require.NoError(t, err)
+	require.Equal(t, len(wantContent), n)
+	require.Equal(t, wantContent, string(buf[:n]))
+}
+
+// TestReadContent_ErrorEnvelopeIsNotFound pins that {ok:false} on
+// read_content surfaces as graph.ErrNotFound, matching the contract
+// SQLiteGraph uses for stale node IDs.
+func TestReadContent_ErrorEnvelopeIsNotFound(t *testing.T) {
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": false, "error": "node not found"}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	_, err = g.ReadContent("/stale", make([]byte, 16), 0)
+	require.ErrorIs(t, err, graph.ErrNotFound)
+}
+
+// TestGetCallers_DecodesNodeIDs pins the typed-decode round-trip for
+// find_callers. Each `callers[]` entry's `node_id` must surface as a
+// graph.Node. No test existed for this path before — the refactor
+// from map[string]any to typed Ref structs was uncovered.
+func TestGetCallers_DecodesNodeIDs(t *testing.T) {
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		if req["op"] != "find_callers" {
+			return map[string]any{"ok": false, "error": "unexpected op"}
+		}
+		require.Equal(t, "Validate", req["token"], "find_callers must pass the token verbatim")
+		return map[string]any{
+			"ok": true,
+			"callers": []any{
+				map[string]any{"node_id": "/pkg/a/UseValidate", "source_id": "/pkg/a/UseValidate/source"},
+				map[string]any{"node_id": "/pkg/b/CallValidate", "source_id": "/pkg/b/CallValidate/source"},
+				// empty node_id must be skipped (defensive)
+				map[string]any{"node_id": "", "source_id": "/junk"},
+			},
+		}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	callers, err := g.GetCallers("Validate")
+	require.NoError(t, err)
+	ids := make([]string, 0, len(callers))
+	for _, n := range callers {
+		ids = append(ids, n.ID)
+	}
+	require.ElementsMatch(t,
+		[]string{"/pkg/a/UseValidate", "/pkg/b/CallValidate"},
+		ids,
+		"GetCallers must decode node_id strings; empty entries skipped")
+}
+
+// TestListChildren_ErrorNotFoundMapping pins the daemon-error → typed-
+// error contract: an {"ok":false,"error":"... not found ..."} envelope
+// must surface as graph.ErrNotFound (case-insensitive substring match),
+// matching the SQLiteGraph contract for stale directory IDs.
+func TestListChildren_ErrorNotFoundMapping(t *testing.T) {
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": false, "error": "Node Not Found in arena"}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	_, err = g.ListChildren("/stale")
+	require.ErrorIs(t, err, graph.ErrNotFound,
+		"daemon error containing 'not found' must map to graph.ErrNotFound")
+}
+
+// TestListChildren_GenericErrorPropagates pins the non-not-found error
+// path: any other error string from the daemon must propagate as a
+// generic error (with the daemon's message preserved for debugging).
+// Without this, mache would conflate all daemon errors with ErrNotFound.
+func TestListChildren_GenericErrorPropagates(t *testing.T) {
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": false, "error": "arena read failed: io/timeout"}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	_, err = g.ListChildren("/x")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, graph.ErrNotFound, "non-not-found errors must not collapse to ErrNotFound")
+	require.Contains(t, err.Error(), "arena read failed: io/timeout",
+		"daemon error message must be preserved in the wrapped error")
+}
+
 // TestGetNode_DecodesSizeAsJSONString pins the bug this PR targets:
 // post-b0ea2e the daemon emits Int64 fields as quoted JSON strings (e.g.
 // `"size":"4096"`). The pre-refactor `map[string]any` + `.(float64)`
