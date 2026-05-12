@@ -179,6 +179,70 @@ func TestGetCallees_ResolvesViaDaemonFindCalleesOp(t *testing.T) {
 		"self-edge to /pkg/auth/Login skipped; duplicate Validate deduped")
 }
 
+// TestGetNode_DecodesSizeAsJSONString pins the bug this PR targets:
+// post-b0ea2e the daemon emits Int64 fields as quoted JSON strings (e.g.
+// `"size":"4096"`). The pre-refactor `map[string]any` + `.(float64)`
+// pattern silently zeroed every Int64 field on that wire. Typed decoding
+// with `,string` tags must round-trip the value correctly.
+//
+// Counterpart of TestListChildren_ParsesObjectsNotStrings — that one
+// covers the list_children path; this one covers get_node so any future
+// regression in the typed decoder is caught for both shapes the daemon
+// actually emits Node records in.
+func TestGetNode_DecodesSizeAsJSONString(t *testing.T) {
+	const wantSize int64 = 4096
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		if req["op"] != "get_node" {
+			return map[string]any{"ok": false, "error": "unexpected op"}
+		}
+		return map[string]any{
+			"ok": true,
+			"node": map[string]any{
+				"id":        "/pkg/foo.go",
+				"parent_id": "/pkg",
+				"name":      "foo.go",
+				"kind":      0, // file
+				"size":      "4096",
+			},
+		}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	node, err := g.GetNode("/pkg/foo.go")
+	require.NoError(t, err)
+	require.NotNil(t, node.Ref, "file node must carry a ContentRef")
+	require.Equal(t, wantSize, node.Ref.ContentLen,
+		"Size must round-trip through the `,string` json tag")
+}
+
+// TestGetNode_RejectsBareNumericSize is the inverse guard: under the
+// post-b0ea2e wire contract sizes are quoted strings; if a (broken or
+// pre-v0.3.0) daemon emits a bare number, we want a loud error rather
+// than a silent zero. This pins the "strict decode is the failure mode"
+// design choice flagged on PR review.
+func TestGetNode_RejectsBareNumericSize(t *testing.T) {
+	sock := stubDaemon(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"ok": true,
+			"node": map[string]any{
+				"id":   "/pkg/foo.go",
+				"kind": 0,
+				"size": 4096, // bare number — pre-b0ea2e shape
+			},
+		}
+	})
+
+	g, err := newUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+
+	_, err = g.GetNode("/pkg/foo.go")
+	require.Error(t, err, "bare numeric size must fail decode, not silently zero")
+}
+
 func TestGetCallees_EmptyResultIsNotAnError(t *testing.T) {
 	// Daemon returning {ok: false} (e.g. unknown node, no refs) should
 	// not propagate as an error — other Graph backends treat empty

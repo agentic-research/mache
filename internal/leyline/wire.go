@@ -2,14 +2,20 @@
 //
 // These mirror the hand-written bindings in LLO's
 // `clients/go/leyline-schema/daemon/daemon_protocol_test.go` (PR #12
-// commit 145fcc5). When `clients/go/leyline-schema/v0.3.0` is tagged with
-// these types promoted to a shipped `daemon/types.go`, replace this file
-// with imports from that package — the shapes are byte-identical by design.
+// commit 145fcc5). The current `leyline-schema/v0.3.0` ships those
+// mirrors in `package daemon_test` (test-only), so we cannot import
+// them directly — this file is the consumer-side declaration. If a
+// future leyline-schema release promotes the structs to a non-test
+// package, this file becomes a trivial import swap; the shapes are
+// byte-identical by design.
 //
-// Wire encoding note: under the b0ea2e capnp-json codec (LLO ≥ post-PR-#12),
+// Wire encoding note: under the b0ea2e capnp-json codec (LLO ≥ v0.3.0),
 // 64-bit integers ride as JSON strings to avoid JS Number precision loss.
 // All Int64 / UInt64 fields carry `,string` so json.Unmarshal accepts the
 // `"123"` form. Without these tags decode silently zeros the field.
+// The strict-decode is intentional: pre-b0ea2e daemons emit bare numeric
+// JSON which will surface as a UnmarshalTypeError rather than a silent
+// wrong-zero — the failure mode is loud and points at version skew.
 
 package leyline
 
