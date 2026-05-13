@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/agentic-research/mache/internal/graph"
@@ -581,19 +582,33 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 			Role  string `json:"role,omitempty"`
 		}
 
-		// Definition search: scan the defs map with LIKE-style matching
+		// Definition search.
+		//
+		// Two backends: SQL-pushdown via defsSearcher (preferred — covers
+		// pre-built .db files whose in-memory defs map is empty), and
+		// in-memory map iteration via defsMapProvider (legacy MemoryStore
+		// and live-ingest paths). Bead mache-9cba08: before the
+		// defsSearcher path, this handler returned [] for every pattern
+		// on a SQLiteGraph because DefsMap() was empty.
 		if role == "definition" {
-			dp, ok := g.(defsMapProvider)
-			if !ok {
+			var matches map[string][]string
+			if ds, ok := g.(defsSearcher); ok {
+				matches = ds.SearchDefs(pattern, limit)
+			} else if dp, ok := g.(defsMapProvider); ok {
+				defs := dp.DefsMap()
+				matches = make(map[string][]string, len(defs))
+				for token, ids := range defs {
+					if sqlLikeMatch(pattern, token) {
+						matches[token] = ids
+					}
+				}
+			} else {
 				return mcp.NewToolResultError("backend does not support definition search"), nil
 			}
-			defs := dp.DefsMap()
+
 			var results []searchResult
 			seenPaths := make(map[string]bool)
-			for token, ids := range defs {
-				if !sqlLikeMatch(pattern, token) {
-					continue
-				}
+			for token, ids := range matches {
 				for _, id := range ids {
 					if typeFilter != "" && !strings.Contains(id, "/"+typeFilter+"/") {
 						continue
@@ -889,7 +904,52 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultText(string(data)), nil
 		}
 
-		data, _ := json.MarshalIndent(result, "", "  ")
+		// Non-summary full output. Bead mache-9cd921: previously
+		// marshaled the full Communities slice, blowing past the MCP
+		// response budget (720K chars on 28K LOC). Cap to the top N
+		// largest communities + top N members within each. Truncation
+		// is in-place on the result; the marshaled JSON keeps its
+		// existing CommunityResult shape (PascalCase) so consumers
+		// that already parse this output don't break.
+		const maxCommunities = 25
+		const maxMembersPerCommunity = 20
+
+		sort.Slice(result.Communities, func(i, j int) bool {
+			return len(result.Communities[i].Members) > len(result.Communities[j].Members)
+		})
+		eliddedCommunities := 0
+		if len(result.Communities) > maxCommunities {
+			eliddedCommunities = len(result.Communities) - maxCommunities
+			result.Communities = result.Communities[:maxCommunities]
+		}
+		eliddedMembers := 0
+		for i := range result.Communities {
+			if len(result.Communities[i].Members) > maxMembersPerCommunity {
+				eliddedMembers += len(result.Communities[i].Members) - maxMembersPerCommunity
+				result.Communities[i].Members = result.Communities[i].Members[:maxMembersPerCommunity]
+			}
+		}
+
+		// Anonymous wrapper embeds *CommunityResult so existing
+		// consumers see the same field names; truncation metadata
+		// rides as additive optional fields.
+		out := struct {
+			*graph.CommunityResult
+			ElidedCommunities int    `json:",omitempty"`
+			ElidedMembers     int    `json:",omitempty"`
+			TruncationNote    string `json:",omitempty"`
+		}{
+			CommunityResult:   result,
+			ElidedCommunities: eliddedCommunities,
+			ElidedMembers:     eliddedMembers,
+		}
+		if eliddedCommunities > 0 || eliddedMembers > 0 {
+			out.TruncationNote = fmt.Sprintf(
+				"output truncated to %d communities (×%d members each) to fit MCP response budget; use summary=true for an even tighter view",
+				maxCommunities, maxMembersPerCommunity,
+			)
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }

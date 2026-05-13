@@ -629,6 +629,25 @@ func (lg *lazyGraph) LookupDef(token string) []string {
 	return nil
 }
 
+// SearchDefs forwards the optional defsSearcher interface so
+// `search role=definition` can use a SQL-pushdown when the inner
+// backend supports it. Mirrors LookupDef's passthrough shape.
+//
+// Returns nil when the inner doesn't implement defsSearcher —
+// the search handler falls through to defsMapProvider iteration.
+func (lg *lazyGraph) SearchDefs(pattern string, limit int) map[string][]string {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil
+	}
+	if ds, ok := g.(interface {
+		SearchDefs(string, int) map[string][]string
+	}); ok {
+		return ds.SearchDefs(pattern, limit)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Interface types for optional graph backend capabilities
 // ---------------------------------------------------------------------------
@@ -656,6 +675,20 @@ type defsMapProvider interface {
 // when the caller only needs one token's dir IDs.
 type defsLookuper interface {
 	LookupDef(token string) []string
+}
+
+// defsSearcher supports pattern-based search across the defs index
+// without snapshotting the whole map. The pattern uses SQL LIKE
+// syntax ('%' = any chars, '_' = single char). SQL-backed graphs
+// push the filter down to the database; in-memory graphs may
+// implement it as a linear scan with sqlLikeMatch. Returns up to
+// `limit` token→nodeIDs entries.
+//
+// search role=definition uses this when available — fixes the
+// bug where SQLiteGraph's empty in-memory defs map made the
+// search handler return [] for every pattern (bead mache-9cba08).
+type defsSearcher interface {
+	SearchDefs(pattern string, limit int) map[string][]string
 }
 
 // writeBacker is the subset of Graph backends that support surgical write-back

@@ -709,6 +709,52 @@ func TestGetCommunities_CustomMinSize(t *testing.T) {
 	assert.Empty(t, cr.Communities)
 }
 
+// TestGetCommunities_TruncatesOversizedOutput pins bead mache-9cd921.
+// On a 28K-LOC repo the original handler produced 720K-char payloads
+// that exceeded the MCP response budget. The handler now caps to the
+// top N communities + top N members per community and surfaces an
+// explicit TruncationNote with the elided counts.
+//
+// This test builds a graph dense enough to exceed both caps and
+// verifies the output is shaped accordingly.
+func TestGetCommunities_TruncatesOversizedOutput(t *testing.T) {
+	store := graph.NewMemoryStore()
+	// 30 clusters × 30 members each — exceeds the 25-community cap
+	// AND the 20-member-per-community cap deliberately.
+	for c := range 30 {
+		for m := range 30 {
+			token := fmt.Sprintf("token_%d_%d", c, m%3)
+			node := fmt.Sprintf("cluster_%d/node_%d", c, m)
+			require.NoError(t, store.AddRef(token, node))
+		}
+	}
+
+	handler := makeGetCommunitiesHandler(store)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	body := resultText(t, result)
+	var out struct {
+		Communities       []graph.Community
+		ElidedCommunities int
+		ElidedMembers     int
+		TruncationNote    string
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &out))
+
+	require.LessOrEqual(t, len(out.Communities), 25,
+		"community count must be capped at 25 to fit MCP response budget")
+	require.Positive(t, out.ElidedCommunities,
+		"ElidedCommunities must report what was dropped, not silently truncate")
+	require.NotEmpty(t, out.TruncationNote,
+		"TruncationNote must explain that truncation happened and how to get more")
+	for i, c := range out.Communities {
+		require.LessOrEqual(t, len(c.Members), 20,
+			"community[%d] members must be capped at 20", i)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // get_overview handler tests
 // ---------------------------------------------------------------------------

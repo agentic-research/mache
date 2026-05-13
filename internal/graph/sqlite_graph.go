@@ -314,6 +314,103 @@ func (g *SQLiteGraph) DefsMap() map[string][]string {
 	return cp
 }
 
+// SearchDefs returns up to `limit` token→nodeIDs entries whose
+// token matches the SQL LIKE pattern. Used by `search role=definition`
+// to avoid materializing the full defs map.
+//
+// For pre-built .db files the in-memory g.defs map is empty; this
+// pushes the filter down to SQL against node_defs. Mirrors LookupDef's
+// fallback structure: in-memory first (with sqlLikeMatch-style check),
+// then SQL. Bead mache-9cba08.
+func (g *SQLiteGraph) SearchDefs(pattern string, limit int) map[string][]string {
+	if limit <= 0 {
+		limit = 100
+	}
+	out := make(map[string][]string)
+
+	g.pendingMu.Lock()
+	for token, ids := range g.defs {
+		if !likeMatch(pattern, token) {
+			continue
+		}
+		cp := make([]string, len(ids))
+		copy(cp, ids)
+		out[token] = cp
+		if len(out) >= limit {
+			g.pendingMu.Unlock()
+			return out
+		}
+	}
+	g.pendingMu.Unlock()
+
+	if !g.useNodesTable || g.db == nil {
+		return out
+	}
+	rows, err := g.db.Query(
+		"SELECT token, node_id FROM node_defs WHERE token LIKE ? LIMIT ?",
+		pattern, limit-len(out),
+	)
+	if err != nil {
+		return out
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var token, nodeID string
+		if scanErr := rows.Scan(&token, &nodeID); scanErr != nil {
+			continue
+		}
+		// In-memory had precedence — don't override an existing entry.
+		if _, exists := out[token]; exists {
+			continue
+		}
+		out[token] = append(out[token], nodeID)
+		if len(out) >= limit {
+			return out
+		}
+	}
+	return out
+}
+
+// likeMatch is the in-memory equivalent of SQL LIKE for SearchDefs's
+// in-memory pass. Supports % (any-chars) and _ (single-char). Kept
+// in-package to avoid pulling the cmd/-level helper across boundaries.
+func likeMatch(pattern, value string) bool {
+	// Empty pattern matches nothing (consistent with sqlLikeMatch).
+	if pattern == "" {
+		return false
+	}
+	return likeMatchRec(pattern, value)
+}
+
+func likeMatchRec(pattern, value string) bool {
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '%':
+			rest := pattern[i+1:]
+			if rest == "" {
+				return true
+			}
+			for j := 0; j <= len(value); j++ {
+				if likeMatchRec(rest, value[j:]) {
+					return true
+				}
+			}
+			return false
+		case '_':
+			if len(value) == 0 {
+				return false
+			}
+			value = value[1:]
+		default:
+			if len(value) == 0 || value[0] != pattern[i] {
+				return false
+			}
+			value = value[1:]
+		}
+	}
+	return len(value) == 0
+}
+
 // LookupDef returns the dir IDs that define `token` without
 // snapshotting the entire defs map. Returns nil for unknown tokens.
 // Mirrors MemoryStore.LookupDef; see that method's docstring.
@@ -651,12 +748,15 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	for _, child := range children {
 		base := filepath.Base(child)
 		if base == "source" {
-			// nodes-table path returns bare names; sidecar path returns full paths
-			if g.useNodesTable {
-				sourceID = id + "/" + child
-			} else {
-				sourceID = child
-			}
+			// Both backends now return full paths from ListChildren —
+			// SQLiteGraph forwards to NodesTableReader which selects the
+			// `id` column (full path); the sidecar path also stores full
+			// paths in dirChildren. Earlier this branch concatenated
+			// `id + "/" + child` for useNodesTable assuming bare names —
+			// produced "leyline/methods/SendOp/leyline/methods/SendOp/source"
+			// and made find_callees silently return [] for every construct
+			// on a pre-built .db. Bead mache-9ca6af root cause.
+			sourceID = child
 			break
 		}
 	}
@@ -786,6 +886,36 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 				nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
 				continue
 			}
+
+			// Suffix-match fallback for receiver-method calls (bead
+			// mache-9ca6af). A call like `c.sendRaw(...)` extracts as
+			// the bare token "sendRaw"; node_defs has it only as the
+			// qualified form "SocketClient.sendRaw". Bare lookup above
+			// misses. If there's exactly ONE "*.token" entry in
+			// node_defs, that's our target — unambiguous resolution
+			// for the receiver case. >1 matches means ambiguous (two
+			// types both define a method of this name) — skip rather
+			// than guess wrongly. LIMIT 2 detects ambiguity cheaply.
+			rows, qErr := g.db.Query(
+				"SELECT node_id FROM node_defs WHERE token LIKE ? LIMIT 2",
+				"%."+qc.Token,
+			)
+			if qErr == nil {
+				var candidates []string
+				for rows.Next() {
+					var nodeID string
+					if scanErr := rows.Scan(&nodeID); scanErr == nil && nodeID != id {
+						candidates = append(candidates, nodeID)
+					}
+				}
+				_ = rows.Close()
+				if len(candidates) == 1 && !seen[candidates[0]] {
+					seen[candidates[0]] = true
+					nodes = append(nodes, &Node{ID: candidates[0], Mode: os.ModeDir | 0o555})
+					continue
+				}
+			}
+
 			// Final fallback: name match in nodes table
 			// kind = 1 → graph.NodeKindDir (definition constructs are dirs).
 			err = g.db.QueryRow("SELECT id FROM nodes WHERE name = ? AND kind = 1 LIMIT 1", qc.Token).Scan(&defID)
