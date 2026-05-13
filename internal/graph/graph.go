@@ -561,6 +561,33 @@ func (s *MemoryStore) LookupDef(token string) []string {
 	return append([]string(nil), ids...)
 }
 
+// SearchDefs returns up to `limit` token→nodeIDs entries whose token
+// matches the SQL LIKE pattern. Mirrors SQLiteGraph.SearchDefs for
+// dispatch uniformity — every backend that has a defs map should
+// also be searchable, so the handler's defsSearcher check resolves
+// the same regardless of backend (bead from PR #373 post-fix audit:
+// lazyGraph wrapping a MemoryStore previously returned nil from
+// SearchDefs because MemoryStore didn't implement it, and the
+// handler's defsMapProvider fallback was unreachable).
+func (s *MemoryStore) SearchDefs(pattern string, limit int) map[string][]string {
+	if limit <= 0 {
+		limit = 100
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string][]string)
+	for token, ids := range s.defs {
+		if !likeMatch(pattern, token) {
+			continue
+		}
+		out[token] = append([]string(nil), ids...)
+		if len(out) >= limit {
+			return out
+		}
+	}
+	return out
+}
+
 // DeleteFileNodes removes all nodes that originated from the given source file.
 // Uses the roaring bitmap index for O(k) lookup instead of O(N) full scan.
 func (s *MemoryStore) DeleteFileNodes(filePath string) {

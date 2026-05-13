@@ -587,23 +587,36 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		// Two backends: SQL-pushdown via defsSearcher (preferred — covers
 		// pre-built .db files whose in-memory defs map is empty), and
 		// in-memory map iteration via defsMapProvider (legacy MemoryStore
-		// and live-ingest paths). Bead mache-9cba08: before the
-		// defsSearcher path, this handler returned [] for every pattern
-		// on a SQLiteGraph because DefsMap() was empty.
+		// and live-ingest paths).
+		//
+		// Wrappers like lazyGraph always satisfy the defsSearcher
+		// interface (they have the method, even if the inner backend
+		// doesn't). If the wrapper returns nil from SearchDefs because
+		// the inner didn't implement it, fall through to the DefsMap
+		// path — `nil` from SearchDefs is distinguishable from `empty
+		// map = no matches` and signals "I don't speak this protocol."
+		//
+		// Bead mache-9cba08 caught the original SQL pushdown gap; the
+		// nil-passthrough fallback below was caught by the PR #373
+		// post-fix audit (lazyGraph→MemoryStore returned nil and the
+		// fallback was unreachable due to dispatch ordering).
 		if role == "definition" {
 			var matches map[string][]string
 			if ds, ok := g.(defsSearcher); ok {
 				matches = ds.SearchDefs(pattern, limit)
-			} else if dp, ok := g.(defsMapProvider); ok {
-				defs := dp.DefsMap()
-				matches = make(map[string][]string, len(defs))
-				for token, ids := range defs {
-					if sqlLikeMatch(pattern, token) {
-						matches[token] = ids
+			}
+			if matches == nil {
+				if dp, ok := g.(defsMapProvider); ok {
+					defs := dp.DefsMap()
+					matches = make(map[string][]string, len(defs))
+					for token, ids := range defs {
+						if sqlLikeMatch(pattern, token) {
+							matches[token] = ids
+						}
 					}
+				} else {
+					return mcp.NewToolResultError("backend does not support definition search"), nil
 				}
-			} else {
-				return mcp.NewToolResultError("backend does not support definition search"), nil
 			}
 
 			var results []searchResult

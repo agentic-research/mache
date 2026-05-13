@@ -709,6 +709,133 @@ func TestGetCommunities_CustomMinSize(t *testing.T) {
 	assert.Empty(t, cr.Communities)
 }
 
+// stubLazyWrapper mimics the lazyGraph wrapper's defsSearcher passthrough
+// behavior in the PR #373 post-fix audit. It always satisfies the
+// defsSearcher interface (so handler type assertion succeeds) but
+// returns nil from SearchDefs — simulating "inner backend doesn't
+// implement SearchDefs." Used to prove the search-handler fallback
+// from defsSearcher → defsMapProvider works when the wrapper passes
+// nil through. Wraps a real Graph for everything else.
+type stubLazyWrapper struct {
+	inner graph.Graph
+}
+
+func (s *stubLazyWrapper) GetNode(id string) (*graph.Node, error) { return s.inner.GetNode(id) }
+func (s *stubLazyWrapper) ListChildren(id string) ([]string, error) {
+	return s.inner.ListChildren(id)
+}
+
+func (s *stubLazyWrapper) ListChildStats(id string) ([]graph.NodeStat, error) {
+	return s.inner.ListChildStats(id)
+}
+
+func (s *stubLazyWrapper) ReadContent(id string, buf []byte, offset int64) (int, error) {
+	return s.inner.ReadContent(id, buf, offset)
+}
+
+func (s *stubLazyWrapper) GetCallers(token string) ([]*graph.Node, error) {
+	return s.inner.GetCallers(token)
+}
+
+func (s *stubLazyWrapper) GetCallees(id string) ([]*graph.Node, error) {
+	return s.inner.GetCallees(id)
+}
+func (s *stubLazyWrapper) Invalidate(id string) { s.inner.Invalidate(id) }
+func (s *stubLazyWrapper) Act(id, action, payload string) (*graph.ActionResult, error) {
+	return s.inner.Act(id, action, payload)
+}
+
+func (s *stubLazyWrapper) Close() error {
+	if c, ok := s.inner.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+// DefsMap forwards so the handler can use it as the fallback.
+func (s *stubLazyWrapper) DefsMap() map[string][]string {
+	if dp, ok := s.inner.(interface{ DefsMap() map[string][]string }); ok {
+		return dp.DefsMap()
+	}
+	return nil
+}
+
+// SearchDefs INTENTIONALLY returns nil — mimics the lazyGraph dispatch
+// path before bead mache-9cba08-post-fix where the wrapper satisfied
+// the type assertion but returned nil for backends that didn't
+// implement the new interface. The handler must fall through.
+func (s *stubLazyWrapper) SearchDefs(_ string, _ int) map[string][]string {
+	return nil
+}
+
+// TestSearch_RoleDefinition_FallsThroughOnNilSearchDefs pins the
+// dispatch chain bug surfaced by the PR #373 post-fix audit: a wrapper
+// that satisfies the defsSearcher type assertion but returns nil must
+// trigger the handler's fallback to defsMapProvider iteration. Without
+// the nil-check, every wrapped backend returns [] for every pattern.
+//
+// Bench evidence (from
+// benchmarks/serena/results/mache_cc_fresh_eval_macherepo_postfix.md
+// Issue B): `search(pattern="dedupSuffix", role="definition")` returned
+// [] despite `find_definition("dedupSuffix")` returning the same data
+// via DefsMap. Root cause was lazyGraph→MemoryStore where MemoryStore
+// didn't implement SearchDefs.
+func TestSearch_RoleDefinition_FallsThroughOnNilSearchDefs(t *testing.T) {
+	store := graph.NewMemoryStore()
+	require.NoError(t, store.AddDef("dedupSuffix", "internal/ingest/functions/dedupSuffix"))
+	require.NoError(t, store.AddDef("NewMemoryStore", "internal/graph/functions/NewMemoryStore"))
+
+	// Wrap in a defsSearcher-satisfying stub that always returns nil.
+	// This mirrors lazyGraph wrapping a backend that doesn't implement
+	// SearchDefs — the exact production scenario the post-fix bench
+	// caught.
+	wrapper := &stubLazyWrapper{inner: store}
+
+	handler := makeSearchHandler(wrapper)
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"pattern": "dedupSuffix",
+		"role":    "definition",
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var hits []struct {
+		Token string `json:"token"`
+		Path  string `json:"path"`
+		Role  string `json:"role"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &hits))
+	require.Len(t, hits, 1,
+		"handler must fall through to DefsMap when SearchDefs returns nil — "+
+			"otherwise every wrapper-around-MemoryStore search returns [] regardless of data")
+	require.Equal(t, "dedupSuffix", hits[0].Token)
+	require.Equal(t, "internal/ingest/functions/dedupSuffix", hits[0].Path)
+	require.Equal(t, "definition", hits[0].Role)
+}
+
+// TestSearch_RoleDefinition_WildcardThroughWrapper exercises the same
+// dispatch path with a % pattern, ensuring the fallback iteration
+// actually matches via sqlLikeMatch and not just exact tokens.
+func TestSearch_RoleDefinition_WildcardThroughWrapper(t *testing.T) {
+	store := graph.NewMemoryStore()
+	require.NoError(t, store.AddDef("NewMemoryStore", "graph/functions/NewMemoryStore"))
+	require.NoError(t, store.AddDef("NewSocketClient", "leyline/functions/NewSocketClient"))
+	require.NoError(t, store.AddDef("OldThing", "other/functions/OldThing"))
+
+	wrapper := &stubLazyWrapper{inner: store}
+	handler := makeSearchHandler(wrapper)
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"pattern": "New%",
+		"role":    "definition",
+	}))
+	require.NoError(t, err)
+
+	var hits []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &hits))
+	require.Len(t, hits, 2,
+		"wildcard 'New%%' must match both New-prefixed defs via the fallback path")
+}
+
 // TestGetCommunities_TruncatesOversizedOutput pins bead mache-9cd921.
 // On a 28K-LOC repo the original handler produced 720K-char payloads
 // that exceeded the MCP response budget. The handler now caps to the
