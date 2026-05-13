@@ -535,6 +535,74 @@ func setup() {
 		"struct field name must not leak into refs")
 }
 
+// TestExtractCalls_GoTypeReferences guards the type-reference patterns
+// added under mache-9c615a. PR #373 bench surfaced that find_callers
+// returned [] for type names like Topology despite 141 grep hits —
+// the index only captured call_expression, not type usages. These
+// patterns capture type references in parameters, fields, composite
+// literals, type assertions, and var specs so find_callers(Topology)
+// returns actual usage sites.
+func TestExtractCalls_GoTypeReferences(t *testing.T) {
+	w := NewSitterWalker()
+	code := []byte(`package pkg
+
+type Topology struct {
+	Name string
+}
+
+type Node interface {
+	Get() string
+}
+
+// Topology as a parameter type
+func consume(t Topology) {}
+
+// Topology as a pointer parameter type
+func consumePtr(t *Topology) {}
+
+// Topology as a struct field type
+type Wrapper struct {
+	T Topology
+	P *Topology
+}
+
+// Topology in a composite literal
+var instance = Topology{Name: "x"}
+
+// Topology in a var spec
+var declared Topology
+
+// Topology in a pointer var spec
+var ptr *Topology
+
+// Node in a type assertion
+func assertNode(x any) Node {
+	return x.(Node)
+}
+`)
+	lang := golang.GetLanguage()
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+	tree, err := parser.ParseCtx(context.Background(), nil, code)
+	require.NoError(t, err)
+
+	calls, err := w.ExtractCalls(tree.RootNode(), code, lang, "go")
+	require.NoError(t, err)
+
+	// Topology must appear; the patterns capture each of:
+	//   - parameter_declaration (consume, consumePtr)
+	//   - field_declaration (Wrapper.T, Wrapper.P)
+	//   - composite_literal (instance)
+	//   - var_spec (declared, ptr)
+	// Multiple occurrences are expected; we only assert presence.
+	assert.Contains(t, calls, "Topology",
+		"Topology must appear in node_refs — used as parameter, field, composite literal, and var type")
+
+	// Node must appear from the type assertion + interface return type
+	assert.Contains(t, calls, "Node",
+		"Node must appear in node_refs — used in a type_assertion_expression")
+}
+
 // TestExtractFileLevelRefs_GoTopLevelCobraVar guards the file-level
 // ref extraction path (mache-02r9). Per-scope ExtractCalls only sees
 // call_expressions within a matched function body — top-level

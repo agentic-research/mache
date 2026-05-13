@@ -317,14 +317,36 @@ func (g *SQLiteGraph) DefsMap() map[string][]string {
 // LookupDef returns the dir IDs that define `token` without
 // snapshotting the entire defs map. Returns nil for unknown tokens.
 // Mirrors MemoryStore.LookupDef; see that method's docstring.
+//
+// For pre-built DBs (useNodesTable path) the in-memory g.defs map is
+// usually empty because data lives in the `node_defs` SQL table. Falls
+// back to the SQL query on in-memory miss so find_definition works
+// against ley-line-parsed databases. Matches the SQL pattern used by
+// GetCallees (line ~722 / ~761) for parity.
 func (g *SQLiteGraph) LookupDef(token string) []string {
 	g.pendingMu.Lock()
-	defer g.pendingMu.Unlock()
 	ids, ok := g.defs[token]
-	if !ok {
+	g.pendingMu.Unlock()
+	if ok {
+		return append([]string(nil), ids...)
+	}
+
+	if !g.useNodesTable || g.db == nil {
 		return nil
 	}
-	return append([]string(nil), ids...)
+	rows, err := g.db.Query("SELECT node_id FROM node_defs WHERE token = ?", token)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	var dirIDs []string
+	for rows.Next() {
+		var dirID string
+		if scanErr := rows.Scan(&dirID); scanErr == nil && dirID != "" {
+			dirIDs = append(dirIDs, dirID)
+		}
+	}
+	return dirIDs
 }
 
 func (g *SQLiteGraph) GetNode(id string) (*Node, error) {
