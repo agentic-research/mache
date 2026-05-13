@@ -136,3 +136,196 @@ func BenchmarkSendOpInto_TypedDecode(b *testing.B) {
 		}
 	}
 }
+
+// --- per-op pairs covering the remaining udsGraph surface ---
+//
+// Each pair benches the same wire payload through both decode paths
+// (map vs typed). Pairs let benchstat report apples-to-apples deltas
+// per op; aggregating across them captures the full PR #372 surface.
+
+func benchGetNodeResponse() map[string]any {
+	return map[string]any{
+		"ok": true,
+		"node": map[string]any{
+			"id":        "/pkg/foo.go",
+			"parent_id": "/pkg",
+			"name":      "foo.go",
+			"kind":      0,
+			"size":      "8192",
+			"record":    "package foo\n\nfunc Foo() {}\n",
+		},
+	}
+}
+
+func BenchmarkSendOp_GetNode_Map(b *testing.B) {
+	resp := benchGetNodeResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "get_node", "id": "/pkg/foo.go"}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := c.SendOp(req); err != nil {
+			b.Fatalf("SendOp: %v", err)
+		}
+	}
+}
+
+func BenchmarkSendOpInto_GetNode_Typed(b *testing.B) {
+	resp := benchGetNodeResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "get_node", "id": "/pkg/foo.go"}
+	b.ReportAllocs()
+	for b.Loop() {
+		var dest GetNodeResponse
+		if err := c.SendOpInto(req, &dest); err != nil {
+			b.Fatalf("SendOpInto: %v", err)
+		}
+	}
+}
+
+// 8 KB content payload — realistic mid-sized Go source file.
+func benchReadContentResponse() map[string]any {
+	body := make([]byte, 8192)
+	for i := range body {
+		body[i] = byte('a' + (i % 26))
+	}
+	return map[string]any{"ok": true, "content": string(body)}
+}
+
+func BenchmarkSendOp_ReadContent_Map(b *testing.B) {
+	resp := benchReadContentResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "read_content", "id": "/pkg/foo.go"}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := c.SendOp(req); err != nil {
+			b.Fatalf("SendOp: %v", err)
+		}
+	}
+}
+
+func BenchmarkSendOpInto_ReadContent_Typed(b *testing.B) {
+	resp := benchReadContentResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "read_content", "id": "/pkg/foo.go"}
+	b.ReportAllocs()
+	for b.Loop() {
+		var dest ReadContentResponse
+		if err := c.SendOpInto(req, &dest); err != nil {
+			b.Fatalf("SendOpInto: %v", err)
+		}
+	}
+}
+
+// 32 Ref entries — realistic for a moderately-referenced symbol.
+func benchFindCallersResponse() map[string]any {
+	callers := make([]any, 32)
+	for i := range callers {
+		callers[i] = map[string]any{
+			"node_id":   "/pkg/caller_" + itoa(i) + "/Use",
+			"source_id": "/pkg/caller_" + itoa(i) + "/Use/source",
+		}
+	}
+	return map[string]any{"ok": true, "callers": callers}
+}
+
+func BenchmarkSendOp_FindCallers_Map(b *testing.B) {
+	resp := benchFindCallersResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "find_callers", "token": "Validate"}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := c.SendOp(req); err != nil {
+			b.Fatalf("SendOp: %v", err)
+		}
+	}
+}
+
+func BenchmarkSendOpInto_FindCallers_Typed(b *testing.B) {
+	resp := benchFindCallersResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "find_callers", "token": "Validate"}
+	b.ReportAllocs()
+	for b.Loop() {
+		var dest FindCallersResponse
+		if err := c.SendOpInto(req, &dest); err != nil {
+			b.Fatalf("SendOpInto: %v", err)
+		}
+	}
+}
+
+// 16 callees — typical fan-out for a single Go function.
+func benchFindCalleesResponse() map[string]any {
+	callees := make([]any, 16)
+	for i := range callees {
+		callees[i] = map[string]any{
+			"node_id":   "/pkg/dep_" + itoa(i) + "/Func",
+			"source_id": "/pkg/dep_" + itoa(i) + "/Func/source",
+		}
+	}
+	return map[string]any{"ok": true, "callees": callees}
+}
+
+func BenchmarkSendOp_FindCallees_Map(b *testing.B) {
+	resp := benchFindCalleesResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "find_callees", "id": "/pkg/foo/Func"}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := c.SendOp(req); err != nil {
+			b.Fatalf("SendOp: %v", err)
+		}
+	}
+}
+
+func BenchmarkSendOpInto_FindCallees_Typed(b *testing.B) {
+	resp := benchFindCalleesResponse()
+	sock := benchDaemon(b, func(req map[string]any) map[string]any { return resp })
+	c, err := DialSocket(sock)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	b.Cleanup(func() { _ = c.Close() })
+	req := map[string]any{"op": "find_callees", "id": "/pkg/foo/Func"}
+	b.ReportAllocs()
+	for b.Loop() {
+		var dest FindCalleesResponse
+		if err := c.SendOpInto(req, &dest); err != nil {
+			b.Fatalf("SendOpInto: %v", err)
+		}
+	}
+}
