@@ -155,6 +155,70 @@ func (c *CompositeGraph) wrapDefID(prefix, id string) string {
 	return prefix + "/" + id
 }
 
+// SearchDefs federates SearchDefs across every mount that implements
+// it, then aggregates the results with mount-name prefixes applied to
+// each node_id. Sub-graphs that don't expose SearchDefs (only
+// DefsMap) fall back to a DefsMap iteration with sqlLikeMatch.
+//
+// Without this method, find_definition / search role=definition on a
+// CompositeGraph mounting an SQL-backed graph would silently return
+// [] — SQLiteGraph's in-memory g.defs is empty for pre-built .db
+// files, so aggregating DefsMap across mounts misses the real data
+// that lives in node_defs. Each mount's SearchDefs handles its own
+// SQL-vs-memory dispatch; this federates the results.
+//
+// Bead from PR #373 post-fix audit: lazyGraph→CompositeGraph→
+// SQLiteGraph chain. lazyGraph satisfied the defsSearcher type
+// assertion in the handler, but its inner (CompositeGraph) didn't
+// implement SearchDefs, so lazyGraph returned nil. Handler fell
+// through to DefsMap. CompositeGraph.DefsMap aggregated empty
+// SQLiteGraph.DefsMaps. Result: [] for every pattern.
+func (c *CompositeGraph) SearchDefs(pattern string, limit int) map[string][]string {
+	if limit <= 0 {
+		limit = 100
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string][]string)
+	for prefix, g := range c.mounts {
+		var perMount map[string][]string
+		if ds, ok := g.(interface {
+			SearchDefs(string, int) map[string][]string
+		}); ok {
+			perMount = ds.SearchDefs(pattern, limit)
+		}
+		if perMount == nil {
+			// Backend doesn't implement SearchDefs — fall back to
+			// DefsMap iteration with the same matching semantics
+			// the search handler uses for the in-memory path.
+			if dp, ok := g.(defsMapper); ok {
+				perMount = make(map[string][]string)
+				for token, ids := range dp.DefsMap() {
+					if !likeMatch(pattern, token) {
+						continue
+					}
+					perMount[token] = ids
+				}
+			}
+		}
+		for token, ids := range perMount {
+			for _, id := range ids {
+				var wrapped string
+				if id == "" {
+					wrapped = prefix
+				} else {
+					wrapped = prefix + "/" + id
+				}
+				out[token] = append(out[token], wrapped)
+				if len(out) >= limit {
+					return out
+				}
+			}
+		}
+	}
+	return out
+}
+
 // DefsMap aggregates token → dir IDs across every mount that
 // implements DefsMap(), prefixing each dir ID with its mount name.
 // Sub-graphs that don't expose a defs index are skipped.

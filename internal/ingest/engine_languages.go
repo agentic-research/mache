@@ -46,12 +46,49 @@ func init() {
 	// Function-body scopes catch nested cobra literals; file-level
 	// cases (top-level var declarations) still need a separate pass
 	// — known follow-up under mache-02r9.
+	//
+	// Type-reference patterns (mache-9c615a): bench surfaced that
+	// `find_callers(Topology)` returned [] despite 141 grep hits.
+	// Root cause was that node_refs only indexed call_expression,
+	// so type usages — struct fields, function parameters, composite
+	// literals, pointer/slice/map element types — never landed in
+	// the index. Agent asking "who uses this type?" got silent empty.
+	//
+	// Each pattern below targets a type POSITION where the matched
+	// (type_identifier) can never be the declaration of itself (which
+	// is `type_spec name: (type_identifier)`, syntactically distinct).
+	// So adding these does NOT introduce self-references; existing
+	// self-edge filtering in find_callers handlers is unaffected.
+	//
+	// Patterns NOT included (would self-reference or over-capture):
+	//   - bare `(type_identifier) @call` — matches the declaration too
+	//   - `(type_spec)` patterns — definition site, not a reference
+	//   - `(generic_type)` instantiations — handled by their inner
+	//     (type_identifier) child via the qualified_type pattern when
+	//     present; bare generic-arg shapes are tracked under a
+	//     follow-up bead if needed
 	RegisterRefQuery("go", `
 		(call_expression function: (identifier) @call)
 		(call_expression function: (selector_expression field: (field_identifier) @call))
 		(keyed_element
 			(literal_element)
 			(literal_element (identifier) @call))
+		(parameter_declaration (type_identifier) @call)
+		(parameter_declaration (pointer_type (type_identifier) @call))
+		(parameter_declaration (qualified_type name: (type_identifier) @call))
+		(parameter_declaration (pointer_type (qualified_type name: (type_identifier) @call)))
+		(field_declaration (type_identifier) @call)
+		(field_declaration (pointer_type (type_identifier) @call))
+		(field_declaration (qualified_type name: (type_identifier) @call))
+		(field_declaration (pointer_type (qualified_type name: (type_identifier) @call)))
+		(composite_literal type: (type_identifier) @call)
+		(composite_literal type: (qualified_type name: (type_identifier) @call))
+		(type_assertion_expression (type_identifier) @call)
+		(type_assertion_expression (qualified_type name: (type_identifier) @call))
+		(var_spec (type_identifier) @call)
+		(var_spec (pointer_type (type_identifier) @call))
+		(var_spec (qualified_type name: (type_identifier) @call))
+		(var_spec (pointer_type (qualified_type name: (type_identifier) @call)))
 	`)
 
 	// Register Go file-level ref query — runs once per FILE against

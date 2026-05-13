@@ -546,15 +546,34 @@ func (w *SQLiteWriter) Close() error {
 // --- Graph Interface Implementation (for IngestionTarget) ---
 
 func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
-	// Engine calls GetNode to check existence and update children.
-	// Since we use parent_id in child records, we don't strictly need to
-	// return the full Children list here, but we must return a node if it exists.
-	// We use the current transaction to see uncommitted writes.
+	// Engine calls GetNode in two places that matter for correctness:
+	//
+	//   1. existence check before insert (parent dir wiring)
+	//   2. "preserve Properties + Children across the two-pass write
+	//      pattern at engine.go:1576-1594" — the engine writes a node
+	//      with lang/pkg set, then re-reads to layer on location+doc
+	//      from a different code path. If GetNode drops Properties,
+	//      the second write overwrites Properties with nil and the
+	//      lang/pkg from the first write is gone.
+	//
+	// Pre-fix (mache-d28eb1): GetNode returned only ID/Mode/ModTime.
+	// Result: every construct node in `mache build` output had only
+	// `location` in its record column; `lang` was set by the engine
+	// but unconditionally erased by the second-pass overwrite. The
+	// MCP find_callees handler reads `lang` to pick an extractor, so
+	// it returned [] for every construct on a pre-built .db.
+	//
+	// Fix: also SELECT record column and unmarshal it back into
+	// Properties so the engine's "preserve currentProps" logic
+	// actually preserves something.
 
 	var kind int
 	var mtimeNano int64
-	// parent_id can be NULL for root
-	err := w.tx.QueryRow("SELECT kind, mtime FROM nodes WHERE id = ?", id).Scan(&kind, &mtimeNano)
+	var record sql.NullString
+	err := w.tx.QueryRow(
+		"SELECT kind, mtime, record FROM nodes WHERE id = ?",
+		id,
+	).Scan(&kind, &mtimeNano, &record)
 	if err == sql.ErrNoRows {
 		return nil, graph.ErrNotFound
 	}
@@ -567,13 +586,21 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 		mode = os.ModeDir | 0o555
 	}
 
-	return &graph.Node{
+	n := &graph.Node{
 		ID:      id,
 		Mode:    mode,
 		ModTime: time.Unix(0, mtimeNano),
-		// Children: nil -- Engine will append to this and call AddNode,
-		// but our AddNode ignores n.Children, so this is safe.
-	}, nil
+	}
+	// Round-trip record JSON → Properties. Only meaningful for dir
+	// nodes (kind=1); file nodes (kind=0) carry rendered template
+	// content in `record` and don't go through this path.
+	if kind == graph.NodeKindDir && record.Valid && record.String != "" {
+		var props map[string][]byte
+		if json.Unmarshal([]byte(record.String), &props) == nil && len(props) > 0 {
+			n.Properties = props
+		}
+	}
+	return n, nil
 }
 
 func (w *SQLiteWriter) ListChildren(id string) ([]string, error) {

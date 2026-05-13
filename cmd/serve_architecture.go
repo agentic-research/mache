@@ -130,7 +130,22 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 				}}
 			} else {
 				result := graph.DetectCommunities(refs, 2)
-				for _, c := range result.Communities {
+				// Bead mache-9cd921: get_architecture previously appended
+				// every community returned by Louvain, blowing past the
+				// MCP response budget on medium codebases (486K chars on
+				// 28K LOC). Cap to the top N largest communities; the
+				// elided count rides as a note in the final layer.
+				const maxLayers = 25
+				sort.Slice(result.Communities, func(i, j int) bool {
+					return len(result.Communities[i].Members) > len(result.Communities[j].Members)
+				})
+				keep := result.Communities
+				elided := 0
+				if len(keep) > maxLayers {
+					elided = len(keep) - maxLayers
+					keep = keep[:maxLayers]
+				}
+				for _, c := range keep {
 					top := c.Members
 					if len(top) > 5 {
 						top = top[:5]
@@ -143,6 +158,11 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 						ID:         c.ID,
 						Size:       len(c.Members),
 						TopMembers: cleaned,
+					})
+				}
+				if elided > 0 {
+					arch.DependencyLayers = append(arch.DependencyLayers, dependencyLayer{
+						Note: fmt.Sprintf("+%d smaller communities elided (showing top %d by size)", elided, maxLayers),
 					})
 				}
 			}
@@ -163,10 +183,19 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 				return len(syms[i].ids) > len(syms[j].ids)
 			})
 			limit := min(len(syms), 20)
+			// Cap DefIDs per symbol — a common-name symbol like "Error"
+			// can have dozens of defs (interfaces, test mocks, etc.).
+			// Without a cap, KeyAbstractions alone could push the
+			// response past the MCP budget. Bead mache-9cd921.
+			const maxDefsPerSymbol = 8
 			for _, sd := range syms[:limit] {
+				ids := sd.ids
+				if len(ids) > maxDefsPerSymbol {
+					ids = ids[:maxDefsPerSymbol]
+				}
 				arch.KeyAbstractions = append(arch.KeyAbstractions, keyAbstraction{
 					Symbol: sd.symbol,
-					DefIDs: sd.ids,
+					DefIDs: ids,
 				})
 			}
 
