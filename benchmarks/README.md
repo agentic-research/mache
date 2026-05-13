@@ -2,8 +2,8 @@
 
 This directory anchors mache's benchmarking work. Two categories live here:
 
-1. **Micro-benchmarks** — Go `testing.B` benchmarks that live next to the code they measure (in `internal/...`). This README cross-links the ones that matter for cross-PR comparison.
-1. **Comparative bench harness** *(planned, scoped under bead `mache-7937c5`)* — runs mache against peer code-intelligence MCPs (codebase-memory-mcp, Serena, agent-lsp) over a fixed repo corpus + question set. Not yet implemented; lives here once the methodology lock-in lands.
+1. **Micro-benchmarks** — Go `testing.B` benchmarks that live next to the code they measure (in `internal/...`). This README cross-links the ones that matter for cross-PR comparison and reports their measured baselines.
+1. **Comparative bench harness** *(planned, scoped under bead `mache-7937c5`)* — runs mache against peer code-intelligence MCPs (codebase-memory-mcp, Serena, agent-lsp) over a fixed repo corpus + question set. Not yet implemented; lives here once methodology lock-in lands.
 
 ## Wire-decode microbench (`internal/leyline/socket_bench_test.go`)
 
@@ -16,57 +16,86 @@ Payloads match the v0.3.0 daemon wire shape — Int64 fields as quoted JSON stri
 | Op            | Payload shape                      | Bench prefix                             |
 | ------------- | ---------------------------------- | ---------------------------------------- |
 | list_children | 64 child entries (Int64 size each) | `BenchmarkSend{Op,OpInto}…_*Decode`      |
-| get_node      | single Node + 30 B record          | `BenchmarkSend{Op,OpInto}_GetNode_*`     |
+| get_node      | single Node + 27 B record          | `BenchmarkSend{Op,OpInto}_GetNode_*`     |
 | read_content  | 8 KiB content string               | `BenchmarkSend{Op,OpInto}_ReadContent_*` |
 | find_callers  | 32 Ref entries                     | `BenchmarkSend{Op,OpInto}_FindCallers_*` |
 | find_callees  | 16 Ref entries                     | `BenchmarkSend{Op,OpInto}_FindCallees_*` |
 
+Fixture sizes are illustrative middle-of-the-road values, not production-sourced. The 16/32/64 split between callees/callers/children is arbitrary; future work (bead `mache-7937c5`) should re-baseline against real production p50/p95 distributions before claims about "realistic workloads" are made from these numbers.
+
 ### Running
 
 ```sh
-go test -bench='BenchmarkSendOp' -benchmem -run='^$' -benchtime=2s -count=3 ./internal/leyline/
+go test -bench='BenchmarkSendOp' -benchmem -run='^$' -benchtime=2s -count=10 ./internal/leyline/
 ```
 
-For a single op:
+For statistically meaningful deltas use `-count=10` and feed both runs to `benchstat`. The headline numbers below come from a single 10-run sample on a M3 Max under low background load; rerun on your target platform before quoting them elsewhere.
 
-```sh
-go test -bench='BenchmarkSendOp.*_FindCallers' -benchmem -run='^$' ./internal/leyline/
-```
+### Baseline results (benchstat, n=10, Apple M3 Max, darwin/arm64, Go 1.25.5)
 
-`-count=3` smooths out scheduler noise; the deltas reported below were stable across runs.
+`p` values from a Mann-Whitney U test; `~` means the wall-clock difference is not statistically distinguishable from noise at α=0.05.
 
-### Baseline results (Apple M3 Max, darwin/arm64, Go 1.25.5)
+| Op            |    Map sec/op | Typed sec/op |     Δ time | sig.    |
+| ------------- | ------------: | -----------: | ---------: | ------- |
+| list_children |  101.5 µs ±2% | 109.8 µs ±1% | **+8.13%** | p=0.000 |
+| get_node      |  6.932 µs ±1% | 6.924 µs ±1% |          ~ | p=0.896 |
+| read_content  |  50.64 µs ±1% | 50.48 µs ±1% |          ~ | p=0.393 |
+| find_callers  | 35.83 µs ±12% | 34.53 µs ±2% | **−3.62%** | p=0.000 |
+| find_callees  |  20.11 µs ±2% | 19.47 µs ±2% | **−3.19%** | p=0.000 |
+| **geomean**   |  **30.33 µs** | **30.36 µs** | **+0.09%** | —       |
 
-Two runs at `-benchtime=2s`, results averaged. `Δ` is typed-vs-map relative to map baseline.
+| Op            |       Map B/op |    Typed B/op |      Δ B/op |
+| ------------- | -------------: | ------------: | ----------: |
+| list_children |  80.21 KiB ±0% | 62.90 KiB ±0% | **−21.58%** |
+| get_node      |  2.927 KiB ±0% | 2.363 KiB ±0% | **−19.25%** |
+| read_content  |  46.29 KiB ±0% | 45.99 KiB ±0% |      −0.66% |
+| find_callers  |  28.93 KiB ±0% | 17.54 KiB ±0% | **−39.37%** |
+| find_callees  | 14.417 KiB ±0% | 8.612 KiB ±0% | **−40.26%** |
+| **geomean**   |  **21.44 KiB** | **15.95 KiB** | **−25.61%** |
 
-| Op            | Map ns/op | Typed ns/op | Δ time | Map B/op | Typed B/op | Δ alloc B | Map allocs | Typed allocs | Δ allocs |
-| ------------- | --------: | ----------: | -----: | -------: | ---------: | --------: | ---------: | -----------: | -------: |
-| list_children |   101,700 |     106,818 |  +5.0% |   82,152 |     64,382 |    −21.6% |      1,716 |        1,455 |   −15.2% |
-| get_node      |     6,835 |       6,881 |  +0.7% |    2,997 |      2,420 |    −19.3% |         72 |           65 |    −9.7% |
-| read_content  |    49,197 |      49,316 |  +0.2% |   47,412 |     47,093 |     −0.7% |         44 |           40 |    −9.1% |
-| find_callers  |    34,557 |      33,561 |  −2.9% |   29,627 |     17,958 |    −39.4% |        464 |          332 |   −28.4% |
-| find_callees  |    20,648 |      18,844 |  −8.7% |   14,762 |      8,816 |    −40.3% |        255 |          187 |   −26.7% |
+| Op            | Map allocs/op | Typed allocs/op |    Δ allocs |
+| ------------- | ------------: | --------------: | ----------: |
+| list_children |         1,716 |           1,455 | **−15.21%** |
+| get_node      |            72 |              65 |  **−9.72%** |
+| read_content  |            44 |              40 |  **−9.09%** |
+| find_callers  |           464 |             332 | **−28.45%** |
+| find_callees  |           255 |             187 | **−26.67%** |
+| **geomean**   |       **230** |         **188** | **−18.25%** |
 
 ### Reading the table
 
-- **Throughput (`ns/op`)**: typed-decode is equal or faster on every op except the largest one (`list_children` with 64 children × 6 fields = 384 fields decoded). Reflection cost scales with field count; map decode beats it only when the payload is wide.
-- **Memory (`B/op`)**: typed-decode allocates uniformly less, with the biggest wins on Ref-list responses (`find_callers`, `find_callees`). The `map[string]any` path materializes every JSON value as an `any` box; the typed path stuffs them into struct fields directly.
-- **Allocations (`allocs/op`)**: typed-decode does 9–28% fewer allocations across the board. The wins compound under sustained traffic (GC pressure, scheduler tail latency) — exactly the thing the wall-clock microbench understates.
+The honest one-line summary: **wall-clock is essentially unchanged overall (geomean +0.09%, p>0.05); memory drops materially across the board (geomean −25.6% bytes, −18.3% allocations).**
+
+Per-op:
+
+- **`list_children`** is the one significant wall-clock regression (+8.13%, p=0.000). 64 children × 6 fields = 384 fields decoded; that's where reflection cost over `json.Unmarshal` into a typed slice shows up. Memory drops 21.6% so the trade is real, not free.
+- **`get_node`** and **`read_content`** are statistically indistinguishable on wall-clock (p=0.896, p=0.393). The README's earlier "+0.7%" and "+0.2%" framing was inside noise; these ops should be reported as flat.
+- **`find_callers`** and **`find_callees`** are modestly faster (−3.6%, −3.2%) and substantially lighter on memory (~−40%). The `map[string]any` path boxes every JSON value as an `any`; the typed path stuffs them into struct fields directly. On Ref-list payloads the boxing cost dominates.
 
 ### Net read
 
-The typed-decode path that PR #372 lands is a net win across realistic workloads. The only marginally-slower op is `list_children`, and even there the GC-pressure trade (−21% bytes, −15% allocs) is the right call: GC tail latency hurts mache's MCP-tool flow more than 5 µs per call.
+PR #372's typed-decode is a wash on wall-clock and a clean memory win. The marketing in the previous revision of this README ("net win across realistic workloads") was overclaiming — the only defensible "win" headline is the memory/allocation one.
 
-The `list_children` reflection overhead is bounded — children fanout is what it is, and most callers walk only a slice of the result. If it ever matters in production, the fix is field-level cleanup (drop unused `*string` pointers, replace with `string` where capnp's nullability isn't load-bearing) rather than reverting to map decode.
+What this bench does NOT prove:
+
+- p99 latency in production (uses a localhost stub, no kernel/IPC contention)
+- Performance on linux/amd64 (M3 Max numbers don't transfer cleanly)
+- That fixture sizes reflect real workloads (16/32/64 entry counts are arbitrary)
+
+The `list_children` reflection overhead is bounded by field count. If it ever shows up in production p99, the fix is field-level cleanup (drop unused `*string` pointers, replace with `string` where capnp's nullability isn't load-bearing) rather than reverting to map decode.
 
 ## Comparative bench (planned)
 
 Tracked under bead `mache-7937c5`. Three peer MCPs in scope:
 
 - **codebase-memory-mcp** (DeusData) — tree-sitter + Cypher; published a 12-question × 64-repo PASS/PARTIAL/FAIL grid we can adopt as the navigation-axis methodology.
-- **Serena** (Oraios) — live LSP, no published bench; serves as the "live-data" comparator.
+- **Serena** (Oraios) — live LSP, no published bench; serves as the "live-data" comparator. Initial install / single-repo run sketched in this PR (see "Serena comparison sketch" below).
 - **agent-lsp** (Blackwell Systems) — LSP + workflow-enforcing skills; published per-codebase ratio benchmarks (rename, FP rate, speculative-edit) we can adopt as the edit-axis methodology.
 
-The 2-axis question is the meaningful one: how does mache's projected-FS structural view compare on **navigation** (codebase-memory-mcp's strength) AND on **edit-prep** (agent-lsp's strength), measured on the same repo corpus, against all three peers? See bead comments for the methodology breakdown.
+The 2-axis question is the meaningful one: how does mache's projected-FS structural view compare on **navigation** (codebase-memory-mcp's strength) AND on **edit-prep** (agent-lsp's strength), measured on the same repo corpus, against all three peers?
 
-Until that work lands, this README is just the wire-decode regression baseline.
+### Serena head-to-head harness
+
+See `benchmarks/serena/README.md`. We vendor Serena's MIT-licensed agent-self-eval methodology (one-shot 20-task prompt) and adapt it for mache's read-only surface — categories 2–4 (single-file edits, multi-file changes, edit-reliability) are marked **out of scope** per Serena's own taxonomy. The remaining categories (codebase understanding, workflow effects, non-code reads, free-text search) are exactly where mache's projected-FS + pre-baked LSP claims are testable.
+
+`benchmarks/serena/baselines/serena_cc_opus_4.6_on_tianshou.md` is the published Serena baseline (CC-Opus-4.6 on Tianshou, 26K LOC Python). Mache's hypothesis is that on category 1 (codebase understanding) mache will classify as **strong positive vs built-ins** where Serena classified as *moderate positive* — because navigation is `ls` on a projected directory rather than an MCP call, and the LSP-backed answers are pre-baked into the .db so there's no language-server startup cost. That hypothesis is now testable; running it is the next step on bead `mache-7937c5`.
