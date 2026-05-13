@@ -258,6 +258,33 @@ func (c *SocketClient) Close() error {
 // SendOp sends a JSON request and reads the JSON response.
 // Both are line-delimited (newline-terminated JSON).
 func (c *SocketClient) SendOp(req map[string]any) (map[string]any, error) {
+	line, err := c.sendRaw(req)
+	if err != nil {
+		return nil, err
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+	return resp, nil
+}
+
+// SendOpInto sends a JSON request and decodes the response into dest.
+// Use this for ops with typed response structs (see wire.go); SendOp's
+// map[string]any return silently zeros Int64 fields under the post-b0ea2e
+// daemon wire (capnp-json codec emits int64 as JSON strings).
+func (c *SocketClient) SendOpInto(req map[string]any, dest any) error {
+	line, err := c.sendRaw(req)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(line, dest); err != nil {
+		return fmt.Errorf("unmarshal response: %w", err)
+	}
+	return nil
+}
+
+func (c *SocketClient) sendRaw(req map[string]any) ([]byte, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -272,13 +299,7 @@ func (c *SocketClient) SendOp(req map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-
-	var resp map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	return resp, nil
+	return []byte(strings.TrimSpace(line)), nil
 }
 
 // Tool invokes a named tool with the given args via the `tool` op.
