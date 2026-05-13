@@ -206,6 +206,70 @@ func TestSQLiteGraph_GetCallees_ReceiverSuffixMatch(t *testing.T) {
 		"resolved target must be the unique qualified-form node_defs entry")
 }
 
+// TestSQLiteGraph_GetCallees_RequiresLangProperty pins the bug from
+// bead mache-d28eb1: SQLiteGraph.GetCallees reads the construct node's
+// `lang` Property to pick an extractor. If the property is missing,
+// langName="" → grammar lookup fails → empty callees. Pre-fix,
+// `mache build` produced .db files where this property was wiped by
+// the two-pass write pattern in engine.processNode (SQLiteWriter
+// .GetNode returned no Properties, so the second pass overwrote them
+// with nil).
+//
+// This test uses the construct node's record JSON directly to assert
+// the resolver path reads `lang` and only resolves callees when it's
+// present.
+func TestSQLiteGraph_GetCallees_RequiresLangProperty(t *testing.T) {
+	dir, err := os.MkdirTemp("", "callees-lang-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			kind INTEGER NOT NULL,
+			size INTEGER DEFAULT 0,
+			mtime INTEGER NOT NULL,
+			record_id TEXT,
+			record JSON
+		);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Construct dir with lang property base64-encoded ("go" → "Z28=")
+		INSERT INTO nodes VALUES ('caller', '', 'caller', 1, 0, 1, NULL, '{"lang":"Z28="}');
+		INSERT INTO nodes VALUES ('caller/source', 'caller', 'source', 0, 30, 1, NULL, 'func f() { target() }');
+		INSERT INTO nodes VALUES ('target', '', 'target', 1, 0, 1, NULL, '{"lang":"Z28="}');
+		INSERT INTO node_defs VALUES ('target', 'target');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	g, err := OpenSQLiteGraph(dbPath, &api.Topology{}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	g.SetCallExtractor(func(_ []byte, _, langName string) ([]QualifiedCall, error) {
+		// Production extractor returns nil for empty langName because
+		// it can't pick a grammar. This stub mirrors that behavior so
+		// the test catches "lang missing → no callees" regressions.
+		if langName == "" {
+			return nil, nil
+		}
+		return []QualifiedCall{{Token: "target"}}, nil
+	})
+
+	callees, err := g.GetCallees("caller")
+	require.NoError(t, err)
+	require.Len(t, callees, 1,
+		"lang property present + extractor returns calls → GetCallees must resolve")
+	require.Equal(t, "target", callees[0].ID)
+}
+
 // TestSQLiteGraph_GetCallees_AmbiguousSuffixSkipped pins the
 // disambiguation guard for the suffix-match fallback. If two types
 // both define a method of the same bare name, we cannot pick one

@@ -2,14 +2,61 @@ package ingest
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/internal/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+// TestSQLiteWriter_GetNode_RoundTripsProperties pins the bug from bead
+// mache-d28eb1: SQLiteWriter.GetNode previously returned only
+// ID/Mode/ModTime, dropping Properties. The engine then "preserves"
+// Properties across the two-pass write pattern at engine.go:1576-1594,
+// but the preservation was a no-op — currentProps was always nil. The
+// second pass wrote nil Properties, erasing lang/pkg/imports set on
+// the first pass. Net effect: every construct node in `mache build`
+// output had only `location`; the MCP find_callees handler (which
+// reads `lang` to pick an extractor) returned [] for every construct.
+//
+// This test writes a dir node with Properties via AddNode, reads it
+// back via GetNode, and asserts the Properties round-trip. The bug
+// would have been caught immediately if this test had existed.
+func TestSQLiteWriter_GetNode_RoundTripsProperties(t *testing.T) {
+	dir, err := os.MkdirTemp("", "writer-roundtrip-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	dbPath := filepath.Join(dir, "test.db")
+	w, err := NewSQLiteWriter(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	w.AddNode(&graph.Node{
+		ID:      "pkg/methods/Foo.Bar",
+		Mode:    os.ModeDir | 0o555,
+		ModTime: time.Unix(1700000000, 0),
+		Properties: map[string][]byte{
+			"lang": []byte("go"),
+			"pkg":  []byte("foo"),
+		},
+	})
+
+	got, err := w.GetNode("pkg/methods/Foo.Bar")
+	require.NoError(t, err)
+	require.True(t, got.Mode.IsDir())
+	require.NotNil(t, got.Properties,
+		"GetNode must round-trip Properties — the engine's two-pass write "+
+			"pattern relies on this to preserve lang/pkg across the location/doc overwrite")
+	require.Equal(t, []byte("go"), got.Properties["lang"],
+		"lang Property must survive the AddNode → GetNode round-trip")
+	require.Equal(t, []byte("foo"), got.Properties["pkg"],
+		"pkg Property must survive the round-trip too")
+}
 
 // LoadFileIndex is the read-side of incremental re-ingestion: when
 // `mache build` runs over a tree we've seen before, it loads this
