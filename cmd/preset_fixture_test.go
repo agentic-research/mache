@@ -13,6 +13,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// pendingFixtureCoverage lists presets that don't yet have a case in
+// presetFixtureCases. Every entry is a TODO — either author the fixture
+// (preferred) or update the value with the reason it can't be tested
+// here. The companion test TestPresetSchemas_PendingFixtureCoverage
+// fails when a registered preset is missing from BOTH this list and
+// presetFixtureCases, AND when an entry here is also in
+// presetFixtureCases (double-coverage means the TODO is stale), AND
+// when an entry here no longer exists in presetSchemas (preset was
+// removed but the TODO wasn't).
+//
+// Most of these are "rich" presets (>100 lines) that were in production
+// before fixture coverage existed; they're exercised indirectly by
+// other tests (TestInferDirSchema_*, the integration test suite, the
+// dead_code rule's Go assertions). Authoring direct fixtures for them
+// is straightforward but high-volume — pick one off, add a fixture
+// under cmd/testdata/preset_fixtures/<name>/, append a case to
+// presetFixtureCases, remove it from this map.
+//
+// Format: preset name → reason. Empty string means "no reason
+// recorded, just hasn't been written yet."
+var pendingFixtureCoverage = map[string]string{
+	"c":          "",
+	"cpp":        "",
+	"elixir":     "",
+	"java":       "",
+	"javascript": "",
+	"kotlin":     "",
+	"php":        "",
+	"python":     "",
+	"ruby":       "",
+	"scala":      "",
+	"swift":      "",
+	"typescript": "",
+}
+
 // presetFixtureCase pairs a preset name with a fixture directory and
 // the node-path substrings that must appear in the resulting graph.
 // TestPresetSchemas_AgainstFixtures runs each case end-to-end:
@@ -264,6 +299,88 @@ func TestPresetSchemas_AgainstFixtures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPresetSchemas_PendingFixtureCoverage is the patrol that catches
+// new presets being added without fixture coverage. It computes the
+// set of registered presets (presetSchemas keys, minus the data-format
+// presets that don't use tree-sitter grammars), compares against
+// what's in presetFixtureCases plus pendingFixtureCoverage, and fails
+// when any registered preset shows up in neither — or when anything
+// in pendingFixtureCoverage no longer matches presetSchemas.
+//
+// Failure mode the test catches: somebody adds a new language to
+// internal/lang's Registry with a new preset schema, wires it through
+// cmd/schemas/<name>.json, but forgets to author a fixture. Without
+// this test the new preset would silently fall back to
+// "selector compiles, but does it actually match real source?" being
+// unverified.
+//
+// To unblock a failing run, do one of:
+//
+//   - Add a case to presetFixtureCases (preferred — author the fixture)
+//   - Add the preset to pendingFixtureCoverage with a reason
+//   - Remove the preset from pendingFixtureCoverage if it's no longer
+//     registered or if you just added a case
+func TestPresetSchemas_PendingFixtureCoverage(t *testing.T) {
+	// Data-format presets use JSONPath against record-shaped data
+	// (not tree-sitter against source files). Skipping them matches
+	// TestPresetSchemas_SelectorsCompile's dataPresets carveout.
+	dataPresets := map[string]bool{"cli": true, "mcp": true, "mcp-registry": true}
+
+	covered := make(map[string]bool, len(presetFixtureCases(t)))
+	for _, c := range presetFixtureCases(t) {
+		covered[c.preset] = true
+	}
+
+	var (
+		uncovered               []string
+		pendingButCovered       []string
+		pendingButNotInRegistry []string
+	)
+
+	for name := range presetSchemas {
+		if dataPresets[name] {
+			continue
+		}
+		_, pending := pendingFixtureCoverage[name]
+		switch {
+		case covered[name] && pending:
+			pendingButCovered = append(pendingButCovered, name)
+		case !covered[name] && !pending:
+			uncovered = append(uncovered, name)
+		}
+	}
+
+	for name := range pendingFixtureCoverage {
+		if _, exists := presetSchemas[name]; !exists {
+			pendingButNotInRegistry = append(pendingButNotInRegistry, name)
+		}
+	}
+
+	sort.Strings(uncovered)
+	sort.Strings(pendingButCovered)
+	sort.Strings(pendingButNotInRegistry)
+
+	if len(uncovered) > 0 {
+		t.Errorf("preset(s) registered in presetSchemas have no fixture coverage and aren't on the pending allowlist:\n"+
+			"  %s\n"+
+			"Either add a case to presetFixtureCases (with a fixture under cmd/testdata/preset_fixtures/<name>/) "+
+			"or list the preset in pendingFixtureCoverage with a reason.",
+			strings.Join(uncovered, ", "))
+	}
+	if len(pendingButCovered) > 0 {
+		t.Errorf("preset(s) are listed in pendingFixtureCoverage but also have a case in presetFixtureCases:\n"+
+			"  %s\n"+
+			"Remove them from pendingFixtureCoverage — they're already covered.",
+			strings.Join(pendingButCovered, ", "))
+	}
+	if len(pendingButNotInRegistry) > 0 {
+		t.Errorf("preset(s) listed in pendingFixtureCoverage are no longer in presetSchemas:\n"+
+			"  %s\n"+
+			"Remove them from pendingFixtureCoverage — they no longer exist.",
+			strings.Join(pendingButNotInRegistry, ", "))
 	}
 }
 
