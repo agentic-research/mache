@@ -16,6 +16,54 @@
           ]
         }
       ]
+    },
+    {
+      "name": "sequences",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(stream (document (block_node (block_sequence (block_sequence_item) @scope))))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "documents",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(stream (document) @scope)",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "block_scalars",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(block_scalar) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
