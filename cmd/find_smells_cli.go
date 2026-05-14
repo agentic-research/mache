@@ -109,12 +109,16 @@ This tool is observability, not a gate. It never exits non-zero on findings.`,
 		if missing, err := missingTables(qg, rule.Requires); err != nil {
 			return cliExit(4, fmt.Errorf("pre-flight: %w", err))
 		} else if len(missing) > 0 {
+			backendNote := ""
+			if backend := queryBuildBackend(qg); backend != "" {
+				backendNote = fmt.Sprintf(" (built with backend=%q)", backend)
+			}
 			return cliExit(2, fmt.Errorf(
-				"rule %q requires SQL tables [%s] which aren't present in %s — "+
+				"rule %q requires SQL tables [%s] which aren't present in %s%s — "+
 					"_ast / _source / _imports / _lsp* come from ley-line-open's `leyline parse`; "+
 					"node_defs / node_refs / nodes come from both standalone mache and LLO; "+
 					"see docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full capability matrix",
-				findSmellsRule, strings.Join(missing, ", "), findSmellsDBPath,
+				findSmellsRule, strings.Join(missing, ", "), findSmellsDBPath, backendNote,
 			))
 		}
 
