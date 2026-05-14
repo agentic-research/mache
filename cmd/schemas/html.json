@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "elements",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(element (start_tag (tag_name) @name)) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

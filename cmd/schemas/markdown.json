@@ -1,0 +1,37 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "sections",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(section (atx_heading (inline) @name)) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "code_blocks",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(fenced_code_block) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

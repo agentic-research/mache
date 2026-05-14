@@ -1,0 +1,37 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "fields",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(field) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "imports",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(import_declaration) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "rules",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(rule_set) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "media",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(media_statement) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

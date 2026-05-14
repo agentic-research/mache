@@ -1,0 +1,53 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "stages",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(from_instruction) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "run_steps",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(run_instruction) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "copy_steps",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(copy_instruction) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
