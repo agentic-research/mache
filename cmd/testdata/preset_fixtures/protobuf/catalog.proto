@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package mache.fixture;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/agentic-research/mache/fixture";
+
+enum EntryKind {
+  ENTRY_KIND_UNSPECIFIED = 0;
+  ENTRY_KIND_FILE = 1;
+  ENTRY_KIND_DIRECTORY = 2;
+  ENTRY_KIND_SYMLINK = 3;
+}
+
+message Entry {
+  string id = 1;
+  EntryKind kind = 2;
+  int64 size = 3;
+  google.protobuf.Timestamp modified_at = 4;
+}
+
+message LookupRequest {
+  string id = 1;
+}
+
+message LookupResponse {
+  Entry entry = 1;
+  bool found = 2;
+}
+
+service Catalog {
+  rpc Lookup(LookupRequest) returns (LookupResponse);
+  rpc Count(LookupRequest) returns (LookupResponse);
+}

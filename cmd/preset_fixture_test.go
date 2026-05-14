@@ -124,6 +124,110 @@ func presetFixtureCases(t *testing.T) []presetFixtureCase {
 			},
 			minNodes: 20,
 		},
+		{
+			preset:             "bash",
+			fixtureDir:         filepath.Join(fixturesRoot, "bash"),
+			expectedSubstrings: []string{"functions/log", "functions/ensure_dir", "if_statements/", "for_loops/", "case_statements/", "commands/"},
+			minNodes:           10,
+		},
+		{
+			preset:     "csharp",
+			fixtureDir: filepath.Join(fixturesRoot, "csharp"),
+			expectedSubstrings: []string{
+				"namespaces/", "classes/Catalog", "classes/Entry",
+				"structs/EntryStats", "interfaces/ILookup", "enums/EntryKind",
+				"methods/Insert", "methods/Lookup",
+			},
+			minNodes: 10,
+		},
+		{
+			preset:             "css",
+			fixtureDir:         filepath.Join(fixturesRoot, "css"),
+			expectedSubstrings: []string{"rules/", "media_queries/", "keyframes/", "imports/", "supports/"},
+			minNodes:           8,
+		},
+		{
+			preset:             "cue",
+			fixtureDir:         filepath.Join(fixturesRoot, "cue"),
+			expectedSubstrings: []string{"package/", "imports/", "fields/", "let_clauses/"},
+			minNodes:           8,
+		},
+		{
+			preset:     "dockerfile",
+			fixtureDir: filepath.Join(fixturesRoot, "dockerfile"),
+			expectedSubstrings: []string{
+				"stages/", "run_steps/", "copy_steps/",
+				"env/", "workdir/", "expose/", "labels/", "healthcheck/",
+			},
+			minNodes: 8,
+		},
+		{
+			preset:             "groovy",
+			fixtureDir:         filepath.Join(fixturesRoot, "groovy"),
+			expectedSubstrings: []string{"package/", "imports/", "classes/BuildConfig", "functions/"},
+			minNodes:           5,
+		},
+		{
+			preset:             "html",
+			fixtureDir:         filepath.Join(fixturesRoot, "html"),
+			expectedSubstrings: []string{"elements/", "scripts/", "styles/", "doctype/"},
+			minNodes:           5,
+		},
+		{
+			preset:     "lua",
+			fixtureDir: filepath.Join(fixturesRoot, "lua"),
+			expectedSubstrings: []string{
+				"functions/", "locals/", "if_statements/",
+				"for_statements/", "while_statements/",
+			},
+			minNodes: 10,
+		},
+		{
+			preset:     "markdown",
+			fixtureDir: filepath.Join(fixturesRoot, "markdown"),
+			expectedSubstrings: []string{
+				"sections/", "code_blocks/", "lists/",
+				"paragraphs/", "block_quotes/", "tables/", "html_blocks/",
+			},
+			minNodes: 10,
+		},
+		{
+			preset:     "protobuf",
+			fixtureDir: filepath.Join(fixturesRoot, "protobuf"),
+			expectedSubstrings: []string{
+				"package/", "imports/",
+				"messages/Entry", "messages/LookupRequest",
+				"services/Catalog", "enums/EntryKind", "rpcs/",
+			},
+			minNodes: 8,
+		},
+		{
+			preset:     "sql",
+			fixtureDir: filepath.Join(fixturesRoot, "sql"),
+			expectedSubstrings: []string{
+				"tables/users", "tables/sessions",
+				"views/active_sessions", "indexes/", "triggers/",
+				"functions/", "types/",
+			},
+			minNodes: 10,
+		},
+		{
+			preset:     "toml",
+			fixtureDir: filepath.Join(fixturesRoot, "toml"),
+			expectedSubstrings: []string{
+				"tables/package", "tables/dependencies",
+				"array_tables/bin", "pairs/", "inline_tables/",
+			},
+			minNodes: 10,
+		},
+		{
+			preset:     "yaml",
+			fixtureDir: filepath.Join(fixturesRoot, "yaml"),
+			expectedSubstrings: []string{
+				"mappings/", "documents/", "block_scalars/",
+			},
+			minNodes: 5,
+		},
 	}
 }
 

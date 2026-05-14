@@ -2,12 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "fields",
+      "name": "package",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(field) @scope",
+          "selector": "(package_clause) @scope",
           "files": [
             {
               "name": "source",
@@ -24,6 +24,38 @@
         {
           "name": "{{.index}}",
           "selector": "(import_declaration) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fields",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(field) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "let_clauses",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(let_clause) @scope",
           "files": [
             {
               "name": "source",

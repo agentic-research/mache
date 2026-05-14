@@ -2,12 +2,54 @@
   "version": "v1",
   "nodes": [
     {
+      "name": "namespaces",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(namespace_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(namespace_declaration name: (qualified_name) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "classes",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
           "selector": "(class_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "structs",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(struct_declaration name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -34,12 +76,44 @@
       ]
     },
     {
+      "name": "enums",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(enum_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "methods",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
           "selector": "(method_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "properties",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(property_declaration name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
