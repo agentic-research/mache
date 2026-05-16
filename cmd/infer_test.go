@@ -130,8 +130,10 @@ func TestInferDirSchema_NoSourceFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	// Only non-source files
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# hi"), 0o644))
+	// Only non-source files. Use .txt — markdown is a registered
+	// source extension (lang.Registry) so README.md would now go
+	// through the markdown preset path and produce a schema.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi"), 0o644))
 
 	topo, err := inferDirSchema(dir)
 	require.NoError(t, err)

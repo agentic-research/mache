@@ -106,11 +106,11 @@ func presetFixtureCases(t *testing.T) []presetFixtureCase {
 			// disappear, either the schema regressed or internal/lang
 			// got refactored — both are worth a failing test.
 			expectedSubstrings: []string{
-				"lang/imports/",                 // imports surface
-				"lang/functions/init",           // package init() function
-				"lang/functions/ForExt",         // exported helper
-				"lang/functions/enrichHCLNode",  // unexported helper
-				"lang/types",                    // types directory exists
+				"lang/imports/",                // imports surface
+				"lang/functions/init",          // package init() function
+				"lang/functions/ForExt",        // exported helper
+				"lang/functions/enrichHCLNode", // unexported helper
+				"lang/types",                   // types directory exists
 			},
 			minNodes: 50,
 		},
