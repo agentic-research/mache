@@ -2,12 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
+      "name": "functions",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(table (bare_key) @name) @scope",
+          "selector": "(function_definition name: (word) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -18,12 +18,12 @@
       ]
     },
     {
-      "name": "array_tables",
+      "name": "commands",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(table_array_element (bare_key) @name) @scope",
+          "selector": "(command name: (command_name) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -34,12 +34,12 @@
       ]
     },
     {
-      "name": "pairs",
+      "name": "if_statements",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(pair) @scope",
+          "selector": "(if_statement) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +50,28 @@
       ]
     },
     {
-      "name": "inline_tables",
+      "name": "for_loops",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(inline_table) @scope",
+          "selector": "(for_statement) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "case_statements",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(case_statement) @scope",
           "files": [
             {
               "name": "source",

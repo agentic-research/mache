@@ -1,0 +1,28 @@
+[package]
+name = "mache-fixture"
+version = "0.1.0"
+edition = "2021"
+authors = ["mache-fixture <fixture@example.com>"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+
+[dev-dependencies]
+proptest = "1.0"
+
+[features]
+default = ["json"]
+json = ["serde_json"]
+
+[[bin]]
+name = "fixture"
+path = "src/bin/fixture.rs"
+
+[[bin]]
+name = "fixture-cli"
+path = "src/bin/cli.rs"
+
+[profile.release]
+opt-level = 3
+lto = true

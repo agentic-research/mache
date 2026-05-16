@@ -832,9 +832,17 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 		if missing, err := missingTables(qg, rule.Requires); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("rule %q: pre-flight table check failed: %v", ruleID, err)), nil
 		} else if len(missing) > 0 {
+			// If the active .db was built by `mache build`, the
+			// _mache_meta marker tells us which backend produced it.
+			// Splice that into the error so agents don't have to run
+			// `.tables` to figure out why _ast is missing.
+			backendNote := ""
+			if backend := queryBuildBackend(qg); backend != "" {
+				backendNote = fmt.Sprintf(" (this .db was built with backend=%q)", backend)
+			}
 			return mcp.NewToolResultError(fmt.Sprintf(
-				"rule %q requires SQL tables [%s] which aren't present on the active backend. _ast / _source / _imports / _lsp* are produced by ley-line-open's `leyline parse`; node_defs / node_refs / nodes are produced by both standalone mache and LLO. See docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full table.",
-				ruleID, strings.Join(missing, ", "))), nil
+				"rule %q requires SQL tables [%s] which aren't present on the active backend%s. _ast / _source / _imports / _lsp* are produced by ley-line-open's `leyline parse`; node_defs / node_refs / nodes are produced by both standalone mache and LLO. See docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full table.",
+				ruleID, strings.Join(missing, ", "), backendNote)), nil
 		}
 
 		findings, err := runSmellRule(qg, rule, sourceID, limit)
@@ -912,6 +920,28 @@ func rulesListing() any {
 		Help:  "find_smells runs structural pattern queries against the _ast / nodes / node_defs / node_refs tables. Pass `rule` to scan; omit it (this response) to list available rules. Each rule entry includes a `requires` list of SQL tables it reads — agents can use it to skip rules whose tables aren't present on the active backend (e.g. _ast is only populated by ley-line-open's leyline parse). Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold. Rules that surface a `default_min_metric` apply that as the threshold when the caller omits `min_metric`; an explicit `min_metric=0` overrides the default and returns everything sorted by metric.",
 		Rules: out,
 	}
+}
+
+// queryBuildBackend returns the value of `_mache_meta.backend` on the
+// active backend, or "" if the table isn't present, the row is missing,
+// or any error occurs. `mache build` stamps this marker for every .db
+// it produces (see cmd/build_meta.go); older or third-party-produced
+// .dbs return "" silently so the caller can fall back to a generic
+// message. Best-effort by design — never returns an error.
+func queryBuildBackend(qg refsQuerier) string {
+	rows, err := qg.QueryRefs(`SELECT value FROM _mache_meta WHERE key = 'backend'`)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return ""
+	}
+	var v string
+	if err := rows.Scan(&v); err != nil {
+		return ""
+	}
+	return v
 }
 
 // missingTables returns the subset of `required` that's not in

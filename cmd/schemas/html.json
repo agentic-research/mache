@@ -2,12 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
+      "name": "elements",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(table (bare_key) @name) @scope",
+          "selector": "(element (start_tag (tag_name) @name)) @scope",
           "files": [
             {
               "name": "source",
@@ -18,28 +18,12 @@
       ]
     },
     {
-      "name": "array_tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(table_array_element (bare_key) @name) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "pairs",
+      "name": "scripts",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(pair) @scope",
+          "selector": "(script_element) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +34,28 @@
       ]
     },
     {
-      "name": "inline_tables",
+      "name": "styles",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(inline_table) @scope",
+          "selector": "(style_element) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "doctype",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(doctype) @scope",
           "files": [
             {
               "name": "source",

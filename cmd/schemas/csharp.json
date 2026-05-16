@@ -2,12 +2,22 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
+      "name": "namespaces",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(create_table (object_reference name: (identifier) @name) @scope)",
+          "selector": "(namespace_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(namespace_declaration name: (qualified_name) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -18,12 +28,12 @@
       ]
     },
     {
-      "name": "views",
+      "name": "classes",
       "selector": "$",
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(create_view (object_reference name: (identifier) @name) @scope)",
+          "selector": "(class_declaration name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -34,12 +44,12 @@
       ]
     },
     {
-      "name": "functions",
+      "name": "structs",
       "selector": "$",
       "children": [
         {
-          "name": "{{.index}}",
-          "selector": "(create_function) @scope",
+          "name": "{{.name}}",
+          "selector": "(struct_declaration name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +60,12 @@
       ]
     },
     {
-      "name": "types",
+      "name": "interfaces",
       "selector": "$",
       "children": [
         {
-          "name": "{{.index}}",
-          "selector": "(create_type) @scope",
+          "name": "{{.name}}",
+          "selector": "(interface_declaration name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -66,12 +76,12 @@
       ]
     },
     {
-      "name": "indexes",
+      "name": "enums",
       "selector": "$",
       "children": [
         {
-          "name": "{{.index}}",
-          "selector": "(create_index) @scope",
+          "name": "{{.name}}",
+          "selector": "(enum_declaration name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -82,12 +92,28 @@
       ]
     },
     {
-      "name": "triggers",
+      "name": "methods",
       "selector": "$",
       "children": [
         {
-          "name": "{{.index}}",
-          "selector": "(create_trigger) @scope",
+          "name": "{{.name}}",
+          "selector": "(method_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "properties",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(property_declaration name: (identifier) @name) @scope",
           "files": [
             {
               "name": "source",

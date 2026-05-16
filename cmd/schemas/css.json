@@ -2,44 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(create_table (object_reference name: (identifier) @name) @scope)",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "views",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(create_view (object_reference name: (identifier) @name) @scope)",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "functions",
+      "name": "rules",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_function) @scope",
+          "selector": "(rule_set) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +18,12 @@
       ]
     },
     {
-      "name": "types",
+      "name": "media_queries",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_type) @scope",
+          "selector": "(media_statement) @scope",
           "files": [
             {
               "name": "source",
@@ -66,12 +34,12 @@
       ]
     },
     {
-      "name": "indexes",
+      "name": "keyframes",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_index) @scope",
+          "selector": "(keyframes_statement) @scope",
           "files": [
             {
               "name": "source",
@@ -82,12 +50,44 @@
       ]
     },
     {
-      "name": "triggers",
+      "name": "imports",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_trigger) @scope",
+          "selector": "(import_statement) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "at_rules",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(at_rule) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "supports",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(supports_statement) @scope",
           "files": [
             {
               "name": "source",

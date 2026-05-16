@@ -2,44 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(table (bare_key) @name) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "array_tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(table_array_element (bare_key) @name) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "pairs",
+      "name": "package",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(pair) @scope",
+          "selector": "(groovy_package) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +18,54 @@
       ]
     },
     {
-      "name": "inline_tables",
+      "name": "imports",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(inline_table) @scope",
+          "selector": "(groovy_import) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "classes",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(class_definition (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "functions",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(function_definition) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.index}}",
+          "selector": "(function_declaration) @scope",
           "files": [
             {
               "name": "source",

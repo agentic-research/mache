@@ -2,44 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(create_table (object_reference name: (identifier) @name) @scope)",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "views",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(create_view (object_reference name: (identifier) @name) @scope)",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
       "name": "functions",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_function) @scope",
+          "selector": "(function_statement) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +18,12 @@
       ]
     },
     {
-      "name": "types",
+      "name": "locals",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_type) @scope",
+          "selector": "(local) @scope",
           "files": [
             {
               "name": "source",
@@ -66,12 +34,12 @@
       ]
     },
     {
-      "name": "indexes",
+      "name": "variable_declarations",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_index) @scope",
+          "selector": "(variable_declaration) @scope",
           "files": [
             {
               "name": "source",
@@ -82,12 +50,44 @@
       ]
     },
     {
-      "name": "triggers",
+      "name": "if_statements",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_trigger) @scope",
+          "selector": "(if_statement) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "for_statements",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(for_statement) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "while_statements",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(while_statement) @scope",
           "files": [
             {
               "name": "source",

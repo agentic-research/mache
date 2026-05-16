@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mache Fixture</title>
+  <style>
+    body { background: #0e0e0e; color: #f3f3f3; }
+    a { color: #4a9eff; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mache</h1>
+    <nav>
+      <a href="/docs">Docs</a>
+      <a href="/api">API</a>
+    </nav>
+  </header>
+  <main>
+    <section>
+      <p>Fixture content for the HTML preset.</p>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll('a').forEach(a => {
+      a.addEventListener('click', () => console.log(a.href));
+    });
+  </script>
+</body>
+</html>

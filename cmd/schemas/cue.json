@@ -2,44 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(table (bare_key) @name) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "array_tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(table_array_element (bare_key) @name) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "pairs",
+      "name": "package",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(pair) @scope",
+          "selector": "(package_clause) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +18,44 @@
       ]
     },
     {
-      "name": "inline_tables",
+      "name": "imports",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(inline_table) @scope",
+          "selector": "(import_declaration) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fields",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(field) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "let_clauses",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(let_clause) @scope",
           "files": [
             {
               "name": "source",

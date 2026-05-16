@@ -59,7 +59,7 @@ func TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output)
+	err := runBuildViaLeyline(src, output, true)
 	require.Error(t, err, "leyline missing must error, not silently fall back")
 	assert.Contains(t, err.Error(), "leyline backend",
 		"error must identify which backend failed (helps the user diagnose)")
@@ -81,7 +81,7 @@ func TestRunBuildViaLeyline_HappyPath(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	require.NoError(t, runBuildViaLeyline(src, output))
+	require.NoError(t, runBuildViaLeyline(src, output, true))
 
 	info, err := os.Stat(output)
 	require.NoError(t, err, "output .db must exist at the user-supplied path")
@@ -116,6 +116,71 @@ func TestBuildCmd_BackendDispatch(t *testing.T) {
 	require.Error(t, err, "leyline path must error when binary is missing")
 	assert.Contains(t, err.Error(), "leyline backend",
 		"dispatch must reach runBuildViaLeyline, not the in-process engine")
+}
+
+// TestRunBuildViaLeyline_SchemaExplicitErrors pins issue #2 in
+// claude/fix-mache-schema-bugs-6vBkF: passing `--schema` together
+// with an explicit `--backend=leyline` is a user contradiction
+// (leyline doesn't honor build-time schemas) and must surface as
+// a clean error rather than a passive log.Info.
+//
+// Detection path: schemaPath set + schemaExplicit=true must error
+// before runBuildViaLeyline ever shells out to leyline. We don't
+// need a leyline binary on PATH because the check fires before
+// autoInvokeLeylineParse.
+func TestRunBuildViaLeyline_SchemaExplicitErrors(t *testing.T) {
+	saved := saveBuildFlags()
+	defer saved.restore()
+
+	// Force the failing combination — user passed --schema and
+	// --backend=leyline simultaneously.
+	schemaPath = "/tmp/whatever-schema.json"
+
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"),
+		[]byte("package main\nfunc main() {}\n"), 0o644))
+
+	output := filepath.Join(t.TempDir(), "out.db")
+	err := runBuildViaLeyline(src, output, true /* schemaExplicit */)
+	require.Error(t, err, "--schema with --backend=leyline must error")
+	assert.Contains(t, err.Error(), "--backend=leyline",
+		"error must identify the conflicting backend flag")
+	assert.Contains(t, err.Error(), "--schema",
+		"error must identify the conflicting schema flag")
+}
+
+// TestRunBuildViaLeyline_SchemaAutoOnlyWarns pins issue #2: when
+// --backend was auto-selected (not explicit), passing --schema
+// still gets ignored, but it's a WARNING, not an error. The user
+// didn't pick leyline, so we don't punish them — just tell them
+// loudly. This case still tries to actually parse, so it'll fail
+// without a leyline binary; we just assert the warning fired by
+// inspecting the error chain (the leyline-missing error is
+// downstream of our warn-and-continue).
+func TestRunBuildViaLeyline_SchemaAutoOnlyWarns(t *testing.T) {
+	saved := saveBuildFlags()
+	defer saved.restore()
+
+	schemaPath = "/tmp/whatever-schema.json"
+	// Hide leyline so the call fails after the warning fires.
+	t.Setenv("PATH", "")
+	t.Setenv("HOME", t.TempDir())
+
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"),
+		[]byte("package main\nfunc main() {}\n"), 0o644))
+
+	output := filepath.Join(t.TempDir(), "out.db")
+	err := runBuildViaLeyline(src, output, false /* schemaExplicit */)
+	// The leyline binary is missing, so this errors — but the error
+	// must be the leyline-missing one (after the warning), NOT the
+	// schema-contradiction one (which would mean we never got past
+	// the warning branch).
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "leyline backend",
+		"auto-mode + --schema must warn and continue (not error on the schema flag)")
+	assert.NotContains(t, err.Error(), "does not honor --schema",
+		"auto-mode must NOT raise the explicit-only error")
 }
 
 // silence unused-import warning when tests don't reference cobra.

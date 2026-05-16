@@ -2,44 +2,12 @@
   "version": "v1",
   "nodes": [
     {
-      "name": "tables",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(create_table (object_reference name: (identifier) @name) @scope)",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "views",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(create_view (object_reference name: (identifier) @name) @scope)",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "functions",
+      "name": "stages",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_function) @scope",
+          "selector": "(from_instruction) @scope",
           "files": [
             {
               "name": "source",
@@ -50,12 +18,12 @@
       ]
     },
     {
-      "name": "types",
+      "name": "run_steps",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_type) @scope",
+          "selector": "(run_instruction) @scope",
           "files": [
             {
               "name": "source",
@@ -66,12 +34,12 @@
       ]
     },
     {
-      "name": "indexes",
+      "name": "copy_steps",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_index) @scope",
+          "selector": "(copy_instruction) @scope",
           "files": [
             {
               "name": "source",
@@ -82,12 +50,76 @@
       ]
     },
     {
-      "name": "triggers",
+      "name": "env",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_trigger) @scope",
+          "selector": "(env_instruction) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "workdir",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(workdir_instruction) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "expose",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(expose_instruction) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "labels",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(label_instruction) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "healthcheck",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(healthcheck_instruction) @scope",
           "files": [
             {
               "name": "source",

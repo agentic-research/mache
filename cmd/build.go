@@ -47,13 +47,13 @@ var buildCmd = &cobra.Command{
 		//   auto / ""    → prefer leyline when available, else in-process
 		switch buildBackend {
 		case "leyline":
-			return runBuildViaLeyline(source, output)
+			return runBuildViaLeyline(source, output, true /* schemaExplicit */)
 		case "tree-sitter":
 			// Fall through to in-process path below.
 		default: // "auto" or empty
 			if leylineAvailable() {
 				log.Printf("--backend=auto: leyline detected, using leyline path; pass --backend=tree-sitter to force in-process")
-				return runBuildViaLeyline(source, output)
+				return runBuildViaLeyline(source, output, false /* schemaExplicit */)
 			}
 			// No leyline → use in-process. Same as today's behavior.
 		}
@@ -167,7 +167,6 @@ var buildCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer func() { _ = writer.Close() }()
 
 		// 3. Setup Engine
 		engine := ingest.NewEngine(schema, writer)
@@ -176,9 +175,27 @@ var buildCmd = &cobra.Command{
 		start := time.Now()
 		log.Printf("Building %s from %s...", output, source)
 		if err := engine.Ingest(source); err != nil {
+			_ = writer.Close()
 			return err
 		}
 		log.Printf("Done in %v.", time.Since(start))
+
+		// Close the writer before stamping metadata — the writer holds
+		// the schema lock via its open transaction, so opening a second
+		// connection here would block on it. The schema marker plus the
+		// empty-build check both need fresh reads, so close, then probe.
+		//
+		// Close errors are FATAL here: they can signal a failed final
+		// commit/flush (disk-full, partial transaction, etc.), in which
+		// case the .db on disk may be corrupt or truncated. `mache build`
+		// exiting 0 with a broken .db would cause every downstream tool
+		// (mache serve, find_smells) to fail mysteriously. Match the
+		// fatal-on-close treatment in cmd/mount.go:312 / mount.go:393.
+		if err := writer.Close(); err != nil {
+			return fmt.Errorf("close sqlite writer: %w", err)
+		}
+		_ = writeBuildMetadata(output, "tree-sitter")
+		warnIfEmptyBuild(output, source, "tree-sitter")
 		return nil
 	},
 }
@@ -227,9 +244,30 @@ func leylineAvailable() bool {
 // in-process backend silently — that masks misconfiguration.
 // If the user explicitly passed --backend=leyline, leyline being
 // missing is a real error worth reporting, not a fallback trigger.
-func runBuildViaLeyline(source, output string) error {
+//
+// schemaExplicit is true when --backend=leyline was passed on the
+// CLI (vs. auto-selected). It controls the --schema-with-leyline
+// behavior: a passed-but-ignored --schema is an error in the
+// explicit case (user contradiction), and a loud WARNING in the
+// auto case (user didn't choose leyline but still passed --schema).
+// The leyline backend never honors --schema — schema projection
+// happens at serve/mount time — so either way the flag is silently
+// dropped without one of these messages.
+func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 	if schemaPath != "" {
-		log.Printf("--backend=leyline: --schema=%q is ignored on this path; schema projection happens at serve/mount time", schemaPath)
+		if schemaExplicit {
+			return fmt.Errorf(
+				"--backend=leyline does not honor --schema=%q "+
+					"(schema projection happens at serve/mount time). "+
+					"Either drop --schema and pass it to `mache serve`/`mache mount`, "+
+					"or use --backend=tree-sitter to build with this schema baked in",
+				schemaPath)
+		}
+		log.Printf("WARNING: --backend=auto selected the leyline path; "+
+			"--schema=%q is being ignored (leyline doesn't apply build-time schemas). "+
+			"Pass --backend=tree-sitter to build with this schema, "+
+			"or pass --schema to `mache serve`/`mache mount` instead.",
+			schemaPath)
 	}
 	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
 	if err != nil {
@@ -247,5 +285,7 @@ func runBuildViaLeyline(source, output string) error {
 		return fmt.Errorf("copy leyline output to %s: %w", output, err)
 	}
 	log.Printf("Built %s from %s via leyline", output, source)
+	_ = writeBuildMetadata(output, "leyline")
+	warnIfEmptyBuild(output, source, "leyline")
 	return nil
 }

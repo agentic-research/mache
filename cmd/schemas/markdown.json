@@ -2,12 +2,92 @@
   "version": "v1",
   "nodes": [
     {
+      "name": "sections",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(section (atx_heading (inline) @name)) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "code_blocks",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(fenced_code_block) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "lists",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(list) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "paragraphs",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(paragraph) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "block_quotes",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.index}}",
+          "selector": "(block_quote) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "tables",
       "selector": "$",
       "children": [
         {
-          "name": "{{.name}}",
-          "selector": "(create_table (object_reference name: (identifier) @name) @scope)",
+          "name": "{{.index}}",
+          "selector": "(pipe_table) @scope",
           "files": [
             {
               "name": "source",
@@ -18,76 +98,12 @@
       ]
     },
     {
-      "name": "views",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.name}}",
-          "selector": "(create_view (object_reference name: (identifier) @name) @scope)",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "functions",
+      "name": "html_blocks",
       "selector": "$",
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(create_function) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "types",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.index}}",
-          "selector": "(create_type) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "indexes",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.index}}",
-          "selector": "(create_index) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "triggers",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.index}}",
-          "selector": "(create_trigger) @scope",
+          "selector": "(html_block) @scope",
           "files": [
             {
               "name": "source",

@@ -70,6 +70,86 @@ error at run time and the agent will get a tool error.
   Declare in `Requires` so the pre-flight check catches missing
   tables before the SQL runs.
 
+## Common pitfalls
+
+A few schema quirks bite first-time rule authors. The built-in rules
+work around them, so consult `cmd/serve_find_smells.go` for prior art
+before assuming a "natural" SQL query will do what you expect.
+
+### `nodes.source_file` is empty for construct dirs
+
+The schema engine attaches `source_file` to the leaf rendered files
+(`source`, `ast.json`, `doc`) but **not** to the wrapping construct
+directory itself. So a query like
+
+```sql
+SELECT id FROM nodes WHERE source_file NOT LIKE '%test.go'
+```
+
+won't filter construct dirs the way you'd expect. Every dir's
+`source_file` is `''`, and `'' NOT LIKE '%test.go'` evaluates true,
+so construct dirs are **included** in the result — *the predicate
+doesn't filter them at all*. The "is this construct in a test file?"
+question can only be answered by walking the dir's child rows (where
+`source_file` is non-empty) and projecting the answer up.
+
+Use the COALESCE-via-child idiom the built-in `dead_code` rule uses
+(`cmd/serve_find_smells.go:241`):
+
+```sql
+WITH child_source AS (
+  SELECT parent_id AS node_id, MIN(source_file) AS source_file
+  FROM nodes
+  WHERE source_file IS NOT NULL AND source_file != ''
+  GROUP BY parent_id
+)
+SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') AS source_id,
+       ...
+FROM nodes n
+LEFT JOIN child_source cs ON cs.node_id = n.id
+```
+
+The `NULLIF(..., '')` is load-bearing — `COALESCE` only skips NULLs,
+not empty strings, so without it the empty `n.source_file` shadows
+the resolved child `source_file`.
+
+### Joining `node_defs` to an `_ast` row
+
+`node_defs.node_id` is the construct dir (`functions/Foo`), while the
+matching `_ast` row's `node_id` is the AST path under the source
+(`<type_decl>/type_spec` or similar). A `=` join
+
+```sql
+SELECT ... FROM node_defs d JOIN _ast a ON a.node_id = d.node_id
+```
+
+returns nothing because the two columns refer to different things.
+Use a `LIKE` join with the construct-dir path as a prefix:
+
+```sql
+SELECT ... FROM node_defs d
+JOIN _ast a ON a.node_id LIKE d.node_id || '/%%'
+```
+
+(Remember to escape the SQL `%` as `%%` — see SQL caveats below.)
+
+### Backend produced different tables
+
+`mache build` may dispatch to leyline or the in-process tree-sitter
+backend depending on what's on PATH. Leyline produces `_ast`,
+`_source`, `_imports`, `_lsp*` in addition to the shared
+`nodes` / `node_defs` / `node_refs` tables; the in-process backend
+produces `v_defs` / `v_refs` / `_index_coverage` and no `_ast`.
+
+Declare every table your query reads in `Requires` so the pre-flight
+check returns a friendly "rule X needs table Y" error instead of a
+raw `no such table: _ast`. To check which backend produced an
+existing `.db`, look at the `_mache_meta` table:
+
+```bash
+sqlite3 my.db "SELECT key, value FROM _mache_meta"
+```
+
 ## Validation
 
 The loader validates every rule at startup:
