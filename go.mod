@@ -17,7 +17,7 @@ require (
 	github.com/willscott/go-nfs v0.0.4
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/sys v0.44.0
-	golang.org/x/text v0.36.0
+	golang.org/x/text v0.37.0
 	modernc.org/sqlite v1.50.1
 	mvdan.cc/gofumpt v0.10.0
 )
