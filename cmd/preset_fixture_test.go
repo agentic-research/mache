@@ -388,6 +388,13 @@ func TestPresetSchemas_PendingFixtureCoverage(t *testing.T) {
 // returns every node ID it finds. Doesn't deduplicate (the graph is
 // already a tree, so duplicates aren't expected); ordering is
 // undefined.
+//
+// ListChildren errors are FATAL: a partial traversal would silently
+// mask graph-integrity bugs (broken edges, missing parents, store
+// corruption) and let tests pass on a graph that's actually wrong.
+// This helper exists to verify fixture coverage — a fixture test
+// that "passes" because the walk gave up halfway is worse than
+// useless.
 func collectAllNodeIDs(t *testing.T, store *graph.MemoryStore) []string {
 	t.Helper()
 	var ids []string
@@ -395,9 +402,7 @@ func collectAllNodeIDs(t *testing.T, store *graph.MemoryStore) []string {
 	walk = func(id string) {
 		ids = append(ids, id)
 		children, err := store.ListChildren(id)
-		if err != nil {
-			return
-		}
+		require.NoError(t, err, "ListChildren(%q): graph integrity failure", id)
 		for _, c := range children {
 			walk(c)
 		}

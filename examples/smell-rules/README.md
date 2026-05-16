@@ -86,10 +86,12 @@ directory itself. So a query like
 SELECT id FROM nodes WHERE source_file NOT LIKE '%test.go'
 ```
 
-silently matches zero construct dirs — every dir's `source_file` is
-`''`, and `'' NOT LIKE '%test.go'` is true, but the row drops out as
-soon as you `AND` it against any other `source_file`-bearing filter
-because the column is empty on the rows you care about.
+won't filter construct dirs the way you'd expect. Every dir's
+`source_file` is `''`, and `'' NOT LIKE '%test.go'` evaluates true,
+so construct dirs are **included** in the result — *the predicate
+doesn't filter them at all*. The "is this construct in a test file?"
+question can only be answered by walking the dir's child rows (where
+`source_file` is non-empty) and projecting the answer up.
 
 Use the COALESCE-via-child idiom the built-in `dead_code` rule uses
 (`cmd/serve_find_smells.go:241`):

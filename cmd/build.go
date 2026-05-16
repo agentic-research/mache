@@ -184,8 +184,15 @@ var buildCmd = &cobra.Command{
 		// the schema lock via its open transaction, so opening a second
 		// connection here would block on it. The schema marker plus the
 		// empty-build check both need fresh reads, so close, then probe.
+		//
+		// Close errors are FATAL here: they can signal a failed final
+		// commit/flush (disk-full, partial transaction, etc.), in which
+		// case the .db on disk may be corrupt or truncated. `mache build`
+		// exiting 0 with a broken .db would cause every downstream tool
+		// (mache serve, find_smells) to fail mysteriously. Match the
+		// fatal-on-close treatment in cmd/mount.go:312 / mount.go:393.
 		if err := writer.Close(); err != nil {
-			log.Printf("warn: close writer: %v", err)
+			return fmt.Errorf("close sqlite writer: %w", err)
 		}
 		_ = writeBuildMetadata(output, "tree-sitter")
 		warnIfEmptyBuild(output, source, "tree-sitter")

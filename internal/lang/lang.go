@@ -74,7 +74,7 @@ var Registry = []Language{
 	{Name: "kotlin", DisplayName: "Kotlin", Extensions: []string{".kt", ".kts"}, Grammar: kotlin.GetLanguage, PresetSchema: "kotlin"},
 	{Name: "swift", DisplayName: "Swift", Extensions: []string{".swift"}, Grammar: swift.GetLanguage, PresetSchema: "swift", SentinelFiles: []string{"Package.swift"}},
 	{Name: "scala", DisplayName: "Scala", Extensions: []string{".scala", ".sc"}, Grammar: scala.GetLanguage, PresetSchema: "scala", SentinelFiles: []string{"build.sbt"}},
-	// --- Added grammars (no preset schemas yet) ---
+	// --- Added grammars (preset schemas live alongside the core set) ---
 	{Name: "bash", DisplayName: "Bash", Extensions: []string{".sh", ".bash"}, Grammar: bash.GetLanguage, PresetSchema: "bash"},
 	{Name: "csharp", DisplayName: "C#", Extensions: []string{".cs"}, Grammar: csharp.GetLanguage, PresetSchema: "csharp"},
 	{Name: "css", DisplayName: "CSS", Extensions: []string{".css"}, Grammar: css.GetLanguage, PresetSchema: "css"},
