@@ -135,6 +135,21 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 		r.wrapHandler(makeGetOverviewHandler),
 	)
 
+	// get_sheaf_status surfaces the ley-line daemon's sheaf state to
+	// agents — generation (monotonic, advances on every cascade run),
+	// valid/total cache entries, defect score. Lets an agent decide
+	// whether a cached result is still fresh after an edit, without
+	// having to invalidate the whole world. Registered directly (no
+	// graph-registry wrapping) because the tool doesn't depend on
+	// session state; it talks to the daemon over UDS using the
+	// well-known socket path.
+	s.AddTool(
+		mcp.NewTool("get_sheaf_status",
+			mcp.WithDescription("Returns the ley-line daemon's sheaf cache state (generation counter, valid/total entries, defect score). Use to decide whether cached find_callers / find_definition / get_architecture results are still fresh after an edit. Returns {available: false, reason: ...} when the daemon is not reachable rather than erroring — safe to call periodically."),
+		),
+		makeGetSheafStatusHandler(),
+	)
+
 	s.AddTool(
 		mcp.NewTool("get_impact",
 			mcp.WithDescription("Change impact analysis: given a symbol, trace through the refs graph to show affected callers and/or callees (multi-hop BFS traversal). Use for 'what would be affected if I change X?', 'blast radius of modifying Y'."),
@@ -1283,6 +1298,57 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		data, _ := json.MarshalIndent(ov, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+// makeGetSheafStatusHandler returns the handler for the get_sheaf_status
+// MCP tool. The tool surfaces the daemon's sheaf cache state to agents
+// so they can decide whether cached results are still fresh.
+//
+// Design contract: the handler MUST NOT surface daemon unavailability
+// as an MCP error. Agents polling this tool would otherwise see
+// transport failures whenever the daemon is down or hasn't been
+// dialed yet. Instead, return a structured {available: false, reason:
+// "..."} response. This matches the documented graceful-degradation
+// pattern in the wider sheaf wiring (cmd/serve.go).
+//
+// DiscoverSocket (not DiscoverOrStart) is the right primitive here:
+// a status check should never trigger a daemon auto-spawn (which can
+// download the binary, take seconds, etc.).
+func makeGetSheafStatusHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		unavailable := func(reason string) (*mcp.CallToolResult, error) {
+			data, _ := json.Marshal(map[string]any{
+				"available": false,
+				"reason":    reason,
+			})
+			return mcp.NewToolResultText(string(data)), nil
+		}
+
+		sockPath, err := leyline.DiscoverSocket()
+		if err != nil {
+			return unavailable("no ley-line daemon socket — set LEYLINE_SOCKET or start `leyline daemon`")
+		}
+		sock, err := leyline.DialSocket(sockPath)
+		if err != nil {
+			return unavailable(fmt.Sprintf("dial %s: %v", sockPath, err))
+		}
+		defer func() { _ = sock.Close() }()
+
+		sc := leyline.NewSheafClient(sock)
+		s, err := sc.Status()
+		if err != nil {
+			return unavailable(fmt.Sprintf("sheaf_status: %v", err))
+		}
+
+		data, _ := json.Marshal(map[string]any{
+			"available":  true,
+			"generation": s.Generation,
+			"valid":      s.Valid,
+			"total":      s.Total,
+			"defect":     s.Defect,
+		})
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }

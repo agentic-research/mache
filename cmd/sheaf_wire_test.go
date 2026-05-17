@@ -1,15 +1,20 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -295,4 +300,170 @@ func TestGetCommunities_NoInvalidatorWhenGraphDoesntProvide(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("goroutine did not finish within 2s")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TDD #5 — get_sheaf_status MCP tool [mache-4a0c05]
+// ---------------------------------------------------------------------------
+//
+// Surfaces the daemon's monotonic generation counter (+ defect, valid,
+// total) to agents so they can decide whether a cached result is still
+// fresh. Pre-cmd-c14c43 the agent has no signal that the cascade fired
+// at all — this tool is the missing visibility.
+
+// startMockSheafServer is a self-contained UDS server that handles a
+// single op pattern: receive line-delimited JSON, return the canned
+// response from the handler func. Mirrors the (unexported)
+// internal/leyline test helper; kept local to cmd/ so the package
+// boundary stays clean.
+func startMockSheafServer(t *testing.T, handler func(map[string]any) map[string]any) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "mache-sheaf-tool-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "t.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				rd := bufio.NewReader(c)
+				for {
+					line, err := rd.ReadString('\n')
+					if err != nil {
+						return
+					}
+					var req map[string]any
+					if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &req); err != nil {
+						continue
+					}
+					resp := handler(req)
+					data, _ := json.Marshal(resp)
+					_, _ = c.Write(append(data, '\n'))
+				}
+			}(conn)
+		}
+	}()
+
+	return sockPath
+}
+
+// TestGetSheafStatus_ReturnsDaemonState pins the happy path: when the
+// daemon is reachable and reports sheaf state, the tool returns a JSON
+// object with the four fields agents need (generation, valid, total,
+// defect) plus an `available: true` marker.
+//
+// Uses the quoted-string generation format (the live wire shape, see
+// PR #382's parseUint64 + cmd/sheaf-wire-check) to also pin that the
+// MCP tool routes through SheafClient.Status (which knows that codec)
+// rather than parsing the response directly and silently dropping the
+// generation value.
+func TestGetSheafStatus_ReturnsDaemonState(t *testing.T) {
+	leyline.StopManaged()
+	sockPath := startMockSheafServer(t, func(req map[string]any) map[string]any {
+		assert.Equal(t, "sheaf_status", req["op"])
+		return map[string]any{
+			"generation": "42", // quoted — capnp-json Int64 shape
+			"valid":      7.0,
+			"total":      10.0,
+			"defect":     0.25,
+		}
+	})
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+
+	handler := makeGetSheafStatusHandler()
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "handler must succeed when daemon responds: %s", resultText(t, result))
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	assert.Equal(t, true, out["available"])
+	assert.EqualValues(t, 42, out["generation"], "must parse quoted-string Int64 from the live wire format")
+	assert.EqualValues(t, 7, out["valid"])
+	assert.EqualValues(t, 10, out["total"])
+	assert.InDelta(t, 0.25, out["defect"].(float64), 0.001)
+}
+
+// TestGetSheafStatus_NoDaemonReturnsUnavailable pins the documented
+// graceful-degradation contract: when no daemon socket exists, the
+// tool returns a structured "unavailable" response, NOT an MCP error.
+// Agents calling this tool periodically (e.g. as part of a freshness
+// check) should never see a transport-level failure just because the
+// daemon happens to be down.
+func TestGetSheafStatus_NoDaemonReturnsUnavailable(t *testing.T) {
+	leyline.StopManaged()
+	// Steer LEYLINE_SOCKET + HOME away so neither the env var nor the
+	// well-known fallback resolves.
+	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-sheaf-status-sock")
+	t.Setenv("HOME", t.TempDir())
+
+	handler := makeGetSheafStatusHandler()
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "no-daemon path must not surface as an MCP error")
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	assert.Equal(t, false, out["available"])
+	assert.NotEmpty(t, out["reason"], "must explain why state is unavailable")
+}
+
+// TestGetSheafStatus_RegisteredInToolSet pins that the tool is wired
+// into the MCP server's tool list — without this assertion a future
+// refactor could quietly drop the registration and the moat's
+// visibility layer would silently disappear.
+func TestGetSheafStatus_RegisteredInToolSet(t *testing.T) {
+	store := graph.NewMemoryStore()
+	registry := newGraphRegistry(".", nil)
+	registry.graphs.Store(".", &lazyGraph{inner: store})
+
+	srv := mcpServerForToolListing()
+	registerMCPTools(srv, registry)
+
+	names := listRegisteredTools(t, srv)
+	assert.Contains(t, names, "get_sheaf_status",
+		"get_sheaf_status must be in the MCP tool surface — see mache-4a0c05")
+}
+
+// mcpServerForToolListing constructs a bare MCP server fit for tool
+// enumeration. Extracted so the get_sheaf_status registration test
+// doesn't drag the full multi-tenant TestRegisterMCPTools fixture.
+func mcpServerForToolListing() *server.MCPServer {
+	return server.NewMCPServer("test", "1.0.0", server.WithToolCapabilities(false))
+}
+
+// listRegisteredTools queries the server's tools/list endpoint and
+// returns the set of registered names. Mirrors the pattern in
+// TestRegisterMCPTools (cmd/serve_test.go) — kept local so the new
+// tool's regression guard is self-contained.
+func listRegisteredTools(t *testing.T, s *server.MCPServer) map[string]bool {
+	t.Helper()
+	reqJSON := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	resp := s.HandleMessage(context.Background(), reqJSON)
+	respJSON, err := json.Marshal(resp)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(respJSON, &parsed))
+
+	names := map[string]bool{}
+	for _, tool := range parsed.Result.Tools {
+		names[tool.Name] = true
+	}
+	return names
 }
