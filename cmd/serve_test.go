@@ -13,10 +13,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/leyline"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
@@ -856,7 +858,25 @@ func TestGetCommunities_TruncatesOversizedOutput(t *testing.T) {
 		}
 	}
 
-	handler := makeGetCommunitiesHandler(store)
+	// Gate out the leyline auto-spawn — the PushTopology goroutine
+	// would otherwise try to find or start a real daemon, blocking
+	// many seconds. PATH+HOME steer LookPath / fallback dir away from
+	// any installed binary; MACHE_NO_LEYLINE then makes DiscoverOrStart
+	// error out immediately so the goroutine returns fast.
+	// StopManaged clears the process-global managed-daemon cache so an
+	// earlier test in this binary doesn't leave a running daemon that
+	// findExistingSocket would otherwise reuse.
+	leyline.StopManaged()
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
+
+	// Wire a done channel so the fire-and-forget PushTopology goroutine
+	// signals completion deterministically — avoids races under -race
+	// without resorting to time.Sleep / Gosched.
+	pushDone := make(chan struct{})
+	handler := makeGetCommunitiesHandlerWithDone(store, pushDone)
 	result, err := handler(context.Background(), makeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
@@ -879,6 +899,15 @@ func TestGetCommunities_TruncatesOversizedOutput(t *testing.T) {
 	for i, c := range out.Communities {
 		require.LessOrEqual(t, len(c.Members), 20,
 			"community[%d] members must be capped at 20", i)
+	}
+
+	// Bound test runtime if the goroutine wedges (e.g. daemon discovery
+	// blocks). 2s is generous — the goroutine's slow path is auto-spawn,
+	// which DiscoverOrStart caps internally at a few seconds.
+	select {
+	case <-pushDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("PushTopology goroutine did not finish within 2s")
 	}
 }
 
@@ -2412,7 +2441,18 @@ func TestArena_AllTools(t *testing.T) {
 
 	// --- 7. get_communities ---
 	t.Run("get_communities", func(t *testing.T) {
-		handler := makeGetCommunitiesHandler(store)
+		// Suppress the fire-and-forget PushTopology goroutine's auto-spawn
+		// path and wait deterministically on a done channel so -race
+		// can't catch the goroutine mid-read after subtest exit. See the
+		// equivalent setup in TestGetCommunities_TruncatesOversizedOutput
+		// for the per-knob rationale.
+		leyline.StopManaged()
+		t.Setenv("PATH", "/nonexistent-path-for-test")
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("MACHE_NO_LEYLINE", "1")
+		t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
+		pushDone := make(chan struct{})
+		handler := makeGetCommunitiesHandlerWithDone(store, pushDone)
 		result, err := handler(context.Background(), makeRequest(nil))
 		require.NoError(t, err)
 		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
@@ -2422,6 +2462,12 @@ func TestArena_AllTools(t *testing.T) {
 		assert.Greater(t, cr.NumNodes, 0, "should detect nodes in communities")
 		assert.NotEmpty(t, cr.Communities, "should detect at least one community")
 		assert.Greater(t, cr.Modularity, 0.0, "modularity should be positive")
+
+		select {
+		case <-pushDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("PushTopology goroutine did not finish within 2s")
+		}
 	})
 
 	// --- 8. find_definition ---

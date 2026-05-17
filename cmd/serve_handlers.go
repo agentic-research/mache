@@ -827,6 +827,16 @@ func sqlLikeMatch(pattern, value string) bool {
 }
 
 func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
+	return makeGetCommunitiesHandlerWithDone(g, nil)
+}
+
+// makeGetCommunitiesHandlerWithDone is the test-friendly variant of
+// makeGetCommunitiesHandler. When pushDone is non-nil, the channel is
+// closed once the fire-and-forget PushTopology goroutine returns —
+// letting race-prone tests wait deterministically instead of sleeping
+// or polling. Production callers use the nil-channel path via the
+// public makeGetCommunitiesHandler wrapper.
+func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		minSize := request.GetInt("min_size", 2)
 		summary := request.GetBool("summary", false)
@@ -862,7 +872,29 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 		// sheaf_set_topology. None of those are actionable for the
 		// user mid-call; log only once per process to avoid the
 		// every-call spam during benchmarks and non-LLO setups.
+		//
+		// Snapshot the inputs PushTopology reads (Communities + each
+		// community's Members) so the goroutine sees a stable view —
+		// the full-output branch below mutates result.Communities in
+		// place (sort + truncate slice + truncate per-community Members)
+		// and would otherwise race buildRegions inside PushTopology.
+		// Membership is read-only after DetectCommunities returns, so
+		// reusing it without cloning is safe.
+		snapComms := make([]graph.Community, len(result.Communities))
+		for i, c := range result.Communities {
+			snapComms[i] = graph.Community{
+				ID:      c.ID,
+				Members: append([]string(nil), c.Members...),
+			}
+		}
+		snap := &graph.CommunityResult{
+			Communities: snapComms,
+			Membership:  result.Membership,
+		}
 		go func() {
+			if pushDone != nil {
+				defer close(pushDone)
+			}
 			sockPath, err := leyline.DiscoverOrStart()
 			if err != nil {
 				return // no daemon — skip silently
@@ -873,7 +905,7 @@ func makeGetCommunitiesHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 			defer func() { _ = sock.Close() }()
 			sc := leyline.NewSheafClient(sock)
-			if pushErr := sc.PushTopology(result, refs); pushErr != nil {
+			if pushErr := sc.PushTopology(snap, refs); pushErr != nil {
 				logSheafPushOnce(pushErr)
 			}
 		}()
