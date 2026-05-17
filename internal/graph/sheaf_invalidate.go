@@ -2,6 +2,7 @@ package graph
 
 import (
 	"log"
+	"sync"
 )
 
 // SheafInvalidator wraps a Graph with sheaf-aware cascading invalidation.
@@ -12,7 +13,12 @@ import (
 // If the SheafClient is nil or the daemon is unavailable, it falls back
 // to plain Graph.Invalidate on the single node.
 type SheafInvalidator struct {
-	graph  Graph
+	graph Graph
+	// mu guards sheaf + result. The watcher goroutine calls
+	// InvalidateWithCascade while the MCP get_communities handler may
+	// concurrently call SetCommunityResult / SetSheaf. Both reads
+	// (sheaf, result) are taken under RLock; writes upgrade to Lock.
+	mu     sync.RWMutex
 	sheaf  SheafBackend
 	result *CommunityResult
 }
@@ -38,7 +44,34 @@ func NewSheafInvalidator(graph Graph, sheaf SheafBackend, result *CommunityResul
 // SetCommunityResult updates the community detection result used for lookups.
 // Call this after re-running community detection.
 func (si *SheafInvalidator) SetCommunityResult(cr *CommunityResult) {
+	si.mu.Lock()
+	defer si.mu.Unlock()
 	si.result = cr
+}
+
+// SetSheaf swaps the sheaf backend. Pass nil to disable cascades (the
+// invalidator falls back to single-node Graph.Invalidate). Used by the
+// serve startup path to attach a SheafClient lazily — the file watcher
+// can install the invalidator before the ley-line daemon is reachable,
+// then swap in a real backend once a connection is established.
+func (si *SheafInvalidator) SetSheaf(b SheafBackend) {
+	si.mu.Lock()
+	defer si.mu.Unlock()
+	si.sheaf = b
+}
+
+// HasResult reports whether the invalidator has a CommunityResult to
+// look up regions in. When false, InvalidateWithCascade degrades to
+// single-node invalidate (still correct, just no cascade). Callers
+// (e.g. the watcher) use this to decide whether to skip the lookup
+// entirely vs. fall through.
+func (si *SheafInvalidator) HasResult() bool {
+	if si == nil {
+		return false
+	}
+	si.mu.RLock()
+	defer si.mu.RUnlock()
+	return si.result != nil
 }
 
 // InvalidateWithCascade invalidates a node and, if sheaf is available,
@@ -53,13 +86,22 @@ func (si *SheafInvalidator) InvalidateWithCascade(id string, membership map[stri
 		return 0
 	}
 
+	// Take a consistent snapshot of sheaf + result under the read lock,
+	// then release it before any network I/O — sheaf.Invalidate dials
+	// the daemon and could block long enough to starve SetSheaf /
+	// SetCommunityResult writers.
+	si.mu.RLock()
+	sheaf := si.sheaf
+	storedResult := si.result
+	si.mu.RUnlock()
+
 	// Use stored membership if caller didn't provide one.
-	if membership == nil && si.result != nil {
-		membership = si.result.Membership
+	if membership == nil && storedResult != nil {
+		membership = storedResult.Membership
 	}
 
 	// If no sheaf backend or no community info, fall back to single invalidation.
-	if si.sheaf == nil || membership == nil {
+	if sheaf == nil || membership == nil {
 		si.graph.Invalidate(id)
 		return 1
 	}
@@ -71,7 +113,7 @@ func (si *SheafInvalidator) InvalidateWithCascade(id string, membership map[stri
 		return 1
 	}
 
-	affected, err := si.sheaf.Invalidate(regionID)
+	affected, err := sheaf.Invalidate(regionID)
 	if err != nil {
 		// Daemon error — log and fall back to single invalidation.
 		log.Printf("sheaf invalidate region %d: %v (falling back to single node)", regionID, err)

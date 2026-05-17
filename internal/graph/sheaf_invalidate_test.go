@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,14 +14,29 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockSheafBackend struct {
+	mu       sync.Mutex
 	calls    []int // region IDs passed to Invalidate
 	response []int // affected region IDs to return
 	err      error // error to return
 }
 
 func (m *mockSheafBackend) Invalidate(regionID int) ([]int, error) {
+	m.mu.Lock()
 	m.calls = append(m.calls, regionID)
-	return m.response, m.err
+	resp, err := m.response, m.err
+	m.mu.Unlock()
+	return resp, err
+}
+
+// Calls returns a snapshot of the recorded region IDs. Use this in
+// assertions instead of touching .calls directly so the mutex protects
+// concurrent test usage.
+func (m *mockSheafBackend) Calls() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int, len(m.calls))
+	copy(out, m.calls)
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -27,6 +44,7 @@ func (m *mockSheafBackend) Invalidate(regionID int) ([]int, error) {
 // ---------------------------------------------------------------------------
 
 type mockGraph struct {
+	mu          sync.Mutex
 	invalidated []string
 }
 
@@ -41,7 +59,28 @@ func (m *mockGraph) Act(id, action, payload string) (*ActionResult, error) {
 }
 
 func (m *mockGraph) Invalidate(id string) {
+	m.mu.Lock()
 	m.invalidated = append(m.invalidated, id)
+	m.mu.Unlock()
+}
+
+// Invalidated returns a snapshot of the recorded node IDs. Use this in
+// assertions instead of touching .invalidated directly so the mutex
+// protects concurrent test usage.
+func (m *mockGraph) Invalidated() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.invalidated))
+	copy(out, m.invalidated)
+	return out
+}
+
+// resetInvalidated clears the recorded list. Test helper for cases that
+// reset between phases (e.g. before/after a hot-swap).
+func (m *mockGraph) resetInvalidated() {
+	m.mu.Lock()
+	m.invalidated = nil
+	m.mu.Unlock()
 }
 
 // ---------------------------------------------------------------------------
@@ -335,4 +374,133 @@ func TestSheafInvalidator_WithRealCommunities(t *testing.T) {
 	for _, nid := range g.invalidated {
 		assert.Equal(t, a1Region, cr.Membership[nid])
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Hot-swap + race-safety contracts (mache-c11848)
+//
+// The watcher goroutine calls InvalidateWithCascade while MCP handlers
+// concurrently mutate the invalidator via SetCommunityResult / SetSheaf.
+// These tests pin the mutex protection added for the file-watcher wiring.
+// ---------------------------------------------------------------------------
+
+// TestSheafInvalidator_HasResult covers the "do I have membership data?"
+// accessor the watcher uses to decide whether to short-circuit a cascade
+// before even constructing the call. nil-receiver safety is the new
+// invariant — without it the cascade path on a nil invalidator would
+// nil-deref instead of cleanly degrading to "no cascade".
+func TestSheafInvalidator_HasResult(t *testing.T) {
+	var nilSi *SheafInvalidator
+	assert.False(t, nilSi.HasResult(), "nil receiver must be safe + false")
+
+	si := NewSheafInvalidator(&mockGraph{}, nil, nil)
+	assert.False(t, si.HasResult(), "fresh invalidator without result")
+
+	cr := &CommunityResult{
+		Communities: []Community{{ID: 1, Members: []string{"a"}}},
+		Membership:  map[string]int{"a": 1},
+	}
+	si.SetCommunityResult(cr)
+	assert.True(t, si.HasResult(), "after SetCommunityResult")
+}
+
+// TestSheafInvalidator_SetSheaf_Hotswap pins the contract that the
+// invalidator can be constructed before the ley-line daemon is reachable
+// — the file watcher installs it at serve startup, and the sheaf backend
+// gets swapped in later once a connection is established. Pre-swap the
+// invalidator must fall back to single-node Graph.Invalidate; post-swap
+// the cascade must engage.
+func TestSheafInvalidator_SetSheaf_Hotswap(t *testing.T) {
+	g := &mockGraph{}
+	cr := &CommunityResult{
+		Communities: []Community{
+			{ID: 1, Members: []string{"a"}},
+			{ID: 2, Members: []string{"b"}},
+		},
+		Membership: map[string]int{"a": 1, "b": 2},
+	}
+	si := NewSheafInvalidator(g, nil, cr)
+
+	// Pre-swap: no sheaf attached. Must fall back to single-node.
+	count := si.InvalidateWithCascade("a", nil)
+	assert.Equal(t, 1, count, "no sheaf → single-node")
+	assert.Equal(t, []string{"a"}, g.invalidated, "only the requested node")
+
+	// Hot-swap a sheaf backend in mid-flight.
+	mock := &mockSheafBackend{response: []int{1, 2}}
+	si.SetSheaf(mock)
+
+	g.resetInvalidated()
+	count = si.InvalidateWithCascade("a", nil)
+	assert.Equal(t, 2, count, "post-swap → full cascade")
+	assert.Equal(t, []int{1}, mock.Calls(), "sheaf called with region id")
+	assert.ElementsMatch(t, []string{"a", "b"}, g.Invalidated(), "both region members invalidated")
+
+	// Hot-swap back to nil — must return to single-node, not panic.
+	si.SetSheaf(nil)
+	g.resetInvalidated()
+	count = si.InvalidateWithCascade("a", nil)
+	assert.Equal(t, 1, count, "nil-swap → fallback")
+}
+
+// TestSheafInvalidator_ConcurrentReadWrite is the race-detector gate.
+// Without the mutex on (sheaf, result), the watcher goroutine reading
+// these fields while the MCP handler swaps them produces the same
+// kind of data race the get_communities snapshot fix (PR #380) caught
+// — it just hadn't fired yet because there was no concurrent writer.
+//
+// Run with `go test -race` to actually catch a regression. Without
+// -race this only validates that 100 concurrent calls don't panic
+// or deadlock, which is weaker but still useful as a smoke test.
+func TestSheafInvalidator_ConcurrentReadWrite(t *testing.T) {
+	g := &mockGraph{}
+	si := NewSheafInvalidator(g, nil, nil)
+
+	const (
+		readers    = 8
+		writers    = 4
+		iterations = 200
+	)
+
+	var done sync.WaitGroup
+	var readOps int64
+
+	// Reader goroutines hammer InvalidateWithCascade.
+	for i := 0; i < readers; i++ {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			for j := 0; j < iterations; j++ {
+				si.InvalidateWithCascade("a", nil)
+				_ = si.HasResult()
+				atomic.AddInt64(&readOps, 1)
+			}
+		}()
+	}
+
+	// Writer goroutines hammer SetCommunityResult + SetSheaf.
+	for i := 0; i < writers; i++ {
+		done.Add(1)
+		go func(seed int) {
+			defer done.Done()
+			for j := 0; j < iterations; j++ {
+				cr := &CommunityResult{
+					Communities: []Community{{ID: seed, Members: []string{"a"}}},
+					Membership:  map[string]int{"a": seed},
+				}
+				si.SetCommunityResult(cr)
+				si.SetSheaf(&mockSheafBackend{response: []int{seed}})
+				// And clear them to keep the swap surface honest.
+				if j%17 == 0 {
+					si.SetSheaf(nil)
+				}
+				if j%23 == 0 {
+					si.SetCommunityResult(nil)
+				}
+			}
+		}(i + 1)
+	}
+
+	done.Wait()
+	assert.Equal(t, int64(readers*iterations), readOps, "all reads completed")
 }

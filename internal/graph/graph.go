@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -594,6 +595,67 @@ func (s *MemoryStore) DeleteFileNodes(filePath string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deleteFileNodes(filePath)
+}
+
+// NodesForPath returns the IDs of every node whose origin file is filePath,
+// in deterministic order. The path is canonicalised via filepath.EvalSymlinks
+// to match the bookkeeping Ingest does. Returns an empty slice when no nodes
+// are indexed under that path.
+//
+// O(k) via the file→nodes bitmap; falls back to a full O(N) scan only when a
+// path was added before the bitmap was populated (the same fallback path
+// DeleteFileNodes uses, kept for parity).
+//
+// Used by the file-watcher → SheafInvalidator wiring (cmd/serve.go) so the
+// sheaf cascade has a node ID to look up the region for. Exposed via the
+// NodesForPathProvider interface so non-MemoryStore backends can plug in
+// without leaking *MemoryStore type assertions into serve.go.
+func (s *MemoryStore) NodesForPath(filePath string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	canonical := filePath
+	if realPath, err := filepath.EvalSymlinks(filePath); err == nil {
+		canonical = realPath
+	}
+
+	var ids []string
+	if bm, ok := s.fileToNodes[canonical]; ok {
+		it := bm.Iterator()
+		for it.HasNext() {
+			intID := it.Next()
+			if int(intID) < len(s.intToNodeID) {
+				nodeID := s.intToNodeID[intID]
+				if nodeID != "" {
+					ids = append(ids, nodeID)
+				}
+			}
+		}
+		sort.Strings(ids)
+		return ids
+	}
+
+	// Fallback: linear scan for paths not in the bitmap yet.
+	for id, n := range s.nodes {
+		if n.Origin != nil && n.Origin.FilePath == canonical {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// NodesForPathProvider is implemented by graph backends that can answer
+// "which node IDs originated from this file?". MemoryStore implements it;
+// other backends (SQLiteGraph, CompositeGraph) may either implement it
+// directly or compose it via type assertion on their inner store.
+//
+// Kept as a separate interface (rather than added to Graph) so consumers
+// that don't need this query — most graph readers — aren't forced to
+// implement it. Watcher-driven invalidation paths type-assert and degrade
+// gracefully when the backing store doesn't satisfy the interface.
+type NodesForPathProvider interface {
+	NodesForPath(filePath string) []string
 }
 
 // ReplaceFileNodes atomically replaces all nodes from a file with a new set.
