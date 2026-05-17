@@ -891,6 +891,29 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			Communities: snapComms,
 			Membership:  result.Membership,
 		}
+
+		// Install the snapshot on the SheafInvalidator the file watcher
+		// holds (if any), so its next onChange fire engages the cascade
+		// instead of falling back to single-node Graph.Invalidate. This
+		// must happen on the SYNCHRONOUS path — the goroutine below
+		// also dials the daemon and pushes topology, but the watcher
+		// shouldn't have to wait on daemon discovery to start using
+		// real membership data. SetCommunityResult is mutex-guarded
+		// (TestSheafInvalidator_ConcurrentReadWrite); the watcher can
+		// safely read while we write here.
+		//
+		// Graph backends without a watcher (control-mode lazyGraph,
+		// composite mounts) don't implement sheafInvalidatorProvider —
+		// the type-assert degrades silently, which is the documented
+		// behavior for those modes (see buildServeGraph).
+		var sip sheafInvalidatorProvider
+		if sp, ok := g.(sheafInvalidatorProvider); ok {
+			sip = sp
+			if si := sip.SheafInvalidator(); si != nil {
+				si.SetCommunityResult(snap)
+			}
+		}
+
 		go func() {
 			if pushDone != nil {
 				defer close(pushDone)
@@ -907,6 +930,19 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			sc := leyline.NewSheafClient(sock)
 			if pushErr := sc.PushTopology(snap, refs); pushErr != nil {
 				logSheafPushOnce(pushErr)
+				return
+			}
+			// PushTopology succeeded — swap the (now-live) SheafClient
+			// into the invalidator so subsequent watcher fires engage
+			// the cross-region cascade instead of falling back. This
+			// closes the consumer-side loop the mache-49bf9a audit
+			// flagged as "sketch": from here on, edits route through
+			// the daemon and the cascade output drives local cache
+			// invalidation.
+			if sip != nil {
+				if si := sip.SheafInvalidator(); si != nil {
+					si.SetSheaf(sc)
+				}
 			}
 		}()
 

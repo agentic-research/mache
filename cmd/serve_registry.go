@@ -689,6 +689,18 @@ type defsMapProvider interface {
 	DefsMap() map[string][]string
 }
 
+// sheafInvalidatorProvider is the subset of Graph backends that own a
+// SheafInvalidator wired into their file-watcher onChange path. The
+// get_communities handler type-asserts this to install the freshly-
+// detected CommunityResult + dialed SheafClient, which is the trigger
+// that moves the watcher's cascade calls from single-node fallback
+// into actual cross-region propagation. Backends that don't have a
+// watcher (control-mode lazyGraph, composite mounts) don't implement
+// this interface; the handler degrades silently in that case.
+type sheafInvalidatorProvider interface {
+	SheafInvalidator() *graph.SheafInvalidator
+}
+
 // defsLookuper is the cheaper alternative to defsMapProvider for the
 // common case of looking up exactly one symbol. Backends that
 // implement it avoid the O(N) snapshot copy of the full defs map

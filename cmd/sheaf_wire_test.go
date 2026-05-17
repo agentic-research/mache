@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -184,4 +186,113 @@ func TestBuildServeGraph_OnDeleteAlsoFiresInvalidator(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	assert.Empty(t, store.NodesForPath(target), "onDelete must purge the file's nodes within debounce + 2s")
+}
+
+// ---------------------------------------------------------------------------
+// TDD #4 — get_communities populates the invalidator
+// ---------------------------------------------------------------------------
+//
+// Without this wiring, the watcher's InvalidateWithCascade calls
+// degrade to single-node Graph.Invalidate forever — even after the
+// MCP layer has community data that COULD enable the cascade. The
+// handler is the natural place to install it: it's the only path
+// that runs community detection AND dials the daemon, which are
+// the two prerequisites SheafInvalidator needs.
+
+// testGraphWithSI is a minimal wrapper that satisfies graph.Graph,
+// refsMapProvider (via the embedded MemoryStore), AND the
+// sheafInvalidatorProvider interface — lets unit tests stand in for
+// a lazyGraph without building the full lazy-init / session-routing
+// machinery. Embedding the concrete *graph.MemoryStore (not the
+// interface) so RefsMap/DefsMap and friends are promoted.
+type testGraphWithSI struct {
+	*graph.MemoryStore
+	si *graph.SheafInvalidator
+}
+
+func (t *testGraphWithSI) SheafInvalidator() *graph.SheafInvalidator { return t.si }
+
+// TestGetCommunities_PopulatesInvalidator pins the consumer-side wire
+// the audit identified as load-bearing: after the handler runs, the
+// invalidator MUST have community-result state so the watcher's next
+// fire engages the cascade instead of falling back to single-node.
+func TestGetCommunities_PopulatesInvalidator(t *testing.T) {
+	// Suppress auto-spawn; SetSheaf will see nil and the invalidator
+	// will fall back to single-node — but SetCommunityResult must still
+	// fire. This is the minimum contract the watcher cares about.
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
+	leyline.StopManaged()
+
+	// Build a store with enough cross-references to produce a real
+	// CommunityResult (Louvain needs at least one community above
+	// min_size).
+	store := graph.NewMemoryStore()
+	require.NoError(t, store.AddRef("alpha", "a1"))
+	require.NoError(t, store.AddRef("alpha", "a2"))
+	require.NoError(t, store.AddRef("alpha", "a3"))
+	require.NoError(t, store.AddRef("beta", "b1"))
+	require.NoError(t, store.AddRef("beta", "b2"))
+	require.NoError(t, store.AddRef("beta", "b3"))
+	require.NoError(t, store.AddRef("bridge", "a1"))
+	require.NoError(t, store.AddRef("bridge", "b1"))
+
+	// Wrap with an invalidator that the handler MUST populate.
+	si := graph.NewSheafInvalidator(store, nil, nil)
+	require.False(t, si.HasResult(), "precondition: invalidator starts empty")
+
+	g := &testGraphWithSI{MemoryStore: store, si: si}
+
+	// Wire deterministic wait on the fire-and-forget goroutine.
+	pushDone := make(chan struct{})
+	handler := makeGetCommunitiesHandlerWithDone(g, pushDone)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "handler returned error result: %s", resultText(t, result))
+
+	// Wait for the goroutine that wraps PushTopology + (in the wired
+	// implementation) SetCommunityResult / SetSheaf to complete.
+	select {
+	case <-pushDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("get_communities goroutine did not finish within 2s")
+	}
+
+	// THE CONTRACT: the invalidator MUST now have community-result
+	// state so the watcher's next fire engages the cascade path.
+	assert.True(t, si.HasResult(),
+		"handler must call SetCommunityResult on the invalidator — without this the moat never engages no matter how many edits the watcher sees")
+}
+
+// TestGetCommunities_NoInvalidatorWhenGraphDoesntProvide guards the
+// nil-receiver / missing-provider case. A graph that doesn't expose a
+// SheafInvalidator (e.g. control-mode lazyGraph, composite mounts)
+// must let the handler succeed with no state mutation — the cascade
+// just isn't available in those modes and that's documented behavior.
+func TestGetCommunities_NoInvalidatorWhenGraphDoesntProvide(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
+	leyline.StopManaged()
+
+	store := graph.NewMemoryStore()
+	require.NoError(t, store.AddRef("x", "n1"))
+	require.NoError(t, store.AddRef("x", "n2"))
+
+	// store is a plain MemoryStore — does NOT implement
+	// sheafInvalidatorProvider. Handler must complete normally.
+	pushDone := make(chan struct{})
+	handler := makeGetCommunitiesHandlerWithDone(store, pushDone)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "handler must succeed even when graph has no invalidator")
+
+	select {
+	case <-pushDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine did not finish within 2s")
+	}
 }
