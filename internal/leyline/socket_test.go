@@ -255,13 +255,21 @@ func TestDiscoverOrStart_NoBinaryOnPath(t *testing.T) {
 	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
 	// Ensure leyline binary is not on PATH
 	t.Setenv("PATH", "/nonexistent-path-for-test")
+	// Steer ~/.mache/bin fallback at an empty tempdir so the cached-binary
+	// branch is not taken.
+	t.Setenv("HOME", t.TempDir())
+	// Gate out the auto-download path. Without this gate, ley-line-open's
+	// published releases (v0.4.1+) succeed the download, the daemon spawns,
+	// and this test no longer exercises the "no binary anywhere" failure
+	// mode it was written for.
+	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	_, err := DiscoverOrStart()
 	if err == nil {
 		t.Fatal("expected error when no socket and no binary")
 	}
-	if !strings.Contains(err.Error(), "not on PATH") {
-		t.Errorf("expected 'not on PATH' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "MACHE_NO_LEYLINE") {
+		t.Errorf("expected 'MACHE_NO_LEYLINE' in error, got: %v", err)
 	}
 }
 

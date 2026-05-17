@@ -458,11 +458,10 @@ func (c *SocketClient) Prioritize(files []string) error {
 // ley-line-open repository. The earlier private-repo URL (agentic-research/ley-line)
 // was retired when mache integrated against ley-line-open per the T8 work.
 //
-// Note: as of 2026-05, ley-line-open has no releases yet — a fresh-clone
-// `mache serve` will get a 404 here and fall through to the no-leyline path.
-// Once LLO cuts its first release, this URL starts serving. The bundle
-// deployment path (apko + melange image) is the canonical way to ship
-// mache+leyline together and does not exercise this download flow.
+// Pulls from `/releases/latest/download/` so installs track the latest
+// LLO release automatically. The bundle deployment path (apko + melange
+// image) ships leyline alongside mache and does not exercise this flow.
+// CI can set MACHE_NO_LEYLINE=1 to skip download entirely.
 const leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-open/releases/latest/download/%s"
 
 // downloadLeyline fetches the leyline binary from the latest GitHub release
