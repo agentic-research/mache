@@ -331,6 +331,36 @@ func TestStatus_ParsesFullResponse(t *testing.T) {
 	assert.InDelta(t, 0.2, s.Defect, 0.001)
 }
 
+// TestStatus_ParsesQuotedGeneration covers the wire format the LIVE
+// daemon actually emits: capnp-json encodes Int64 fields as quoted
+// strings ("0", "1", ...) rather than JSON numbers, so without the
+// parseUint64 helper Status() silently dropped the generation value
+// and reported 0 forever. The cross-runtime e2e
+// (TestE2E_SheafCascade_AgainstLiveDaemon) exercises this path
+// against a real daemon, but it skips when `leyline` is not on PATH —
+// this mock-driven test ensures CI configurations without the daemon
+// binary still pin the wire-format fix.
+func TestStatus_ParsesQuotedGeneration(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"generation": "7", // quoted: how the live daemon actually emits Int64
+			"valid":      3.0,
+			"total":      4.0,
+			"defect":     0.1,
+		}
+	})
+
+	sock, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer sock.Close() //nolint:errcheck
+
+	sc := NewSheafClient(sock)
+	s, err := sc.Status()
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), s.Generation,
+		"quoted-string generation must be parsed as uint64 — see capnp-json Int64 encoding")
+}
+
 // ---------------------------------------------------------------------------
 // JSON serialization of topology (verifies the wire format)
 // ---------------------------------------------------------------------------
