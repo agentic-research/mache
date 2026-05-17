@@ -66,10 +66,14 @@ type restriction struct {
 	AgreementDim int     `json:"agreement_dim,omitempty"`
 }
 
-// stalk is the JSON shape sent in sheaf_invalidate.
+// stalk is the JSON shape sent in sheaf_invalidate. Hash is omitempty
+// so callers that don't have a content-hash can rely on the daemon's
+// "infer from data" path (see sheaf_ops.rs::op_sheaf_invalidate) rather
+// than sending an empty string that would have to be re-parsed
+// daemon-side as zero bytes.
 type stalk struct {
 	ID           int       `json:"id"`
-	Hash         string    `json:"hash"`
+	Hash         string    `json:"hash,omitempty"`
 	Data         []float32 `json:"data,omitempty"`
 	AgreementDim int       `json:"agreement_dim,omitempty"`
 }
@@ -131,11 +135,21 @@ func (sc *SheafClient) Invalidate(regionID int) ([]int, error) {
 // of regions the daemon determined are transitively affected.
 //
 // newHash may be empty — the daemon will infer the hash from data
-// when omitted (see sheaf_ops.rs::op_sheaf_invalidate). When both
-// hash and data are absent, this is equivalent to Invalidate.
+// when both `hash` and `data` are present. When both hash and data
+// are empty, this is equivalent to Invalidate.
+//
+// Returns an error when newData is non-empty but len(newData) is
+// not stalkDim — a wrong-sized vector would either be rejected
+// daemon-side with a confusing error or, worse, cause the δ⁰
+// projection to silently mis-align with restriction agreement_dim
+// and skip the cascade entirely.
 func (sc *SheafClient) InvalidateWithStalk(regionID int, newHash string, newData []float32) ([]int, error) {
 	if sc == nil || sc.sock == nil {
 		return nil, nil
+	}
+
+	if len(newData) > 0 && len(newData) != stalkDim {
+		return nil, fmt.Errorf("sheaf_invalidate: stalk data must be %d floats (got %d)", stalkDim, len(newData))
 	}
 
 	s := stalk{ID: regionID, Hash: newHash}
@@ -288,7 +302,9 @@ func crossCommunityTokens(cr *graph.CommunityResult, refs map[string][]string) m
 // buildRegions produces the region list for sheaf_set_topology.
 // Each region's hash is SHA-256 of sorted member IDs joined by newlines.
 // crossTokens[id] may be nil (region with no cross-boundary refs) —
-// stalkForRegion handles the empty case.
+// ComputeStalk handles the empty case by returning a 32-D vector
+// whose agreement coords are the SHA-256 of zero input (a fixed
+// "empty bucket") plus the region's private dims.
 func buildRegions(cr *graph.CommunityResult, crossTokens map[int][]string) []region {
 	regions := make([]region, len(cr.Communities))
 	for i, c := range cr.Communities {
