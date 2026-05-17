@@ -44,10 +44,13 @@ func TestBuildMaybeMultiGraph_NoMountsFallsThroughToSingleSource(t *testing.T) {
 	// MemoryStore path deterministically.
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 
-	g, cleanup, err := buildMaybeMultiGraph(dir, &api.Topology{Version: api.SchemaVersion})
+	g, si, cleanup, err := buildMaybeMultiGraph(dir, &api.Topology{Version: api.SchemaVersion})
 	require.NoError(t, err)
 	defer cleanup()
 	require.NotNil(t, g)
+	// Pass-through case: invalidator propagates from buildServeGraph and
+	// is non-nil for directory sources.
+	require.NotNil(t, si, "no --mount + directory must propagate the SheafInvalidator")
 
 	// We don't assert graph contents here — that would require a
 	// non-empty topology and exercise the schema/ingest pipeline,
@@ -70,9 +73,12 @@ func TestBuildMaybeMultiGraph_MountsBuildComposite(t *testing.T) {
 	})
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 
-	g, cleanup, err := buildMaybeMultiGraph("", &api.Topology{Version: api.SchemaVersion})
+	g, si, cleanup, err := buildMaybeMultiGraph("", &api.Topology{Version: api.SchemaVersion})
 	require.NoError(t, err)
 	defer cleanup()
+	// Composite mount mode forfeits the unified cascade — see
+	// buildMaybeMultiGraph for the design call.
+	assert.Nil(t, si, "composite mounts must return nil *SheafInvalidator")
 
 	root, err := g.GetNode("")
 	require.NoError(t, err)
@@ -94,7 +100,7 @@ func TestBuildMaybeMultiGraph_PositionalSourceWithMountErrors(t *testing.T) {
 	dir := writeSourceDir(t, "Foo")
 	withServeMounts(t, []string{"x=" + dir})
 
-	_, _, err := buildMaybeMultiGraph(dir, &api.Topology{Version: api.SchemaVersion})
+	_, _, _, err := buildMaybeMultiGraph(dir, &api.Topology{Version: api.SchemaVersion})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot use both")
 }
@@ -114,7 +120,7 @@ func TestBuildMaybeMultiGraph_InvalidSpecErrors(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			withServeMounts(t, []string{tc.spec})
-			_, _, err := buildMaybeMultiGraph("", &api.Topology{Version: api.SchemaVersion})
+			_, _, _, err := buildMaybeMultiGraph("", &api.Topology{Version: api.SchemaVersion})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "invalid --mount spec")
 		})

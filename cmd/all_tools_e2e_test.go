@@ -158,7 +158,7 @@ func TestE2E_AllMCPTools(t *testing.T) {
 	schema, err := resolveSchema("go", ".")
 	require.NoError(t, err)
 	require.NotNil(t, schema, "go preset schema must resolve")
-	g, cleanup, err := buildMaybeMultiGraph(dir, schema)
+	g, _, cleanup, err := buildMaybeMultiGraph(dir, schema)
 	require.NoError(t, err)
 	defer cleanup()
 
