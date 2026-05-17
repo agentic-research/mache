@@ -208,9 +208,12 @@ func (sc *SheafClient) Status() (SheafStatus, error) {
 	}
 
 	s := SheafStatus{}
-	if v, ok := resp["generation"].(float64); ok {
-		s.Generation = uint64(v)
-	}
+	// generation is an Int64 on the wire and capnp-json encodes Int64
+	// as a quoted string ("0", "1", ...) — see the wire-decode
+	// microbench commit (cc30abe). Accept both shapes so the mock
+	// tests (which pass float64) and the live daemon (which passes a
+	// quoted string) both round-trip correctly.
+	s.Generation = parseUint64(resp["generation"])
 	if v, ok := resp["valid"].(float64); ok {
 		s.Valid = int(v)
 	}
@@ -426,4 +429,21 @@ func parseIntSlice(v any) []int {
 		}
 	}
 	return result
+}
+
+// parseUint64 accepts either a float64 (Go-stdlib JSON default for any
+// JSON number, including small Int64) or a string (capnp-json's
+// rendering of Int64 to avoid float64 precision loss past 2^53) and
+// returns the corresponding uint64. Returns 0 on any other shape.
+func parseUint64(v any) uint64 {
+	switch x := v.(type) {
+	case float64:
+		return uint64(x)
+	case string:
+		var n uint64
+		_, _ = fmt.Sscanf(x, "%d", &n)
+		return n
+	default:
+		return 0
+	}
 }
