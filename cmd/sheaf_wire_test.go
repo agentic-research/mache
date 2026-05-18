@@ -217,19 +217,29 @@ type testGraphWithSI struct {
 
 func (t *testGraphWithSI) SheafInvalidator() *graph.SheafInvalidator { return t.si }
 
-// TestGetCommunities_PopulatesInvalidator pins the consumer-side wire
-// the audit identified as load-bearing: after the handler runs, the
-// invalidator MUST have community-result state so the watcher's next
-// fire engages the cascade instead of falling back to single-node.
-func TestGetCommunities_PopulatesInvalidator(t *testing.T) {
-	// Suppress auto-spawn; SetSheaf will see nil and the invalidator
-	// will fall back to single-node — but SetCommunityResult must still
-	// fire. This is the minimum contract the watcher cares about.
+// TestGetCommunities_PopulatesInvalidator_WithDaemon pins the consumer-
+// side wire the audit identified as load-bearing: when the handler can
+// reach the daemon AND PushTopology succeeds, the invalidator MUST be
+// populated with BOTH the new CommunityResult and the new SheafClient
+// — atomically (PR #383 Copilot #6). Pre-fix the handler did
+// SetCommunityResult sync + SetSheaf async, opening a window where
+// the watcher could pair new membership with stale sheaf state.
+//
+// We use a mock UDS daemon (sheaf_set_topology returns ok) to drive
+// PushTopology to success; LEYLINE_SOCKET steers the discovery there.
+func TestGetCommunities_PopulatesInvalidator_WithDaemon(t *testing.T) {
+	leyline.StopManaged()
+	sockPath := startMockSheafServer(t, func(req map[string]any) map[string]any {
+		// PushTopology sends sheaf_set_topology; respond with the
+		// success shape the daemon would return.
+		return map[string]any{"ok": true, "delta_zero_mode": true, "regions": 2.0, "restrictions": 1.0}
+	})
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+	// Steer PATH/HOME away so DiscoverSocket finds our mock — not
+	// some leftover real daemon — and DiscoverOrStart doesn't try
+	// to auto-spawn.
 	t.Setenv("PATH", "/nonexistent-path-for-test")
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MACHE_NO_LEYLINE", "1")
-	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
-	leyline.StopManaged()
 
 	// Build a store with enough cross-references to produce a real
 	// CommunityResult (Louvain needs at least one community above
@@ -250,25 +260,62 @@ func TestGetCommunities_PopulatesInvalidator(t *testing.T) {
 
 	g := &testGraphWithSI{MemoryStore: store, si: si}
 
-	// Wire deterministic wait on the fire-and-forget goroutine.
 	pushDone := make(chan struct{})
 	handler := makeGetCommunitiesHandlerWithDone(g, pushDone)
 	result, err := handler(context.Background(), makeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "handler returned error result: %s", resultText(t, result))
 
-	// Wait for the goroutine that wraps PushTopology + (in the wired
-	// implementation) SetCommunityResult / SetSheaf to complete.
 	select {
 	case <-pushDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("get_communities goroutine did not finish within 2s")
 	}
 
-	// THE CONTRACT: the invalidator MUST now have community-result
-	// state so the watcher's next fire engages the cascade path.
+	// THE CONTRACT: when PushTopology succeeds, the invalidator is
+	// atomically populated (SetState swaps result + sheaf together).
 	assert.True(t, si.HasResult(),
-		"handler must call SetCommunityResult on the invalidator — without this the moat never engages no matter how many edits the watcher sees")
+		"handler must atomically install CommunityResult + SheafClient after PushTopology succeeds — see PR #383 Copilot #6")
+}
+
+// TestGetCommunities_NoDaemon_LeavesInvalidatorEmpty pins the
+// correctness side of PR #383 Copilot #6: when the daemon is
+// unreachable, the handler MUST NOT install CommunityResult on the
+// invalidator. Doing so would pair new membership with no sheaf
+// (or, worse, stale sheaf state from a prior call) and produce
+// cascades against a daemon that doesn't have the new topology.
+// Graceful degradation: leave the invalidator in its prior state
+// so watcher fires use the prior pair atomically.
+func TestGetCommunities_NoDaemon_LeavesInvalidatorEmpty(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
+	leyline.StopManaged()
+
+	store := graph.NewMemoryStore()
+	require.NoError(t, store.AddRef("a", "n1"))
+	require.NoError(t, store.AddRef("a", "n2"))
+	require.NoError(t, store.AddRef("b", "n2"))
+	require.NoError(t, store.AddRef("b", "n3"))
+
+	si := graph.NewSheafInvalidator(store, nil, nil)
+	g := &testGraphWithSI{MemoryStore: store, si: si}
+
+	pushDone := make(chan struct{})
+	handler := makeGetCommunitiesHandlerWithDone(g, pushDone)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	select {
+	case <-pushDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine did not finish within 2s")
+	}
+
+	assert.False(t, si.HasResult(),
+		"with no daemon, CommunityResult must NOT be installed — would pair new membership with stale/missing sheaf and cause wrong cascades (PR #383 Copilot #6)")
 }
 
 // TestGetCommunities_NoInvalidatorWhenGraphDoesntProvide guards the

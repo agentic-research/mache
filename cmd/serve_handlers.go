@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -907,26 +908,25 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			Membership:  result.Membership,
 		}
 
-		// Install the snapshot on the SheafInvalidator the file watcher
-		// holds (if any), so its next onChange fire engages the cascade
-		// instead of falling back to single-node Graph.Invalidate. This
-		// must happen on the SYNCHRONOUS path — the goroutine below
-		// also dials the daemon and pushes topology, but the watcher
-		// shouldn't have to wait on daemon discovery to start using
-		// real membership data. SetCommunityResult is mutex-guarded
-		// (TestSheafInvalidator_ConcurrentReadWrite); the watcher can
-		// safely read while we write here.
+		// Resolve the SheafInvalidator (if this graph has one) up front
+		// so the goroutine below can install state atomically once it
+		// successfully reaches the daemon.
 		//
 		// Graph backends without a watcher (control-mode lazyGraph,
 		// composite mounts) don't implement sheafInvalidatorProvider —
 		// the type-assert degrades silently, which is the documented
 		// behavior for those modes (see buildServeGraph).
+		//
+		// DELIBERATELY DEFER state install until PushTopology succeeds.
+		// Installing SetCommunityResult synchronously here (the prior
+		// shape) paired NEW membership with the OLD sheaf/topology
+		// during the dial+push window — watcher events in that window
+		// looked up regions in the new membership but sent them to a
+		// daemon that still held the prior topology. Fixed by atomic
+		// SetState below; see PR #383 Copilot #6.
 		var sip sheafInvalidatorProvider
 		if sp, ok := g.(sheafInvalidatorProvider); ok {
 			sip = sp
-			if si := sip.SheafInvalidator(); si != nil {
-				si.SetCommunityResult(snap)
-			}
 		}
 
 		go func() {
@@ -941,22 +941,42 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			if err != nil {
 				return
 			}
-			defer func() { _ = sock.Close() }()
+			// Track whether we handed off socket ownership to the
+			// invalidator. If we did, the SheafClient inside the
+			// invalidator owns the socket and we MUST NOT close it
+			// here — the watcher's later cascade calls reuse the
+			// connection. If we didn't hand off, close it normally
+			// to avoid leaking a socket per failed get_communities
+			// run. See PR #383 Copilot #1: the prior code deferred
+			// sock.Close() unconditionally, so the SheafClient
+			// stored on the invalidator was talking to a closed
+			// socket from the goroutine's return onward.
+			var handedOff bool
+			defer func() {
+				if !handedOff {
+					_ = sock.Close()
+				}
+			}()
+
 			sc := leyline.NewSheafClient(sock)
 			if pushErr := sc.PushTopology(snap, refs); pushErr != nil {
 				logSheafPushOnce(pushErr)
 				return
 			}
-			// PushTopology succeeded — swap the (now-live) SheafClient
-			// into the invalidator so subsequent watcher fires engage
-			// the cross-region cascade instead of falling back. This
-			// closes the consumer-side loop the mache-49bf9a audit
-			// flagged as "sketch": from here on, edits route through
-			// the daemon and the cascade output drives local cache
-			// invalidation.
+			// PushTopology succeeded — atomically swap BOTH the new
+			// CommunityResult and the new SheafClient onto the
+			// invalidator. From here on, subsequent watcher fires
+			// engage the cross-region cascade. The prior backend
+			// (if any) is returned so we can close its socket and
+			// avoid leaking one UDS connection per get_communities
+			// call across the process lifetime.
 			if sip != nil {
 				if si := sip.SheafInvalidator(); si != nil {
-					si.SetSheaf(sc)
+					prior := si.SetState(snap, sc)
+					handedOff = true
+					if closer, ok := prior.(io.Closer); ok {
+						_ = closer.Close()
+					}
 				}
 			}
 		}()

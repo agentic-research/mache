@@ -7,8 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockServer starts a UDS server that echoes back canned responses.
@@ -318,4 +323,57 @@ func TestLeylineReleaseURL_PointsAtPublicRepo(t *testing.T) {
 	if strings.Contains(leylineReleaseURLTemplate, "/ley-line/") {
 		t.Errorf("leylineReleaseURLTemplate still references the private ley-line repo: %q", leylineReleaseURLTemplate)
 	}
+}
+
+// TestSendOp_ConcurrentCallsDoNotInterleave is the regression guard
+// for Copilot's PR #383 review: SocketClient.SendOp performs an
+// unsynchronized write-then-read on a shared connection. Without a
+// mutex, concurrent callers (e.g. the file watcher firing multiple
+// debounce timers in quick succession after a save burst) would
+// interleave requests and reads, corrupting the line-delimited
+// JSON protocol. Pinned here so a future refactor can't drop the
+// serialization without the race detector catching it.
+//
+// The mock server tags each response with the request's "id" field;
+// after N parallel SendOps, every caller must see a response whose
+// id matches its own request. Without the mutex, ids will mismatch
+// (or the read will EOF) under -race.
+func TestSendOp_ConcurrentCallsDoNotInterleave(t *testing.T) {
+	const calls = 50
+
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		// Echo the id so callers can verify their request matched
+		// the response they read.
+		return map[string]any{"id": req["id"], "ok": true}
+	})
+
+	sock, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer sock.Close() //nolint:errcheck
+
+	var (
+		wg         sync.WaitGroup
+		mismatches int64
+		errs       int64
+	)
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			resp, err := sock.SendOp(map[string]any{"op": "echo", "id": float64(id)})
+			if err != nil {
+				atomic.AddInt64(&errs, 1)
+				return
+			}
+			gotID, _ := resp["id"].(float64)
+			if int(gotID) != id {
+				atomic.AddInt64(&mismatches, 1)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Zero(t, atomic.LoadInt64(&errs), "no SendOp call should error under concurrent load")
+	assert.Zero(t, atomic.LoadInt64(&mismatches),
+		"every caller must read the response matching its own request id — mismatches mean the line-delimited protocol got crossed")
 }

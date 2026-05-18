@@ -54,10 +54,35 @@ func (si *SheafInvalidator) SetCommunityResult(cr *CommunityResult) {
 // serve startup path to attach a SheafClient lazily — the file watcher
 // can install the invalidator before the ley-line daemon is reachable,
 // then swap in a real backend once a connection is established.
-func (si *SheafInvalidator) SetSheaf(b SheafBackend) {
+//
+// Returns the prior backend so callers that own SheafBackend resources
+// (e.g. a SheafClient wrapping a UDS socket) can close the prior one
+// without leaking. Returns nil if no prior backend was installed.
+func (si *SheafInvalidator) SetSheaf(b SheafBackend) (prior SheafBackend) {
 	si.mu.Lock()
 	defer si.mu.Unlock()
+	prior = si.sheaf
 	si.sheaf = b
+	return prior
+}
+
+// SetState atomically swaps both the CommunityResult and SheafBackend
+// under a single Lock. Use this when both pieces are being replaced
+// together (e.g. from get_communities after PushTopology succeeds).
+// The standalone SetSheaf / SetCommunityResult paths open a window
+// where the watcher can observe new membership paired with old sheaf
+// (or vice versa) — see TestSheafInvalidator_SetState_AtomicSwap and
+// PR #383 Copilot #6 for the cascade-mismatch failure mode.
+//
+// Returns the prior backend so the caller can close it without
+// leaking. Returns nil if no prior backend was installed.
+func (si *SheafInvalidator) SetState(result *CommunityResult, sheaf SheafBackend) (prior SheafBackend) {
+	si.mu.Lock()
+	defer si.mu.Unlock()
+	prior = si.sheaf
+	si.result = result
+	si.sheaf = sheaf
+	return prior
 }
 
 // HasResult reports whether the invalidator has a CommunityResult to

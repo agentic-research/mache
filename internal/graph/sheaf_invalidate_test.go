@@ -504,3 +504,64 @@ func TestSheafInvalidator_ConcurrentReadWrite(t *testing.T) {
 	done.Wait()
 	assert.Equal(t, int64(readers*iterations), readOps, "all reads completed")
 }
+
+// TestSheafInvalidator_SetState_AtomicSwap pins the contract added in
+// response to PR #383 Copilot #6: SetCommunityResult + SetSheaf as two
+// separate writes opens a window where the watcher can observe new
+// membership paired with old sheaf (or vice versa) — and route
+// invalidations through a daemon that doesn't yet have the new
+// topology. SetState swaps both under a single Lock, so the watcher
+// either sees the old pair OR the new pair, never a mismatched mix.
+//
+// Verifies the swap is atomic by serializing a sequence: SetState(A) →
+// SetState(B) → SetState(C); the watcher's snapshot is always one
+// consistent (result, sheaf) tuple — never (resultA, sheafB).
+func TestSheafInvalidator_SetState_AtomicSwap(t *testing.T) {
+	g := &mockGraph{}
+	si := NewSheafInvalidator(g, nil, nil)
+
+	crA := &CommunityResult{Membership: map[string]int{"x": 1}}
+	backendA := &mockSheafBackend{response: []int{1}}
+
+	priorA := si.SetState(crA, backendA)
+	assert.Nil(t, priorA, "first SetState returns nil prior backend")
+	assert.True(t, si.HasResult(), "result installed")
+
+	// Verify the snapshot is consistent post-SetState.
+	g.resetInvalidated()
+	si.InvalidateWithCascade("x", nil)
+	assert.Equal(t, []int{1}, backendA.Calls(), "post-SetState cascade hits backendA")
+
+	// Hot-swap to a new pair atomically.
+	crB := &CommunityResult{Membership: map[string]int{"y": 2}}
+	backendB := &mockSheafBackend{response: []int{2}}
+	priorB := si.SetState(crB, backendB)
+	assert.Same(t, backendA, priorB, "second SetState returns priorA so caller can close it")
+
+	g.resetInvalidated()
+	si.InvalidateWithCascade("y", nil)
+	assert.Equal(t, []int{2}, backendB.Calls(), "post-swap cascade hits backendB only")
+	assert.Equal(t, []int{1}, backendA.Calls(), "backendA not touched after swap")
+
+	// Clear: pass nil/nil; prior is backendB.
+	priorC := si.SetState(nil, nil)
+	assert.Same(t, backendB, priorC)
+	assert.False(t, si.HasResult(), "result cleared")
+}
+
+// TestSheafInvalidator_SetSheaf_ReturnsPrior covers the standalone
+// SetSheaf path with the same prior-backend handoff. Callers that
+// own SheafBackend resources (e.g. a SheafClient wrapping a UDS
+// socket) need this to close the prior backend without leaking.
+func TestSheafInvalidator_SetSheaf_ReturnsPrior(t *testing.T) {
+	g := &mockGraph{}
+	si := NewSheafInvalidator(g, nil, nil)
+
+	a := &mockSheafBackend{}
+	b := &mockSheafBackend{}
+
+	assert.Nil(t, si.SetSheaf(a), "initial set: no prior")
+	assert.Same(t, a, si.SetSheaf(b), "second set: returns a as prior")
+	assert.Same(t, b, si.SetSheaf(nil), "nil clear: returns b as prior")
+	assert.Nil(t, si.SetSheaf(nil), "no-op clear: nil prior")
+}
