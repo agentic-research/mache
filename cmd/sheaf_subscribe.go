@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/agentic-research/mache/internal/graph"
@@ -147,26 +149,59 @@ func siInvalidateRegions(si *graph.SheafInvalidator, regions []int) bool {
 	return true
 }
 
-// startSheafSubscriber dials the daemon socket and starts a subscriber
-// that routes events through r. Returns the subscriber (or nil when
-// no daemon socket is reachable at startup, in which case the
-// returned stop is a no-op and a warning is logged — the watcher path
-// still works, just without notifications from other initiators).
+// startSheafSubscriber starts a subscriber that routes daemon-pushed
+// events through r. ALWAYS starts the subscriber, regardless of
+// whether a daemon socket exists at startup — the subscriber's
+// reconnect-with-backoff loop handles initial absence, so any later
+// auto-spawn (get_communities, LSP enrichment) brings up a daemon
+// that the subscriber will pick up on its next dial attempt.
 //
 // Returning the subscriber pointer lets the MCP get_sheaf_status
 // handler poll its Status() to surface subscriber state to agents.
+// When no path could be resolved (no LEYLINE_SOCKET and no usable
+// home dir), returns nil + a no-op stop — but in practice the home-
+// dir fallback path is always derivable, so the nil case is a true
+// "this environment is broken in a way the subscriber can't paper
+// over" signal.
 //
 // Lives in cmd/ rather than internal/leyline so the routing closure
 // can reference the router (which holds *graph.SheafInvalidator) — a
 // type that internal/leyline can't import without a cycle.
+//
+// Fixed in response to PR #384 Copilot #3: the prior implementation
+// called DiscoverSocket up front, so any auto-spawn that brought a
+// daemon up later silently never had a subscriber attached.
 func startSheafSubscriber(ctx context.Context, r *sheafEventRouter) (sub *leyline.SheafSubscriber, stop func()) {
-	sockPath, err := leyline.DiscoverSocket()
-	if err != nil {
-		log.Printf("sheaf subscriber: no daemon socket reachable at startup (%v); cascade events from other initiators will not be observed", err)
+	sockPath := resolveSubscriberSocketPath()
+	if sockPath == "" {
+		log.Printf("sheaf subscriber: cannot resolve a deterministic socket path (LEYLINE_SOCKET unset, no usable home dir); cascade events will not be observed")
 		return nil, func() {}
 	}
 
 	sub = leyline.NewSheafSubscriber(sockPath, r.dispatch)
 	sub.Start(ctx)
 	return sub, sub.Stop
+}
+
+// resolveSubscriberSocketPath picks the path the subscriber should
+// dial. Doesn't check whether the file exists — the subscriber's
+// retry loop handles absence. Order:
+//  1. $LEYLINE_SOCKET if set (env override; matches what
+//     DiscoverSocket would resolve to in the same call).
+//  2. ~/.mache/default.sock — the well-known kiln deployment path
+//     that auto-spawned daemons use too. Lets the subscriber pick
+//     up a daemon a later DiscoverOrStart spawns without restart.
+//
+// Returns "" when no home dir is determinable. Real-world systems
+// always have one; the empty case is a fail-loud signal rather than
+// a usable fallback.
+func resolveSubscriberSocketPath() string {
+	if env := os.Getenv("LEYLINE_SOCKET"); env != "" {
+		return env
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".mache", "default.sock")
 }

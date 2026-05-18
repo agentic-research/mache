@@ -52,11 +52,24 @@ type SheafSubscriber struct {
 	backoffMin time.Duration
 	backoffMax time.Duration
 
-	// cancel signals the loop to exit; doneCh closes when the loop returns.
-	cancel  context.CancelFunc
-	doneCh  chan struct{}
-	stopMu  sync.Mutex
-	stopped bool
+	// Lifecycle channels. Both created in NewSheafSubscriber so Stop
+	// has something to read regardless of whether Start was called.
+	//
+	//   startedCh — closed by Start (via startOnce) the first time
+	//     Start is invoked. Stop checks this BEFORE waiting on doneCh
+	//     to avoid blocking forever when Start was never called.
+	//   doneCh    — closed by run() when it returns. Stop waits on
+	//     this once it knows Start fired. Concurrent Stop calls all
+	//     wait on the same closed channel (returns immediately after
+	//     run() exits) — every call observes the terminal state.
+	startedCh chan struct{}
+	doneCh    chan struct{}
+	startOnce sync.Once
+
+	// cancel is set by Start, read by Stop. Guarded by mu (the same
+	// lock that protects state) since Start writes while reader
+	// goroutines may snapshot the subscriber's state simultaneously.
+	cancel context.CancelFunc
 }
 
 // EventHandler is called once per pushed sheaf.invalidate event.
@@ -117,6 +130,9 @@ func (s SubscriberState) String() string {
 // NewSheafSubscriber creates a subscriber that will dial sockPath and
 // dispatch events to handler. Use Start to begin the loop; Stop to
 // shut it down cleanly.
+//
+// Both lifecycle channels are constructed here so Stop is safe to
+// call in any order relative to Start (see Stop's contract).
 func NewSheafSubscriber(sockPath string, handler EventHandler) *SheafSubscriber {
 	if handler == nil {
 		handler = func(SheafInvalidateEvent) {} // no-op
@@ -126,6 +142,7 @@ func NewSheafSubscriber(sockPath string, handler EventHandler) *SheafSubscriber 
 		handler:    handler,
 		backoffMin: 1 * time.Second,
 		backoffMax: 30 * time.Second,
+		startedCh:  make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}
 }
@@ -145,28 +162,44 @@ func (s *SheafSubscriber) SetBackoffForTest(min, max time.Duration) {
 // Start spawns the subscribe loop in a background goroutine. Returns
 // immediately. The loop runs until Stop is called or ctx is cancelled.
 //
-// Start is not idempotent — calling it twice on the same subscriber
-// spawns two loops competing for the conn. Don't do that.
+// Idempotent — repeated calls after the first are no-ops (sync.Once
+// gate). Concurrent Start calls collapse to a single loop spawn so
+// two goroutines can't accidentally race for the conn.
 func (s *SheafSubscriber) Start(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	s.mu.Lock()
-	s.cancel = cancel
-	s.mu.Unlock()
-
-	go s.run(ctx)
+	s.startOnce.Do(func() {
+		ctx, cancel := context.WithCancel(ctx)
+		s.mu.Lock()
+		s.cancel = cancel
+		s.mu.Unlock()
+		close(s.startedCh) // signal "Start was called at least once"
+		go s.run(ctx)
+	})
 }
 
 // Stop signals the subscribe loop to terminate and blocks until it has.
-// Safe to call multiple times. Always reaches the StateDisconnected
-// terminal state before returning.
+//
+// Contract:
+//   - When Start was never called, returns immediately (no goroutine
+//     to stop, no channel to wait on).
+//   - When Start was called, every Stop call (including concurrent and
+//     repeated ones) waits until run() has actually returned. Returning
+//     before that would let callers observe a Disconnected state too
+//     early — the contract is "by the time Stop returns, the loop is
+//     gone." Multiple Stop calls all observe the same close on doneCh
+//     (a closed channel is permanently ready) so the wait is cheap
+//     after the first one completes.
+//
+// Fixed in response to PR #384 Copilot #1: the prior shape blocked
+// forever pre-Start and short-circuited on a "stopped" flag for
+// repeated calls, violating both guarantees.
 func (s *SheafSubscriber) Stop() {
-	s.stopMu.Lock()
-	if s.stopped {
-		s.stopMu.Unlock()
+	// Pre-Start? Nothing to wait on.
+	select {
+	case <-s.startedCh:
+		// Started — fall through to shutdown.
+	default:
 		return
 	}
-	s.stopped = true
-	s.stopMu.Unlock()
 
 	s.mu.RLock()
 	cancel := s.cancel
@@ -175,7 +208,6 @@ func (s *SheafSubscriber) Stop() {
 		cancel()
 	}
 
-	// Wait for the loop goroutine to return (or already returned).
 	<-s.doneCh
 }
 
@@ -270,12 +302,19 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 	}
 }
 
-// dispatch parses a single event map and calls the handler. Ignored
-// events (wrong topic, malformed) are logged and skipped.
+// dispatch parses a single event map and calls the handler. Events
+// with a non-matching topic are silently dropped — they're structurally
+// impossible from the daemon side (we only subscribed to one topic),
+// so reaching them indicates a daemon-side bug rather than a runtime
+// condition agents need to observe. Updated from the prior "logged
+// and skipped" docstring (PR #384 Copilot #2) to match what the code
+// actually does; the runtime log line would just be noise on a
+// subscribed-topic stream.
 func (s *SheafSubscriber) dispatch(ev map[string]any) {
 	topic, _ := ev["topic"].(string)
 	if topic != "sheaf.invalidate" {
-		// Only sheaf.invalidate is subscribed; defensive ignore.
+		// Only sheaf.invalidate is subscribed; silently ignore the
+		// impossible case rather than emit log noise per event.
 		return
 	}
 

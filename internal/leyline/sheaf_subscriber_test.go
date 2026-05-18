@@ -39,7 +39,13 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 				"topic":       "sheaf.invalidate",
 				"invalidated": []any{1.0, 2.0, 3.0},
 				"count":       3.0,
-				"generation":  uint64(7), // will be wire-encoded as quoted "7" by the mock
+				// QUOTED string — actually exercises parseUint64's
+				// string path, which is the live daemon's wire shape
+				// per capnp-json's Int64 codec (PR #382's quoted-Int64
+				// fix). Pushing a raw uint64 here would marshal as a
+				// JSON number and silently bypass the wire-format
+				// contract the test claims to verify.
+				"generation": "7",
 			},
 		},
 	})
@@ -171,6 +177,68 @@ func TestSheafSubscriber_StatusReportsDisconnect(t *testing.T) {
 	status := sub.Status()
 	assert.NotEqual(t, StateConnected, status.State, "must NOT report Connected when socket missing")
 	assert.NotEmpty(t, status.Reason, "Status.Reason must explain why the subscriber is not connected")
+}
+
+// TestSheafSubscriber_StopBeforeStart pins the lifecycle bug Copilot
+// caught on PR #384: Stop() reads s.cancel + waits on s.doneCh, but
+// when Stop is called BEFORE Start, neither has been initialized
+// (cancel == nil and doneCh hasn't been closed since run() never
+// started). The original implementation would block forever on
+// <-s.doneCh in this case. Stop must return promptly when the
+// subscriber was never started.
+func TestSheafSubscriber_StopBeforeStart(t *testing.T) {
+	sub := NewSheafSubscriber("/tmp/never-started.sock", func(SheafInvalidateEvent) {})
+
+	done := make(chan struct{})
+	go func() {
+		sub.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// ok
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stop() blocked forever when called before Start() — the lifecycle is broken")
+	}
+}
+
+// TestSheafSubscriber_StopIdempotentAndAlwaysWaits pins the doc claim:
+// every Stop() call MUST wait until the loop has actually terminated,
+// not short-circuit on a "already-stopped" flag. The original
+// implementation set stopped=true under a mutex and returned without
+// waiting on subsequent calls — meaning a second Stop() could return
+// while the first call's <-doneCh wait was still in flight.
+//
+// We construct the race by starting two Stop()s concurrently. Both
+// must observe the loop fully terminated before they return.
+func TestSheafSubscriber_StopIdempotentAndAlwaysWaits(t *testing.T) {
+	sockPath := startSubscribeMockServer(t, mockBehavior{acceptSubscribe: true})
+	sub := NewSheafSubscriber(sockPath, func(SheafInvalidateEvent) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sub.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return sub.Status().State == StateConnected
+	}, 2*time.Second, 25*time.Millisecond, "connect before testing Stop")
+
+	// Two concurrent Stop calls. Both must return cleanly + observe
+	// the terminal state.
+	done := make(chan struct{}, 2)
+	go func() { sub.Stop(); done <- struct{}{} }()
+	go func() { sub.Stop(); done <- struct{}{} }()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			t.Fatalf("concurrent Stop() #%d hung — contract says every Stop waits", i)
+		}
+	}
+
+	assert.Equal(t, StateDisconnected, sub.Status().State,
+		"after Stop returns, state MUST be Disconnected")
 }
 
 // TestSheafSubscriber_StopHaltsLoop pins clean shutdown: Stop()

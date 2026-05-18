@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -202,4 +204,54 @@ func waitTimeout(wg *sync.WaitGroup, d time.Duration) bool {
 	case <-time.After(d):
 		return false
 	}
+}
+
+// TestStartSheafSubscriber_StartsEvenWhenSocketAbsent pins the
+// architectural fix from PR #384 Copilot #3. The prior
+// startSheafSubscriber called DiscoverSocket up front and returned
+// nil when no socket existed at startup — so any auto-spawn that
+// brought a daemon up later (via get_communities, LSP enrichment,
+// etc.) would never have a subscriber, and daemon-pushed
+// invalidations would silently never reach mache until a full serve
+// restart.
+//
+// The new contract: always start the subscriber with a deterministic
+// path (LEYLINE_SOCKET env if set, else ~/.mache/default.sock). The
+// subscriber's existing reconnect-with-backoff loop handles initial
+// absence — it'll dial the path repeatedly until the daemon comes
+// up, then subscribe normally.
+//
+// We point LEYLINE_SOCKET at a temp path that doesn't exist, call
+// startSheafSubscriber, and assert the returned subscriber is
+// non-nil. The Status() will report Disconnected (with a dial-error
+// Reason) but the subscriber is alive and retrying.
+func TestStartSheafSubscriber_StartsEvenWhenSocketAbsent(t *testing.T) {
+	// Set LEYLINE_SOCKET to a guaranteed-missing path.
+	missing := filepath.Join(t.TempDir(), "no-daemon.sock")
+	t.Setenv("LEYLINE_SOCKET", missing)
+	t.Setenv("HOME", t.TempDir()) // Also steer the fallback path away.
+
+	router := newSheafEventRouter()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	sub, stop := startSheafSubscriber(ctx, router)
+	t.Cleanup(stop)
+
+	require.NotNil(t, sub,
+		"startSheafSubscriber must return a non-nil subscriber even with no socket present — backoff handles initial absence (PR #384 Copilot #3)")
+
+	// Subscriber should be visibly trying-and-failing within the
+	// initial backoff window. The state may be Connecting or
+	// Disconnected depending on timing, but it MUST NOT be Connected.
+	require.Eventually(t, func() bool {
+		st := sub.Status().State
+		return st == leyline.StateConnecting || st == leyline.StateDisconnected
+	}, 1*time.Second, 25*time.Millisecond,
+		"subscriber must enter the connect-retry loop (got %v)", sub.Status().State)
+
+	// Reason should explain why it's not connected.
+	st := sub.Status()
+	assert.NotEqual(t, leyline.StateConnected, st.State,
+		"subscriber must NOT report Connected when the socket is missing")
 }
