@@ -27,7 +27,7 @@ Three concrete weaknesses surfaced during the post-T8 / evolve sweep:
    N×M×K matrix.
 
 1. **No fixture taxonomy.** The e2e harness uses a 4-package toy Go
-   project hand-rolled in `writeE2EFixture` (`cmd/all_tools_e2e_test.go:441-555`).
+   project hand-rolled in `writeE2EFixture` (`cmd/all_tools_e2e_test.go:451-539`).
    Heterogeneous (cross-language), large-corpus, and mache-on-mache
    fixtures exist as open beads (`mache-d332b5`, `mache-be8090`) but
    nothing routes them through the same tool surface. Smell rules and
@@ -93,7 +93,7 @@ asserts coverage of each language the tool claims to support.
 
 | Category                       | Status    | Source                                                          |
 | ------------------------------ | --------- | --------------------------------------------------------------- |
-| `toy` (≤10 files, hand-rolled) | exists    | `writeE2EFixture` (`cmd/all_tools_e2e_test.go:441`)             |
+| `toy` (≤10 files, hand-rolled) | exists    | `writeE2EFixture` (`cmd/all_tools_e2e_test.go:451`)             |
 | `synthetic-medium`             | open bead | `mache-be8090` (tunable size, generated)                        |
 | `mache-on-mache` (self-ingest) | open bead | `mache-be8090` (`task test-go-schema` proxies today)            |
 | `heterogeneous-multi-lang`     | open bead | `mache-d332b5` (`testdata/hetero/{go,rust,python,typescript}/`) |
@@ -127,10 +127,11 @@ representative fixture, and produces the expected projected shape.
 This pins the declarative-topology contract that ADR-0002 promised.
 
 **Enforcement.** `examples/examples_test.go` already does this for
-the parse step (`TestSchemasParse`) and for the MCP schema specifically
-(`TestMCPSchemaIngest`). The gap is the remaining 16 schemas: each
-needs (a) a sample fixture and (b) an expected-projected-shape
-assertion. Pattern is established; rollout is per-schema.
+the parse step (`TestSchemasParse`) and for 4 schemas via
+`TestMCPSchemaIngest` (mcp) and `TestTreeSitterExamples` (go, python,
+sql). The gap is the remaining 14 schemas: each needs (a) a sample
+fixture and (b) an expected-projected-shape assertion. Pattern is
+established; rollout is per-schema.
 
 Failure = a schema present in `examples/` without a paired
 `TestIngest_<schema>` function.
@@ -353,7 +354,7 @@ ratchet-able.
 | `internal/writeback/splice_normalize_test.go`   | I3                                                   |                                   |
 | `internal/writeback/validate_test.go`           | I3 (tree-sitter pre-write)                           |                                   |
 | `api/schema_test.go`                            | I3 (Topology JSON contract)                          |                                   |
-| `examples/examples_test.go`                     | I4 (parse + MCP ingest only)                         | I4 partial — needs more schemas   |
+| `examples/examples_test.go`                     | I4 (parse all + ingest for mcp/go/python/sql)        | I4 partial — 14 schemas to add    |
 | `graph/cache_test.go`                           | I3                                                   | outer `graph/` shim               |
 | `graph/sqlite_test.go`                          | I3                                                   | outer shim                        |
 | `tests/integration_test.go`                     | I3 (cross-package: ingest + graph + nfs + writeback) | gold                              |
@@ -405,13 +406,20 @@ ratchet-able.
 | `get_impact`       |         ✓          |      ~      |       □       |       □        |    □    |
 | `get_architecture` |         ✓          |      ~      |       □       |       □        |    □    |
 | `get_diagram`      |         ✓          |      ~      |       □       |       □        |    □    |
-| `write_file`       | □ (skipped in e2e) |      □      |       ✓       |       □        |    ✓    |
+| `write_file`       | □ (skipped in e2e) |      □      |       ~       |       □        |    ~    |
 | `resolve_ref`      |         ✓          |      ~      |       □       |       □        |    □    |
 | `find_smells`      |         ~          |      ✓      |       □       |       □        |    □    |
 
 **Open cell count: ~60.** Most concentrated on `WritableGraph` and
 `CompositeGraph` — neither is exercised through the MCP tool surface
 end-to-end.
+
+*Note: write_file matrix cells reflect the current test surface, not
+the published API. `WritableGraph` and `GraphFS` both support writes
+(per the production code and `internal/graph/writable_graph_test.go` /
+`internal/nfsmount/graphfs_test.go` unit coverage), but the e2e harness
+doesn't exercise those paths through the `write_file` MCP tool yet —
+closing those cells is part of SB-02 / SB-03 / SB-16.*
 
 ### Fixture × Tool (I2) — open cells
 
@@ -438,16 +446,17 @@ once routed through the existing harness loop.
 
 ### Schema engine (I4) — gap surfaces
 
-`examples/examples_test.go` covers parse for all schemas and ingest
-for **only** `mcp-schema.json`. 16 schemas remain without a paired
+`examples/examples_test.go` covers parse for all 18 schemas and ingest
+for 4: `mcp` (via `TestMCPSchemaIngest`), `go`, `python`, `sql` (via
+`TestTreeSitterExamples`). **14** schemas remain without a paired
 `TestIngest_<schema>` test:
 
 `audit-schema.json`, `bdr-hierarchy-schema.json`, `bdr-schema.json`,
-`cli-schema.json`, `go-schema.json`, `kev-schema.json`,
+`cli-schema.json`, `kev-schema.json`,
 `llm-conversations-schema.json`, `markdown-schema.json`,
 `mcp-registry-schema.json`, `notion-repos-schema.json`,
-`notion-schema.json`, `nvd-schema.json`, `python-schema.json`,
-`rust-schema.json`, `sql-schema.json`, `terraform-schema.json`,
+`notion-schema.json`, `nvd-schema.json`,
+`rust-schema.json`, `terraform-schema.json`,
 `trivy-ghsa-schema.json`.
 
 ### Daemon-paired (I5) — gap surfaces
@@ -674,7 +683,8 @@ they trace back to this ADR.
 - files: `examples/examples_test.go`, `examples/testdata/`
 - test_files: `examples/examples_test.go`
 - priority: 2
-- desc: One `TestIngest_<schema>` per schema (16 schemas remain).
+- desc: One `TestIngest_<schema>` per schema (14 schemas remain after
+  `mcp` + go/python/sql coverage via `TestTreeSitterExamples`).
   Pattern from existing `TestMCPSchemaIngest`. Sample fixtures land
   in `examples/testdata/`.
 
