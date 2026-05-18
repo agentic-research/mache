@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -325,6 +326,33 @@ func TestLeylineReleaseURL_PointsAtPublicRepo(t *testing.T) {
 	if strings.Contains(leylineReleaseURLTemplate, "/ley-line/") {
 		t.Errorf("leylineReleaseURLTemplate still references the private ley-line repo: %q", leylineReleaseURLTemplate)
 	}
+}
+
+// TestLeylineReleaseURL_IncludesVersion pins the second half of the
+// mache-9051f0 fix: the auto-download URL must be version-pinned, not
+// `/releases/latest/download/`. Floating-latest is a recipe for picking
+// up a daemon binary that doesn't match mache's schema-client pin in
+// go.mod, which produces wire-format decode errors that are very hard
+// to diagnose from the consumer side. The constructed URL must:
+//   - reference the pinned version constant leylineBinaryVersion, and
+//   - NOT contain the string "/releases/latest/" — every download
+//     resolves to an exact tag.
+func TestLeylineReleaseURL_IncludesVersion(t *testing.T) {
+	// Pinned version must be a non-empty `vX.Y.Z`-shaped string.
+	require.NotEmpty(t, leylineBinaryVersion, "leylineBinaryVersion must not be empty")
+	assert.True(t, strings.HasPrefix(leylineBinaryVersion, "v"),
+		"leylineBinaryVersion must be a vX.Y.Z tag (got %q)", leylineBinaryVersion)
+
+	// The template substitutes (version, asset). Render with a stand-in
+	// asset and assert the rendered URL embeds the pinned version and
+	// does not fall back to /releases/latest/.
+	rendered := fmt.Sprintf(leylineReleaseURLTemplate, leylineBinaryVersion, "leyline-linux-amd64")
+	assert.Contains(t, rendered, leylineBinaryVersion,
+		"rendered download URL must include the pinned version (got %q)", rendered)
+	assert.NotContains(t, rendered, "/releases/latest/",
+		"rendered download URL must NOT use /releases/latest/ — floating-latest defeats the version pin (got %q)", rendered)
+	assert.Contains(t, rendered, "ley-line-open/releases/download/",
+		"rendered download URL must use the /releases/download/<tag>/ form (got %q)", rendered)
 }
 
 // TestSendOp_ConcurrentCallsDoNotInterleave is the regression guard
