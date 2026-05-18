@@ -462,8 +462,9 @@ func TestClose_DoubleClose(t *testing.T) {
 // scheduling-dependent failures that single-threaded tests miss.
 //
 // Today the production code is NOT goroutine-safe on Close — this test
-// pins the current observable behavior: no panic, exactly-one nil-error
-// caller (the rest may get Munmap EINVAL).
+// pins the current observable behavior: no panic, at least one Close sees
+// nil — under the sync.Once discipline ([[mache-4a827c]]) this would
+// tighten to "exactly one," tracked as a follow-up.
 func TestClose_ConcurrentClose(t *testing.T) {
 	ctrl, _ := newController(t)
 
