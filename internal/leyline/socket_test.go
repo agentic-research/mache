@@ -2,7 +2,9 @@ package leyline
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -376,4 +378,224 @@ func TestSendOp_ConcurrentCallsDoNotInterleave(t *testing.T) {
 	assert.Zero(t, atomic.LoadInt64(&errs), "no SendOp call should error under concurrent load")
 	assert.Zero(t, atomic.LoadInt64(&mismatches),
 		"every caller must read the response matching its own request id — mismatches mean the line-delimited protocol got crossed")
+}
+
+// captureLog redirects the default logger to a thread-safe buffer for the
+// duration of the test and returns a snapshot accessor. Used by the
+// Subscribe observability tests to assert that the goroutine logged the
+// expected message on each silent-failure path.
+func captureLog(t *testing.T) func() string {
+	t.Helper()
+	var (
+		mu  sync.Mutex
+		buf bytes.Buffer
+	)
+	// Wrap the buffer so writes are serialized — log.Output is called
+	// from the Subscribe goroutine and the test goroutine reads it.
+	prevOut := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&lockedWriter{mu: &mu, buf: &buf})
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
+	}
+}
+
+type lockedWriter struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+}
+
+func (w *lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+// subscribePushServer accepts a single subscribe op, sends the supplied
+// response line, and then yields the raw connection over the returned
+// channel so the test can push arbitrary lines (valid events, malformed
+// JSON, or nothing at all) into the SocketClient's read side.
+//
+// Use this instead of mockServer when the test needs to drive the
+// Subscribe goroutine directly rather than the request/response path.
+func subscribePushServer(t *testing.T, subscribeResp map[string]any) (sockPath string, connCh chan net.Conn) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "leyline-sub-test-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath = filepath.Join(dir, "t.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	connCh = make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		rd := bufio.NewReader(conn)
+		// Read the subscribe request, then send the canned response.
+		if _, err := rd.ReadString('\n'); err != nil {
+			_ = conn.Close()
+			return
+		}
+		data, _ := json.Marshal(subscribeResp)
+		if _, err := conn.Write(append(data, '\n')); err != nil {
+			_ = conn.Close()
+			return
+		}
+		connCh <- conn
+	}()
+	return sockPath, connCh
+}
+
+// TestSubscribe_MalformedEventLogsAndContinues pins the malformed-event
+// silent-drop fix: prior code did `if err := json.Unmarshal(...); err != nil { continue }`
+// with no operator signal. After the fix, each malformed line is logged
+// and the goroutine keeps processing — a subsequent well-formed event
+// must still reach the consumer's channel.
+func TestSubscribe_MalformedEventLogsAndContinues(t *testing.T) {
+	logSnap := captureLog(t)
+	sockPath, connCh := subscribePushServer(t, map[string]any{"ok": true})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	ch, err := client.Subscribe([]string{"x"})
+	require.NoError(t, err)
+
+	conn := <-connCh
+	defer conn.Close() //nolint:errcheck
+
+	// Garbage line, then a well-formed event.
+	_, err = conn.Write([]byte("{this-is-not-json\n"))
+	require.NoError(t, err)
+	good := map[string]any{"event": true, "topic": "x", "payload": "ok"}
+	data, _ := json.Marshal(good)
+	_, err = conn.Write(append(data, '\n'))
+	require.NoError(t, err)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "x", ev["topic"], "well-formed event after malformed line must reach the consumer")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected event after malformed line within 2s")
+	}
+
+	assert.Contains(t, logSnap(), "subscribe: drop malformed event",
+		"malformed event must be logged, not silently dropped")
+}
+
+// TestSubscribe_ReadDeadlineLogged pins the deadline-vs-EOF disambiguation
+// fix: before, a 60s deadline timeout closed the channel identically to a
+// clean EOF, so operators triaging "stale cache" reports couldn't tell
+// "daemon SIGKILLed" from "daemon closed cleanly". After the fix, the
+// timeout path emits a distinct log line.
+//
+// To avoid actually waiting 60s, we drive runSubscribeLoop directly with
+// a 50ms timeout and a server that accepts the subscribe but never pushes
+// any event lines.
+func TestSubscribe_ReadDeadlineLogged(t *testing.T) {
+	logSnap := captureLog(t)
+	sockPath, connCh := subscribePushServer(t, map[string]any{"ok": true})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	// Drive the subscribe handshake manually so we can call
+	// runSubscribeLoop with a sub-second timeout. The production
+	// Subscribe() always uses defaultSubscribeReadTimeout (60s),
+	// which would make this test wall-clock-slow without the seam.
+	_, err = client.conn.Write([]byte(`{"op":"subscribe","topics":["x"]}` + "\n"))
+	require.NoError(t, err)
+	_, err = client.rd.ReadString('\n') // consume "ok" handshake line
+	require.NoError(t, err)
+
+	conn := <-connCh
+	// Server holds the conn but never pushes — the goroutine's read
+	// deadline will fire first.
+	defer conn.Close() //nolint:errcheck
+
+	ch := make(chan map[string]any, 4)
+	done := make(chan struct{})
+	go func() {
+		client.runSubscribeLoop(ch, 50*time.Millisecond)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Channel must be closed too (drained → zero-value receive).
+		_, open := <-ch
+		assert.False(t, open, "channel must be closed after deadline timeout")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe goroutine did not return after read deadline")
+	}
+
+	assert.Contains(t, logSnap(), "subscribe: read deadline exceeded",
+		"deadline timeout must log distinctly from clean EOF so operators can tell SIGKILL from clean shutdown")
+}
+
+// TestSubscribe_SlowConsumerCountsAndLogsDrops pins the slow-consumer
+// silent-drop fix: prior code did `select { case ch <- ev: default: /* drop */ }`
+// with no counter and no log. After the fix:
+//   - Every dropped event increments SubscribeDropped()
+//   - The first drop emits a log line so operators see the signal
+//     before stale-cache decisions pile up
+//
+// We fill the buffered channel (64) plus extras and never read; the
+// goroutine must drop the overflow and SubscribeDropped() must advance.
+func TestSubscribe_SlowConsumerCountsAndLogsDrops(t *testing.T) {
+	logSnap := captureLog(t)
+	sockPath, connCh := subscribePushServer(t, map[string]any{"ok": true})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	ch, err := client.Subscribe([]string{"x"})
+	require.NoError(t, err)
+	_ = ch // intentionally never read — drives the drop path
+
+	conn := <-connCh
+	defer conn.Close() //nolint:errcheck
+
+	// Push more events than the channel buffer (64). The goroutine
+	// will fill the buffer, then start dropping on every subsequent
+	// event. We push 80 → expect at least ~16 drops.
+	const totalPushed = 80
+	good := map[string]any{"event": true, "topic": "x"}
+	data, _ := json.Marshal(good)
+	line := append(data, '\n')
+	for i := 0; i < totalPushed; i++ {
+		if _, err := conn.Write(line); err != nil {
+			t.Fatalf("push event %d: %v", i, err)
+		}
+	}
+
+	// SubscribeDropped is updated async by the goroutine — poll briefly
+	// rather than sleeping a fixed amount.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.SubscribeDropped() > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	dropped := client.SubscribeDropped()
+	assert.Positive(t, dropped, "consumer never read; SubscribeDropped() must be non-zero")
+	assert.Contains(t, logSnap(), "subscribe: dropping events (consumer behind)",
+		"first drop must emit a log line so operators see the signal before stale-cache decisions pile up")
 }

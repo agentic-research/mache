@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -47,7 +48,37 @@ type SocketClient struct {
 	conn   net.Conn
 	rd     *bufio.Reader
 	sendMu sync.Mutex
+
+	// subscribeDropped counts events the Subscribe goroutine had to drop
+	// because the consumer wasn't reading fast enough. Exposed via
+	// SubscribeDropped(); the goroutine logs the first drop and every
+	// 100th drop thereafter so operators can spot a stuck consumer
+	// without flooding the log.
+	subscribeDropped atomic.Uint64
+
+	// subscribeParseFailures counts *consecutive* malformed event lines.
+	// The goroutine resets it to zero on every successful parse and
+	// returns (closing the channel) if it stays above
+	// maxConsecutiveParseFailures — sustained garbage on the wire is
+	// treated as a dead/corrupt connection rather than transient noise.
+	subscribeParseFailures atomic.Uint64
 }
+
+// SubscribeDropped returns the cumulative number of events the Subscribe
+// goroutine has dropped because the consumer's channel buffer was full.
+// Non-zero values mean the consumer is falling behind the daemon's event
+// rate; investigate before treating cache state as authoritative.
+func (c *SocketClient) SubscribeDropped() uint64 {
+	return c.subscribeDropped.Load()
+}
+
+// maxConsecutiveParseFailures is the threshold at which the Subscribe
+// goroutine gives up and closes the channel. Sustained malformed lines
+// almost always mean the connection is desynced or talking to the wrong
+// protocol; one-off blips (single corrupted line) shouldn't kill the
+// subscription. 16 is high enough that JSON-coding hiccups don't bite,
+// low enough that the consumer notices within a second on a noisy stream.
+const maxConsecutiveParseFailures = 16
 
 // managed holds state for a leyline daemon subprocess auto-spawned by mache.
 // At most one managed daemon per process. Cleaned up on process exit.
@@ -426,44 +457,81 @@ func (c *SocketClient) Subscribe(topics []string) (<-chan map[string]any, error)
 	// Read pushed events in a goroutine. A 60s read deadline detects
 	// daemon crashes that don't cleanly close the socket (e.g., SIGKILL).
 	// The deadline resets on every successful read or timeout-with-retry.
-	go func() {
-		defer close(ch)
-		const readTimeout = 60 * time.Second
-		for {
-			_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
-			evLine, err := c.rd.ReadString('\n')
-			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					// Deadline hit with no data — connection likely dead.
-					// Could add a ping/pong here later; for now, close.
-					return
-				}
-				return // connection closed or broken
-			}
-			evLine = strings.TrimSpace(evLine)
-			if evLine == "" {
-				continue
-			}
-
-			var ev map[string]any
-			if err := json.Unmarshal([]byte(evLine), &ev); err != nil {
-				continue
-			}
-
-			// Only forward pushed events (have "event": true).
-			if isEvent, _ := ev["event"].(bool); !isEvent {
-				continue
-			}
-
-			select {
-			case ch <- ev:
-			default:
-				// Drop if consumer is behind.
-			}
-		}
-	}()
+	go c.runSubscribeLoop(ch, defaultSubscribeReadTimeout)
 
 	return ch, nil
+}
+
+// defaultSubscribeReadTimeout is the read deadline for pushed events on a
+// live subscription. Long enough that an idle subscription doesn't churn,
+// short enough that a daemon SIGKILL is detected before the consumer makes
+// stale cache decisions. Overridable via runSubscribeLoop for tests so we
+// don't have to wait 60s to exercise the timeout path.
+const defaultSubscribeReadTimeout = 60 * time.Second
+
+// runSubscribeLoop is the body of the Subscribe goroutine, factored out
+// so tests can drive the loop with a short readTimeout without actually
+// waiting the production 60s.
+//
+// Closes ch when the connection drops, the read deadline expires, or
+// the wire is so persistently malformed (maxConsecutiveParseFailures+1
+// bad lines in a row) that we treat it as dead.
+func (c *SocketClient) runSubscribeLoop(ch chan<- map[string]any, readTimeout time.Duration) {
+	defer close(ch)
+	for {
+		_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
+		evLine, err := c.rd.ReadString('\n')
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				// Deadline hit with no data — connection likely dead.
+				// Log this distinctly from a clean EOF so operators can
+				// tell "daemon SIGKILLed (deadline)" apart from "daemon
+				// closed cleanly (EOF)" when triaging stale-cache reports.
+				// Could add a ping/pong here later; for now, close.
+				log.Printf("subscribe: read deadline exceeded, treating connection as dead")
+				return
+			}
+			return // connection closed or broken
+		}
+		evLine = strings.TrimSpace(evLine)
+		if evLine == "" {
+			continue
+		}
+
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(evLine), &ev); err != nil {
+			// Log malformed events instead of dropping silently. A single
+			// bad line is recoverable (resync on the next \n), but a flood
+			// of them means the wire is desynced — bail after
+			// maxConsecutiveParseFailures so a corrupted connection
+			// doesn't spin forever.
+			log.Printf("subscribe: drop malformed event: %v (line=%q)", err, evLine)
+			if c.subscribeParseFailures.Add(1) > maxConsecutiveParseFailures {
+				log.Printf("subscribe: %d consecutive malformed events, closing subscription", maxConsecutiveParseFailures+1)
+				return
+			}
+			continue
+		}
+		c.subscribeParseFailures.Store(0)
+
+		// Only forward pushed events (have "event": true).
+		if isEvent, _ := ev["event"].(bool); !isEvent {
+			continue
+		}
+
+		select {
+		case ch <- ev:
+		default:
+			// Consumer is behind — count + log so operators can see it
+			// before stale-cache decisions pile up. Log on the first
+			// drop (so we don't miss the very first signal) and then
+			// every 100 drops to bound log volume on a stuck consumer.
+			dropped := c.subscribeDropped.Add(1)
+			if dropped == 1 || dropped%100 == 0 {
+				log.Printf("subscribe: dropping events (consumer behind); total dropped=%d", dropped)
+			}
+		}
+	}
 }
 
 // Prioritize requests the daemon to parse the given files on the next pass.
