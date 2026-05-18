@@ -31,10 +31,17 @@ func TriggerEmbedding(g graph.Graph, batchSize int) {
 
 	sc := NewSemanticClient(sock)
 
-	// Check if embeddings are enabled
+	// Check if embeddings are enabled. Distinguish a transport / parse
+	// failure (status check itself errored) from the daemon explicitly
+	// reporting "not ready" — operators chasing "why isn't this corpus
+	// being indexed?" need to see which one tripped.
 	status, err := sc.Status()
-	if err != nil || !status.Ready {
-		log.Printf("embed trigger: embeddings not enabled on ley-line daemon")
+	if err != nil {
+		log.Printf("embed trigger: status check failed: %v", err)
+		return
+	}
+	if !status.Ready {
+		log.Printf("embed trigger: embeddings disabled on daemon")
 		return
 	}
 
@@ -46,6 +53,11 @@ func TriggerEmbedding(g graph.Graph, batchSize int) {
 	walkDir = func(id string) {
 		children, err := g.ListChildren(id)
 		if err != nil {
+			// Partial corpus > zero corpus: skip this subtree but let
+			// the outer walk keep going. Silent return here used to
+			// truncate the whole indexing pass after one transient
+			// SQLite hiccup.
+			log.Printf("embed trigger: list children %q: %v", id, err)
 			return
 		}
 		for _, childID := range children {
@@ -58,9 +70,16 @@ func TriggerEmbedding(g graph.Graph, batchSize int) {
 				continue
 			}
 
-			// Read content
+			// Read content. A real error (corrupt SQLite content row,
+			// lazy-resolver template error, permission) used to look
+			// identical to "empty file" because the err was dropped —
+			// nodes silently fell out of the embedded corpus.
 			buf := make([]byte, 8192)
-			n, _ := g.ReadContent(childID, buf, 0)
+			n, err := g.ReadContent(childID, buf, 0)
+			if err != nil {
+				log.Printf("embed trigger: read %s: %v", childID, err)
+				continue
+			}
 			if n == 0 {
 				continue
 			}
