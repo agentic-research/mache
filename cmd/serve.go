@@ -111,6 +111,22 @@ func runServe(cmd *cobra.Command, args []string) error {
 	defer registry.Close()
 	registry.repoCloneDir = repoCloneDir
 
+	// Start the sheaf-invalidate event subscriber (mache-c14c43).
+	// One subscriber per process feeds the router; the router fans
+	// events out to every lazyGraph's invalidator. When no daemon
+	// socket is reachable at startup, startSheafSubscriber logs and
+	// returns nil + a no-op stop — local watcher invalidation still
+	// works, just without notifications from other initiators.
+	// registry.Close stops it during shutdown.
+	subscriberCtx, stopSubscriberCtx := context.WithCancel(context.Background())
+	defer stopSubscriberCtx()
+	sub, stop := startSheafSubscriber(subscriberCtx, registry.sheafRouter)
+	registry.sheafSubscriber = sub
+	registry.stopSheafSubscriber = func() {
+		stopSubscriberCtx()
+		stop()
+	}
+
 	// Clean up session → root mapping on disconnect.
 	// Root discovery happens lazily on the first tool call (see wrapHandler)
 	// because ListRoots deadlocks inside OnAfterInitialize — the client
