@@ -354,8 +354,20 @@ func cloneRepo(repoURL string) (string, func(), error) {
 }
 
 // buildServeGraph constructs a read-only Graph from the data source.
+// Returns the graph plus a *graph.SheafInvalidator wired into the file
+// watcher's onChange path. The invalidator is non-nil iff this build
+// constructed a watcher (i.e. dataSource is a directory) — file-shaped
+// sources, .db sources, and control-mode init all return a nil
+// invalidator since there's no watcher to fire it.
+//
+// The invalidator is constructed with sheaf=nil and result=nil. The
+// MCP get_communities handler swaps in both via SetCommunityResult /
+// SetSheaf after running community detection + dialing the daemon.
+// Pre-swap, the watcher's cascade attempts fall back to single-node
+// Graph.Invalidate — correct behavior, just no cross-region propagation
+// until the moat is engaged.
 // Returns the graph, a cleanup function, and any error.
-func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func(), error) {
+func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *graph.SheafInvalidator, func(), error) {
 	noop := func() {}
 
 	// Control block path: read from ley-line arena with hot-swap.
@@ -374,12 +386,29 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 	// This eliminates CGO tree-sitter at mount time. Falls back silently to
 	// the in-process Engine + SitterWalker path on any failure.
 	// Disable via MACHE_NO_LEYLINE=1.
+	//
+	// KNOWN GAP (PR #383 Copilot #4 → bead mache-6c9e1d): this path returns
+	// a NIL *SheafInvalidator because openDBGraph's .db backend is frozen
+	// at parse time — no watcher is constructed, so the file-watcher →
+	// sheaf cascade wiring is disabled in the default leyline-installed
+	// setup. Only MACHE_NO_LEYLINE=1 (in-process MemoryStore path below)
+	// currently exercises the cascade.
+	//
+	// Closing this requires either (a) flipping auto-leyline from one-
+	// shot `leyline parse` to a managed daemon that watches the source
+	// dir + reparses + emits sheaf.invalidate events that mache subscribes
+	// to (depends on mache-c14c43), or (b) building the cascade-eligible
+	// in-process store alongside the .db (wasteful double-ingest). Tracked
+	// for the followup; the current behavior is honest documented
+	// degradation — agents using auto-leyline get fast cold-start but
+	// stale results after edits until the daemon-mode rewrite ships.
 	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() &&
 		os.Getenv("MACHE_NO_LEYLINE") == "" {
 		if dbPath, dbCleanup, err := autoInvokeLeylineParse(dataSource); err == nil {
-			g, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
+			g, si, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
 			if gerr == nil {
-				return g, gCleanup, nil
+				log.Printf("auto-leyline: serving from %s (frozen .db — sheaf cascade NOT engaged for live edits; set MACHE_NO_LEYLINE=1 for the in-process watcher path)", filepath.Base(dbPath))
+				return g, si, gCleanup, nil
 			}
 			log.Printf("auto-leyline: opened .db failed (%v); falling back to in-process ingest", gerr)
 			dbCleanup()
@@ -397,31 +426,66 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 	engine := ingest.NewEngine(schema, store)
 	if err := engine.Ingest(dataSource); err != nil {
 		resolver.Close()
-		return nil, noop, fmt.Errorf("ingestion: %w", err)
+		return nil, nil, noop, fmt.Errorf("ingestion: %w", err)
 	}
 
 	if err := store.InitRefsDB(); err != nil {
 		resolver.Close()
-		return nil, noop, fmt.Errorf("init refs db: %w", err)
+		return nil, nil, noop, fmt.Errorf("init refs db: %w", err)
 	}
 	if err := store.FlushRefs(); err != nil {
 		log.Printf("Warning: refs flush: %v", err)
 	}
 
 	// Start file watcher for incremental re-index if source is a directory.
+	// The SheafInvalidator is constructed *only* on this path — it has no
+	// purpose without a watcher to fire it. cmd/serve_handlers.go's
+	// get_communities handler later calls si.SetCommunityResult + SetSheaf
+	// to engage the cross-region cascade; until then the watcher's
+	// invalidate calls fall back to single-node Graph.Invalidate.
 	var fw *ingest.Watcher
+	var si *graph.SheafInvalidator
 	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() {
+		si = graph.NewSheafInvalidator(store, nil, nil)
 		onChange := func(path string) {
+			// Snapshot PRE-edit node IDs before DeleteFileNodes wipes
+			// the path↔nodes bitmap. The new IDs (post-reingest) may
+			// differ if the edit renames/moves/removes constructs —
+			// without including the old IDs, the cascade misses
+			// regions that the old constructs occupied (PR #383
+			// Copilot #3). Union of old + new covers both: regions
+			// containing removed-or-renamed nodes get invalidated
+			// via the pre-edit IDs; regions containing the new
+			// construct names get invalidated via the post-edit IDs.
+			oldIDs := store.NodesForPath(path)
 			store.DeleteFileNodes(path)
 			if reErr := engine.ReIngestFile(path); reErr != nil {
 				log.Printf("watcher: re-ingest %s: %v", path, reErr)
-			} else {
-				log.Printf("watcher: re-indexed %s", path)
+				// Still cascade the old IDs — the file's prior
+				// state is no longer valid downstream regardless
+				// of whether the re-ingest succeeded.
+				si.InvalidateNodesWithCascade(oldIDs)
+				return
 			}
+			log.Printf("watcher: re-indexed %s", path)
+			newIDs := store.NodesForPath(path)
+			affected := unionStringSlices(oldIDs, newIDs)
+			// One daemon round-trip per unique region (dedupe in
+			// InvalidateNodesWithCascade). Pre-install (no sheaf,
+			// no result) this still degrades to single-node
+			// invalidates — same intentional graceful behavior.
+			si.InvalidateNodesWithCascade(affected)
 		}
 		onDelete := func(path string) {
+			// Snapshot affected nodes BEFORE DeleteFileNodes wipes the
+			// path↔nodes bitmap — otherwise NodesForPath returns empty
+			// and the cascade has nothing to invalidate. The post-delete
+			// graph.Invalidate path is correct for local caches; the
+			// cascade is what propagates the boundary change daemon-side.
+			affected := store.NodesForPath(path)
 			store.DeleteFileNodes(path)
 			log.Printf("watcher: deleted nodes for %s", path)
+			si.InvalidateNodesWithCascade(affected)
 		}
 		var watchErr error
 		fw, watchErr = ingest.NewWatcher(dataSource, onChange, onDelete,
@@ -433,7 +497,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 		}
 	}
 
-	return store, func() {
+	return store, si, func() {
 		if fw != nil {
 			fw.Stop()
 		}
@@ -442,23 +506,58 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, func
 	}, nil
 }
 
+// unionStringSlices returns the deduped union of a and b. Order
+// within the result is undefined. Used by the watcher's onChange to
+// build the union of pre- and post-edit node IDs so the cascade
+// hits regions containing both states (PR #383 Copilot #3).
+func unionStringSlices(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // buildMaybeMultiGraph dispatches between single-source and composite
 // (multi-mount) construction. With no --mount flags, it's a thin
-// pass-through to buildServeGraph. With one or more --mount NAME=PATH
-// flags, it builds a CompositeGraph by calling buildServeGraph for
-// each mount path and Mount-ing the result under NAME.
+// pass-through to buildServeGraph (propagating its *SheafInvalidator).
+// With one or more --mount NAME=PATH flags, it builds a CompositeGraph
+// by calling buildServeGraph for each mount path and Mount-ing the
+// result under NAME. The composite case returns a nil *SheafInvalidator
+// — per-mount watchers each have their own invalidator captured in
+// their closures, and there's no semantically correct way to expose
+// a single composite invalidator to the MCP handler layer (each mount
+// has its own CommunityResult). Composite mounts forfeit the cascade
+// in exchange for the multi-mount feature; document for the wiring PR
+// that revisits this if a use case emerges.
 //
 // When --mount is set, the positional dataSource is rejected — the
 // caller must choose between a single source and a composite.
 //
 // Cleanup runs in reverse-mount order so child graphs are torn down
 // before any shared resources they depend on.
-func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph, func(), error) {
+func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph, *graph.SheafInvalidator, func(), error) {
 	if len(serveMounts) == 0 {
 		return buildServeGraph(dataSource, schema)
 	}
 	if dataSource != "" {
-		return nil, func() {}, fmt.Errorf("cannot use both a positional source (%q) and --mount; use one or the other", dataSource)
+		return nil, nil, func() {}, fmt.Errorf("cannot use both a positional source (%q) and --mount; use one or the other", dataSource)
 	}
 
 	composite := graph.NewCompositeGraph()
@@ -494,46 +593,51 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 		name, path, ok := strings.Cut(spec, "=")
 		if !ok || name == "" || path == "" {
 			runAll()
-			return nil, func() {}, fmt.Errorf("invalid --mount spec %q (expected NAME=PATH)", spec)
+			return nil, nil, func() {}, fmt.Errorf("invalid --mount spec %q (expected NAME=PATH)", spec)
 		}
-		g, cleanup, err := buildServeGraph(path, schema)
+		g, _, cleanup, err := buildServeGraph(path, schema)
 		if err != nil {
 			runAll()
-			return nil, func() {}, fmt.Errorf("mount %s=%s: %w", name, path, err)
+			return nil, nil, func() {}, fmt.Errorf("mount %s=%s: %w", name, path, err)
 		}
 		cleanups = append(cleanups, cleanup)
 		if err := composite.Mount(name, g); err != nil {
 			runAll()
-			return nil, func() {}, fmt.Errorf("mount %q: %w", name, err)
+			return nil, nil, func() {}, fmt.Errorf("mount %q: %w", name, err)
 		}
 		log.Printf("mounted %s -> %s", name, path)
 	}
-	return composite, runAll, nil
+	return composite, nil, runAll, nil
 }
 
 // openDBGraph opens a .db file as a SQLiteGraph after materializing virtual
 // nodes. The extra cleanup callback runs after the graph is closed (used to
 // delete an auto-generated temp .db).
-func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (graph.Graph, func(), error) {
+// openDBGraph returns (graph, nil, cleanup, err) — the *SheafInvalidator
+// slot is always nil here because .db sources don't run a file watcher
+// and have no need for cascade wiring (the contents are frozen at the
+// time the .db was built). Callers (e.g. buildServeGraph) propagate the
+// nil to their own returns.
+func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (graph.Graph, *graph.SheafInvalidator, func(), error) {
 	if extraCleanup == nil {
 		extraCleanup = func() {}
 	}
 	if err := materializeVirtuals(dbPath, schema, false); err != nil {
 		extraCleanup()
-		return nil, func() {}, fmt.Errorf("materialize virtuals: %w", err)
+		return nil, nil, func() {}, fmt.Errorf("materialize virtuals: %w", err)
 	}
 	sg, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
 	if err != nil {
 		extraCleanup()
-		return nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)
+		return nil, nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)
 	}
 	sg.SetCallExtractor(pickCallExtractor(sg.DB()))
 	if err := sg.EagerScan(); err != nil {
 		_ = sg.Close()
 		extraCleanup()
-		return nil, func() {}, fmt.Errorf("scan: %w", err)
+		return nil, nil, func() {}, fmt.Errorf("scan: %w", err)
 	}
-	return sg, func() {
+	return sg, nil, func() {
 		_ = sg.Close()
 		extraCleanup()
 	}, nil
@@ -586,7 +690,12 @@ func autoInvokeLeylineParse(sourceDir string) (string, func(), error) {
 // buildControlGraph connects to the ley-line daemon over UDS.
 // The daemon owns SQLite (zero-copy via sqlite3_deserialize on the arena).
 // Mache sends structured ops, never opens SQLite directly.
-func buildControlGraph(ctrlPath string, _ *api.Topology) (graph.Graph, func(), error) {
+//
+// Returns a nil *SheafInvalidator slot: control mode reads from an
+// arena that's owned by the daemon (no mache-side watcher, no need
+// for cascade wiring — the daemon's own reparse pipeline drives the
+// freshness story in this mode).
+func buildControlGraph(ctrlPath string, _ *api.Topology) (graph.Graph, *graph.SheafInvalidator, func(), error) {
 	// The daemon socket is at <ctrl>.sock (convention)
 	sockPath := ctrlPath[:len(ctrlPath)-len(".ctrl")] + ".sock"
 
@@ -598,7 +707,7 @@ func buildControlGraph(ctrlPath string, _ *api.Topology) (graph.Graph, func(), e
 		}
 		select {
 		case <-deadline:
-			return nil, nil, fmt.Errorf("timed out waiting for daemon socket %s (30s)", sockPath)
+			return nil, nil, nil, fmt.Errorf("timed out waiting for daemon socket %s (30s)", sockPath)
 		default:
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -606,9 +715,9 @@ func buildControlGraph(ctrlPath string, _ *api.Topology) (graph.Graph, func(), e
 
 	g, err := newUDSGraph(sockPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect to daemon: %w", err)
+		return nil, nil, nil, fmt.Errorf("connect to daemon: %w", err)
 	}
 	log.Printf("Connected to ley-line daemon at %s", sockPath)
 
-	return g, func() { _ = g.Close() }, nil
+	return g, nil, func() { _ = g.Close() }, nil
 }

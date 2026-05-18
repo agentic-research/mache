@@ -337,6 +337,24 @@ type lazyGraph struct {
 	schema       *api.Topology // retained after init for schema-aware tools
 	cleanup      func()
 	err          error
+	// sheafInv is the SheafInvalidator wired into the file watcher's
+	// onChange path (when this lazyGraph backs a directory source).
+	// Nil for control mode, .db sources, single-file sources, and
+	// composite mounts — see buildServeGraph / buildMaybeMultiGraph
+	// for the construction contract. The MCP get_communities handler
+	// calls SetCommunityResult + SetSheaf on this to engage the
+	// cross-region cascade; until then the watcher's invalidate calls
+	// fall back to single-node Graph.Invalidate.
+	sheafInv *graph.SheafInvalidator
+}
+
+// SheafInvalidator exposes the cascade-invalidator the file watcher
+// holds for this lazyGraph. Returns nil for graphs that don't have a
+// watcher (control mode, .db sources, composite mounts) — callers
+// must nil-check before use.
+func (lg *lazyGraph) SheafInvalidator() *graph.SheafInvalidator {
+	lg.init()
+	return lg.sheafInv
 }
 
 // schemaProvider exposes the Topology used during graph construction.
@@ -367,12 +385,13 @@ func (lg *lazyGraph) init() {
 
 		// --control mode: skip all source detection, read from arena.
 		if serveControl != "" {
-			g, cleanup, err := buildServeGraph("", &api.Topology{Version: api.SchemaVersion})
+			g, si, cleanup, err := buildServeGraph("", &api.Topology{Version: api.SchemaVersion})
 			if err != nil {
 				lg.err = err
 				return
 			}
 			lg.inner = g
+			lg.sheafInv = si // expected nil in control mode; stored for uniformity
 			lg.cleanup = cleanup
 			lg.schema = &api.Topology{Version: api.SchemaVersion}
 			log.Println("graph ready (arena control mode)")
@@ -449,12 +468,13 @@ func (lg *lazyGraph) init() {
 			}
 		}
 
-		g, cleanup, err := buildMaybeMultiGraph(dataSource, schema)
+		g, si, cleanup, err := buildMaybeMultiGraph(dataSource, schema)
 		if err != nil {
 			lg.err = err
 			return
 		}
 		lg.inner = g
+		lg.sheafInv = si
 		lg.schema = schema
 		lg.cleanup = cleanup
 		log.Println("graph ready")
@@ -667,6 +687,18 @@ type refsMapProvider interface {
 // for find_definition (symbol → where it's defined).
 type defsMapProvider interface {
 	DefsMap() map[string][]string
+}
+
+// sheafInvalidatorProvider is the subset of Graph backends that own a
+// SheafInvalidator wired into their file-watcher onChange path. The
+// get_communities handler type-asserts this to install the freshly-
+// detected CommunityResult + dialed SheafClient, which is the trigger
+// that moves the watcher's cascade calls from single-node fallback
+// into actual cross-region propagation. Backends that don't have a
+// watcher (control-mode lazyGraph, composite mounts) don't implement
+// this interface; the handler degrades silently in that case.
+type sheafInvalidatorProvider interface {
+	SheafInvalidator() *graph.SheafInvalidator
 }
 
 // defsLookuper is the cheaper alternative to defsMapProvider for the

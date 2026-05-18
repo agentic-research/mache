@@ -29,9 +29,24 @@ import (
 
 // SocketClient communicates with a running ley-line daemon over its
 // Unix domain control socket ({ctrl}.sock).
+//
+// SendOp / SendOpInto are safe for concurrent use: sendMu serializes
+// the write-then-read pair so the line-delimited JSON protocol can't
+// get crossed when multiple callers (e.g. the file watcher firing
+// multiple debounce timers after a save burst) hit the same client
+// simultaneously. The protocol is request/response — interleaving
+// produces a response for the wrong caller, which the daemon can't
+// detect since there's no per-message correlation ID.
+//
+// Subscribe is the exception: once a Subscribe goroutine takes
+// ownership of the read side, ad-hoc SendOp on the same connection
+// is unsupported and will race the subscription's event reads. The
+// canonical usage is one SocketClient per role (one for ops, one
+// for subscribe).
 type SocketClient struct {
-	conn net.Conn
-	rd   *bufio.Reader
+	conn   net.Conn
+	rd     *bufio.Reader
+	sendMu sync.Mutex
 }
 
 // managed holds state for a leyline daemon subprocess auto-spawned by mache.
@@ -290,6 +305,14 @@ func (c *SocketClient) sendRaw(req map[string]any) ([]byte, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 	data = append(data, '\n')
+
+	// Serialize the write-then-read pair. Without this lock, concurrent
+	// callers interleave their writes and crossed reads on the line-
+	// delimited JSON protocol — caller A reads caller B's response and
+	// vice versa, and there's no per-message correlation ID to detect
+	// the swap. Pinned by TestSendOp_ConcurrentCallsDoNotInterleave.
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 
 	if _, err := c.conn.Write(data); err != nil {
 		return nil, fmt.Errorf("write: %w", err)

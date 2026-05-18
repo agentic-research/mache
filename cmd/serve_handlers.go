@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -133,6 +134,21 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithDescription("START HERE when exploring a codebase. Returns top-level structure, node counts, cross-reference stats, and a usage guide for all tools."),
 		),
 		r.wrapHandler(makeGetOverviewHandler),
+	)
+
+	// get_sheaf_status surfaces the ley-line daemon's sheaf state to
+	// agents — generation (monotonic, advances on every cascade run),
+	// valid/total cache entries, defect score. Lets an agent decide
+	// whether a cached result is still fresh after an edit, without
+	// having to invalidate the whole world. Registered directly (no
+	// graph-registry wrapping) because the tool doesn't depend on
+	// session state; it talks to the daemon over UDS using the
+	// well-known socket path.
+	s.AddTool(
+		mcp.NewTool("get_sheaf_status",
+			mcp.WithDescription("Returns the ley-line daemon's sheaf cache state (generation counter, valid/total entries, defect score). Use to decide whether cached find_callers / find_definition / get_architecture results are still fresh after an edit. Returns {available: false, reason: ...} when the daemon is not reachable rather than erroring — safe to call periodically."),
+		),
+		makeGetSheafStatusHandler(),
 	)
 
 	s.AddTool(
@@ -891,6 +907,28 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			Communities: snapComms,
 			Membership:  result.Membership,
 		}
+
+		// Resolve the SheafInvalidator (if this graph has one) up front
+		// so the goroutine below can install state atomically once it
+		// successfully reaches the daemon.
+		//
+		// Graph backends without a watcher (control-mode lazyGraph,
+		// composite mounts) don't implement sheafInvalidatorProvider —
+		// the type-assert degrades silently, which is the documented
+		// behavior for those modes (see buildServeGraph).
+		//
+		// DELIBERATELY DEFER state install until PushTopology succeeds.
+		// Installing SetCommunityResult synchronously here (the prior
+		// shape) paired NEW membership with the OLD sheaf/topology
+		// during the dial+push window — watcher events in that window
+		// looked up regions in the new membership but sent them to a
+		// daemon that still held the prior topology. Fixed by atomic
+		// SetState below; see PR #383 Copilot #6.
+		var sip sheafInvalidatorProvider
+		if sp, ok := g.(sheafInvalidatorProvider); ok {
+			sip = sp
+		}
+
 		go func() {
 			if pushDone != nil {
 				defer close(pushDone)
@@ -903,10 +941,43 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			if err != nil {
 				return
 			}
-			defer func() { _ = sock.Close() }()
+			// Track whether we handed off socket ownership to the
+			// invalidator. If we did, the SheafClient inside the
+			// invalidator owns the socket and we MUST NOT close it
+			// here — the watcher's later cascade calls reuse the
+			// connection. If we didn't hand off, close it normally
+			// to avoid leaking a socket per failed get_communities
+			// run. See PR #383 Copilot #1: the prior code deferred
+			// sock.Close() unconditionally, so the SheafClient
+			// stored on the invalidator was talking to a closed
+			// socket from the goroutine's return onward.
+			var handedOff bool
+			defer func() {
+				if !handedOff {
+					_ = sock.Close()
+				}
+			}()
+
 			sc := leyline.NewSheafClient(sock)
 			if pushErr := sc.PushTopology(snap, refs); pushErr != nil {
 				logSheafPushOnce(pushErr)
+				return
+			}
+			// PushTopology succeeded — atomically swap BOTH the new
+			// CommunityResult and the new SheafClient onto the
+			// invalidator. From here on, subsequent watcher fires
+			// engage the cross-region cascade. The prior backend
+			// (if any) is returned so we can close its socket and
+			// avoid leaking one UDS connection per get_communities
+			// call across the process lifetime.
+			if sip != nil {
+				if si := sip.SheafInvalidator(); si != nil {
+					prior := si.SetState(snap, sc)
+					handedOff = true
+					if closer, ok := prior.(io.Closer); ok {
+						_ = closer.Close()
+					}
+				}
 			}
 		}()
 
@@ -1247,6 +1318,57 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		data, _ := json.MarshalIndent(ov, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+// makeGetSheafStatusHandler returns the handler for the get_sheaf_status
+// MCP tool. The tool surfaces the daemon's sheaf cache state to agents
+// so they can decide whether cached results are still fresh.
+//
+// Design contract: the handler MUST NOT surface daemon unavailability
+// as an MCP error. Agents polling this tool would otherwise see
+// transport failures whenever the daemon is down or hasn't been
+// dialed yet. Instead, return a structured {available: false, reason:
+// "..."} response. This matches the documented graceful-degradation
+// pattern in the wider sheaf wiring (cmd/serve.go).
+//
+// DiscoverSocket (not DiscoverOrStart) is the right primitive here:
+// a status check should never trigger a daemon auto-spawn (which can
+// download the binary, take seconds, etc.).
+func makeGetSheafStatusHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		unavailable := func(reason string) (*mcp.CallToolResult, error) {
+			data, _ := json.Marshal(map[string]any{
+				"available": false,
+				"reason":    reason,
+			})
+			return mcp.NewToolResultText(string(data)), nil
+		}
+
+		sockPath, err := leyline.DiscoverSocket()
+		if err != nil {
+			return unavailable("no ley-line daemon socket — set LEYLINE_SOCKET or start `leyline daemon`")
+		}
+		sock, err := leyline.DialSocket(sockPath)
+		if err != nil {
+			return unavailable(fmt.Sprintf("dial %s: %v", sockPath, err))
+		}
+		defer func() { _ = sock.Close() }()
+
+		sc := leyline.NewSheafClient(sock)
+		s, err := sc.Status()
+		if err != nil {
+			return unavailable(fmt.Sprintf("sheaf_status: %v", err))
+		}
+
+		data, _ := json.Marshal(map[string]any{
+			"available":  true,
+			"generation": s.Generation,
+			"valid":      s.Valid,
+			"total":      s.Total,
+			"defect":     s.Defect,
+		})
 		return mcp.NewToolResultText(string(data)), nil
 	}
 }
