@@ -189,11 +189,44 @@ per-benchmark threshold (default ±15%) versus a committed baseline.
 | `internal/ingest/ingest_throughput_bench_test.go` | `BenchmarkIngestThroughput_*` |
 | `internal/leyline/socket_bench_test.go`           | `BenchmarkSocket_*`           |
 
+**Threshold tuning.** The default ±15% per-bench threshold is a
+starting point — strict enough to catch real regressions, loose
+enough to absorb scheduler noise on a typical M-series Mac or
+GitHub-hosted runner. Per-bench overrides land via PRs that edit
+`benchmarks/baselines.json`: include the new threshold, the prior
+baseline measurement, the new measurement, and one sentence on why
+the noise floor demands a wider band (e.g., "macOS GC pauses during
+JSON marshal push p99 to +25%"). A reviewer scrutinizes the
+justification — looser thresholds without evidence are pushback bait.
+Thresholds tighten back down opportunistically when noise sources are
+eliminated.
+
 **Enforcement.** `benchmarks/baselines.json` (NEW) records the
 canonical numbers. A nightly or pre-merge CI job runs `task bench`,
 compares via `benchstat`, and fails on regression beyond threshold.
 Coordinates with `mache-15f15a` (operational perf bench) which
 supplies the corpora and the wall-clock numbers.
+
+### Candidate I7 — Fuzz / property-based coverage (deferred)
+
+Mache already uses Go stdlib fuzzing in one location:
+`internal/lattice/fuzz_test.go`. A future invariant could require fuzz
+coverage of:
+
+- Parsers / wire decoders (`internal/leyline/sheaf.go::parseUint64`,
+  `parseIntSlice` — the version-skew seam tracked by `mache-5159a2`)
+- Template `dig` / `first` / `slice` funcs (already partially covered
+  by `internal/ingest/dig_test.go`)
+- JSONPath walkers in `internal/ingest/json_walker.go`
+- Schema parser in `api/schema.go`
+
+Deferred to a follow-up ADR rather than included here because:
+(a) fuzz coverage is a SECOND axis (corpus quality + crash-free) that
+doesn't compose cleanly with the matrix invariants I1–I2; (b) Go
+fuzzing's seed-corpus discipline is its own decision area; (c) the
+current evolve campaign's win condition is matrix-coverage, not
+fuzz-coverage. A separate `feat/evolve-fuzz` campaign — if/when
+prioritized — would extend this ADR with I7.
 
 ## Existing test surface — categorization
 
@@ -600,6 +633,7 @@ they trace back to this ADR.
 - files: `internal/graph/`, `cmd/`
 - test_files: `cmd/all_tools_matrix_test.go` (NEW)
 - priority: 1
+- depends on: SB-01
 - desc: New file extending SB-01 to also cover `WritableGraph` and
   `CompositeGraph`. Document inapplicable cells with explicit
   `requireIsError` assertions naming the reason.
@@ -609,6 +643,7 @@ they trace back to this ADR.
 - files: `internal/nfsmount/`, `cmd/`
 - test_files: `cmd/all_tools_nfs_test.go` (NEW)
 - priority: 2
+- depends on: SB-01, SB-02
 - desc: Wire GraphFS over MemoryStore + SQLiteGraph through the
   matrix runner. Drive via in-process NFS client (already used by
   `internal/nfsmount/server_test.go`).
@@ -620,16 +655,18 @@ they trace back to this ADR.
 - files: `testdata/hetero/`, `cmd/all_tools_e2e_test.go`
 - test_files: `cmd/all_tools_hetero_test.go` (NEW)
 - priority: 2
-- desc: Depends on `mache-d332b5`. Wire the hetero fixtures into the
-  matrix runner; language-specific tools assert per-language coverage.
+- depends on: SB-01 (external: `mache-d332b5`)
+- desc: Wire the hetero fixtures into the matrix runner; language-specific
+  tools assert per-language coverage.
 
 **SB-05 · fixtures: synthetic-medium generator + matrix wiring**
 
 - files: `testdata/synth/`, `cmd/all_tools_e2e_test.go`
 - test_files: `cmd/all_tools_synth_test.go` (NEW)
 - priority: 2
-- desc: Depends on `mache-be8090`. Tunable-size synthetic Go corpus
-  (default ~200 files, 50 packages); routed through matrix runner.
+- depends on: SB-01 (external: `mache-be8090`)
+- desc: Tunable-size synthetic Go corpus (default ~200 files,
+  50 packages); routed through matrix runner.
 
 **SB-06 · fixtures: mache-on-mache invariant test**
 
@@ -655,6 +692,7 @@ they trace back to this ADR.
 - files: `Taskfile.yml`, `scripts/bench-check.sh` (NEW)
 - test_files: —
 - priority: 2
+- depends on: SB-07
 - desc: New task that runs benchmarks, diffs against baseline, exits
   non-zero on regression beyond per-bench threshold (default 15%).
 
@@ -663,6 +701,7 @@ they trace back to this ADR.
 - files: `.github/workflows/bench.yml` (NEW)
 - test_files: —
 - priority: 3
+- depends on: SB-08
 - desc: Nightly workflow runs `task bench-check` on a stable runner.
   Requires 3 of last 5 nightly runs to regress before failing the
   gate (anti-flake).
@@ -727,6 +766,7 @@ they trace back to this ADR.
 - files: `cmd/all_tools_e2e_test.go`, `cmd/serve_write_test.go`
 - test_files: as above
 - priority: 3
+- depends on: SB-01, SB-02
 - desc: `write_file` is currently skipped in the e2e harness because
   it mutates fixture state. Split into a separate sub-harness with
   a writable fixture clone; assert post-write read-back round-trip
