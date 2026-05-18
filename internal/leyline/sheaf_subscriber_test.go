@@ -34,18 +34,32 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 	sockPath := startSubscribeMockServer(t, mockBehavior{
 		acceptSubscribe: true,
 		pushEvents: []map[string]any{
+			// v0.4.3 event envelope: top-level event metadata + payload
+			// nested under `data`. Pinned empirically against the
+			// daemon's actual emit shape (see
+			// tools/sheaf-subscribe-probe/main.go output:
+			//   {"event":true,"seq":N,"source":"leyline",
+			//    "topic":"sheaf.invalidate",
+			//    "data":{"count":N,"generation":N,"invalidated":[…],
+			//            "prior_generation":N}}).
+			//
+			// Pre-LLO-v0.4.3 the daemon never emitted the event at
+			// all (ley-line-open-5caa59), so the original version of
+			// this test used a flat shape based on assumption. The
+			// real wire format only became observable once LLO
+			// shipped the fix; we must pin it here to catch parser
+			// regressions before they reach live runtime.
 			{
-				"event":       true,
-				"topic":       "sheaf.invalidate",
-				"invalidated": []any{1.0, 2.0, 3.0},
-				"count":       3.0,
-				// QUOTED string — actually exercises parseUint64's
-				// string path, which is the live daemon's wire shape
-				// per capnp-json's Int64 codec (PR #382's quoted-Int64
-				// fix). Pushing a raw uint64 here would marshal as a
-				// JSON number and silently bypass the wire-format
-				// contract the test claims to verify.
-				"generation": "7",
+				"event":  true,
+				"seq":    1.0,
+				"source": "leyline",
+				"topic":  "sheaf.invalidate",
+				"data": map[string]any{
+					"invalidated":      []any{1.0, 2.0, 3.0},
+					"count":            3.0,
+					"generation":       7.0,
+					"prior_generation": 6.0,
+				},
 			},
 		},
 	})
@@ -78,7 +92,7 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 	got := gotEvent
 	eventMu.Unlock()
 	assert.Equal(t, []int{1, 2, 3}, got.Invalidated, "invalidated region IDs round-trip")
-	assert.Equal(t, uint64(7), got.Generation, "generation must parse from quoted-string wire format")
+	assert.Equal(t, uint64(7), got.Generation, "generation must parse from event payload (nested under data)")
 	assert.Equal(t, 3, got.Count, "count round-trips")
 
 	// Status should reflect what we observed.
@@ -108,21 +122,31 @@ func TestSheafSubscriber_ReconnectsAfterDisconnect(t *testing.T) {
 			switch session {
 			case 1:
 				pushEvent(map[string]any{
-					"event":       true,
-					"topic":       "sheaf.invalidate",
-					"invalidated": []any{10.0},
-					"count":       1.0,
-					"generation":  uint64(1),
+					"event":  true,
+					"seq":    1.0,
+					"source": "leyline",
+					"topic":  "sheaf.invalidate",
+					"data": map[string]any{
+						"invalidated":      []any{10.0},
+						"count":            1.0,
+						"generation":       1.0,
+						"prior_generation": 0.0,
+					},
 				})
 				time.Sleep(50 * time.Millisecond)
 				closeConn()
 			case 2:
 				pushEvent(map[string]any{
-					"event":       true,
-					"topic":       "sheaf.invalidate",
-					"invalidated": []any{20.0},
-					"count":       1.0,
-					"generation":  uint64(2),
+					"event":  true,
+					"seq":    2.0,
+					"source": "leyline",
+					"topic":  "sheaf.invalidate",
+					"data": map[string]any{
+						"invalidated":      []any{20.0},
+						"count":            1.0,
+						"generation":       2.0,
+						"prior_generation": 1.0,
+					},
 				})
 			}
 		},

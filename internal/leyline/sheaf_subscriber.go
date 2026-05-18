@@ -10,20 +10,20 @@ import (
 // SheafSubscriber owns a long-lived `subscribe` connection to the ley-line
 // daemon, dispatching pushed `sheaf.invalidate` events to a handler.
 //
-// UPSTREAM GAP (2026-05-18, ley-line-open-5caa59): empirical e2e
-// validation found that LLO v0.4.2 does NOT actually deliver
-// sheaf.invalidate events to subscribers — the emit call runs daemon-
-// side (the cascade math + response are correct) but the event bus
-// drops it. Other topics (daemon.snapshot, daemon.files.changed)
-// deliver fine, so the bus itself works; the wiring for the sheaf
-// state's emitter is suspected. tools/sheaf-subscribe-probe/main.go
-// is the canonical repro.
+// FIXED UPSTREAM (LLO v0.4.3, ley-line-open-5caa59): pre-v0.4.3 LLO
+// daemons did NOT actually deliver sheaf.invalidate events to UDS
+// subscribers — `handle_connection` was a pure request/response loop
+// that never drained `ConnectionState.event_rx`, so emitted events
+// silently accumulated. The cascade math + op response were always
+// correct; only the event-bus push was broken. Other topics
+// (daemon.snapshot) appeared to work because they happened to be
+// included in the subscribe-response replay batch. LLO v0.4.3 ships
+// a per-connection writer task plus a per-subscribe event-relay
+// task; mache requires v0.4.3 or later for daemon-pushed cascades.
 //
-// This subscriber is still correct code — once LLO ships the fix, no
-// mache change is needed; events start arriving and the existing
-// dispatch + routing logic handles them. The watcher-initiated cascade
-// (PR #383) is unaffected: those invalidations are synchronous via the
-// sheaf_invalidate response, not pushed events.
+// tools/sheaf-subscribe-probe/main.go is the canonical repro tool;
+// internal/leyline/sheaf_subscriber_e2e_test.go is the regression
+// guard that catches a future re-emergence of this bug.
 //
 // Design constraints (locked in by PR for mache-c14c43):
 //
@@ -325,6 +325,18 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 // and skipped" docstring (PR #384 Copilot #2) to match what the code
 // actually does; the runtime log line would just be noise on a
 // subscribed-topic stream.
+//
+// Wire shape (pinned against LLO v0.4.3 via
+// tools/sheaf-subscribe-probe/main.go):
+//
+//	{"event": true, "seq": N, "source": "leyline",
+//	 "topic": "sheaf.invalidate",
+//	 "data": {"invalidated": [...], "generation": N, "count": N,
+//	          "prior_generation": N}}
+//
+// Payload fields are nested under `data`. Pre-v0.4.3 the daemon
+// never delivered the event at all (ley-line-open-5caa59), so the
+// envelope wasn't observable from mache's side until the fix shipped.
 func (s *SheafSubscriber) dispatch(ev map[string]any) {
 	topic, _ := ev["topic"].(string)
 	if topic != "sheaf.invalidate" {
@@ -333,11 +345,17 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) {
 		return
 	}
 
+	// Payload lives under `data`. A missing or wrong-typed `data`
+	// field means the daemon emitted a malformed event; treat as an
+	// empty payload rather than panic — the handler still observes
+	// the topic-was-delivered signal and can decide what to do.
+	data, _ := ev["data"].(map[string]any)
+
 	parsed := SheafInvalidateEvent{
-		Invalidated: parseIntSlice(ev["invalidated"]),
-		Generation:  parseUint64(ev["generation"]),
+		Invalidated: parseIntSlice(data["invalidated"]),
+		Generation:  parseUint64(data["generation"]),
 	}
-	if v, ok := ev["count"].(float64); ok {
+	if v, ok := data["count"].(float64); ok {
 		parsed.Count = int(v)
 	} else {
 		parsed.Count = len(parsed.Invalidated)
