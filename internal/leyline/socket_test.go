@@ -1516,3 +1516,63 @@ func TestSubscribe_NonEventLineSkippedSilently(t *testing.T) {
 		t.Fatal("expected real event after non-event filter within 2s")
 	}
 }
+
+// TestCloseConcurrentWithSubscribeReader pins the race surfaced by CI on
+// PR #384 (macos-latest, run 26063835518). The original SocketClient.Close
+// nilled out c.conn under no synchronization while the goroutine spawned
+// by Subscribe was still reading from c.conn at socket.go:433
+// (SetReadDeadline) and :434 (rd.ReadString). The reconnect path in
+// TestSheafSubscriber_ReconnectsAfterDisconnect drove this:
+//
+//  1. consume() returns when the mock daemon closes the conn.
+//  2. SheafSubscriber.run calls sock.Close() — sets c.conn = nil.
+//  3. The Subscribe goroutine's next loop iteration dereferences nil.
+//
+// With Close using sync.Once and NOT nilling out c.conn:
+//   - The closed conn pointer remains valid.
+//   - SetReadDeadline on a closed conn returns an error (we discard it).
+//   - The subsequent ReadString returns "use of closed network connection".
+//   - The goroutine exits cleanly via its err-return path.
+//   - No data race on c.conn (we never write to it after construction).
+//
+// Run under -race: pre-fix → DATA RACE + nil deref panic. Post-fix → clean.
+func TestCloseConcurrentWithSubscribeReader(t *testing.T) {
+	// Reuse the subscribe mock — accepts subscribe, keeps the session
+	// open (blocking on rd.ReadString) so the subscribe read goroutine
+	// in our client has nothing to do but loop in SetReadDeadline +
+	// ReadString while Close races against it.
+	sockPath := startSubscribeMockServer(t, mockBehavior{acceptSubscribe: true})
+
+	for i := 0; i < 50; i++ {
+		sock, err := DialSocket(sockPath)
+		require.NoError(t, err)
+
+		evCh, err := sock.Subscribe([]string{"sheaf.invalidate"})
+		require.NoError(t, err)
+
+		// Race the Close call against the Subscribe goroutine that's
+		// running its read loop. Pre-fix this is the exact window
+		// reproduced by the reconnect test in CI.
+		closeDone := make(chan struct{})
+		go func() {
+			_ = sock.Close()
+			close(closeDone)
+		}()
+
+		// Subscribe goroutine should exit cleanly via the closed-conn
+		// error path — channel close is our signal.
+		select {
+		case <-evCh:
+			// Either a residual event we don't care about, or the channel closed.
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iter %d: subscribe read goroutine did not exit within 2s after Close", i)
+		}
+		<-closeDone
+
+		// Second Close MUST be a clean no-op — the sync.Once contract.
+		// Pre-fix this would attempt to call Close() on a nil conn and
+		// hit the existing guard; post-fix it short-circuits via the
+		// Once and returns the same closeErr.
+		require.NoError(t, sock.Close(), "iter %d: second Close must be safely idempotent", i)
+	}
+}
