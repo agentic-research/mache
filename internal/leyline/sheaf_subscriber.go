@@ -10,6 +10,21 @@ import (
 // SheafSubscriber owns a long-lived `subscribe` connection to the ley-line
 // daemon, dispatching pushed `sheaf.invalidate` events to a handler.
 //
+// UPSTREAM GAP (2026-05-18, ley-line-open-5caa59): empirical e2e
+// validation found that LLO v0.4.2 does NOT actually deliver
+// sheaf.invalidate events to subscribers — the emit call runs daemon-
+// side (the cascade math + response are correct) but the event bus
+// drops it. Other topics (daemon.snapshot, daemon.files.changed)
+// deliver fine, so the bus itself works; the wiring for the sheaf
+// state's emitter is suspected. tools/sheaf-subscribe-probe/main.go
+// is the canonical repro.
+//
+// This subscriber is still correct code — once LLO ships the fix, no
+// mache change is needed; events start arriving and the existing
+// dispatch + routing logic handles them. The watcher-initiated cascade
+// (PR #383) is unaffected: those invalidations are synchronous via the
+// sheaf_invalidate response, not pushed events.
+//
 // Design constraints (locked in by PR for mache-c14c43):
 //
 //   - Dedicated SocketClient (not shared with the watcher's SheafClient).
