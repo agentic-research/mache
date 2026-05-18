@@ -99,6 +99,116 @@ func (si *SheafInvalidator) HasResult() bool {
 	return si.result != nil
 }
 
+// InvalidateNodesWithCascade is the batched-by-region variant of
+// InvalidateWithCascade. The watcher passes every node touched by a
+// file edit; this method dedupes them to the underlying set of unique
+// region IDs and calls the daemon exactly once per unique region.
+//
+// Why this exists (PR #383 Copilot #7): the naive
+// `for _, id := range ids { InvalidateWithCascade(id) }` loop hits the
+// daemon once per node. On a large file with 50 functions all in the
+// same community, that's 50 redundant region invalidations — each
+// bumps the generation counter and re-cascades the same regions on
+// the daemon side. This method collapses that to one call per unique
+// region.
+//
+// IDs not present in membership fall back to single-node
+// Graph.Invalidate (same fallback as InvalidateWithCascade for unknown
+// nodes). When sheaf or membership is nil, the entire input falls
+// back to per-id Graph.Invalidate.
+//
+// Returns total nodes invalidated across all paths (cascades + fallbacks).
+func (si *SheafInvalidator) InvalidateNodesWithCascade(ids []string) int {
+	if si == nil || si.graph == nil || len(ids) == 0 {
+		return 0
+	}
+
+	si.mu.RLock()
+	sheaf := si.sheaf
+	storedResult := si.result
+	si.mu.RUnlock()
+
+	var membership map[string]int
+	if storedResult != nil {
+		membership = storedResult.Membership
+	}
+
+	// Degraded path: no sheaf or no membership → per-id single-node invalidate.
+	if sheaf == nil || membership == nil {
+		for _, id := range ids {
+			si.graph.Invalidate(id)
+		}
+		return len(ids)
+	}
+
+	// Split inputs: nodes that map to a region (eligible for cascade)
+	// vs. unmapped (fall back to single-node invalidate).
+	regionSet := make(map[int]struct{})
+	var unmapped []string
+	for _, id := range ids {
+		if rid, ok := membership[id]; ok {
+			regionSet[rid] = struct{}{}
+		} else {
+			unmapped = append(unmapped, id)
+		}
+	}
+
+	// If nothing maps to a region, fall back per-id.
+	if len(regionSet) == 0 {
+		for _, id := range ids {
+			si.graph.Invalidate(id)
+		}
+		return len(ids)
+	}
+
+	// Call the daemon ONCE per unique region; union the affected sets.
+	affectedSet := make(map[int]struct{})
+	for region := range regionSet {
+		affected, err := sheaf.Invalidate(region)
+		if err != nil {
+			log.Printf("sheaf invalidate region %d: %v (falling back to single node)", region, err)
+			// Best-effort: invalidate the requesting region's member
+			// nodes via the local graph so this region isn't entirely
+			// dropped, then continue with the remaining regions.
+			for nodeID, cid := range membership {
+				if cid == region {
+					si.graph.Invalidate(nodeID)
+				}
+			}
+			continue
+		}
+		for _, rid := range affected {
+			affectedSet[rid] = struct{}{}
+		}
+		// Daemon-returned cascade may be empty (no entries to
+		// invalidate); the input region itself is still stale, so
+		// include it for the local invalidation pass below.
+		affectedSet[region] = struct{}{}
+	}
+
+	// Invalidate every node in the union of affected regions exactly once.
+	invalidated := make(map[string]struct{})
+	for nodeID, cid := range membership {
+		if _, hit := affectedSet[cid]; hit {
+			if _, seen := invalidated[nodeID]; !seen {
+				si.graph.Invalidate(nodeID)
+				invalidated[nodeID] = struct{}{}
+			}
+		}
+	}
+
+	// Plus unmapped inputs (renames / new constructs not yet in the
+	// stored CommunityResult) — fall back to single-node invalidate.
+	for _, id := range unmapped {
+		if _, seen := invalidated[id]; !seen {
+			si.graph.Invalidate(id)
+			invalidated[id] = struct{}{}
+		}
+	}
+
+	return len(invalidated)
+}
+
 // InvalidateWithCascade invalidates a node and, if sheaf is available,
 // cascades the invalidation to all nodes in transitively affected regions.
 //

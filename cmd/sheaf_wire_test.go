@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,42 +98,111 @@ func TestBuildServeGraph_InvalidatorWiredIntoStore(t *testing.T) {
 // concurrent SetCommunityResult call don't trip the new mutex
 // (covered by TestSheafInvalidator_ConcurrentReadWrite at the unit
 // level, this is the integration variant).
+// countingSheafBackend records every Invalidate call so tests can
+// assert the watcher actually routed through the cascade path. Stand-
+// in for the real SheafClient when the test doesn't need (or want) a
+// live UDS daemon. Thread-safe — the watcher fires from a goroutine.
+type countingSheafBackend struct {
+	mu       sync.Mutex
+	calls    []int // region IDs received, in call order
+	response []int // canned cascade response
+}
+
+func (c *countingSheafBackend) Invalidate(regionID int) ([]int, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, regionID)
+	resp := c.response
+	c.mu.Unlock()
+	return resp, nil
+}
+
+func (c *countingSheafBackend) CallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.calls)
+}
+
+func (c *countingSheafBackend) Calls() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]int, len(c.calls))
+	copy(out, c.calls)
+	return out
+}
+
+// TestBuildServeGraph_WatcherFiresInvalidator hardens the prior
+// version of this test (PR #383 Copilot #5) — the previous shape
+// slept until a deadline and asserted on `si.HasResult()` being
+// false, which would have passed even if the watcher→invalidator
+// wiring were deleted entirely.
+//
+// The hardened version installs a counting fake SheafBackend AND a
+// synthetic CommunityResult that maps the fixture's node IDs to a
+// known region. After editing the file, the test waits up to 2s for
+// the fake backend to record at least one Invalidate call. Without
+// the watcher→invalidator wiring (or with a regression that bypasses
+// the invalidator), the call count stays at 0 and the test fails.
+//
+// Also pins that the cascade is called with the *correct* region —
+// the synthetic membership puts every node from the fixture file
+// into region 42, so the only legitimate call recorded is for 42.
 func TestBuildServeGraph_WatcherFiresInvalidator(t *testing.T) {
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 	dir := writeSourceDir(t, "Baz")
 
-	_, si, cleanup, err := buildServeGraph(dir, &api.Topology{Version: api.SchemaVersion})
+	g, si, cleanup, err := buildServeGraph(dir, &api.Topology{Version: api.SchemaVersion})
 	require.NoError(t, err)
 	defer cleanup()
 	require.NotNil(t, si)
 
-	// Edit the file. The watcher's debounce is 100ms by default.
+	// Resolve the fixture's actual node IDs so the synthetic membership
+	// maps every one of them to our known region.
+	store, ok := g.(*graph.MemoryStore)
+	require.True(t, ok, "in-process build returns a MemoryStore")
 	file := filepath.Join(dir, "main.go")
+	nodeIDs := store.NodesForPath(file)
+	require.NotEmpty(t, nodeIDs, "fixture must produce at least one node after Ingest")
+
+	const knownRegion = 42
+	membership := make(map[string]int, len(nodeIDs))
+	for _, id := range nodeIDs {
+		membership[id] = knownRegion
+	}
+	cr := &graph.CommunityResult{
+		Communities: []graph.Community{{ID: knownRegion, Members: nodeIDs}},
+		Membership:  membership,
+	}
+	mock := &countingSheafBackend{response: []int{knownRegion}}
+
+	// Install state via the atomic SetState — same path the real
+	// get_communities handler uses post-PushTopology (PR #383 #6).
+	prior := si.SetState(cr, mock)
+	require.Nil(t, prior, "fresh invalidator has no prior backend")
+
+	// Edit the file. The watcher's debounce is 100ms by default.
 	require.NoError(t, os.WriteFile(file, []byte("package main\nfunc Baz() { _ = 1 }\n"), 0o600))
 
-	// Spin up to 2s waiting for the invalidator to record activity.
-	// The contract: the watcher onChange MUST end up routing through
-	// the invalidator we got back from buildServeGraph (not a
-	// different one, not direct store.Invalidate).
+	// Wait up to 2s for the cascade call to be recorded. Without
+	// the watcher→invalidator wiring this loop times out with
+	// CallCount() == 0 — that's the regression signal.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		// si.HasResult() stays false until get_communities runs —
-		// what we're really checking here is that the watcher
-		// touched the invalidator at all. Without a more direct
-		// hook we'd need to inject a mock; this test pins the wiring
-		// indirectly via the no-result/no-sheaf fallback path
-		// returning count > 0.
-		//
-		// (A subsequent test with a get_communities call + mock
-		// SheafBackend will tighten this to actually observe
-		// cascade calls — see TDD #4.)
+		if mock.CallCount() > 0 {
+			break
+		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// For now the assertion is just: didn't panic, didn't deadlock,
-	// the invalidator survived a watcher event cycle.
-	assert.False(t, si.HasResult(), "still no community result post-edit")
-	_ = graph.NodesForPathProvider(nil) // keep the import live; provider used in next PR's wiring
+	calls := mock.Calls()
+	require.NotEmpty(t, calls, "watcher must route the edit through SheafBackend.Invalidate within 2s — empty here means the watcher→invalidator wiring regressed")
+	// Every recorded call MUST be for the known region. Any other
+	// region ID means membership-snapshot logic regressed (e.g. the
+	// onChange path is using new IDs without including the pre-edit
+	// snapshot — but in this test old IDs == new IDs because we
+	// preserved the function name).
+	for _, region := range calls {
+		assert.Equal(t, knownRegion, region, "all cascades must hit the known region; got %v", region)
+	}
 }
 
 // TestBuildServeGraph_IngestErrorReturnsNilInvalidator pins that error

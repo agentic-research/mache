@@ -565,3 +565,88 @@ func TestSheafInvalidator_SetSheaf_ReturnsPrior(t *testing.T) {
 	assert.Same(t, b, si.SetSheaf(nil), "nil clear: returns b as prior")
 	assert.Nil(t, si.SetSheaf(nil), "no-op clear: nil prior")
 }
+
+// TestSheafInvalidator_InvalidateNodesWithCascade_DedupsByRegion pins
+// PR #383 Copilot #7: the watcher passes multiple node IDs (every
+// node touched by a file edit), but many of those nodes typically
+// share the same community/region. The naive loop of "for each id:
+// InvalidateWithCascade(id)" hits the daemon once per node, which on
+// a large file is dozens of redundant region invalidations that
+// bump the generation counter per call and re-cascade the same
+// regions.
+//
+// InvalidateNodesWithCascade collapses to ONE daemon call per
+// unique region. Verified by the fake backend's Calls() returning
+// exactly len(unique regions) entries, not len(ids).
+func TestSheafInvalidator_InvalidateNodesWithCascade_DedupsByRegion(t *testing.T) {
+	g := &mockGraph{}
+	cr := &CommunityResult{
+		Communities: []Community{
+			{ID: 1, Members: []string{"a1", "a2", "a3"}},
+			{ID: 2, Members: []string{"b1", "b2"}},
+		},
+		Membership: map[string]int{
+			"a1": 1, "a2": 1, "a3": 1,
+			"b1": 2, "b2": 2,
+		},
+	}
+	mock := &mockSheafBackend{response: []int{1, 2}}
+	si := NewSheafInvalidator(g, mock, cr)
+
+	// Call with 5 IDs spanning 2 unique regions.
+	count := si.InvalidateNodesWithCascade([]string{"a1", "a2", "a3", "b1", "b2"})
+
+	// Pin the dedupe contract: exactly 2 daemon calls (one per unique
+	// region), not 5.
+	calls := mock.Calls()
+	require.Len(t, calls, 2, "must call sheaf.Invalidate once per UNIQUE region, not once per node")
+	assert.ElementsMatch(t, []int{1, 2}, calls, "both unique regions called exactly once")
+
+	// All 5 nodes should still be invalidated (cascade union — both
+	// regions 1 and 2 returned as affected, so all members invalidated).
+	assert.Equal(t, 5, count, "all nodes in affected regions invalidated")
+	assert.ElementsMatch(t, []string{"a1", "a2", "a3", "b1", "b2"}, g.Invalidated())
+}
+
+// TestSheafInvalidator_InvalidateNodesWithCascade_FallbackPaths covers
+// the degraded cases the watcher hits before get_communities has run
+// (no sheaf, no result) and the partial case where some IDs are not
+// in the membership map (renames, new constructs).
+func TestSheafInvalidator_InvalidateNodesWithCascade_FallbackPaths(t *testing.T) {
+	t.Run("no_sheaf_no_result_single_node_per_id", func(t *testing.T) {
+		g := &mockGraph{}
+		si := NewSheafInvalidator(g, nil, nil)
+		count := si.InvalidateNodesWithCascade([]string{"x", "y", "z"})
+		assert.Equal(t, 3, count, "fallback: each id invalidates locally")
+		assert.ElementsMatch(t, []string{"x", "y", "z"}, g.Invalidated())
+	})
+
+	t.Run("ids_not_in_membership_fall_through", func(t *testing.T) {
+		g := &mockGraph{}
+		cr := &CommunityResult{
+			Communities: []Community{{ID: 1, Members: []string{"known"}}},
+			Membership:  map[string]int{"known": 1},
+		}
+		mock := &mockSheafBackend{response: []int{1}}
+		si := NewSheafInvalidator(g, mock, cr)
+
+		// One known + two unknown IDs.
+		count := si.InvalidateNodesWithCascade([]string{"known", "ghost1", "ghost2"})
+
+		// Cascade fires once for region 1 (known); ghosts fall back
+		// to single-node invalidate.
+		assert.Equal(t, []int{1}, mock.Calls(), "only the known id's region cascades")
+		// known's cascade returns region 1, which has member "known" → invalidated.
+		// ghosts are invalidated individually via the fallback path.
+		assert.ElementsMatch(t, []string{"known", "ghost1", "ghost2"}, g.Invalidated())
+		assert.Equal(t, 3, count)
+	})
+
+	t.Run("empty_input_no_op", func(t *testing.T) {
+		g := &mockGraph{}
+		si := NewSheafInvalidator(g, &mockSheafBackend{}, &CommunityResult{Membership: map[string]int{}})
+		count := si.InvalidateNodesWithCascade(nil)
+		assert.Equal(t, 0, count)
+		assert.Empty(t, g.Invalidated())
+	})
+}

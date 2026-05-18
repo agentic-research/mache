@@ -386,11 +386,28 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	// This eliminates CGO tree-sitter at mount time. Falls back silently to
 	// the in-process Engine + SitterWalker path on any failure.
 	// Disable via MACHE_NO_LEYLINE=1.
+	//
+	// KNOWN GAP (PR #383 Copilot #4 → bead mache-6c9e1d): this path returns
+	// a NIL *SheafInvalidator because openDBGraph's .db backend is frozen
+	// at parse time — no watcher is constructed, so the file-watcher →
+	// sheaf cascade wiring is disabled in the default leyline-installed
+	// setup. Only MACHE_NO_LEYLINE=1 (in-process MemoryStore path below)
+	// currently exercises the cascade.
+	//
+	// Closing this requires either (a) flipping auto-leyline from one-
+	// shot `leyline parse` to a managed daemon that watches the source
+	// dir + reparses + emits sheaf.invalidate events that mache subscribes
+	// to (depends on mache-c14c43), or (b) building the cascade-eligible
+	// in-process store alongside the .db (wasteful double-ingest). Tracked
+	// for the followup; the current behavior is honest documented
+	// degradation — agents using auto-leyline get fast cold-start but
+	// stale results after edits until the daemon-mode rewrite ships.
 	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() &&
 		os.Getenv("MACHE_NO_LEYLINE") == "" {
 		if dbPath, dbCleanup, err := autoInvokeLeylineParse(dataSource); err == nil {
 			g, si, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
 			if gerr == nil {
+				log.Printf("auto-leyline: serving from %s (frozen .db — sheaf cascade NOT engaged for live edits; set MACHE_NO_LEYLINE=1 for the in-process watcher path)", filepath.Base(dbPath))
 				return g, si, gCleanup, nil
 			}
 			log.Printf("auto-leyline: opened .db failed (%v); falling back to in-process ingest", gerr)
@@ -431,22 +448,33 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() {
 		si = graph.NewSheafInvalidator(store, nil, nil)
 		onChange := func(path string) {
+			// Snapshot PRE-edit node IDs before DeleteFileNodes wipes
+			// the path↔nodes bitmap. The new IDs (post-reingest) may
+			// differ if the edit renames/moves/removes constructs —
+			// without including the old IDs, the cascade misses
+			// regions that the old constructs occupied (PR #383
+			// Copilot #3). Union of old + new covers both: regions
+			// containing removed-or-renamed nodes get invalidated
+			// via the pre-edit IDs; regions containing the new
+			// construct names get invalidated via the post-edit IDs.
+			oldIDs := store.NodesForPath(path)
 			store.DeleteFileNodes(path)
 			if reErr := engine.ReIngestFile(path); reErr != nil {
 				log.Printf("watcher: re-ingest %s: %v", path, reErr)
+				// Still cascade the old IDs — the file's prior
+				// state is no longer valid downstream regardless
+				// of whether the re-ingest succeeded.
+				si.InvalidateNodesWithCascade(oldIDs)
 				return
 			}
 			log.Printf("watcher: re-indexed %s", path)
-			// Cascade invalidation for every node touched by this file.
-			// NodesForPath is post-reingest so it reflects the new node IDs;
-			// the watcher's bookkeeping in the daemon's sheaf cache uses
-			// region IDs that depend on community membership the handler
-			// will install later — pre-install this loop is a no-op past
-			// single-node Graph.Invalidate (which DeleteFileNodes already
-			// effectively did) and that's intentional graceful degradation.
-			for _, nodeID := range store.NodesForPath(path) {
-				si.InvalidateWithCascade(nodeID, nil)
-			}
+			newIDs := store.NodesForPath(path)
+			affected := unionStringSlices(oldIDs, newIDs)
+			// One daemon round-trip per unique region (dedupe in
+			// InvalidateNodesWithCascade). Pre-install (no sheaf,
+			// no result) this still degrades to single-node
+			// invalidates — same intentional graceful behavior.
+			si.InvalidateNodesWithCascade(affected)
 		}
 		onDelete := func(path string) {
 			// Snapshot affected nodes BEFORE DeleteFileNodes wipes the
@@ -457,9 +485,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 			affected := store.NodesForPath(path)
 			store.DeleteFileNodes(path)
 			log.Printf("watcher: deleted nodes for %s", path)
-			for _, nodeID := range affected {
-				si.InvalidateWithCascade(nodeID, nil)
-			}
+			si.InvalidateNodesWithCascade(affected)
 		}
 		var watchErr error
 		fw, watchErr = ingest.NewWatcher(dataSource, onChange, onDelete,
@@ -478,6 +504,34 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 		_ = store.Close()
 		resolver.Close()
 	}, nil
+}
+
+// unionStringSlices returns the deduped union of a and b. Order
+// within the result is undefined. Used by the watcher's onChange to
+// build the union of pre- and post-edit node IDs so the cascade
+// hits regions containing both states (PR #383 Copilot #3).
+func unionStringSlices(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // buildMaybeMultiGraph dispatches between single-source and composite
