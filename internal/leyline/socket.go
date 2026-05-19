@@ -514,8 +514,8 @@ func (c *SocketClient) Subscribe(topics []string) (<-chan map[string]any, error)
 		"topics": topics,
 	}
 	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal subscribe: %w", err)
+	if err != nil { // coverage:ignore — map[string]any with only string + []string values cannot fail json.Marshal; the branch is defensive-only
+		return nil, fmt.Errorf("marshal subscribe: %w", err) // coverage:ignore
 	}
 	data = append(data, '\n')
 
