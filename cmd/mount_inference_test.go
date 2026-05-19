@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,13 +34,17 @@ func TestInferFromTreeSitterFile_GoSource(t *testing.T) {
 }
 
 // TestInferFromTreeSitterFile_MissingFile returns the wrapped os error when
-// the source file does not exist.
+// the source file does not exist. Uses errors.Is(fs.ErrNotExist) so the
+// assertion is robust to future error wrapping (e.g. fmt.Errorf("read %s: %w", ...))
+// which would still satisfy errors.Is but NOT os.IsNotExist. Path is rooted
+// in t.TempDir() so the test does not depend on global filesystem state.
 func TestInferFromTreeSitterFile_MissingFile(t *testing.T) {
 	goLang := lang.ForExt(".go")
 	require.NotNil(t, goLang)
 	inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
 
-	_, err := inferFromTreeSitterFile(inf, "/nonexistent/path/does-not-exist.go", goLang.Grammar(), goLang.DisplayName)
+	missing := filepath.Join(t.TempDir(), "does-not-exist.go")
+	_, err := inferFromTreeSitterFile(inf, missing, goLang.Grammar(), goLang.DisplayName)
 	require.Error(t, err)
-	require.True(t, os.IsNotExist(err), "expected fs.ErrNotExist, got %v", err)
+	require.True(t, errors.Is(err, fs.ErrNotExist), "expected fs.ErrNotExist, got %v", err)
 }

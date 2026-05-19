@@ -16,17 +16,16 @@ func TestNewCallExtractor_UnknownLanguage(t *testing.T) {
 	require.Nil(t, calls)
 }
 
-// TestNewCallExtractor_NilTreeForUnsupportedContent — empty content with a
-// real language still produces a tree (tree-sitter parses to an empty
-// root), so the explicit `tree == nil` branch is defensive against
-// future tree-sitter API changes. We exercise the success-with-empty
-// path here to lock in current behavior.
+// TestNewCallExtractor_EmptyGoContent — exercises the parse-success path
+// with valid Go that produces a call. The NotNil assertion is what
+// distinguishes this from the unknown-language short-circuit (which
+// returns nil, nil). Without NotNil the test would pass for both paths
+// because require.Empty accepts nil; with NotNil the test enforces that
+// the grammar resolved and the parser actually ran.
 func TestNewCallExtractor_EmptyGoContent(t *testing.T) {
 	extract := newCallExtractor()
-	calls, err := extract([]byte(""), "/tmp/empty.go", "go")
+	calls, err := extract([]byte("package p\nfunc f() { g() }\n"), "/tmp/empty.go", "go")
 	require.NoError(t, err)
-	// Empty source produces no calls — but the parse path must complete
-	// without error so the extractor returns an empty slice (not nil
-	// from the short-circuit branch).
-	require.Empty(t, calls)
+	require.NotNil(t, calls, "Go grammar registered: parse must return non-nil slice")
+	require.NotEmpty(t, calls, "parsed Go source with a call must yield at least one QualifiedCall")
 }

@@ -26,7 +26,7 @@ func inferFromTreeSitterFile(inf *lattice.Inferrer, path string, lang *sitter.La
 	parser := sitter.NewParser()
 	parser.SetLanguage(lang)
 	tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
-	if parseErr != nil { // coverage:ignore — tree-sitter ParseCtx with a valid grammar only errors on context cancellation; not reachable from this synchronous call path
+	if parseErr != nil { // coverage:ignore — tree-sitter ParseCtx surfaces three error classes (per convertTSTree in smacker/go-tree-sitter): ctx cancellation, ErrNoLanguage, ErrOperationLimit. ErrNoLanguage is ruled out by SetLanguage(lang) above; ErrOperationLimit is unreachable because mache never calls SetOperationLimit anywhere in cmd/. Context cancellation requires a propagated cancel that this synchronous call path doesn't construct.
 		return nil, fmt.Errorf("tree-sitter parse failed for %s: %w", path, parseErr) // coverage:ignore
 	} // coverage:ignore
 	if tree == nil { // coverage:ignore — defensive nil check; ParseCtx returns nil tree only when it also returns an error, already handled above
