@@ -1232,3 +1232,163 @@ func TestDiscoverOrStart_E2E_DaemonCrashRecovery(t *testing.T) {
 	require.NoError(t, dialErr, "recovered daemon must accept a Dial")
 	_ = conn.Close()
 }
+
+// TestQuery_PropagatesSendOpError pins the early-return branch of Query
+// (L470 in commit 3c73e6b): when SendOp fails — e.g. the daemon closes
+// the connection mid-RPC — Query must surface that error directly rather
+// than masking it as a nil rows result. We force the failure with a
+// past-deadline SetDeadline so SendOp's Write (or follow-on Read) trips
+// the i/o timeout, which SendOp wraps and returns to Query.
+func TestQuery_PropagatesSendOpError(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": true}
+	})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	// Past deadline forces the next Read/Write to fail immediately with
+	// an i/o timeout. Using SetDeadline rather than Close avoids the nil
+	// c.conn deref that Close triggers; the goal here is to drive SendOp
+	// into its error return so Query's `if err != nil { return nil, err }`
+	// branch executes.
+	require.NoError(t, client.SetDeadline(time.Unix(0, 1)))
+
+	_, err = client.Query("SELECT 1")
+	require.Error(t, err, "Query must surface SendOp errors instead of returning (nil, nil)")
+}
+
+// TestQuery_UnexpectedRowsType pins the rows type-assertion failure
+// branch (L482-483 in commit 3c73e6b): when the daemon returns a `rows`
+// field whose JSON shape isn't `[]any` (e.g. a bare string from a
+// version-skewed daemon, or a future shape we haven't taught Query to
+// parse), Query must reject the response with a typed error rather than
+// panic on the assertion or silently return empty rows.
+func TestQuery_UnexpectedRowsType(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		// Return a string where Query expects []any. JSON-decode of the
+		// response gives us resp["rows"] of dynamic type string, which
+		// fails the `rows.([]any)` assertion.
+		return map[string]any{"rows": "not-an-array"}
+	})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	_, err = client.Query("SELECT 1")
+	require.Error(t, err, "Query must reject a non-[]any rows field")
+	assert.Contains(t, err.Error(), "unexpected rows type",
+		"error must name the surprise type so operators can fingerprint the daemon-version mismatch (got %q)", err.Error())
+}
+
+// TestSubscribe_WriteFailsOnExpiredDeadline pins the write-failure branch
+// (L523-524 in commit 3c73e6b): if the UDS connection isn't writable
+// when Subscribe issues its handshake, the error must propagate with the
+// "write subscribe" wrap rather than getting hidden under a later
+// read-side failure. We force the Write to fail by setting a past
+// deadline before Subscribe so the very first c.conn.Write inside
+// Subscribe returns an i/o-timeout error.
+func TestSubscribe_WriteFailsOnExpiredDeadline(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": true}
+	})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	// Past deadline → next Write trips i/o timeout. SetDeadline (rather
+	// than Close) preserves c.conn so we drive Subscribe's c.conn.Write
+	// to its error path without nil-deref on the test side.
+	require.NoError(t, client.SetDeadline(time.Unix(0, 1)))
+
+	_, err = client.Subscribe([]string{"x"})
+	require.Error(t, err, "Subscribe must surface the write failure")
+	assert.Contains(t, err.Error(), "write subscribe",
+		"error must wrap with 'write subscribe' so the failing leg is identifiable in logs (got %q)", err.Error())
+}
+
+// TestSubscribe_ReadResponseFailsOnEarlyClose pins the
+// read-subscribe-response branch (L529-530 in commit 3c73e6b): the
+// daemon accepted and read our subscribe op but disconnected before
+// sending an ack. Subscribe must surface the read failure with the
+// documented "read subscribe response" wrap, NOT a misleading
+// "unmarshal subscribe response" (which would suggest the daemon
+// returned garbage rather than nothing).
+func TestSubscribe_ReadResponseFailsOnEarlyClose(t *testing.T) {
+	// Build a mock that accepts the subscribe write, then closes the
+	// connection without responding. We don't use subscribePushServer
+	// because that one always sends a canned response line.
+	dir, err := os.MkdirTemp("/tmp", "leyline-sub-noreply-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "t.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		rd := bufio.NewReader(conn)
+		// Consume the subscribe request line so the client's Write
+		// completes successfully; then close without replying.
+		_, _ = rd.ReadString('\n')
+		_ = conn.Close()
+	}()
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	_, err = client.Subscribe([]string{"x"})
+	require.Error(t, err, "Subscribe must surface the read failure when the daemon disconnects without acking")
+	assert.Contains(t, err.Error(), "read subscribe response",
+		"error must wrap with 'read subscribe response' so the failing leg is identifiable (got %q)", err.Error())
+}
+
+// TestSubscribe_UnmarshalResponseFailsOnNonJSON pins the
+// unmarshal-response branch (L534 in commit 3c73e6b): the daemon
+// replied to subscribe, but with bytes that don't parse as JSON.
+// Subscribe must surface that as "unmarshal subscribe response" so
+// operators can tell "daemon talking the wrong protocol" apart from
+// "daemon disconnected" (L529-530's path) and "daemon returned a
+// JSON-shaped error" (the L536-537 errMsg path).
+func TestSubscribe_UnmarshalResponseFailsOnNonJSON(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "leyline-sub-badjson-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "t.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close() //nolint:errcheck
+		rd := bufio.NewReader(conn)
+		if _, err := rd.ReadString('\n'); err != nil {
+			return
+		}
+		// Send a line that isn't JSON.
+		_, _ = conn.Write([]byte("not-json\n"))
+	}()
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	_, err = client.Subscribe([]string{"x"})
+	require.Error(t, err, "Subscribe must reject a non-JSON reply")
+	assert.Contains(t, err.Error(), "unmarshal subscribe response",
+		"error must wrap with 'unmarshal subscribe response' so a daemon-protocol mismatch isn't confused with a transport failure (got %q)", err.Error())
+}
