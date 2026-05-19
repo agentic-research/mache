@@ -378,6 +378,60 @@ func TestSQLiteGraph_DefsMap_SQLFallback(t *testing.T) {
 	require.Equal(t, []string{"ingest/functions/Engine.Ingest"}, got["Engine.Ingest"])
 }
 
+// TestSQLiteGraph_DefsMap_MultipleSQLNodesForOneToken regression-
+// guards a bug Copilot caught on the initial DefsMap SQL-fallback fix
+// (PR #401): the merge loop treated any pre-existing cp[token] as an
+// in-memory collision and skipped subsequent SQL rows. Since SQL rows
+// for the same token populate cp[token] themselves on the first hit,
+// every additional node_id for that token was silently dropped.
+//
+// Production reality: a method like Close, String, or any
+// commonly-named function has multiple definitions across packages.
+// Dropping all but the first would break find_callers / get_impact
+// disambiguation downstream.
+//
+// This test inserts THREE node_defs rows for the same token and
+// asserts DefsMap returns all three node_ids.
+func TestSQLiteGraph_DefsMap_MultipleSQLNodesForOneToken(t *testing.T) {
+	dir, err := os.MkdirTemp("", "defsmap-multi-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			kind INTEGER NOT NULL,
+			size INTEGER DEFAULT 0,
+			mtime INTEGER NOT NULL,
+			record_id TEXT,
+			record JSON
+		);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Same token (Close) defined in three different packages
+		INSERT INTO node_defs VALUES ('Close', 'reader/Reader.Close');
+		INSERT INTO node_defs VALUES ('Close', 'writer/Writer.Close');
+		INSERT INTO node_defs VALUES ('Close', 'pipe/Pipe.Close');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	g, err := OpenSQLiteGraph(dbPath, &api.Topology{}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	got := g.DefsMap()
+	require.Contains(t, got, "Close")
+	require.Len(t, got["Close"], 3,
+		"DefsMap must return ALL node_defs rows for a token, not just the first — see PR #401 Copilot review")
+}
+
 // TestSQLiteGraph_DefsMap_MergesInMemoryAndSQL pins that AddDef
 // entries layer on top of the SQL-fallback hydration without
 // dropping either source. Mirrors TestSQLiteGraph_LookupDef_InMemoryWinsOverSQL

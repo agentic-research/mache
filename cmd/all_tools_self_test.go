@@ -120,15 +120,19 @@ func TestE2E_BackendParity_MacheOnMache(t *testing.T) {
 // tool inventory against it on both backends. The acceptance bar
 // goes beyond TestE2E_AllMCPTools's "no transport errors" check —
 // per-tool assertions confirm that tools which SHOULD hit on a real
-// mache repo actually return non-empty results:
+// mache repo actually return non-empty results.
 //
-//   - find_callers Validate          → ≥1 caller (Validate is called
-//     across cmd/ and internal/)
-//   - find_definition NewEngine      → resolves to internal/ingest
-//   - find_definition NewMemoryStore → resolves to internal/graph
-//   - get_overview                   → non-trivial body
-//   - list_directory ""              → root has child dirs
-//   - search "Validate"              → ≥1 hit
+// The shared invocation table in runToolMatrix uses symbol="Validate"
+// and pattern="%alidate%" so the assertions follow suit:
+//
+//   - find_callers   token=Validate    → ≥1 caller
+//   - find_definition symbol=Validate  → resolves
+//   - get_overview                     → non-trivial body
+//   - list_directory ""                → root has child dirs
+//   - search          pattern=Validate → ≥1 hit
+//
+// Additional symbol probes (NewEngine, NewMemoryStore, etc.) require
+// per-tool argument tables, deferred to SB-04 / SB-05 work.
 //
 // Tools whose semantics legitimately depend on LLO-only tables
 // (semantic_search, get_type_info, get_diagnostics, find_smells with
@@ -200,19 +204,10 @@ func assertMacheOnMacheInvariants(t *testing.T, profiles []toolProfile) {
 		assert.Positive(t, p.BodySize, "%s body must be non-empty", name)
 	}
 
-	// find_callers + find_definition should hit. Symbols chosen
-	// from mache's own API surface; if a refactor renames them,
-	// the test name is the bread-crumb to update this list.
-	for _, sym := range []string{"Validate", "NewEngine", "NewMemoryStore"} {
-		// find_callers args were pinned to "Validate" in the
-		// shared invocation table; only assert for that one. The
-		// other symbols would need separate invocations to test
-		// here — out of scope for SB-06 (single-shot invocation
-		// per tool). Asserts cover only what the matrix actually
-		// ran.
-		_ = sym
-	}
-
+	// find_callers + find_definition should hit. The shared
+	// invocation table runs them with symbol="Validate" — a name
+	// that exists across both internal/ingest and cmd/. Additional
+	// symbol probes would require per-corpus arg tables (SB-04/05).
 	callers, ok := byName["find_callers"]
 	require.True(t, ok)
 	if callers.Status == "ok" {
@@ -247,7 +242,9 @@ func indexProfiles(profiles []toolProfile) map[string]toolProfile {
 // developer's other repos when MACHE_E2E_CORPORA is set, exercising
 // the tool surface against real polyglot trees outside mache's own
 // source. Format: `MACHE_E2E_CORPORA=name=path[,schema]:name2=path2`.
-// `schema` defaults to the auto-detected preset.
+// `schema` defaults to "go" when omitted (per parseCorpusSpec) —
+// pass an explicit preset (rust/python/typescript/...) for non-Go
+// corpora. Auto-detection from sentinel files is NOT applied here.
 //
 // Example:
 //
@@ -306,11 +303,7 @@ func TestE2E_RealCorpora(t *testing.T) {
 }
 
 func parseCorpusSpec(spec string) (name, path, schema string, ok bool) {
-	nameRest, found := strings.CutPrefix(strings.TrimSpace(spec), "")
-	if !found {
-		return "", "", "", false
-	}
-	name, rest, ok := strings.Cut(nameRest, "=")
+	name, rest, ok := strings.Cut(spec, "=")
 	if !ok || name == "" || rest == "" {
 		return "", "", "", false
 	}

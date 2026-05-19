@@ -316,8 +316,10 @@ func (g *SQLiteGraph) AddDef(token, dirID string) error {
 func (g *SQLiteGraph) DefsMap() map[string][]string {
 	g.pendingMu.Lock()
 	cp := make(map[string][]string, len(g.defs))
+	inMemoryTokens := make(map[string]struct{}, len(g.defs))
 	for k, v := range g.defs {
 		cp[k] = append([]string(nil), v...)
+		inMemoryTokens[k] = struct{}{}
 	}
 	g.pendingMu.Unlock()
 
@@ -334,9 +336,13 @@ func (g *SQLiteGraph) DefsMap() map[string][]string {
 		if scanErr := rows.Scan(&token, &nodeID); scanErr != nil {
 			continue
 		}
-		if _, exists := cp[token]; exists {
-			// In-memory wins on token collision (live ingestion
-			// is authoritative over the frozen-at-build snapshot).
+		// Skip only tokens that originated in-memory (live ingestion
+		// is authoritative over the frozen-at-build snapshot). Tokens
+		// first seen from SQL must accumulate all their node_defs
+		// rows — e.g. a method like Close defined across multiple
+		// types. Without the inMemoryTokens guard, the cp[token]
+		// existence check would drop every SQL row past the first.
+		if _, fromMemory := inMemoryTokens[token]; fromMemory {
 			continue
 		}
 		cp[token] = append(cp[token], nodeID)
