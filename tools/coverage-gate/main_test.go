@@ -1077,6 +1077,240 @@ func TestRun_UnknownFlagRejected(t *testing.T) {
 	}
 }
 
+// --- Dissimilarity detection tests ---
+//
+// `git diff -B` emits `dissimilarity index N%` for in-place rewrites
+// (no rename, just heavy content turnover — N% of the file CHANGED).
+// We map that to similarity (100 - N)% and reuse the rename threshold:
+//
+//   dissimilarity 30%  → similarity 70%  → excluded at threshold 50
+//   dissimilarity 80%  → similarity 20%  → flagged at threshold 50
+//   dissimilarity 50%  → similarity 50%  → excluded (inclusive boundary)
+//
+// This was driven by bead mache-301daf: the /evolve sqlite_graph
+// decomposition (PR #396, 1598 → 547 LOC) emitted `dissimilarity index
+// 62%` for internal/graph/sqlite_graph.go and the coverage-gate flagged
+// 110 lines as new — false positive, since they were uncovered before
+// the refactor too. The fix is conservative: at default threshold 50,
+// `dissimilarity 62%` (= similarity 38%) is STILL flagged. The reviewer
+// opts in by lowering -rename-threshold for heavy-rewrite PRs.
+
+func TestParseDiff_DissimilarityIndexHighExcluded(t *testing.T) {
+	// dissimilarity 30% → similarity 70%. At threshold 50, the block is
+	// classified as a near-move and the `+` lines must be excluded.
+	in := `diff --git a/x.go b/x.go
+dissimilarity index 30%
+--- a/x.go
++++ b/x.go
+@@ -1,3 +1,3 @@
++rewritten line 1
++rewritten line 2
++rewritten line 3
+`
+	ds, err := parseDiffWithRenames(strings.NewReader(in), 50)
+	if err != nil {
+		t.Fatalf("parseDiffWithRenames: %v", err)
+	}
+	if got, ok := ds["x.go"]; ok && len(got) > 0 {
+		t.Errorf("expected NO lines flagged for dissimilarity 30%% "+
+			"(= similarity 70%%) at threshold 50, got: %v", got)
+	}
+}
+
+func TestParseDiff_DissimilarityIndexLowFlagged(t *testing.T) {
+	// dissimilarity 80% → similarity 20%. At threshold 50, the block is
+	// NOT a near-move and the `+` lines must still appear in the diff set.
+	in := `diff --git a/x.go b/x.go
+dissimilarity index 80%
+--- a/x.go
++++ b/x.go
+@@ -1,1 +1,3 @@
+ context
++rewritten line 1
++rewritten line 2
+`
+	ds, err := parseDiffWithRenames(strings.NewReader(in), 50)
+	if err != nil {
+		t.Fatalf("parseDiffWithRenames: %v", err)
+	}
+	if !ds["x.go"][2] {
+		t.Errorf("expected x.go L2 tracked for dissimilarity 80%% "+
+			"(= similarity 20%%) at threshold 50, got: %v", ds["x.go"])
+	}
+	if !ds["x.go"][3] {
+		t.Errorf("expected x.go L3 tracked, got: %v", ds["x.go"])
+	}
+}
+
+func TestParseDiff_DissimilarityIndexBoundary(t *testing.T) {
+	// dissimilarity 50% → similarity 50%. Inclusive boundary: at
+	// threshold 50, similarity 50 satisfies `>= threshold`, so the
+	// block is excluded — matching the rename case (similarity 50% at
+	// threshold 50 is also excluded).
+	in := `diff --git a/x.go b/x.go
+dissimilarity index 50%
+--- a/x.go
++++ b/x.go
+@@ -1,2 +1,3 @@
+ context
++boundary line 1
++boundary line 2
+`
+	ds, err := parseDiffWithRenames(strings.NewReader(in), 50)
+	if err != nil {
+		t.Fatalf("parseDiffWithRenames: %v", err)
+	}
+	if got, ok := ds["x.go"]; ok && len(got) > 0 {
+		t.Errorf("expected NO lines flagged at the inclusive boundary "+
+			"(dissimilarity 50%% = similarity 50%%, threshold 50), got: %v", got)
+	}
+}
+
+func TestRunDissimilarity_RealWorldRegression(t *testing.T) {
+	// Synthesized to mirror the `dissimilarity 62%` case observed when
+	// running `git diff -B5% origin/feat/godfile-decomposition..HEAD` on
+	// the sqlite_graph decomposition commit (0825449). We synthesize
+	// rather than shell out to `git diff` because the test must run in
+	// CI containers that may not have the worktree's full history (and
+	// reaching for the git binary from a Go unit test is a brittle
+	// dependency anyway). The synthetic diff shape — one `diff --git`
+	// block with `dissimilarity index 62%` followed by Go-shaped `+`
+	// lines — exercises exactly the same parseDiffWithRenames code path
+	// the real `git diff -B` output triggers; only the byte content of
+	// the additions is different.
+	//
+	// At threshold 50 (default) — dissimilarity 62% maps to similarity
+	// 38%, BELOW threshold, so the block is flagged. Gate trips.
+	// At threshold 30 — similarity 38% is at/above 30, so the block is
+	// excluded. Gate exits 0.
+	cover := "mode: set\ninternal/graph/sqlite_graph.go:10.1,12.2 2 0\n"
+	diff := `diff --git a/internal/graph/sqlite_graph.go b/internal/graph/sqlite_graph.go
+dissimilarity index 62%
+--- a/internal/graph/sqlite_graph.go
++++ b/internal/graph/sqlite_graph.go
+@@ -1,1 +10,3 @@
+ context
++func newSomething() *Foo { return &Foo{} }
++func anotherUncoveredFunc() error { return nil }
+`
+
+	// (1) Threshold 50 (default): block stays in, gate trips.
+	covPath := writeTemp(t, "cover.out", cover)
+	diffPath := writeTemp(t, "diff.patch", diff)
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{covPath, diffPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit 1 at threshold 50 on dissimilarity 62%%, "+
+			"got %d (stdout=%q stderr=%q)", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "internal/graph/sqlite_graph.go") {
+		t.Errorf("expected sqlite_graph.go in report at threshold 50, got: %q",
+			stdout.String())
+	}
+
+	// (2) Threshold 30: similarity 38% >= 30, block excluded, gate clean.
+	stdout.Reset()
+	stderr.Reset()
+	code = run("coverage-gate",
+		[]string{"-rename-threshold", "30", covPath, diffPath},
+		&stdout, &stderr,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit 0 at threshold 30 on dissimilarity 62%% "+
+			"(= similarity 38%%), got %d (stdout=%q stderr=%q)",
+			code, stdout.String(), stderr.String())
+	}
+}
+
+func TestParseDissimilarityPercent(t *testing.T) {
+	// Direct unit test of the helper, mirroring TestParseSimilarityPercent.
+	cases := map[string]struct {
+		want int
+		ok   bool
+	}{
+		"dissimilarity index 100%": {100, true},
+		"dissimilarity index 62%":  {62, true},
+		"dissimilarity index 50%":  {50, true},
+		"dissimilarity index 0%":   {0, true},
+		"dissimilarity index abc%": {0, false},
+		"dissimilarity index ":     {0, false},
+	}
+	for in, exp := range cases {
+		got, ok := parseDissimilarityPercent(in)
+		if ok != exp.ok || got != exp.want {
+			t.Errorf("parseDissimilarityPercent(%q) = (%d,%v), want (%d,%v)",
+				in, got, ok, exp.want, exp.ok)
+		}
+	}
+}
+
+func TestParseDissimilarityPercent_OutOfRange(t *testing.T) {
+	// Pins the range check in parseDissimilarityPercent. Without it,
+	// `dissimilarity index -5%` would compute (100 - (-5)) = 105 in the
+	// caller's similarity comparison, which is `>=` any threshold value
+	// — silently muting the gate. Equivalently, `dissimilarity index
+	// 101%` would compute (100 - 101) = -1, which is never `>=` a valid
+	// threshold but still represents nonsense input. Both must be
+	// rejected (parse-not-skip), making the caller fall through to
+	// "no dissimilarity info" and treat the block as normal new code.
+	cases := map[string]struct {
+		want int
+		ok   bool
+	}{
+		// Negative — the original vulnerability.
+		"dissimilarity index -5%": {0, false},
+		// Above 100.
+		"dissimilarity index 101%":   {0, false},
+		"dissimilarity index 9999%":  {0, false},
+		"dissimilarity index 12345%": {0, false},
+		// In-range values stay accepted (regression check on the
+		// existing happy paths now that range check is in place).
+		"dissimilarity index 0%":   {0, true},
+		"dissimilarity index 100%": {100, true},
+		// Negative zero — strconv.Atoi accepts "-0" as 0, which passes
+		// the range check (0 is in [0,100]). Document the choice: we
+		// allow it because it's semantically equivalent to "0%" and
+		// neither value is adversarial — the gate just treats the block
+		// as "100% similarity" (fully unchanged), which is a no-op.
+		"dissimilarity index -0%": {0, true},
+	}
+	for in, exp := range cases {
+		got, ok := parseDissimilarityPercent(in)
+		if ok != exp.ok || got != exp.want {
+			t.Errorf("parseDissimilarityPercent(%q) = (%d,%v), want (%d,%v)",
+				in, got, ok, exp.want, exp.ok)
+		}
+	}
+}
+
+func TestParseSimilarityPercent_OutOfRange(t *testing.T) {
+	// Mirrors TestParseDissimilarityPercent_OutOfRange — same range
+	// check on the similarity parser. A `similarity index 105%` would
+	// be accepted as 105 without this check; while no current threshold
+	// path is broken by that (105 >= 50 just means "always exclude",
+	// the same as 100 already does), keeping both parsers symmetric
+	// avoids surprises if future code tightens or inverts the
+	// comparison.
+	cases := map[string]struct {
+		want int
+		ok   bool
+	}{
+		"similarity index -5%":   {0, false},
+		"similarity index 101%":  {0, false},
+		"similarity index 9999%": {0, false},
+		"similarity index 0%":    {0, true},
+		"similarity index 100%":  {100, true},
+		"similarity index -0%":   {0, true},
+	}
+	for in, exp := range cases {
+		got, ok := parseSimilarityPercent(in)
+		if ok != exp.ok || got != exp.want {
+			t.Errorf("parseSimilarityPercent(%q) = (%d,%v), want (%d,%v)",
+				in, got, ok, exp.want, exp.ok)
+		}
+	}
+}
+
 func TestRun_RenameThresholdPropagates(t *testing.T) {
 	// End-to-end through run(): a 100%-similarity rename block with
 	// zero coverage on the destination file must NOT trigger the gate
