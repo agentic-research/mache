@@ -1055,6 +1055,28 @@ func TestRun_InvalidRenameThreshold(t *testing.T) {
 	}
 }
 
+func TestRun_UnknownFlagRejected(t *testing.T) {
+	// FlagSet.Parse() errors on unknown flags. The current behavior is
+	// exit 2 with flag's own usage message on stderr — verify this path
+	// is exercised by the existing run() error handling, not bypassed.
+	// This pins the L107-110 branch (fs.Parse error → return 2) that's
+	// distinct from the threshold-range branch (L111-113) covered by
+	// TestRun_InvalidRenameThreshold above.
+	covPath := writeTemp(t, "cover.out", "mode: set\n")
+	diffPath := writeTemp(t, "diff.patch", "")
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate",
+		[]string{"-totally-unknown-flag", covPath, diffPath},
+		&stdout, &stderr,
+	)
+	if code != 2 {
+		t.Errorf("expected exit 2 on unknown flag, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "totally-unknown-flag") {
+		t.Errorf("expected stderr to identify the offending flag, got %q", stderr.String())
+	}
+}
+
 func TestRun_RenameThresholdPropagates(t *testing.T) {
 	// End-to-end through run(): a 100%-similarity rename block with
 	// zero coverage on the destination file must NOT trigger the gate
