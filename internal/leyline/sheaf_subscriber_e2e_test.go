@@ -53,6 +53,7 @@ import (
 // refactor regresses this path, this test catches it before the bug
 // reaches live runtime.
 func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate ~/.mache/ from sibling tests
 	leylineBin, err := exec.LookPath("leyline")
 	if err != nil {
 		t.Skip("leyline binary not on PATH — skipping cross-runtime subscriber e2e")
