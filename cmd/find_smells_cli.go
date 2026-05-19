@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -37,103 +38,176 @@ var (
 	findSmellsLimit     int
 	findSmellsMinMetric int64
 	findSmellsFormat    string
+	findSmellsFailOn    string
+	findSmellsTags      string
 )
+
+// exitFunc is the process-exit hook the CLI uses after RunE returns a
+// non-zero code. Production points it at os.Exit; tests override it to
+// capture the code without crashing the test binary. Keeping it as a
+// package var (rather than weaving t.Cleanup hooks through every test)
+// matches the cobra-CLI convention used elsewhere in this package.
+var exitFunc = os.Exit
 
 var findSmellsCmd = &cobra.Command{
 	Use:   "find-smells",
 	Short: "Run structural code-smell rules against a mache or leyline-built SQLite database",
 	Long: `Runs the same rule registry that powers the find_smells MCP tool, but as a
 CLI for non-MCP consumers (CI, scripts, GitHub Actions). With no --rule
-argument it lists registered rules; otherwise it executes the named rule.
+argument it lists registered rules; otherwise it executes the named rule
+(or every rule whose ID matches the glob pattern).
 
 Output formats:
   --format=json (default)  machine-readable, same shape as the MCP tool
   --format=md              human-readable markdown summary
+  --format=ci              one-line-per-finding "file:line:col: severity: msg [rule-id]"
+                           (gh / ripgrep / vale convention)
+
+Rule selection:
+  --rule=ID                exact match (legacy)
+  --rule='drift_doc_*'     filepath.Match glob; runs every matching rule
+  --tags=docs,security     filter the registry to rules whose Tags contain
+                           ANY of the listed values (set union). Composes
+                           with --rule glob.
+
+Gate decision (ADR-0018, pylint precedent):
+  --fail-on=none           never exits non-zero on findings (legacy default)
+  --fail-on=warn           exit 1 if any finding's rule resolves to warn or error
+  --fail-on=error (default) exit 1 only on findings from rules with Severity=error
 
 Exit codes:
-  0  success — regardless of how many findings the rule produced
+  0  success — no findings exceeded the --fail-on threshold
+  1  findings exceeded --fail-on threshold (new in ADR-0018 PR 2)
   2  pre-flight failed (missing tables on the active backend)
-  3  unknown rule
+  3  unknown rule (no matches from --rule glob + --tags filter)
   4  database open / query error
 
-This tool is observability, not a gate. It never exits non-zero on findings.`,
+The historical observability contract ("never exits non-zero on findings") is
+preserved with --fail-on=none, and is the de-facto default for every rule that
+ships at Severity=warn (which is every rule today) when --fail-on=error.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Discovery mode: no rule -> dump the listing. No db required.
-		if findSmellsRule == "" {
-			return renderListing(cmd.OutOrStdout(), findSmellsFormat)
+		code, err := runFindSmells(cmd, args)
+		// On success (code 0), return any benign render error directly so
+		// cobra surfaces it via its normal channel. On non-zero, the
+		// error has already been printed to stderr inside runFindSmells;
+		// short-circuit via exitFunc so the process exit code reflects
+		// the failure mode (2 = pre-flight, 3 = unknown rule, 4 = db,
+		// 1 = gate fired). Tests swap exitFunc to capture the code.
+		if code != 0 {
+			exitFunc(code)
 		}
+		return err
+	},
+}
 
-		// Running a rule requires a db. SQLite would silently create
-		// missing files on Open, so existence-check first to give a
-		// clear error rather than running the rule against an empty
-		// auto-created file.
-		if findSmellsDBPath == "" {
-			return fmt.Errorf("--db PATH is required when --rule is set")
-		}
-		if _, err := os.Stat(findSmellsDBPath); err != nil {
-			return cliExit(4, fmt.Errorf("db file: %w", err))
-		}
-		db, err := sql.Open("sqlite", findSmellsDBPath)
-		if err != nil {
-			return cliExit(4, fmt.Errorf("open db: %w", err))
-		}
-		defer func() { _ = db.Close() }()
-		if err := db.Ping(); err != nil {
-			return cliExit(4, fmt.Errorf("ping db: %w", err))
-		}
-		// SetMaxOpenConns(1) pins all queries to a single connection so
-		// the TEMP _capnp_binding_refs table created by ensureCanonicalViews
-		// + LoadCapnpBindings stays visible to subsequent queries.
-		// modernc/sqlite spreads queries across the pool by default,
-		// which would put the TEMP-table population on a connection
-		// the rule SELECT never sees.
-		db.SetMaxOpenConns(1)
-		qg := &dbQuerier{db: db, path: findSmellsDBPath}
+// runFindSmells is the testable core: it returns the intended process
+// exit code plus any cobra-surfaceable error, instead of calling
+// os.Exit directly. This lets tests assert exit semantics (especially
+// the new --fail-on gate behavior) without crashing the test binary.
+//
+// Production flow:
+//
+//	RunE -> runFindSmells -> (code, err) -> exitFunc(code) on non-zero
+//
+// Error printing for non-zero codes still happens here (mirroring the
+// old cliExit), so cobra doesn't double-print.
+func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
+	// Discovery mode: no rule glob -> dump the listing. No db required.
+	// Tags filter is intentionally NOT applied to discovery — listing
+	// is meant to show every registered rule so an agent can decide
+	// which tags to pass.
+	if findSmellsRule == "" {
+		return 0, renderListing(cmd.OutOrStdout(), findSmellsFormat)
+	}
 
-		var rule *SmellRule
-		for i := range smellRegistry {
-			if smellRegistry[i].ID == findSmellsRule {
-				rule = &smellRegistry[i]
-				break
-			}
-		}
-		if rule == nil {
-			return cliExit(3, fmt.Errorf(
-				"unknown rule %q — available: %s — run with no --rule for full descriptions",
-				findSmellsRule, strings.Join(allRuleIDs(), ", "),
-			))
-		}
+	// Validate --fail-on early so a typo surfaces before we open the db.
+	if !validFailOn(findSmellsFailOn) {
+		return printAndCode(4, fmt.Errorf(
+			"invalid --fail-on=%q; must be one of: none, warn, error", findSmellsFailOn,
+		))
+	}
 
+	// Resolve rule selection: glob + tags filter against the registry.
+	// allRuleIDs() returns alphabetical; matchRules preserves registry
+	// order so multiple-match runs are deterministic.
+	tagSet := parseTags(findSmellsTags)
+	matched, err := matchRules(findSmellsRule, tagSet)
+	if err != nil {
+		return printAndCode(3, fmt.Errorf(
+			"invalid --rule glob %q: %w", findSmellsRule, err,
+		))
+	}
+	if len(matched) == 0 {
+		return printAndCode(3, fmt.Errorf(
+			"no rules match --rule=%q --tags=%q — available: %s — run with no --rule for full descriptions",
+			findSmellsRule, findSmellsTags, strings.Join(allRuleIDs(), ", "),
+		))
+	}
+
+	// Running rules requires a db. SQLite would silently create
+	// missing files on Open, so existence-check first to give a
+	// clear error rather than running against an empty auto-created file.
+	if findSmellsDBPath == "" {
+		return 0, fmt.Errorf("--db PATH is required when --rule is set")
+	}
+	if _, err := os.Stat(findSmellsDBPath); err != nil {
+		return printAndCode(4, fmt.Errorf("db file: %w", err))
+	}
+	db, err := sql.Open("sqlite", findSmellsDBPath)
+	if err != nil {
+		return printAndCode(4, fmt.Errorf("open db: %w", err))
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.Ping(); err != nil {
+		return printAndCode(4, fmt.Errorf("ping db: %w", err))
+	}
+	// SetMaxOpenConns(1) pins all queries to a single connection so
+	// the TEMP _capnp_binding_refs table created by ensureCanonicalViews
+	// + LoadCapnpBindings stays visible to subsequent queries.
+	// modernc/sqlite spreads queries across the pool by default,
+	// which would put the TEMP-table population on a connection
+	// the rule SELECT never sees.
+	db.SetMaxOpenConns(1)
+	qg := &dbQuerier{db: db, path: findSmellsDBPath}
+
+	// Mirror the MCP handler's threshold-default semantics. If
+	// the caller passed --min-metric explicitly, that value wins
+	// (including 0 for "show me everything sorted"). If the flag
+	// wasn't set, fall back to rule.DefaultMinMetric per rule.
+	minMetricChanged := cmd.Flags().Changed("min-metric")
+
+	// Run every matched rule and concatenate results. Each finding
+	// already carries its RuleID so downstream consumers can split
+	// by rule. Output is one envelope per rule in JSON/MD modes; CI
+	// mode interleaves lines (per the gh/ripgrep convention).
+	results := make([]ruleRunResult, 0, len(matched))
+
+	for _, rule := range matched {
 		// Pre-flight required tables, same shape as the MCP handler.
-		if missing, err := missingTables(qg, rule.Requires); err != nil {
-			return cliExit(4, fmt.Errorf("pre-flight: %w", err))
+		if missing, mErr := missingTables(qg, rule.Requires); mErr != nil {
+			return printAndCode(4, fmt.Errorf("pre-flight: %w", mErr))
 		} else if len(missing) > 0 {
 			backendNote := ""
 			if backend := queryBuildBackend(qg); backend != "" {
 				backendNote = fmt.Sprintf(" (built with backend=%q)", backend)
 			}
-			return cliExit(2, fmt.Errorf(
+			return printAndCode(2, fmt.Errorf(
 				"rule %q requires SQL tables [%s] which aren't present in %s%s — "+
 					"_ast / _source / _imports / _lsp* come from ley-line-open's `leyline parse`; "+
 					"node_defs / node_refs / nodes come from both standalone mache and LLO; "+
 					"see docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full capability matrix",
-				findSmellsRule, strings.Join(missing, ", "), findSmellsDBPath, backendNote,
+				rule.ID, strings.Join(missing, ", "), findSmellsDBPath, backendNote,
 			))
 		}
 
-		findings, err := runSmellRule(qg, rule, findSmellsSourceID, findSmellsLimit)
-		if err != nil {
-			return cliExit(4, fmt.Errorf("rule %q: %w", findSmellsRule, err))
+		findings, rErr := runSmellRule(qg, rule, findSmellsSourceID, findSmellsLimit)
+		if rErr != nil {
+			return printAndCode(4, fmt.Errorf("rule %q: %w", rule.ID, rErr))
 		}
 
-		// Mirror the MCP handler's threshold-default semantics. If
-		// the caller passed --min-metric explicitly, that value wins
-		// (including 0 for "show me everything sorted"). If the flag
-		// wasn't set, fall back to rule.DefaultMinMetric so CLI and
-		// MCP consumers see the same default set.
 		minMetric := findSmellsMinMetric
-		if !cmd.Flags().Changed("min-metric") {
+		if !minMetricChanged {
 			minMetric = rule.DefaultMinMetric
 		}
 		if minMetric > 0 {
@@ -146,19 +220,152 @@ This tool is observability, not a gate. It never exits non-zero on findings.`,
 			findings = filtered
 		}
 		populateSnippets(qg, findings)
+		results = append(results, ruleRunResult{rule: rule, findings: findings})
+	}
 
-		return renderFindings(cmd.OutOrStdout(), rule.ID, findings, findSmellsFormat)
-	},
+	// Render — CI format streams lines across all rules; JSON/MD emit
+	// one envelope per rule so the legacy single-rule shape is preserved
+	// when the matcher returned exactly one match.
+	if findSmellsFormat == "ci" {
+		for _, r := range results {
+			if err := renderFindingsCI(cmd.OutOrStdout(), r.rule, r.findings); err != nil {
+				return 0, err
+			}
+		}
+	} else {
+		for _, r := range results {
+			if err := renderFindings(cmd.OutOrStdout(), r.rule.ID, r.findings, findSmellsFormat); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	// Gate decision (ADR-0018). --fail-on=none preserves the legacy
+	// observability contract; warn fails on warn-or-error findings;
+	// error fails only on findings from rules opted-in via
+	// Severity=error. Today every shipped rule is warn, so the
+	// effective default behavior with --fail-on=error is "exit 0".
+	exitCode := gateDecision(findSmellsFailOn, results)
+	return exitCode, nil
 }
 
-// cliExit wraps an error with a specific exit code so callers can
-// distinguish pre-flight failures from real errors. Cobra's RunE only
-// supports a single err return, so we set the process exit code via
-// os.Exit at the call site.
-func cliExit(code int, err error) error {
+// printAndCode mirrors the historical cliExit side effect (write the
+// error to stderr) but returns the intended exit code instead of
+// calling os.Exit, so tests can assert it.
+func printAndCode(code int, err error) (int, error) {
 	fmt.Fprintln(os.Stderr, err)
-	os.Exit(code)
-	return err // unreachable
+	return code, nil
+}
+
+// validFailOn returns true for the three permitted --fail-on values.
+// Anything else is a typo; surfacing it as exit 4 (DB-error class)
+// keeps the unknown-rule code (3) reserved for rule-resolution failures.
+func validFailOn(s string) bool {
+	switch s {
+	case "none", "warn", "error":
+		return true
+	}
+	return false
+}
+
+// parseTags splits the comma-separated --tags value into a lookup set.
+// Empty / whitespace tokens are dropped so `--tags=,foo,` behaves like
+// `--tags=foo`.
+func parseTags(csv string) map[string]struct{} {
+	if csv == "" {
+		return nil
+	}
+	out := make(map[string]struct{})
+	for _, t := range strings.Split(csv, ",") {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			out[t] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// matchRules resolves a --rule pattern (exact ID or glob) intersected
+// with the --tags filter to the concrete subset of smellRegistry rules
+// that should run. The pattern is matched via filepath.Match, which
+// supports `*`, `?`, and `[...]`. A pattern without metacharacters
+// behaves as exact-match (same as the legacy code path).
+//
+// Tags semantics are union (match-any): a rule passes when ANY of its
+// Tags is in the requested set. Empty tagSet disables the filter.
+//
+// Registry order is preserved so multi-match output is deterministic
+// across runs.
+func matchRules(pattern string, tagSet map[string]struct{}) ([]*SmellRule, error) {
+	// Eagerly validate the pattern so a typo like '[' surfaces here,
+	// not deep inside the loop where filepath.Match would return
+	// ErrBadPattern repeatedly.
+	if _, err := filepath.Match(pattern, ""); err != nil {
+		return nil, err
+	}
+	var out []*SmellRule
+	for i := range smellRegistry {
+		r := &smellRegistry[i]
+		ok, _ := filepath.Match(pattern, r.ID)
+		if !ok {
+			continue
+		}
+		if len(tagSet) > 0 && !hasAnyTag(r.Tags, tagSet) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// hasAnyTag implements the union-semantics tag filter: returns true
+// if the rule carries at least one of the requested tags.
+func hasAnyTag(ruleTags []string, want map[string]struct{}) bool {
+	for _, t := range ruleTags {
+		if _, ok := want[t]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// ruleRunResult bundles one rule with the findings it produced for the
+// current invocation. Package-level (not anonymous) so gateDecision can
+// take a typed slice — anonymous structs don't share identity across
+// function boundaries.
+type ruleRunResult struct {
+	rule     *SmellRule
+	findings []smellFinding
+}
+
+// gateDecision implements --fail-on per ADR-0018. Returns 1 when any
+// finding belongs to a rule whose Effective() severity crosses the
+// requested threshold; 0 otherwise. --fail-on=none always returns 0
+// (the legacy observability contract).
+func gateDecision(failOn string, results []ruleRunResult) int {
+	if failOn == "none" {
+		return 0
+	}
+	for _, r := range results {
+		if len(r.findings) == 0 {
+			continue
+		}
+		sev := r.rule.Effective()
+		switch failOn {
+		case "warn":
+			if sev == SeverityWarn || sev == SeverityError {
+				return 1
+			}
+		case "error":
+			if sev == SeverityError {
+				return 1
+			}
+		}
+	}
+	return 0
 }
 
 func renderListing(w io.Writer, format string) error {
@@ -239,16 +446,61 @@ func renderFindings(w io.Writer, ruleID string, findings []smellFinding, format 
 	return enc.Encode(resp)
 }
 
+// renderFindingsCI emits one line per finding in the gh/ripgrep/vale
+// convention: `<source_id>:<line>:<column>: <severity>: <message> [<rule-id>]`.
+// The message is the rule's Description, normalized (newlines -> spaces,
+// truncated to ~120 chars) so editors can parse the line cleanly.
+// Severity is the rule's Effective() value so the on-the-wire shape
+// reflects the gate decision the consumer would see.
+func renderFindingsCI(w io.Writer, rule *SmellRule, findings []smellFinding) error {
+	sev := string(rule.Effective())
+	msg := truncateOneLine(rule.Description, 120)
+	for _, f := range findings {
+		if _, err := fmt.Fprintf(w, "%s:%d:%d: %s: %s [%s]\n",
+			f.SourceID, f.Line, f.Column, sev, msg, rule.ID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// truncateOneLine collapses newlines/tabs/CRs to single spaces and
+// truncates at maxLen with an ellipsis, so a multiline rule description
+// renders cleanly on the CI format's one-line shape. The cap is fuzzy
+// (gh/vale don't enforce a hard limit) but ~120 keeps lines reviewable
+// in a terminal without horizontal scroll on most setups.
+func truncateOneLine(s string, maxLen int) string {
+	s = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(s)
+	// Collapse runs of spaces so the output stays compact.
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > maxLen {
+		// Reserve 3 chars for the ellipsis so the total length stays
+		// within maxLen for downstream parsers that buffer line-by-line.
+		if maxLen > 3 {
+			s = s[:maxLen-3] + "..."
+		} else {
+			s = s[:maxLen]
+		}
+	}
+	return s
+}
+
 func escapePipes(s string) string {
 	return strings.ReplaceAll(s, "|", `\|`)
 }
 
 func init() {
 	findSmellsCmd.Flags().StringVar(&findSmellsDBPath, "db", "", "path to the SQLite database (mache-built or leyline-built) — required")
-	findSmellsCmd.Flags().StringVar(&findSmellsRule, "rule", "", "rule ID to run; omit to list available rules")
+	findSmellsCmd.Flags().StringVar(&findSmellsRule, "rule", "", "rule ID or glob (e.g. 'drift_doc_*'); omit to list available rules")
 	findSmellsCmd.Flags().StringVar(&findSmellsSourceID, "source-id", "", "scope rule to a single source file path")
-	findSmellsCmd.Flags().IntVar(&findSmellsLimit, "limit", 200, "cap result count")
+	findSmellsCmd.Flags().IntVar(&findSmellsLimit, "limit", 200, "cap result count per rule")
 	findSmellsCmd.Flags().Int64Var(&findSmellsMinMetric, "min-metric", 0, "drop findings whose metric is below this threshold")
-	findSmellsCmd.Flags().StringVar(&findSmellsFormat, "format", "json", "output format: json or md")
+	findSmellsCmd.Flags().StringVar(&findSmellsFormat, "format", "json", "output format: json, md, or ci")
+	findSmellsCmd.Flags().StringVar(&findSmellsFailOn, "fail-on", "error", "exit non-zero when findings reach severity: none | warn | error (ADR-0018)")
+	findSmellsCmd.Flags().StringVar(&findSmellsTags, "tags", "", "comma-separated tags; runs rules whose Tags contain ANY of these values (set union)")
 	rootCmd.AddCommand(findSmellsCmd)
 }
