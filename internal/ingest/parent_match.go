@@ -1,8 +1,10 @@
 package ingest
 
-import "maps"
+import (
+	"maps"
 
-import sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/smacker/go-tree-sitter"
+)
 
 // parentAwareMatch wraps a Match and injects a _parent key into Values()
 // containing the parent match's values. This allows child templates to
