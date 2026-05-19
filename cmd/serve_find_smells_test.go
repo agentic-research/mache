@@ -3239,3 +3239,127 @@ func TestFindSmells_DriftDocOutdatedCount_PlaceholderQueryReturnsZeroFindings(t 
 		"v1 placeholder returns zero findings; follow-up bead under mache-e1b6c8 will replace this once the TOML loader + claim extractor land")
 	assert.Empty(t, findings)
 }
+
+// TestFindSmells_DeadCode_CorrectnessParity_FixtureUnchanged — bead
+// mache-68980e. Pins the EXACT finding set the rule produces on the
+// canonical regression-floor fixture, so the OR-join → UNION-arms SQL
+// rewrite (the perf fix) cannot silently change which constructs are
+// flagged dead.
+//
+// The fixture exercises every alive-check path the original OR-join
+// covered:
+//
+//   - L_0 mention arm (token equality):
+//     Live group 1 — bare 'LiveHelper' token referenced from a
+//     caller's source, def must remain alive.
+//
+//   - Receiver-method arm (post-dot leaf match):
+//     Live group 2 — 'Greeter.Greet' def with a bare 'Greet' ref
+//     from a caller. Without the receiver-strip arm, every method
+//     under the go-schema methods/ branch would look dead. The UNION
+//     rewrite preserves this via its third arm.
+//
+//   - Skip-list cooperation (named tokens + Test prefix + generated
+//     file suffix + orphan filter):
+//     Groups 3-6 — each on a different skip dimension; none should
+//     fire regardless of alive-check shape.
+//
+//   - True positive (dead + not skip-listed + has source):
+//     Group 7 — TrulyDead must fire (the lone expected finding).
+//
+// The fixture and expected output are identical to
+// TestFindSmells_DeadCodeRegressionFloor (#284), but this test exists
+// as the explicit parity assertion for the mache-68980e SQL rewrite:
+// re-running the rule against the same node_defs / node_refs / nodes
+// rows yields the same nodeID set and the same Total, byte-for-byte.
+// Future SQL changes to the alive CTE (or any structural rewrite
+// within dead_code) must keep this passing — when they don't, the
+// failing diff IS the regression and the right move is to root-cause,
+// not silence.
+func TestFindSmells_DeadCode_CorrectnessParity_FixtureUnchanged(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Mirrors TestFindSmells_DeadCodeRegressionFloor's fixture
+		-- exactly — kept as a separate seed so the two tests are
+		-- independently auditable. If the regression-floor fixture
+		-- ever needs to evolve, this test pins the parity contract:
+		-- the alive-check SQL rewrite changes the PLAN, never the
+		-- ROWS.
+
+		-- Live group 1: L_0 mention arm (bare token equality).
+		INSERT INTO node_defs VALUES
+		  ('LiveHelper',     'pkg/functions/LiveHelper'),
+		  ('pkg.LiveHelper', 'pkg/functions/LiveHelper');
+		INSERT INTO node_refs VALUES ('LiveHelper', 'pkg/functions/Caller/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/LiveHelper', 'pkg/functions', 'LiveHelper', 1, 0, 'helper.go', ''),
+		  ('pkg/functions/Caller',     'pkg/functions', 'Caller',     1, 0, 'caller.go', '');
+
+		-- Live group 2: receiver-method arm (post-dot leaf match).
+		INSERT INTO node_defs VALUES
+		  ('Greeter.Greet',     'pkg/methods/Greeter.Greet'),
+		  ('pkg.Greeter.Greet', 'pkg/methods/Greeter.Greet'),
+		  ('Greet',             'pkg/methods/Greeter.Greet');
+		INSERT INTO node_refs VALUES ('Greet', 'pkg/functions/CallSite/source');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Greeter.Greet', 'pkg/methods',   'Greeter.Greet', 1, 0, 'greet.go',    ''),
+		  ('pkg/functions/CallSite',    'pkg/functions', 'CallSite',      1, 0, 'callsite.go', '');
+
+		-- Skip group 3: interface-method named skip (vtab.Module).
+		INSERT INTO node_defs VALUES
+		  ('Cursor.BestIndex', 'pkg/methods/Cursor.BestIndex'),
+		  ('BestIndex',        'pkg/methods/Cursor.BestIndex');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/methods/Cursor.BestIndex', 'pkg/methods', 'Cursor.BestIndex', 1, 0, 'vtab.go', '');
+
+		-- Skip group 4: Test prefix (reflective dispatch by go test).
+		INSERT INTO node_defs VALUES
+		  ('TestSomething', 'pkg/functions/TestSomething');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/TestSomething', 'pkg/functions', 'TestSomething', 1, 0, 'foo_test.go', '');
+
+		-- Skip group 5: generated-file suffix.
+		INSERT INTO node_defs VALUES
+		  ('GeneratedFn', 'pkg/functions/GeneratedFn');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/GeneratedFn', 'pkg/functions', 'GeneratedFn', 1, 0, 'foo.capnp.go', '');
+
+		-- Skip group 6: orphan (no resolvable source_file).
+		INSERT INTO node_defs VALUES
+		  ('OrphanFn', 'pkg/functions/OrphanFn');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/OrphanFn', 'pkg/functions', 'OrphanFn', 1, 0, '', '');
+
+		-- True positive: dead, not skip-listed, has source_file.
+		INSERT INTO node_defs VALUES
+		  ('TrulyDead',     'pkg/functions/TrulyDead'),
+		  ('pkg.TrulyDead', 'pkg/functions/TrulyDead');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/functions/TrulyDead', 'pkg/functions', 'TrulyDead', 1, 0, 'truly_dead.go', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code", "limit": 100}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Equal(t, []string{"pkg/functions/TrulyDead"}, gotIDs,
+		"mache-68980e parity contract: the SQL rewrite must produce the "+
+			"identical finding set on the canonical fixture. Any diff here "+
+			"is a behavioral regression smuggled into a perf change.")
+	assert.Equal(t, 1, resp.Total,
+		"mache-68980e parity contract: Total must equal len(findings) AND match the pre-rewrite value (1).")
+}
