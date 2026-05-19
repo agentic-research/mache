@@ -181,15 +181,15 @@ func parseProfile(r io.Reader) (profile, error) {
 		}
 		span := parts[0]
 		hitsStr := parts[2]
-		comma := strings.Index(span, ",")
-		if comma < 0 {
+		before, after, ok := strings.Cut(span, ",")
+		if !ok {
 			return nil, fmt.Errorf("malformed span (no comma): %q", span)
 		}
-		sLine, err := parsePosLine(span[:comma])
+		sLine, err := parsePosLine(before)
 		if err != nil {
 			return nil, fmt.Errorf("bad start in %q: %w", line, err)
 		}
-		eLine, err := parsePosLine(span[comma+1:])
+		eLine, err := parsePosLine(after)
 		if err != nil {
 			return nil, fmt.Errorf("bad end in %q: %w", line, err)
 		}
@@ -233,7 +233,7 @@ func modulePathFromGoMod() string {
 	for {
 		p := dir + string(os.PathSeparator) + "go.mod"
 		if data, err := os.ReadFile(p); err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
+			for line := range strings.SplitSeq(string(data), "\n") {
 				line = strings.TrimSpace(line)
 				if strings.HasPrefix(line, "module ") {
 					return strings.TrimSpace(strings.TrimPrefix(line, "module"))
@@ -263,11 +263,11 @@ func parentDir(path string) string {
 
 // parsePosLine extracts the line number from a "line.col" token.
 func parsePosLine(tok string) (int, error) {
-	dot := strings.Index(tok, ".")
-	if dot < 0 {
+	before, _, ok := strings.Cut(tok, ".")
+	if !ok {
 		return 0, fmt.Errorf("missing dot in %q", tok)
 	}
-	return strconv.Atoi(tok[:dot])
+	return strconv.Atoi(before)
 }
 
 // parseDiff walks a unified diff and returns file → set of NEW prod line numbers.
@@ -358,11 +358,11 @@ func parseDiff(r io.Reader) (diffSet, error) {
 
 // parseHunkNewStart pulls the +newstart from "@@ -a,b +c,d @@".
 func parseHunkNewStart(s string) (int, error) {
-	plus := strings.Index(s, "+")
-	if plus < 0 {
+	_, after, ok := strings.Cut(s, "+")
+	if !ok {
 		return 0, fmt.Errorf("no + in hunk header")
 	}
-	rest := s[plus+1:]
+	rest := after
 	// rest = "c,d @@ ..."
 	end := strings.IndexAny(rest, " ,")
 	if end < 0 {
