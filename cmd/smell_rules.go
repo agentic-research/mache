@@ -53,6 +53,53 @@ type SmellRule struct {
 	// default and see everything; any non-zero min_metric also
 	// overrides.
 	DefaultMinMetric int64
+	// Severity controls whether a finding from this rule is fatal to
+	// the gate. Three tiers per ESLint precedent (off/warn/error) —
+	// see ADR-0018 and bead mache-ec1a06 for the prior-art rationale.
+	//
+	//   - "off"   — rule defined but never produces findings; useful
+	//     for shipping a rule in a pack that's disabled for now
+	//   - "warn"  — emits findings, exit 0 (observability default)
+	//   - "error" — emits findings, exit 1 (rule author asserts this
+	//     drift must not ship)
+	//
+	// Default ("") is treated as "warn" — preserves the existing
+	// observability contract for all rules that haven't opted in.
+	// Gate decision is made at CLI invocation via --fail-on (pylint
+	// precedent): rule says what's true, gate decides whether truth
+	// is fatal.
+	Severity Severity
+	// Tags is a free-form classification used for CLI selection via
+	// --tags=foo,bar. Per ADR-0018 + research, NOT a closed enum:
+	// stages (pre-commit, ci) emerge as CLI profiles from
+	// (--tags × --fail-on) combinations, not from a fixed schema.
+	// Cap at 3-5 tags per rule to avoid the clippy-group explosion;
+	// expand the vocabulary deliberately, not reactively.
+	Tags []string
+}
+
+// Severity is one of off / warn / error. ESLint precedent (string
+// names, no numeric aliases). See mache-ec1a06 for the prior-art
+// rationale across ruff/pylint/eslint/clippy/semgrep.
+type Severity string
+
+const (
+	SeverityOff   Severity = "off"
+	SeverityWarn  Severity = "warn"
+	SeverityError Severity = "error"
+)
+
+// Effective returns the resolved severity, treating the zero value
+// ("") as warn — the default for any rule that hasn't opted in.
+// Callers asking "is this rule fatal" should always go through
+// Effective() rather than reading Severity directly.
+func (r *SmellRule) Effective() Severity {
+	switch r.Severity {
+	case SeverityOff, SeverityError:
+		return r.Severity
+	default:
+		return SeverityWarn
+	}
 }
 
 // smellRegistry holds the registered rules. Built-ins below; external

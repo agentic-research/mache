@@ -1,9 +1,17 @@
 # ADR-0018: Doc-Drift Detection as Executable Specs (find_smells First-Class Workflow)
 
 Date: 2026-05-19
-Status: Proposed
+Status: Accepted (vocabulary amended post-merge per `mache-ec1a06`)
 Bead: `mache-e1b6c8`
-Pairs with: `mache-96341d` (rule categorization), `mache-966e22` (external rule pack distribution), `mache-9e03df` (viper+TOML config — *bead, not yet shipped*)
+Pairs with: `mache-96341d` (rule categorization), `mache-966e22` (external rule pack distribution), `mache-9e03df` (viper+TOML config — *bead, not yet shipped*), `mache-ec1a06` (severity+tags vocabulary, prior-art research)
+
+> **Amendment 2026-05-19 (`mache-ec1a06`):** Prior-art research across ruff/pylint/eslint/clippy/semgrep (full report: `/tmp/prior-art-rule-classification.md`) refined the schema before implementation. Two changes from the original draft:
+>
+> - **Severity vocabulary:** `block | warn | info` → **`off | warn | error`** (ESLint precedent, three-tier near-universal). `block` was bespoke; `error` aligns with every existing 2026 linter. `info` was non-actionable; `off` matches clippy's `allow` and lets a rule ship-disabled in a pack.
+> - **`Stages []string` field dropped.** None of the 5 surveyed tools puts stages on the rule. Replaced with **`Tags []string`** (free-form, capped at 3-5) — stages emerge as CLI profiles from `(--tags × --fail-on)` combinations at invocation, not from a frozen enum baked into the schema. Same agent-native local/CI symmetry, more flexible.
+> - **`--fail-on` default** is `error` (not the original `never`). Observability contract is preserved by construction because new rules default to `Severity = "warn"` — no rule ships at error severity unless the author opts in. CI escalates via `--fail-on=warn` (clippy `-D warnings` idiom).
+>
+> The rest of the ADR (PR roadmap, scope, deferred federation, SDD framing) stands as-is. The implementation PRs ship the amended vocabulary.
 
 ## Context
 

@@ -140,15 +140,20 @@ func rulesListing() any {
 		Description      string   `json:"description"`
 		Requires         []string `json:"requires,omitempty"`
 		DefaultMinMetric int64    `json:"default_min_metric,omitempty"`
+		Severity         Severity `json:"severity"` // always emitted; "warn" when rule omits the field
+		Tags             []string `json:"tags,omitempty"`
 	}
 	out := make([]ruleSummary, 0, len(smellRegistry))
-	for _, r := range smellRegistry {
+	for i := range smellRegistry {
+		r := &smellRegistry[i]
 		out = append(out, ruleSummary{
 			ID:               r.ID,
 			Languages:        r.Languages,
 			Description:      r.Description,
 			Requires:         r.Requires,
 			DefaultMinMetric: r.DefaultMinMetric,
+			Severity:         r.Effective(),
+			Tags:             r.Tags,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
