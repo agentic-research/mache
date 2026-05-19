@@ -252,9 +252,18 @@ func DiscoverOrStart() (string, error) {
 	// bound this exact path between findExistingSocket and here; if so,
 	// piggyback rather than starting a second daemon that will fight for
 	// the same arena/control files.
-	if isSocketAlive(sockPath) {
-		return sockPath, nil
-	}
+	//
+	// coverage:ignore — defensive TOCTOU guard against an external
+	// process binding sockPath between findExistingSocket (L179) and
+	// here. Cannot be exercised hermetically in-process: if a listener
+	// is alive at sockPath when findExistingSocket runs, fast-path 1
+	// returns at L181; if it isn't, only an external second-process
+	// race can flip isSocketAlive to true here. The same path is
+	// safety-netted by the post-spawn poll loop (L290-297) if a
+	// concurrent spawn lands on the same inode.
+	if isSocketAlive(sockPath) { // coverage:ignore
+		return sockPath, nil // coverage:ignore
+	} // coverage:ignore
 	// And clear any leftover socket inode so the daemon can bind.
 	_ = os.Remove(sockPath)
 
