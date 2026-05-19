@@ -292,6 +292,24 @@ tasks:
     cmds:
       - bash scripts/docs-lint.sh
 
+  coverage-gate:
+    desc: Run the diff-aware NEW-CODE coverage gate against the current branch
+    vars:
+      # Override BASE=<ref> on the command line for non-default base branches
+      # (e.g. `task coverage-gate BASE=origin/feat/godfile-decomposition`).
+      BASE: '{{.BASE | default "origin/main"}}'
+      DIFF: /tmp/.coverage-gate.diff
+      COV: /tmp/.coverage-gate.cov
+    cmds:
+      # IMPORTANT: -B5% -M5% -C5% are required for rename/copy/break-rewrite
+      # detection to fire — plain `git diff` does not emit `similarity index`
+      # or `dissimilarity index` headers, so the gate's -rename-threshold
+      # logic becomes a no-op. See tools/coverage-gate/main.go package
+      # docstring for full rationale.
+      - git diff -B5% -M5% -C5% {{.BASE}}...HEAD > {{.DIFF}}
+      - go test -coverprofile={{.COV}} ./...
+      - go run ./tools/coverage-gate {{.COV}} {{.DIFF}}
+
   check:
     desc: Run all checks (fmt, vet, lint, test, validate, docs:lint)
     cmds:
