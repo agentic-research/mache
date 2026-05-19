@@ -40,8 +40,8 @@ func (errCallersGraph) GetCallers(token string) ([]*graph.Node, error) {
 	return nil, errors.New("synthetic backend failure")
 }
 
-// TestFindCallers_BackendErrorSurfacesAsMCPError pins L22-23 of
-// serve_handler_find_callers.go: when the underlying Graph.GetCallers
+// TestFindCallers_BackendErrorSurfacesAsMCPError pins makeFindCallersHandler's
+// error-wrapping contract: when the underlying Graph.GetCallers
 // returns an error, the handler wraps it in NewToolResultError rather
 // than letting it propagate. Agents polling a misbehaving backend
 // should see "get callers: ..." with IsError=true, not a connection
@@ -58,12 +58,13 @@ func TestFindCallers_BackendErrorSurfacesAsMCPError(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "synthetic backend failure")
 }
 
-// TestFindCallers_ControlModeEmptyHasRetryHint pins L61-62: when
-// serveControl is non-empty (mache running against a ley-line daemon's
-// arena-backed control block) and GetCallers returns no callers, the
-// handler returns the "[] — daemon may still be parsing" hint rather
-// than the bare "[]". Agents need this signal to know that an empty
-// result is potentially provisional during cold-start parse.
+// TestFindCallers_ControlModeEmptyHasRetryHint pins the control-mode
+// empty-result hint: when serveControl is non-empty (mache running
+// against a ley-line daemon's arena-backed control block) and
+// GetCallers returns no callers, the handler returns the "[] — daemon
+// may still be parsing" hint rather than the bare "[]". Agents need
+// this signal to know that an empty result is potentially provisional
+// during cold-start parse.
 func TestFindCallers_ControlModeEmptyHasRetryHint(t *testing.T) {
 	prev := serveControl
 	serveControl = "/tmp/synthetic-control.ctrl"
@@ -84,12 +85,13 @@ func TestFindCallers_ControlModeEmptyHasRetryHint(t *testing.T) {
 // get_sheaf_status: dial-failure + status-error paths
 // ---------------------------------------------------------------------------
 
-// TestGetSheafStatus_DialFailureReturnsUnavailable pins L43-44: when
-// DiscoverSocket finds a path (LEYLINE_SOCKET points at an existing
-// file) but DialSocket fails (the file isn't a live UDS listener, or
-// the listener is rejecting), the handler must return the structured
-// {available: false, reason: ...} response rather than an MCP error.
-// This is the graceful-degradation contract documented at the top of
+// TestGetSheafStatus_DialFailureReturnsUnavailable pins the dial-failure
+// graceful-degradation path: when DiscoverSocket finds a path
+// (LEYLINE_SOCKET points at an existing file) but DialSocket fails
+// (the file isn't a live UDS listener, or the listener is rejecting),
+// the handler must return the structured {available: false, reason:
+// ...} response rather than an MCP error. This is the graceful-
+// degradation contract documented at the top of
 // serve_handler_get_sheaf_status.go.
 func TestGetSheafStatus_DialFailureReturnsUnavailable(t *testing.T) {
 	leyline.StopManaged()
@@ -116,20 +118,20 @@ func TestGetSheafStatus_DialFailureReturnsUnavailable(t *testing.T) {
 	assert.Contains(t, reason, bogusSock, "reason must include the offending path")
 }
 
-// TestGetSheafStatus_DaemonErrorReturnsUnavailable pins L50-51: when
-// the daemon is reachable but sheaf_status itself returns an error
-// payload (sheaf subsystem uninitialized, persistence error, etc.),
-// the handler returns {available: false, reason: "sheaf_status: ..."}.
-// Same graceful-degradation contract as the dial-failure path — agents
-// must not see transport-level errors for a routine status poll.
+// TestGetSheafStatus_DaemonErrorReturnsUnavailable pins the daemon-error
+// graceful-degradation path: when the daemon is reachable but
+// sheaf_status itself returns an error payload (sheaf subsystem
+// uninitialized, persistence error, etc.), the handler returns
+// {available: false, reason: "sheaf_status: ..."}. Same graceful-
+// degradation contract as the dial-failure path — agents must not see
+// transport-level errors for a routine status poll.
 func TestGetSheafStatus_DaemonErrorReturnsUnavailable(t *testing.T) {
 	leyline.StopManaged()
 	sockPath := startMockSheafServer(t, func(req map[string]any) map[string]any {
 		assert.Equal(t, "sheaf_status", req["op"])
 		// SheafClient.Status surfaces any "error" field on the
-		// response as a Go error — see internal/leyline/sheaf.go
-		// L206-208. This is the wire-level contract for daemon
-		// failures.
+		// response as a Go error — see internal/leyline/sheaf.go.
+		// This is the wire-level contract for daemon failures.
 		return map[string]any{
 			"error": "sheaf not initialized — call sheaf_compute first",
 		}
@@ -160,6 +162,9 @@ func TestGetSheafStatus_DaemonErrorReturnsUnavailable(t *testing.T) {
 // requested k back as len(results) capped to len(canned).
 func startMockSemanticServer(t *testing.T, canned []map[string]any, returnError string) string {
 	t.Helper()
+	// NOTE: t.TempDir() returns paths under $TMPDIR which on macOS
+	// (/var/folders/...) exceed the 104-byte sun_path limit for UDS
+	// sockets. Keep using a short /tmp base — mirrors startMockSheafServer.
 	dir, err := os.MkdirTemp("/tmp", "mache-sem-tool-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
@@ -220,17 +225,18 @@ func startMockSemanticServer(t *testing.T, canned []map[string]any, returnError 
 // want exercised.
 func isolateLeyline(t *testing.T) {
 	t.Helper()
-	leyline.StopManaged()
+	t.Setenv("LEYLINE_SOCKET", "") // clear any ambient daemon path
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MACHE_NO_LEYLINE", "1") // block auto-download + auto-spawn
+	leyline.StopManaged()
 }
 
-// TestSemanticSearch_DaemonReturnsError pins L38-45: when the daemon
-// is reachable AND DialSocket succeeds but the semantic_search op
-// itself fails (daemon doesn't have embeddings indexed yet), the
-// handler returns the "does not support embeddings" message. Same
-// agent-visible diagnosability as the dial-fail case but distinct
-// branch.
+// TestSemanticSearch_DaemonReturnsError pins the daemon-side error
+// path in makeSemanticSearchHandler: when the daemon is reachable AND
+// DialSocket succeeds but the semantic_search op itself fails (daemon
+// doesn't have embeddings indexed yet), the handler returns the "does
+// not support embeddings" message. Same agent-visible diagnosability
+// as the dial-fail case but distinct branch.
 func TestSemanticSearch_DaemonReturnsError(t *testing.T) {
 	isolateLeyline(t)
 	sockPath := startMockSemanticServer(t, nil, "embeddings not indexed")
@@ -246,11 +252,11 @@ func TestSemanticSearch_DaemonReturnsError(t *testing.T) {
 		"daemon-side semantic_search error must surface as the embeddings-not-available message")
 }
 
-// TestSemanticSearch_EmptyResults pins L47-49: when the daemon
-// responds successfully with zero hits (rare in practice but the
-// pattern is "query too obscure to embed"), the handler must short-
-// circuit to "[]" rather than spending cycles on graph enrichment of
-// an empty slice.
+// TestSemanticSearch_EmptyResults pins the empty-result short-circuit:
+// when the daemon responds successfully with zero hits (rare in
+// practice but the pattern is "query too obscure to embed"), the
+// handler must short-circuit to "[]" rather than spending cycles on
+// graph enrichment of an empty slice.
 func TestSemanticSearch_EmptyResults(t *testing.T) {
 	isolateLeyline(t)
 	sockPath := startMockSemanticServer(t, nil, "")
@@ -265,13 +271,13 @@ func TestSemanticSearch_EmptyResults(t *testing.T) {
 	assert.Equal(t, "[]", resultText(t, result), "zero hits must serialize to the bare empty-array literal")
 }
 
-// TestSemanticSearch_EnrichesFileResults pins L51-89 (the bulk of the
-// uncovered code): when the daemon returns hits, the handler enriches
-// each one with graph metadata — Type=file for leaf nodes, Type=
-// directory for dirs, plus a content snippet for files. This is the
-// whole point of the handler living in mache rather than agents
-// calling the daemon directly: the enrichment is what makes the
-// results actionable. Pin it.
+// TestSemanticSearch_EnrichesFileResults pins the graph-enrichment
+// path (the bulk of the uncovered code): when the daemon returns
+// hits, the handler enriches each one with graph metadata — Type=file
+// for leaf nodes, Type=directory for dirs, plus a content snippet for
+// files. This is the whole point of the handler living in mache
+// rather than agents calling the daemon directly: the enrichment is
+// what makes the results actionable. Pin it.
 func TestSemanticSearch_EnrichesFileResults(t *testing.T) {
 	isolateLeyline(t)
 
@@ -317,11 +323,11 @@ func TestSemanticSearch_EnrichesFileResults(t *testing.T) {
 	assert.Empty(t, out[2].Snippet)
 }
 
-// TestSemanticSearch_LongFileTruncatesSnippet pins L77-79: when a
-// file's content exceeds the 200-byte snippet window, the handler
-// appends "..." to signal truncation. Without this guard, an agent
-// would see a snippet that happened to be exactly 200 bytes long and
-// might assume it's the whole file.
+// TestSemanticSearch_LongFileTruncatesSnippet pins the snippet
+// truncation marker: when a file's content exceeds the 200-byte
+// snippet window, the handler appends "..." to signal truncation.
+// Without this guard, an agent would see a snippet that happened to
+// be exactly 200 bytes long and might assume it's the whole file.
 func TestSemanticSearch_LongFileTruncatesSnippet(t *testing.T) {
 	isolateLeyline(t)
 
