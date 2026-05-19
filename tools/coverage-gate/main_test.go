@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +12,13 @@ import (
 	"strings"
 	"testing"
 )
+
+// errReader is an io.Reader that returns a non-EOF error on first Read.
+// Used to drive bufio.Scanner into its err-not-EOF path so we can pin
+// parseProfile / parseDiff's `if err := sc.Err(); err != nil` branches.
+type errReader struct{ err error }
+
+func (e *errReader) Read([]byte) (int, error) { return 0, e.err }
 
 func TestParseProfile(t *testing.T) {
 	in := `mode: set
@@ -398,5 +408,380 @@ func TestIntersectStableSort(t *testing.T) {
 	got := intersect(prof, ds)["a.go"]
 	if !sort.IntsAreSorted(got) {
 		t.Errorf("expected sorted output, got %v", got)
+	}
+}
+
+// --- In-process run() tests ---
+//
+// These call run() directly (no os/exec) so the cover profile counts
+// every line of main()'s logic. The os/exec integration tests above
+// stay — they exercise the real binary end-to-end — but coverage of
+// run() comes from these.
+
+func TestRun_CleanExitOnCoveredDiff(t *testing.T) {
+	cover := "mode: set\nfoo.go:10.1,12.2 2 1\n"
+	diff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -1,1 +10,2 @@
+ context
++added code
+`
+	covPath := writeTemp(t, "cover.out", cover)
+	diffPath := writeTemp(t, "diff.patch", diff)
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{covPath, diffPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0 on clean diff, got %d (stderr=%q stdout=%q)", code, stderr.String(), stdout.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("expected empty stdout on clean exit, got %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("expected empty stderr on clean exit, got %q", stderr.String())
+	}
+}
+
+func TestRun_NonZeroExitWithUncoveredLines(t *testing.T) {
+	// Two files so we exercise the sort + multi-file render path.
+	cover := `mode: set
+a.go:10.1,12.2 2 0
+b.go:42.1,42.10 1 0
+`
+	diff := `diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -1,1 +10,3 @@
++code1
++code2
++code3
+diff --git a/b.go b/b.go
+--- a/b.go
++++ b/b.go
+@@ -1,1 +42,1 @@
++code
+`
+	covPath := writeTemp(t, "cover.out", cover)
+	diffPath := writeTemp(t, "diff.patch", diff)
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{covPath, diffPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit 1, got %d (stderr=%q)", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "NEW PROD LINES NOT COVERED:") {
+		t.Errorf("missing header in stdout, got: %q", out)
+	}
+	// Files sorted: a.go before b.go.
+	aIdx := strings.Index(out, "a.go")
+	bIdx := strings.Index(out, "b.go")
+	if aIdx < 0 || bIdx < 0 || aIdx > bIdx {
+		t.Errorf("expected a.go before b.go in sorted output, got: %q", out)
+	}
+	// Range collapse: 10-12, single L42.
+	if !strings.Contains(out, "L10-12") {
+		t.Errorf("expected L10-12 collapsed range, got: %q", out)
+	}
+	if !strings.Contains(out, "L42\n") {
+		t.Errorf("expected single L42, got: %q", out)
+	}
+	// Totals line.
+	if !strings.Contains(out, "4 new prod line(s) uncovered") {
+		t.Errorf("expected '4 new prod line(s) uncovered' total, got: %q", out)
+	}
+}
+
+func TestRun_ErrorOnMissingProfile(t *testing.T) {
+	// Profile path that doesn't exist; diff is irrelevant (won't be read).
+	missing := filepath.Join(t.TempDir(), "does-not-exist.cov")
+	diffPath := writeTemp(t, "diff.patch", "")
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{missing, diffPath}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 on missing profile, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "error opening cover profile") {
+		t.Errorf("expected 'error opening cover profile' in stderr, got: %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("expected empty stdout on io error, got %q", stdout.String())
+	}
+}
+
+func TestRun_UsageOnWrongArgCount(t *testing.T) {
+	// Zero args.
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 on zero args, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "usage: coverage-gate") {
+		t.Errorf("expected usage line in stderr, got: %q", stderr.String())
+	}
+
+	// One arg.
+	stdout.Reset()
+	stderr.Reset()
+	code = run("coverage-gate", []string{"only-one"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 on one arg, got %d", code)
+	}
+
+	// Three args.
+	stdout.Reset()
+	stderr.Reset()
+	code = run("coverage-gate", []string{"a", "b", "c"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 on three args, got %d", code)
+	}
+}
+
+func TestRun_ErrorOnMalformedProfile(t *testing.T) {
+	// Profile that parses past the mode header but trips parseProfile.
+	covPath := writeTemp(t, "cover.out", "mode: set\nno-colon-here 1 1\n")
+	diffPath := writeTemp(t, "diff.patch", "")
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{covPath, diffPath}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 on malformed profile, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "error parsing cover profile") {
+		t.Errorf("expected 'error parsing cover profile' in stderr, got: %q", stderr.String())
+	}
+}
+
+func TestRun_ErrorOnMissingDiff(t *testing.T) {
+	// Valid (empty) profile, missing diff file.
+	covPath := writeTemp(t, "cover.out", "mode: set\n")
+	missingDiff := filepath.Join(t.TempDir(), "does-not-exist.diff")
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{covPath, missingDiff}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 on missing diff, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "error opening diff") {
+		t.Errorf("expected 'error opening diff' in stderr, got: %q", stderr.String())
+	}
+}
+
+func TestParseProfile_ScannerError(t *testing.T) {
+	// Pins parseProfile's `if err := sc.Err(); err != nil` branch
+	// (L199-200): bufio.Scanner surfaces non-EOF read errors via
+	// Err() after Scan() returns false. We inject a custom reader
+	// that fails on the first Read; parseProfile must propagate the
+	// underlying error, not swallow it.
+	want := errors.New("synthetic read failure")
+	_, err := parseProfile(&errReader{err: want})
+	if err == nil {
+		t.Fatalf("expected parseProfile to surface reader error, got nil")
+	}
+	if !errors.Is(err, want) && !strings.Contains(err.Error(), want.Error()) {
+		t.Errorf("expected %q in error, got %v", want, err)
+	}
+}
+
+func TestIsCountableProdLine_BlockCommentContinuation(t *testing.T) {
+	// Pins isCountableProdLine's `if strings.HasPrefix(trimmed, "*")`
+	// branch (L402-404 in main.go): inside a /* */ block comment the
+	// continuation lines typically start with " * ..." — these must
+	// NOT be flagged as countable prod lines.
+	if isCountableProdLine(" * continuation line") {
+		t.Errorf("expected ' * continuation' to be excluded as block-comment continuation")
+	}
+	if isCountableProdLine("\t* tab-indented continuation") {
+		t.Errorf("expected tab-indented '* ...' continuation to be excluded")
+	}
+}
+
+func TestParseDiff_NoNewlineAtEndOfFile(t *testing.T) {
+	// Pins the `case '\\':` branch in parseDiff (L345 in main.go).
+	// `\ No newline at end of file` is a marker emitted by `git diff`
+	// when the file lacks a trailing newline. It must NOT advance
+	// newLine and must NOT be flagged as countable.
+	in := `diff --git a/x.go b/x.go
+--- a/x.go
++++ b/x.go
+@@ -1,1 +5,2 @@
+ context
++added without trailing newline
+\ No newline at end of file
+`
+	ds, err := parseDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatalf("parseDiff: %v", err)
+	}
+	// L6 is the "+added" line; L7 would be the "\ No newline" marker.
+	// Marker must not produce a tracked line at 7.
+	if ds["x.go"][7] {
+		t.Errorf("'\\ No newline at end of file' marker must not be counted as a prod line, got L7 in: %v", ds["x.go"])
+	}
+	if !ds["x.go"][6] {
+		t.Errorf("expected the real added line at L6, got: %v", ds["x.go"])
+	}
+}
+
+func TestParseDiff_ScannerError(t *testing.T) {
+	// Pins parseDiff's `if err := sc.Err(); err != nil` branch
+	// (L350-351). Same mechanism as TestParseProfile_ScannerError.
+	want := errors.New("synthetic read failure")
+	_, err := parseDiff(&errReader{err: want})
+	if err == nil {
+		t.Fatalf("expected parseDiff to surface reader error, got nil")
+	}
+	if !errors.Is(err, want) && !strings.Contains(err.Error(), want.Error()) {
+		t.Errorf("expected %q in error, got %v", want, err)
+	}
+}
+
+// silence: ensure io is used even on platforms / build configs where
+// the only test reference happens to be in a guarded path.
+var _ = io.Reader(&errReader{})
+
+func TestParseProfile_SkipsEmptyLines(t *testing.T) {
+	// An empty line mid-profile must be tolerated (not error), and the
+	// subsequent records must still parse. Pins parseProfile's
+	// `if line == "" { continue }` branch (L163).
+	in := "mode: set\nfoo.go:1.1,2.2 1 1\n\nbar.go:5.1,9.2 4 0\n"
+	prof, err := parseProfile(strings.NewReader(in))
+	if err != nil {
+		t.Fatalf("parseProfile: %v", err)
+	}
+	if len(prof) != 2 {
+		t.Errorf("expected 2 files parsed across the empty line, got %d (%v)", len(prof), prof)
+	}
+}
+
+func TestParseProfile_SpanWithoutComma(t *testing.T) {
+	// Pins parseProfile's `if comma < 0 { error }` branch (L182-183).
+	// The token has 3 fields after the colon but the first field has
+	// no comma — `10.1 15.3 1` parses to len(parts)==3 but span lacks ','.
+	in := "mode: set\nfoo.go:10.1 1 1\n"
+	if _, err := parseProfile(strings.NewReader(in)); err == nil {
+		t.Errorf("expected error on span without comma, got nil")
+	}
+}
+
+func TestParseHunkNewStart_NoPlus(t *testing.T) {
+	// Pins the `if plus < 0 { error }` branch (L359-360) of
+	// parseHunkNewStart. The hunk header literally has no '+' so the
+	// parser must return an error rather than panic on rest[plus+1:].
+	if _, err := parseHunkNewStart("@@ -1,3 -5,6 @@"); err == nil {
+		t.Errorf("expected error when hunk header has no '+', got nil")
+	}
+}
+
+func TestParseHunkNewStart_NoTerminator(t *testing.T) {
+	// Pins the `if end < 0 { return strconv.Atoi(rest) }` branch
+	// (L365-366) — the substring after '+' has neither space nor comma,
+	// so end == -1 and parseHunkNewStart Atois the whole tail.
+	got, err := parseHunkNewStart("@@ -1 +42")
+	if err != nil {
+		t.Fatalf("parseHunkNewStart: %v", err)
+	}
+	if got != 42 {
+		t.Errorf("expected 42, got %d", got)
+	}
+}
+
+func TestParseDiff_DevNullSkipped(t *testing.T) {
+	// Pins the `/dev/null` branch in parseDiff (L298-300): a file
+	// deletion shows `+++ /dev/null`, which must be skipped (no entries
+	// for it in the diff set).
+	in := `diff --git a/gone.go b/gone.go
+--- a/gone.go
++++ /dev/null
+@@ -1,2 +0,0 @@
+-old line 1
+-old line 2
+diff --git a/kept.go b/kept.go
+--- a/kept.go
++++ b/kept.go
+@@ -1,1 +5,2 @@
+ context
++added
+`
+	ds, err := parseDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatalf("parseDiff: %v", err)
+	}
+	if _, ok := ds["gone.go"]; ok {
+		t.Errorf("expected gone.go (/dev/null target) to be skipped, got: %v", ds["gone.go"])
+	}
+	if !ds["kept.go"][6] {
+		t.Errorf("expected kept.go L6 tracked after /dev/null hunk, got: %v", ds["kept.go"])
+	}
+}
+
+func TestParseDiff_BlankLineInHunkAdvances(t *testing.T) {
+	// Pins parseDiff's `if len(line) == 0 { newLine++ }` branch
+	// (L323-325). A bare empty line inside a hunk is treated as a
+	// context line and must advance newLine — proven by the line
+	// number assigned to the next '+' addition.
+	in := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,3 +10,4 @@\n context1\n\n context3\n+added\n"
+	ds, err := parseDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatalf("parseDiff: %v", err)
+	}
+	// Hunk starts at newLine=10. context1 → 11, blank → 12, context3 →
+	// 13, +added at 13. (Three pre-existing-context-like lines advance
+	// newLine three times before the '+'.)
+	if !ds["x.go"][13] {
+		t.Errorf("expected x.go L13 from added line after blank-in-hunk, got: %v", ds["x.go"])
+	}
+}
+
+func TestParentDir_Root(t *testing.T) {
+	// Pins parentDir at filesystem root (L252-253): when i==0 and
+	// path[0] is a separator, must return string(os.PathSeparator).
+	sep := string(os.PathSeparator)
+	if got := parentDir(sep); got != sep {
+		t.Errorf("parentDir(%q) = %q, want %q", sep, got, sep)
+	}
+	// Also pins the no-separator fall-through (last return path):
+	if got := parentDir("nosep"); got != "nosep" {
+		t.Errorf("parentDir(\"nosep\") = %q, want \"nosep\"", got)
+	}
+}
+
+func TestModulePathFromGoMod_WalksUpAndStops(t *testing.T) {
+	// Pins modulePathFromGoMod's "reached filesystem root, no go.mod"
+	// branch (L241-242) by chdir'ing into a tmpdir that contains no
+	// go.mod anywhere on its path up to root. We then assert the
+	// function returns "".
+	//
+	// macOS /private/tmp is hierarchically below /, and there's no
+	// go.mod in /private, /tmp, or / — so the walk terminates with "".
+	dir := t.TempDir()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir tmp: %v", err)
+	}
+	got := modulePathFromGoMod()
+	if got != "" {
+		t.Errorf("expected empty module path when no go.mod on the path, got %q", got)
+	}
+}
+
+func TestRun_ErrorOnMalformedDiff(t *testing.T) {
+	covPath := writeTemp(t, "cover.out", "mode: set\nfoo.go:10.1,12.2 2 0\n")
+	// Hunk header with garbage after the '+' so parseHunkNewStart fails.
+	badDiff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -1,1 +notanumber @@
++code
+`
+	diffPath := writeTemp(t, "diff.patch", badDiff)
+	var stdout, stderr bytes.Buffer
+	code := run("coverage-gate", []string{covPath, diffPath}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 on malformed diff, got %d (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "error parsing diff") {
+		t.Errorf("expected 'error parsing diff' in stderr, got: %q", stderr.String())
 	}
 }

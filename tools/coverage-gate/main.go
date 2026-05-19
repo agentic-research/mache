@@ -55,48 +55,66 @@ type uncoveredBlock struct {
 	endLine   int
 }
 
-func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintf(os.Stderr, "usage: %s <cover.out> <diff.patch>\n", os.Args[0])
-		os.Exit(2)
+// main is a thin wrapper around run() and is never invoked under
+// `go test` (which compiles a test binary with a different entry
+// point), so the body is exempt from the coverage gate. All logic
+// lives in run(), which has direct in-process tests.
+func main() { // coverage:ignore
+	os.Exit(run(os.Args[0], os.Args[1:], os.Stdout, os.Stderr)) // coverage:ignore
+} // coverage:ignore
+
+// run executes the coverage-gate logic and returns the process exit code.
+// Extracted from main() for in-process testing — main() is now a thin
+// wrapper around os.Exit(run(...)). Observable behavior is identical to
+// the previous main(): same argv parsing, same exit codes (0 clean / 1
+// uncovered / 2 usage-or-io-error), same stdout/stderr formats.
+//
+// progName is the program name used in the usage message (os.Args[0]
+// when called from main). args is the argument list AFTER the program
+// name (i.e. os.Args[1:]). stdout receives the report; stderr receives
+// usage and error messages.
+func run(progName string, args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 {
+		_, _ = fmt.Fprintf(stderr, "usage: %s <cover.out> <diff.patch>\n", progName)
+		return 2
 	}
-	coverPath := os.Args[1]
-	diffPath := os.Args[2]
+	coverPath := args[0]
+	diffPath := args[1]
 
 	covF, err := os.Open(coverPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error opening cover profile: %v\n", err)
-		os.Exit(2)
+		_, _ = fmt.Fprintf(stderr, "error opening cover profile: %v\n", err)
+		return 2
 	}
 	defer func() { _ = covF.Close() }()
 
 	prof, err := parseProfile(covF)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error parsing cover profile: %v\n", err)
-		os.Exit(2)
+		_, _ = fmt.Fprintf(stderr, "error parsing cover profile: %v\n", err)
+		return 2
 	}
 	prof = normalizeProfilePaths(prof, modulePathFromGoMod())
 
 	diffF, err := os.Open(diffPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error opening diff: %v\n", err)
-		os.Exit(2)
+		_, _ = fmt.Fprintf(stderr, "error opening diff: %v\n", err)
+		return 2
 	}
 	defer func() { _ = diffF.Close() }()
 
 	ds, err := parseDiff(diffF)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error parsing diff: %v\n", err)
-		os.Exit(2)
+		_, _ = fmt.Fprintf(stderr, "error parsing diff: %v\n", err)
+		return 2
 	}
 
 	report := intersect(prof, ds)
 	if len(report) == 0 {
-		os.Exit(0)
+		return 0
 	}
 
-	fmt.Println("NEW PROD LINES NOT COVERED:")
-	fmt.Println()
+	_, _ = fmt.Fprintln(stdout, "NEW PROD LINES NOT COVERED:")
+	_, _ = fmt.Fprintln(stdout)
 	total := 0
 	files := make([]string, 0, len(report))
 	for f := range report {
@@ -106,19 +124,19 @@ func main() {
 	for _, f := range files {
 		lines := report[f]
 		blocks := collapseBlocks(lines)
-		fmt.Println(f)
+		_, _ = fmt.Fprintln(stdout, f)
 		for _, b := range blocks {
 			if b.startLine == b.endLine {
-				fmt.Printf("  L%d\n", b.startLine)
+				_, _ = fmt.Fprintf(stdout, "  L%d\n", b.startLine)
 			} else {
-				fmt.Printf("  L%d-%d\n", b.startLine, b.endLine)
+				_, _ = fmt.Fprintf(stdout, "  L%d-%d\n", b.startLine, b.endLine)
 			}
 			total += b.endLine - b.startLine + 1
 		}
-		fmt.Println()
+		_, _ = fmt.Fprintln(stdout)
 	}
-	fmt.Printf("%d new prod line(s) uncovered. Either add tests or annotate the line with `// coverage:ignore`.\n", total)
-	os.Exit(1)
+	_, _ = fmt.Fprintf(stdout, "%d new prod line(s) uncovered. Either add tests or annotate the line with `// coverage:ignore`.\n", total)
+	return 1
 }
 
 // parseProfile reads a Go cover profile and returns file → ranges.
@@ -209,9 +227,9 @@ func normalizeProfilePaths(prof profile, modulePath string) profile {
 // nearest ancestor go.mod. Empty string if none is found.
 func modulePathFromGoMod() string {
 	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
+	if err != nil { // coverage:ignore — os.Getwd only fails on detached/removed cwd, can't be reproduced from a Go test
+		return "" // coverage:ignore
+	} // coverage:ignore
 	for {
 		p := dir + string(os.PathSeparator) + "go.mod"
 		if data, err := os.ReadFile(p); err == nil {
