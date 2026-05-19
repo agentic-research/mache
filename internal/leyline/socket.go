@@ -571,7 +571,11 @@ const leylineBinaryVersion = "v0.4.1"
 // skip download entirely.
 //
 // First %s = version tag, second %s = asset name.
-const leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-open/releases/download/%s/%s"
+//
+// Declared as var (not const) so hermetic tests can swap in an httptest server
+// URL to exercise downloadLeyline without touching the network. Production
+// code never mutates this — see socket_test.go for the test-only override.
+var leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-open/releases/download/%s/%s"
 
 // downloadLeyline fetches the pinned-version leyline binary from GitHub
 // releases (see leylineBinaryVersion) to the specified path. Returns the

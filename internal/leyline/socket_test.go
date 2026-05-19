@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -626,4 +628,96 @@ func TestSubscribe_SlowConsumerCountsAndLogsDrops(t *testing.T) {
 	assert.Positive(t, dropped, "consumer never read; SubscribeDropped() must be non-zero")
 	assert.Contains(t, logSnap(), "subscribe: dropping events (consumer behind)",
 		"first drop must emit a log line so operators see the signal before stale-cache decisions pile up")
+}
+
+// swapLeylineReleaseURLTemplate replaces leylineReleaseURLTemplate for the
+// duration of a test, restoring the original via t.Cleanup. This is the
+// hermetic-test seam for downloadLeyline — production code never mutates
+// the template, only tests do, so the global swap is safe as long as tests
+// in this file don't run downloadLeyline in parallel (they don't).
+func swapLeylineReleaseURLTemplate(t *testing.T, replacement string) {
+	t.Helper()
+	orig := leylineReleaseURLTemplate
+	leylineReleaseURLTemplate = replacement
+	t.Cleanup(func() { leylineReleaseURLTemplate = orig })
+}
+
+// TestDownloadLeyline_HappyPath exercises the 200-OK branch of
+// downloadLeyline without touching the network. It stands up an
+// httptest.Server that returns a known payload, swaps the release-URL
+// template to point at that server, then asserts the binary lands on
+// disk with the right bytes and an executable bit set. This covers the
+// assetName / URL construction lines plus the io.Copy + chmod + rename
+// path. Coverage-gate flagged the assetName line (L583) as new-prod
+// uncovered in PR #388; this test closes that gap hermetically.
+func TestDownloadLeyline_HappyPath(t *testing.T) {
+	const wantBody = "fake-leyline-binary-payload"
+
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(wantBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	// Template still takes (version, asset) — keep the same %s/%s shape
+	// so the assetName Sprintf inside downloadLeyline is still exercised.
+	swapLeylineReleaseURLTemplate(t, srv.URL+"/releases/download/%s/%s")
+
+	destDir := t.TempDir()
+	destPath := filepath.Join(destDir, "leyline")
+
+	out, err := downloadLeyline(destPath)
+	require.NoError(t, err, "downloadLeyline must succeed on 200 OK")
+	require.Equal(t, destPath, out, "downloadLeyline must return the requested dest path")
+
+	// Asset name is built from runtime.GOOS/GOARCH inside downloadLeyline —
+	// the server saw a URL of the form /releases/download/<version>/leyline-<os>-<arch>.
+	// Don't pin os/arch (test runs on darwin AND linux CI); just assert the
+	// /releases/download/<version>/leyline- prefix lines up.
+	assert.Contains(t, gotPath, "/releases/download/"+leylineBinaryVersion+"/leyline-",
+		"server should have received a version-pinned, asset-name-suffixed request path (got %q)", gotPath)
+
+	// Verify file landed with the right bytes.
+	gotBytes, err := os.ReadFile(destPath)
+	require.NoError(t, err, "downloaded binary must exist on disk")
+	assert.Equal(t, wantBody, string(gotBytes), "downloaded bytes must match server payload")
+
+	// Verify the executable bit is set (chmod 0o755).
+	info, err := os.Stat(destPath)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&0o111, "downloaded binary must have at least one executable bit set (got mode %v)", info.Mode())
+}
+
+// TestDownloadLeyline_NotFound exercises the 404 branch of downloadLeyline
+// without touching the network. Coverage-gate flagged the StatusNotFound
+// arm (L605) as new-prod uncovered in PR #388. The user-facing error must
+// distinguish "this pinned version isn't published" from a generic network
+// failure so operators can fix the pin (or fall back) instead of chasing
+// a transport-layer ghost.
+func TestDownloadLeyline_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	swapLeylineReleaseURLTemplate(t, srv.URL+"/releases/download/%s/%s")
+
+	destDir := t.TempDir()
+	destPath := filepath.Join(destDir, "leyline")
+
+	_, err := downloadLeyline(destPath)
+	require.Error(t, err, "downloadLeyline must return an error on HTTP 404")
+	assert.Contains(t, err.Error(), "no leyline release available",
+		"404 error must use the 'no release available' phrasing so operators can distinguish missing-pin from transport failure (got %q)", err.Error())
+	assert.Contains(t, err.Error(), leylineBinaryVersion,
+		"404 error must name the pinned version so operators know which tag to publish/repin (got %q)", err.Error())
+
+	// Negative assertion: file must NOT have been created when download
+	// failed — otherwise a stale zero-byte binary lingers and confuses
+	// subsequent runs.
+	_, statErr := os.Stat(destPath)
+	assert.True(t, os.IsNotExist(statErr),
+		"destPath must not exist after a failed download (got stat err %v)", statErr)
 }
