@@ -1392,3 +1392,127 @@ func TestSubscribe_UnmarshalResponseFailsOnNonJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "unmarshal subscribe response",
 		"error must wrap with 'unmarshal subscribe response' so a daemon-protocol mismatch isn't confused with a transport failure (got %q)", err.Error())
 }
+
+// TestSubscribe_EmptyLineSkippedSilently pins the empty-line skip branch
+// (L583 in socket.go): a bare "\n" on the wire is benign noise (some
+// daemons buffer-flush an empty line between events) and must NOT close
+// the channel or be forwarded to consumers. A subsequent well-formed
+// event must still reach the consumer, proving the empty line was
+// silently skipped, not blocking.
+func TestSubscribe_EmptyLineSkippedSilently(t *testing.T) {
+	sockPath, connCh := subscribePushServer(t, map[string]any{"ok": true})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	ch, err := client.Subscribe([]string{"x"})
+	require.NoError(t, err)
+
+	conn := <-connCh
+	defer conn.Close() //nolint:errcheck
+
+	// Push an empty line (just "\n"), then a well-formed event.
+	_, err = conn.Write([]byte("\n"))
+	require.NoError(t, err)
+	good := map[string]any{"event": true, "topic": "x", "payload": "ok"}
+	data, _ := json.Marshal(good)
+	_, err = conn.Write(append(data, '\n'))
+	require.NoError(t, err)
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "x", ev["topic"],
+			"event after an empty line must still reach the consumer — the empty line must be silently skipped, not block the loop")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected event after empty line within 2s")
+	}
+}
+
+// TestSubscribe_MaxConsecutiveParseFailuresClosesSubscription pins the
+// threshold-exceeded close branch (L595-596 in socket.go): a flood of
+// maxConsecutiveParseFailures+1 consecutive bad-JSON lines means the
+// wire is desynced — the goroutine must log distinctly and return so
+// the consumer's channel is closed (signaling "subscription dead, stop
+// trusting cache"). Without this guard a corrupted connection would
+// spin forever logging "drop malformed event".
+func TestSubscribe_MaxConsecutiveParseFailuresClosesSubscription(t *testing.T) {
+	logSnap := captureLog(t)
+	sockPath, connCh := subscribePushServer(t, map[string]any{"ok": true})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	ch, err := client.Subscribe([]string{"x"})
+	require.NoError(t, err)
+
+	conn := <-connCh
+	defer conn.Close() //nolint:errcheck
+
+	// Push maxConsecutiveParseFailures+1 bad-JSON lines back-to-back.
+	// The goroutine increments the counter on each, and once it exceeds
+	// the threshold, logs the "closing subscription" message and returns
+	// (which closes ch via the deferred close).
+	for range maxConsecutiveParseFailures + 1 {
+		_, err = conn.Write([]byte("{not-json\n"))
+		require.NoError(t, err)
+	}
+
+	// Channel must close within a budget — the goroutine returns once
+	// the threshold trips.
+	select {
+	case _, open := <-ch:
+		assert.False(t, open,
+			"channel must be closed after maxConsecutiveParseFailures+1 bad lines so the consumer knows the subscription is dead")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe goroutine did not return after consecutive parse-failure threshold")
+	}
+
+	assert.Contains(t, logSnap(), "closing subscription",
+		"threshold-exceeded close must log distinctly so operators can tell 'wire desynced, gave up' apart from 'daemon closed cleanly'")
+}
+
+// TestSubscribe_NonEventLineSkippedSilently pins the non-event filter
+// branch (L604 in socket.go): a line that is valid JSON but lacks
+// `"event": true` (e.g. an op-response that landed on the subscribe
+// connection by mistake, or future-proofed envelope keys) must NOT be
+// forwarded to consumers. A subsequent real event must still arrive,
+// proving the filter is a silent skip, not a connection break.
+func TestSubscribe_NonEventLineSkippedSilently(t *testing.T) {
+	sockPath, connCh := subscribePushServer(t, map[string]any{"ok": true})
+
+	client, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	ch, err := client.Subscribe([]string{"x"})
+	require.NoError(t, err)
+
+	conn := <-connCh
+	defer conn.Close() //nolint:errcheck
+
+	// Push valid JSON that is NOT an event (no "event":true), then a
+	// real event. The non-event must be silently dropped; the real
+	// event must reach the consumer.
+	nonEvent := map[string]any{"foo": "bar"}
+	data, _ := json.Marshal(nonEvent)
+	_, err = conn.Write(append(data, '\n'))
+	require.NoError(t, err)
+	good := map[string]any{"event": true, "topic": "x", "payload": "ok"}
+	data, _ = json.Marshal(good)
+	_, err = conn.Write(append(data, '\n'))
+	require.NoError(t, err)
+
+	select {
+	case ev := <-ch:
+		// Must be the real event (topic "x"), NOT the non-event payload.
+		assert.Equal(t, "x", ev["topic"],
+			"only events with 'event':true must reach the consumer — non-event JSON must be silently filtered")
+		_, hasFoo := ev["foo"]
+		assert.False(t, hasFoo,
+			"the non-event {foo:bar} line must NOT have been forwarded to the consumer")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected real event after non-event filter within 2s")
+	}
+}
