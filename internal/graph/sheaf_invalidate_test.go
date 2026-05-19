@@ -466,11 +466,11 @@ func TestSheafInvalidator_ConcurrentReadWrite(t *testing.T) {
 	var readOps int64
 
 	// Reader goroutines hammer InvalidateWithCascade.
-	for i := 0; i < readers; i++ {
+	for range readers {
 		done.Add(1)
 		go func() {
 			defer done.Done()
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				si.InvalidateWithCascade("a", nil)
 				_ = si.HasResult()
 				atomic.AddInt64(&readOps, 1)
@@ -479,11 +479,11 @@ func TestSheafInvalidator_ConcurrentReadWrite(t *testing.T) {
 	}
 
 	// Writer goroutines hammer SetCommunityResult + SetSheaf.
-	for i := 0; i < writers; i++ {
+	for i := range writers {
 		done.Add(1)
 		go func(seed int) {
 			defer done.Done()
-			for j := 0; j < iterations; j++ {
+			for j := range iterations {
 				cr := &CommunityResult{
 					Communities: []Community{{ID: seed, Members: []string{"a"}}},
 					Membership:  map[string]int{"a": seed},

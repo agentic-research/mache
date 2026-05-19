@@ -397,7 +397,7 @@ func TestOpenOrCreate_ConcurrentCreate(t *testing.T) {
 	errs := make([]error, n)
 
 	start := make(chan struct{})
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -473,7 +473,7 @@ func TestClose_ConcurrentClose(t *testing.T) {
 	errs := make([]error, n)
 
 	start := make(chan struct{})
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

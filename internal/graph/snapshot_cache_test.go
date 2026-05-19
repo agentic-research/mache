@@ -119,14 +119,14 @@ func TestRefsMap_AddRefInvalidatesCache(t *testing.T) {
 func TestSnapshotCache_ConcurrentReadersGetConsistentSnapshot(t *testing.T) {
 	s := graph.NewMemoryStore()
 	const seedCount = 100
-	for i := 0; i < seedCount; i++ {
+	for i := range seedCount {
 		require.NoError(t, s.AddDef("Tok_"+strconv.Itoa(i), "construct/"+strconv.Itoa(i)))
 	}
 
 	const readers = 32
 	var wg sync.WaitGroup
 	wg.Add(readers)
-	for i := 0; i < readers; i++ {
+	for range readers {
 		go func() {
 			defer wg.Done()
 			snap := s.DefsMap()
