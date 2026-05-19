@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -300,6 +301,85 @@ func TestE2E_RealCorpora(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFindSmells_DeadCode_PerfGate_MacheOnMache — bead mache-68980e.
+//
+// Background: the original dead_code rule's `alive` CTE joined v_defs
+// to v_refs with an OR-ed predicate ("target_node_id match OR token
+// match OR receiver-strip match"). SQLite's planner cannot use an
+// index when JOIN conditions are joined by top-level OR — it falls
+// back to a nested-loop scan over the cross product. On the mache-on-
+// mache corpus that's ~3K defs × ~45K refs = ~135M pairs, observed as
+// 57 seconds wall-clock for the rule (alive CTE alone: 12s).
+//
+// Fix (mache-68980e): split the OR-join into three UNION arms. Each
+// arm has one equality predicate the planner can satisfy via an index
+// on v_refs.target_node_id (L_1 binding arm) or v_refs.token (L_0
+// mention + receiver-method arms). Same DISTINCT semantics; same
+// findings; ~10ms for the alive CTE on the same .db.
+//
+// Acceptance bar: < 5 seconds total wall-clock for the rule on the
+// mache-on-mache .db. Why 5s and not "as fast as possible":
+//
+//   - The original 57s was unworkable for any pre-commit / CI gate —
+//     a developer running `mache find-smells --rule dead_code` before
+//     pushing waited a full minute for feedback on a rule that should
+//     be a fast structural pattern check.
+//   - 5s is the threshold where the rule becomes usable in a CI
+//     workflow without timing out test runs. Pre-commit hooks
+//     typically budget ~10s total for all checks; a single rule
+//     consuming half that budget is still acceptable, more is not.
+//   - The actual post-fix timing on a 353-file Go corpus runs ~1-2s
+//     (see commit message for measurements); 5s gives ~3× headroom
+//     for slower hardware (CI runners, ARM emulation) so the gate
+//     doesn't flake on legitimate variance.
+//
+// Gated behind MACHE_E2E_SELF=1 because the build step ingests
+// mache's own source tree (single-digit seconds on a developer
+// laptop, more in a constrained CI environment). The unit-test
+// suite stays fast; this perf gate runs in the same gated tier as
+// TestE2E_MacheOnMache.
+func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("perf gate; rerun without -short")
+	}
+	if os.Getenv("MACHE_E2E_SELF") == "" {
+		t.Skip("set MACHE_E2E_SELF=1 to run the dead_code perf gate")
+	}
+
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	repoRoot := macheRepoRoot(t)
+	schema, err := resolveSchema("go", ".")
+	require.NoError(t, err)
+	require.NotNil(t, schema, "go preset schema must resolve")
+
+	g, cleanup := buildSQLiteBackend(t, repoRoot, schema)
+	defer cleanup()
+
+	qg, ok := g.(refsQuerier)
+	require.True(t, ok, "SQLite backend must implement refsQuerier")
+
+	rule := findRegisteredRule(t, "dead_code")
+
+	start := time.Now()
+	findings, err := runSmellRule(qg, rule, "" /*sourceID*/, 5000 /*limit*/)
+	elapsed := time.Since(start)
+	require.NoError(t, err, "dead_code rule must execute without error on mache-on-mache")
+
+	const budget = 5 * time.Second
+	assert.Less(t, elapsed, budget,
+		"dead_code wall-clock %s exceeds %s budget on mache-on-mache "+
+			"(bead mache-68980e — the OR-join nested-loop scan should be a thing of the past); "+
+			"got %d findings",
+		elapsed, budget, len(findings))
+
+	// Surface the actual timing in the test log so reviewers can see
+	// the headroom against the budget without reading the assertion
+	// failure path. Format matches the commit-message convention.
+	t.Logf("dead_code on mache-on-mache: %s (%d findings, budget %s)",
+		elapsed, len(findings), budget)
 }
 
 func parseCorpusSpec(spec string) (name, path, schema string, ok bool) {

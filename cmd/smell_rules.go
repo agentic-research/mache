@@ -167,15 +167,53 @@ var smellRegistry = []SmellRule{
 			-- legacy node_refs query. Once binding rows arrive, the
 			-- L_1 arm dominates and the skip-list below becomes
 			-- redundant for the cases LSP actually sees.
+			--
+			-- Performance: written as UNION over three single-predicate
+			-- arms rather than one OR-joined predicate. SQLite's planner
+			-- cannot use an index when a JOIN's ON-clause has top-level
+			-- OR — it falls back to a nested-loop scan over the cross
+			-- product (mache-68980e: 12s for the alive CTE alone on
+			-- mache-on-mache, 33s total for the rule). Splitting into
+			-- three UNIONed arms — each with one equality predicate —
+			-- lets the planner SEARCH v_refs via idx_refs_node (L_1
+			-- arm) or idx_refs_token (L_0 + receiver arms) and brings
+			-- the same query to ~10ms. UNION (not UNION ALL) preserves
+			-- the DISTINCT semantics of the prior shape.
 			WITH alive AS (
+				-- L_1 binding arm: target_node_id direct match.
+				-- Uses an index on v_refs.target_node_id (when the
+				-- planner has access to one — _capnp_binding_refs
+				-- today, the legacy _lsp_refs union arm pre-mache-
+				-- 6bd4d8 in older .dbs).
+				SELECT DISTINCT d.node_id
+				FROM v_defs d
+				JOIN v_refs r ON r.target_node_id = d.node_id
+
+				UNION
+
+				-- L_0 mention arm: token equality. Uses
+				-- idx_refs_token on node_refs (the dominant arm
+				-- pre-Step-1 since v_refs.target_node_id is NULL
+				-- for every mention-fidelity row).
 				SELECT DISTINCT d.node_id
 				FROM v_defs d
 				JOIN v_refs r
-				  ON r.target_node_id = d.node_id
-				  OR (r.target_node_id IS NULL AND (
-				       r.token = d.token
-				       OR (instr(d.token, '.') > 0 AND r.token = substr(d.token, instr(d.token, '.') + 1))
-				     ))
+				  ON r.target_node_id IS NULL
+				 AND r.token = d.token
+
+				UNION
+
+				-- Receiver-method arm: the call-site captures the
+				-- bare leaf ('Method') but the def is registered as
+				-- 'Receiver.Method'. Pre-filter to dotted def tokens,
+				-- then equality-match the post-dot leaf against the
+				-- ref token — still index-eligible on v_refs.token.
+				SELECT DISTINCT d.node_id
+				FROM v_defs d
+				JOIN v_refs r
+				  ON r.target_node_id IS NULL
+				 AND instr(d.token, '.') > 0
+				 AND r.token = substr(d.token, instr(d.token, '.') + 1)
 			),
 			-- Skip-list: defs whose alive-status this rule shouldn't try
 			-- to determine textually. Two categories, with different
