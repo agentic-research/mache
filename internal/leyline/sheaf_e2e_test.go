@@ -39,6 +39,7 @@ import (
 // completes inside the timeout — extend the deadline if the bench
 // repo grows beyond a few KB of fixtures.
 func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate ~/.mache/ from sibling tests
 	leylineBin, err := exec.LookPath("leyline")
 	if err != nil {
 		t.Skip("leyline binary not on PATH — skipping cross-runtime e2e")

@@ -62,6 +62,20 @@ type SocketClient struct {
 	// maxConsecutiveParseFailures — sustained garbage on the wire is
 	// treated as a dead/corrupt connection rather than transient noise.
 	subscribeParseFailures atomic.Uint64
+
+	// closeOnce gates Close so the underlying conn.Close runs exactly
+	// once, even under concurrent shutdown (SheafSubscriber.run calls
+	// sock.Close while the Subscribe read goroutine may still be in
+	// its SetReadDeadline + ReadString loop). The prior shape — guard
+	// with `if c.conn != nil` then assign `c.conn = nil` — was a real
+	// data race surfaced by PR #384 CI (run 26063835518, macos-latest):
+	// the Subscribe goroutine read c.conn at socket.go:433 while
+	// Close raced the nil-out at socket.go:267, then deref'd nil.
+	// sync.Once removes the write entirely; the closed conn pointer
+	// stays valid and the goroutine exits cleanly via the closed-conn
+	// error path from SetReadDeadline / ReadString.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // SubscribeDropped returns the cumulative number of events the Subscribe
@@ -376,14 +390,19 @@ func findExistingSocket() (string, error) {
 	return "", fmt.Errorf("no socket found")
 }
 
-// Close closes the underlying connection. Safe to call multiple times.
+// Close closes the underlying connection. Safe to call multiple times
+// from any number of goroutines — the sync.Once gates the underlying
+// conn.Close so concurrent shutdown can't race the Subscribe read
+// goroutine (see closeOnce docstring on SocketClient for the history).
+// The conn pointer is intentionally NOT zeroed; closed conn errors
+// from subsequent reads/writes propagate normally to their callers.
 func (c *SocketClient) Close() error {
-	if c.conn != nil {
-		err := c.conn.Close()
-		c.conn = nil
-		return err
-	}
-	return nil
+	c.closeOnce.Do(func() {
+		if c.conn != nil {
+			c.closeErr = c.conn.Close()
+		}
+	})
+	return c.closeErr
 }
 
 // SendOp sends a JSON request and reads the JSON response.

@@ -7,12 +7,35 @@
 //
 // Usage:
 //
-//	coverage-gate <cover.out> <diff.patch>
+//	coverage-gate [-rename-threshold N] <cover.out> <diff.patch>
 //
 // Inputs:
 //   - cover.out: produced by `go test -coverprofile=cover.out ./...`
 //   - diff.patch: unified diff, e.g. `git diff base..HEAD > diff.patch`
 //     or `gh pr diff <num> > diff.patch`
+//
+// IMPORTANT — generating the diff:
+//
+// For best results, generate the diff with `git diff -B5% -M5% -C5%`
+// which surfaces both rename (similarity index) and break-rewrite
+// (dissimilarity index) hunks. Plain `git diff` or `gh pr diff` will
+// not produce these headers, so renames look like delete+create and
+// heavy in-place rewrites look like a full new file — which means the
+// -rename-threshold flag and the dissimilarity-index handling below are
+// effectively dead unless you pass `-B` / `-M` / `-C` when capturing the
+// diff. The `task coverage-gate` target in Taskfile.yml uses the
+// recommended invocation; copy from there if running by hand.
+//
+// Flags:
+//   - -rename-threshold N (0..100, default 50): when a `diff --git` block
+//     carries a `similarity index N%` header (emitted by `git diff -M`
+//     or `git diff -C`), and N is >= threshold, the block's `+` lines
+//     are treated as a pure move and excluded from the new-lines set.
+//     A `dissimilarity index N%` header (emitted by `git diff -B` for
+//     in-place rewrites) is mapped to similarity (100 - N)% and uses the
+//     same threshold.
+//     0 = treat any detected rename/copy/rewrite as not-new; 100 = require
+//     an exact-content move.
 //
 // Behavior:
 //   - Parses cover profile into file → []{startLine, endLine, hits} ranges.
@@ -24,10 +47,16 @@
 //     and are silently skipped.
 //   - A `// coverage:ignore` suffix on an added line suppresses the warning
 //     for that single line.
+//   - Pure-move refactors detected via `similarity index` headers (see
+//     -rename-threshold) are excluded.
+//   - In-place rewrites flagged via `dissimilarity index N%` are mapped
+//     to similarity (100 - N)% and excluded when that value is at or
+//     above -rename-threshold.
 package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +64,11 @@ import (
 	"strconv"
 	"strings"
 )
+
+// defaultRenameThreshold is the default similarity percentage at or above
+// which a `diff --git` block tagged with `similarity index N%` is treated
+// as a pure move and its added lines are excluded from the new-lines set.
+const defaultRenameThreshold = 50
 
 // coverRange is one entry from a Go cover profile.
 type coverRange struct {
@@ -74,12 +108,42 @@ func main() { // coverage:ignore
 // name (i.e. os.Args[1:]). stdout receives the report; stderr receives
 // usage and error messages.
 func run(progName string, args []string, stdout, stderr io.Writer) int {
-	if len(args) != 2 {
-		_, _ = fmt.Fprintf(stderr, "usage: %s <cover.out> <diff.patch>\n", progName)
+	fs := flag.NewFlagSet(progName, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	renameThreshold := fs.Int(
+		"rename-threshold",
+		defaultRenameThreshold,
+		"similarity percentage (0..100) at or above which a `diff --git` block "+
+			"tagged with `similarity index N%` is treated as a pure move and its "+
+			"added lines are excluded; `dissimilarity index N%` headers are "+
+			"mapped to similarity (100 - N)%; 0 = exclude any detected rename or "+
+			"rewrite, 100 = require exact-content match",
+	)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "usage: %s [-rename-threshold N] <cover.out> <diff.patch>\n", progName)
+		_, _ = fmt.Fprintf(stderr, "\n")
+		_, _ = fmt.Fprintf(stderr, "Generate the diff with `git diff -B5%% -M5%% -C5%% base..HEAD > diff.patch`\n")
+		_, _ = fmt.Fprintf(stderr, "so similarity index (rename/copy) and dissimilarity index (break-rewrite)\n")
+		_, _ = fmt.Fprintf(stderr, "headers are emitted — plain `git diff` / `gh pr diff` will not produce them\n")
+		_, _ = fmt.Fprintf(stderr, "and the rename-threshold flag becomes a no-op.\n")
+		_, _ = fmt.Fprintf(stderr, "\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		// flag already wrote a message to stderr via SetOutput.
 		return 2
 	}
-	coverPath := args[0]
-	diffPath := args[1]
+	if *renameThreshold < 0 || *renameThreshold > 100 {
+		_, _ = fmt.Fprintf(stderr, "error: -rename-threshold must be in [0,100], got %d\n", *renameThreshold)
+		return 2
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		fs.Usage()
+		return 2
+	}
+	coverPath := rest[0]
+	diffPath := rest[1]
 
 	covF, err := os.Open(coverPath)
 	if err != nil {
@@ -102,7 +166,7 @@ func run(progName string, args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = diffF.Close() }()
 
-	ds, err := parseDiff(diffF)
+	ds, err := parseDiffWithRenames(diffF, *renameThreshold)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "error parsing diff: %v\n", err)
 		return 2
@@ -275,7 +339,31 @@ func parsePosLine(tok string) (int, error) {
 // "New prod line" means: a `+`-prefixed line in the diff that is in a .go file,
 // not in a _test.go file, not in /testdata/, not blank, and not a pure
 // comment line. Lines suffixed `// coverage:ignore` are excluded.
+//
+// This is a thin wrapper that delegates to parseDiffWithRenames with the
+// default rename threshold. Diffs without `similarity index` headers (the
+// common case) behave identically regardless of the threshold value, so
+// existing call sites need no changes.
 func parseDiff(r io.Reader) (diffSet, error) {
+	return parseDiffWithRenames(r, defaultRenameThreshold)
+}
+
+// parseDiffWithRenames is parseDiff with an explicit rename-similarity
+// threshold. When a `diff --git` block carries a `similarity index N%`
+// header AND N >= renameThreshold, the block's `+` lines are excluded
+// from the result entirely (they're a pure move / copy, not new code).
+//
+// `dissimilarity index N%` headers (emitted by `git diff -B` when a file
+// has been rewritten in place — N% of the file changed) are mapped to
+// similarity (100 - N)% and use the same threshold. So at the default
+// threshold (50), `dissimilarity index 30%` → similarity 70% → block
+// excluded; `dissimilarity index 80%` → similarity 20% → block flagged
+// as new code; `dissimilarity index 50%` → similarity 50% → excluded
+// (boundary is inclusive, matching the rename case).
+//
+// Blocks WITHOUT either header behave exactly as a non-rename diff.
+// See defaultRenameThreshold for the CLI default.
+func parseDiffWithRenames(r io.Reader, renameThreshold int) (diffSet, error) {
 	out := diffSet{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
@@ -283,15 +371,40 @@ func parseDiff(r io.Reader) (diffSet, error) {
 	var curFile string
 	var inHunk bool
 	var newLine int
-	skipFile := true // until we know we're in a tracked file
+	skipFile := true   // until we know we're in a tracked file
+	skipBlock := false // set when the current `diff --git` block is a pure rename
 
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
+			// New block — reset all per-block state. similarity / rename /
+			// copy headers (if any) appear BEFORE --- / +++, so we can
+			// detect them on subsequent iterations and toggle skipBlock
+			// before any `+` lines are seen.
 			curFile = ""
 			inHunk = false
 			skipFile = true
+			skipBlock = false
+		case strings.HasPrefix(line, "similarity index "):
+			// "similarity index N%" — git's rename/copy detector emits this
+			// before the rename-from / rename-to / --- / +++ lines.
+			n, ok := parseSimilarityPercent(line)
+			if ok && n >= renameThreshold {
+				skipBlock = true
+			}
+		case strings.HasPrefix(line, "dissimilarity index "):
+			// "dissimilarity index N%" — emitted by `git diff -B` for
+			// in-place rewrites where N% of the file CHANGED. We map this
+			// to similarity (100 - N)% and apply the same threshold: at
+			// default threshold 50, dissimilarity 30% → similarity 70%
+			// (excluded as a near-move); dissimilarity 80% → similarity
+			// 20% (still flagged as new). Mirrors the similarity branch
+			// above to keep block-state semantics uniform.
+			n, ok := parseDissimilarityPercent(line)
+			if ok && (100-n) >= renameThreshold {
+				skipBlock = true
+			}
 		case strings.HasPrefix(line, "--- "):
 			// nothing; we trust +++ for the new path
 		case strings.HasPrefix(line, "+++ "):
@@ -333,7 +446,12 @@ func parseDiff(r io.Reader) (diffSet, error) {
 			case '+':
 				// Added line. Strip leading '+' to get content.
 				content := line[1:]
-				if isCountableProdLine(content) {
+				// skipBlock: this `diff --git` block is a pure-move
+				// rename/copy at or above the similarity threshold. The
+				// `+` lines are the moved content, not new code. We
+				// still ADVANCE newLine so subsequent context-line
+				// counting stays correct, but we do NOT add to out.
+				if !skipBlock && isCountableProdLine(content) {
 					if out[curFile] == nil {
 						out[curFile] = map[int]bool{}
 					}
@@ -354,6 +472,52 @@ func parseDiff(r io.Reader) (diffSet, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// parseSimilarityPercent extracts N from `similarity index N%`. Returns
+// (0, false) on malformed OR out-of-range input — caller treats a parse
+// failure as "no similarity info", which keeps behavior backwards-
+// compatible AND prevents adversarial values (negative, >100) from
+// silently muting the gate. Range check: N must be in [0,100].
+func parseSimilarityPercent(line string) (int, bool) {
+	rest := strings.TrimPrefix(line, "similarity index ")
+	rest = strings.TrimSpace(rest)
+	rest = strings.TrimSuffix(rest, "%")
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 0, false
+	}
+	if n < 0 || n > 100 {
+		return 0, false
+	}
+	return n, true
+}
+
+// parseDissimilarityPercent extracts N from `dissimilarity index N%`.
+// Returns (0, false) on malformed OR out-of-range input — caller treats
+// a parse failure as "no dissimilarity info" and the block falls through
+// to normal new-code handling, which is the conservative choice (flag,
+// don't skip). The range check exists because without it a malicious or
+// malformed `dissimilarity index -5%` would compute (100 - (-5)) = 105
+// in the caller's similarity comparison, which silently mutes the gate
+// on ANY threshold value — exactly the wrong failure mode. Range:
+// N must be in [0,100].
+//
+// Callers should map the returned N to similarity (100 - N)% before
+// applying any rename threshold; this function intentionally does NOT
+// perform that translation so the parser layer stays purely lexical.
+func parseDissimilarityPercent(line string) (int, bool) {
+	rest := strings.TrimPrefix(line, "dissimilarity index ")
+	rest = strings.TrimSpace(rest)
+	rest = strings.TrimSuffix(rest, "%")
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return 0, false
+	}
+	if n < 0 || n > 100 {
+		return 0, false
+	}
+	return n, true
 }
 
 // parseHunkNewStart pulls the +newstart from "@@ -a,b +c,d @@".

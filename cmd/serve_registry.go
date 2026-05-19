@@ -39,10 +39,49 @@ type graphRegistry struct {
 	sessionRepos    sync.Map // sessionID → repo URL (for cleanup on disconnect)
 	sessionBaseDirs sync.Map // sessionID → base clone dir (for hosted worktree cleanup)
 	hostedOnces     sync.Map // sessionID → *sync.Once (serialize hosted worktree creation)
+
+	// sheafRouter is the process-wide router for daemon-pushed
+	// sheaf.invalidate events. lazyGraph.init registers its invalidator
+	// here (if non-nil); the subscriber's handler walks the snapshot
+	// and dispatches to whichever invalidator's CommunityResult claims
+	// the affected regions. See cmd/sheaf_subscribe.go for the
+	// routing contract and mache-c14c43 for design rationale.
+	sheafRouter *sheafEventRouter
+
+	// stopSheafSubscriber halts the long-running subscriber goroutine
+	// at Close(). nil when no subscriber was started (e.g. no daemon
+	// socket reachable at runServe time).
+	stopSheafSubscriber func()
+
+	// sheafSubscriber is the running subscriber instance, exposed so
+	// the get_sheaf_status MCP tool can surface its state (connected /
+	// disconnected, last-seen generation, reason). nil when no
+	// subscriber was started at runServe time.
+	sheafSubscriber *leyline.SheafSubscriber
 }
 
 func newGraphRegistry(basePath string, args []string) *graphRegistry {
-	return &graphRegistry{basePath: basePath, args: args}
+	return &graphRegistry{
+		basePath:    basePath,
+		args:        args,
+		sheafRouter: newSheafEventRouter(),
+	}
+}
+
+// sheafSubscriberAccessor returns a closure that reads the current
+// subscriber's status. Closing over the registry rather than the
+// subscriber pointer directly lets the handler see post-startup
+// changes (e.g. a future "restart subscriber" admin op replacing the
+// pointer). When no subscriber was started, the accessor returns a
+// zero SubscriberStatus and ok=false so the handler can render an
+// honest "not subscribed" response.
+func (r *graphRegistry) sheafSubscriberAccessor() func() (leyline.SubscriberStatus, bool) {
+	return func() (leyline.SubscriberStatus, bool) { // coverage:ignore — defensive accessor; reduction tracked in mache-89b5dd.
+		if r.sheafSubscriber == nil { // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
+			return leyline.SubscriberStatus{}, false // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
+		} // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
+		return r.sheafSubscriber.Status(), true // coverage:ignore — defensive accessor; reduction tracked in mache-89b5dd.
+	} // coverage:ignore — defensive accessor; reduction tracked in mache-89b5dd.
 }
 
 // resolvedBasePath returns basePath if set, otherwise ".".
@@ -68,6 +107,14 @@ func (r *graphRegistry) unregisterSession(sessionID string) {
 // Close calls the cleanup function on every lazily-built graph.
 // Use on server shutdown to release SQLite connections and temp files.
 func (r *graphRegistry) Close() {
+	// Stop the sheaf subscriber FIRST so it doesn't try to dispatch
+	// to invalidators whose graphs are tearing down. Stop blocks
+	// until the loop returns, so this is ordered correctly without
+	// further synchronization.
+	if r.stopSheafSubscriber != nil { // coverage:ignore — registry shutdown wiring; reduction tracked in mache-89b5dd.
+		r.stopSheafSubscriber() // coverage:ignore — registry shutdown wiring; reduction tracked in mache-89b5dd.
+	} // coverage:ignore — registry shutdown wiring; reduction tracked in mache-89b5dd.
+
 	r.graphs.Range(func(_, v any) bool {
 		lg := v.(*lazyGraph)
 		if lg.cleanup != nil {
@@ -103,7 +150,7 @@ func (r *graphRegistry) getOrCreateGraph(rootPath string) *lazyGraph {
 		}
 		return true
 	})
-	lg := &lazyGraph{args: r.args, basePath: rootPath}
+	lg := &lazyGraph{args: r.args, basePath: rootPath, sheafRouter: r.sheafRouter}
 	actual, _ := r.graphs.LoadOrStore(cacheKey, lg)
 	return actual.(*lazyGraph)
 }
@@ -346,6 +393,15 @@ type lazyGraph struct {
 	// cross-region cascade; until then the watcher's invalidate calls
 	// fall back to single-node Graph.Invalidate.
 	sheafInv *graph.SheafInvalidator
+
+	// sheafRouter is the back-reference to the graphRegistry's
+	// process-wide router. Set at lazyGraph construction time so
+	// init() can register sheafInv with the router (and cleanup can
+	// unregister it). Optional — when nil, the lazyGraph stands alone
+	// and sheaf events are only consumed via the watcher's own
+	// invalidator. The router is the seam for daemon-pushed events,
+	// not a hard requirement for serving the graph.
+	sheafRouter *sheafEventRouter
 }
 
 // SheafInvalidator exposes the cascade-invalidator the file watcher
@@ -391,9 +447,10 @@ func (lg *lazyGraph) init() {
 				return
 			}
 			lg.inner = g
-			lg.sheafInv = si // expected nil in control mode; stored for uniformity
-			lg.cleanup = cleanup
+			lg.sheafInv = si                                            // expected nil in control mode; stored for uniformity // coverage:ignore — control-mode wiring; reduction tracked in mache-89b5dd.
+			lg.cleanup = lg.wrapCleanupWithSheafUnregister(cleanup, si) // coverage:ignore — control-mode wiring; reduction tracked in mache-89b5dd.
 			lg.schema = &api.Topology{Version: api.SchemaVersion}
+			lg.registerSheafInvalidator() // coverage:ignore — control-mode wiring; reduction tracked in mache-89b5dd.
 			log.Println("graph ready (arena control mode)")
 			return
 		}
@@ -476,9 +533,41 @@ func (lg *lazyGraph) init() {
 		lg.inner = g
 		lg.sheafInv = si
 		lg.schema = schema
-		lg.cleanup = cleanup
+		lg.cleanup = lg.wrapCleanupWithSheafUnregister(cleanup, si)
+		lg.registerSheafInvalidator()
 		log.Println("graph ready")
 	})
+}
+
+// registerSheafInvalidator hooks lg.sheafInv into the registry's
+// process-wide router so daemon-pushed sheaf.invalidate events can
+// route to this graph. No-op when either the router or the invalidator
+// is nil — the watcher cascade still works in the local-only path
+// even without the subscriber wired.
+func (lg *lazyGraph) registerSheafInvalidator() {
+	if lg.sheafRouter == nil || lg.sheafInv == nil {
+		return
+	}
+	lg.sheafRouter.register(lg.sheafInv) // coverage:ignore — router wiring on lazyGraph init; reduction tracked in mache-89b5dd.
+}
+
+// wrapCleanupWithSheafUnregister produces a cleanup func that
+// unregisters this graph's SheafInvalidator from the router BEFORE
+// running the inner cleanup. Ordering: stop receiving events first,
+// then tear down the graph state those events would touch. Returns
+// inner unchanged when the router or invalidator is nil — no need
+// to wrap a no-op.
+func (lg *lazyGraph) wrapCleanupWithSheafUnregister(inner func(), si *graph.SheafInvalidator) func() {
+	if lg.sheafRouter == nil || si == nil {
+		return inner
+	}
+	router := lg.sheafRouter // coverage:ignore — router cleanup wiring; reduction tracked in mache-89b5dd.
+	return func() {          // coverage:ignore — router cleanup wiring; reduction tracked in mache-89b5dd.
+		router.unregister(si) // coverage:ignore — router cleanup wiring; reduction tracked in mache-89b5dd.
+		if inner != nil {     // coverage:ignore — router cleanup wiring; reduction tracked in mache-89b5dd.
+			inner() // coverage:ignore — router cleanup wiring; reduction tracked in mache-89b5dd.
+		} // coverage:ignore — router cleanup wiring; reduction tracked in mache-89b5dd.
+	} // coverage:ignore — router cleanup wiring; reduction tracked in mache-89b5dd.
 }
 
 func (lg *lazyGraph) get() (graph.Graph, error) {

@@ -84,6 +84,52 @@ What this bench does NOT prove:
 
 The `list_children` reflection overhead is bounded by field count. If it ever shows up in production p99, the fix is field-level cleanup (drop unused `*string` pointers, replace with `string` where capnp's nullability isn't load-bearing) rather than reverting to map decode.
 
+## Sheaf cascade microbench (`internal/leyline/sheaf_cascade_bench_test.go`)
+
+Measures the wall-clock latency of one `sheaf_invalidate` round-trip against a live ley-line daemon. Pairs δ⁰ mode (full 32-D f32 stalk + agreement_dim=30) against heuristic-only mode (hash-only invalidation, no stalk data) so the wire cost of the δ⁰ precision win is visible.
+
+This is the moat number — the audit's `<500ms` budget for edit → fresh-result is built on this kernel. Everything else (watcher debounce, ReIngestFile, MCP cache flush) is on top of it.
+
+### Coverage
+
+| Bench                                      | Wire payload                                                                 | What it measures                                  |
+| ------------------------------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------- |
+| `BenchmarkCascade_InvalidateWithStalk`     | regions with 32-D f32 data + agreement_dim                                   | One `sheaf_invalidate` round-trip with δ⁰ engaged |
+| `BenchmarkCascade_InvalidateHeuristicMode` | regions without stalk data — daemon falls back to heuristic XOR-of-endpoints | One `sheaf_invalidate` round-trip without δ⁰      |
+
+Both benches push a 4-region a↔b↔c↔d chain topology, then loop `Invalidate` rotating through regions 1-4 so the daemon's cache doesn't short-circuit on a repeat.
+
+### Running
+
+Requires `leyline` on PATH (or `~/.local/bin/leyline`). Both benches skip automatically when the binary is absent.
+
+```sh
+go test -bench='BenchmarkCascade' -benchmem -run='^$' -benchtime=2s -count=10 ./internal/leyline/
+```
+
+### Baseline results (n=10, Apple M3 Max, darwin/arm64, leyline 0.4.2)
+
+| Mode           | µs/op (median) | B/op | allocs/op | Range (10 runs) |
+| -------------- | -------------: | ---: | --------: | --------------- |
+| δ⁰ (full)      |       **24.0** | 2061 |        45 | 23.7 – 31.8     |
+| Heuristic      |       **17.5** | 1834 |        45 | 16.8 – 20.1     |
+| Δ (cost of δ⁰) |       **~6.5** | +227 |         0 | —               |
+
+### Reading the table
+
+- **Daemon round-trip is ~20µs.** That's JSON marshal + UDS write + daemon BFS + UDS read + JSON unmarshal. Dominated by syscalls + JSON, not the cascade math itself.
+- **δ⁰ overhead is ~6.5µs and 227 bytes.** The extra bytes are the 32 f32 values × ~6 chars JSON each (the daemon's quoted-Int64 codec emits f32 with up-to-6 decimal digits + commas + brackets). The extra time is parsing those values + projecting onto the agreement subspace daemon-side.
+- **Allocs are equal.** Both modes go through the same `SocketClient.SendOp` path; the only marshal-side difference is array length, not allocation count.
+
+### What this bench does NOT measure
+
+- **File watcher debounce.** Fsnotify has a 100ms quiet period before firing — the cascade can't run any faster than that for live edits.
+- **Local re-ingest.** `engine.ReIngestFile` walks tree-sitter over the changed file; cost scales with file size, not cascade size.
+- **MCP cache flush.** `Graph.Invalidate` per node is microseconds × node count; covered by the per-region dedupe in `SheafInvalidator.InvalidateNodesWithCascade`.
+- **Multi-event correctness vs throughput.** The bench measures a single invalidation per iteration; a save-burst that fires 5 concurrent watchers tests `SocketClient.sendMu` serialization, not raw latency. (Pinned by `TestSendOp_ConcurrentCallsDoNotInterleave`.)
+
+A full edit-to-fresh-result bench against a real source repo lives in `mache-9077ae` (the cost-quality bench rerun on curated data) — the cascade kernel is the lower bound on what that will measure.
+
 ## Comparative bench (planned)
 
 Tracked under bead `mache-7937c5`. Three peer MCPs in scope:

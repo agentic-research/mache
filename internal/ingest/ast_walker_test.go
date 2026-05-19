@@ -65,7 +65,8 @@ func seedTestAST(t *testing.T) *sql.DB {
 		CREATE TABLE _source (
 			id TEXT PRIMARY KEY,
 			language TEXT NOT NULL,
-			content BLOB NOT NULL
+			content BLOB,
+			path TEXT
 		);
 	`)
 	require.NoError(t, err)
@@ -85,7 +86,7 @@ type Config struct {
 	Name string
 }
 `
-	_, err = db.Exec("INSERT INTO _source VALUES (?, ?, ?)", "main.go", "go", []byte(src))
+	_, err = db.Exec("INSERT INTO _source (id, language, content, path) VALUES (?, ?, ?, NULL)", "main.go", "go", []byte(src))
 	require.NoError(t, err)
 
 	// nodes table (ley-line projection format)
@@ -187,7 +188,8 @@ func seedTestASTFile(t *testing.T) *sql.DB {
 		CREATE TABLE _source (
 			id TEXT PRIMARY KEY,
 			language TEXT NOT NULL,
-			content BLOB NOT NULL
+			content BLOB,
+			path TEXT
 		);
 	`)
 	require.NoError(t, err)
@@ -206,7 +208,7 @@ type Config struct {
 	Name string
 }
 `
-	_, err = db.Exec("INSERT INTO _source VALUES (?, ?, ?)", "main.go", "go", []byte(src))
+	_, err = db.Exec("INSERT INTO _source (id, language, content, path) VALUES (?, ?, ?, NULL)", "main.go", "go", []byte(src))
 	require.NoError(t, err)
 
 	nodes := []struct {
