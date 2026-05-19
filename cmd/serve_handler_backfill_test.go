@@ -105,7 +105,7 @@ func TestGetSheafStatus_DialFailureReturnsUnavailable(t *testing.T) {
 	require.NoError(t, os.WriteFile(bogusSock, []byte("not a socket"), 0o600))
 	t.Setenv("LEYLINE_SOCKET", bogusSock)
 
-	handler := makeGetSheafStatusHandler()
+	handler := makeGetSheafStatusHandler(nil)
 	result, err := handler(context.Background(), makeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "dial failure must surface as structured unavailable, not MCP error")
@@ -138,7 +138,7 @@ func TestGetSheafStatus_DaemonErrorReturnsUnavailable(t *testing.T) {
 	})
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
-	handler := makeGetSheafStatusHandler()
+	handler := makeGetSheafStatusHandler(nil)
 	result, err := handler(context.Background(), makeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "daemon-side error must NOT surface as MCP error")

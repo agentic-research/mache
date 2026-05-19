@@ -496,7 +496,7 @@ func TestGetSheafStatus_ReturnsDaemonState(t *testing.T) {
 	})
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
-	handler := makeGetSheafStatusHandler()
+	handler := makeGetSheafStatusHandler(nil)
 	result, err := handler(context.Background(), makeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "handler must succeed when daemon responds: %s", resultText(t, result))
@@ -523,7 +523,7 @@ func TestGetSheafStatus_NoDaemonReturnsUnavailable(t *testing.T) {
 	t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-sheaf-status-sock")
 	t.Setenv("HOME", t.TempDir())
 
-	handler := makeGetSheafStatusHandler()
+	handler := makeGetSheafStatusHandler(nil)
 	result, err := handler(context.Background(), makeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "no-daemon path must not surface as an MCP error")
@@ -532,6 +532,106 @@ func TestGetSheafStatus_NoDaemonReturnsUnavailable(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
 	assert.Equal(t, false, out["available"])
 	assert.NotEmpty(t, out["reason"], "must explain why state is unavailable")
+}
+
+// TestGetSheafStatus_IncludesSubscriberState pins the c14c43 contract:
+// when the registry has a running subscriber, get_sheaf_status surfaces
+// the subscriber's state under a "subscriber" key. Without this, agents
+// can read a daemon generation but have no way to tell whether mache
+// has actually OBSERVED that generation via a pushed event (which is
+// what tells them mache's MCP caches have been flushed).
+func TestGetSheafStatus_IncludesSubscriberState(t *testing.T) {
+	leyline.StopManaged()
+	sockPath := startMockSheafServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"generation": "12",
+			"valid":      5.0,
+			"total":      8.0,
+			"defect":     0.1,
+		}
+	})
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+
+	now := time.Now()
+	subAccessor := func() (leyline.SubscriberStatus, bool) {
+		return leyline.SubscriberStatus{
+			State:          leyline.StateConnected,
+			LastGeneration: 11,
+			LastEvent:      now,
+		}, true
+	}
+
+	handler := makeGetSheafStatusHandler(subAccessor)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.Contains(t, out, "subscriber", "must include subscriber sub-object when accessor reports ok")
+
+	sub := out["subscriber"].(map[string]any)
+	assert.Equal(t, "connected", sub["state"], "state lowercased for agent consumption")
+	assert.EqualValues(t, 11, sub["last_generation"])
+	assert.EqualValues(t, now.Unix(), sub["last_event_unix"])
+	_, hasReason := sub["reason"]
+	assert.False(t, hasReason, "reason omitted when state is connected")
+}
+
+// TestGetSheafStatus_SubscriberDisconnectedSurfaced pins the inverse:
+// daemon may still respond to direct queries (per-call connection
+// check), but agents need to see the subscriber's "not receiving
+// events" state to know that previously-cached find_callers results
+// may be stale even though sheaf_status itself succeeded.
+func TestGetSheafStatus_SubscriberDisconnectedSurfaced(t *testing.T) {
+	leyline.StopManaged()
+	sockPath := startMockSheafServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"generation": "20", "valid": 2.0, "total": 5.0, "defect": 0.0,
+		}
+	})
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+
+	subAccessor := func() (leyline.SubscriberStatus, bool) {
+		return leyline.SubscriberStatus{
+			State:  leyline.StateDisconnected,
+			Reason: "dial /tmp/x.sock: connection refused",
+		}, true
+	}
+
+	handler := makeGetSheafStatusHandler(subAccessor)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	assert.Equal(t, true, out["available"], "daemon-direct check still passes")
+
+	sub := out["subscriber"].(map[string]any)
+	assert.Equal(t, "disconnected", sub["state"])
+	assert.Contains(t, sub["reason"], "connection refused")
+}
+
+// TestGetSheafStatus_NilSubscriberAccessor pins the legacy compat
+// path: nil accessor → omit the subscriber sub-object entirely,
+// don't synthesize a fake state.
+func TestGetSheafStatus_NilSubscriberAccessor(t *testing.T) {
+	leyline.StopManaged()
+	sockPath := startMockSheafServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{"generation": "1"}
+	})
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+
+	handler := makeGetSheafStatusHandler(nil)
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	_, hasSubscriber := out["subscriber"]
+	assert.False(t, hasSubscriber, "nil accessor → omit subscriber field (don't fake a state)")
 }
 
 // TestGetSheafStatus_RegisteredInToolSet pins that the tool is wired

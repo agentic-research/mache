@@ -118,9 +118,9 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	// well-known socket path.
 	s.AddTool(
 		mcp.NewTool("get_sheaf_status",
-			mcp.WithDescription("Returns the ley-line daemon's sheaf cache state (generation counter, valid/total entries, defect score). Use to decide whether cached find_callers / find_definition / get_architecture results are still fresh after an edit. Returns {available: false, reason: ...} when the daemon is not reachable rather than erroring — safe to call periodically."),
+			mcp.WithDescription("Returns the ley-line daemon's sheaf cache state (generation counter, valid/total entries, defect score) AND the local subscriber state (whether mache is receiving sheaf.invalidate events, last event seen, last generation observed). Use to decide whether cached find_callers / find_definition / get_architecture results are still fresh after an edit. Returns {available: false, reason: ...} when the daemon is not reachable rather than erroring — safe to call periodically."),
 		),
-		makeGetSheafStatusHandler(),
+		makeGetSheafStatusHandler(r.sheafSubscriberAccessor()),
 	)
 
 	s.AddTool(
