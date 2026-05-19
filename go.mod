@@ -1,6 +1,6 @@
 module github.com/agentic-research/mache
 
-go 1.25.5
+go 1.26
 
 require (
 	capnproto.org/go/capnp/v3 v3.1.0-alpha.2
