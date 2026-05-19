@@ -688,6 +688,26 @@ var smellRegistry = []SmellRule{
 		`,
 	},
 	{
+		ID:          "sleep_in_test",
+		Languages:   []string{"go"},
+		Description: "Calls to time.Sleep / time.After / time.NewTimer / time.NewTicker / time.AfterFunc from inside Go test files (`*_test.go`). Sleep-based synchronization is a flakiness anti-pattern: tests that wait wall-clock time instead of polling an observable condition (channel close, monitor event, exit-code check) drift between machines and CI environments. Prefer `testing.T.Eventually`, `Monitor`-style notifications, or `until <cond>; do sleep 0.5; done` polling loops. Cross-backend rule (uses node_refs + nodes, no _ast required). Static heuristic — captures the bare token after call-extraction so a non-time.Sleep method on an unrelated type (e.g. a custom Sleep() on a mock) is a false positive; documented divergence rather than over-engineering. Benchmark files are still flagged — sleep-based timing measurement in benchmarks is wrong for the same flakiness reason; if you need it explicitly, exclude the file via the rule's allowlist (TBD, tracked under mache-6682ec's smell-rule-categories sub-bead).",
+		Requires:    []string{"node_refs", "nodes"},
+		ScopeColumn: "COALESCE(n.source_file, '')",
+		Query: `
+			SELECT COALESCE(n.source_file, n.id) AS source_id,
+			       n.id AS node_id,
+			       0 AS start_byte, 0 AS end_byte,
+			       0 AS start_row, 0 AS start_col,
+			       0 AS metric
+			FROM node_refs r
+			JOIN nodes n ON n.id = r.node_id
+			WHERE r.token IN ('Sleep', 'After', 'NewTimer', 'NewTicker', 'AfterFunc')
+			  AND COALESCE(n.source_file, '') LIKE '%%_test.go'
+			%s
+			ORDER BY source_id, node_id
+		`,
+	},
+	{
 		ID:          "long_file",
 		Description: "Source files sorted descending by total line count (end_row of the source_file root AST node). Default threshold is 1501 lines — matches the historical strict `> 1500` SQL floor exactly, so agents calling without min_metric see the same long-file set as before. Pass min_metric to adjust: 3000 for 'definitely review now', 800 for 'noteworthy', 0 to see everything sorted by length. Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind.",
 		Requires:    []string{"_ast"},
