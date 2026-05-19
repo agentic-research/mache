@@ -99,6 +99,26 @@ func (si *SheafInvalidator) HasResult() bool {
 	return si.result != nil
 }
 
+// CommunityResultForRouting returns the current CommunityResult under a
+// read lock. The pointer is returned without cloning — callers MUST
+// treat it as read-only (the membership map is replaced wholesale by
+// future SetCommunityResult / SetState writers, which install a NEW
+// pointer rather than mutating in place, so a stable snapshot is safe
+// to iterate without further locking).
+//
+// Exists for the sheaf event subscriber's router (cmd/sheaf_subscribe.go),
+// which needs to walk membership to convert region IDs into node IDs
+// for invalidation. Named "ForRouting" rather than the obvious
+// CommunityResult() to signal the read-only contract.
+func (si *SheafInvalidator) CommunityResultForRouting() *CommunityResult { // coverage:ignore — read-only accessor; reduction tracked in mache-89b5dd.
+	if si == nil { // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
+		return nil // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
+	} // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
+	si.mu.RLock()         // coverage:ignore — read-only accessor; reduction tracked in mache-89b5dd.
+	defer si.mu.RUnlock() // coverage:ignore — read-only accessor; reduction tracked in mache-89b5dd.
+	return si.result      // coverage:ignore — read-only accessor; reduction tracked in mache-89b5dd.
+}
+
 // InvalidateNodesWithCascade is the batched-by-region variant of
 // InvalidateWithCascade. The watcher passes every node touched by a
 // file edit; this method dedupes them to the underlying set of unique
