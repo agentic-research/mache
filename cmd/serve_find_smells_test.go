@@ -3051,3 +3051,191 @@ func TestFindSmells_MinMetricFilters(t *testing.T) {
 	assert.Equal(t, "c.go", filtered.Findings[0].SourceID)
 	assert.Equal(t, int64(5000), filtered.Findings[0].Metric)
 }
+
+// ---------------------------------------------------------------------------
+// drift_doc_* rules (ADR-0018 PR 3) — v1 placeholder contract tests.
+//
+// Each of the three rules below ships in the registry today with a
+// no-op SQL query (returns zero rows). The tests pin:
+//
+//   1. _Registered: the registry actually carries the rule with the
+//      expected metadata (ID, Languages, Severity, Tags, Requires).
+//   2. _ListingExposesIt: the MCP rules-listing surface emits the rule
+//      with severity + tags so PR 2's `--rule 'drift_doc_*'` glob and
+//      future agent discovery have something to match.
+//   3. _PlaceholderQueryReturnsZeroFindings: invoking the rule today
+//      runs cleanly (pre-flight passes, SQL executes) and returns zero
+//      findings. This pins the v1 placeholder contract — the follow-up
+//      bead implementing the firing logic will replace this assertion
+//      with a "fires on the seeded drift, doesn't fire on the seeded
+//      clean case" pair once the preprocessor / host-side validator /
+//      TOML loader lands.
+// ---------------------------------------------------------------------------
+
+// findRegisteredRule is a tiny helper for the placeholder tests below.
+// Returns the rule by ID or fails the test loudly so the assertion that
+// follows can use the pointer without nil-guards.
+func findRegisteredRule(t *testing.T, id string) *SmellRule {
+	t.Helper()
+	for i := range smellRegistry {
+		if smellRegistry[i].ID == id {
+			return &smellRegistry[i]
+		}
+	}
+	t.Fatalf("rule %q not registered in smellRegistry", id)
+	return nil
+}
+
+// driftRuleSummary is the JSON shape the rules-listing surface emits
+// for each rule. Mirrors the inline ruleSummary type in
+// serve_find_smells.go rulesListing() — kept local to the tests so a
+// shape drift in the production type is caught by these unmarshal calls
+// rather than silently coerced.
+type driftRuleSummary struct {
+	ID          string   `json:"id"`
+	Languages   []string `json:"languages"`
+	Description string   `json:"description"`
+	Requires    []string `json:"requires"`
+	Severity    string   `json:"severity"`
+	Tags        []string `json:"tags"`
+}
+
+// listingFor finds a rule in the rules-listing handler output by ID.
+// Calls the handler with no rule (discovery mode), unmarshals, and
+// returns the entry. Fails the test if the rule is absent.
+func listingFor(t *testing.T, id string) driftRuleSummary {
+	t.Helper()
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Rules []driftRuleSummary `json:"rules"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	for _, r := range resp.Rules {
+		if r.ID == id {
+			return r
+		}
+	}
+	t.Fatalf("rule %q absent from rules listing", id)
+	return driftRuleSummary{}
+}
+
+// runPlaceholderRule invokes the find_smells handler against the rule
+// and returns the decoded response. Verifies the call did not error
+// (placeholder SQL must execute cleanly against the seedSmellAST
+// fixture) and that the rule echoed back matches the request.
+func runPlaceholderRule(t *testing.T, id string) (int, []smellFinding) {
+	t.Helper()
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": id,
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "placeholder rule %q must execute cleanly: %s", id, resultText(t, res))
+
+	var resp struct {
+		Rule     string         `json:"rule"`
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, id, resp.Rule)
+	return resp.Total, resp.Findings
+}
+
+// --- drift_doc_dead_symbol_reference -------------------------------
+
+func TestFindSmells_DriftDocDeadSymbolReference_Registered(t *testing.T) {
+	r := findRegisteredRule(t, "drift_doc_dead_symbol_reference")
+	assert.Equal(t, []string{"markdown"}, r.Languages)
+	assert.Equal(t, SeverityWarn, r.Effective(),
+		"placeholder rules default to warn — observability tier per ADR-0018")
+	assert.Equal(t, []string{"docs", "drift"}, r.Tags)
+	assert.ElementsMatch(t, []string{"nodes", "node_defs"}, r.Requires,
+		"rule reads nodes (markdown content) + node_defs (symbol ground truth)")
+	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn,
+		"scope column matches the alias the real query will use once the preprocessor lands")
+	assert.NotEmpty(t, r.Description)
+}
+
+func TestFindSmells_DriftDocDeadSymbolReference_ListingExposesIt(t *testing.T) {
+	entry := listingFor(t, "drift_doc_dead_symbol_reference")
+	assert.Equal(t, []string{"markdown"}, entry.Languages)
+	assert.Equal(t, string(SeverityWarn), entry.Severity,
+		"listing must emit severity so PR 2's --fail-on flag can reason about gating")
+	assert.Equal(t, []string{"docs", "drift"}, entry.Tags,
+		"listing must emit tags so PR 2's --rule glob (drift_doc_*) and future --tags filter work")
+	assert.ElementsMatch(t, []string{"nodes", "node_defs"}, entry.Requires)
+}
+
+func TestFindSmells_DriftDocDeadSymbolReference_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
+	total, findings := runPlaceholderRule(t, "drift_doc_dead_symbol_reference")
+	assert.Zero(t, total,
+		"v1 placeholder returns zero findings; follow-up bead under mache-e1b6c8 will replace this once the preprocessor lands")
+	assert.Empty(t, findings)
+}
+
+// --- drift_doc_broken_internal_link --------------------------------
+
+func TestFindSmells_DriftDocBrokenInternalLink_Registered(t *testing.T) {
+	r := findRegisteredRule(t, "drift_doc_broken_internal_link")
+	assert.Equal(t, []string{"markdown"}, r.Languages)
+	assert.Equal(t, SeverityWarn, r.Effective())
+	assert.Equal(t, []string{"docs", "drift", "links"}, r.Tags)
+	assert.ElementsMatch(t, []string{"nodes"}, r.Requires,
+		"link-target validation needs the markdown content (nodes); filesystem stat happens host-side")
+	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn)
+	assert.NotEmpty(t, r.Description)
+}
+
+func TestFindSmells_DriftDocBrokenInternalLink_ListingExposesIt(t *testing.T) {
+	entry := listingFor(t, "drift_doc_broken_internal_link")
+	assert.Equal(t, []string{"markdown"}, entry.Languages)
+	assert.Equal(t, string(SeverityWarn), entry.Severity)
+	assert.Equal(t, []string{"docs", "drift", "links"}, entry.Tags)
+	assert.ElementsMatch(t, []string{"nodes"}, entry.Requires)
+}
+
+func TestFindSmells_DriftDocBrokenInternalLink_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
+	total, findings := runPlaceholderRule(t, "drift_doc_broken_internal_link")
+	assert.Zero(t, total,
+		"v1 placeholder returns zero findings; follow-up bead under mache-e1b6c8 will replace this once host-side filesystem validation lands")
+	assert.Empty(t, findings)
+}
+
+// --- drift_doc_outdated_count --------------------------------------
+
+func TestFindSmells_DriftDocOutdatedCount_Registered(t *testing.T) {
+	r := findRegisteredRule(t, "drift_doc_outdated_count")
+	assert.Equal(t, []string{"markdown"}, r.Languages)
+	assert.Equal(t, SeverityWarn, r.Effective())
+	assert.Equal(t, []string{"docs", "drift", "counts"}, r.Tags)
+	assert.ElementsMatch(t, []string{"nodes"}, r.Requires,
+		"ground-truth queries from .mache/drift-counts.toml execute against the wider DB; this rule needs only the markdown content (nodes)")
+	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn)
+	assert.NotEmpty(t, r.Description)
+}
+
+func TestFindSmells_DriftDocOutdatedCount_ListingExposesIt(t *testing.T) {
+	entry := listingFor(t, "drift_doc_outdated_count")
+	assert.Equal(t, []string{"markdown"}, entry.Languages)
+	assert.Equal(t, string(SeverityWarn), entry.Severity)
+	assert.Equal(t, []string{"docs", "drift", "counts"}, entry.Tags)
+	assert.ElementsMatch(t, []string{"nodes"}, entry.Requires)
+}
+
+func TestFindSmells_DriftDocOutdatedCount_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
+	total, findings := runPlaceholderRule(t, "drift_doc_outdated_count")
+	assert.Zero(t, total,
+		"v1 placeholder returns zero findings; follow-up bead under mache-e1b6c8 will replace this once the TOML loader + claim extractor land")
+	assert.Empty(t, findings)
+}

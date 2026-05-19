@@ -760,4 +760,114 @@ var smellRegistry = []SmellRule{
 			ORDER BY metric DESC, src.source_id
 		`,
 	},
+	// drift_doc_* rules — v1 placeholders per ADR-0018 (PR 3 of the
+	// migration path). The rule METADATA ships now so:
+	//
+	//   1. `mache find_smells` (no rule) surfaces them in the listing
+	//      — discovery surface is complete.
+	//   2. PR 2's `--rule 'drift_doc_*'` glob has something to match —
+	//      the CLI feature can be exercised end-to-end against real
+	//      registry entries instead of an empty set.
+	//   3. PR 4's pre-commit hook can wire the rule pack today without
+	//      waiting on the actual firing logic.
+	//
+	// Each rule's QUERY is intentionally a no-op (WHERE 1=0). The real
+	// firing logic for each has an honest dependency on additional
+	// plumbing — a markdown-token preprocessor, host-side filesystem
+	// validation, and a TOML config loader respectively — none of which
+	// belongs in PR 3's scope. Each rule has a follow-up bead filed
+	// against ADR-0018 (mache-e1b6c8) + the schema bead (mache-ec1a06).
+	//
+	// The placeholder Query shape — seven canonical columns wrapped in
+	// WHERE 1=0 — keeps these rules wired through the existing
+	// runSmellRule machinery without special-casing. They return zero
+	// findings, but every other code path (listing, severity, tags,
+	// requires pre-flight) treats them exactly like any other rule.
+	{
+		ID:        "drift_doc_dead_symbol_reference",
+		Languages: []string{"markdown"},
+		Description: "v1 placeholder (ADR-0018 PR 3). Spec: every backtick-fenced token `Foo` or `pkg.Bar` " +
+			"in markdown should refer to a real symbol defined in node_defs; a missing definition " +
+			"signals the doc has drifted from the code (renamed/removed function/type still " +
+			"referenced in docs). Current implementation: no findings — the firing logic requires " +
+			"a backtick-token preprocessor (either a derived _doc_tokens view populated by the " +
+			"markdown ingestion path, or a SQLite regex extension) which is tracked as a separate " +
+			"follow-up bead under mache-e1b6c8. The rule appears in the listing today so PR 2's " +
+			"--rule 'drift_doc_*' glob has something to match and PR 4's pre-commit hook can wire " +
+			"the rule pack ahead of the firing logic landing.",
+		Severity:    SeverityWarn,
+		Tags:        []string{"docs", "drift"},
+		Requires:    []string{"nodes", "node_defs"},
+		ScopeColumn: "COALESCE(md.source_file, '')",
+		Query: `
+			-- Placeholder: returns zero rows. Real implementation needs
+			-- a derived view of backtick-fenced tokens extracted from
+			-- markdown source. Follow-up bead under mache-e1b6c8.
+			SELECT '' AS source_id, '' AS node_id,
+			       0 AS start_byte, 0 AS end_byte,
+			       0 AS start_row, 0 AS start_col,
+			       0 AS metric
+			WHERE 1=0
+			%s
+		`,
+	},
+	{
+		ID:        "drift_doc_broken_internal_link",
+		Languages: []string{"markdown"},
+		Description: "v1 placeholder (ADR-0018 PR 3). Spec: every markdown internal link " +
+			"`[text](relative/path)` should resolve to an existing file on disk (external URLs — " +
+			"http/https/mailto — are skipped). Catches doc reorganizations that left stale links. " +
+			"Current implementation: no findings — SQL cannot stat the filesystem, so the firing " +
+			"logic requires a host-side post-processing step in runSmellRule that checks each " +
+			"candidate link's path on disk. That's a small refactor tracked as a separate " +
+			"follow-up bead under mache-e1b6c8. The rule appears in the listing today so PR 2's " +
+			"--rule 'drift_doc_*' glob has something to match and PR 4's pre-commit hook can wire " +
+			"the rule pack ahead of the firing logic landing.",
+		Severity:    SeverityWarn,
+		Tags:        []string{"docs", "drift", "links"},
+		Requires:    []string{"nodes"},
+		ScopeColumn: "COALESCE(md.source_file, '')",
+		Query: `
+			-- Placeholder: returns zero rows. Real implementation needs
+			-- host-side filesystem stat for each markdown link target;
+			-- pure SQL cannot do this. Follow-up bead under mache-e1b6c8.
+			SELECT '' AS source_id, '' AS node_id,
+			       0 AS start_byte, 0 AS end_byte,
+			       0 AS start_row, 0 AS start_col,
+			       0 AS metric
+			WHERE 1=0
+			%s
+		`,
+	},
+	{
+		ID:        "drift_doc_outdated_count",
+		Languages: []string{"markdown"},
+		Description: "v1 placeholder (ADR-0018 PR 3). Spec: numeric claims in markdown like " +
+			"'supports 28 languages' or '17 MCP tools' should match a SQL ground-truth query the " +
+			"repo author provides in .mache/drift-counts.toml (the schema is sketched in ADR-0018 " +
+			"Open Question 2). Generalizes the cloister-style narrow-lint pattern already " +
+			"implemented in bash as check #4 in scripts/docs-lint.sh for language-count claims. " +
+			"Current implementation: no findings — the firing logic needs a TOML loader, a regex " +
+			"extractor for '(\\d+) (tools|languages|rules)' patterns in markdown, and a per-claim " +
+			"SQL execution loop. Those three pieces are tracked as a separate follow-up bead " +
+			"under mache-e1b6c8. The rule appears in the listing today so PR 2's " +
+			"--rule 'drift_doc_*' glob has something to match and PR 4's pre-commit hook can wire " +
+			"the rule pack ahead of the firing logic landing.",
+		Severity:    SeverityWarn,
+		Tags:        []string{"docs", "drift", "counts"},
+		Requires:    []string{"nodes"},
+		ScopeColumn: "COALESCE(md.source_file, '')",
+		Query: `
+			-- Placeholder: returns zero rows. Real implementation needs
+			-- a .mache/drift-counts.toml loader, a regex extractor for
+			-- numeric claims in markdown, and a per-claim SQL execution
+			-- loop. Follow-up bead under mache-e1b6c8.
+			SELECT '' AS source_id, '' AS node_id,
+			       0 AS start_byte, 0 AS end_byte,
+			       0 AS start_row, 0 AS start_col,
+			       0 AS metric
+			WHERE 1=0
+			%s
+		`,
+	},
 }
