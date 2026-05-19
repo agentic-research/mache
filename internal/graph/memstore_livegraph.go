@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// Live-graph mtime tracking. NOTE: mtime population is split across two
+// sites — RecordFileMtime (below, the explicit re-ingest path) and
+// indexNode in memstore_write.go (which auto-records mtime as a side
+// effect of indexing nodes with SourceOrigin). A reader of this file
+// alone won't see the auto-record path; check memstore_write.go's
+// indexNode for the implicit write site.
+
 // SetRefresher configures a callback invoked when a source file is stale.
 // The callback should re-ingest the file and update the store.
 func (s *MemoryStore) SetRefresher(fn func(filePath string) error) {
