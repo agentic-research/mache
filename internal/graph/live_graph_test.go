@@ -75,6 +75,44 @@ func TestMemoryStore_DetectsStaleness(t *testing.T) {
 	assert.True(t, store.IsFileStale(srcFile), "file should be stale after modification")
 }
 
+// IsFileStale returns false for paths the store has never indexed —
+// callers can probe arbitrary paths without recording them first.
+func TestMemoryStore_IsFileStale_Untracked(t *testing.T) {
+	store := NewMemoryStore()
+
+	tmpDir := t.TempDir()
+	never := filepath.Join(tmpDir, "untracked.go")
+	require.NoError(t, os.WriteFile(never, []byte("package x"), 0o644))
+
+	assert.False(t, store.IsFileStale(never), "untracked path must not be considered stale")
+}
+
+// IsFileStale returns true when the source file has been deleted —
+// the file-watcher path treats "can't stat" as "definitely changed".
+func TestMemoryStore_IsFileStale_StatError(t *testing.T) {
+	store := NewMemoryStore()
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "vanish.go")
+	require.NoError(t, os.WriteFile(srcFile, []byte("package x"), 0o644))
+
+	info, _ := os.Stat(srcFile)
+	store.AddNode(&Node{
+		ID:      "vanish/source",
+		Mode:    0o444,
+		ModTime: info.ModTime(),
+		Data:    []byte("package x"),
+		Origin: &SourceOrigin{
+			FilePath:  srcFile,
+			StartByte: 0,
+			EndByte:   9,
+		},
+	})
+
+	require.NoError(t, os.Remove(srcFile))
+	assert.True(t, store.IsFileStale(srcFile), "deleted tracked file must report stale")
+}
+
 func TestMemoryStore_RefresherCalledOnStaleRead(t *testing.T) {
 	store := NewMemoryStore()
 
