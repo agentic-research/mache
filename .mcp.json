@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mache": {
+      "type": "stdio",
+      "command": "mache",
+      "args": ["serve", "--stdio", "."],
+      "env": {}
+    }
+  }
+}

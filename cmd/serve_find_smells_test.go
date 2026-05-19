@@ -243,6 +243,63 @@ func TestFindSmells_MagicIntInComparison(t *testing.T) {
 	assert.Equal(t, 5, resp.Findings[1].Line)
 }
 
+// TestFindSmells_SleepInTest pins the sleep_in_test rule: calls to
+// time.Sleep / time.After / time.NewTimer / time.NewTicker / time.AfterFunc
+// from inside *_test.go files must be flagged; identical calls from
+// non-test files must NOT be flagged.
+//
+// The fixture seeds three node_refs rows:
+//   - Sleep called from a *_test.go leaf       → flagged
+//   - After called from a *_test.go leaf       → flagged
+//   - Sleep called from a production .go leaf  → NOT flagged
+//   - Sleep called from a *_test.go leaf using a different token → NOT flagged
+func TestFindSmells_SleepInTest(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
+		  ('tests/functions/TestFlaky/source',  'tests/functions/TestFlaky',  'source', 0, 0, 'foo_test.go'),
+		  ('tests/functions/TestFlaky2/source', 'tests/functions/TestFlaky2', 'source', 0, 0, 'bar_test.go'),
+		  ('prod/functions/Worker/source',      'prod/functions/Worker',      'source', 0, 0, 'worker.go'),
+		  ('tests/functions/TestQuiet/source',  'tests/functions/TestQuiet',  'source', 0, 0, 'quiet_test.go');
+
+		INSERT INTO node_refs (token, node_id) VALUES
+		  ('Sleep', 'tests/functions/TestFlaky/source'),
+		  ('After', 'tests/functions/TestFlaky2/source'),
+		  ('Sleep', 'prod/functions/Worker/source'),
+		  ('Something', 'tests/functions/TestQuiet/source');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "sleep_in_test",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "sleep_in_test should run cleanly: %s", resultText(t, res))
+
+	var resp struct {
+		Rule     string         `json:"rule"`
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	assert.Equal(t, "sleep_in_test", resp.Rule)
+	require.Equal(t, 2, resp.Total,
+		"must flag exactly the two *_test.go calls (Sleep + After); production call and non-sleep token excluded")
+
+	gotNodes := map[string]bool{}
+	for _, f := range resp.Findings {
+		gotNodes[f.NodeID] = true
+	}
+	assert.True(t, gotNodes["tests/functions/TestFlaky/source"], "Sleep in foo_test.go must be flagged")
+	assert.True(t, gotNodes["tests/functions/TestFlaky2/source"], "After in bar_test.go must be flagged")
+	assert.False(t, gotNodes["prod/functions/Worker/source"], "Sleep in production worker.go must NOT be flagged")
+	assert.False(t, gotNodes["tests/functions/TestQuiet/source"], "non-sleep token in test must NOT be flagged")
+}
+
 func TestFindSmells_UnknownRuleErrors(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.db.Close() }()

@@ -13,7 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/ingest"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +50,12 @@ import (
 
 // toolProfile is one row of the e2e manifest.
 type toolProfile struct {
-	Name       string `json:"name"`
+	Name string `json:"name"`
+	// Backend identifies which graph implementation produced this row
+	// (memory | sqlite). The matrix runner emits one row per (tool,
+	// backend) pair so consumers can diff behavior across backends.
+	// Empty for legacy single-backend manifests.
+	Backend    string `json:"backend,omitempty"`
 	LatencyMS  int64  `json:"latency_ms"`
 	AllocBytes uint64 `json:"alloc_bytes"`
 	AllocCount uint64 `json:"alloc_count"`
@@ -137,7 +145,64 @@ func readPprofOpts(t *testing.T) pprofOpts {
 	return pprofOpts{dir: dir, iterations: iterations}
 }
 
+// backendBuilder constructs a Graph for one row of the matrix.
+//
+// Both implementations consume the same on-disk fixture so any
+// behavior delta surfaces as a backend-attributable difference, not a
+// fixture difference. SB-01 (ADR-0017 M1) wires MemoryStore +
+// SQLiteGraph; SB-02 + SB-03 add WritableGraph, CompositeGraph, and
+// GraphFS as separate columns.
+type backendBuilder struct {
+	name  string
+	build func(t *testing.T, fixtureDir string, schema *api.Topology) (graph.Graph, func())
+}
+
+func allE2EBackends() []backendBuilder {
+	return []backendBuilder{
+		{name: "memory", build: buildMemoryBackend},
+		{name: "sqlite", build: buildSQLiteBackend},
+	}
+}
+
+// buildMemoryBackend is the canonical pre-SB-01 path: serve.go's
+// buildMaybeMultiGraph, which on a directory source with
+// MACHE_NO_LEYLINE=1 produces an in-process MemoryStore + Engine
+// ingest. Kept routed through the public entry point so any regression
+// in the cmd-layer construction is caught here, not just in the
+// per-store unit tests.
+func buildMemoryBackend(t *testing.T, fixtureDir string, schema *api.Topology) (graph.Graph, func()) {
+	t.Helper()
+	g, _, cleanup, err := buildMaybeMultiGraph(fixtureDir, schema)
+	require.NoError(t, err, "memory backend build")
+	return g, cleanup
+}
+
+// buildSQLiteBackend ingests the same fixture into a .db via
+// SQLiteWriter (the cmd/build.go path), then opens it as a
+// SQLiteGraph. This mirrors what `mache build && mache serve <.db>`
+// does end-to-end without shelling out, so the harness picks up any
+// nodes-table/template-render drift between the two backends.
+func buildSQLiteBackend(t *testing.T, fixtureDir string, schema *api.Topology) (graph.Graph, func()) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "fixture.db")
+
+	writer, err := ingest.NewSQLiteWriter(dbPath)
+	require.NoError(t, err, "sqlite writer")
+	engine := ingest.NewEngine(schema, writer)
+	require.NoError(t, engine.Ingest(fixtureDir), "sqlite ingest")
+	require.NoError(t, writer.Close(), "sqlite writer close")
+
+	sg, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
+	require.NoError(t, err, "open sqlite graph")
+	return sg, func() { _ = sg.Close() }
+}
+
 // TestE2E_AllMCPTools is the harness. See file header.
+//
+// Matrix-runner shape (SB-01, ADR-0017 M1): one subtest per backend,
+// each running the full tool inventory and emitting its own profile
+// rows tagged with `backend`. The manifest aggregates rows across
+// backends so consumers can compare (tool, backend) pairs.
 func TestE2E_AllMCPTools(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e harness; rerun without -short")
@@ -146,7 +211,9 @@ func TestE2E_AllMCPTools(t *testing.T) {
 	// Pin to the in-process MemoryStore path so the fixture build is
 	// deterministic. Auto-leyline would need a leyline binary on
 	// PATH and would change the .db shape per environment — not what
-	// this harness is testing.
+	// this harness is testing. Applies to the memory backend; the
+	// sqlite backend constructs its own .db via SQLiteWriter without
+	// touching the auto-leyline path.
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	dir := writeE2EFixture(t)
@@ -158,9 +225,35 @@ func TestE2E_AllMCPTools(t *testing.T) {
 	schema, err := resolveSchema("go", ".")
 	require.NoError(t, err)
 	require.NotNil(t, schema, "go preset schema must resolve")
-	g, _, cleanup, err := buildMaybeMultiGraph(dir, schema)
-	require.NoError(t, err)
-	defer cleanup()
+
+	opts := readPprofOpts(t)
+	allProfiles := make([]toolProfile, 0)
+
+	for _, backend := range allE2EBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			g, cleanup := backend.build(t, dir, schema)
+			defer cleanup()
+
+			profiles := runToolMatrix(t, g, dir, backend.name, opts)
+			printProfileSummary(t, profiles)
+			allProfiles = append(allProfiles, profiles...)
+
+			assertHarnessHealth(t, profiles)
+		})
+	}
+
+	if out := os.Getenv("E2E_PROFILE_OUT"); out != "" {
+		writeProfileManifest(t, out, allProfiles)
+	}
+}
+
+// runToolMatrix invokes every registered MCP tool against `g` and
+// returns one profile row per tool, all tagged with the given backend
+// name. Extracted from TestE2E_AllMCPTools so SB-02 (WritableGraph,
+// CompositeGraph) and SB-04/05/06 (alt fixtures) can share the
+// inventory without copy-pasting the invocation table.
+func runToolMatrix(t *testing.T, g graph.Graph, fixtureDir, backend string, opts pprofOpts) []toolProfile {
+	t.Helper()
 
 	// Each entry: tool name, handler factory, args. Order matches
 	// registerMCPTools (cmd/serve_handlers.go) so a missing tool
@@ -186,36 +279,39 @@ func TestE2E_AllMCPTools(t *testing.T) {
 		{"get_impact", makeGetImpactHandler, map[string]any{"symbol": "Validate", "depth": float64(2)}},
 		{"get_architecture", makeGetArchitectureHandler, map[string]any{}},
 		{"get_diagram", makeGetDiagramHandler, map[string]any{"layout": "TD"}},
-		{"resolve_ref", makeResolveRefHandler, map[string]any{"token": "mod:./billing", "base_path": dir}},
+		{"resolve_ref", makeResolveRefHandler, map[string]any{"token": "mod:./billing", "base_path": fixtureDir}},
 		{"find_smells", makeFindSmellsHandler, map[string]any{"rule": "dead_code", "limit": float64(20)}},
 		// write_file is intentionally skipped — happy path mutates
 		// the fixture and would invalidate downstream tool results
 		// in this single-pass harness. A separate write-path harness
-		// is the right fit. Phase 1 pins the read surface.
+		// is the right fit (SB-16). Phase 1 pins the read surface.
 	}
 
-	opts := readPprofOpts(t)
 	profiles := make([]toolProfile, 0, len(invocations))
 	for _, inv := range invocations {
-		profiles = append(profiles, profileTool(t, inv.name, inv.handler(g), inv.args, opts))
+		p := profileTool(t, inv.name, inv.handler(g), inv.args, opts)
+		p.Backend = backend
+		profiles = append(profiles, p)
 	}
+	return profiles
+}
 
-	printProfileSummary(t, profiles)
-	if out := os.Getenv("E2E_PROFILE_OUT"); out != "" {
-		writeProfileManifest(t, out, profiles)
-	}
-
-	// Acceptance is intentionally loose: this harness exists to
-	// emit observability over the tool surface, not to gate merges.
-	// A tool returning IsError on a no-LLO fixture (e.g. find_smells
-	// with _ast rules, get_type_info without _lsp_*) is documented
-	// behavior — surfaced as "skipped" — not a failure. Tests for
-	// individual semantics live in the per-handler test files.
-	//
-	// The single bar: NO tool errors out at the transport level
-	// (panic, nil result, raw error) and AT LEAST ONE tool returns
-	// ok. Anything below that is a harness misconfiguration or a
-	// fundamental graph-build break, not legitimate tool semantics.
+// assertHarnessHealth enforces the same acceptance bar the
+// pre-SB-01 single-backend test used, scoped per subtest.
+//
+// Acceptance is intentionally loose: this harness exists to emit
+// observability over the tool surface, not to gate merges. A tool
+// returning IsError on a no-LLO fixture (e.g. find_smells with _ast
+// rules, get_type_info without _lsp_*) is documented behavior —
+// surfaced as "skipped" — not a failure. Tests for individual
+// semantics live in the per-handler test files.
+//
+// The single bar: NO tool errors out at the transport level (panic,
+// nil result, raw error) and AT LEAST ONE tool returns ok. Anything
+// below that is a harness misconfiguration or a fundamental
+// graph-build break, not legitimate tool semantics.
+func assertHarnessHealth(t *testing.T, profiles []toolProfile) {
+	t.Helper()
 	var okCount, errorCount int
 	for _, p := range profiles {
 		switch p.Status {

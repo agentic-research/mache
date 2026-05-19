@@ -321,6 +321,164 @@ func TestSQLiteGraph_GetCallees_AmbiguousSuffixSkipped(t *testing.T) {
 		"ambiguous *.Close suffix match (2 candidates) must NOT auto-resolve — silent wrong-target is worse than no answer")
 }
 
+// TestSQLiteGraph_DefsMap_SQLFallback regression-guards bead
+// mache-655e98: DefsMap() was reading ONLY in-memory g.defs, so on
+// pre-built .db files where definitions live in the node_defs SQL
+// table, it returned an empty map. Downstream tools that depend on
+// DefsMap() (get_impact, get_architecture, and the find_callees
+// resolver fallback) silently returned "no definition found" for
+// every symbol on every corpus.
+//
+// Surfaced 2026-05-19 by SB-01's matrix runner: get_impact returned
+// the same 51-byte error envelope ({"symbol":...,"error":"no
+// definition found"}) regardless of corpus (mache, rosary, LLO) or
+// language (Go, Rust) when run against SQLiteGraph. MemoryStore
+// returned rich impact data on the same fixtures.
+//
+// This test sets up a node_defs row WITHOUT any AddDef call and
+// asserts DefsMap returns it — exercising the SQL-fallback path
+// that mirrors SearchDefs and LookupDef.
+func TestSQLiteGraph_DefsMap_SQLFallback(t *testing.T) {
+	dir, err := os.MkdirTemp("", "defsmap-sqlfallback-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			kind INTEGER NOT NULL,
+			size INTEGER DEFAULT 0,
+			mtime INTEGER NOT NULL,
+			record_id TEXT,
+			record JSON
+		);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		INSERT INTO node_defs VALUES ('NewEngine', 'ingest/functions/NewEngine');
+		INSERT INTO node_defs VALUES ('Validate', 'auth/functions/Validate');
+		INSERT INTO node_defs VALUES ('Engine.Ingest', 'ingest/functions/Engine.Ingest');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	g, err := OpenSQLiteGraph(dbPath, &api.Topology{}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	got := g.DefsMap()
+	require.Len(t, got, 3, "DefsMap must hydrate all node_defs rows on pre-built .db")
+	require.Equal(t, []string{"ingest/functions/NewEngine"}, got["NewEngine"])
+	require.Equal(t, []string{"auth/functions/Validate"}, got["Validate"])
+	require.Equal(t, []string{"ingest/functions/Engine.Ingest"}, got["Engine.Ingest"])
+}
+
+// TestSQLiteGraph_DefsMap_MultipleSQLNodesForOneToken regression-
+// guards a bug Copilot caught on the initial DefsMap SQL-fallback fix
+// (PR #401): the merge loop treated any pre-existing cp[token] as an
+// in-memory collision and skipped subsequent SQL rows. Since SQL rows
+// for the same token populate cp[token] themselves on the first hit,
+// every additional node_id for that token was silently dropped.
+//
+// Production reality: a method like Close, String, or any
+// commonly-named function has multiple definitions across packages.
+// Dropping all but the first would break find_callers / get_impact
+// disambiguation downstream.
+//
+// This test inserts THREE node_defs rows for the same token and
+// asserts DefsMap returns all three node_ids.
+func TestSQLiteGraph_DefsMap_MultipleSQLNodesForOneToken(t *testing.T) {
+	dir, err := os.MkdirTemp("", "defsmap-multi-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			kind INTEGER NOT NULL,
+			size INTEGER DEFAULT 0,
+			mtime INTEGER NOT NULL,
+			record_id TEXT,
+			record JSON
+		);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- Same token (Close) defined in three different packages
+		INSERT INTO node_defs VALUES ('Close', 'reader/Reader.Close');
+		INSERT INTO node_defs VALUES ('Close', 'writer/Writer.Close');
+		INSERT INTO node_defs VALUES ('Close', 'pipe/Pipe.Close');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	g, err := OpenSQLiteGraph(dbPath, &api.Topology{}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	got := g.DefsMap()
+	require.Contains(t, got, "Close")
+	require.Len(t, got["Close"], 3,
+		"DefsMap must return ALL node_defs rows for a token, not just the first — see PR #401 Copilot review")
+}
+
+// TestSQLiteGraph_DefsMap_MergesInMemoryAndSQL pins that AddDef
+// entries layer on top of the SQL-fallback hydration without
+// dropping either source. Mirrors TestSQLiteGraph_LookupDef_InMemoryWinsOverSQL
+// for the bulk-snapshot path.
+func TestSQLiteGraph_DefsMap_MergesInMemoryAndSQL(t *testing.T) {
+	dir, err := os.MkdirTemp("", "defsmap-merge-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	dbPath := filepath.Join(dir, "test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			kind INTEGER NOT NULL,
+			size INTEGER DEFAULT 0,
+			mtime INTEGER NOT NULL,
+			record_id TEXT,
+			record JSON
+		);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		INSERT INTO node_defs VALUES ('OnlyInSQL', 'sql/OnlyInSQL');
+		INSERT INTO node_defs VALUES ('InBoth', 'sql/InBoth');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	g, err := OpenSQLiteGraph(dbPath, &api.Topology{}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	require.NoError(t, g.AddDef("OnlyInMemory", "mem/OnlyInMemory"))
+	require.NoError(t, g.AddDef("InBoth", "mem/InBoth"))
+
+	got := g.DefsMap()
+	require.Contains(t, got, "OnlyInSQL", "SQL-only def must appear in DefsMap")
+	require.Contains(t, got, "OnlyInMemory", "in-memory-only def must appear in DefsMap")
+	require.Contains(t, got, "InBoth", "def present in both sources must appear in DefsMap")
+	// In-memory wins on conflict, matching LookupDef precedence.
+	require.Equal(t, []string{"mem/InBoth"}, got["InBoth"],
+		"on token collision, in-memory entry must win (matches LookupDef precedence)")
+}
+
 // TestSQLiteGraph_LookupDef_InMemoryWinsOverSQL pins that an AddDef
 // call still takes precedence over the SQL table — the in-memory map
 // is a write-through layer for live ingestion, not just a cache. If

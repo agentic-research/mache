@@ -1,0 +1,73 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.agentic-research/mache",
+  "title": "mache",
+  "description": "Project structured data (JSON, SQLite, source code) as a filesystem driven by declarative JSON schemas. Exposes MCP tools for code intelligence: find_callers, find_definition, get_impact, get_architecture, find_smells, search, and 11 others.",
+  "version": "0.8.0",
+  "repository": {
+    "url": "https://github.com/agentic-research/mache",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/agentic-research/mache/blob/main/GETTING-STARTED.md",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "http://localhost:{port}/mcp",
+      "variables": {
+        "port": {
+          "description": "Port where `mache serve --http :PORT` is listening (default 7532)",
+          "default": "7532"
+        }
+      }
+    }
+  ],
+  "_meta": {
+    "io.github.agentic-research.mache/transports": {
+      "stdio": {
+        "command": "mache",
+        "args": ["serve", "--stdio", "<source-path>"],
+        "note": "Per-client subprocess. Use for editor integrations that own the daemon lifecycle. See .mcp.json at repo root for a Claude Code template."
+      },
+      "streamable-http": {
+        "command": "mache",
+        "args": ["serve", "--http", ":7532", "<source-path>"],
+        "note": "Recommended for shared use — one daemon across all clients avoids per-client FD leaks."
+      }
+    },
+    "io.github.agentic-research.mache/tools": {
+      "standalone": [
+        "list_directory",
+        "read_file",
+        "search",
+        "find_callers",
+        "find_callees",
+        "find_definition",
+        "get_overview",
+        "get_impact",
+        "get_architecture",
+        "get_diagram",
+        "get_communities",
+        "find_smells",
+        "resolve_ref",
+        "write_file"
+      ],
+      "requires-ley-line-open": [
+        "semantic_search",
+        "get_type_info",
+        "get_diagnostics"
+      ]
+    },
+    "io.github.agentic-research.mache/optional-deps": {
+      "io.github.agentic-research/ley-line-open": {
+        "purpose": "Provides _ast / _lsp_* / _embeddings tables consumed by semantic_search, get_type_info, get_diagnostics, and the AST-backed find_smells rules.",
+        "minimum-version": "0.4.5"
+      }
+    },
+    "io.github.agentic-research.mache/source-acceptance": {
+      "directories": "any tree containing source files — auto-detects language preset (Go, Rust, Python, TypeScript, ...)",
+      "db-files": ".db files produced by `mache build` or `leyline parse` open instantly via SQLiteGraph (pure-Go path)",
+      "json": "JSON corpora ingest via JSONPath walker (see examples/nvd-schema.json)",
+      "sqlite": "arbitrary SQLite via templated schemas (see examples/mcp-schema.json)"
+    }
+  }
+}
