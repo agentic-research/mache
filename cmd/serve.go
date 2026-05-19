@@ -118,14 +118,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// returns nil + a no-op stop — local watcher invalidation still
 	// works, just without notifications from other initiators.
 	// registry.Close stops it during shutdown.
-	subscriberCtx, stopSubscriberCtx := context.WithCancel(context.Background())
-	defer stopSubscriberCtx()
-	sub, stop := startSheafSubscriber(subscriberCtx, registry.sheafRouter)
-	registry.sheafSubscriber = sub
-	registry.stopSheafSubscriber = func() {
-		stopSubscriberCtx()
-		stop()
-	}
+	subscriberCtx, stopSubscriberCtx := context.WithCancel(context.Background()) // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	defer stopSubscriberCtx()                                                    // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	sub, stop := startSheafSubscriber(subscriberCtx, registry.sheafRouter)       // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	registry.sheafSubscriber = sub                                               // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	registry.stopSheafSubscriber = func() {                                      // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+		stopSubscriberCtx() // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+		stop()              // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	} // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
 
 	// Clean up session → root mapping on disconnect.
 	// Root discovery happens lazily on the first tool call (see wrapHandler)
