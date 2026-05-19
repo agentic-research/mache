@@ -167,9 +167,8 @@ func TestASTWalker_Query_FindNodesByKindError(t *testing.T) {
 
 // TestASTWalker_Query_ByteRangeFallback verifies that when a captured leaf
 // node has an empty `record` column, the walker falls back to slicing the
-// source bytes by the AST byte range. The standard seeder schema lacks a
-// `path` column on `_source`, which makes readSource fail and disables the
-// fallback; this test builds a richer schema so readSource succeeds.
+// source bytes by the AST byte range. Builds a dedicated schema so the
+// fallback path is exercised end-to-end (independent of the shared seeder).
 func TestASTWalker_Query_ByteRangeFallback(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "fallback.db")
