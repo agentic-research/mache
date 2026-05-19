@@ -304,12 +304,42 @@ func (g *SQLiteGraph) AddDef(token, dirID string) error {
 }
 
 // DefsMap returns a snapshot of the token→dirIDs definition map.
+//
+// On pre-built .db files (the `mache build` / `leyline parse` output)
+// the in-memory g.defs map is empty — definitions live in the
+// node_defs SQL table populated at build time. Falls through to a SQL
+// scan so downstream consumers (get_impact, get_architecture, and the
+// find_callees resolver fallback) see the full def set on both fresh
+// in-process ingestion and pre-built .db sources. In-memory entries
+// take precedence on token collision, matching LookupDef's behavior
+// and the SearchDefs pattern two functions below. Bead mache-655e98.
 func (g *SQLiteGraph) DefsMap() map[string][]string {
 	g.pendingMu.Lock()
-	defer g.pendingMu.Unlock()
 	cp := make(map[string][]string, len(g.defs))
 	for k, v := range g.defs {
 		cp[k] = append([]string(nil), v...)
+	}
+	g.pendingMu.Unlock()
+
+	if !g.useNodesTable || g.db == nil {
+		return cp
+	}
+	rows, err := g.db.Query("SELECT token, node_id FROM node_defs")
+	if err != nil {
+		return cp
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var token, nodeID string
+		if scanErr := rows.Scan(&token, &nodeID); scanErr != nil {
+			continue
+		}
+		if _, exists := cp[token]; exists {
+			// In-memory wins on token collision (live ingestion
+			// is authoritative over the frozen-at-build snapshot).
+			continue
+		}
+		cp[token] = append(cp[token], nodeID)
 	}
 	return cp
 }
