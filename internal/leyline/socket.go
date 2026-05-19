@@ -115,6 +115,29 @@ func DiscoverSocket() (string, error) {
 	return "", fmt.Errorf("no ley-line socket found (set LEYLINE_SOCKET or start leyline daemon)")
 }
 
+// socketLivenessTimeout bounds the connect-test used to decide whether a
+// discovered socket file is backed by a live daemon. 500ms is generous
+// enough to absorb a busy daemon's accept-loop scheduling (the daemon's
+// accept must run before the connect returns) and short enough that a
+// stale post-SIGKILL socket — which fails immediately with ECONNREFUSED
+// because nothing is listening — adds no noticeable startup cost.
+const socketLivenessTimeout = 500 * time.Millisecond
+
+// isSocketAlive returns true iff a Unix-domain dial to sockPath succeeds
+// within socketLivenessTimeout. A "yes" means *something* is accepting
+// connections on the path; we don't speak the protocol here. A "no"
+// covers both the missing-file and stale-file-no-listener cases, which
+// is the discrimination DiscoverOrStart needs to avoid orphaning a fresh
+// daemon onto a path whose previous owner was SIGKILL'd.
+func isSocketAlive(sockPath string) bool {
+	conn, err := net.DialTimeout("unix", sockPath, socketLivenessTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 // DiscoverOrStart finds a running ley-line daemon socket, or auto-starts
 // a managed daemon subprocess if the leyline binary is on PATH.
 //
@@ -127,20 +150,59 @@ func DiscoverSocket() (string, error) {
 //
 // The subprocess is killed when the mache process exits (via atexit cleanup
 // registered on first spawn). Only one managed daemon per process.
+//
+// Dedup (mache-52a23a): every "is there already a socket?" check verifies
+// the socket is *live* (a Unix dial connects) before returning the path.
+// A stale socket file left behind by a SIGKILL'd daemon would otherwise
+// be returned by findExistingSocket and cause the caller to fail at first
+// DialSocket. Worse, *between* the stat and the spawn, the entire managed
+// daemon path can also be re-entered, orphaning daemons under concurrent
+// callers within the same process. The full DiscoverOrStart now runs
+// under managed.mu so the discover-then-spawn sequence is atomic across
+// goroutines; stale on-disk sockets are removed before spawning so the
+// daemon can bind the well-known path cleanly.
 func DiscoverOrStart() (string, error) {
-	// Fast path: socket already exists (running daemon or env var)
-	if sock, err := findExistingSocket(); err == nil {
-		return sock, nil
-	}
-
-	// Check for previously spawned managed daemon
+	// Take the managed-state lock for the full discover-then-spawn cycle.
+	// Prior code released the lock after the in-memory managed check, so
+	// two goroutines that both observed managed.sock == "" could each
+	// proceed to cmd.Start() before either wrote managed.proc — a clean
+	// double-spawn that orphans one daemon (the second binder loses the
+	// socket race, exits unnoticed). Holding through Start fixes that.
 	managed.mu.Lock()
 	defer managed.mu.Unlock()
+
+	// Fast path 1: env var or well-known path resolves AND the socket is
+	// live. A bare os.Stat hit isn't enough — a post-SIGKILL daemon
+	// leaves the socket file behind with nothing listening, and the
+	// caller's first SendOp would fail with "connect: connection refused"
+	// long after this returned "found it!".
+	if sock, err := findExistingSocket(); err == nil {
+		if isSocketAlive(sock) {
+			return sock, nil
+		}
+		// Stale: file exists, no listener. Remove it so the spawn below
+		// can re-bind the well-known path. Only the well-known path is
+		// owned by mache; an explicit LEYLINE_SOCKET points at someone
+		// else's daemon and we must not touch it.
+		if env := os.Getenv("LEYLINE_SOCKET"); env == "" {
+			_ = os.Remove(sock)
+		} else {
+			return "", fmt.Errorf("LEYLINE_SOCKET=%s exists but no daemon is listening", env)
+		}
+	}
+
+	// Fast path 2: previously spawned managed daemon in this process. The
+	// liveness probe re-checks here too — managed.proc might have died
+	// since we last looked (e.g. OOM-killed independently of mache).
 	if managed.sock != "" {
-		if _, err := os.Stat(managed.sock); err == nil {
+		if isSocketAlive(managed.sock) {
 			return managed.sock, nil
 		}
-		// Stale — previous daemon died, clear state and try again
+		// Stale managed daemon: reap and reset so the spawn block runs.
+		if managed.proc != nil {
+			_ = managed.proc.Kill()
+		}
+		_ = os.Remove(managed.sock)
 		managed.proc = nil
 		managed.sock = ""
 	}
@@ -185,6 +247,26 @@ func DiscoverOrStart() (string, error) {
 	ctrlPath := filepath.Join(dataDir, "default.ctrl")
 	sockPath := filepath.Join(dataDir, "default.sock")
 
+	// Last-chance pre-spawn liveness check on the would-be socket path.
+	// A concurrent mache invocation (different process) might have just
+	// bound this exact path between findExistingSocket and here; if so,
+	// piggyback rather than starting a second daemon that will fight for
+	// the same arena/control files.
+	//
+	// coverage:ignore — defensive TOCTOU guard against an external
+	// process binding sockPath between findExistingSocket (L179) and
+	// here. Cannot be exercised hermetically in-process: if a listener
+	// is alive at sockPath when findExistingSocket runs, fast-path 1
+	// returns at L181; if it isn't, only an external second-process
+	// race can flip isSocketAlive to true here. The same path is
+	// safety-netted by the post-spawn poll loop (L290-297) if a
+	// concurrent spawn lands on the same inode.
+	if isSocketAlive(sockPath) { // coverage:ignore
+		return sockPath, nil // coverage:ignore
+	} // coverage:ignore
+	// And clear any leftover socket inode so the daemon can bind.
+	_ = os.Remove(sockPath)
+
 	// Start leyline daemon as a background subprocess.
 	// `daemon` creates the UDS socket at <ctrl>.sock that mache connects to.
 	// `serve` mounts only (no socket) — wrong for our use case.
@@ -210,10 +292,13 @@ func DiscoverOrStart() (string, error) {
 	// Background goroutine to wait on the process (prevent zombie)
 	go func() { _ = cmd.Wait() }()
 
-	// Poll for socket to appear (daemon needs a moment to bind)
+	// Poll for socket to appear AND accept a connection. Mere os.Stat is
+	// insufficient — the kernel can create the inode before the daemon
+	// finishes its accept loop bind, and a stat-only wait would return a
+	// path that DialSocket can't connect to.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sockPath); err == nil {
+		if isSocketAlive(sockPath) {
 			log.Printf("leyline daemon ready (pid=%d, socket=%s)", cmd.Process.Pid, sockPath)
 			return sockPath, nil
 		}

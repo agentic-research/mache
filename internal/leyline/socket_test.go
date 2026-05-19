@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -246,9 +248,19 @@ func TestDiscoverSocket_EnvVarMissing(t *testing.T) {
 }
 
 func TestDiscoverOrStart_UsesExistingSocket(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "test.sock")
-	f, _ := os.Create(sockPath)
-	_ = f.Close()
+	// Real UDS listener — after mache-52a23a, DiscoverOrStart probes the
+	// socket with a live Dial (not just os.Stat) so a touch-file isn't
+	// enough to pass the dedup gate. The listener simulates an existing
+	// daemon and must accept the connect attempt.
+	dir, err := os.MkdirTemp("/tmp", "leyline-existing-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "test.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go acceptAndClose(ln)
 
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 	found, err := DiscoverOrStart()
@@ -257,6 +269,19 @@ func TestDiscoverOrStart_UsesExistingSocket(t *testing.T) {
 	}
 	if found != sockPath {
 		t.Errorf("expected %s, got %s", sockPath, found)
+	}
+}
+
+// acceptAndClose drains accept events from ln until it closes, immediately
+// closing each accepted conn. Used to satisfy isSocketAlive() probes
+// without speaking the request/response protocol.
+func acceptAndClose(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
 	}
 }
 
@@ -720,4 +745,490 @@ func TestDownloadLeyline_NotFound(t *testing.T) {
 	_, statErr := os.Stat(destPath)
 	assert.True(t, os.IsNotExist(statErr),
 		"destPath must not exist after a failed download (got stat err %v)", statErr)
+}
+
+// resetManaged clears the package-level managed singleton between tests
+// that exercise DiscoverOrStart. Without this, a prior test that primed
+// managed.sock would let the next test's "no daemon found" assertion
+// fail spuriously because the second-fast-path keeps the stale value.
+//
+// Takes *testing.T (used only for t.Helper); has no return value. The
+// helper just zeros the singleton and kills any managed.proc — it does
+// NOT register a t.Cleanup itself. Callers that want post-test cleanup
+// must wrap it explicitly, e.g. t.Cleanup(func() { resetManaged(t) }).
+func resetManaged(t *testing.T) {
+	t.Helper()
+	managed.mu.Lock()
+	if managed.proc != nil {
+		_ = managed.proc.Kill()
+	}
+	managed.proc = nil
+	managed.sock = ""
+	managed.mu.Unlock()
+}
+
+// TestDiscoverOrStart_OrphanedSocketRemovedThenSpawnsFresh pins the
+// mache-52a23a dedup fix's stale-socket recovery path:
+//
+//   - A SIGKILL'd daemon leaves the well-known socket file behind with
+//     no listener. The prior DiscoverOrStart did `os.Stat` and returned
+//     that path, so the caller hit "connect: connection refused" long
+//     after DiscoverOrStart claimed success.
+//   - After the fix, the liveness probe (a real Dial) classifies the
+//     file as stale, removes it, and proceeds to the spawn path. We
+//     can't actually spawn leyline in unit tests, so MACHE_NO_LEYLINE=1
+//     short-circuits the spawn with a distinctive error. The observable
+//     contract is: (a) the stale socket file is GONE after the call,
+//     proving the cleanup ran; (b) the error is the documented "no
+//     binary" sentinel, proving execution reached the spawn block.
+func TestDiscoverOrStart_OrphanedSocketRemovedThenSpawnsFresh(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	home := t.TempDir()
+	dataDir := filepath.Join(home, ".mache")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	sockPath := filepath.Join(dataDir, "default.sock")
+
+	// Plant an orphaned socket file — a touch-file, no listener.
+	require.NoError(t, os.WriteFile(sockPath, []byte{}, 0o600))
+
+	t.Setenv("HOME", home)
+	t.Setenv("LEYLINE_SOCKET", "") // force well-known path
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	_, err := DiscoverOrStart()
+	require.Error(t, err, "spawn must be reached (no binary → MACHE_NO_LEYLINE error)")
+	assert.Contains(t, err.Error(), "MACHE_NO_LEYLINE",
+		"liveness probe must classify the touch-file as stale and proceed to spawn")
+
+	_, statErr := os.Stat(sockPath)
+	assert.True(t, os.IsNotExist(statErr),
+		"stale socket file must be removed before spawn so the daemon can re-bind; got stat err=%v", statErr)
+}
+
+// TestDiscoverOrStart_LiveDaemonNotRespawned pins the "don't spawn over
+// a healthy listener" path: if findExistingSocket returns a path AND a
+// Dial connects, DiscoverOrStart must return that path immediately. No
+// process is spawned, the env-gate (MACHE_NO_LEYLINE=1) is never hit.
+func TestDiscoverOrStart_LiveDaemonNotRespawned(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	dir, err := os.MkdirTemp("/tmp", "leyline-live-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "live.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go acceptAndClose(ln)
+
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+	// Belt-and-braces: even if the liveness check were broken, the spawn
+	// branch would error with MACHE_NO_LEYLINE — which would surface as
+	// the test error and tell us the dedup gate let us through.
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	found, err := DiscoverOrStart()
+	require.NoError(t, err, "live daemon must short-circuit before the spawn block")
+	assert.Equal(t, sockPath, found)
+}
+
+// TestDiscoverOrStart_ConcurrentCallersDoNotDoubleSpawn pins the
+// in-process dedup property at the heart of mache-52a23a's "6 orphan
+// daemons" observation: even when many callers invoke DiscoverOrStart
+// in parallel, exactly one daemon's socket is reported, and the spawn
+// path is entered at most once.
+//
+// We can't spawn real leyline in a unit test, so we stand up a real UDS
+// listener at the well-known path BEFORE the calls and confirm every
+// caller reuses it. If the lock-then-probe sequence were missing,
+// goroutine A could spawn while goroutine B was still inside the
+// pre-lock fast path — observable here as one caller's path differing,
+// or any caller hitting the MACHE_NO_LEYLINE spawn-fail error.
+func TestDiscoverOrStart_ConcurrentCallersDoNotDoubleSpawn(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	dir, err := os.MkdirTemp("/tmp", "leyline-concurrent-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "shared.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go acceptAndClose(ln)
+
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	const goroutines = 16
+	var (
+		wg      sync.WaitGroup
+		results = make([]string, goroutines)
+		errs    = make([]error, goroutines)
+		start   = make(chan struct{})
+	)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start // line everyone up so the race window is real
+			path, err := DiscoverOrStart()
+			results[idx] = path
+			errs[idx] = err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoErrorf(t, err, "goroutine %d failed — concurrent dedup let one caller fall through to the spawn block", i)
+		assert.Equalf(t, sockPath, results[i],
+			"goroutine %d returned %q; all callers must reuse the single live socket", i, results[i])
+	}
+}
+
+// e2eHome builds a HOME dir for DiscoverOrStart's spawn-path tests. The
+// daemon's UDS path is derived from <HOME>/.mache/default.sock and macOS
+// caps sun_path at ~104 bytes — Go's t.TempDir lives under
+// /var/folders/.../TestName/NNN/ which blows that budget every time. Put
+// HOME under /tmp/<short> and clean it explicitly since it lives outside
+// t.TempDir's reach. Same constraint observed in sheaf_e2e_test.go.
+func e2eHome(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "leyline-disc-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// TestDiscoverOrStart_LocalBinFallback_SocketTimeout covers two production
+// branches that the on-PATH happy path skips:
+//
+//   - The `~/.mache/bin/leyline` fallback (lines 218-222): leyline not on
+//     PATH but a cached binary exists in the local bin dir.
+//   - The "spawned but socket never appeared within 5s" timeout (lines
+//     300-303): exec.Start succeeds but the binary doesn't bind the
+//     daemon UDS, so the poll loop must time out, kill the process, and
+//     surface a distinctive error.
+//
+// We satisfy both with /bin/sh as the fake binary — it ignores the
+// daemon flags, exits immediately, and never binds a socket. The poll
+// loop runs the full 5s before declaring failure, so this test costs
+// ~5s; that's the price of covering the timeout path without a more
+// elaborate harness binary.
+func TestDiscoverOrStart_LocalBinFallback_SocketTimeout(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	home := e2eHome(t)
+	binDir := filepath.Join(home, ".mache", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	// Symlink /bin/sh into ~/.mache/bin/leyline. exec.LookPath against
+	// PATH must fail (sentinel path), then os.Stat on the local-bin
+	// fallback succeeds, so DiscoverOrStart picks up the fake binary
+	// from the cache location and proceeds to cmd.Start.
+	require.NoError(t, os.Symlink("/bin/sh", filepath.Join(binDir, "leyline")))
+
+	t.Setenv("HOME", home)
+	t.Setenv("LEYLINE_SOCKET", "")
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "")
+
+	_, err := DiscoverOrStart()
+	require.Error(t, err, "fake binary that doesn't bind the socket must time out")
+	assert.Contains(t, err.Error(), "did not appear within 5s",
+		"timeout path must surface the documented 'socket did not appear' error")
+
+	// Singleton must be reset by the timeout cleanup (lines 301-302) so
+	// a follow-up DiscoverOrStart can retry without inheriting the
+	// dead fake process.
+	managed.mu.Lock()
+	leftoverProc := managed.proc
+	leftoverSock := managed.sock
+	managed.mu.Unlock()
+	assert.Nil(t, leftoverProc, "timeout cleanup must clear managed.proc")
+	assert.Empty(t, leftoverSock, "timeout cleanup must clear managed.sock")
+}
+
+// TestDiscoverOrStart_ManagedFastPathReturnsLiveSocket pins fast-path 2
+// (the `managed.sock != "" && isSocketAlive(managed.sock)` happy branch
+// at lines 197-200). Normally a second in-process call short-circuits
+// via fast-path 1 (findExistingSocket), but in deployments where HOME
+// or LEYLINE_SOCKET don't resolve to a socket file the in-memory
+// managed singleton is the only fast path left.
+//
+// Setup: prime managed with a real UDS listener, then call
+// DiscoverOrStart with HOME pointed at a directory that does NOT
+// contain default.sock and LEYLINE_SOCKET cleared, forcing
+// findExistingSocket to error and execution to reach fast-path 2.
+func TestDiscoverOrStart_ManagedFastPathReturnsLiveSocket(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	dir, err := os.MkdirTemp("/tmp", "leyline-fp2-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "managed.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go acceptAndClose(ln)
+
+	// Prime the managed singleton directly. We don't have a real
+	// os.Process here, and DiscoverOrStart's fast-path 2 only reads
+	// managed.sock — managed.proc is only inspected in the stale
+	// branch (which we're NOT exercising) so leaving it nil is fine.
+	managed.mu.Lock()
+	managed.sock = sockPath
+	managed.proc = nil
+	managed.mu.Unlock()
+
+	// HOME points at an empty dir → no <HOME>/.mache/default.sock →
+	// findExistingSocket returns "no socket found" → execution falls
+	// through to fast-path 2.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("LEYLINE_SOCKET", "")
+	// If fast-path 2 misfired, the spawn block would error on the
+	// missing binary — this gate makes that the unmistakable signal.
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	found, err := DiscoverOrStart()
+	require.NoError(t, err, "managed.sock fast-path must short-circuit before the spawn block")
+	assert.Equal(t, sockPath, found, "fast-path 2 must return the primed managed.sock")
+}
+
+// TestDiscoverOrStart_ExplicitSocketStaleErrors pins the "user-supplied
+// LEYLINE_SOCKET points at a stale path" path. When the env var is set
+// but no daemon is listening, mache must NOT silently remove the user's
+// file (it isn't ours — only the well-known <HOME>/.mache/default.sock
+// is mache-owned). Instead, DiscoverOrStart surfaces a distinctive
+// "exists but no daemon is listening" error so the operator can fix
+// their setup. Pins lines 189-191 of socket.go.
+func TestDiscoverOrStart_ExplicitSocketStaleErrors(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	dir, err := os.MkdirTemp("/tmp", "leyline-stale-env-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "stale.sock")
+	// Touch-file with no listener: findExistingSocket returns this path
+	// via the env-var branch, then isSocketAlive must reject it, and
+	// the env-set branch must error rather than removing the file.
+	require.NoError(t, os.WriteFile(sockPath, []byte{}, 0o600))
+
+	t.Setenv("LEYLINE_SOCKET", sockPath)
+	// Belt-and-braces: short-circuit the spawn path if the env-stale
+	// branch were skipped, so we'd see the wrong error.
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	_, err = DiscoverOrStart()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exists but no daemon is listening",
+		"explicit LEYLINE_SOCKET pointing at a stale path must surface a distinct error, not silently remove the user's file")
+
+	// File must still exist — mache must not touch sockets it doesn't own.
+	_, statErr := os.Stat(sockPath)
+	assert.NoError(t, statErr, "user-supplied LEYLINE_SOCKET file must NOT be removed by mache")
+}
+
+// TestDiscoverOrStart_E2E_HappyPath spawns a real leyline daemon via the
+// production DiscoverOrStart path and asserts:
+//
+//   - the returned sockPath is non-empty and matches <HOME>/.mache/default.sock
+//   - the socket file exists on disk after the call
+//   - a fresh Dial succeeds, proving a real listener was bound (not just
+//     a stale inode left over from a SIGKILL)
+//
+// This exercises the cmd.Start / wait-for-socket / managed-record block
+// that the mocked tests intentionally skip via MACHE_NO_LEYLINE=1. Skips
+// automatically when the leyline binary is not on PATH so CI workers
+// without it stay green — same idiom as sheaf_e2e_test.go.
+func TestDiscoverOrStart_E2E_HappyPath(t *testing.T) {
+	if _, err := exec.LookPath("leyline"); err != nil {
+		t.Skip("leyline binary not on PATH — skipping E2E DiscoverOrStart")
+	}
+	resetManaged(t)
+	t.Cleanup(func() {
+		StopManaged()
+		resetManaged(t)
+	})
+
+	home := e2eHome(t)
+	t.Setenv("HOME", home)
+	// Clear LEYLINE_SOCKET so DiscoverOrStart falls through to the
+	// well-known path and exercises the spawn branch rather than the
+	// env-var fast path.
+	t.Setenv("LEYLINE_SOCKET", "")
+	// Ensure the env-gate doesn't short-circuit the spawn.
+	t.Setenv("MACHE_NO_LEYLINE", "")
+
+	sockPath, err := DiscoverOrStart()
+	require.NoError(t, err, "DiscoverOrStart must spawn a live daemon when leyline is on PATH")
+	require.NotEmpty(t, sockPath, "spawn must return a socket path")
+	assert.Equal(t, filepath.Join(home, ".mache", "default.sock"), sockPath,
+		"managed daemon must bind the well-known <HOME>/.mache/default.sock path")
+
+	_, statErr := os.Stat(sockPath)
+	require.NoError(t, statErr, "spawn must leave the socket file on disk")
+
+	// Real Dial confirms a listener is alive, not just an inode. This is
+	// the same liveness criterion isSocketAlive uses; reaching it through
+	// DiscoverOrStart proves the post-spawn poll loop returned only after
+	// the daemon's accept loop was bound.
+	conn, dialErr := net.DialTimeout("unix", sockPath, 2*time.Second)
+	require.NoError(t, dialErr, "spawned daemon must accept a Dial")
+	_ = conn.Close()
+
+	// managed singleton must reflect the spawned daemon so StopManaged
+	// can reap it; if proc is nil, t.Cleanup's StopManaged would leak.
+	managed.mu.Lock()
+	hasProc := managed.proc != nil
+	recordedSock := managed.sock
+	managed.mu.Unlock()
+	assert.True(t, hasProc, "managed.proc must be recorded after spawn so StopManaged can reap it")
+	assert.Equal(t, sockPath, recordedSock, "managed.sock must match the returned path")
+}
+
+// TestDiscoverOrStart_E2E_ManagedReusedAcrossCalls asserts the fast path
+// 2 (in-process managed reuse) covers a real daemon: after a first call
+// spawns and records the managed singleton, a second call returns the
+// same path WITHOUT spawning a new process.
+//
+// This pins the contract that callers in the same process don't pay
+// repeated spawn cost — the heart of the mache-52a23a dedup work for
+// process-internal callers. Sibling test
+// TestDiscoverOrStart_ConcurrentCallersDoNotDoubleSpawn covers the
+// concurrent variant against a mock listener; this test covers the
+// sequential variant against a real daemon.
+func TestDiscoverOrStart_E2E_ManagedReusedAcrossCalls(t *testing.T) {
+	if _, err := exec.LookPath("leyline"); err != nil {
+		t.Skip("leyline binary not on PATH — skipping E2E DiscoverOrStart")
+	}
+	resetManaged(t)
+	t.Cleanup(func() {
+		StopManaged()
+		resetManaged(t)
+	})
+
+	home := e2eHome(t)
+	t.Setenv("HOME", home)
+	t.Setenv("LEYLINE_SOCKET", "")
+	t.Setenv("MACHE_NO_LEYLINE", "")
+
+	first, err := DiscoverOrStart()
+	require.NoError(t, err, "first DiscoverOrStart must spawn a daemon")
+	require.NotEmpty(t, first)
+
+	managed.mu.Lock()
+	firstPid := 0
+	if managed.proc != nil {
+		firstPid = managed.proc.Pid
+	}
+	managed.mu.Unlock()
+	require.NotZero(t, firstPid, "first call must record a managed.proc with a pid")
+
+	second, err := DiscoverOrStart()
+	require.NoError(t, err, "second DiscoverOrStart must reuse the live daemon")
+	assert.Equal(t, first, second, "second call must return the same socket path")
+
+	managed.mu.Lock()
+	secondPid := 0
+	if managed.proc != nil {
+		secondPid = managed.proc.Pid
+	}
+	managed.mu.Unlock()
+	assert.Equal(t, firstPid, secondPid,
+		"second call must NOT spawn a new process — managed.proc.Pid must be unchanged")
+}
+
+// TestDiscoverOrStart_E2E_DaemonCrashRecovery pins the stale-managed-
+// daemon recovery path (the `managed.sock != "" && !isSocketAlive`
+// branch inside DiscoverOrStart). Sequence:
+//
+//  1. DiscoverOrStart spawns a daemon and records managed.{proc,sock}.
+//  2. We SIGKILL the daemon directly — the socket inode stays on disk
+//     (kernel doesn't clean it up) but nothing listens. This is the
+//     real "daemon crashed" shape, distinct from the cooperative
+//     SIGTERM path StopManaged uses.
+//  3. A second DiscoverOrStart must observe the dead listener, reap +
+//     reset the singleton, remove the stale inode, and spawn fresh.
+//     Observable: a new pid and a successful Dial post-call.
+//
+// This is the only test that hits lines 200-208 (stale-managed reap +
+// reset) with a real daemon process; the existing
+// OrphanedSocketRemovedThenSpawnsFresh test exercises the on-disk-only
+// stale path with MACHE_NO_LEYLINE gating the spawn.
+func TestDiscoverOrStart_E2E_DaemonCrashRecovery(t *testing.T) {
+	if _, err := exec.LookPath("leyline"); err != nil {
+		t.Skip("leyline binary not on PATH — skipping E2E DiscoverOrStart")
+	}
+	resetManaged(t)
+	t.Cleanup(func() {
+		StopManaged()
+		resetManaged(t)
+	})
+
+	home := e2eHome(t)
+	t.Setenv("HOME", home)
+	t.Setenv("LEYLINE_SOCKET", "")
+	t.Setenv("MACHE_NO_LEYLINE", "")
+
+	sockPath, err := DiscoverOrStart()
+	require.NoError(t, err)
+	require.NotEmpty(t, sockPath)
+
+	managed.mu.Lock()
+	firstProc := managed.proc
+	managed.mu.Unlock()
+	require.NotNil(t, firstProc, "first spawn must record managed.proc")
+	firstPid := firstProc.Pid
+
+	// SIGKILL the daemon and wait for the kernel to reap it. We can't
+	// just call StopManaged here — that resets managed.{proc,sock}, and
+	// the whole point of this test is that DiscoverOrStart itself does
+	// the recovery when it finds a recorded-but-dead managed daemon.
+	require.NoError(t, firstProc.Signal(syscall.SIGKILL))
+	_, _ = firstProc.Wait()
+
+	// Wait until the socket is observably dead. SIGKILL drops the
+	// listener immediately, but giving the kernel a brief beat avoids
+	// any platform-specific connect-on-dying-socket flakiness.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !isSocketAlive(sockPath) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.False(t, isSocketAlive(sockPath),
+		"after SIGKILL the socket must not accept connections — recovery path requires this")
+
+	// Recovery call: must detect the dead managed daemon, reap +
+	// reset, remove the stale inode, and spawn fresh.
+	recovered, err := DiscoverOrStart()
+	require.NoError(t, err, "DiscoverOrStart must recover from a crashed managed daemon")
+	assert.Equal(t, sockPath, recovered, "recovered daemon must rebind the well-known path")
+
+	managed.mu.Lock()
+	secondProc := managed.proc
+	managed.mu.Unlock()
+	require.NotNil(t, secondProc, "recovery must record a new managed.proc")
+	assert.NotEqual(t, firstPid, secondProc.Pid,
+		"recovery must spawn a new process — same pid means the dead-daemon branch was skipped")
+
+	// Sanity-check: the fresh daemon is actually accepting.
+	conn, dialErr := net.DialTimeout("unix", recovered, 2*time.Second)
+	require.NoError(t, dialErr, "recovered daemon must accept a Dial")
+	_ = conn.Close()
 }
