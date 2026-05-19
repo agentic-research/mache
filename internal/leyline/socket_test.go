@@ -413,7 +413,7 @@ func TestSendOp_ConcurrentCallsDoNotInterleave(t *testing.T) {
 		mismatches int64
 		errs       int64
 	)
-	for i := 0; i < calls; i++ {
+	for i := range calls {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -633,7 +633,7 @@ func TestSubscribe_SlowConsumerCountsAndLogsDrops(t *testing.T) {
 	good := map[string]any{"event": true, "topic": "x"}
 	data, _ := json.Marshal(good)
 	line := append(data, '\n')
-	for i := 0; i < totalPushed; i++ {
+	for i := range totalPushed {
 		if _, err := conn.Write(line); err != nil {
 			t.Fatalf("push event %d: %v", i, err)
 		}
@@ -875,7 +875,7 @@ func TestDiscoverOrStart_ConcurrentCallersDoNotDoubleSpawn(t *testing.T) {
 		errs    = make([]error, goroutines)
 		start   = make(chan struct{})
 	)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
