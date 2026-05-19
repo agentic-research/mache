@@ -14,6 +14,18 @@
 //   - diff.patch: unified diff, e.g. `git diff base..HEAD > diff.patch`
 //     or `gh pr diff <num> > diff.patch`
 //
+// IMPORTANT — generating the diff:
+//
+// For best results, generate the diff with `git diff -B5% -M5% -C5%`
+// which surfaces both rename (similarity index) and break-rewrite
+// (dissimilarity index) hunks. Plain `git diff` or `gh pr diff` will
+// not produce these headers, so renames look like delete+create and
+// heavy in-place rewrites look like a full new file — which means the
+// -rename-threshold flag and the dissimilarity-index handling below are
+// effectively dead unless you pass `-B` / `-M` / `-C` when capturing the
+// diff. The `task coverage-gate` target in Taskfile.yml uses the
+// recommended invocation; copy from there if running by hand.
+//
 // Flags:
 //   - -rename-threshold N (0..100, default 50): when a `diff --git` block
 //     carries a `similarity index N%` header (emitted by `git diff -M`
@@ -109,6 +121,12 @@ func run(progName string, args []string, stdout, stderr io.Writer) int {
 	)
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "usage: %s [-rename-threshold N] <cover.out> <diff.patch>\n", progName)
+		_, _ = fmt.Fprintf(stderr, "\n")
+		_, _ = fmt.Fprintf(stderr, "Generate the diff with `git diff -B5%% -M5%% -C5%% base..HEAD > diff.patch`\n")
+		_, _ = fmt.Fprintf(stderr, "so similarity index (rename/copy) and dissimilarity index (break-rewrite)\n")
+		_, _ = fmt.Fprintf(stderr, "headers are emitted — plain `git diff` / `gh pr diff` will not produce them\n")
+		_, _ = fmt.Fprintf(stderr, "and the rename-threshold flag becomes a no-op.\n")
+		_, _ = fmt.Fprintf(stderr, "\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -457,8 +475,10 @@ func parseDiffWithRenames(r io.Reader, renameThreshold int) (diffSet, error) {
 }
 
 // parseSimilarityPercent extracts N from `similarity index N%`. Returns
-// (0, false) on malformed input — caller treats a parse failure as "no
-// similarity info", which keeps behavior backwards-compatible.
+// (0, false) on malformed OR out-of-range input — caller treats a parse
+// failure as "no similarity info", which keeps behavior backwards-
+// compatible AND prevents adversarial values (negative, >100) from
+// silently muting the gate. Range check: N must be in [0,100].
 func parseSimilarityPercent(line string) (int, bool) {
 	rest := strings.TrimPrefix(line, "similarity index ")
 	rest = strings.TrimSpace(rest)
@@ -467,13 +487,21 @@ func parseSimilarityPercent(line string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
+	if n < 0 || n > 100 {
+		return 0, false
+	}
 	return n, true
 }
 
 // parseDissimilarityPercent extracts N from `dissimilarity index N%`.
-// Returns (0, false) on malformed input — caller treats a parse failure
-// as "no dissimilarity info" and the block falls through to normal
-// new-code handling, which is the conservative choice.
+// Returns (0, false) on malformed OR out-of-range input — caller treats
+// a parse failure as "no dissimilarity info" and the block falls through
+// to normal new-code handling, which is the conservative choice (flag,
+// don't skip). The range check exists because without it a malicious or
+// malformed `dissimilarity index -5%` would compute (100 - (-5)) = 105
+// in the caller's similarity comparison, which silently mutes the gate
+// on ANY threshold value — exactly the wrong failure mode. Range:
+// N must be in [0,100].
 //
 // Callers should map the returned N to similarity (100 - N)% before
 // applying any rename threshold; this function intentionally does NOT
@@ -484,6 +512,9 @@ func parseDissimilarityPercent(line string) (int, bool) {
 	rest = strings.TrimSuffix(rest, "%")
 	n, err := strconv.Atoi(rest)
 	if err != nil {
+		return 0, false
+	}
+	if n < 0 || n > 100 {
 		return 0, false
 	}
 	return n, true

@@ -1167,10 +1167,17 @@ dissimilarity index 50%
 }
 
 func TestRunDissimilarity_RealWorldRegression(t *testing.T) {
-	// Synthesizes a diff modelled on the sqlite_graph decomposition
-	// (bead mache-301daf): `dissimilarity index 62%` with uncovered
-	// added lines that look like real Go code so isCountableProdLine
-	// accepts them.
+	// Synthesized to mirror the `dissimilarity 62%` case observed when
+	// running `git diff -B5% origin/feat/godfile-decomposition..HEAD` on
+	// the sqlite_graph decomposition commit (0825449). We synthesize
+	// rather than shell out to `git diff` because the test must run in
+	// CI containers that may not have the worktree's full history (and
+	// reaching for the git binary from a Go unit test is a brittle
+	// dependency anyway). The synthetic diff shape — one `diff --git`
+	// block with `dissimilarity index 62%` followed by Go-shaped `+`
+	// lines — exercises exactly the same parseDiffWithRenames code path
+	// the real `git diff -B` output triggers; only the byte content of
+	// the additions is different.
 	//
 	// At threshold 50 (default) — dissimilarity 62% maps to similarity
 	// 38%, BELOW threshold, so the block is flagged. Gate trips.
@@ -1232,6 +1239,73 @@ func TestParseDissimilarityPercent(t *testing.T) {
 		got, ok := parseDissimilarityPercent(in)
 		if ok != exp.ok || got != exp.want {
 			t.Errorf("parseDissimilarityPercent(%q) = (%d,%v), want (%d,%v)",
+				in, got, ok, exp.want, exp.ok)
+		}
+	}
+}
+
+func TestParseDissimilarityPercent_OutOfRange(t *testing.T) {
+	// Pins the range check in parseDissimilarityPercent. Without it,
+	// `dissimilarity index -5%` would compute (100 - (-5)) = 105 in the
+	// caller's similarity comparison, which is `>=` any threshold value
+	// — silently muting the gate. Equivalently, `dissimilarity index
+	// 101%` would compute (100 - 101) = -1, which is never `>=` a valid
+	// threshold but still represents nonsense input. Both must be
+	// rejected (parse-not-skip), making the caller fall through to
+	// "no dissimilarity info" and treat the block as normal new code.
+	cases := map[string]struct {
+		want int
+		ok   bool
+	}{
+		// Negative — the original vulnerability.
+		"dissimilarity index -5%": {0, false},
+		// Above 100.
+		"dissimilarity index 101%":   {0, false},
+		"dissimilarity index 9999%":  {0, false},
+		"dissimilarity index 12345%": {0, false},
+		// In-range values stay accepted (regression check on the
+		// existing happy paths now that range check is in place).
+		"dissimilarity index 0%":   {0, true},
+		"dissimilarity index 100%": {100, true},
+		// Negative zero — strconv.Atoi accepts "-0" as 0, which passes
+		// the range check (0 is in [0,100]). Document the choice: we
+		// allow it because it's semantically equivalent to "0%" and
+		// neither value is adversarial — the gate just treats the block
+		// as "100% similarity" (fully unchanged), which is a no-op.
+		"dissimilarity index -0%": {0, true},
+	}
+	for in, exp := range cases {
+		got, ok := parseDissimilarityPercent(in)
+		if ok != exp.ok || got != exp.want {
+			t.Errorf("parseDissimilarityPercent(%q) = (%d,%v), want (%d,%v)",
+				in, got, ok, exp.want, exp.ok)
+		}
+	}
+}
+
+func TestParseSimilarityPercent_OutOfRange(t *testing.T) {
+	// Mirrors TestParseDissimilarityPercent_OutOfRange — same range
+	// check on the similarity parser. A `similarity index 105%` would
+	// be accepted as 105 without this check; while no current threshold
+	// path is broken by that (105 >= 50 just means "always exclude",
+	// the same as 100 already does), keeping both parsers symmetric
+	// avoids surprises if future code tightens or inverts the
+	// comparison.
+	cases := map[string]struct {
+		want int
+		ok   bool
+	}{
+		"similarity index -5%":   {0, false},
+		"similarity index 101%":  {0, false},
+		"similarity index 9999%": {0, false},
+		"similarity index 0%":    {0, true},
+		"similarity index 100%":  {100, true},
+		"similarity index -0%":   {0, true},
+	}
+	for in, exp := range cases {
+		got, ok := parseSimilarityPercent(in)
+		if ok != exp.ok || got != exp.want {
+			t.Errorf("parseSimilarityPercent(%q) = (%d,%v), want (%d,%v)",
 				in, got, ok, exp.want, exp.ok)
 		}
 	}
