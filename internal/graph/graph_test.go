@@ -32,6 +32,18 @@ func TestMemoryStore_AddRootAndGetNode(t *testing.T) {
 	}
 }
 
+// ContentSize prefers DraftData over Data and Ref — drafts are the
+// pending write-back source of truth, so size reporting must match.
+func TestNode_ContentSize_DraftDataWins(t *testing.T) {
+	n := &Node{
+		Data:      []byte("committed"),
+		DraftData: []byte("draft-larger-content"),
+		Ref:       &ContentRef{ContentLen: 999},
+	}
+	assert.Equal(t, int64(len(n.DraftData)), n.ContentSize(),
+		"DraftData length must take precedence over Data and Ref")
+}
+
 func TestMemoryStore_AddNodeFileWithData(t *testing.T) {
 	store := NewMemoryStore()
 	store.AddNode(&Node{
