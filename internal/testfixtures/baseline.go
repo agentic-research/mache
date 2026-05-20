@@ -67,15 +67,16 @@ func loadBaselines() (map[string][]Baseline, error) {
 			baselinesErr = err
 			return
 		}
-		baselinesVal, baselinesErr = parseBaselinesFile(path)
+		baselinesVal, baselinesErr = ParseBaselinesFile(path)
 	})
 	return baselinesVal, baselinesErr
 }
 
-// parseBaselinesFile parses one baselines.toml at the given path.
-// Extracted so tests can exercise the parser against fixtures
-// without touching the package-level cache.
-func parseBaselinesFile(path string) (map[string][]Baseline, error) {
+// ParseBaselinesFile parses one baselines.toml at the given path.
+// Extracted (and exported) so tooling (tools/fixtures-rebaseline) and
+// tests can exercise the parser against arbitrary files without
+// touching the package-level cache.
+func ParseBaselinesFile(path string) (map[string][]Baseline, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read baselines %s: %w", path, err)

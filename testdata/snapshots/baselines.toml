@@ -1,0 +1,21 @@
+schema = "mache-baselines/v1"
+
+# Perf-gate baselines (ADR-0019 D.6).
+#
+# Fixed-anchor + tolerance band. Auto-rebaseline is intentionally NOT
+# done — see ADR-0019 D.6 for the derivation. Update an entry only via:
+#
+#   task fixtures:rebaseline key=<rule:variant> fixture=<id> \
+#       wall_ms=<new-ms> justification="<reason>"
+#
+# That tool writes wall_ms + last_intentional_bump + anchored_at
+# (refreshed to the current HEAD SHA) and the developer commits the
+# change with a message linking the audit trail.
+
+[["find_smells:dead_code"]]
+fixture = "mache-self"
+wall_ms = 124              # FIXED at ADR-0019 PR 3 acceptance; explicit bump only
+tolerance_pct = 25         # gate fails if measurement > wall_ms * 1.25 (= 155ms ceiling)
+anchored_at = "f1c6d9a"    # mache HEAD at baseline-set time (PR 1 of ADR-0019)
+anchored_at_date = "2026-05-19"
+last_intentional_bump = ""

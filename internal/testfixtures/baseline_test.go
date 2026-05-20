@@ -147,7 +147,7 @@ last_intentional_bump = ""
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	parsed, err := parseBaselinesFile(path)
+	parsed, err := ParseBaselinesFile(path)
 	require.NoError(t, err)
 
 	b, ok := LookupBaseline(parsed, "find_smells:dead_code", "mache-self")
@@ -168,7 +168,7 @@ func TestParseBaselinesFile_RejectsWrongSchema(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(`schema = "mache-baselines/v999"
 `), 0o644))
 
-	_, err := parseBaselinesFile(path)
+	_, err := ParseBaselinesFile(path)
 	require.Error(t, err)
 	assert.True(t,
 		strings.Contains(err.Error(), "unsupported baselines schema"),
