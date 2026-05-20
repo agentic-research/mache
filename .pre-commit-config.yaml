@@ -7,14 +7,24 @@ repos:
         additional_dependencies:
           - mdformat-gfm
           - mdformat-frontmatter
-        exclude: '^\.beads/'
+        # Snapshot fixtures (ADR-0019) MUST stay byte-identical to the
+        # upstream source — reformatting them would erase the "this is
+        # rosary at SHA X" provenance and could change test results
+        # for the doc-drift rules that read these files. Same rationale
+        # as .beads/ — vendored content owned by another repo.
+        exclude: '^(\.beads/|testdata/snapshots/)'
 
   # Basic file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b # v5.0.0
     hooks:
+      # File-content hooks all skip testdata/snapshots/ — the snapshot
+      # fixtures (ADR-0019) are byte-identical copies of upstream code;
+      # any normalization invalidates the snapshot's provenance.
       - id: trailing-whitespace
+        exclude: '^testdata/snapshots/'
       - id: end-of-file-fixer
+        exclude: '^testdata/snapshots/'
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
@@ -22,6 +32,7 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
       - id: mixed-line-ending
+        exclude: '^testdata/snapshots/'
 
   # Go-specific checks (all use locally installed tools)
   - repo: local
