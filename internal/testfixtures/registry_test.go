@@ -96,6 +96,53 @@ func TestRegistry_RequireTier_LargeSkipsByDefault(t *testing.T) {
 	assert.True(t, sub.Skipped(), "RequireTier(large) must skip when MACHE_E2E_LARGE is unset")
 }
 
+// TestRegistry_Get_MediumRustRosary proves the external snapshot
+// added in ADR-0019 PR 2 (the medium-rust-rosary fixture) loads
+// through the registry end-to-end: manifest entry resolves, rust
+// preset schema parses, tree-sitter ingest produces a non-trivial
+// SQLiteGraph. The 10-node floor catches the failure mode where the
+// fixture path resolves but the snapshot is empty (which would
+// otherwise pass an existence check and fail downstream tests with
+// less actionable messages).
+func TestRegistry_Get_MediumRustRosary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("ingest is multi-second; rerun without -short")
+	}
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	g := Get(t, "medium-rust-rosary")
+	require.NotNil(t, g, "Get must return a non-nil SQLiteGraph for medium-rust-rosary")
+
+	children, err := g.ListChildren("")
+	require.NoError(t, err, "ListChildren must succeed on the projected root")
+	require.GreaterOrEqual(t, len(children), 10,
+		"medium-rust-rosary root must project ≥10 top-level entries; got %d (snapshot may be empty)",
+		len(children))
+}
+
+// TestRegistry_All_ContainsMediumRustRosary is the manifest-shape
+// smoke test for the rosary snapshot: All() must return an entry
+// whose declared fields match what the curation tooling wrote.
+func TestRegistry_All_ContainsMediumRustRosary(t *testing.T) {
+	entries := All()
+	require.NotEmpty(t, entries, "manifest must parse at least one fixture")
+
+	var found bool
+	for _, f := range entries {
+		if f.ID == "medium-rust-rosary" {
+			found = true
+			assert.Equal(t, "medium", f.Tier)
+			assert.Equal(t, "rust", f.Language)
+			assert.Equal(t, "rust", f.SchemaPreset)
+			assert.Equal(t, "medium-rust-rosary", f.Path)
+			assert.Equal(t, "own", f.License)
+			assert.NotEmpty(t, f.SHA, "medium-rust-rosary must record an upstream SHA")
+			break
+		}
+	}
+	assert.True(t, found, "manifest must contain the medium-rust-rosary entry")
+}
+
 // TestRegistry_All_ContainsMacheSelf is a smoke test: All() must
 // return the mache-self entry parsed from manifest.toml.
 func TestRegistry_All_ContainsMacheSelf(t *testing.T) {

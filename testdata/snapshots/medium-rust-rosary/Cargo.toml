@@ -1,0 +1,72 @@
+# Rosary — autonomous work orchestrator
+[workspace]
+members = [".", "crates/crypto", "crates/bdr"]
+
+[package]
+name = "rosary"
+version = "0.1.0"
+edition = "2024"
+description = "Strings beads, repos, and review layers into coordinated work"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/agentic-research/rosary"
+homepage = "https://github.com/agentic-research/rosary"
+
+[[bin]]
+name = "rsry"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+toml = "1.0.6"
+shellexpand = "3.1.2"
+dirs-next = "2.0.0"
+sqlx-core = { version = "0.8.6", features = ["chrono", "tokio", "_rt-tokio"], default-features = false }
+sqlx-mysql = { version = "0.8.6", features = ["chrono"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+leyline-vcs = { git = "https://github.com/agentic-research/ley-line-open", default-features = false, optional = true }
+agent-client-protocol = "0.10.2"
+async-trait = "0.1.89"
+tokio-util = { version = "0.7", features = ["compat"] }
+libc = "0.2"
+bdr = { path = "crates/bdr" }
+axum = "0.8"
+uuid = { version = "1", features = ["v4"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+owo-colors = "4.3.0"
+jsonwebtoken = "9"
+socket2 = "0.5"
+rusqlite = { version = "0.34", features = ["bundled"] }
+capnp = "0.21"
+capnp-futures = "0.21"
+# Force vendored OpenSSL so the musl cross-build (`task image` via krust)
+# can produce a static binary without a target-native libssl on the host.
+# Transitive: reqwest → native-tls → openssl-sys; adding the openssl direct
+# dep with `vendored` propagates the feature globally.
+openssl = { version = "0.10", features = ["vendored"] }
+
+[build-dependencies]
+capnpc = "0.21"
+
+[features]
+# `leyline` is back on by default now that leyline-vcs ships from
+# `agentic-research/ley-line-open` (PUBLIC). Public clones build the
+# integrated jj sidecar + FUSE path natively, no `--features` flag
+# required. See rosary-7b1191 / ley-line-open#1 for the carve-out.
+default = ["leyline"]
+leyline = ["dep:leyline-vcs"]
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+tower = { version = "0.5", features = ["util"] }
+rand = "0.8"

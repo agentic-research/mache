@@ -181,24 +181,33 @@ func projectMarkers(language string) map[string]bool {
 
 // excludedDirNames is the set of directory base-names that are pruned
 // from the walk wherever they appear (top-level or nested). These are
-// build outputs, SCM metadata, and IDE config — never source.
+// build outputs that don't start with a dot. Dotted directories are
+// handled by the leading-dot rule in isExcludedDir.
 var excludedDirNames = map[string]bool{
 	"target":       true, // Rust / Java
 	"node_modules": true, // JS / TS
 	"__pycache__":  true, // Python
-	".git":         true,
-	".idea":        true,
-	".vscode":      true,
 	"dist":         true,
 	"bin":          true,
 }
 
-// isExcludedDir reports whether a directory should be pruned. Uses the
-// relative path for path-specific rules (currently none) and the base
-// name for the global deny list. The relative path is plumbed through
-// so future rules like "exclude vendor/ only at top level" stay easy.
+// isExcludedDir reports whether a directory should be pruned. Two
+// rules:
+//   - Any directory whose base name starts with "." is pruned. Covers
+//     .git, .idea, .vscode, .DS_Store, .venv, .beads, .pytest_cache,
+//     and every other tool-state directory in one rule rather than
+//     enumerating each. ADR-0019 D.7 names .git/.idea/.vscode as the
+//     canonical examples; the broader rule is the spirit of the spec.
+//   - The non-dotted build-output deny list (target, node_modules, etc.)
+//     is consulted second.
+//
+// The relative path is plumbed through so future rules like
+// "exclude vendor/ only at top level" stay easy to add.
 func isExcludedDir(rel, name string) bool {
 	_ = rel
+	if len(name) > 0 && name[0] == '.' {
+		return true
+	}
 	return excludedDirNames[name]
 }
 

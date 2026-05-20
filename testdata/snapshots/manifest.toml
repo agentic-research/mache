@@ -2,13 +2,17 @@ schema = "mache-fixtures/v1"
 
 # Real-corpus fixture registry.
 #
-# v1 (PR 1 of ADR-0019) ships only the mache-self sentinel:
-#   - source = "self" + path = "$REPO_ROOT" tells the registry to resolve
-#     the path at runtime via runtime.Caller, finding mache's own repo root.
-#   - Acknowledged non-portable: only works inside mache's test binary.
+# v1 ships the mache-self sentinel + one external snapshot per
+# ADR-0019:
+#   - mache-self uses source = "self" + path = "$REPO_ROOT" so the
+#     registry resolves the path at runtime via runtime.Caller,
+#     finding mache's own repo root. Acknowledged non-portable: only
+#     works inside mache's test binary.
+#   - medium-rust-rosary is a curated snapshot of agentic-research/rosary
+#     produced by `task fixtures:snapshot id=medium-rust-rosary
+#     source=~/remotes/art/rosary` (see ADR-0019 D.7 for the spec).
 #
-# External snapshots (rosary, ley-line-open) are PR 2. Baseline tracking
-# is PR 3. See docs/adr/0019-real-corpus-fixture-registry.md.
+# Baseline tracking is PR 3. See docs/adr/0019-real-corpus-fixture-registry.md.
 
 [[fixture]]
 id = "mache-self"
@@ -18,4 +22,14 @@ source = "self"
 sha = ""
 path = "$REPO_ROOT"
 schema_preset = "go"
+license = "own"
+
+[[fixture]]
+id = "medium-rust-rosary"
+tier = "medium"
+language = "rust"
+source = "/Users/jamesgardner/remotes/art/rosary"
+sha = "4b1711a"
+path = "medium-rust-rosary"
+schema_preset = "rust"
 license = "own"
