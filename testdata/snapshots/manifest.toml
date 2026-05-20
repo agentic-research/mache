@@ -1,0 +1,21 @@
+schema = "mache-fixtures/v1"
+
+# Real-corpus fixture registry.
+#
+# v1 (PR 1 of ADR-0019) ships only the mache-self sentinel:
+#   - source = "self" + path = "$REPO_ROOT" tells the registry to resolve
+#     the path at runtime via runtime.Caller, finding mache's own repo root.
+#   - Acknowledged non-portable: only works inside mache's test binary.
+#
+# External snapshots (rosary, ley-line-open) are PR 2. Baseline tracking
+# is PR 3. See docs/adr/0019-real-corpus-fixture-registry.md.
+
+[[fixture]]
+id = "mache-self"
+tier = "medium"
+language = "go"
+source = "self"
+sha = ""
+path = "$REPO_ROOT"
+schema_preset = "go"
+license = "own"
