@@ -322,6 +322,17 @@ tasks:
       - go run ./tools/fixtures-snapshot --id {{.id}} --source {{.source}}
     silent: false
 
+  fixtures:rebaseline:
+    desc: 'Update a perf baseline with audit trail (ADR-0019 D.6). Args: key=<rule:variant> fixture=<id> wall_ms=<new-ms> justification=<text>'
+    cmds:
+      # Fixed-anchor policy: this is the ONLY sanctioned path to bump
+      # wall_ms for a (key, fixture) pair in baselines.toml. The tool
+      # refuses to create new anchors silently — to add a new gate,
+      # append the entry manually first. See ADR-0019 D.6 for why
+      # auto-rebaseline was rejected.
+      - go run ./tools/fixtures-rebaseline --key {{.key}} --fixture {{.fixture}} --wall-ms {{.wall_ms}} --justification "{{.justification}}"
+    silent: false
+
   check:
     desc: Run all checks (fmt, vet, lint, test, validate, docs:lint)
     cmds:
