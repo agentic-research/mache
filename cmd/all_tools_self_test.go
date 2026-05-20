@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/testfixtures"
 )
 
 // TestE2E_BackendParity_MacheOnMache — the "rough edges" gate.
@@ -140,22 +142,27 @@ func TestE2E_BackendParity_MacheOnMache(t *testing.T) {
 // _ast rules) are allowed to return skipped; the matrix runner's
 // existing classification handles that.
 //
-// Skipped under -short and behind MACHE_E2E_SELF=1 because ingest of
-// a ~30K-LOC tree takes single-digit seconds per backend and the test
-// is large enough to count as integration, not unit.
+// Skipped under -short because ingest of a ~30K-LOC tree takes
+// single-digit seconds per backend and the test is large enough to
+// count as integration, not unit. The MACHE_E2E_SELF env gate is
+// gone post-ADR-0019 — the fixture lives in the medium tier of the
+// real-corpus fixture registry which is always-on.
 func TestE2E_MacheOnMache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e mache-on-mache; rerun without -short")
 	}
-	if os.Getenv("MACHE_E2E_SELF") == "" {
-		t.Skip("set MACHE_E2E_SELF=1 to run the mache-on-mache invariant")
-	}
 
 	t.Setenv("MACHE_NO_LEYLINE", "1")
+	testfixtures.RequireTier(t, "medium")
 
-	repoRoot := macheRepoRoot(t)
-	schema, err := resolveSchema("go", ".")
-	require.NoError(t, err)
+	// Resolve fixture path + schema through the registry. The matrix
+	// runner still builds per-backend graphs locally (memory + sqlite)
+	// so backend deltas surface; the registry centralizes WHERE the
+	// fixture lives, not HOW each backend ingests it.
+	repoRoot, err := testfixtures.ResolvePath("mache-self")
+	require.NoError(t, err, "resolve mache-self path")
+	schema, err := testfixtures.LoadSchema("mache-self")
+	require.NoError(t, err, "load mache-self schema")
 	require.NotNil(t, schema, "go preset schema must resolve")
 
 	opts := readPprofOpts(t)
@@ -335,31 +342,24 @@ func TestE2E_RealCorpora(t *testing.T) {
 //     for slower hardware (CI runners, ARM emulation) so the gate
 //     doesn't flake on legitimate variance.
 //
-// Gated behind MACHE_E2E_SELF=1 because the build step ingests
-// mache's own source tree (single-digit seconds on a developer
-// laptop, more in a constrained CI environment). The unit-test
-// suite stays fast; this perf gate runs in the same gated tier as
-// TestE2E_MacheOnMache.
+// Skipped under -short because the build step ingests mache's own
+// source tree (single-digit seconds on a developer laptop). The
+// MACHE_E2E_SELF env gate is gone post-ADR-0019 — the underlying
+// fixture is the medium tier of the real-corpus fixture registry,
+// always-on.
 func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("perf gate; rerun without -short")
 	}
-	if os.Getenv("MACHE_E2E_SELF") == "" {
-		t.Skip("set MACHE_E2E_SELF=1 to run the dead_code perf gate")
-	}
 
 	t.Setenv("MACHE_NO_LEYLINE", "1")
+	testfixtures.RequireTier(t, "medium")
 
-	repoRoot := macheRepoRoot(t)
-	schema, err := resolveSchema("go", ".")
-	require.NoError(t, err)
-	require.NotNil(t, schema, "go preset schema must resolve")
-
-	g, cleanup := buildSQLiteBackend(t, repoRoot, schema)
-	defer cleanup()
-
-	qg, ok := g.(refsQuerier)
-	require.True(t, ok, "SQLite backend must implement refsQuerier")
+	// Pull the cached SQLiteGraph from the registry. First call in the
+	// cmd test binary triggers ingest (~5s); subsequent tests reuse
+	// the same .db. Cleanup is process-lifetime (see registry docs).
+	g := testfixtures.Get(t, "mache-self")
+	qg := refsQuerier(g) // *SQLiteGraph implements refsQuerier directly.
 
 	rule := findRegisteredRule(t, "dead_code")
 
