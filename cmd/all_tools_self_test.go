@@ -396,6 +396,16 @@ func runRealCorporaFromEnv(t *testing.T, corpora string, opts pprofOpts) {
 // MACHE_E2E_SELF env gate is gone post-ADR-0019 — the underlying
 // fixture is the medium tier of the real-corpus fixture registry,
 // always-on.
+//
+// ADR-0019 PR 3 update: the hardcoded 5s budget is replaced by the
+// fixed-anchor + tolerance band gate in testdata/snapshots/baselines.toml.
+// Current baseline is 124ms +25% (= 155ms ceiling on this rule for
+// mache-self). Bumping the baseline is an explicit + audited action:
+// `task fixtures:rebaseline key=find_smells:dead_code fixture=mache-self
+//
+//	wall_ms=<n> justification="<reason>"`. See ADR-0019 D.6 for why
+//
+// auto-rebaseline was rejected (perf rot ratchet).
 func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("perf gate; rerun without -short")
@@ -417,18 +427,15 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err, "dead_code rule must execute without error on mache-on-mache")
 
-	const budget = 5 * time.Second
-	assert.Less(t, elapsed, budget,
-		"dead_code wall-clock %s exceeds %s budget on mache-on-mache "+
-			"(bead mache-68980e — the OR-join nested-loop scan should be a thing of the past); "+
-			"got %d findings",
-		elapsed, budget, len(findings))
+	// Surface finding count for diagnostic context before the band
+	// check fires. AssertWithinBaseline emits its own pass/fail log.
+	t.Logf("dead_code on mache-on-mache: %s (%d findings)", elapsed, len(findings))
 
-	// Surface the actual timing in the test log so reviewers can see
-	// the headroom against the budget without reading the assertion
-	// failure path. Format matches the commit-message convention.
-	t.Logf("dead_code on mache-on-mache: %s (%d findings, budget %s)",
-		elapsed, len(findings), budget)
+	// Per ADR-0019 D.6: gate fails if measured > baseline * (1 + tolerance).
+	// Anchor + tolerance live in testdata/snapshots/baselines.toml; the
+	// helper t.Fatalfs with both numbers and a `task fixtures:rebaseline`
+	// command if the regression is intentional.
+	testfixtures.AssertWithinBaseline(t, "find_smells:dead_code", "mache-self", elapsed)
 }
 
 // TestE2E_RealCorpora_RegistryDrivenByDefault asserts the migration
