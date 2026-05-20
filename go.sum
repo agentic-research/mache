@@ -1,5 +1,7 @@
 capnproto.org/go/capnp/v3 v3.1.0-alpha.2 h1:93ISpqHf2/3WQlfrBP0tT8Dg/RQc3uq6DV36vN0ePWk=
 capnproto.org/go/capnp/v3 v3.1.0-alpha.2/go.mod h1:2vT5D2dtG8sJGEoEKU17e+j7shdaYp1Myl8X03B3hmc=
+github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/RoaringBitmap/roaring v1.9.4 h1:yhEIoH4YezLYT04s1nHehNO64EKFTop/wBhxv2QzDdQ=
 github.com/RoaringBitmap/roaring v1.9.4/go.mod h1:6AXUsoIEzDTFFQCe1RbGA6uFONMhvejWj5rqITANK90=
 github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.4.2 h1:juqen3MOmjbw5A9OGVp5DymCPbFzbBFQ1tdubvMNPSE=
