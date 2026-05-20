@@ -124,6 +124,17 @@ func LoadExternalSmellRules(dir string) ([]SmellRule, error) {
 // runSmellRule splices the scope clause via fmt.Sprintf(query, scope).
 // An unescaped `%f` would be treated as the float verb and produce
 // `%!f(string=...)` corruption at runtime. Reject at load time.
+//
+// ScopeColumn is interpolated unescaped into the SQL (runSmellRule
+// builds `"AND " + rule.ScopeColumn + " = ?"`), so an external rule
+// could in principle break out of the scope clause with `;`, `--`,
+// or unexpected characters. The trust boundary here is whoever
+// controls $MACHE_SMELL_RULES_DIR (operator), so this is defense in
+// depth rather than a vulnerability — but the cost is one regex-shaped
+// check, and the value is "a typo in an external rule can't silently
+// corrupt the query." The whitelist mirrors what the built-in
+// ScopeColumn values use (identifiers, dots, COALESCE/NULLIF call
+// shape, comma, paren, single quote, space).
 func validateSmellRule(r SmellRule) error {
 	if strings.TrimSpace(r.ID) == "" {
 		return fmt.Errorf("rule ID is required")
@@ -139,6 +150,37 @@ func validateSmellRule(r SmellRule) error {
 	formatted := fmt.Sprintf(r.Query, "")
 	if strings.Contains(formatted, "%!") {
 		return fmt.Errorf("rule %q: Query has unescaped '%%' chars (other than the single '%%s' placeholder); SQL '%%' must be escaped as '%%%%' (e.g. LIKE '%%%%foo%%%%')", r.ID)
+	}
+	if err := validateScopeColumn(r.ScopeColumn); err != nil {
+		return fmt.Errorf("rule %q: %w", r.ID, err)
+	}
+	return nil
+}
+
+// validateScopeColumn rejects ScopeColumn values that contain SQL
+// statement terminators, comment sequences, or characters outside
+// the small set the built-in registry uses. Empty is allowed (the
+// rule opts out of source_id scoping). See validateSmellRule's
+// comment for the threat model.
+func validateScopeColumn(s string) error {
+	if s == "" {
+		return nil
+	}
+	if strings.Contains(s, ";") {
+		return fmt.Errorf("ScopeColumn must not contain ';' (statement terminator)")
+	}
+	if strings.Contains(s, "--") {
+		return fmt.Errorf("ScopeColumn must not contain '--' (SQL line comment)")
+	}
+	for _, r := range s {
+		switch {
+		case 'a' <= r && r <= 'z':
+		case 'A' <= r && r <= 'Z':
+		case '0' <= r && r <= '9':
+		case r == '_' || r == '.' || r == ',' || r == '(' || r == ')' || r == '\'' || r == ' ':
+		default:
+			return fmt.Errorf("ScopeColumn contains disallowed character %q; allowed: identifiers, '.', ',', '(', ')', \"'\", and space", r)
+		}
 	}
 	return nil
 }

@@ -210,6 +210,94 @@ func TestLoadExternalSmellRules_FilePassedAsDirRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a directory")
 }
 
+// TestValidateScopeColumn_AcceptsBuiltinShapes pins that every
+// ScopeColumn value used by built-in rules passes the load-time
+// validator. If a future contributor tightens the whitelist in a way
+// that breaks a real shape, this catches it before the loader starts
+// rejecting legitimate external rules that copy the built-in pattern.
+func TestValidateScopeColumn_AcceptsBuiltinShapes(t *testing.T) {
+	for _, r := range smellRegistry {
+		if r.ScopeColumn == "" {
+			continue
+		}
+		t.Run(r.ID, func(t *testing.T) {
+			require.NoError(t, validateScopeColumn(r.ScopeColumn),
+				"built-in ScopeColumn %q must pass validation", r.ScopeColumn)
+		})
+	}
+}
+
+// TestValidateScopeColumn_RejectsInjectionShapes asserts the
+// security hardening: even though the trust boundary for external
+// rules is "operator controls the rules dir", a malicious or buggy
+// rule file cannot smuggle a `;`-terminated second statement, a
+// `--` line comment, or any character outside the small whitelist
+// that the built-in registry actually uses.
+func TestValidateScopeColumn_RejectsInjectionShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"semicolon terminator", "n.source_file; DROP TABLE nodes", "statement terminator"},
+		{"line comment", "n.source_file --", "line comment"},
+		{"slash-star block comment", "n.source_file /* foo */", "disallowed character"},
+		{"asterisk wildcard", "n.*", "disallowed character"},
+		{"equals comparator", "n.source_file = 'x'", "disallowed character"},
+		{"backtick", "`n.source_file`", "disallowed character"},
+		{"double quote identifier", `"n.source_file"`, "disallowed character"},
+		{"newline injection", "n.source_file\nDROP TABLE", "disallowed character"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateScopeColumn(c.in)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), c.want)
+		})
+	}
+}
+
+// TestLoadExternalSmellRules_RejectsInjectableScopeColumn is the
+// end-to-end version: a JSON file whose ScopeColumn carries a `;`
+// must not load. Closes the loop on the user's "ensure we are
+// making our queries safe / not making them injectable" directive
+// for the only surface where external (non-source-tree) input
+// reaches runSmellRule's SQL composition path.
+func TestLoadExternalSmellRules_RejectsInjectableScopeColumn(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "evil.json"), []byte(`{
+		"ID": "evil_scope",
+		"Description": "Tries to escape the scope clause",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s",
+		"ScopeColumn": "n.source_file; DROP TABLE nodes; --"
+	}`), 0o644))
+
+	_, err := LoadExternalSmellRules(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ScopeColumn")
+	assert.Contains(t, err.Error(), "statement terminator")
+}
+
+// TestLoadExternalSmellRules_AcceptsBuiltinShapedScopeColumn pins
+// that a rule using the same ScopeColumn shapes the built-ins use
+// (dotted identifiers, COALESCE/NULLIF) loads cleanly. Without
+// this, the hardening could quietly grow stricter than the
+// built-ins and lock out reasonable external rules.
+func TestLoadExternalSmellRules_AcceptsBuiltinShapedScopeColumn(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "coalesce.json"), []byte(`{
+		"ID": "external_coalesce_scope",
+		"Description": "Uses the same COALESCE shape several built-ins use",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes n %s",
+		"ScopeColumn": "COALESCE(NULLIF(n.source_file, ''), '')"
+	}`), 0o644))
+
+	rules, err := LoadExternalSmellRules(dir)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "external_coalesce_scope", rules[0].ID)
+}
+
 // snapshotSmellRegistry captures the current registry so a test
 // that mutates it via appendExternalRulesFromEnv can restore the
 // original state. The package-level smellRegistry is the source
