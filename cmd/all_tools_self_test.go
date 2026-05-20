@@ -246,36 +246,88 @@ func indexProfiles(profiles []toolProfile) map[string]toolProfile {
 	return out
 }
 
-// TestE2E_RealCorpora — ad-hoc 5xxx-step driver. Ingests the
-// developer's other repos when MACHE_E2E_CORPORA is set, exercising
-// the tool surface against real polyglot trees outside mache's own
-// source. Format: `MACHE_E2E_CORPORA=name=path[,schema]:name2=path2`.
-// `schema` defaults to "go" when omitted (per parseCorpusSpec) —
-// pass an explicit preset (rust/python/typescript/...) for non-Go
-// corpora. Auto-detection from sentinel files is NOT applied here.
+// TestE2E_RealCorpora — exercises the tool surface across every
+// medium-tier fixture in the registry. Default behavior (post-ADR-0019
+// PR 2) iterates `testfixtures.All()` filtered to `Tier == "medium"`
+// and runs the matrix runner against each. No env var needed: medium
+// tier is always-on per testfixtures.RequireTier.
 //
-// Example:
+// MACHE_E2E_CORPORA override (legacy / ad-hoc path):
 //
-//	MACHE_E2E_CORPORA="rosary=~/remotes/art/rosary,rust:llo=~/remotes/art/ley-line-open,rust" \
+//	MACHE_E2E_CORPORA="my-corpus=/path/to/repo,rust" \
 //	  go test -run TestE2E_RealCorpora ./cmd/ -timeout 10m -v
 //
-// Each entry yields a subtest under (corpus_name, backend). Failures
-// here represent real corpus shapes that mache choked on — file a
-// bead and either fix the tool or document the divergence. The test
-// itself only asserts the harness-health bar (no transport errors,
-// at least one ok) because tool semantics vary per language.
+// When set, the env var REPLACES the registry-driven set with the
+// developer's ad-hoc paths. Used for testing against repos that
+// haven't been snapshotted into testdata/snapshots/ yet (the snapshot
+// workflow is `task fixtures:snapshot`; until a repo is snapshotted,
+// pointing the test at a live working tree is the escape hatch).
+//
+// Each fixture yields a subtest under (fixture_id, backend). The test
+// asserts only the harness-health bar (no transport errors, at least
+// one ok tool) — per-tool reality checks vary per language and live
+// in TestE2E_MacheOnMache for the Go case; per-language reality
+// checks for Rust / polyglot are deferred to SB-04 / SB-05 work.
 func TestE2E_RealCorpora(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e real-corpora; rerun without -short")
 	}
-	corpora := os.Getenv("MACHE_E2E_CORPORA")
-	if corpora == "" {
-		t.Skip("set MACHE_E2E_CORPORA=name=path,schema[:name2=path2] to exercise real corpora")
-	}
-
+	testfixtures.RequireTier(t, "medium")
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 	opts := readPprofOpts(t)
 
+	// Env var override: ad-hoc paths replace the registry-driven set.
+	// Documented escape hatch for repos that aren't snapshotted yet.
+	if corpora := os.Getenv("MACHE_E2E_CORPORA"); corpora != "" {
+		runRealCorporaFromEnv(t, corpora, opts)
+		return
+	}
+
+	// Default path: iterate every medium-tier fixture in the registry.
+	// Both mache-self and medium-rust-rosary run here under -short=false;
+	// mache-self double-runs vs TestE2E_MacheOnMache but the registry
+	// cache means the second ingest is free.
+	for _, fx := range testfixtures.All() {
+		if fx.Tier != "medium" {
+			continue
+		}
+		t.Run(fx.ID, func(t *testing.T) {
+			runRealCorpusFixture(t, fx, opts)
+		})
+	}
+}
+
+// runRealCorpusFixture executes the backend matrix for one registry
+// fixture. Factored out of TestE2E_RealCorpora to keep the test body
+// readable and to give the env-var override path a shared helper.
+func runRealCorpusFixture(t *testing.T, fx testfixtures.Fixture, opts pprofOpts) {
+	t.Helper()
+	srcPath, err := testfixtures.ResolvePath(fx.ID)
+	require.NoError(t, err, "resolve path for %s", fx.ID)
+	schema, err := testfixtures.LoadSchema(fx.ID)
+	require.NoError(t, err, "load schema for %s", fx.ID)
+	require.NotNil(t, schema, "schema for %s must resolve", fx.ID)
+
+	for _, backend := range allE2EBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			g, cleanup := backend.build(t, srcPath, schema)
+			defer cleanup()
+
+			profiles := runToolMatrix(t, g, srcPath, backend.name, opts)
+			printProfileSummary(t, profiles)
+			// Loose: only the harness-health bar applies here.
+			// Per-tool reality checks would need per-corpus arg
+			// tables, deferred to SB-04 (hetero) / SB-05 (synth).
+			assertHarnessHealth(t, profiles)
+		})
+	}
+}
+
+// runRealCorporaFromEnv handles the MACHE_E2E_CORPORA legacy/ad-hoc
+// override. Same matrix-runner behavior as the registry path; just
+// sources paths from the env-var spec instead of the manifest.
+func runRealCorporaFromEnv(t *testing.T, corpora string, opts pprofOpts) {
+	t.Helper()
 	for _, entry := range strings.Split(corpora, ":") {
 		name, path, schemaName, ok := parseCorpusSpec(entry)
 		if !ok {
@@ -300,9 +352,6 @@ func TestE2E_RealCorpora(t *testing.T) {
 
 					profiles := runToolMatrix(t, g, path, backend.name, opts)
 					printProfileSummary(t, profiles)
-					// Loose: only the harness-health bar applies here.
-					// Per-tool reality checks would need per-corpus arg
-					// tables, deferred to SB-04 (hetero) / SB-05 (synth).
 					assertHarnessHealth(t, profiles)
 				})
 			}
@@ -380,6 +429,40 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	// failure path. Format matches the commit-message convention.
 	t.Logf("dead_code on mache-on-mache: %s (%d findings, budget %s)",
 		elapsed, len(findings), budget)
+}
+
+// TestE2E_RealCorpora_RegistryDrivenByDefault asserts the migration
+// of TestE2E_RealCorpora (ADR-0019 PR 2) actually drives off the
+// fixture registry rather than the legacy MACHE_E2E_CORPORA env var.
+//
+// This is a structural check, not a behavioral one — we can't ride
+// through testing.T.Run dynamically to verify the subtests were
+// created without massively expanding the test surface, so we assert
+// the precondition: the registry contains BOTH expected medium-tier
+// fixtures (mache-self + medium-rust-rosary), which is what the
+// migrated TestE2E_RealCorpora iterates by default. If either is
+// missing, the matrix runner would silently skip a corpus that
+// reviewers expect to be exercised.
+func TestE2E_RealCorpora_RegistryDrivenByDefault(t *testing.T) {
+	want := map[string]bool{
+		"mache-self":         false,
+		"medium-rust-rosary": false,
+	}
+	for _, fx := range testfixtures.All() {
+		if fx.Tier != "medium" {
+			continue
+		}
+		if _, expected := want[fx.ID]; expected {
+			want[fx.ID] = true
+		}
+	}
+	for id, found := range want {
+		assert.True(t, found,
+			"medium-tier fixture %q must be in the registry; "+
+				"TestE2E_RealCorpora drives off testfixtures.All() filtered to medium, "+
+				"so a missing entry means the corpus silently stops being exercised",
+			id)
+	}
 }
 
 func parseCorpusSpec(spec string) (name, path, schema string, ok bool) {
