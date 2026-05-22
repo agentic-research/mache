@@ -19,6 +19,7 @@
 package cmd
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -27,7 +28,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"capnproto.org/go/capnp/v3"
+	capnp "capnproto.org/go/capnp/v3"
 	"github.com/BurntSushi/toml"
 	cache "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/cache"
 	"github.com/spf13/cobra"
@@ -57,9 +58,17 @@ const MacheProducerVersion = "0.x.y"
 var (
 	cachePushDBPath string
 	cachePushOutDir string
+	cachePushRemote string
+	cachePushScope  string
+	cachePushTag    string
+	cachePushToken  string
 	cachePullInPath string
 	cachePullOutDB  string
 	cachePullVerify bool
+	cachePullRemote string
+	cachePullScope  string
+	cachePullRef    string
+	cachePullToken  string
 )
 
 var cacheCmd = &cobra.Command{
@@ -80,25 +89,54 @@ cloister-spec/build-cache/v1.
 
 var cachePushCmd = &cobra.Command{
 	Use:   "push <out-dir>",
-	Short: "Emit a lockfile + chunks from a mache .db (Phase 1)",
+	Short: "Emit a lockfile + chunks from a mache .db (Phase 1+3)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cachePushOutDir = args[0]
 		if cachePushDBPath == "" {
 			return fmt.Errorf("--db is required")
 		}
-		return runCachePush(cmd.OutOrStdout(), cachePushDBPath, cachePushOutDir)
+		if err := runCachePush(cmd.OutOrStdout(), cachePushDBPath, cachePushOutDir); err != nil {
+			return err
+		}
+		if cachePushRemote != "" {
+			if cachePushScope == "" {
+				return fmt.Errorf("--scope is required when --remote is set")
+			}
+			token := cachePushToken
+			if token == "" {
+				token = os.Getenv("MACHE_CACHE_TOKEN")
+			}
+			return runCacheRemotePush(cmd.Context(), cmd.OutOrStdout(),
+				cachePushOutDir, cachePushRemote, MacheProducerName, cachePushScope,
+				cachePushTag, token)
+		}
+		return nil
 	},
 }
 
 var cachePullCmd = &cobra.Command{
 	Use:   "pull <in-dir>",
-	Short: "Restore a .db state from a lockfile + chunks (Phase 2)",
+	Short: "Restore a .db state from a lockfile + chunks (Phase 2+3)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cachePullInPath = args[0]
 		if cachePullOutDB == "" {
 			return fmt.Errorf("--out-db is required")
+		}
+		if cachePullRemote != "" {
+			if cachePullScope == "" {
+				return fmt.Errorf("--scope is required when --remote is set")
+			}
+			token := cachePullToken
+			if token == "" {
+				token = os.Getenv("MACHE_CACHE_TOKEN")
+			}
+			if err := runCacheRemotePull(cmd.Context(), cmd.OutOrStdout(),
+				cachePullRemote, MacheProducerName, cachePullScope, cachePullRef,
+				token, cachePullInPath); err != nil {
+				return err
+			}
 		}
 		return runCachePull(cmd.OutOrStdout(), cachePullInPath, cachePullOutDB, cachePullVerify)
 	},
@@ -107,11 +145,19 @@ var cachePullCmd = &cobra.Command{
 func init() {
 	cachePushCmd.Flags().StringVar(&cachePushDBPath, "db", "", "path to mache-built .db")
 	_ = cachePushCmd.MarkFlagRequired("db")
+	cachePushCmd.Flags().StringVar(&cachePushRemote, "remote", "", "Phase 3: OCI registry base URL")
+	cachePushCmd.Flags().StringVar(&cachePushScope, "scope", "", "Phase 3: scope segment (e.g. <repo>/<commit>)")
+	cachePushCmd.Flags().StringVar(&cachePushTag, "tag", "latest", "Phase 3: mutable tag")
+	cachePushCmd.Flags().StringVar(&cachePushToken, "token", "", "Phase 3: bearer token (or MACHE_CACHE_TOKEN env)")
 
 	cachePullCmd.Flags().StringVar(&cachePullOutDB, "out-db", "", "path to write the restored .db")
 	_ = cachePullCmd.MarkFlagRequired("out-db")
 	cachePullCmd.Flags().BoolVar(&cachePullVerify, "verify", true,
 		"after restore, re-walk sources and assert their BLAKE3 matches the lockfile")
+	cachePullCmd.Flags().StringVar(&cachePullRemote, "remote", "", "Phase 3: OCI registry base URL")
+	cachePullCmd.Flags().StringVar(&cachePullScope, "scope", "", "Phase 3: scope segment")
+	cachePullCmd.Flags().StringVar(&cachePullRef, "ref", "latest", "Phase 3: digest or tag")
+	cachePullCmd.Flags().StringVar(&cachePullToken, "token", "", "Phase 3: bearer token (or MACHE_CACHE_TOKEN env)")
 
 	cacheCmd.AddCommand(cachePushCmd)
 	cacheCmd.AddCommand(cachePullCmd)
@@ -666,4 +712,160 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 3: remote push/pull via build-cache/v1 OCI transport
+// ─────────────────────────────────────────────────────────────────────
+
+// runCacheRemotePush walks a local push'd <localDir> and uploads
+// everything to the registry per
+// cloister-spec/build-cache/v1/wire/push-protocol.md.
+func runCacheRemotePush(ctx context.Context, out io.Writer, localDir, baseURL, producer, scope, tag, token string) error {
+	configBytes, err := os.ReadFile(filepath.Join(localDir, "mache.lock.bin"))
+	if err != nil {
+		return fmt.Errorf("read mache.lock.bin: %w", err)
+	}
+	configDigest := digestFor(blake3.Sum256(configBytes))
+
+	chunksByDigest := map[string][]byte{}
+	chunkLayers := []OCIDescriptor{}
+	objectsDir := filepath.Join(localDir, "objects")
+	bucketEntries, err := os.ReadDir(objectsDir)
+	if err != nil {
+		return fmt.Errorf("read objects dir: %w", err)
+	}
+	for _, bucketEntry := range bucketEntries {
+		if !bucketEntry.IsDir() {
+			continue
+		}
+		bucketName := bucketEntry.Name()
+		if len(bucketName) != 2 {
+			continue
+		}
+		bucketPath := filepath.Join(objectsDir, bucketName)
+		files, err := os.ReadDir(bucketPath)
+		if err != nil {
+			return fmt.Errorf("read bucket %s: %w", bucketPath, err)
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			fileName := f.Name()
+			if len(fileName) != 62 {
+				continue
+			}
+			fullHex := bucketName + fileName
+			digest := "sha256:" + fullHex
+			body, err := os.ReadFile(filepath.Join(bucketPath, fileName))
+			if err != nil {
+				return fmt.Errorf("read chunk %s: %w", fileName, err)
+			}
+			actual := blake3.Sum256(body)
+			if hex.EncodeToString(actual[:]) != fullHex {
+				return fmt.Errorf("chunk %s drift on push", fileName)
+			}
+			chunksByDigest[digest] = body
+			chunkLayers = append(chunkLayers, OCIDescriptor{
+				MediaType: cacheLayerMediaType,
+				Digest:    digest,
+				Size:      int64(len(body)),
+			})
+		}
+	}
+
+	manifest := &OCIManifest{
+		SchemaVersion: 2,
+		MediaType:     ociManifestMediaType,
+		Config: OCIDescriptor{
+			MediaType: cacheConfigMediaType,
+			Digest:    configDigest,
+			Size:      int64(len(configBytes)),
+		},
+		Layers: chunkLayers,
+		Annotations: map[string]string{
+			"org.cloister.build-cache.producer":         producer,
+			"org.cloister.build-cache.producer_version": MacheProducerVersion,
+			"org.cloister.build-cache.schema_version":   CacheVersion,
+		},
+	}
+
+	client, err := NewOCIClient(baseURL, producer, scope)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		client.SetToken(token)
+	}
+
+	manifestDigest, err := client.PushBundle(ctx, manifest, configBytes, chunksByDigest, tag, 4)
+	if err != nil {
+		return fmt.Errorf("remote push: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(out, "pushed %d chunks + manifest to %s/v2/%s/%s\n",
+		len(chunkLayers), baseURL, producer, scope)
+	_, _ = fmt.Fprintf(out, "manifest digest: %s\n", manifestDigest)
+	if tag != "" {
+		_, _ = fmt.Fprintf(out, "tag: %s\n", tag)
+	}
+	return nil
+}
+
+// runCacheRemotePull fetches a manifest + config + chunks from the
+// registry into <localDir>, mirroring what runCachePush emits. After
+// this returns, runCachePull(localDir, outDB) can restore as if the
+// bundle had originated locally.
+func runCacheRemotePull(ctx context.Context, out io.Writer, baseURL, producer, scope, ref, token, localDir string) error {
+	client, err := NewOCIClient(baseURL, producer, scope)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		client.SetToken(token)
+	}
+
+	manifest, configBytes, chunks, manifestDigest, err := client.PullBundle(ctx, ref, 4)
+	if err != nil {
+		return fmt.Errorf("remote pull: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(localDir, "objects"), 0o755); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(filepath.Join(localDir, "mache.lock.bin"), configBytes); err != nil {
+		return fmt.Errorf("write lockfile: %w", err)
+	}
+	for _, layer := range manifest.Layers {
+		body, ok := chunks[layer.Digest]
+		if !ok {
+			return fmt.Errorf("pulled manifest references chunk %s but body missing", layer.Digest)
+		}
+		hexDigest := layer.Digest
+		if len(hexDigest) > len("sha256:") && hexDigest[:len("sha256:")] == "sha256:" {
+			hexDigest = hexDigest[len("sha256:"):]
+		}
+		if len(hexDigest) != 64 {
+			return fmt.Errorf("layer digest %q: want 64 hex chars after sha256 prefix", layer.Digest)
+		}
+		bucket := filepath.Join(localDir, "objects", hexDigest[:2])
+		if err := os.MkdirAll(bucket, 0o755); err != nil {
+			return fmt.Errorf("mkdir bucket: %w", err)
+		}
+		chunkPath := filepath.Join(bucket, hexDigest[2:])
+		if existing, err := os.ReadFile(chunkPath); err == nil {
+			if !bytesEqual(existing, body) {
+				return fmt.Errorf("chunk %s on disk has wrong bytes", chunkPath)
+			}
+			continue
+		}
+		if err := writeFileAtomic(chunkPath, body); err != nil {
+			return fmt.Errorf("write chunk %s: %w", chunkPath, err)
+		}
+	}
+
+	_, _ = fmt.Fprintf(out, "pulled manifest %s (%d chunks) from %s/v2/%s/%s\n",
+		manifestDigest, len(manifest.Layers), baseURL, producer, scope)
+	return nil
 }

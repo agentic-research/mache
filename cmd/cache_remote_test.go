@@ -1,0 +1,131 @@
+// End-to-end test for Phase 3: local push → remote push → fresh
+// local pull from remote → restore. Uses the in-process mock
+// registry from cache_oci_test.go.
+//
+// Why a separate file: cache_oci_test.go tests the OCI client in
+// isolation; this file tests the full glue that runCacheRemotePush
+// / runCacheRemotePull provide on top of it.
+
+package cmd
+
+import (
+	"bytes"
+	"context"
+	"path/filepath"
+	"testing"
+)
+
+func TestCacheRemoteRoundTrip(t *testing.T) {
+	srv, _, _ := startMock(t)
+	ctx := context.Background()
+
+	// 1. Set up a synthetic db.
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "input.db")
+	pushDir := filepath.Join(tmp, "push-out")
+	pullDir := filepath.Join(tmp, "pull-in")
+	restoredPath := filepath.Join(tmp, "restored.db")
+
+	original := []synthSource{
+		{id: "a.go", path: "a.go", language: "go", content: []byte("package a\n")},
+		{id: "b.go", path: "b.go", language: "go", content: []byte("package b\n")},
+	}
+	makeSyntheticDB(t, dbPath, original)
+
+	// 2. Local push (Phase 1 still has to run before remote push).
+	var buf bytes.Buffer
+	if err := runCachePush(&buf, dbPath, pushDir); err != nil {
+		t.Fatalf("local push: %v", err)
+	}
+
+	// 3. Remote push.
+	if err := runCacheRemotePush(ctx, &buf, pushDir, srv.URL, "mache", "e2e-scope", "latest", ""); err != nil {
+		t.Fatalf("remote push: %v\n%s", err, buf.String())
+	}
+
+	// 4. Remote pull into a fresh local dir.
+	if err := runCacheRemotePull(ctx, &buf, srv.URL, "mache", "e2e-scope", "latest", "", pullDir); err != nil {
+		t.Fatalf("remote pull: %v\n%s", err, buf.String())
+	}
+
+	// 5. Local pull restores from pullDir.
+	if err := runCachePull(&buf, pullDir, restoredPath, true); err != nil {
+		t.Fatalf("local pull: %v\n%s", err, buf.String())
+	}
+
+	// 6. Verify restored content matches.
+	restored := readBackSources(t, restoredPath)
+	if len(restored) != len(original) {
+		t.Fatalf("restored count: want %d, got %d", len(original), len(restored))
+	}
+	pathToOrig := map[string][]byte{}
+	for _, r := range original {
+		pathToOrig[r.path] = r.content
+	}
+	for _, r := range restored {
+		want, ok := pathToOrig[r.path]
+		if !ok {
+			t.Errorf("unexpected restored path %s", r.path)
+			continue
+		}
+		if !bytes.Equal(r.content, want) {
+			t.Errorf("content drift for %s: want %q, got %q", r.path, want, r.content)
+		}
+	}
+}
+
+func TestCacheRemotePush_RequiresScope(t *testing.T) {
+	srv, _, _ := startMock(t)
+	ctx := context.Background()
+	tmp := t.TempDir()
+	pushDir := filepath.Join(tmp, "out")
+	// Empty pushDir — function would fail on missing lockfile, but
+	// the scope-required check is up to the CLI layer not the func.
+	// This test exercises that an empty baseURL is rejected by the
+	// constructor — the more interesting validation.
+	err := runCacheRemotePush(ctx, new(bytes.Buffer), pushDir, "", "mache", "", "", "")
+	if err == nil {
+		t.Fatalf("empty baseURL should fail; got nil")
+	}
+	_ = srv // keep the linter happy
+}
+
+func TestCacheRemotePush_IdempotentSecondRun(t *testing.T) {
+	srv, reg, _ := startMock(t)
+	ctx := context.Background()
+
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "input.db")
+	pushDir := filepath.Join(tmp, "push-out")
+	makeSyntheticDB(t, dbPath, []synthSource{
+		{id: "x.go", path: "x.go", language: "go", content: []byte("package x\n")},
+	})
+	if err := runCachePush(new(bytes.Buffer), dbPath, pushDir); err != nil {
+		t.Fatalf("local push: %v", err)
+	}
+
+	if err := runCacheRemotePush(ctx, new(bytes.Buffer), pushDir, srv.URL, "mache", "idem-scope", "latest", ""); err != nil {
+		t.Fatalf("first remote push: %v", err)
+	}
+
+	reg.mu.Lock()
+	blobCount := len(reg.blobs)
+	manifestCount := len(reg.manifests)
+	reg.mu.Unlock()
+
+	// Second remote push: HEAD on every blob says "already present",
+	// no re-upload. Manifest count may grow by 1 (digest already
+	// present is overwritten with same body; tag stays at "latest").
+	if err := runCacheRemotePush(ctx, new(bytes.Buffer), pushDir, srv.URL, "mache", "idem-scope", "latest", ""); err != nil {
+		t.Fatalf("second remote push: %v", err)
+	}
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if len(reg.blobs) != blobCount {
+		t.Errorf("blob count drift on idempotent push: %d → %d", blobCount, len(reg.blobs))
+	}
+	// Manifest count should also be stable (digest + tag both unchanged).
+	if len(reg.manifests) != manifestCount {
+		t.Errorf("manifest count drift on idempotent push: %d → %d", manifestCount, len(reg.manifests))
+	}
+}
