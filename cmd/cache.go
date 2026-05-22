@@ -73,7 +73,21 @@ var (
 	cacheVerifyScope  string
 	cacheVerifyRef    string
 	cacheVerifyToken  string
+
+	// --token-file flags (precedence over --token and MACHE_CACHE_TOKEN env).
+	cachePushTokenFile   string
+	cachePullTokenFile   string
+	cacheVerifyTokenFile string
 )
+
+var cacheInspectCmd = &cobra.Command{
+	Use:   "inspect <cache-dir-or-lockfile>",
+	Short: "Print a summary of a local cache dir / lockfile (no remote network)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runCacheInspect(cmd.OutOrStdout(), args[0])
+	},
+}
 
 var cacheCmd = &cobra.Command{
 	Use:   "cache",
@@ -107,9 +121,9 @@ var cachePushCmd = &cobra.Command{
 			if cachePushScope == "" {
 				return fmt.Errorf("--scope is required when --remote is set")
 			}
-			token := cachePushToken
-			if token == "" {
-				token = os.Getenv("MACHE_CACHE_TOKEN")
+			token, err := resolveCacheToken(cachePushToken, cachePushTokenFile)
+			if err != nil {
+				return err
 			}
 			return runCacheRemotePush(cmd.Context(), cmd.OutOrStdout(),
 				cachePushOutDir, cachePushRemote, MacheProducerName, cachePushScope,
@@ -132,9 +146,9 @@ var cachePullCmd = &cobra.Command{
 			if cachePullScope == "" {
 				return fmt.Errorf("--scope is required when --remote is set")
 			}
-			token := cachePullToken
-			if token == "" {
-				token = os.Getenv("MACHE_CACHE_TOKEN")
+			token, err := resolveCacheToken(cachePullToken, cachePullTokenFile)
+			if err != nil {
+				return err
 			}
 			if err := runCacheRemotePull(cmd.Context(), cmd.OutOrStdout(),
 				cachePullRemote, MacheProducerName, cachePullScope, cachePullRef,
@@ -162,9 +176,9 @@ var cacheVerifyCmd = &cobra.Command{
 		if cacheVerifyScope == "" {
 			return fmt.Errorf("--scope is required")
 		}
-		token := cacheVerifyToken
-		if token == "" {
-			token = os.Getenv("MACHE_CACHE_TOKEN")
+		token, err := resolveCacheToken(cacheVerifyToken, cacheVerifyTokenFile)
+		if err != nil {
+			return err
 		}
 		return runCacheVerify(cmd.Context(), cmd.OutOrStdout(),
 			cacheVerifyRemote, MacheProducerName, cacheVerifyScope,
@@ -199,6 +213,14 @@ func init() {
 	cacheCmd.AddCommand(cachePushCmd)
 	cacheCmd.AddCommand(cachePullCmd)
 	cacheCmd.AddCommand(cacheVerifyCmd)
+	cacheCmd.AddCommand(cacheInspectCmd)
+
+	cachePushCmd.Flags().StringVar(&cachePushTokenFile, "token-file", "",
+		"read bearer token from a file (first line trimmed); overrides --token + MACHE_CACHE_TOKEN")
+	cachePullCmd.Flags().StringVar(&cachePullTokenFile, "token-file", "",
+		"read bearer token from a file (first line trimmed); overrides --token + MACHE_CACHE_TOKEN")
+	cacheVerifyCmd.Flags().StringVar(&cacheVerifyTokenFile, "token-file", "",
+		"read bearer token from a file (first line trimmed); overrides --token + MACHE_CACHE_TOKEN")
 	rootCmd.AddCommand(cacheCmd)
 }
 
@@ -1040,5 +1062,177 @@ func runCacheVerify(ctx context.Context, out io.Writer, baseURL, producer, scope
 	}
 
 	_, _ = fmt.Fprintf(out, "verify: bundle %s is intact + verifiable\n", manifestDigest)
+	return nil
+}
+
+// resolveCacheToken picks a bearer token from (in order):
+//  1. --token-file <path>          (highest precedence; first line trimmed)
+//  2. --token <value>              (CLI arg; visible in ps + history)
+//  3. MACHE_CACHE_TOKEN env var    (default for ad-hoc shell)
+//
+// Empty result means "no token" (unauthenticated registry).
+//
+// --token-file is the recommended path for CI: tokens live in a
+// secret-mounted file, never in process args or env where child
+// processes can read them.
+func resolveCacheToken(cliToken, tokenFile string) (string, error) {
+	if tokenFile != "" {
+		body, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return "", fmt.Errorf("read --token-file %s: %w", tokenFile, err)
+		}
+		// First line, whitespace-trimmed. Allows trailing newlines from
+		// `echo "$TOKEN" > /run/secrets/cache-token`.
+		line := string(body)
+		if idx := indexNewline(line); idx >= 0 {
+			line = line[:idx]
+		}
+		token := trimSpace(line)
+		if token == "" {
+			return "", fmt.Errorf("--token-file %s is empty (after trim)", tokenFile)
+		}
+		return token, nil
+	}
+	if cliToken != "" {
+		return cliToken, nil
+	}
+	return os.Getenv("MACHE_CACHE_TOKEN"), nil
+}
+
+func indexNewline(s string) int {
+	for i, c := range s {
+		if c == '\n' || c == '\r' {
+			return i
+		}
+	}
+	return -1
+}
+
+func trimSpace(s string) string {
+	start, end := 0, len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
+}
+
+// runCacheInspect reads either:
+//   - a cache directory containing mache.lock.bin (+ optionally objects/)
+//   - a bare .bin lockfile path
+//
+// and prints a human-readable summary. Useful for debugging without
+// running a full pull, and as a quick "what shipped in this bundle?"
+// gate in a PR review.
+func runCacheInspect(out io.Writer, target string) error {
+	info, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", target, err)
+	}
+
+	var lockfilePath string
+	var chunksDir string
+	if info.IsDir() {
+		lockfilePath = filepath.Join(target, "mache.lock.bin")
+		chunksDir = filepath.Join(target, "objects")
+		if _, err := os.Stat(lockfilePath); err != nil {
+			return fmt.Errorf("no mache.lock.bin in %s: %w", target, err)
+		}
+	} else {
+		lockfilePath = target
+	}
+
+	lfBytes, err := os.ReadFile(lockfilePath)
+	if err != nil {
+		return fmt.Errorf("read lockfile: %w", err)
+	}
+	msg, err := capnp.Unmarshal(lfBytes)
+	if err != nil {
+		return fmt.Errorf("unmarshal lockfile: %w", err)
+	}
+	lf, err := cache.ReadRootCacheLockfile(msg)
+	if err != nil {
+		return fmt.Errorf("read lockfile root: %w", err)
+	}
+
+	meta, _ := lf.Meta()
+	producer, _ := meta.Producer()
+	producerVersion, _ := meta.ProducerVersion()
+	schemaVersion, _ := meta.SchemaVersion()
+	generatedAtMs := meta.GeneratedAtMs()
+
+	srcs, _ := lf.Sources()
+	edges, _ := lf.Topology()
+	root, _ := lf.Root()
+	rootBytes, _ := root.Bytes()
+
+	procs, _ := meta.InputProcessors()
+
+	// Tally chunks on disk (if we have a chunks dir).
+	var totalChunkBytes int64
+	var chunksPresent, chunksMissing int
+	var astShape, rawShape int
+	if chunksDir != "" {
+		for i := 0; i < srcs.Len(); i++ {
+			ch, _ := srcs.At(i).ChunkHash()
+			cb, _ := ch.Bytes()
+			if len(cb) != 32 {
+				continue
+			}
+			path := filepath.Join(chunksDir,
+				hex.EncodeToString(cb[:1]),
+				hex.EncodeToString(cb[1:]))
+			body, err := os.ReadFile(path)
+			if err != nil {
+				chunksMissing++
+				continue
+			}
+			chunksPresent++
+			totalChunkBytes += int64(len(body))
+			if chunkBodyIsASTShape(body) {
+				astShape++
+			} else {
+				rawShape++
+			}
+		}
+	}
+
+	_, _ = fmt.Fprintf(out, "lockfile:        %s (%d bytes canonical)\n", lockfilePath, len(lfBytes))
+	_, _ = fmt.Fprintf(out, "producer:        %s\n", producer)
+	if producerVersion != "" {
+		_, _ = fmt.Fprintf(out, "producer_version: %s\n", producerVersion)
+	}
+	_, _ = fmt.Fprintf(out, "schema_version:  %s\n", schemaVersion)
+	if generatedAtMs > 0 {
+		_, _ = fmt.Fprintf(out, "generated_at_ms: %d\n", generatedAtMs)
+	}
+	_, _ = fmt.Fprintf(out, "sources:         %d\n", srcs.Len())
+	_, _ = fmt.Fprintf(out, "topology edges:  %d\n", edges.Len())
+	_, _ = fmt.Fprintf(out, "root:            %s\n", hex.EncodeToString(rootBytes))
+
+	if procs.Len() > 0 {
+		_, _ = fmt.Fprintf(out, "input_processors (%d):\n", procs.Len())
+		for i := 0; i < procs.Len(); i++ {
+			p := procs.At(i)
+			kind, _ := p.Kind()
+			version, _ := p.Version()
+			_, _ = fmt.Fprintf(out, "  - %s @ %s\n", kind, version)
+		}
+	}
+
+	if chunksDir != "" {
+		_, _ = fmt.Fprintf(out, "\nchunks on disk:\n")
+		_, _ = fmt.Fprintf(out, "  present:  %d\n", chunksPresent)
+		_, _ = fmt.Fprintf(out, "  missing:  %d\n", chunksMissing)
+		_, _ = fmt.Fprintf(out, "  total:    %d bytes\n", totalChunkBytes)
+		_, _ = fmt.Fprintf(out, "  ast-shape (Phase 4): %d\n", astShape)
+		_, _ = fmt.Fprintf(out, "  raw-shape (Phase 1): %d\n", rawShape)
+		if chunksMissing > 0 {
+			return fmt.Errorf("inspect: %d/%d chunks missing from %s",
+				chunksMissing, srcs.Len(), chunksDir)
+		}
+	}
 	return nil
 }
