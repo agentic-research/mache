@@ -11,7 +11,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -127,5 +129,138 @@ func TestCacheRemotePush_IdempotentSecondRun(t *testing.T) {
 	// Manifest count should also be stable (digest + tag both unchanged).
 	if len(reg.manifests) != manifestCount {
 		t.Errorf("manifest count drift on idempotent push: %d → %d", manifestCount, len(reg.manifests))
+	}
+}
+
+// ── verify subcommand (Phase 3.5 — CI-friendly existence check) ────
+
+func TestCacheVerify_IntactBundle(t *testing.T) {
+	srv, _, _ := startMock(t)
+	ctx := context.Background()
+
+	// Push a bundle first.
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "input.db")
+	pushDir := filepath.Join(tmp, "out")
+	makeSyntheticDB(t, dbPath, []synthSource{
+		{id: "x.go", path: "x.go", language: "go", content: []byte("package x\n")},
+		{id: "y.go", path: "y.go", language: "go", content: []byte("package y\n")},
+	})
+	if err := runCachePush(new(bytes.Buffer), dbPath, pushDir); err != nil {
+		t.Fatalf("local push: %v", err)
+	}
+	if err := runCacheRemotePush(ctx, new(bytes.Buffer), pushDir, srv.URL, "mache", "verify-scope", "latest", ""); err != nil {
+		t.Fatalf("remote push: %v", err)
+	}
+
+	// Verify should pass cleanly.
+	var buf bytes.Buffer
+	if err := runCacheVerify(ctx, &buf, srv.URL, "mache", "verify-scope", "latest", ""); err != nil {
+		t.Fatalf("verify: %v\n%s", err, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "bundle") || !strings.Contains(out, "intact") {
+		t.Errorf("verify output missing success markers: %s", out)
+	}
+}
+
+func TestCacheVerify_MissingManifest(t *testing.T) {
+	srv, _, _ := startMock(t)
+	ctx := context.Background()
+
+	err := runCacheVerify(ctx, new(bytes.Buffer), srv.URL, "mache", "no-such-scope", "latest", "")
+	if err == nil {
+		t.Fatalf("verify should fail when manifest missing; got nil")
+	}
+	if !strings.Contains(err.Error(), "verify manifest") {
+		t.Errorf("expected 'verify manifest' in error; got %v", err)
+	}
+}
+
+func TestCacheVerify_MissingLayer(t *testing.T) {
+	srv, reg, _ := startMock(t)
+	ctx := context.Background()
+
+	// Push a real bundle, then delete one layer from the mock.
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "input.db")
+	pushDir := filepath.Join(tmp, "out")
+	makeSyntheticDB(t, dbPath, []synthSource{
+		{id: "a.go", path: "a.go", language: "go", content: []byte("package a\n")},
+		{id: "b.go", path: "b.go", language: "go", content: []byte("package b\n")},
+	})
+	if err := runCachePush(new(bytes.Buffer), dbPath, pushDir); err != nil {
+		t.Fatalf("local push: %v", err)
+	}
+	if err := runCacheRemotePush(ctx, new(bytes.Buffer), pushDir, srv.URL, "mache", "del-scope", "latest", ""); err != nil {
+		t.Fatalf("remote push: %v", err)
+	}
+
+	// Delete one layer blob from the registry (simulates GC eating a chunk).
+	reg.mu.Lock()
+	var deletedAny bool
+	for digest := range reg.blobs {
+		// Skip the config (the latest pushed manifest's config). Heuristic:
+		// keep the largest blob (most likely the lockfile); delete a smaller one.
+		// Simpler: just delete the first blob we find that's not in the manifest's
+		// config slot. We don't know which one that is here — instead, look at the
+		// "latest" manifest and pick layers[0].
+		_ = digest
+	}
+	if mfBytes, ok := reg.manifests["latest"]; ok {
+		var m OCIManifest
+		if err := json.Unmarshal(mfBytes, &m); err == nil && len(m.Layers) > 0 {
+			delete(reg.blobs, m.Layers[0].Digest)
+			deletedAny = true
+		}
+	}
+	reg.mu.Unlock()
+	if !deletedAny {
+		t.Fatalf("test invariant: could not delete a layer to simulate GC")
+	}
+
+	// Verify should report the missing layer.
+	var buf bytes.Buffer
+	err := runCacheVerify(ctx, &buf, srv.URL, "mache", "del-scope", "latest", "")
+	if err == nil {
+		t.Fatalf("verify should fail when a layer is missing; got nil\n%s", buf.String())
+	}
+	if !strings.Contains(err.Error(), "layers missing") {
+		t.Errorf("expected 'layers missing' in error; got %v", err)
+	}
+	if !strings.Contains(buf.String(), "MISSING layer:") {
+		t.Errorf("expected 'MISSING layer:' in output; got %s", buf.String())
+	}
+}
+
+func TestCacheVerify_DetectsCorruptedSampleLayer(t *testing.T) {
+	srv, reg, _ := startMock(t)
+	ctx := context.Background()
+
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "input.db")
+	pushDir := filepath.Join(tmp, "out")
+	makeSyntheticDB(t, dbPath, []synthSource{
+		{id: "a.go", path: "a.go", language: "go", content: []byte("package a\n")},
+	})
+	if err := runCachePush(new(bytes.Buffer), dbPath, pushDir); err != nil {
+		t.Fatalf("local push: %v", err)
+	}
+	if err := runCacheRemotePush(ctx, new(bytes.Buffer), pushDir, srv.URL, "mache", "corrupt-scope", "latest", ""); err != nil {
+		t.Fatalf("remote push: %v", err)
+	}
+
+	// Flip the corruptGET flag so GET returns wrong bytes.
+	reg.mu.Lock()
+	reg.corruptGET = true
+	reg.mu.Unlock()
+
+	err := runCacheVerify(ctx, new(bytes.Buffer), srv.URL, "mache", "corrupt-scope", "latest", "")
+	if err == nil {
+		t.Fatalf("verify should fail under corruptGET; got nil")
+	}
+	// The verify-config GET is hit first, so the error is from that path.
+	if !strings.Contains(err.Error(), "verify config") && !strings.Contains(err.Error(), "integrity") {
+		t.Errorf("expected verify config / integrity error; got %v", err)
 	}
 }

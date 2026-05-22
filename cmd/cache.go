@@ -56,19 +56,23 @@ const MacheProducerVersion = "0.x.y"
 // Flag values (subcommand-scoped) — package-level so test code can
 // override + restore cleanly.
 var (
-	cachePushDBPath string
-	cachePushOutDir string
-	cachePushRemote string
-	cachePushScope  string
-	cachePushTag    string
-	cachePushToken  string
-	cachePullInPath string
-	cachePullOutDB  string
-	cachePullVerify bool
-	cachePullRemote string
-	cachePullScope  string
-	cachePullRef    string
-	cachePullToken  string
+	cachePushDBPath   string
+	cachePushOutDir   string
+	cachePushRemote   string
+	cachePushScope    string
+	cachePushTag      string
+	cachePushToken    string
+	cachePullInPath   string
+	cachePullOutDB    string
+	cachePullVerify   bool
+	cachePullRemote   string
+	cachePullScope    string
+	cachePullRef      string
+	cachePullToken    string
+	cacheVerifyRemote string
+	cacheVerifyScope  string
+	cacheVerifyRef    string
+	cacheVerifyToken  string
 )
 
 var cacheCmd = &cobra.Command{
@@ -142,6 +146,32 @@ var cachePullCmd = &cobra.Command{
 	},
 }
 
+// cacheVerifyCmd is the CI-friendly probe: given a registry + ref,
+// asserts the manifest exists, all chunks exist, and the verify-on-
+// read path passes. Does NOT restore the db. Designed for a CI step
+// that gates "do we have a cache for this commit?" before a long
+// pull job runs.
+var cacheVerifyCmd = &cobra.Command{
+	Use:   "verify",
+	Short: "Verify a remote build-cache bundle exists + chunks pass verify-on-read",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if cacheVerifyRemote == "" {
+			return fmt.Errorf("--remote is required")
+		}
+		if cacheVerifyScope == "" {
+			return fmt.Errorf("--scope is required")
+		}
+		token := cacheVerifyToken
+		if token == "" {
+			token = os.Getenv("MACHE_CACHE_TOKEN")
+		}
+		return runCacheVerify(cmd.Context(), cmd.OutOrStdout(),
+			cacheVerifyRemote, MacheProducerName, cacheVerifyScope,
+			cacheVerifyRef, token)
+	},
+}
+
 func init() {
 	cachePushCmd.Flags().StringVar(&cachePushDBPath, "db", "", "path to mache-built .db")
 	_ = cachePushCmd.MarkFlagRequired("db")
@@ -159,8 +189,16 @@ func init() {
 	cachePullCmd.Flags().StringVar(&cachePullRef, "ref", "latest", "Phase 3: digest or tag")
 	cachePullCmd.Flags().StringVar(&cachePullToken, "token", "", "Phase 3: bearer token (or MACHE_CACHE_TOKEN env)")
 
+	cacheVerifyCmd.Flags().StringVar(&cacheVerifyRemote, "remote", "", "OCI registry base URL")
+	_ = cacheVerifyCmd.MarkFlagRequired("remote")
+	cacheVerifyCmd.Flags().StringVar(&cacheVerifyScope, "scope", "", "scope segment (e.g. <repo>/<commit>)")
+	_ = cacheVerifyCmd.MarkFlagRequired("scope")
+	cacheVerifyCmd.Flags().StringVar(&cacheVerifyRef, "ref", "latest", "digest or tag to verify")
+	cacheVerifyCmd.Flags().StringVar(&cacheVerifyToken, "token", "", "bearer token (or MACHE_CACHE_TOKEN env)")
+
 	cacheCmd.AddCommand(cachePushCmd)
 	cacheCmd.AddCommand(cachePullCmd)
+	cacheCmd.AddCommand(cacheVerifyCmd)
 	rootCmd.AddCommand(cacheCmd)
 }
 
@@ -943,5 +981,64 @@ func runCacheRemotePull(ctx context.Context, out io.Writer, baseURL, producer, s
 
 	_, _ = fmt.Fprintf(out, "pulled manifest %s (%d chunks) from %s/v2/%s/%s\n",
 		manifestDigest, len(manifest.Layers), baseURL, producer, scope)
+	return nil
+}
+
+// runCacheVerify is the CI-friendly probe. Fetches the manifest,
+// HEAD-checks every blob (config + layers), and GET-verifies a
+// sample chunk to confirm verify-on-read still passes. Does NOT
+// download every chunk in full — a fast "does the cache exist for
+// this commit?" gate before an expensive pull.
+//
+// Returns nil if intact. Returns OCIManifestMissingError or
+// OCIBlobMissingError if anything is absent so callers can react.
+func runCacheVerify(ctx context.Context, out io.Writer, baseURL, producer, scope, ref, token string) error {
+	client, err := NewOCIClient(baseURL, producer, scope)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		client.SetToken(token)
+	}
+
+	manifest, manifestDigest, err := client.GetManifest(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("verify manifest: %w", err)
+	}
+	_, _ = fmt.Fprintf(out, "manifest: %s (%d layers)\n", manifestDigest, len(manifest.Layers))
+
+	configBytes, err := client.GetBlob(ctx, manifest.Config.Digest)
+	if err != nil {
+		return fmt.Errorf("verify config: %w", err)
+	}
+	_, _ = fmt.Fprintf(out, "config: %s (%d bytes, verify-on-read OK)\n",
+		manifest.Config.Digest, len(configBytes))
+
+	missing := 0
+	for _, layer := range manifest.Layers {
+		ok, err := client.HeadBlob(ctx, layer.Digest)
+		if err != nil {
+			return fmt.Errorf("HEAD layer %s: %w", layer.Digest, err)
+		}
+		if !ok {
+			_, _ = fmt.Fprintf(out, "MISSING layer: %s\n", layer.Digest)
+			missing++
+		}
+	}
+	if missing > 0 {
+		return fmt.Errorf("verify failed: %d/%d layers missing", missing, len(manifest.Layers))
+	}
+
+	if len(manifest.Layers) > 0 {
+		sample := manifest.Layers[0]
+		body, err := client.GetBlob(ctx, sample.Digest)
+		if err != nil {
+			return fmt.Errorf("sample GET %s: %w", sample.Digest, err)
+		}
+		_, _ = fmt.Fprintf(out, "sample layer: %s (%d bytes, verify-on-read OK)\n",
+			sample.Digest, len(body))
+	}
+
+	_, _ = fmt.Fprintf(out, "verify: bundle %s is intact + verifiable\n", manifestDigest)
 	return nil
 }
