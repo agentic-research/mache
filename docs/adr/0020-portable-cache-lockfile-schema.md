@@ -17,7 +17,9 @@ Initial draft of this ADR landed the schema design itself in mache. User correct
 
 ## Decision
 
-**Mache adopts LLO's `CacheLockfile` capnp schema (LLO ADR-0021 / `rs/ll-core/public-schema/capnp/cache.capnp`) for the portable-cache feature. On-disk: TOML at `mache.lock.toml` (committed). Wire: OCI artifacts pushed to a `build-cache/v1` provider (Phase 3 of mache-aeb262).**
+**Mache adopts LLO's `CacheLockfile` capnp schema (LLO ADR-0021 / `rs/ll-core/schema-capnp/schemas/cache.capnp`) for the portable-cache feature. On-disk: TOML at `mache.lock.toml` AND canonical capnp at `mache.lock.bin` (both committed). Wire: OCI artifacts pushed to a `build-cache/v1` provider (Phase 3 of mache-aeb262).**
+
+> **Path correction note** (2026-05-22): an earlier draft referenced `rs/ll-core/public-schema/capnp/cache.capnp`. The schema actually lives at `rs/ll-core/schema-capnp/schemas/cache.capnp` alongside `common.capnp` / `ast.capnp` / etc. — schema-capnp is the structural substrate; public-schema is for protocol (daemon RPC). The corrected location above is what `cmd/cache.go` actually imports.
 
 This ADR records the **mache-specific** decisions on top of LLO's substrate schema. The schema design itself, the rendering paths (capnp↔TOML↔OCI), and the consequences for substrate consumers all live in LLO ADR-0021.
 
