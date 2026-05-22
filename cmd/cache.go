@@ -213,19 +213,44 @@ func runCachePush(out io.Writer, dbPath, outDir string) error {
 		return fmt.Errorf("db %s has no _source rows; refusing to emit an empty lockfile", dbPath)
 	}
 
+	// Phase 4 detection (mache-aeb262): if the db has an `_ast` table,
+	// emit rich chunks that carry source content + AST node rows so
+	// `mache pull` reconstructs both _source AND _ast. Otherwise fall
+	// back to Phase 1 (chunk = raw content).
+	useAST, err := dbHasASTTable(db)
+	if err != nil {
+		return err
+	}
+
 	entries := make([]chunkEntry, 0, len(sources))
 	for _, s := range sources {
-		// Phase 1 chunk = raw source content. Phase 4 will switch chunks
-		// to be the per-source capnp-encoded parse output (the actual
-		// "derived" cache content); for v1 the content-equals-chunk path
-		// proves the lockfile + transport machinery end-to-end.
+		// input_hash is always BLAKE3 of the raw input bytes — that's
+		// the address of the source itself, independent of how the
+		// chunk-derived form is encoded.
 		ih := blake3.Sum256(s.content)
-		ch := ih // v1: chunk == input bytes
+
+		var chunkBytes []byte
+		if useAST {
+			nodes, err := loadASTNodesForSource(db, s.id)
+			if err != nil {
+				return err
+			}
+			body, err := encodeASTChunk(s, nodes)
+			if err != nil {
+				return err
+			}
+			chunkBytes = body
+		} else {
+			// Phase 1 fallback: chunk = raw content.
+			chunkBytes = s.content
+		}
+		ch := blake3.Sum256(chunkBytes)
+
 		entries = append(entries, chunkEntry{
 			src:        s,
 			inputHash:  ih,
 			chunkHash:  ch,
-			chunkBytes: s.content,
+			chunkBytes: chunkBytes,
 			fileName:   hex.EncodeToString(ch[:]),
 		})
 	}
@@ -587,9 +612,10 @@ func runCachePull(out io.Writer, inDir, outDBPath string, verify bool) error {
 	}
 
 	// Open a fresh SQLite db; create _source schema matching mache's
-	// ingest pipeline. v1 restores only _source (content + path);
-	// derived tables (_ast, _lsp*) are out of scope for Phase 2 — a
-	// subsequent re-ingest reproduces them from the restored content.
+	// ingest pipeline. Phase 4 chunks ALSO restore _ast rows; the
+	// table is created lazily on first AST-shape chunk encountered
+	// so Phase 1 (raw-content) restores don't get an empty _ast
+	// table they didn't ask for.
 	if err := os.MkdirAll(filepath.Dir(outDBPath), 0o755); err != nil {
 		return err
 	}
@@ -613,12 +639,16 @@ func runCachePull(out io.Writer, inDir, outDBPath string, verify bool) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT INTO _source(id, path, language, content) VALUES(?,?,?,?)")
+	sourceStmt, err := tx.Prepare("INSERT INTO _source(id, path, language, content) VALUES(?,?,?,?)")
 	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	defer func() { _ = stmt.Close() }()
+	defer func() { _ = sourceStmt.Close() }()
+
+	// Lazily created if any chunk is AST-shape.
+	var astStmt *sql.Stmt
+	astTableCreated := false
 
 	chunksDir := filepath.Join(inDir, "objects")
 	for i := 0; i < srcs.Len(); i++ {
@@ -657,14 +687,60 @@ func runCachePull(out io.Writer, inDir, outDBPath string, verify bool) error {
 					chunkPath, chunkHashBytes, actual)
 			}
 		}
+
+		// Phase 4 (mache-aeb262): if chunk is JSON-shape, decode and
+		// restore _source + _ast together. Otherwise fall through to
+		// Phase 1 (chunk = raw content → _source only).
+		if chunkBodyIsASTShape(body) {
+			entry, err := decodeASTChunk(body)
+			if err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("source[%d]: %w", i, err)
+			}
+			// Lazy-create _ast on first AST-shape chunk.
+			if !astTableCreated {
+				if _, err := tx.Exec(`CREATE TABLE _ast (
+					node_id TEXT PRIMARY KEY,
+					source_id TEXT NOT NULL,
+					node_kind TEXT NOT NULL,
+					start_byte INTEGER NOT NULL,
+					end_byte INTEGER NOT NULL,
+					start_row INTEGER,
+					start_col INTEGER,
+					end_row INTEGER,
+					end_col INTEGER
+				)`); err != nil {
+					_ = tx.Rollback()
+					return fmt.Errorf("create _ast: %w", err)
+				}
+				astStmt, err = tx.Prepare(`INSERT INTO _ast
+					(node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+					VALUES (?,?,?,?,?,?,?,?,?)`)
+				if err != nil {
+					_ = tx.Rollback()
+					return fmt.Errorf("prepare _ast insert: %w", err)
+				}
+				defer func() {
+					if astStmt != nil {
+						_ = astStmt.Close()
+					}
+				}()
+				astTableCreated = true
+			}
+			if err := restoreFromASTChunk(entry, sourceStmt, astStmt); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("source[%d]: %w", i, err)
+			}
+			continue
+		}
+
+		// Phase 1 path: chunk = raw content.
 		// Synthesize an `id` since the lockfile only commits `path`.
-		// mache's ingest uses path as id when no other identifier is
-		// supplied; mirror that here.
 		id := path
 		if id == "" {
 			id = fmt.Sprintf("chunk_%d", i)
 		}
-		if _, err := stmt.Exec(id, path, language, body); err != nil {
+		if _, err := sourceStmt.Exec(id, path, language, body); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("insert source[%d]: %w", i, err)
 		}
