@@ -25,6 +25,34 @@ Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_f
 
 For the full tool inventory and capability matrix (which tools need which tables), see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
+## Portable cache (mache-aeb262)
+
+`mache cache` push/pulls the projected `.db` as a content-addressed bundle so CI / new dev machines / agents don't re-parse a million lines on every cold start.
+
+```bash
+# Emit a portable bundle from a built db.
+mache cache push --db ./mache.db ./cache-out
+
+# Restore a fresh db from a bundle.
+mache cache pull --out-db ./restored.db ./cache-out
+
+# Push to a remote OCI registry (build-cache/v1 transport).
+mache cache push --db ./mache.db ./cache-out \
+    --remote https://cache.example.com --scope myrepo/abc123 --tag latest
+
+# Pull from a remote registry into a local cache dir, then restore.
+mache cache pull --out-db ./restored.db ./cache-in \
+    --remote https://cache.example.com --scope myrepo/abc123 --ref latest
+
+# CI-friendly: assert a bundle is intact + verifiable, without restoring.
+mache cache verify \
+    --remote https://cache.example.com --scope myrepo/abc123 --ref latest
+```
+
+When the source db has an `_ast` table, chunks carry the AST node rows too — pull restores both `_source` AND `_ast`, so the restored db is queryable without re-parsing. When `_ast` is absent, chunks are raw source bytes (Phase 1 fallback).
+
+See [`docs/cache/phase-4-chunk-shape.md`](docs/cache/phase-4-chunk-shape.md) for the wire format and [`cloister-spec/build-cache/v1/`](https://github.com/agentic-research/cloister/tree/main/cloister-spec/build-cache/v1) for the OCI transport spec.
+
 ## How it works
 
 ```mermaid

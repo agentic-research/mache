@@ -342,3 +342,25 @@ tasks:
       - task: test
       - task: validate
       - task: docs:lint
+
+  # ────────────────────────────────────────────────────────────────
+  # Portable cache (bead mache-aeb262)
+  # ────────────────────────────────────────────────────────────────
+
+  cache:test:
+    desc: Run the cache push/pull/OCI test suite
+    cmds:
+      - go test -v -count=1 ./cmd/ -run "TestCache|TestOCI"
+
+  cache:roundtrip:
+    desc: End-to-end self-test — build a tiny db, push, pull, diff
+    summary: |
+      Builds a synthetic mache db, runs `mache cache push` to emit a
+      lockfile + chunks, runs `mache cache pull` to restore into a
+      fresh db, diffs the two _source tables. Exits 1 on any drift.
+
+      Usage: task cache:roundtrip
+      Used by .github/workflows/cache-roundtrip.yml as a CI smoke test
+      that the cache feature still works end-to-end.
+    cmds:
+      - go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./cmd/

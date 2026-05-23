@@ -1,0 +1,55 @@
+# Portable-cache round-trip CI (bead mache-aeb262 Phase 5).
+#
+# Runs the cache feature's end-to-end self-test on every push + PR.
+# All inputs are commit-controlled — no untrusted PR/issue body/title
+# is interpolated into run: blocks.
+
+name: cache-roundtrip
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/cache*.go'
+      - 'cmd/cache_oci*.go'
+      - 'cmd/cache_remote*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/cache-roundtrip.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cmd/cache*.go'
+      - 'cmd/cache_oci*.go'
+      - 'cmd/cache_remote*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/cache-roundtrip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  roundtrip:
+    name: cache round-trip
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          lfs: true
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 22 cache tests: 7 local push/pull + 12 OCI client + 3 e2e remote.
+      - name: Run cache tests
+        run: go test -v -count=1 ./cmd/ -run "TestCache|TestOCI"
+
+      # The "feature still works end-to-end" smoke test.
+      - name: Round-trip self-test
+        run: go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./cmd/
