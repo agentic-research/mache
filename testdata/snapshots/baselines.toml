@@ -15,7 +15,7 @@ schema = "mache-baselines/v1"
 [["find_smells:dead_code"]]
 fixture = "mache-self"
 wall_ms = 2664              # FIXED at ADR-0019 PR 3 acceptance; explicit bump only
-tolerance_pct = 25         # gate fails if measurement > wall_ms * 1.25 (= 155ms ceiling)
+tolerance_pct = 25         # gate fails if measurement > wall_ms * 1.25 (= 3330ms ceiling)
 anchored_at = "7a77813"    # mache HEAD at baseline-set time (PR 1 of ADR-0019)
 anchored_at_date = "2026-06-17"
 last_intentional_bump = "2026-06-17: First CI run after LFS budget unblock revealed the gate had only ever run on developer laptops (Apple Silicon, ~124ms). GH-hosted Ubuntu runners measure ~2664ms; 25% band can't bridge the runner class. Anchoring to slowest known runner; macOS hosted should fit inside +25%."
