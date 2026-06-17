@@ -202,6 +202,8 @@ Trade-off: developers will occasionally see false-positive gate fires due to CI 
 
 Future extension (deferred): a rolling-median observability dashboard that tracks the last N measurements as a non-gating signal. Helps spot the "no single PR broke the gate but the trend is bad" case. Not in v1.
 
+**`-race` carve-out (amendment 2026-06-17, mache-605bf0).** Perf gates skip under `go test -race`. The race detector instruments every SQLite vtab read, every channel op, every map access; on SQLite-heavy workloads the wall-clock overhead is 10-20×. Discovered in PR #421: `TestFindSmells_DeadCode_PerfGate_MacheOnMache` measured ~3.5s without `-race` (well inside the 25% band) and 82.98s with `-race` on macOS-integration. No fixed-anchor baseline is meaningful in race mode — you're measuring the synchronization wrapper, not the algorithm. Implementation: `cmd/race_norace.go` + `cmd/race_race.go` expose a `raceEnabled bool` constant via build tags (canonical Go idiom); gates do `if raceEnabled { t.Skip("perf gate disabled under -race; race detector skews SQLite timings beyond any meaningful baseline") }`. This is the inheritable rule for every future perf gate.
+
 ### D.7 — Snapshot update workflow + curation filter
 
 **What gets snapshotted (per language, derived from `lang.Registry`):**
