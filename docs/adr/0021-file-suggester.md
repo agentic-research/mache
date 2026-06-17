@@ -39,10 +39,10 @@ Combining them at picker time without blowing the budget is the actual engineeri
 
 ### D.1 — Architecture: daemon-backed, precomputed rank
 
-The hot path is a single SQLite query against a precomputed `rank` table:
+The hot path is a single SQLite query against a precomputed `mache_suggest_rank` table (lives in the existing per-repo `.refs.db` sidecar — see D.4):
 
 ```sql
-SELECT path FROM rank
+SELECT path FROM mache_suggest_rank
 WHERE name GLOB ? OR path GLOB ?
 ORDER BY score DESC, recency DESC
 LIMIT 15;
@@ -53,16 +53,17 @@ The `score` column is updated **offline** by a background refresh tick. The hot 
 ```
                     ┌───────────────────────────────┐
                     │      mache serve --http       │
-                    │  (already running per ADR-13) │
+                    │  (already running per ADR-0010)│
                     └──────────────┬────────────────┘
    GET /suggest?q=… (~30ms)        │
         ┌───────────────────┐      │
         │ claude code @     │──────┘
-        │ → mache suggest   │     ┌─────────────────────────────┐
-        │   (tiny client)   │     │ rank.db (per-repo)          │
-        └───────────────────┘     │   path, name, score, mtime  │
-                                  │   refreshed on FS/chat events│
-                                  └─────────────────────────────┘
+        │ → mache suggest   │     ┌─────────────────────────────────┐
+        │   (tiny client)   │     │ .refs.db (per-repo)             │
+        └───────────────────┘     │   mache_suggest_rank:            │
+                                  │     path, name, score, recency  │
+                                  │   refreshed on FS/chat events   │
+                                  └─────────────────────────────────┘
                                          ▲
               ┌──────────────────────────┼──────────────────────────┐
               │             refresh tick (debounced, async)         │
@@ -74,7 +75,7 @@ The `score` column is updated **offline** by a background refresh tick. The hot 
               └──────────────────────────────────────────────────────┘
 ```
 
-The suggester binary is ~50 lines: read stdin, POST `localhost:7532/suggest?q=…`, print stdout. Sub-30ms when the daemon is warm.
+The suggester binary is ~50 lines: read stdin, GET `localhost:7532/suggest?q=…`, print stdout. Sub-30ms when the daemon is warm. GET (not POST) because the query is short, the call is read-only, and a query string keeps the client trivial.
 
 ### D.2 — Signal fusion (offline, per refresh tick)
 
@@ -96,8 +97,8 @@ Weights start as priors. v3 graduates to adaptive weights (track which suggestio
 
 The picker MUST never harder-fail than the default ranker. Failure modes in priority order:
 
-1. **mache daemon down** → suggester binary falls back to local `rank.db` via direct SQLite read (mmap'd). No-network path.
-1. **`rank.db` missing or stale** → fall back to fd-style filename glob. Beats default ranker on big repos because we still skip `node_modules` / `target` / `.git` per `lang.Registry` exclusions.
+1. **mache daemon down** → suggester binary falls back to direct SQLite read of `.refs.db`'s `mache_suggest_rank` table (mmap'd). No-network path.
+1. **`mache_suggest_rank` missing or stale** → fall back to fd-style filename glob. Beats default ranker on big repos because we still skip `node_modules` / `target` / `.git` per `lang.Registry` exclusions.
 1. **lectio empty** (projection not yet populated for this repo) → drop recency + conversation signals from `score`. Other signals carry it.
 1. **rosary disconnected** → drop bead-scope boost. Other signals carry it.
 1. **Query is empty** → return top-N by `score` alone (the user hit `@` and is browsing).
