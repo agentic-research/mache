@@ -1,1 +1,0 @@
-internal/treesitter/*/parser.c filter=lfs diff=lfs merge=lfs -text
