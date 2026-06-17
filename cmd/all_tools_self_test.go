@@ -410,6 +410,14 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("perf gate; rerun without -short")
 	}
+	if raceEnabled {
+		// Race detector instruments every SQLite vtab read; measured
+		// wall-clock is 10-20× the un-instrumented value (PR #409
+		// integration matrix: 83s under -race vs ~3.5s without).
+		// Any fixed-anchor baseline is meaningless under -race —
+		// you're measuring synchronization overhead, not the rule.
+		t.Skip("perf gate disabled under -race; race detector skews SQLite timings beyond any meaningful baseline")
+	}
 
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 	testfixtures.RequireTier(t, "medium")
