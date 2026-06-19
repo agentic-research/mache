@@ -1,0 +1,61 @@
+# LFS tripwire — fails any PR that re-introduces Git LFS tracking.
+#
+# Background (bead mache-608c5a): 2026-06-17 the org's LFS budget silently
+# exhausted. The only LFS-tracked file was `internal/treesitter/elixir/parser.c`
+# (~13MB). Every `actions/checkout` started failing with "This repository
+# exceeded its LFS budget"; main was red from the last merged commit until
+# PR #419 migrated the file out of LFS. The failure was non-obvious — it
+# died inside checkout step, not in our code.
+#
+# This guard catches the regression: any PR adding a `filter=lfs` line to
+# `.gitattributes` fails fast with a loud, actionable error. The full
+# budget-monitoring story (calling the GitHub LFS billing API on a weekly
+# schedule) needs org-billing perms we don't have here; this lightweight
+# guard covers the actual failure mode we've observed.
+
+name: lfs-guard
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .gitattributes
+
+permissions:
+  contents: read
+
+jobs:
+  no-new-lfs:
+    name: assert .gitattributes adds no filter=lfs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # Explicit `lfs: false` so this job can run even when the org
+          # quota is exhausted — the failure mode we're trying to detect.
+          lfs: false
+
+      - name: Check for filter=lfs in .gitattributes
+        run: |
+          set -euo pipefail
+          if [ ! -f .gitattributes ]; then
+            echo "No .gitattributes file — nothing to check."
+            exit 0
+          fi
+          if grep -qE 'filter=lfs' .gitattributes; then
+            echo "::error file=.gitattributes::Git LFS pattern detected in .gitattributes."
+            echo ""
+            echo "This repository deliberately does NOT use Git LFS — see bead"
+            echo "mache-608c5a + PR #419 for the prior incident (LFS budget"
+            echo "exhaustion silently bricked CI for ~4 weeks)."
+            echo ""
+            echo "If you genuinely need LFS, get explicit signoff (and a budget"
+            echo "monitor in place) BEFORE merging. Otherwise, commit the file"
+            echo "as a regular blob — GitHub allows up to 100MB per file."
+            echo ""
+            echo "Offending lines in .gitattributes:"
+            grep -nE 'filter=lfs' .gitattributes || true
+            exit 1
+          fi
+          echo "OK — no filter=lfs lines in .gitattributes."
