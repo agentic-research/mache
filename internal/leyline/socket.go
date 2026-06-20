@@ -650,18 +650,23 @@ func (c *SocketClient) Prioritize(files []string) error {
 }
 
 // leylineBinaryVersion pins the ley-line-open release that mache downloads
-// when no leyline binary is found on PATH or in ~/.mache/bin/. This MUST
-// mirror the schema-client pin in go.mod:
+// when no leyline binary is found on PATH or in ~/.mache/bin/. This tracks the
+// latest published ley-line-open release that ships platform binaries (only
+// tagged releases have downloadable leyline-<os>-<arch> assets — the go.mod
+// schema-client pin may sit on a newer pseudo-version that has no release).
 //
-//	github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.4.1
+// As of this pin, go.mod tracks leyline-schema v0.4.6-pre and the latest
+// release with binary assets is v0.4.5. The Go schema-client and the daemon
+// binary travel together — mache built against schema vX.Y.Z must run a daemon
+// at the same major/minor or it will mis-decode the wire format. v0.4.5 also
+// satisfies mache's v0.4.3+ requirement for daemon-pushed sheaf cascades and,
+// unlike v0.4.1, ships a leyline-darwin-amd64 asset (Intel macs 404'd before).
 //
-// BUMP THIS WHEN UPDATING leyline-schema in go.mod. The Go schema-client and
-// the daemon binary travel together — mache built against schema vX.Y.Z must
-// run a daemon at the same major/minor or it will mis-decode the wire format.
+// BUMP THIS WHEN UPDATING leyline-schema in go.mod to a newer published tag.
 //
 // Future hardening (mache-8kif): on socket connect, query the daemon's
 // `version` op and refuse to proceed if it disagrees with this constant.
-const leylineBinaryVersion = "v0.4.1"
+const leylineBinaryVersion = "v0.4.5"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private
