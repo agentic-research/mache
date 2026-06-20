@@ -45,13 +45,10 @@ const CacheVersion = "0.1.0"
 const MacheProducerName = "mache"
 
 // MacheProducerVersion is the mache version recorded in the lockfile.
-// Bumped on mache release; pulled from build/version info at compile
-// time when wired in. For now: a static placeholder; the actual
-// value isn't load-bearing for the v1 verify path.
-//
-// TODO: thread the real version (cmd.Version) once the cobra root
-// binding is in scope here.
-const MacheProducerVersion = "0.x.y"
+// Sourced from the embedded internal/buildinfo via the package-level
+// Version (same value as the binary's `mache version`), so the lockfile
+// producer field, server.json, and the binary never disagree.
+var MacheProducerVersion = Version
 
 // Flag values (subcommand-scoped) — package-level so test code can
 // override + restore cleanly.

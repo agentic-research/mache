@@ -70,22 +70,28 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Format check (gofumpt)
-        # Pin gofumpt so CI fails reproducibly. @latest meant a
-        # local pre-commit running an older version could disagree
-        # with CI silently — pin matches the one installed locally
-        # via the Taskfile / pre-commit hooks. Bump together when
-        # we move forward.
+      - name: Install Task
+        # Install via Go's module proxy (GitHub's release CDN has 502'd).
+        # Keep this pinned version in lock-step with the build/test job.
         env:
           GOTOOLCHAIN: auto
-        run: |
-          set -euo pipefail
-          go install mvdan.cc/gofumpt@v0.9.2
-          gofumpt -d -extra . | tee /dev/stderr | (! grep .)
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
+      - name: Vet
+        run: task vet
+
+      - name: Format check (gofumpt)
+        # task fmt:check is the single source for the pinned gofumpt
+        # invocation (it diffs instead of writing, so it's CI-safe and
+        # can't disagree with the local `task fmt`).
+        env:
+          GOTOOLCHAIN: auto
+        run: task fmt:check
+
+      # Escape hatch: the golangci-lint *action* (not `task lint`) is kept
+      # deliberately — it provides inline PR annotations + result caching
+      # that a bare `task lint` run can't. Both invoke golangci-lint against
+      # the same .golangci config, so the linter behavior is identical.
       - uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9
         with:
           version: latest

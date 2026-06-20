@@ -46,10 +46,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install Task
+        # Install via Go's module proxy (GitHub's release CDN has 502'd).
+        # Keep this pinned version in lock-step with ci.yml.
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
+
       # 22 cache tests: 7 local push/pull + 12 OCI client + 3 e2e remote.
+      # Run the Taskfile recipe so CI and `task cache:test` stay 1:1.
       - name: Run cache tests
-        run: go test -v -count=1 ./cmd/ -run "TestCache|TestOCI"
+        run: task cache:test
 
       # The "feature still works end-to-end" smoke test.
       - name: Round-trip self-test
-        run: go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./cmd/
+        run: task cache:roundtrip

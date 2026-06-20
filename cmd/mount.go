@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/buildinfo"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
@@ -22,7 +23,11 @@ import (
 )
 
 var (
-	Version = "dev"
+	// Version is the mache release version, sourced from the embedded
+	// internal/buildinfo (the single source of truth — see that package).
+	// Commit and Date are still injected at build time via -ldflags since
+	// they are genuinely build-specific; Version is not.
+	Version = buildinfo.Version
 	Commit  = "none"
 	Date    = "unknown"
 )
