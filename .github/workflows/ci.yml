@@ -89,3 +89,26 @@ jobs:
       - uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9
         with:
           version: latest
+
+  server-json-drift:
+    # Self-maintaining MCP Registry surface — fails the build if the
+    # committed server.json drifts from what tools/server-json-gen
+    # would emit today. Mirrors the discipline ley-line-open ships
+    # under bead `ley-line-open-f10abb`. See bead `mache-802d2b`.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          lfs: true
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install Task
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
+
+      - name: server.json drift check
+        run: task gen:server-json:check

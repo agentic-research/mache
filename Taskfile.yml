@@ -333,8 +333,35 @@ tasks:
       - go run ./tools/fixtures-rebaseline --key {{.key}} --fixture {{.fixture}} --wall-ms {{.wall_ms}} --justification "{{.justification}}"
     silent: false
 
+  gen:server-json:
+    desc: |
+      Regenerate server.json from internal/mcpregistry (ToolRegistry +
+      CloisterGroups). Self-maintaining MCP Registry surface
+      (bead mache-802d2b). Run before committing any change to the MCP
+      tool surface or cloister-group partitioning.
+    cmds:
+      - go run ./tools/server-json-gen/ > server.json
+      - echo "regenerated server.json"
+
+  gen:server-json:check:
+    desc: |
+      Verify the committed server.json matches what server-json-gen
+      would emit today. CI invariant — fails the build on drift. Same
+      discipline ley-line-open uses for its server.json.
+    cmds:
+      - |
+        EXPECTED="$(go run ./tools/server-json-gen/)"
+        ACTUAL="$(cat server.json)"
+        if [ "$EXPECTED" != "$ACTUAL" ]; then
+          echo "server.json is stale — run 'task gen:server-json' and commit"
+          echo "--- diff ---"
+          diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
+          exit 1
+        fi
+        echo "server.json is up to date"
+
   check:
-    desc: Run all checks (fmt, vet, lint, test, validate, docs:lint)
+    desc: Run all checks (fmt, vet, lint, test, validate, docs:lint, server.json drift)
     cmds:
       - task: fmt
       - task: vet
@@ -342,6 +369,7 @@ tasks:
       - task: test
       - task: validate
       - task: docs:lint
+      - task: gen:server-json:check
 
   # ────────────────────────────────────────────────────────────────
   # Portable cache (bead mache-aeb262)

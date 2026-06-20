@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.agentic-research/mache",
   "title": "mache",
-  "description": "Project structured data (JSON, SQLite, source code) as a filesystem driven by declarative JSON schemas. Exposes MCP tools for code intelligence: find_callers, find_definition, get_impact, get_architecture, find_smells, search, and 11 others.",
+  "description": "Project source trees, SQLite, and JSON as a structured filesystem with MCP code-intelligence tools.",
   "version": "0.8.0",
   "repository": {
     "url": "https://github.com/agentic-research/mache",
@@ -25,12 +25,21 @@
     "io.github.agentic-research.mache/transports": {
       "stdio": {
         "command": "mache",
-        "args": ["serve", "--stdio", "<source-path>"],
+        "args": [
+          "serve",
+          "--stdio",
+          "<source-path>"
+        ],
         "note": "Per-client subprocess. Use for editor integrations that own the daemon lifecycle. See .mcp.json at repo root for a Claude Code template."
       },
       "streamable-http": {
         "command": "mache",
-        "args": ["serve", "--http", ":7532", "<source-path>"],
+        "args": [
+          "serve",
+          "--http",
+          ":7532",
+          "<source-path>"
+        ],
         "note": "Recommended for shared use — one daemon across all clients avoids per-client FD leaks."
       }
     },
@@ -38,18 +47,19 @@
       "standalone": [
         "list_directory",
         "read_file",
-        "search",
         "find_callers",
         "find_callees",
+        "search",
+        "get_communities",
         "find_definition",
         "get_overview",
+        "get_sheaf_status",
         "get_impact",
         "get_architecture",
         "get_diagram",
-        "get_communities",
-        "find_smells",
+        "write_file",
         "resolve_ref",
-        "write_file"
+        "find_smells"
       ],
       "requires-ley-line-open": [
         "semantic_search",
@@ -68,6 +78,64 @@
       "db-files": ".db files produced by `mache build` or `leyline parse` open instantly via SQLiteGraph (pure-Go path)",
       "json": "JSON corpora ingest via JSONPath walker (see examples/nvd-schema.json)",
       "sqlite": "arbitrary SQLite via templated schemas (see examples/mcp-schema.json)"
+    },
+    "art.cloister/v1": {
+      "groups": [
+        {
+          "name": "navigation",
+          "advertisedPrefix": "mache_",
+          "upstreamNames": [
+            "list_directory",
+            "read_file",
+            "get_overview",
+            "get_architecture",
+            "get_diagram",
+            "get_communities"
+          ]
+        },
+        {
+          "name": "callgraph",
+          "advertisedPrefix": "mache_",
+          "upstreamNames": [
+            "find_callers",
+            "find_callees",
+            "find_definition",
+            "get_impact",
+            "search",
+            "resolve_ref"
+          ]
+        },
+        {
+          "name": "lsp",
+          "advertisedPrefix": "mache_",
+          "upstreamNames": [
+            "get_type_info",
+            "get_diagnostics",
+            "semantic_search"
+          ]
+        },
+        {
+          "name": "lifecycle",
+          "advertisedPrefix": "mache_",
+          "upstreamNames": [
+            "get_sheaf_status"
+          ]
+        },
+        {
+          "name": "linter",
+          "advertisedPrefix": "mache_",
+          "upstreamNames": [
+            "find_smells"
+          ]
+        },
+        {
+          "name": "mutate",
+          "advertisedPrefix": "mache_",
+          "upstreamNames": [
+            "write_file"
+          ]
+        }
+      ]
     }
   }
 }
