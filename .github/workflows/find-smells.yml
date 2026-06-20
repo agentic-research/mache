@@ -44,8 +44,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Task
+        # Install via Go's module proxy (GitHub's release CDN has 502'd).
+        # Keep this pinned version in lock-step with ci.yml.
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
+
       - name: Build mache
-        run: go build -o /tmp/mache ./
+        # Use the Taskfile recipe (codesign step is darwin-gated, skipped on
+        # ubuntu); override the output path to the throwaway binary.
+        run: task build BINARY_NAME=/tmp/mache
 
       - name: Index repo
         # The standalone (CGO) path produces nodes / node_defs /

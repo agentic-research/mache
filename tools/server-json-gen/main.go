@@ -31,6 +31,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/agentic-research/mache/internal/buildinfo"
 	"github.com/agentic-research/mache/internal/mcpregistry"
 )
 
@@ -55,12 +56,12 @@ const serverTitle = "mache"
 // README.md / GETTING-STARTED.md.
 const serverDescription = "Project source trees, SQLite, and JSON as a structured filesystem with MCP code-intelligence tools."
 
-// serverVersion is the mache release version stamped into server.json.
-// Kept in lock-step with melange.yaml's `version:` field and the OCI
-// image tag — those three move together at release time, by hand for
-// now. A future change can thread the constant out of a single source
-// (e.g. a `VERSION` file the build also reads).
-const serverVersion = "0.8.0"
+// serverVersion is the mache release version stamped into server.json,
+// sourced from the embedded internal/buildinfo single source of truth.
+// melange.yaml's `version:` field and the OCI image tag still move by
+// hand at release time, but `task version:check` asserts they agree with
+// buildinfo so this stamp can no longer silently drift from the binary.
+var serverVersion = buildinfo.Version
 
 // repositoryURL + repositorySource describe where the source lives.
 const (
