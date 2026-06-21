@@ -25,8 +25,11 @@ permissions: {}
 env:
   TAG: ${{ inputs.tag || github.event.client_payload.tag || github.ref_name }}
   # The ley-line-open release carrying the FFI staticlib + header that mache
-  # links against. Keep aligned with internal/leyline.leylineBinaryVersion.
-  LEYLINE_OPEN_VERSION: v0.4.6
+  # links against at build time. This is the build-time linker source and may
+  # legitimately differ from the runtime daemon pin (leylineBinaryVersion):
+  # v0.4.7 is the first LLO release to ship the libleyline_fs-*.a staticlibs
+  # for all three platforms (v0.4.6's darwin-arm64 lib failed to build).
+  LEYLINE_OPEN_VERSION: v0.4.7
 
 jobs:
   build:
