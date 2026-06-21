@@ -1,11 +1,11 @@
 name: Release
 
 # Build mache binaries linked against the ley-line FFI artifacts and
-# publish a GitHub release. The FFI library still comes from the private
-# `agentic-research/ley-line` repo (downloaded via the octo-sts OIDC
-# exchange below); the public `ley-line-open` repo carries the schemas
-# + daemon, not the linker artifacts. When ley-line-open ships the FFI
-# binaries, this workflow should switch its scope and download.
+# publish a GitHub release. The FFI library + header now come from the
+# PUBLIC `agentic-research/ley-line-open` repo (release LEYLINE_OPEN_VERSION),
+# fetched with the default GITHUB_TOKEN — no octo-sts / private-repo access.
+# LLO publishes `libleyline_fs-<os>-<arch>.a` + `leyline_fs.h` as of
+# ley-line-open-c33b9a. Bump LEYLINE_OPEN_VERSION when adopting a newer LLO.
 # Golden path: use `task` commands, never raw go/cargo.
 
 on:
@@ -24,6 +24,9 @@ permissions: {}
 
 env:
   TAG: ${{ inputs.tag || github.event.client_payload.tag || github.ref_name }}
+  # The ley-line-open release carrying the FFI staticlib + header that mache
+  # links against. Keep aligned with internal/leyline.leylineBinaryVersion.
+  LEYLINE_OPEN_VERSION: v0.4.6
 
 jobs:
   build:
@@ -46,8 +49,8 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     permissions:
+      # id-token (octo-sts) no longer needed — LLO artifacts are public.
       contents: read
-      id-token: write
 
     steps:
       - name: Checkout mache
@@ -69,20 +72,17 @@ jobs:
           GOTOOLCHAIN: auto
         run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
-      - name: Exchange OIDC → GitHub token (octo-sts)
-        id: octo-sts
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
-        with:
-          scope: agentic-research/ley-line
-          identity: mache-release
-
-      - name: Download ley-line release artifacts
+      - name: Download ley-line-open FFI artifacts (public)
         env:
-          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LEYLINE_LIB: ${{ matrix.leyline-lib }}
         run: |
+          # Public LLO release — plain GITHUB_TOKEN, no octo-sts. LEYLINE_LIB
+          # comes from the matrix via env (never interpolated into the shell).
           mkdir -p leyline-artifacts
-          gh release download --repo agentic-research/ley-line \
-            -p '${{ matrix.leyline-lib }}' \
+          gh release download "$LEYLINE_OPEN_VERSION" \
+            --repo agentic-research/ley-line-open \
+            -p "$LEYLINE_LIB" \
             -p 'leyline_fs.h' \
             -D leyline-artifacts/
 
@@ -103,9 +103,10 @@ jobs:
         run: |
           GIT_COMMIT=$(git rev-parse --short HEAD)
           BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          # Version is NOT injected — it is single-sourced from the embedded
+          # internal/buildinfo (version.txt). Only Commit/Date come via ldflags.
           go build \
             -ldflags "-s -w \
-              -X github.com/agentic-research/mache/cmd.Version=${TAG} \
               -X github.com/agentic-research/mache/cmd.Commit=${GIT_COMMIT} \
               -X github.com/agentic-research/mache/cmd.Date=${BUILD_DATE}" \
             -o ${{ matrix.artifact }} .
@@ -125,8 +126,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      # contents: write to publish the release; no OIDC consumer here.
       contents: write
-      id-token: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
