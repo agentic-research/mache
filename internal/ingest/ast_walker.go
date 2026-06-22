@@ -97,6 +97,24 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		captureRanges := make(map[string][2]int)
 		missingRequired := false
 
+		// Resolve the @scope node. It may be an inner node, e.g.
+		// `(type_declaration (type_spec ...) @scope)` binds @scope to type_spec,
+		// not the outer match — so the scope text excludes the `type ` keyword.
+		// Use it for the scope source text and the match byte range (write-back
+		// origin), mirroring SitterWalker.
+		scopeForText := scopeNode
+		if pattern.scopeKind != "" && pattern.scopeKind != pattern.outerKind {
+			if sn, err := w.findChildByKindAST(ar.DB, scopeNode.id, pattern.scopeKind, ar.SourceID, pattern.scopeAncestry); err == nil && sn != nil {
+				scopeForText = *sn
+			}
+		}
+		// Inject the scope node's source text as "scope", mirroring SitterWalker —
+		// so leaf templates like {{.scope}} (the most common source-leaf template)
+		// render the construct's source instead of "<no value>".
+		if source != nil && scopeForText.startByte < scopeForText.endByte && scopeForText.endByte <= len(source) {
+			values["scope"] = string(source[scopeForText.startByte:scopeForText.endByte])
+		}
+
 		// Resolve captures from children (searches descendants, not just direct children).
 		// parseSelector strips @scope captures before they reach pattern.captures,
 		// so the explicit "scope" guard below is defensive — it can't be exercised
@@ -173,12 +191,15 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			values:        values,
 			captureRanges: captureRanges,
 			ctx: ASTRoot{
-				DB:           ar.DB,
-				SourceID:     ar.SourceID,
-				ParentPrefix: scopeNode.id,
+				DB:       ar.DB,
+				SourceID: ar.SourceID,
+				// Scope nested schema-child queries to the resolved @scope node
+				// (which may be an inner node like type_spec), mirroring
+				// SitterWalker.Context() returning the captured scope node.
+				ParentPrefix: scopeForText.id,
 			},
-			startByte: scopeNode.startByte,
-			endByte:   scopeNode.endByte,
+			startByte: scopeForText.startByte,
+			endByte:   scopeForText.endByte,
 		}
 		matches = append(matches, m)
 	}

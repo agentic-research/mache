@@ -64,3 +64,16 @@ repos:
         language: system
         files: (go\.mod|go\.sum)$
         pass_filenames: false
+
+      # Pre-PUSH gate (not commit): run the SAME non-mutating CI-equivalent
+      # gate CI runs, so a push that CI would reject fails locally first.
+      # `task ci` is the single source of truth (Taskfile) — this hook never
+      # re-implements the commands, it just invokes the task. Install once with:
+      #   pre-commit install --hook-type pre-push
+      - id: task-ci
+        name: task ci (1:1 with CI — full gate before push)
+        entry: task ci
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -15,6 +15,14 @@ type selectorPattern struct {
 	predicates    []selectorPredicate      // #eq? filters
 	matchPreds    []selectorMatchPredicate // #match? regex filters
 	notMatchPreds []selectorMatchPredicate // #not-match? negated regex filters
+
+	// scopeKind/scopeAncestry locate the @scope node when it is NOT the outer
+	// match node — e.g. `(type_declaration (type_spec ...) @scope)` binds @scope
+	// to the inner type_spec. Empty scopeKind (or scopeKind == outerKind) means
+	// @scope is the outer node. Used to resolve the construct's source text and
+	// write-back byte range to the correct node (parity with SitterWalker).
+	scopeKind     string
+	scopeAncestry []string
 }
 
 type selectorCapture struct {
@@ -271,7 +279,14 @@ func parseSExprNode(tokens []string, pos int, ancestorKinds []string, pattern *s
 	if pos < len(tokens) && strings.HasPrefix(tokens[pos], "@") {
 		capName := tokens[pos][1:]
 		pos++
-		if capName != "scope" && capName != "" {
+		if capName == "scope" {
+			// Record where @scope sits. nodeKind is the @scope node; ancestorKinds[0]
+			// is always the outerKind, so the intermediate path from outer→scope is
+			// ancestryFromKinds(ancestorKinds). For @scope on the outer node both are
+			// the outer (scopeKind == outerKind), handled as a no-op in Query.
+			pattern.scopeKind = nodeKind
+			pattern.scopeAncestry = ancestryFromKinds(ancestorKinds)
+		} else if capName != "" {
 			pattern.captures = append(pattern.captures, selectorCapture{
 				kind:     nodeKind,
 				name:     capName,
