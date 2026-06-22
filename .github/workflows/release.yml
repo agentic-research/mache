@@ -1,12 +1,15 @@
 name: Release
 
-# Build mache binaries linked against the ley-line FFI artifacts and
-# publish a GitHub release. The FFI library still comes from the private
-# `agentic-research/ley-line` repo (downloaded via the octo-sts OIDC
-# exchange below); the public `ley-line-open` repo carries the schemas
-# + daemon, not the linker artifacts. When ley-line-open ships the FFI
-# binaries, this workflow should switch its scope and download.
-# Golden path: use `task` commands, never raw go/cargo.
+# Build mache binaries and publish a GitHub release.
+#
+# mache links NO external C libraries. CGO is enabled solely for the
+# tree-sitter grammars, which carry their own #cgo directives over vendored
+# parser.c. The leyline integration in released binaries is the pure-Go UDS
+# daemon client (internal/leyline); the cgo FFI client
+# (internal/leyline/client.go) is `//go:build leyline` and is NOT compiled
+# here, so the released binary pulls zero symbols from libleyline_fs and
+# needs no fuse headers/framework. Net effect: no privileged access (sudo),
+# no fuse_t runtime dependency — the binary runs on any host.
 
 on:
   push:
@@ -33,21 +36,14 @@ jobs:
         include:
           - os: macos-latest
             artifact: mache-darwin-arm64
-            leyline-lib: libleyline_fs-darwin-arm64.a
-            fuse_setup: brew install --cask fuse-t
           - os: ubuntu-latest
             artifact: mache-linux-amd64
-            leyline-lib: libleyline_fs-linux-amd64.a
-            fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev
           - os: ubuntu-24.04-arm
             artifact: mache-linux-arm64
-            leyline-lib: libleyline_fs-linux-arm64.a
-            fuse_setup: sudo apt-get update && sudo apt-get install -y libfuse-dev
 
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      id-token: write
 
     steps:
       - name: Checkout mache
@@ -60,52 +56,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install FUSE
-        run: ${{ matrix.fuse_setup }}
-
-      - name: Install Task
-        # See ci.yml — go install bypasses GitHub's release CDN.
-        env:
-          GOTOOLCHAIN: auto
-        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
-
-      - name: Exchange OIDC → GitHub token (octo-sts)
-        id: octo-sts
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
-        with:
-          scope: agentic-research/ley-line
-          identity: mache-release
-
-      - name: Download ley-line release artifacts
-        env:
-          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
-        run: |
-          mkdir -p leyline-artifacts
-          gh release download --repo agentic-research/ley-line \
-            -p '${{ matrix.leyline-lib }}' \
-            -p 'leyline_fs.h' \
-            -D leyline-artifacts/
-
-      - name: Build mache (linked against ley-line)
+      - name: Build mache
+        # CGO on for the tree-sitter grammars only (they carry their own #cgo
+        # directives). No external libs, no FUSE, no sudo. Version is
+        # single-sourced from embedded internal/buildinfo; only Commit/Date
+        # come via ldflags.
         env:
           CGO_ENABLED: '1'
-          CGO_CFLAGS: >-
-            ${{ runner.os == 'macOS'
-              && '-I/Library/Frameworks/fuse_t.framework/Versions/Current/Headers'
-              || '' }}
-            -I${{ github.workspace }}/leyline-artifacts
-          CGO_LDFLAGS: >-
-            ${{ runner.os == 'macOS'
-              && '-F/Library/Frameworks -framework fuse_t -Wl,-rpath,/Library/Frameworks'
-              || '' }}
-            ${{ github.workspace }}/leyline-artifacts/${{ matrix.leyline-lib }}
-            -lm -ldl -lpthread
         run: |
           GIT_COMMIT=$(git rev-parse --short HEAD)
           BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           go build \
             -ldflags "-s -w \
-              -X github.com/agentic-research/mache/cmd.Version=${TAG} \
               -X github.com/agentic-research/mache/cmd.Commit=${GIT_COMMIT} \
               -X github.com/agentic-research/mache/cmd.Date=${BUILD_DATE}" \
             -o ${{ matrix.artifact }} .
@@ -125,8 +87,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      # contents: write to publish the release; no OIDC consumer here.
       contents: write
-      id-token: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
