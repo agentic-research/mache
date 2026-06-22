@@ -407,7 +407,7 @@ tasks:
         echo "server.json is up to date"
 
   check:
-    desc: "Dev gate (mutating: fmt -w, lint --fix). For the non-mutating 1:1-with-CI gate use `task ci`."
+    desc: "Dev gate (mutating: `fmt` rewrites files with -w). For the non-mutating 1:1-with-CI gate use `task ci`."
     cmds:
       - task: fmt
       - task: vet
@@ -419,12 +419,15 @@ tasks:
       - task: gen:server-json:check
 
   ci:
-    # SINGLE SOURCE OF TRUTH for the merge gate. CI workflows AND the pre-push
-    # git hook (.pre-commit-config.yaml, stages: [pre-push]) invoke THIS — never
-    # re-implement the underlying commands, so local == CI by construction
-    # (the principle from the version single-sourcing work). Non-mutating:
-    # fmt:check verifies instead of rewriting, so a dirty tree fails the gate
-    # instead of being silently fixed. `task test` already runs the parity gate
+    # The pre-push git hook (.pre-commit-config.yaml, stages: [pre-push]) invokes
+    # THIS, so a push CI would reject fails locally first. CI itself currently runs
+    # the same underlying task targets as separate jobs (task test/vet/fmt:check +
+    # the golangci-lint action) rather than this single `task ci` call — the dedup
+    # is at the TASK level: both sides invoke the same task definitions and never
+    # re-implement the commands inline (the principle from the version
+    # single-sourcing work). Folding CI onto one `task ci` invocation is a
+    # follow-up. Non-mutating: fmt:check verifies instead of rewriting, so a dirty
+    # tree fails the gate. `task test` already runs the parity gate
     # (TestASTQueryParity); `parity` is listed first for fast, named signal.
     desc: Non-mutating CI-equivalent gate — run this (or let the pre-push hook) to be 1:1 with CI before pushing
     cmds:

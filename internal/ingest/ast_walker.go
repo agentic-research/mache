@@ -191,9 +191,12 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			values:        values,
 			captureRanges: captureRanges,
 			ctx: ASTRoot{
-				DB:           ar.DB,
-				SourceID:     ar.SourceID,
-				ParentPrefix: scopeNode.id,
+				DB:       ar.DB,
+				SourceID: ar.SourceID,
+				// Scope nested schema-child queries to the resolved @scope node
+				// (which may be an inner node like type_spec), mirroring
+				// SitterWalker.Context() returning the captured scope node.
+				ParentPrefix: scopeForText.id,
 			},
 			startByte: scopeForText.startByte,
 			endByte:   scopeForText.endByte,

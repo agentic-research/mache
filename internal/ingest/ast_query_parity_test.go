@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,7 +38,8 @@ import (
 //
 // Node IDs are "/"-joined paths; each segment is "<kind>_<perKindIndex>" so
 // stripNumericSuffix recovers the tree-sitter kind and depth == segment count.
-// The root node is skipped: its named children become top-level (parent_id="").
+// The root node IS emitted (parent_id=""), so top-level selectors like
+// `(source_file ...) @scope` match it (see the emit(root, ...) call below).
 // source_id is filepath.Base(sourceFile) to match the engine's ASTRoot wiring
 // (engine_treesitter.go: SourceID = filepath.Base(result.job.path)).
 func sitterToASTDB(tb testing.TB, dbPath, sourceFile, langName string, src []byte) *sql.DB {
@@ -94,6 +96,11 @@ func sitterToASTDB(tb testing.TB, dbPath, sourceFile, langName string, src []byt
 		(node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	require.NoError(tb, err)
+	// Cleanup on early require failure: Rollback is a no-op after a successful
+	// Commit; closing the prepared statements releases their handles.
+	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = insNode.Close() }()
+	defer func() { _ = insAST.Close() }()
 
 	// Emit every named node, INCLUDING the root (e.g. source_file) — the schema's
 	// top-level selector matches it: `(source_file (package_clause ...)) @scope`.
@@ -146,6 +153,11 @@ func readAllContent(tb testing.TB, g graph.Graph, id string) []byte {
 			out = append(out, buf[:n]...)
 			off += int64(n)
 		}
+		// A gating test must not swallow read errors: a non-EOF error would
+		// otherwise masquerade as truncated/empty content and produce false parity.
+		if err != nil && err != io.EOF {
+			tb.Fatalf("ReadContent(%q) at offset %d: %v", id, off, err)
+		}
 		if err != nil || n == 0 || n < len(buf) {
 			break
 		}
@@ -163,7 +175,7 @@ func collectTree(tb testing.TB, g graph.Graph) []string {
 		queue = queue[1:]
 		children, err := g.ListChildren(id)
 		if err != nil {
-			continue
+			tb.Fatalf("ListChildren(%q): %v", id, err) // gating test: fail fast on traversal errors
 		}
 		for _, c := range children {
 			all = append(all, c)
@@ -175,8 +187,10 @@ func collectTree(tb testing.TB, g graph.Graph) []string {
 }
 
 // assertProjectionParity asserts the two projected graphs are byte-identical
-// from a consumer's vantage: same node set, same children per node, same
-// rendered content bytes, and same callers/callees per node.
+// from a consumer's vantage: same node set, same children per node, and same
+// rendered content bytes. (Cross-file callers/callees parity is intentionally
+// out of scope for this single-file gate — it can't witness inter-file edges;
+// tracked as gate expansion on mache-1166aa.)
 func assertProjectionParity(t *testing.T, want, got graph.Graph) {
 	t.Helper()
 
@@ -188,8 +202,10 @@ func assertProjectionParity(t *testing.T, want, got graph.Graph) {
 	}
 
 	for _, id := range wantNodes {
-		wc, _ := want.ListChildren(id)
-		gc, _ := got.ListChildren(id)
+		wc, werr := want.ListChildren(id)
+		gc, gerr := got.ListChildren(id)
+		require.NoErrorf(t, werr, "ListChildren(%q) on want", id)
+		require.NoErrorf(t, gerr, "ListChildren(%q) on got", id)
 		sort.Strings(wc)
 		sort.Strings(gc)
 		assert.Equalf(t, wc, gc, "children of %q must match", id)
