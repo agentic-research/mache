@@ -38,7 +38,7 @@ Topology { version, table?, nodes[], file_sets?, diagrams? }
 - Pattern: `(outer_kind field: (child_kind) @capture) @scope`. The `@scope` node becomes the projected construct; `@capture`s become template values.
 - **`@scope` can be an INNER node**, not the outer match: `(type_declaration (type_spec name: (type_identifier) @name) @scope)` binds scope to `type_spec`, so `{{.scope}}` is `Greeter struct{…}` *without* the `type ` keyword. (This was a real ASTWalker bug — mache-33b53c.) If your `source` leaf includes a leading keyword it shouldn't, your `@scope` is on the wrong node.
 - **Ancestry = id-path depth.** A nested capture's depth must match the real named-node nesting; that's how ASTWalker resolves it (`matchAncestry`). Write the selector to mirror the actual tree-sitter named structure.
-- Predicates: `#eq?`, `#match?`, `#not-match?` are supported by ASTWalker. `#not-eq?`, `#any-eq?`, `#is?` are NOT (fall back to CGO SitterWalker) — avoid them.
+- Predicates: `#eq?`, `#match?`, `#not-match?` are supported by ASTWalker. `#not-eq?`, `#any-eq?`, `#is?`, `#is-not?` are NOT (the parser rejects them; they fall back to CGO SitterWalker) — avoid them.
 
 ## JSONPath dialect (data) — the full toolbox
 

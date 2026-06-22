@@ -30,7 +30,7 @@ SmellRule{
 
 ### The query contract
 
-Return columns **in this order**: `source_id, node_id, start_byte, end_byte, start_row, start_col, metric`. The `%s` placeholder receives the scope clause (so a rule can be run against one file). `metric` drives sorting (desc) and `min_metric` filtering — use `0 AS metric` for non-metric rules.
+Return columns **in this order**: `source_id, node_id, start_byte, end_byte, start_row, start_col, metric`. The `%s` placeholder receives the scope clause (so a rule can be run against one file). The handler applies `min_metric` **filtering** on the `metric` column, but does **not** sort — rows come back in the query's order, so if you want top-N-by-metric you must add `ORDER BY metric DESC` to your SQL yourself (the metric-bearing built-ins do). Use `0 AS metric` for non-metric rules.
 
 ## ⚠ The capability split (`Requires`) — get this right
 
@@ -39,7 +39,7 @@ What tables exist depends on who built the `.db`:
 - **standalone mache** emits: `nodes`, `node_refs`, `node_defs`.
 - **ley-line-open–built `.db`** additionally has: `_ast`, `_source`, `_imports`, `_lsp*`.
 
-A rule that `Requires: ["_ast"]` silently can't run on a standalone build — 4 of the 9 built-ins (complexity, long_function, long_file, magic_int) are `_ast`-only for exactly this reason (ADR-0012). **Prefer `nodes`/`node_defs`/`node_refs` if you want the rule to run everywhere; only reach for `_ast`/`_source` when the smell genuinely needs syntax.** List every table the query reads in `Requires` so agents can tell upfront whether it'll run.
+A rule that `Requires: ["_ast"]` can't run on a standalone build — and several of the built-ins (complexity, long_function, long_file, magic_int) are `_ast`-only for exactly this reason (ADR-0012). It does **not** fail silently: `find_smells` runs a **pre-flight table check** (`cmd/find_smells_cli.go`) against `Requires` and returns a friendly error listing the missing tables (exit code 2) when the active backend lacks them. **Prefer `nodes`/`node_defs`/`node_refs` if you want the rule to run everywhere; only reach for `_ast`/`_source` when the smell genuinely needs syntax.** List **every** table the query reads in `Requires` — that's what pre-flight checks against (see the red flag below for what happens if you don't).
 
 ## Polarity — must-NOT-hold vs must-hold
 
@@ -63,7 +63,7 @@ Most rules are **must-not-hold**: a match IS the smell (duplicate def, magic int
 
 ## Red flags
 
-- Query reads `_ast` but `Requires` omits it → silently empty on standalone builds.
+- Query reads `_ast` but `Requires` omits it → pre-flight (which only checks declared tables) doesn't catch it, so on a standalone build it fails at query time with a raw `no such table: _ast` SQL error. List every table you read.
 - Wrong column count/order → findings render garbage or crash `smell_findings.go`.
 - Only a happy-path fixture → false confidence; add the negative/boundary case.
 - A long tail of trivial low-metric rows → set `DefaultMinMetric`.
