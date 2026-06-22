@@ -152,7 +152,12 @@ tasks:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
 
   parity:
-    desc: Run ASTWalker ↔ SitterWalker parity tests (requires leyline on PATH)
+    desc: ASTWalker↔SitterWalker byte-level projection parity — self-contained (no leyline), always runs
+    cmds:
+      - go test -run 'TestASTQueryParity' ./internal/ingest/
+
+  parity:conformance:
+    desc: "Axis-2: parity vs real leyline-produced _ast (requires leyline on PATH; skips otherwise)"
     cmds:
       - go test -tags leyline -v -run 'TestASTParity' ./internal/ingest/
 
@@ -402,9 +407,29 @@ tasks:
         echo "server.json is up to date"
 
   check:
-    desc: Run all checks (fmt, vet, lint, test, validate, docs:lint, server.json drift)
+    desc: "Dev gate (mutating: fmt -w, lint --fix). For the non-mutating 1:1-with-CI gate use `task ci`."
     cmds:
       - task: fmt
+      - task: vet
+      - task: lint
+      - task: parity
+      - task: test
+      - task: validate
+      - task: docs:lint
+      - task: gen:server-json:check
+
+  ci:
+    # SINGLE SOURCE OF TRUTH for the merge gate. CI workflows AND the pre-push
+    # git hook (.pre-commit-config.yaml, stages: [pre-push]) invoke THIS — never
+    # re-implement the underlying commands, so local == CI by construction
+    # (the principle from the version single-sourcing work). Non-mutating:
+    # fmt:check verifies instead of rewriting, so a dirty tree fails the gate
+    # instead of being silently fixed. `task test` already runs the parity gate
+    # (TestASTQueryParity); `parity` is listed first for fast, named signal.
+    desc: Non-mutating CI-equivalent gate — run this (or let the pre-push hook) to be 1:1 with CI before pushing
+    cmds:
+      - task: parity
+      - task: fmt:check
       - task: vet
       - task: lint
       - task: test
