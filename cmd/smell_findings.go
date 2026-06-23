@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -77,7 +78,89 @@ func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) (
 			Metric:    metric,
 		})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Release the connection before the enrichment query so we don't hold
+	// two open cursors on a single-connection backend.
+	_ = rows.Close()
+	enrichLocations(qg, out)
+	return out, nil
+}
+
+// enrichLocations backfills byte/line/column on findings whose rule left them
+// at the zero-location default. The node_defs-based rules (dead_code,
+// duplicate_definitions, god_file, fan_out_skew, untested_function) emit
+// `0 AS start_byte` in SQL because node_defs/nodes don't carry spans — but the
+// span already ships in _ast keyed by node_id (mache-ae54d8). One batched
+// lookup patches every still-zero finding. No-op when _ast is absent (the
+// standalone tree-sitter backend) — the query errors and findings keep their
+// file-level location, an honest degradation. _ast-native rules (long_function,
+// cyclomatic, …) already compute a span in SQL and are left untouched.
+func enrichLocations(qg refsQuerier, findings []smellFinding) {
+	needsLoc := func(f smellFinding) bool { return f.StartByte == 0 && f.Line <= 1 }
+	ids := make([]string, 0)
+	seen := make(map[string]bool)
+	for i := range findings {
+		f := findings[i]
+		if f.NodeID == "" || (!needsLoc(f) && f.SourceID != "") {
+			continue // already fully located, or no node_id to key on
+		}
+		if !seen[f.NodeID] {
+			seen[f.NodeID] = true
+			ids = append(ids, f.NodeID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	q := "SELECT node_id, source_id, start_byte, end_byte, start_row, start_col FROM _ast WHERE node_id IN (" + placeholders + ")"
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := qg.QueryRefs(q, args...)
+	if err != nil {
+		return // _ast absent (no such table) → leave file-level locations
+	}
+	defer func() { _ = rows.Close() }()
+
+	type loc struct {
+		sourceID           string
+		startByte, endByte int
+		startRow, startCol int
+	}
+	byNode := make(map[string]loc, len(ids))
+	for rows.Next() {
+		var (
+			id, srcID        string
+			sb, eb           int
+			startRow, startC sql.NullInt64
+		)
+		if err := rows.Scan(&id, &srcID, &sb, &eb, &startRow, &startC); err != nil {
+			return
+		}
+		byNode[id] = loc{srcID, sb, eb, int(startRow.Int64), int(startC.Int64)}
+	}
+	for i := range findings {
+		l, ok := byNode[findings[i].NodeID]
+		if !ok {
+			continue
+		}
+		// Backfill the span only when the rule left it zero (don't clobber
+		// SQL-computed spans from _ast-native rules).
+		if needsLoc(findings[i]) {
+			findings[i].StartByte = l.startByte
+			findings[i].EndByte = l.endByte
+			findings[i].Line = l.startRow + 1
+			findings[i].Column = l.startCol + 1
+		}
+		// Backfill the file when the rule's source_file fallback was empty.
+		if findings[i].SourceID == "" {
+			findings[i].SourceID = l.sourceID
+		}
+	}
 }
 
 // populateSnippets fills the Snippet field on each finding. We batch by

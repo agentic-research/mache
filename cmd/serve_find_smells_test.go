@@ -449,6 +449,87 @@ func TestFindSmells_DeadCode(t *testing.T) {
 		"source_id comes from the construct dir's source_file column")
 }
 
+// TestFindSmells_NodeDefsRuleCarriesASTLocation asserts that node_defs-based
+// rules (dead_code here) backfill a real byte/line/col span from _ast keyed by
+// node_id, instead of the historical hardcoded 0/0 → line:1. The location data
+// already ships in _ast; mache-ae54d8 enriches findings from it so L2/L3
+// drill-down is actionable. When _ast lacks the node (or is absent entirely —
+// standalone tree-sitter backend) the finding degrades to file-level (0/1).
+func TestFindSmells_NodeDefsRuleCarriesASTLocation(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- One dead function, with its real span recorded in _ast keyed by
+		-- node_id. dead_code skips nodes with no resolvable source_file (orphan
+		-- filter), so source_file is set; the span backfill is what's under test.
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/funcs/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/Orphan', 'pkg/funcs', 'Orphan', 1, 0, 'orphan.go', '');
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES ('pkg/funcs/Orphan', 'orphan.go', 'function_declaration', 900, 1000, 41, 2, 60, 1);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total)
+	f := resp.Findings[0]
+	assert.Equal(t, "pkg/funcs/Orphan", f.NodeID)
+	assert.Equal(t, "orphan.go", f.SourceID)
+	assert.Equal(t, 42, f.Line, "Line = _ast.start_row+1, not the hardcoded 1")
+	assert.Equal(t, 3, f.Column, "Column = _ast.start_col+1")
+	assert.Equal(t, 900, f.StartByte, "start_byte backfilled from _ast")
+	assert.Equal(t, 1000, f.EndByte, "end_byte backfilled from _ast")
+}
+
+// TestFindSmells_DuplicateDefinitionsBackfillsFileFromAST asserts the
+// source_id (file) backfill path: duplicate_definitions resolves source_id from
+// nodes.source_file, which is empty for a construct dir whose leaves carry the
+// Origin — so the rule emits source_id "". _ast carries source_id keyed by
+// node_id, so mache-ae54d8 backfills the file, making the finding actionable
+// (file:line, not :line). Verified live on the real assay db.
+func TestFindSmells_DuplicateDefinitionsBackfillsFileFromAST(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Same token defined twice (a real duplicate). source_file empty on
+		-- both construct dirs so the rule's source_id resolves to "".
+		INSERT INTO node_defs VALUES ('DupFn', 'functions/DupFn'), ('DupFn', 'pkg/functions/DupFn');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/DupFn',     'functions',     'DupFn', 1, 0, '', ''),
+		  ('pkg/functions/DupFn', 'pkg/functions', 'DupFn', 1, 0, '', '');
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES
+		  ('functions/DupFn',     'a.go', 'function_declaration', 10, 50, 4, 0, 8, 1),
+		  ('pkg/functions/DupFn', 'b.go', 'function_declaration', 60, 90, 12, 0, 16, 1);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NotEmpty(t, resp.Findings)
+	for _, f := range resp.Findings {
+		assert.NotEmpty(t, f.SourceID, "file backfilled from _ast.source_id (was empty from SQL)")
+		assert.Greater(t, f.Line, 1, "line backfilled from _ast.start_row")
+	}
+}
+
 // TestFindSmells_DeadCodeSkipsImports asserts that imports/ nodes
 // don't surface in dead_code, mirroring the same skip in
 // duplicate_definitions (#227). Imports are references TO external
