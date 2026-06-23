@@ -535,6 +535,77 @@ func TestFindSmells_DigestMode(t *testing.T) {
 	assert.Equal(t, 42, dead.Worst[0].Line, "worst exemplar carries the real _ast line, not 1")
 }
 
+// TestEnrichLocations_ChunksLargeIDSets asserts the _ast location lookup is
+// chunked under SQLite's bound-variable limit: with the chunk size forced to 2
+// and 3 findings, the lookup spans 2 batches and every finding is still located
+// (Copilot review on PR #434 — an un-chunked IN(?,…) would fail past ~999 vars
+// and silently revert findings to line:1 on large repos).
+func TestEnrichLocations_ChunksLargeIDSets(t *testing.T) {
+	orig := enrichLocChunk
+	enrichLocChunk = 2
+	defer func() { enrichLocChunk = orig }()
+
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+	_, err := tg.db.Exec(`
+		INSERT INTO node_defs VALUES ('D1','pkg/funcs/D1'),('D2','pkg/funcs/D2'),('D3','pkg/funcs/D3');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/D1','pkg/funcs','D1',1,0,'d1.go',''),
+		  ('pkg/funcs/D2','pkg/funcs','D2',1,0,'d2.go',''),
+		  ('pkg/funcs/D3','pkg/funcs','D3',1,0,'d3.go','');
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES
+		  ('pkg/funcs/D1','d1.go','function_declaration',10,20,5,0,9,1),
+		  ('pkg/funcs/D2','d2.go','function_declaration',30,40,15,0,19,1),
+		  ('pkg/funcs/D3','d3.go','function_declaration',50,60,25,0,29,1);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var resp struct {
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Len(t, resp.Findings, 3)
+	for _, f := range resp.Findings {
+		assert.Greater(t, f.Line, 1, "finding %s must be located across chunk boundaries", f.NodeID)
+	}
+}
+
+// TestFindSmells_DigestTruncatedReflectsScanNotFilter asserts Truncated is
+// computed from the pre-filter scan size, not the post-threshold count (Copilot
+// review on PR #434). With the cap forced to 2, long_function scans 2 rows
+// (capped) but the >=81 threshold drops it to 1 — Truncated must stay true so
+// callers know the count is incomplete.
+func TestFindSmells_DigestTruncatedReflectsScanNotFilter(t *testing.T) {
+	orig := digestScanCap
+	digestScanCap = 2
+	defer func() { digestScanCap = orig }()
+
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+	_, err := tg.db.Exec(`
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES
+		  ('a.go/long',  'a.go', 'function_declaration', 0, 5000, 10, 0, 210, 0),
+		  ('b.go/short', 'b.go', 'function_declaration', 0, 800,  10, 0, 60, 0);
+	`)
+	require.NoError(t, err)
+
+	d, err := buildSmellDigest(tg, 5, 10)
+	require.NoError(t, err)
+	var lf *ruleDigest
+	for i := range d.ByRule {
+		if d.ByRule[i].Rule == "long_function" {
+			lf = &d.ByRule[i]
+		}
+	}
+	require.NotNil(t, lf, "long_function in digest")
+	assert.Equal(t, 1, lf.Count, "only the 200-line fn passes the >=81 threshold")
+	assert.True(t, lf.Truncated, "scan hit the cap (2) even though the filter dropped the count to 1")
+}
+
 // TestFindSmells_DuplicateDefinitionsBackfillsFileFromAST asserts the
 // source_id (file) backfill path: duplicate_definitions resolves source_id from
 // nodes.source_file, which is empty for a construct dir whose leaves carry the

@@ -9,7 +9,7 @@ import (
 // count is exact in practice; when a rule does hit the cap the digest marks it
 // truncated rather than silently undercounting (the exact failure mode the
 // tiered response exists to avoid).
-const digestScanCap = 10000
+var digestScanCap = 10000
 
 // ruleDigest is the L1 summary for one rule: how many findings, a handful of
 // the worst (highest-metric) exemplars with real locations, and whether the
@@ -67,6 +67,11 @@ func buildSmellDigest(qg refsQuerier, worstN, fileTopN int) (smellDigest, error)
 		if err != nil {
 			return smellDigest{}, err
 		}
+		// Capture whether the SCAN hit the cap before any metric filtering —
+		// otherwise a rule whose default threshold drops the result below the
+		// cap would mis-report Truncated=false while the underlying scan was
+		// actually capped (and Count understated).
+		scannedAtCap := len(findings) >= digestScanCap
 		// Apply the rule's default metric threshold so the digest counts match
 		// what a bare `rule=<id>` call would surface (which also applies it).
 		if rule.DefaultMinMetric > 0 {
@@ -96,7 +101,7 @@ func buildSmellDigest(qg refsQuerier, worstN, fileTopN int) (smellDigest, error)
 		rd := ruleDigest{
 			Rule:      rule.ID,
 			Count:     len(findings),
-			Truncated: len(findings) >= digestScanCap,
+			Truncated: scannedAtCap,
 		}
 		for j := 0; j < worstN && j < len(findings); j++ {
 			rd.Worst = append(rd.Worst, findings[j])
