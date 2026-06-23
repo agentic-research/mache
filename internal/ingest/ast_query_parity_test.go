@@ -193,7 +193,7 @@ func collectTree(tb testing.TB, g graph.Graph) []string {
 // rendered content bytes. (Cross-file callers/callees parity is intentionally
 // out of scope for this single-file gate — it can't witness inter-file edges;
 // tracked as gate expansion on mache-1166aa.)
-func assertProjectionParity(t *testing.T, want, got graph.Graph) {
+func assertProjectionParity(t *testing.T, want, got graph.Graph, requireCallers bool) {
 	t.Helper()
 
 	wantNodes := collectTree(t, want)
@@ -203,6 +203,7 @@ func assertProjectionParity(t *testing.T, want, got graph.Graph) {
 		return // content/children comparison is meaningless once the tree diverges
 	}
 
+	sawCallers := false
 	for _, id := range wantNodes {
 		wc, werr := want.ListChildren(id)
 		gc, gerr := got.ListChildren(id)
@@ -223,7 +224,39 @@ func assertProjectionParity(t *testing.T, want, got graph.Graph) {
 		require.NoErrorf(t, gnerr, "GetNode(%q) on got", id)
 		assert.Equalf(t, propsForParity(wn.Properties), propsForParity(gn.Properties),
 			"node Properties of %q must match", id)
+
+		// Callers parity (S3 slice 3): per-scope calls feed AddRef(token,
+		// sourceFile) — the callers/ index. For each construct name, who-calls-it
+		// must match between backends. Exercises ASTWalker's scope-prefixed calls
+		// against SitterWalker's scope-node query.
+		token := filepath.Base(id)
+		wcal := callerIDs(t, want, token)
+		gcal := callerIDs(t, got, token)
+		assert.Equalf(t, wcal, gcal, "callers of %q must match", token)
+		if len(wcal) > 0 {
+			sawCallers = true
+		}
 	}
+	// Non-vacuity: when the fixture is expected to exercise calls, at least one
+	// token must have callers — else the callers-parity check is meaningless
+	// (both-empty-but-matching). Fixtures with no calls pass requireCallers=false.
+	if requireCallers {
+		assert.True(t, sawCallers, "no token had callers — callers parity is vacuous (scope-call regression?)")
+	}
+}
+
+// callerIDs returns the sorted caller node-IDs for a token, via the Graph's
+// callers index (populated from per-construct ScopeCalls -> AddRef).
+func callerIDs(t *testing.T, g graph.Graph, token string) []string {
+	t.Helper()
+	cs, err := g.GetCallers(token)
+	require.NoErrorf(t, err, "GetCallers(%q)", token)
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, c.ID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // propsForParity normalizes Properties for comparison (nil for an empty map so
@@ -274,7 +307,7 @@ func loadParitySchema(t *testing.T, path string) api.Topology {
 
 // runQueryParity ingests the same source through SitterWalker (CGO) and
 // ASTWalker (over an emitted _ast db) and asserts byte-level projection parity.
-func runQueryParity(t *testing.T, schemaPath, langName, sourceFile string, src []byte) {
+func runQueryParity(t *testing.T, schemaPath, langName, sourceFile string, src []byte, requireCallers bool) {
 	t.Helper()
 	schema := loadParitySchema(t, schemaPath)
 
@@ -295,7 +328,7 @@ func runQueryParity(t *testing.T, schemaPath, langName, sourceFile string, src [
 	astEngine.SetASTWalker(NewASTWalker(db))
 	require.NoError(t, astEngine.Ingest(srcPath))
 
-	assertProjectionParity(t, sitterStore, astStore)
+	assertProjectionParity(t, sitterStore, astStore, requireCallers)
 
 	// Non-vacuity guard: Properties parity is meaningless if BOTH backends
 	// silently drop a property (they'd still "match"). Assert a nested construct
@@ -346,7 +379,7 @@ func (g *Greeter) Greet() string {
 func Caller() {
 	fmt.Println(Hello())
 }
-`))
+`), true)
 }
 
 // TestASTQueryParity_DocComments_Go exercises the doc-comment-extended `location`
@@ -374,5 +407,5 @@ func Hello() string {
 func Undocumented() string {
 	return "no docs"
 }
-`))
+`), false)
 }

@@ -137,9 +137,36 @@ func init() {
 	// ASTWalker (pure-Go path): batched JOIN-style fast path. One CallPattern
 	// per shape; ExtractCalls/ExtractQualifiedCalls translate each into a
 	// single SQL query that returns all matches in one pass.
+	// Mirrors the Go RefQuery above (which SitterWalker.ExtractCalls uses via
+	// getCallQuery) so the callers/ refs index matches across backends. Field
+	// labels (name:/type:) don't matter here — queryCallPattern matches the kind
+	// chain by parent_id. Parity asserted by TestASTQueryParity callers check.
 	RegisterASTCallPatterns("go", []CallPattern{
+		// function calls (bare + qualified)
 		{OuterKind: "call_expression", LeafKind: "identifier"},
 		{OuterKind: "call_expression", Ancestors: []string{"selector_expression"}, LeafKind: "field_identifier", QualifierKind: "identifier"},
+		// composite literal element + type
+		{OuterKind: "composite_literal", Ancestors: []string{"literal_element"}, LeafKind: "identifier"},
+		{OuterKind: "composite_literal", LeafKind: "type_identifier"},
+		{OuterKind: "composite_literal", Ancestors: []string{"qualified_type"}, LeafKind: "type_identifier"},
+		// parameter types (incl. receiver) — bare / pointer / qualified
+		{OuterKind: "parameter_declaration", LeafKind: "type_identifier"},
+		{OuterKind: "parameter_declaration", Ancestors: []string{"pointer_type"}, LeafKind: "type_identifier"},
+		{OuterKind: "parameter_declaration", Ancestors: []string{"qualified_type"}, LeafKind: "type_identifier"},
+		{OuterKind: "parameter_declaration", Ancestors: []string{"pointer_type", "qualified_type"}, LeafKind: "type_identifier"},
+		// struct field types
+		{OuterKind: "field_declaration", LeafKind: "type_identifier"},
+		{OuterKind: "field_declaration", Ancestors: []string{"pointer_type"}, LeafKind: "type_identifier"},
+		{OuterKind: "field_declaration", Ancestors: []string{"qualified_type"}, LeafKind: "type_identifier"},
+		{OuterKind: "field_declaration", Ancestors: []string{"pointer_type", "qualified_type"}, LeafKind: "type_identifier"},
+		// type assertions
+		{OuterKind: "type_assertion_expression", LeafKind: "type_identifier"},
+		{OuterKind: "type_assertion_expression", Ancestors: []string{"qualified_type"}, LeafKind: "type_identifier"},
+		// var declaration types
+		{OuterKind: "var_spec", LeafKind: "type_identifier"},
+		{OuterKind: "var_spec", Ancestors: []string{"pointer_type"}, LeafKind: "type_identifier"},
+		{OuterKind: "var_spec", Ancestors: []string{"qualified_type"}, LeafKind: "type_identifier"},
+		{OuterKind: "var_spec", Ancestors: []string{"pointer_type", "qualified_type"}, LeafKind: "type_identifier"},
 	})
 	RegisterASTCallPatterns("python", []CallPattern{
 		{OuterKind: "call", LeafKind: "identifier"},

@@ -127,6 +127,7 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 			values: make(map[string]string),
 			scope:  sr.Node,
 			root:   sr,
+			w:      w,
 		}}, nil
 	}
 
@@ -190,6 +191,7 @@ func (w *SitterWalker) Query(root any, selector string) ([]Match, error) {
 			captures: captures,
 			scope:    scope,
 			root:     sr,
+			w:        w,
 		})
 	}
 
@@ -201,6 +203,7 @@ type sitterMatch struct {
 	captures map[string]*sitter.Node // raw nodes for origin tracking
 	scope    *sitter.Node
 	root     SitterRoot
+	w        *SitterWalker // for per-scope ScopeCalls (uses the query cache)
 }
 
 // CaptureOrigin implements OriginProvider.
@@ -280,6 +283,18 @@ func (m *sitterMatch) DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool
 		}
 	}
 	return docStart, scopeStart, scopeEnd, true
+}
+
+// ScopeCalls implements CallExtractor — calls + address-refs within this scope.
+func (m *sitterMatch) ScopeCalls() []string {
+	if m.w == nil || m.scope == nil {
+		return nil
+	}
+	calls, _ := m.w.ExtractCalls(m.scope, m.root.Source, m.root.Lang, m.root.LangName)
+	if addr, err := m.w.ExtractAddressRefs(m.scope, m.root.Source, m.root.Lang, m.root.LangName); err == nil {
+		calls = append(calls, addr...)
+	}
+	return calls
 }
 
 // getSchemaQuery returns a cached compiled query for schema selector execution.

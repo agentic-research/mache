@@ -56,7 +56,38 @@ func (w *ASTWalker) ExtractCalls(sourcePath, langName string) ([]string, error) 
 	seen := make(map[string]bool)
 	var calls []string
 	for _, p := range patterns {
-		rows, err := w.queryCallPattern(sourceID, p, false)
+		rows, err := w.queryCallPattern(sourceID, p, false, "")
+		if err != nil {
+			continue
+		}
+		for _, r := range rows {
+			if r.token != "" && !seen[r.token] {
+				seen[r.token] = true
+				calls = append(calls, r.token)
+			}
+		}
+	}
+	return calls, nil
+}
+
+// ExtractCallsScoped is the per-construct equivalent of ExtractCalls: it
+// returns only call tokens whose leaf node lives under scopeID's id-path —
+// matching SitterWalker's per-scope ExtractCalls(scopeNode, ...). sourceID is
+// the _source key (filepath.Base of the file). Empty scopeID would match the
+// whole file; callers pass a real construct id.
+func (w *ASTWalker) ExtractCallsScoped(sourceID, scopeID, langName string) ([]string, error) {
+	raw, ok := callPatternRegistry.Load(langName)
+	if !ok {
+		return nil, nil
+	}
+	patterns := raw.([]CallPattern)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool)
+	var calls []string
+	for _, p := range patterns {
+		rows, err := w.queryCallPattern(sourceID, p, false, scopeID)
 		if err != nil {
 			continue
 		}
@@ -84,7 +115,7 @@ func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.
 	seen := make(map[string]bool)
 	var calls []graph.QualifiedCall
 	for _, p := range patterns {
-		rows, err := w.queryCallPattern(sourceID, p, true)
+		rows, err := w.queryCallPattern(sourceID, p, true, "")
 		if err != nil {
 			continue
 		}
@@ -118,7 +149,7 @@ type callRow struct {
 // When wantQualifier is true and pattern.QualifierKind is non-empty, the
 // query also joins a sibling node (same parent as the leaf) of kind
 // QualifierKind to populate r.qualifier.
-func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifier bool) ([]callRow, error) {
+func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifier bool, scopePrefix string) ([]callRow, error) {
 	if p.OuterKind == "" || p.LeafKind == "" {
 		return nil, fmt.Errorf("invalid CallPattern: OuterKind and LeafKind required")
 	}
@@ -174,6 +205,12 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 	sb.WriteString(`
 		WHERE a_leaf.node_kind = ? AND a_leaf.source_id = ?`)
 	args = append(args, p.LeafKind, sourceID)
+	// Scope to a single construct subtree (calls whose leaf node lives under the
+	// scope node's id path). Empty scopePrefix = whole file.
+	if scopePrefix != "" {
+		sb.WriteString(` AND n_leaf.id LIKE ?`)
+		args = append(args, scopePrefix+"/%")
+	}
 	for i, anc := range p.Ancestors {
 		fmt.Fprintf(&sb, ` AND a_anc%d.node_kind = ?`, i)
 		args = append(args, anc)

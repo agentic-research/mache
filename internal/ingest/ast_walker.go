@@ -387,6 +387,20 @@ func (m *astMatch) DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool) {
 	return docStart, scopeStart, scopeEnd, true
 }
 
+// ScopeCalls implements CallExtractor — scope-prefixed calls + address-refs over
+// _ast (the per-construct equivalent of SitterWalker's scope-node query).
+func (m *astMatch) ScopeCalls() []string {
+	if m.w == nil || m.endByte <= m.startByte {
+		return nil
+	}
+	lang := m.w.fileLang(m.ctx.SourceID)
+	calls, _ := m.w.ExtractCallsScoped(m.ctx.SourceID, m.ctx.ParentPrefix, lang)
+	if addr, err := m.w.ExtractAddressRefsScoped(m.ctx.SourceID, m.ctx.ParentPrefix, lang); err == nil {
+		calls = append(calls, addr...)
+	}
+	return calls
+}
+
 type astNode struct {
 	id        string
 	parentID  string
