@@ -253,6 +253,35 @@ func (m *sitterMatch) PackageName() string {
 	return ""
 }
 
+// ScopeSource implements DocScope.
+func (m *sitterMatch) ScopeSource() []byte { return m.root.Source }
+
+// DocRange implements DocScope — walks backward from the @scope capture over
+// contiguous preceding comment siblings (the original extractDocComments logic).
+func (m *sitterMatch) DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool) {
+	scopeNode := m.captures["scope"]
+	if scopeNode == nil {
+		return 0, 0, 0, false
+	}
+	scopeStart = scopeNode.StartByte()
+	scopeEnd = scopeNode.EndByte()
+	docStart = scopeStart
+
+	n := scopeNode
+	prev := n.PrevSibling()
+	for prev != nil && prev.Type() == "comment" {
+		// Adjacency: <= 2 bytes gap (allow \n or \n\n).
+		if int(n.StartByte())-int(prev.EndByte()) <= 2 {
+			docStart = prev.StartByte()
+			n = prev
+			prev = prev.PrevSibling()
+		} else {
+			break
+		}
+	}
+	return docStart, scopeStart, scopeEnd, true
+}
+
 // getSchemaQuery returns a cached compiled query for schema selector execution.
 // The compiled query is reused across all files of the same language, avoiding
 // recompilation of the same S-expression on every file (e.g., 50K files × 20

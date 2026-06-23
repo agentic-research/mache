@@ -21,8 +21,9 @@ type ASTWalker struct {
 	// langCache/pkgCache memoize per-file FileMeta keyed by source_id. The
 	// engine calls Lang()/PackageName() for every construct node, but both are
 	// file-level facts — caching avoids an N+1 SQL pattern on the ingest path.
-	langCache sync.Map // sourceID -> string
-	pkgCache  sync.Map // sourceID -> string
+	langCache   sync.Map // sourceID -> string
+	pkgCache    sync.Map // sourceID -> string
+	sourceCache sync.Map // sourceID -> []byte
 }
 
 // fileLang returns the source language for sourceID, computed once and cached.
@@ -71,6 +72,40 @@ func (w *ASTWalker) filePkg(sourceID string) string {
 	}
 	w.pkgCache.Store(sourceID, pkg)
 	return pkg
+}
+
+// fileSource returns the source bytes for sourceID, cached per file.
+func (w *ASTWalker) fileSource(sourceID string) []byte {
+	if v, ok := w.sourceCache.Load(sourceID); ok {
+		return v.([]byte)
+	}
+	src, _ := w.readSource(w.db, sourceID)
+	w.sourceCache.Store(sourceID, src)
+	return src
+}
+
+// docExtendStart walks backward from a scope node over contiguous preceding
+// comment siblings (same parent, <= 2 byte gap), returning the doc-extended
+// start byte. The SQL mirror of SitterWalker's PrevSibling comment scan.
+func (w *ASTWalker) docExtendStart(sourceID, scopeID string, scopeStart uint32) uint32 {
+	var parentID string
+	if err := w.db.QueryRow("SELECT parent_id FROM nodes WHERE id = ?", scopeID).Scan(&parentID); err != nil {
+		return scopeStart
+	}
+	start := scopeStart
+	for {
+		// Closest preceding comment sibling (same parent), by end_byte.
+		var cs, ce int
+		err := w.db.QueryRow(`SELECT a.start_byte, a.end_byte
+			FROM _ast a JOIN nodes n ON n.id = a.node_id
+			WHERE n.parent_id = ? AND a.source_id = ? AND a.node_kind = 'comment' AND a.end_byte <= ?
+			ORDER BY a.end_byte DESC LIMIT 1`, parentID, sourceID, int(start)).Scan(&cs, &ce)
+		if err != nil || int(start)-ce > 2 {
+			break
+		}
+		start = uint32(cs)
+	}
+	return start
 }
 
 // NewASTWalker creates a walker backed by a SQLite database containing
@@ -330,6 +365,26 @@ func (m *astMatch) PackageName() string {
 		return ""
 	}
 	return m.w.filePkg(m.ctx.SourceID)
+}
+
+// ScopeSource implements DocScope — the file's source bytes (cached).
+func (m *astMatch) ScopeSource() []byte {
+	if m.w == nil {
+		return nil
+	}
+	return m.w.fileSource(m.ctx.SourceID)
+}
+
+// DocRange implements DocScope. The scope node's id is ctx.ParentPrefix (set in
+// Query); a zero-width range marks a "$" grouping match with no real scope.
+func (m *astMatch) DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool) {
+	if m.w == nil || m.endByte <= m.startByte {
+		return 0, 0, 0, false
+	}
+	scopeStart = uint32(m.startByte)
+	scopeEnd = uint32(m.endByte)
+	docStart = m.w.docExtendStart(m.ctx.SourceID, m.ctx.ParentPrefix, scopeStart)
+	return docStart, scopeStart, scopeEnd, true
 }
 
 type astNode struct {

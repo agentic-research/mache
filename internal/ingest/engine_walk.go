@@ -403,16 +403,19 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Properties: currentProps,
 		}
 
-		// Set location property on directory node from source file's origin
+		// Set location property on directory node from source file's origin.
+		// Read source bytes via DocScope so this is walker-agnostic (extStart/
+		// extEnd already came from the walker-agnostic extractDocComments above).
 		if hasScope && absSourceFile != "" {
-			if root, ok := match.Context().(SitterRoot); ok {
+			if ds, ok := match.(DocScope); ok {
+				src := ds.ScopeSource()
 				if node.Properties == nil {
-					node.Properties = make(map[string][]byte) // coverage:ignore
-				} // coverage:ignore
+					node.Properties = make(map[string][]byte)
+				}
 				relPath, err := filepath.Rel(e.RootPath, absSourceFile)
 				if err == nil {
-					startLine := byteOffsetToLine(root.Source, extStart)
-					endLine := byteOffsetToLine(root.Source, extEnd)
+					startLine := byteOffsetToLine(src, extStart)
+					endLine := byteOffsetToLine(src, extEnd)
 					node.Properties["location"] = fmt.Appendf(nil, "%s:%d:%d", relPath, startLine, endLine)
 				}
 			}
@@ -455,12 +458,15 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				Data:    []byte(content),
 			}
 
-			// Extend source file content to include preceding doc comments
+			// Extend source file content to include preceding doc comments.
+			// Walker-agnostic via DocScope (extStart/extEnd came from the
+			// walker-agnostic extractDocComments above).
 			if hasScope && docText != "" && fileSchema.Name == "source" {
-				if root, ok := match.Context().(SitterRoot); ok { // coverage:ignore
-					if extEnd <= uint32(len(root.Source)) { // coverage:ignore
-						fileNode.Data = root.Source[extStart:extEnd] // coverage:ignore
-					} // coverage:ignore
+				if ds, ok := match.(DocScope); ok {
+					src := ds.ScopeSource()
+					if extEnd <= uint32(len(src)) {
+						fileNode.Data = src[extStart:extEnd]
+					}
 				}
 			}
 

@@ -78,3 +78,21 @@ func (m *parentAwareMatch) PackageName() string {
 	}
 	return ""
 }
+
+// ScopeSource forwards to the inner match if it implements DocScope. Like the
+// FileMeta forwards above, nested matches are always wrapped — without this the
+// engine's location/doc lookups would silently no-op on nested constructs.
+func (m *parentAwareMatch) ScopeSource() []byte {
+	if ds, ok := m.inner.(DocScope); ok {
+		return ds.ScopeSource()
+	}
+	return nil
+}
+
+// DocRange forwards to the inner match if it implements DocScope.
+func (m *parentAwareMatch) DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool) {
+	if ds, ok := m.inner.(DocScope); ok {
+		return ds.DocRange()
+	}
+	return 0, 0, 0, false
+}

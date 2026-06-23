@@ -42,3 +42,19 @@ type FileMeta interface {
 	// when the language has no such concept or it can't be determined.
 	PackageName() string
 }
+
+// DocScope is implemented by matches that can locate their @scope node's byte
+// range, extended backward over contiguous preceding comment siblings (doc
+// comments). The engine reads the `location` node property — and doc-comment
+// text — through this interface so it stays walker-agnostic: sitterMatch walks
+// tree-sitter siblings, astMatch queries the _ast comment rows. Parity between
+// the two is asserted by TestASTQueryParity (including a doc-comment fixture).
+type DocScope interface {
+	// ScopeSource returns the file's source bytes (for line/text computation).
+	ScopeSource() []byte
+	// DocRange returns the doc-extended start, the scope start, and the scope
+	// end byte offsets. docStart == scopeStart when there are no contiguous
+	// comment siblings. ok is false when the match has no @scope (e.g. a "$"
+	// grouping match).
+	DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool)
+}
