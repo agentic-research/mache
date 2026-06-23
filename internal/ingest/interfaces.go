@@ -64,8 +64,10 @@ type DocScope interface {
 // index. Both backends implement it — sitterMatch runs tree-sitter call queries
 // on the scope node, astMatch runs scope-prefixed SQL over _ast — and
 // parentAwareMatch forwards. Reading it through this interface lets the engine
-// drop its walker.(*SitterWalker) type-switch. Parity (cross-file callers/
-// callees) is asserted by TestASTQueryParity's multi-file fixture.
+// drop its walker.(*SitterWalker) type-switch. Parity is asserted by
+// TestASTQueryParity, which compares the per-construct callers index built from
+// ScopeCalls (intra-file calls, e.g. Caller→Hello and the Greeter receiver-ref)
+// byte-for-byte across both backends, guarded against vacuity (requireCallers).
 type CallExtractor interface {
 	// ScopeCalls returns deduplicated call tokens + typed address-refs found
 	// within this match's scope. Per-construct, not whole-file.
