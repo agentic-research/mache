@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -17,6 +18,59 @@ import (
 // See ADR-014 for the design rationale.
 type ASTWalker struct {
 	db *sql.DB
+	// langCache/pkgCache memoize per-file FileMeta keyed by source_id. The
+	// engine calls Lang()/PackageName() for every construct node, but both are
+	// file-level facts — caching avoids an N+1 SQL pattern on the ingest path.
+	langCache sync.Map // sourceID -> string
+	pkgCache  sync.Map // sourceID -> string
+}
+
+// fileLang returns the source language for sourceID, computed once and cached.
+func (w *ASTWalker) fileLang(sourceID string) string {
+	if v, ok := w.langCache.Load(sourceID); ok {
+		return v.(string)
+	}
+	var lang string
+	if sourceID != "" {
+		_ = w.db.QueryRow("SELECT language FROM _source WHERE id = ?", sourceID).Scan(&lang)
+	}
+	w.langCache.Store(sourceID, lang)
+	return lang
+}
+
+// filePkg returns the package name for sourceID (Go only), computed once and
+// cached. Non-Go files resolve to "" with no per-node SQL.
+func (w *ASTWalker) filePkg(sourceID string) string {
+	if v, ok := w.pkgCache.Load(sourceID); ok {
+		return v.(string)
+	}
+	pkg := ""
+	if w.fileLang(sourceID) == "go" && sourceID != "" {
+		// package_identifier under the package_clause — the SQL mirror of
+		// SitterWalker's extractGoPackageName. Text from nodes.record, else the
+		// _source byte range.
+		var rec string
+		var sb, eb int
+		err := w.db.QueryRow(`SELECT COALESCE(n.record, ''), a.start_byte, a.end_byte
+			FROM _ast a JOIN nodes n ON n.id = a.node_id
+			WHERE a.source_id = ? AND a.node_kind = 'package_identifier'
+			ORDER BY a.start_byte LIMIT 1`, sourceID).Scan(&rec, &sb, &eb)
+		switch {
+		case err != nil:
+			pkg = ""
+		case rec != "":
+			pkg = rec
+		default:
+			var content []byte
+			if e := w.db.QueryRow("SELECT content FROM _source WHERE id = ?", sourceID).Scan(&content); e == nil {
+				if sb >= 0 && sb < eb && eb <= len(content) {
+					pkg = string(content[sb:eb])
+				}
+			}
+		}
+	}
+	w.pkgCache.Store(sourceID, pkg)
+	return pkg
 }
 
 // NewASTWalker creates a walker backed by a SQLite database containing
@@ -62,6 +116,7 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		return []Match{&astMatch{
 			values: map[string]any{},
 			ctx:    ar,
+			w:      w,
 		}}, nil
 	}
 
@@ -200,6 +255,7 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			},
 			startByte: scopeForText.startByte,
 			endByte:   scopeForText.endByte,
+			w:         w,
 		}
 		matches = append(matches, m)
 	}
@@ -239,6 +295,7 @@ type astMatch struct {
 	ctx           ASTRoot
 	startByte     int
 	endByte       int
+	w             *ASTWalker // for cached FileMeta (lang/pkg) lookups
 }
 
 func (m *astMatch) Values() map[string]any { return m.values }
@@ -257,46 +314,22 @@ func (m *astMatch) CaptureOrigin(name string) (uint32, uint32, bool) {
 	return 0, 0, false
 }
 
-// Lang implements FileMeta — reads _source.language for this match's file.
+// Lang implements FileMeta — the file's source language (cached on the walker,
+// so the engine's per-construct calls don't issue per-node SQL).
 func (m *astMatch) Lang() string {
-	if m.ctx.DB == nil || m.ctx.SourceID == "" {
+	if m.w == nil {
 		return ""
 	}
-	var lang string
-	if err := m.ctx.DB.QueryRow("SELECT language FROM _source WHERE id = ?", m.ctx.SourceID).Scan(&lang); err != nil {
-		return ""
-	}
-	return lang
+	return m.w.fileLang(m.ctx.SourceID)
 }
 
-// PackageName implements FileMeta. For Go, reads the package_identifier from
-// the _ast table — the SQL mirror of SitterWalker's extractGoPackageName. The
-// node's text comes from nodes.record, falling back to the _source byte range.
-// "" for non-Go or when no package clause is present.
+// PackageName implements FileMeta — the file's Go package (cached on the
+// walker; "" for non-Go). SQL mirror of SitterWalker's extractGoPackageName.
 func (m *astMatch) PackageName() string {
-	if m.ctx.DB == nil || m.ctx.SourceID == "" || m.Lang() != "go" {
+	if m.w == nil {
 		return ""
 	}
-	var rec string
-	var sb, eb int
-	err := m.ctx.DB.QueryRow(`SELECT COALESCE(n.record, ''), a.start_byte, a.end_byte
-		FROM _ast a JOIN nodes n ON n.id = a.node_id
-		WHERE a.source_id = ? AND a.node_kind = 'package_identifier'
-		ORDER BY a.start_byte LIMIT 1`, m.ctx.SourceID).Scan(&rec, &sb, &eb)
-	if err != nil {
-		return ""
-	}
-	if rec != "" {
-		return rec
-	}
-	// Fallback: slice the package_identifier's bytes out of the source.
-	var content []byte
-	if e := m.ctx.DB.QueryRow("SELECT content FROM _source WHERE id = ?", m.ctx.SourceID).Scan(&content); e == nil {
-		if sb >= 0 && sb < eb && eb <= len(content) {
-			return string(content[sb:eb])
-		}
-	}
-	return ""
+	return m.w.filePkg(m.ctx.SourceID)
 }
 
 type astNode struct {
