@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -212,7 +213,36 @@ func assertProjectionParity(t *testing.T, want, got graph.Graph) {
 
 		assert.Equalf(t, readAllContent(t, want, id), readAllContent(t, got, id),
 			"rendered content of %q must be byte-identical", id)
+
+		// Node-attribute parity (gate expansion, mache-1166aa): Properties must
+		// match between backends. `location` is excluded — it's still produced
+		// only on the SitterWalker path (doc-comment-coupled); its ASTWalker
+		// parity is a separate S3 slice.
+		wn, wnerr := want.GetNode(id)
+		gn, gnerr := got.GetNode(id)
+		require.NoErrorf(t, wnerr, "GetNode(%q) on want", id)
+		require.NoErrorf(t, gnerr, "GetNode(%q) on got", id)
+		assert.Equalf(t, propsForParity(wn.Properties), propsForParity(gn.Properties),
+			"node Properties of %q must match", id)
 	}
+}
+
+// propsForParity copies Properties minus keys not yet covered by the gate.
+// `location` still comes only from the SitterWalker path (doc-comment-coupled),
+// so its ASTWalker parity is tracked as a follow-up slice; excluding it keeps
+// this gate green while still asserting lang/pkg/imports parity.
+func propsForParity(p map[string][]byte) map[string][]byte {
+	out := make(map[string][]byte, len(p))
+	for k, v := range p {
+		if k == "location" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func logTreeDiff(t *testing.T, want, got []string) {
@@ -273,6 +303,30 @@ func runQueryParity(t *testing.T, schemaPath, langName, sourceFile string, src [
 	require.NoError(t, astEngine.Ingest(srcPath))
 
 	assertProjectionParity(t, sitterStore, astStore)
+
+	// Non-vacuity guard: Properties parity is meaningless if BOTH backends
+	// silently drop a property (they'd still "match"). Assert a nested construct
+	// actually carries the `lang` property — this is the exact class of bug that
+	// the parentAwareMatch FileMeta-forwarding gap produced (nested matches are
+	// always wrapped, so both walkers lost lang/pkg on nested nodes and still
+	// matched). See TestEngine_MethodReceiverShape_RegistersBareLeafDef.
+	assertNestedConstructHasLang(t, sitterStore)
+}
+
+// assertNestedConstructHasLang fails if no nested (depth ≥ 2) node carries a
+// non-empty `lang` property — which would mean the Properties parity assertion
+// is vacuous for the parentAwareMatch wrapping path.
+func assertNestedConstructHasLang(t *testing.T, g graph.Graph) {
+	t.Helper()
+	for _, id := range collectTree(t, g) {
+		if strings.Count(id, "/") < 2 {
+			continue
+		}
+		if n, err := g.GetNode(id); err == nil && len(n.Properties["lang"]) > 0 {
+			return // a nested construct carries lang — parity is non-vacuous
+		}
+	}
+	t.Fatalf("no nested construct carries a `lang` property — Properties parity would be vacuous (parentAwareMatch FileMeta-forwarding regression)")
 }
 
 func TestASTQueryParity_Go(t *testing.T) {

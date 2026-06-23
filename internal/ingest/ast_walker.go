@@ -257,6 +257,48 @@ func (m *astMatch) CaptureOrigin(name string) (uint32, uint32, bool) {
 	return 0, 0, false
 }
 
+// Lang implements FileMeta — reads _source.language for this match's file.
+func (m *astMatch) Lang() string {
+	if m.ctx.DB == nil || m.ctx.SourceID == "" {
+		return ""
+	}
+	var lang string
+	if err := m.ctx.DB.QueryRow("SELECT language FROM _source WHERE id = ?", m.ctx.SourceID).Scan(&lang); err != nil {
+		return ""
+	}
+	return lang
+}
+
+// PackageName implements FileMeta. For Go, reads the package_identifier from
+// the _ast table — the SQL mirror of SitterWalker's extractGoPackageName. The
+// node's text comes from nodes.record, falling back to the _source byte range.
+// "" for non-Go or when no package clause is present.
+func (m *astMatch) PackageName() string {
+	if m.ctx.DB == nil || m.ctx.SourceID == "" || m.Lang() != "go" {
+		return ""
+	}
+	var rec string
+	var sb, eb int
+	err := m.ctx.DB.QueryRow(`SELECT COALESCE(n.record, ''), a.start_byte, a.end_byte
+		FROM _ast a JOIN nodes n ON n.id = a.node_id
+		WHERE a.source_id = ? AND a.node_kind = 'package_identifier'
+		ORDER BY a.start_byte LIMIT 1`, m.ctx.SourceID).Scan(&rec, &sb, &eb)
+	if err != nil {
+		return ""
+	}
+	if rec != "" {
+		return rec
+	}
+	// Fallback: slice the package_identifier's bytes out of the source.
+	var content []byte
+	if e := m.ctx.DB.QueryRow("SELECT content FROM _source WHERE id = ?", m.ctx.SourceID).Scan(&content); e == nil {
+		if sb >= 0 && sb < eb && eb <= len(content) {
+			return string(content[sb:eb])
+		}
+	}
+	return ""
+}
+
 type astNode struct {
 	id        string
 	parentID  string
