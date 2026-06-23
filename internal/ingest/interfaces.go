@@ -58,3 +58,18 @@ type DocScope interface {
 	// grouping match).
 	DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool)
 }
+
+// CallExtractor is implemented by matches that can extract the call tokens and
+// address-refs WITHIN their @scope (per construct) for the callers/callees refs
+// index. Both backends implement it — sitterMatch runs tree-sitter call queries
+// on the scope node, astMatch runs scope-prefixed SQL over _ast — and
+// parentAwareMatch forwards. Reading it through this interface lets the engine
+// drop its walker.(*SitterWalker) type-switch. Parity is asserted by
+// TestASTQueryParity, which compares the per-construct callers index built from
+// ScopeCalls (intra-file calls, e.g. Caller→Hello and the Greeter receiver-ref)
+// byte-for-byte across both backends, guarded against vacuity (requireCallers).
+type CallExtractor interface {
+	// ScopeCalls returns deduplicated call tokens + typed address-refs found
+	// within this match's scope. Per-construct, not whole-file.
+	ScopeCalls() []string
+}

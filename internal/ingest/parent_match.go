@@ -96,3 +96,13 @@ func (m *parentAwareMatch) DocRange() (docStart, scopeStart, scopeEnd uint32, ok
 	}
 	return 0, 0, 0, false
 }
+
+// ScopeCalls forwards to the inner match if it implements CallExtractor. Nested
+// matches are always wrapped, so without this the engine's per-scope call/refs
+// extraction would no-op on nested constructs (the slice-1 lesson).
+func (m *parentAwareMatch) ScopeCalls() []string {
+	if ce, ok := m.inner.(CallExtractor); ok {
+		return ce.ScopeCalls()
+	}
+	return nil
+}

@@ -350,22 +350,14 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			}
 		}
 
-		// Extract calls for this match (refs index)
+		// Extract per-scope calls + address-aware refs (env:, path:, url:) for
+		// the refs index. Read via the CallExtractor interface so the engine is
+		// walker-agnostic — both sitterMatch (tree-sitter scope-node query) and
+		// astMatch (scope-prefixed SQL) implement it, and parentAwareMatch
+		// forwards. Replaces the prior walker.(*SitterWalker) type-switch.
 		var calls []string
-		if sw, ok := walker.(*SitterWalker); ok {
-			if ctxAny := match.Context(); ctxAny != nil {
-				if root, ok := ctxAny.(SitterRoot); ok {
-					if c, err := sw.ExtractCalls(root.Node, root.Source, root.Lang, root.LangName); err == nil {
-						calls = c
-					}
-					// Extract address-aware refs (env:, path:, url:) from the
-					// match scope. These typed tokens bridge across languages
-					// (e.g., Go os.Getenv calls within this function scope).
-					if addrRefs, err := sw.ExtractAddressRefs(root.Node, root.Source, root.Lang, root.LangName); err == nil {
-						calls = append(calls, addrRefs...)
-					}
-				}
-			}
+		if ce, ok := match.(CallExtractor); ok {
+			calls = ce.ScopeCalls()
 		}
 		// Append file-level address refs (e.g., HCL variable declarations)
 		// that weren't already found at the scope level. This avoids

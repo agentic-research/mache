@@ -8,10 +8,23 @@ import (
 )
 
 // ExtractAddressRefs runs all registered address ref queries for the given
-// language by querying the _ast table. Returns deduplicated, scheme-prefixed
-// tokens (e.g., "env:DATABASE_URL"). Mirrors SitterWalker.ExtractAddressRefs
-// but uses SQL instead of CGO tree-sitter.
+// language by querying the _ast table (whole file). Returns deduplicated,
+// scheme-prefixed tokens (e.g., "env:DATABASE_URL"). Mirrors
+// SitterWalker.ExtractAddressRefs but uses SQL instead of CGO tree-sitter.
 func (w *ASTWalker) ExtractAddressRefs(sourcePath, langName string) ([]string, error) {
+	return w.extractAddressRefs(filepath.Base(sourcePath), "", langName)
+}
+
+// ExtractAddressRefsScoped is the per-construct equivalent: address refs whose
+// matched node lives under scopeID's id-path. Mirrors SitterWalker's per-scope
+// ExtractAddressRefs(scopeNode, ...). sourceID is the _source key.
+func (w *ASTWalker) ExtractAddressRefsScoped(sourceID, scopeID, langName string) ([]string, error) {
+	return w.extractAddressRefs(sourceID, scopeID, langName)
+}
+
+// extractAddressRefs is the shared implementation; parentPrefix "" = whole file,
+// non-empty scopes the underlying Query to that node's subtree.
+func (w *ASTWalker) extractAddressRefs(sourceID, parentPrefix, langName string) ([]string, error) {
 	raw, ok := addressRefRegistry.Load(langName)
 	if !ok {
 		return nil, nil
@@ -21,8 +34,7 @@ func (w *ASTWalker) ExtractAddressRefs(sourcePath, langName string) ([]string, e
 		return nil, nil
 	}
 
-	sourceID := filepath.Base(sourcePath)
-	root := ASTRoot{DB: w.db, SourceID: sourceID, ParentPrefix: ""}
+	root := ASTRoot{DB: w.db, SourceID: sourceID, ParentPrefix: parentPrefix}
 
 	seen := make(map[string]bool)
 	var tokens []string
