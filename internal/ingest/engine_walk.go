@@ -241,21 +241,23 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			Children: existingChildren,
 		}
 
-		// Store language name, package name for callees/ resolution (SitterWalker path)
-		if _, ok := walker.(*SitterWalker); ok {
-			if ctxAny := match.Context(); ctxAny != nil {
-				if root, ok := ctxAny.(SitterRoot); ok && root.LangName != "" {
-					if node.Properties == nil {
-						node.Properties = make(map[string][]byte)
-					}
-					node.Properties["lang"] = []byte(root.LangName)
+		// Store language + package name as node properties (used for callees/
+		// qualified-def resolution). Read through the FileMeta interface so the
+		// engine stays walker-agnostic — both sitterMatch and astMatch implement
+		// it (and parentAwareMatch forwards to its inner), so this no longer
+		// type-switches on the concrete walker. Parity between the two backends is
+		// asserted by TestASTQueryParity; correctness of the values by
+		// TestEngine_MethodReceiverShape_RegistersBareLeafDef.
+		if fm, ok := match.(FileMeta); ok {
+			if l := fm.Lang(); l != "" {
+				if node.Properties == nil {
+					node.Properties = make(map[string][]byte)
+				}
+				node.Properties["lang"] = []byte(l)
 
-					// Extract Go package name for qualified def resolution
-					if root.LangName == "go" && root.FileRoot != nil {
-						if pkgName := extractGoPackageName(root.FileRoot, root.Source, root.Lang); pkgName != "" {
-							node.Properties["pkg"] = []byte(pkgName)
-						}
-					}
+				// Go package name, for qualified def resolution.
+				if pkg := fm.PackageName(); pkg != "" {
+					node.Properties["pkg"] = []byte(pkg)
 				}
 			}
 		}

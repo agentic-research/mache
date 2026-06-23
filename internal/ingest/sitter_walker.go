@@ -241,6 +241,18 @@ func (m *sitterMatch) Context() any {
 	return nil
 }
 
+// Lang implements FileMeta.
+func (m *sitterMatch) Lang() string { return m.root.LangName }
+
+// PackageName implements FileMeta. Go-only today (mirrors the engine's prior
+// SitterWalker-gated behavior); other languages return "".
+func (m *sitterMatch) PackageName() string {
+	if m.root.LangName == "go" && m.root.FileRoot != nil {
+		return extractGoPackageName(m.root.FileRoot, m.root.Source, m.root.Lang)
+	}
+	return ""
+}
+
 // getSchemaQuery returns a cached compiled query for schema selector execution.
 // The compiled query is reused across all files of the same language, avoiding
 // recompilation of the same S-expression on every file (e.g., 50K files × 20

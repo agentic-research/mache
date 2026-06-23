@@ -28,3 +28,17 @@ type Match interface {
 type OriginProvider interface {
 	CaptureOrigin(name string) (startByte, endByte uint32, ok bool)
 }
+
+// FileMeta is an optional interface a Match implements to expose per-file
+// metadata the engine records as node Properties (lang, pkg). Reading it
+// through this interface lets the engine stay walker-agnostic — both the
+// tree-sitter (sitterMatch) and SQL (astMatch) backends implement it, so the
+// engine no longer type-switches on the concrete walker to set these. The
+// parity gate (TestASTQueryParity) asserts both backends return identical values.
+type FileMeta interface {
+	// Lang is the source language ("go", "python", ...), or "" if unknown.
+	Lang() string
+	// PackageName is the file's package/namespace (Go package, etc.), or ""
+	// when the language has no such concept or it can't be determined.
+	PackageName() string
+}

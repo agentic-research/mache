@@ -59,3 +59,22 @@ func (m *parentAwareMatch) GetCaptureNode(name string) *sitter.Node {
 	}
 	return nil
 }
+
+// Lang forwards to the inner match if it implements FileMeta. Without this,
+// nested matches (which are always wrapped in parentAwareMatch) would lose the
+// lang/pkg node properties the engine sets via FileMeta — a regression caught by
+// TestEngine_MethodReceiverShape_RegistersBareLeafDef.
+func (m *parentAwareMatch) Lang() string {
+	if fm, ok := m.inner.(FileMeta); ok {
+		return fm.Lang()
+	}
+	return ""
+}
+
+// PackageName forwards to the inner match if it implements FileMeta.
+func (m *parentAwareMatch) PackageName() string {
+	if fm, ok := m.inner.(FileMeta); ok {
+		return fm.PackageName()
+	}
+	return ""
+}
