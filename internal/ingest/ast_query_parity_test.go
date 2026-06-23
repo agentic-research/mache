@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -215,9 +216,7 @@ func assertProjectionParity(t *testing.T, want, got graph.Graph) {
 			"rendered content of %q must be byte-identical", id)
 
 		// Node-attribute parity (gate expansion, mache-1166aa): Properties must
-		// match between backends. `location` is excluded — it's still produced
-		// only on the SitterWalker path (doc-comment-coupled); its ASTWalker
-		// parity is a separate S3 slice.
+		// match between backends — including location (doc-comment-extended).
 		wn, wnerr := want.GetNode(id)
 		gn, gnerr := got.GetNode(id)
 		require.NoErrorf(t, wnerr, "GetNode(%q) on want", id)
@@ -227,21 +226,15 @@ func assertProjectionParity(t *testing.T, want, got graph.Graph) {
 	}
 }
 
-// propsForParity copies Properties minus keys not yet covered by the gate.
-// `location` still comes only from the SitterWalker path (doc-comment-coupled),
-// so its ASTWalker parity is tracked as a follow-up slice; excluding it keeps
-// this gate green while still asserting lang/pkg/imports parity.
+// propsForParity normalizes Properties for comparison (nil for an empty map so
+// nil == empty). All node properties the engine sets — lang, pkg, imports, and
+// location (doc-comment-extended) — are now produced by BOTH backends.
 func propsForParity(p map[string][]byte) map[string][]byte {
-	out := make(map[string][]byte, len(p))
-	for k, v := range p {
-		if k == "location" {
-			continue
-		}
-		out[k] = v
-	}
-	if len(out) == 0 {
+	if len(p) == 0 {
 		return nil
 	}
+	out := make(map[string][]byte, len(p))
+	maps.Copy(out, p)
 	return out
 }
 
@@ -352,6 +345,34 @@ func (g *Greeter) Greet() string {
 
 func Caller() {
 	fmt.Println(Hello())
+}
+`))
+}
+
+// TestASTQueryParity_DocComments_Go exercises the doc-comment-extended `location`
+// property: documented constructs must have a location starting at the comment
+// line, undocumented ones at the construct line — identically on both backends.
+// This drives the ASTWalker SQL comment-sibling scan (docExtendStart) against
+// SitterWalker's PrevSibling walk (S3 slice 2 / mache-33cd7e).
+func TestASTQueryParity_DocComments_Go(t *testing.T) {
+	runQueryParity(t, "../../examples/go-schema.json", "go", "example.go", []byte(`package demo
+
+// MaxRetries caps the retries.
+const MaxRetries = 3
+
+// Greeter greets people.
+// Second doc line.
+type Greeter struct {
+	Name string
+}
+
+// Hello says hello.
+func Hello() string {
+	return "hello"
+}
+
+func Undocumented() string {
+	return "no docs"
 }
 `))
 }

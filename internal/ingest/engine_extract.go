@@ -18,45 +18,29 @@ func byteOffsetToLine(content []byte, offset uint32) int {
 	return line
 }
 
-// extractDocComments walks backward from a tree-sitter @scope capture to find
-// contiguous preceding comment nodes. Returns the doc comment text (just the
-// comments) and the extended byte range for write-back origin tracking.
+// extractDocComments returns the doc-comment text immediately preceding a
+// match's @scope node, plus the doc-extended byte range (for the `location`
+// property and write-back origin tracking). It reads through the DocScope
+// interface so it is walker-agnostic — sitterMatch walks tree-sitter siblings,
+// astMatch queries the _ast comment rows; both yield identical output.
 func extractDocComments(match Match) (docText string, startByte, endByte uint32, hasScope bool) {
-	sm, ok := match.(interface{ GetCaptureNode(string) *sitter.Node })
+	ds, ok := match.(DocScope)
 	if !ok {
 		return docText, startByte, endByte, hasScope
 	}
-	scopeNode := sm.GetCaptureNode("scope")
-	if scopeNode == nil {
+	docStart, scopeStart, scopeEnd, ok := ds.DocRange()
+	if !ok {
 		return docText, startByte, endByte, hasScope
 	}
 	hasScope = true
-	startByte = scopeNode.StartByte()
-	endByte = scopeNode.EndByte()
+	startByte = docStart
+	endByte = scopeEnd
 
-	// Walk backward to find contiguous comment siblings
-	n := scopeNode
-	prev := n.PrevSibling()
-	for prev != nil && prev.Type() == "comment" {
-		// Check adjacency: <= 2 bytes gap (allow \n or \n\n)
-		if int(n.StartByte())-int(prev.EndByte()) <= 2 {
-			startByte = prev.StartByte()
-			n = prev
-			prev = prev.PrevSibling()
-		} else {
-			break
-		}
-	}
-
-	// Extract doc comment text (just the comments, not the scope body)
-	if startByte < scopeNode.StartByte() {
-		if root, ok := match.Context().(SitterRoot); ok {
-			if scopeNode.StartByte() <= uint32(len(root.Source)) {
-				docText = strings.TrimRight(
-					string(root.Source[startByte:scopeNode.StartByte()]),
-					"\n\r\t ",
-				)
-			}
+	// Extract doc comment text (just the comments, not the scope body).
+	if docStart < scopeStart {
+		src := ds.ScopeSource()
+		if scopeStart <= uint32(len(src)) {
+			docText = strings.TrimRight(string(src[docStart:scopeStart]), "\n\r\t ")
 		}
 	}
 	return docText, startByte, endByte, hasScope
