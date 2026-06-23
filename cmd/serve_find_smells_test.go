@@ -491,6 +491,50 @@ func TestFindSmells_NodeDefsRuleCarriesASTLocation(t *testing.T) {
 	assert.Equal(t, 1000, f.EndByte, "end_byte backfilled from _ast")
 }
 
+// TestFindSmells_DigestMode asserts the L1 "shape without weight" digest:
+// rule="*" returns per-rule counts + worst exemplars (with real _ast locations)
+// + a by-file rollup, instead of a flat capped dump. This is the default-flood
+// fix (mache-ae54d8): one bounded response answering "how bad, where's the
+// worst" — drill to L2 with rule=<id>.
+func TestFindSmells_DigestMode(t *testing.T) {
+	tg := seedSmellAST(t) // seeds magic_int fixtures (2 binexprs)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- A dead function with a real _ast span, so dead_code contributes a
+		-- located exemplar to the digest.
+		INSERT INTO node_defs VALUES ('Orphan', 'pkg/funcs/Orphan');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/funcs/Orphan', 'pkg/funcs', 'Orphan', 1, 0, 'orphan.go', '');
+		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
+		VALUES ('pkg/funcs/Orphan', 'orphan.go', 'function_declaration', 900, 1000, 41, 0, 60, 1);
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "*"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var d smellDigest
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &d))
+	assert.Greater(t, d.Total, 0, "digest aggregates findings across rules")
+	assert.NotEmpty(t, d.ByRule, "per-rule counts present")
+	assert.NotEmpty(t, d.ByFileTop, "by-file rollup present")
+
+	// dead_code must appear with a located worst exemplar.
+	var dead *ruleDigest
+	for i := range d.ByRule {
+		if d.ByRule[i].Rule == "dead_code" {
+			dead = &d.ByRule[i]
+		}
+	}
+	require.NotNil(t, dead, "dead_code in digest")
+	assert.Equal(t, 1, dead.Count)
+	require.NotEmpty(t, dead.Worst)
+	assert.Equal(t, 42, dead.Worst[0].Line, "worst exemplar carries the real _ast line, not 1")
+}
+
 // TestFindSmells_DuplicateDefinitionsBackfillsFileFromAST asserts the
 // source_id (file) backfill path: duplicate_definitions resolves source_id from
 // nodes.source_file, which is empty for a construct dir whose leaves carry the

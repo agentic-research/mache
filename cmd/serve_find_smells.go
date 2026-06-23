@@ -28,6 +28,21 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultText(jsonOrPanic(rulesListing())), nil
 		}
 
+		if ruleID == "*" {
+			// L1 digest mode — "shape without weight": per-rule counts +
+			// per-file rollup + a few worst exemplars, instead of a flat
+			// (capped) dump. Drill to L2 with rule=<id> (+ source_id).
+			qg, ok := g.(refsQuerier)
+			if !ok { // coverage:ignore — all test graphs implement refsQuerier
+				return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
+			} // coverage:ignore
+			digest, err := buildSmellDigest(qg, 5, 10)
+			if err != nil { // coverage:ignore — buildSmellDigest only errors on DB IO; unreachable with in-memory fixtures
+				return mcp.NewToolResultError(fmt.Sprintf("digest: %v", err)), nil // coverage:ignore
+			} // coverage:ignore
+			return mcp.NewToolResultText(jsonOrPanic(digest)), nil
+		}
+
 		var rule *SmellRule
 		for i := range smellRegistry {
 			if smellRegistry[i].ID == ruleID {
@@ -161,7 +176,7 @@ func rulesListing() any {
 		Help  string        `json:"help"`
 		Rules []ruleSummary `json:"rules"`
 	}{
-		Help:  "find_smells runs structural pattern queries against the _ast / nodes / node_defs / node_refs tables. Pass `rule` to scan; omit it (this response) to list available rules. Each rule entry includes a `requires` list of SQL tables it reads — agents can use it to skip rules whose tables aren't present on the active backend (e.g. _ast is only populated by ley-line-open's leyline parse). Optional `source_id` filters to one parsed file; `limit` caps results (default 200); `min_metric` drops findings whose metric column is below the threshold. Rules that surface a `default_min_metric` apply that as the threshold when the caller omits `min_metric`; an explicit `min_metric=0` overrides the default and returns everything sorted by metric.",
+		Help:  "find_smells runs structural pattern queries against the _ast / nodes / node_defs / node_refs tables. Three tiers: omit `rule` (this response) to LIST rules; pass `rule=*` for an L1 DIGEST — per-rule counts + per-file rollup + a few worst exemplars, bounded regardless of debt size (start here on an unfamiliar repo); pass `rule=<id>` for the full findings of one rule (L2), each with its real file:line backfilled from _ast, optionally scoped with `source_id=<file>`. Each rule entry includes a `requires` list of SQL tables it reads — agents can use it to skip rules whose tables aren't present on the active backend (e.g. _ast is only populated by ley-line-open's leyline parse). `limit` caps L2 results (default 200); `min_metric` drops findings whose metric column is below the threshold. Rules that surface a `default_min_metric` apply that as the threshold when the caller omits `min_metric`; an explicit `min_metric=0` overrides the default and returns everything sorted by metric.",
 		Rules: out,
 	}
 }
