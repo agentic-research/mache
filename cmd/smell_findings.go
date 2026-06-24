@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -77,7 +78,122 @@ func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) (
 			Metric:    metric,
 		})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Release the connection before the enrichment query so we don't hold
+	// two open cursors on a single-connection backend.
+	_ = rows.Close()
+	if err := enrichLocations(qg, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// enrichLocChunk bounds the _ast IN(...) lookup batch size, kept well under
+// SQLite's default 999 bound-variable limit so a rule returning thousands of
+// findings can't blow the query (var for test injection).
+var enrichLocChunk = 900
+
+// enrichLocations backfills byte/line/column on findings whose rule left them
+// at the zero-location default. The node_defs-based rules (dead_code,
+// duplicate_definitions, god_file, fan_out_skew, untested_function) emit
+// `0 AS start_byte` in SQL because node_defs/nodes don't carry spans — but the
+// span already ships in _ast keyed by node_id (mache-ae54d8). One batched
+// lookup patches every still-zero finding. No-op when _ast is absent (the
+// standalone tree-sitter backend) — the query errors and findings keep their
+// file-level location, an honest degradation. _ast-native rules (long_function,
+// cyclomatic, …) already compute a span in SQL and are left untouched.
+func enrichLocations(qg refsQuerier, findings []smellFinding) error {
+	needsLoc := func(f smellFinding) bool { return f.StartByte == 0 && f.Line <= 1 }
+	ids := make([]string, 0)
+	seen := make(map[string]bool)
+	for i := range findings {
+		f := findings[i]
+		if f.NodeID == "" || (!needsLoc(f) && f.SourceID != "") {
+			continue // already fully located, or no node_id to key on
+		}
+		if !seen[f.NodeID] {
+			seen[f.NodeID] = true
+			ids = append(ids, f.NodeID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	// _ast is absent on the standalone tree-sitter backend — that's an
+	// expected no-op, not an error. Probe once (rather than string-matching a
+	// "no such table" failure) so that any error from the chunked lookups below
+	// is a genuine query failure we must surface, not silent location loss.
+	hasAST, err := tableHasColumn(qg, "_ast", "node_id")
+	if err != nil {
+		return fmt.Errorf("enrich locations: probe _ast: %w", err)
+	}
+	if !hasAST {
+		return nil
+	}
+
+	type loc struct {
+		sourceID           string
+		startByte, endByte int
+		startRow, startCol int
+	}
+	byNode := make(map[string]loc, len(ids))
+	// Chunk the IN(...) list under SQLite's bound-variable limit so a large
+	// finding set can't fail the lookup (and silently revert to line:1).
+	for start := 0; start < len(ids); start += enrichLocChunk {
+		end := min(start+enrichLocChunk, len(ids))
+		batch := ids[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		q := "SELECT node_id, source_id, start_byte, end_byte, start_row, start_col FROM _ast WHERE node_id IN (" + placeholders + ")"
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := qg.QueryRefs(q, args...)
+		if err != nil {
+			// _ast exists (probed above) yet the lookup failed — a real error
+			// (e.g. too-many-variables); surface it instead of swallowing.
+			return fmt.Errorf("enrich locations: _ast lookup: %w", err)
+		}
+		for rows.Next() {
+			var (
+				id, srcID        string
+				sb, eb           int
+				startRow, startC sql.NullInt64
+			)
+			if err := rows.Scan(&id, &srcID, &sb, &eb, &startRow, &startC); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("enrich locations: scan: %w", err)
+			}
+			byNode[id] = loc{srcID, sb, eb, int(startRow.Int64), int(startC.Int64)}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("enrich locations: rows: %w", err)
+		}
+		_ = rows.Close()
+	}
+
+	for i := range findings {
+		l, ok := byNode[findings[i].NodeID]
+		if !ok {
+			continue
+		}
+		// Backfill the span only when the rule left it zero (don't clobber
+		// SQL-computed spans from _ast-native rules).
+		if needsLoc(findings[i]) {
+			findings[i].StartByte = l.startByte
+			findings[i].EndByte = l.endByte
+			findings[i].Line = l.startRow + 1
+			findings[i].Column = l.startCol + 1
+		}
+		// Backfill the file when the rule's source_file fallback was empty.
+		if findings[i].SourceID == "" {
+			findings[i].SourceID = l.sourceID
+		}
+	}
+	return nil
 }
 
 // populateSnippets fills the Snippet field on each finding. We batch by
