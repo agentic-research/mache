@@ -40,6 +40,10 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 		if direction != "callers" && direction != "callees" && direction != "both" {
 			return mcp.NewToolResultError("direction must be 'callers', 'callees', or 'both'"), nil
 		}
+		kind, errResult := validateKindParam(request)
+		if errResult != nil {
+			return errResult, nil
+		}
 
 		// Resolve starting definition(s) for the symbol via the defs map.
 		dp, ok := g.(defsMapProvider)
@@ -59,7 +63,21 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 				}
 			}
 		}
+		// Apply optional kind filter to the starting roots. get_impact
+		// is rooted at a specific symbol-of-a-kind; narrowing by kind
+		// here means "trace impact of THIS kind of Encoder," not "trace
+		// impact through nodes whose kind matches" — depth>0 traversal
+		// follows callers/callees regardless of their construct kind.
+		if found && kind != "" {
+			roots, _ = filterDirIDsByKind(roots, kind)
+			if len(roots) == 0 {
+				found = false
+			}
+		}
 		if !found || len(roots) == 0 {
+			if kind != "" {
+				return mcp.NewToolResultText(fmt.Sprintf(`{"symbol":%q,"kind":%q,"error":"no definition found with kind=%s"}`, symbol, kind, kind)), nil
+			}
 			return mcp.NewToolResultText(fmt.Sprintf(`{"symbol":%q,"error":"no definition found"}`, symbol)), nil
 		}
 

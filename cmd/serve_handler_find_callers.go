@@ -16,6 +16,10 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		if token == "" {
 			return mcp.NewToolResultError("token is required"), nil
 		}
+		kind, errResult := validateKindParam(request)
+		if errResult != nil {
+			return errResult, nil
+		}
 
 		callers, err := g.GetCallers(token)
 		if err != nil {
@@ -25,6 +29,14 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		paths := make([]string, 0, len(callers))
 		for _, c := range callers {
 			paths = append(paths, c.ID)
+		}
+
+		// Apply the optional kind filter to caller paths. find_callers
+		// returns the construct paths of the call SITES, so the kind
+		// filter narrows by what KIND of caller is calling — e.g.
+		// "show me only methods that call X." Empty kind is a no-op.
+		if kind != "" {
+			paths, _ = filterDirIDsByKind(paths, kind)
 		}
 
 		// Cross-repo annotation: when running on a CompositeGraph,
@@ -43,6 +55,9 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		if qg, ok := g.(refsQuerier); ok {
 			lspRefs, lspErr := queryLSPRefs(qg, token)
 			if lspErr == nil && len(lspRefs) > 0 {
+				// Apply kind filter to LSP refs too (same NodeID
+				// construct-path encoding).
+				lspRefs = filterByNodeIDKind(lspRefs, kind, func(r lspRefLocation) string { return r.NodeID })
 				type callersResult struct {
 					Callers []string         `json:"callers"`
 					LSPRefs []lspRefLocation `json:"lsp_refs"`
