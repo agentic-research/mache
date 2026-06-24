@@ -164,8 +164,10 @@ Naming these so they're not mistaken for "validated":
 ## Cross-cutting constraints (surfaced by actually running, 2026-06-24)
 
 - **Read from the `.db`, not the mount.** The NFS mount needs interactive `sudo`
-  (`mache-bb3e39`) and is CI-hostile. Batch measurement uses `mache build --out`
-  - direct node access. The mount is for live humans/agents only.
+  (`mache-bb3e39`) and is CI-hostile. Batch measurement uses
+  `mache build <source> <output.db>` (positional args; see `cmd/build.go:37` —
+  `Use: "build [source] [output.db]"`) plus direct node access against the
+  resulting `.db`. The mount is for live humans/agents only.
 - **The treatment arm is the *writable* surface.** M1/M3/M4 exercise the
   write-back/validate path (`--agent`/`write source`), not the read-only MCP
   framing — the existing Serena harness's read-only scoping does NOT cover them.
@@ -200,8 +202,13 @@ Two benchmarks already exist; both are honest about their flaws but weak as
 Attempting to run M2 (rather than spec it abstractly) surfaced:
 
 - **`mache-b8fe72`** — `context` virtual file absent in the agent mount (0/236).
-  `node.Context` is populated for internal callee resolution (`engine_walk.go:394`)
-  but doesn't surface via the VFS `ContextHandler` on the mount. M2's basis is missing.
+  Root cause is at the projection layer, not the VFS: `node.Context` is computed
+  during ingestion (`internal/ingest/engine_walk.go:394`) but the nodes-table
+  `.db` reader never persists it onto directory nodes —
+  `internal/graph/nodes_table_reader.go:GetNode` (line 69) doesn't populate
+  `graph.Node.Context`, so by the time `ContextHandler` reads the projection
+  there is nothing to serve. The fix is at the projection-write boundary, not
+  the VFS handler. M2's basis is missing until this is closed.
 - **`mache-bb3e39`** — agent mount requires interactive `sudo` (`server.go:82`),
   though the no-sudo userspace path exists (fuse-t / leyline-fuse). Mount is
   unusable for automated measurement → read the `.db`.
