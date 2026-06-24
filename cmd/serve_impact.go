@@ -75,6 +75,9 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 		if !found || len(roots) == 0 {
+			if kind != "" {
+				return mcp.NewToolResultText(fmt.Sprintf(`{"symbol":%q,"kind":%q,"error":"no definition found with kind=%s"}`, symbol, kind, kind)), nil
+			}
 			return mcp.NewToolResultText(fmt.Sprintf(`{"symbol":%q,"error":"no definition found"}`, symbol)), nil
 		}
 

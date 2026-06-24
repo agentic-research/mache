@@ -1,6 +1,9 @@
 package cmd
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Known construct kinds mache projects today. The path layout (per
 // cmd/agent.go's user-facing tour) puts construct directories at
@@ -18,12 +21,15 @@ var kindToPathSegment = map[string]string{
 }
 
 // supportedKinds returns the singular kind names accepted by mache's
-// MCP tools. Used in error messages so agents see the closed set.
+// MCP tools. The slice is sorted so error messages and tool
+// documentation produce stable output (map iteration is otherwise
+// nondeterministic — flagged by Copilot review on PR #438).
 func supportedKinds() []string {
 	out := make([]string, 0, len(kindToPathSegment))
 	for k := range kindToPathSegment {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }
 

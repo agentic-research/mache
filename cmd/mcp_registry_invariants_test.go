@@ -30,7 +30,11 @@ type inspectedTools struct {
 // `tools/list`, and returns the inspected tool inventory.
 func inspectRegisteredToolsForInvariants(t *testing.T) inspectedTools {
 	t.Helper()
-	s := server.NewMCPServer("mache-registry-test", "test")
+	// WithToolCapabilities(false) matches the production server
+	// (cmd/serve.go) and other tool-listing tests (cmd/serve_test.go),
+	// keeping the tools/list response shape stable across mcp-go
+	// version drift. Flagged by Copilot review on PR #438.
+	s := server.NewMCPServer("mache-registry-test", "test", server.WithToolCapabilities(false))
 	r := newGraphRegistry(".", nil)
 	registerMCPTools(s, r)
 
