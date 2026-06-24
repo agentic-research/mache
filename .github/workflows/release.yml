@@ -70,10 +70,15 @@ jobs:
         run: |
           # TAG can originate from repository_dispatch client_payload (attacker-
           # settable), so validate its shape before it's used anywhere — reject
-          # anything that isn't a clean semver tag. Passed via env (not inline
-          # ${{ }}) to avoid shell injection.
-          if [ -n "${TAG}" ] && ! printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
-            echo "::error::invalid release tag '${TAG}' — expected vMAJOR.MINOR.PATCH"
+          # anything that isn't a clean semver release tag (no pre-release/build
+          # suffix; release tags are always vMAJOR.MINOR.PATCH and must equal the
+          # clean version.txt base checked below). Passed via env (not inline
+          # ${{ }}). The error message does NOT echo the raw TAG: pre-validation
+          # it may contain a CR/newline that would break out of the ::error::
+          # workflow command (workflow-command injection). After this gate TAG is
+          # known clean, so the mismatch error below can safely include it.
+          if [ -n "${TAG}" ] && ! printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release tag failed validation — expected a clean semver tag like v0.10.0 (no pre-release or build suffix)"
             exit 1
           fi
           # Release-honesty gate: the tag must match the clean release base in
