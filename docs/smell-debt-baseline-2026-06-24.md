@@ -4,10 +4,13 @@ First measured snapshot of structural smell debt across the ART repos, the
 input the advisory→enforced **ratchet** will eventually grandfather. Produced
 with `mache find-smells` (commit `dac8ac5`) over leyline-parsed `.db`s.
 
-> **Headline:** the baseline is **Go-only**. The non-Go repos are not parseable
-> by the current tooling, so they are invisible to the smell engine — see
-> [the blocker](#the-cross-repo-blocker) (`mache-048fb6`). "Standardize across
-> repos" has an unmet prerequisite.
+> **Headline:** this snapshot is **Go-only** — but the cross-repo gap is
+> narrower than it looks. A *current* leyline parses Rust into a full `_ast`
+> (the installed binary is just stale); the genuine missing piece is **Rust
+> def/ref extraction** (`node_defs`), which is Go-only in LLO today. So the
+> structural rules can't yet run on Rust/TS — see
+> [the blocker](#the-cross-repo-blocker). One LLO function (`extract_rust`) plus
+> cross-lang rule generalization unlocks it.
 
 ## Method
 
@@ -62,29 +65,40 @@ engine, just finished the S-slice refactors).
 
 ## The cross-repo blocker
 
-`mache-048fb6` (P1). Verified 2026-06-24:
+The gap is narrower than a first pass suggested. Corrected against **current LLO
+source** (not the stale installed binary), 2026-06-24:
 
-- **leyline 0.4.5 does not parse Rust.** `mache build` on a 7-file Rust crate
-  ingested **0** `.rs` files (only markdown). rosary (9 crates),
-  ley-line-open (105 crates), cloister (4 crates + TS) are unmeasured.
-- **`--backend tree-sitter` ingests Rust files but extracts 0 defs** — the
-  28-language registry has the grammar, but the default FCA build produces no
-  symbol defs/refs without a per-language def/ref schema, so every `node_defs`
-  rule returns nothing.
+- **leyline _does_ parse Rust.** The `rust` cargo feature (added 2026-06-22,
+  pulled transitively by the default `hdc` feature) wires `tree-sitter-rust`. A
+  binary built from current source parses a 7-file crate into a full `_ast`
+  (743 identifiers, 181 call-expressions, function nodes). The earlier "0 files"
+  result was the **stale `~/.local/bin/leyline` (May-23 build, pre-`rust`-feature)** —
+  an install-currency problem, not a capability gap. **Action: rebuild + install
+  current leyline.**
+- **The real gap is def/ref extraction, which is Go-only.** On a current build,
+  Rust `node_defs = 0` while Go = 49. `rs/ll-open/ts/src/refs.rs` matches on
+  language with a single `TsLanguage::Go => extract_go(...)` arm; the file's own
+  doc says *"add new languages by adding a match arm + an `extract_<lang>`
+  function."* So Rust gets AST but no symbols → the `node_defs` rules
+  (`god_file`/`dead_code`/`duplicate_definitions`/`fan_out_skew`/`untested_function`)
+  return nothing. **This is an LLO bead: write `extract_rust`** (`ley-line-open-…`).
+- **Several rules are Go-language-gated.** `cyclomatic_complexity` /
+  `long_function` / `magic_int_in_comparison` carry `languages: ["go"]`, so they
+  won't fire on Rust even though the AST has the nodes (`function_item`,
+  `if_expression`, …). Cross-lang generalization is a mache concern (`mache-048fb6`).
 
-Until one of these is closed, cross-repo standardization is Go-only:
-
-- (a) leyline gains Rust (+JS/TS) parsing → emits `_ast`/`node_defs` like Go (preferred — unifies on the LLO substrate);
-- (b) author tree-sitter def/ref schemas (`examples/rust-schema.json`, `ts-schema.json`) so the standalone backend extracts defs;
-- (c) both — schema as the standalone floor, leyline as the enriched tier (the fidelity-ladder pattern).
+What **already works for Rust** on a current leyline: cross-lang `_ast` rules —
+`long_file` correctly lists `round_trip.rs`, `projection.rs`, etc. So the moment
+`extract_rust` lands (and the metric rules generalize), rosary (9 crates),
+ley-line-open (105), and cloister (4 + TS) become measurable.
 
 ## Next steps
 
-1. **Unblock non-Go parsing** (`mache-048fb6`) — prerequisite for any cross-repo claim.
-1. **Tune the noisy rules** — `cyclomatic`/`magic_int` need default `min_metric`s or
-   they drown the digest; `duplicate_definitions` FP class is `mache-409569`/`mache-40ae5c`.
-1. **Build the ratchet** — once counts are trustworthy and stable, snapshot a
-   per-repo baseline file and gate on *new* findings (advisory→enforced).
+1. **Install current leyline** — the May-23 binary predates Rust support.
+1. **`extract_rust` in LLO** (`ts/src/refs.rs`) → Rust `node_defs`/`node_refs`; unblocks the structural rules cross-repo.
+1. **Generalize the Go-gated metric rules** cross-lang (`mache-048fb6`) — the Rust/JS AST nodes exist; the rules just need non-Go arms.
+1. **Tune the noisy rules** — `cyclomatic`/`magic_int` need default `min_metric`s; `duplicate_definitions` FP class is `mache-409569`/`mache-40ae5c`.
+1. **Build the ratchet** — once counts are trustworthy + cross-repo, snapshot a per-repo baseline and gate on *new* findings (advisory→enforced).
 1. **Burn down** the actionable Go set — 99 long functions, 3 long test files.
 
 _Generated from `mache find-smells`. Re-run `task install && /tmp/baseline_go.sh` to refresh._
