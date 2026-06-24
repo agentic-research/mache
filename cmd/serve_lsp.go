@@ -41,6 +41,10 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		if symbol == "" {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
+		kind := request.GetString("kind", "")
+		if _, ok := filterDirIDsByKind(nil, kind); !ok {
+			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		}
 
 		// Fail fast on non-SQL backends with a clear message instead
 		// of the generic post-assertion "LSP data not available" which
@@ -67,7 +71,7 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 			if filePath == "" {
 				return lspTableMissing("_lsp_hover", "type info"), nil
 			}
-			result, err := enrichAndQueryTypeInfo(filePath, symbol)
+			result, err := enrichAndQueryTypeInfo(filePath, symbol, kind)
 			if err != nil {
 				log.Printf("LSP auto-enrichment failed: %v", err)
 				return lspEnrichFailed("type info"), nil
@@ -76,7 +80,7 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// LSP tables exist in mache's graph — query directly
-		return queryTypeInfoFromGraph(qg, symbol)
+		return queryTypeInfoFromGraph(qg, symbol, kind)
 	}
 }
 
@@ -84,6 +88,10 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		symbol := request.GetString("symbol", "")
 		limit := request.GetInt("limit", 50)
+		kind := request.GetString("kind", "")
+		if _, ok := filterDirIDsByKind(nil, kind); !ok {
+			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		}
 
 		// Mirror get_type_info: fail fast with a specific error if
 		// the backend doesn't support SQL queries.
@@ -107,7 +115,7 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 			if filePath == "" {
 				return lspTableMissing("_lsp", "diagnostics"), nil
 			}
-			result, err := enrichAndQueryDiagnostics(filePath, symbol, limit)
+			result, err := enrichAndQueryDiagnostics(filePath, symbol, kind, limit)
 			if err != nil {
 				log.Printf("LSP auto-enrichment failed: %v", err)
 				return lspEnrichFailed("diagnostics"), nil
@@ -115,7 +123,7 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 			return result, nil
 		}
 
-		return queryDiagnosticsFromGraph(qg, symbol, limit)
+		return queryDiagnosticsFromGraph(qg, symbol, kind, limit)
 	}
 }
 
@@ -123,7 +131,7 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 // directly from the ley-line daemon's arena via UDS, bypassing mache's
 // in-memory graph (which doesn't have _lsp* tables).
 // Uses a single connection for both enrichment and query.
-func enrichAndQueryTypeInfo(filePath, symbol string) (*mcp.CallToolResult, error) {
+func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult, error) {
 	sockPath, err := leyline.DiscoverOrStart()
 	if err != nil {
 		return nil, fmt.Errorf("discover/start leyline: %w", err)
@@ -191,13 +199,35 @@ func enrichAndQueryTypeInfo(filePath, symbol string) (*mcp.CallToolResult, error
 		return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q", symbol)), nil
 	}
 
+	if kind != "" {
+		nodeIDs := make([]string, len(results))
+		for i, r := range results {
+			nodeIDs[i] = r.NodeID
+		}
+		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
+		keep := make(map[string]bool, len(filteredIDs))
+		for _, id := range filteredIDs {
+			keep[id] = true
+		}
+		kept := results[:0]
+		for _, r := range results {
+			if keep[r.NodeID] {
+				kept = append(kept, r)
+			}
+		}
+		results = kept
+		if len(results) == 0 {
+			return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q with kind=%s", symbol, kind)), nil
+		}
+	}
+
 	data, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
 }
 
 // queryTypeInfoFromGraph queries _lsp_hover from mache's in-memory graph
 // (used when LSP tables already exist in the graph, e.g. from leyline lsp CLI).
-func queryTypeInfoFromGraph(qg refsQuerier, symbol string) (*mcp.CallToolResult, error) {
+func queryTypeInfoFromGraph(qg refsQuerier, symbol, kind string) (*mcp.CallToolResult, error) {
 	type hoverResult struct {
 		NodeID    string `json:"node_id"`
 		HoverText string `json:"hover_text"`
@@ -242,6 +272,28 @@ func queryTypeInfoFromGraph(qg refsQuerier, symbol string) (*mcp.CallToolResult,
 		return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q", symbol)), nil
 	}
 
+	if kind != "" {
+		nodeIDs := make([]string, len(results))
+		for i, r := range results {
+			nodeIDs[i] = r.NodeID
+		}
+		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
+		keep := make(map[string]bool, len(filteredIDs))
+		for _, id := range filteredIDs {
+			keep[id] = true
+		}
+		kept := results[:0]
+		for _, r := range results {
+			if keep[r.NodeID] {
+				kept = append(kept, r)
+			}
+		}
+		results = kept
+		if len(results) == 0 {
+			return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q with kind=%s", symbol, kind)), nil
+		}
+	}
+
 	data, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
 }
@@ -249,7 +301,7 @@ func queryTypeInfoFromGraph(qg refsQuerier, symbol string) (*mcp.CallToolResult,
 // enrichAndQueryDiagnostics triggers LSP enrichment and queries diagnostics
 // directly from the ley-line daemon's arena via UDS.
 // Uses a single connection for both enrichment and query.
-func enrichAndQueryDiagnostics(filePath, symbol string, limit int) (*mcp.CallToolResult, error) {
+func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
 	sockPath, err := leyline.DiscoverOrStart()
 	if err != nil {
 		return nil, fmt.Errorf("discover/start leyline: %w", err)
@@ -307,11 +359,36 @@ func enrichAndQueryDiagnostics(filePath, symbol string, limit int) (*mcp.CallToo
 		}
 	}
 
-	if len(results) == 0 {
-		if symbol != "" {
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
+	if kind != "" {
+		nodeIDs := make([]string, len(results))
+		for i, r := range results {
+			nodeIDs[i] = r.NodeID
 		}
-		return mcp.NewToolResultText("no diagnostics found"), nil
+		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
+		keep := make(map[string]bool, len(filteredIDs))
+		for _, id := range filteredIDs {
+			keep[id] = true
+		}
+		kept := results[:0]
+		for _, r := range results {
+			if keep[r.NodeID] {
+				kept = append(kept, r)
+			}
+		}
+		results = kept
+	}
+
+	if len(results) == 0 {
+		switch {
+		case symbol != "" && kind != "":
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q with kind=%s", symbol, kind)), nil
+		case symbol != "":
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
+		case kind != "":
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found with kind=%s", kind)), nil
+		default:
+			return mcp.NewToolResultText("no diagnostics found"), nil
+		}
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")
@@ -319,7 +396,7 @@ func enrichAndQueryDiagnostics(filePath, symbol string, limit int) (*mcp.CallToo
 }
 
 // queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph.
-func queryDiagnosticsFromGraph(qg refsQuerier, symbol string, limit int) (*mcp.CallToolResult, error) {
+func queryDiagnosticsFromGraph(qg refsQuerier, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
 	type diagResult struct {
 		NodeID      string `json:"node_id"`
 		SymbolKind  string `json:"symbol_kind"`
@@ -351,11 +428,36 @@ func queryDiagnosticsFromGraph(qg refsQuerier, symbol string, limit int) (*mcp.C
 	}
 	_ = rows.Close()
 
-	if len(results) == 0 {
-		if symbol != "" {
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
+	if kind != "" {
+		nodeIDs := make([]string, len(results))
+		for i, r := range results {
+			nodeIDs[i] = r.NodeID
 		}
-		return mcp.NewToolResultText("no diagnostics found"), nil
+		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
+		keep := make(map[string]bool, len(filteredIDs))
+		for _, id := range filteredIDs {
+			keep[id] = true
+		}
+		kept := results[:0]
+		for _, r := range results {
+			if keep[r.NodeID] {
+				kept = append(kept, r)
+			}
+		}
+		results = kept
+	}
+
+	if len(results) == 0 {
+		switch {
+		case symbol != "" && kind != "":
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q with kind=%s", symbol, kind)), nil
+		case symbol != "":
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
+		case kind != "":
+			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found with kind=%s", kind)), nil
+		default:
+			return mcp.NewToolResultText("no diagnostics found"), nil
+		}
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")

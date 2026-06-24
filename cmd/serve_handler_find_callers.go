@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -16,6 +17,10 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		if token == "" {
 			return mcp.NewToolResultError("token is required"), nil
 		}
+		kind := request.GetString("kind", "")
+		if _, ok := filterDirIDsByKind(nil, kind); !ok {
+			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		}
 
 		callers, err := g.GetCallers(token)
 		if err != nil {
@@ -25,6 +30,14 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		paths := make([]string, 0, len(callers))
 		for _, c := range callers {
 			paths = append(paths, c.ID)
+		}
+
+		// Apply the optional kind filter to caller paths. find_callers
+		// returns the construct paths of the call SITES, so the kind
+		// filter narrows by what KIND of caller is calling — e.g.
+		// "show me only methods that call X." Empty kind is a no-op.
+		if kind != "" {
+			paths, _ = filterDirIDsByKind(paths, kind)
 		}
 
 		// Cross-repo annotation: when running on a CompositeGraph,
@@ -43,6 +56,26 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		if qg, ok := g.(refsQuerier); ok {
 			lspRefs, lspErr := queryLSPRefs(qg, token)
 			if lspErr == nil && len(lspRefs) > 0 {
+				// Apply kind filter to LSP refs too (same NodeID
+				// construct-path encoding).
+				if kind != "" {
+					nodeIDs := make([]string, len(lspRefs))
+					for i, r := range lspRefs {
+						nodeIDs[i] = r.NodeID
+					}
+					filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
+					keep := make(map[string]bool, len(filteredIDs))
+					for _, id := range filteredIDs {
+						keep[id] = true
+					}
+					kept := lspRefs[:0]
+					for _, r := range lspRefs {
+						if keep[r.NodeID] {
+							kept = append(kept, r)
+						}
+					}
+					lspRefs = kept
+				}
 				type callersResult struct {
 					Callers []string         `json:"callers"`
 					LSPRefs []lspRefLocation `json:"lsp_refs"`
