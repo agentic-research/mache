@@ -41,9 +41,9 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		if symbol == "" {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
-		kind := request.GetString("kind", "")
-		if _, ok := filterDirIDsByKind(nil, kind); !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		kind, errResult := validateKindParam(request)
+		if errResult != nil {
+			return errResult, nil
 		}
 
 		// Fail fast on non-SQL backends with a clear message instead
@@ -88,9 +88,9 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		symbol := request.GetString("symbol", "")
 		limit := request.GetInt("limit", 50)
-		kind := request.GetString("kind", "")
-		if _, ok := filterDirIDsByKind(nil, kind); !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		kind, errResult := validateKindParam(request)
+		if errResult != nil {
+			return errResult, nil
 		}
 
 		// Mirror get_type_info: fail fast with a specific error if
@@ -199,26 +199,12 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 		return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q", symbol)), nil
 	}
 
-	if kind != "" {
-		nodeIDs := make([]string, len(results))
-		for i, r := range results {
-			nodeIDs[i] = r.NodeID
-		}
-		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
-		keep := make(map[string]bool, len(filteredIDs))
-		for _, id := range filteredIDs {
-			keep[id] = true
-		}
-		kept := results[:0]
-		for _, r := range results {
-			if keep[r.NodeID] {
-				kept = append(kept, r)
-			}
-		}
-		results = kept
-		if len(results) == 0 {
+	results = filterByNodeIDKind(results, kind, func(r hoverResult) string { return r.NodeID })
+	if len(results) == 0 {
+		if kind != "" {
 			return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q with kind=%s", symbol, kind)), nil
 		}
+		return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q", symbol)), nil
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")
@@ -268,30 +254,12 @@ func queryTypeInfoFromGraph(qg refsQuerier, symbol, kind string) (*mcp.CallToolR
 		}
 	}
 
+	results = filterByNodeIDKind(results, kind, func(r hoverResult) string { return r.NodeID })
 	if len(results) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q", symbol)), nil
-	}
-
-	if kind != "" {
-		nodeIDs := make([]string, len(results))
-		for i, r := range results {
-			nodeIDs[i] = r.NodeID
-		}
-		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
-		keep := make(map[string]bool, len(filteredIDs))
-		for _, id := range filteredIDs {
-			keep[id] = true
-		}
-		kept := results[:0]
-		for _, r := range results {
-			if keep[r.NodeID] {
-				kept = append(kept, r)
-			}
-		}
-		results = kept
-		if len(results) == 0 {
+		if kind != "" {
 			return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q with kind=%s", symbol, kind)), nil
 		}
+		return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q", symbol)), nil
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")
@@ -359,40 +327,30 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 		}
 	}
 
-	if kind != "" {
-		nodeIDs := make([]string, len(results))
-		for i, r := range results {
-			nodeIDs[i] = r.NodeID
-		}
-		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
-		keep := make(map[string]bool, len(filteredIDs))
-		for _, id := range filteredIDs {
-			keep[id] = true
-		}
-		kept := results[:0]
-		for _, r := range results {
-			if keep[r.NodeID] {
-				kept = append(kept, r)
-			}
-		}
-		results = kept
-	}
-
+	results = filterByNodeIDKind(results, kind, func(r diagResult) string { return r.NodeID })
 	if len(results) == 0 {
-		switch {
-		case symbol != "" && kind != "":
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q with kind=%s", symbol, kind)), nil
-		case symbol != "":
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
-		case kind != "":
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found with kind=%s", kind)), nil
-		default:
-			return mcp.NewToolResultText("no diagnostics found"), nil
-		}
+		return noDiagnosticsResult(symbol, kind), nil
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// noDiagnosticsResult returns the appropriate "no diagnostics found"
+// message based on which filter inputs were set. Extracted from the
+// two diagnostics paths (enrich + in-graph) which would otherwise
+// repeat the switch verbatim.
+func noDiagnosticsResult(symbol, kind string) *mcp.CallToolResult {
+	switch {
+	case symbol != "" && kind != "":
+		return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q with kind=%s", symbol, kind))
+	case symbol != "":
+		return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol))
+	case kind != "":
+		return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found with kind=%s", kind))
+	default:
+		return mcp.NewToolResultText("no diagnostics found")
+	}
 }
 
 // queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph.
@@ -428,36 +386,9 @@ func queryDiagnosticsFromGraph(qg refsQuerier, symbol, kind string, limit int) (
 	}
 	_ = rows.Close()
 
-	if kind != "" {
-		nodeIDs := make([]string, len(results))
-		for i, r := range results {
-			nodeIDs[i] = r.NodeID
-		}
-		filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
-		keep := make(map[string]bool, len(filteredIDs))
-		for _, id := range filteredIDs {
-			keep[id] = true
-		}
-		kept := results[:0]
-		for _, r := range results {
-			if keep[r.NodeID] {
-				kept = append(kept, r)
-			}
-		}
-		results = kept
-	}
-
+	results = filterByNodeIDKind(results, kind, func(r diagResult) string { return r.NodeID })
 	if len(results) == 0 {
-		switch {
-		case symbol != "" && kind != "":
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q with kind=%s", symbol, kind)), nil
-		case symbol != "":
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found for %q", symbol)), nil
-		case kind != "":
-			return mcp.NewToolResultText(fmt.Sprintf("no diagnostics found with kind=%s", kind)), nil
-		default:
-			return mcp.NewToolResultText("no diagnostics found"), nil
-		}
+		return noDiagnosticsResult(symbol, kind), nil
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")

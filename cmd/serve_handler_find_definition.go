@@ -30,9 +30,9 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
 		fuzzy := request.GetBool("fuzzy", false)
-		kind := request.GetString("kind", "")
-		if _, ok := filterDirIDsByKind(nil, kind); !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		kind, errResult := validateKindParam(request)
+		if errResult != nil {
+			return errResult, nil
 		}
 
 		// Helper: applies the kind filter to a slice of dirIDs. Returns
@@ -118,24 +118,7 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		if qg, ok := g.(refsQuerier); ok {
 			lspDefs, err := queryLSPDefs(qg, symbol)
 			if err == nil && len(lspDefs) > 0 {
-				if kind != "" {
-					nodeIDs := make([]string, len(lspDefs))
-					for i, d := range lspDefs {
-						nodeIDs[i] = d.NodeID
-					}
-					filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
-					keep := make(map[string]bool, len(filteredIDs))
-					for _, id := range filteredIDs {
-						keep[id] = true
-					}
-					kept := lspDefs[:0]
-					for _, d := range lspDefs {
-						if keep[d.NodeID] {
-							kept = append(kept, d)
-						}
-					}
-					lspDefs = kept
-				}
+				lspDefs = filterByNodeIDKind(lspDefs, kind, func(d lspDefLocation) string { return d.NodeID })
 				if len(lspDefs) > 0 {
 					type lspResult struct {
 						Symbol      string           `json:"symbol"`

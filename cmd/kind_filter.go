@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // Known construct kinds mache projects today. The path layout (per
@@ -54,4 +57,51 @@ func filterDirIDsByKind(dirIDs []string, kind string) ([]string, bool) {
 		}
 	}
 	return filtered, true
+}
+
+// validateKindParam pulls the optional `kind` param from an MCP
+// request and validates it against the supported kind set. Returns
+// either (kind, nil) on success or ("", errResult) when the kind
+// is unknown. Caller propagates errResult and returns immediately
+// when non-nil. Extracted from per-handler boilerplate to keep
+// each handler's fan-out under the find_smells threshold (Copilot
+// review on PR #438, fan_out_skew advisory).
+func validateKindParam(request mcp.CallToolRequest) (string, *mcp.CallToolResult) {
+	kind := request.GetString("kind", "")
+	if _, ok := filterDirIDsByKind(nil, kind); !ok {
+		return "", mcp.NewToolResultError(fmt.Sprintf(
+			"unknown kind %q — accepted values: %s",
+			kind, strings.Join(supportedKinds(), ", ")))
+	}
+	return kind, nil
+}
+
+// filterByNodeIDKind keeps only items whose NodeID (extracted via
+// idOf) matches the requested kind. Generic over the item type
+// because lspDefLocation, lspRefLocation, and hover/diag result
+// shapes all carry a NodeID field but have distinct struct types.
+// Returns items unchanged when kind == "". Extracted from the
+// repeated build-IDs / build-keep-map / filter-results loop that
+// appeared 4 times across serve_lsp.go + serve_handler_*.go
+// (Copilot fan_out_skew advisory).
+func filterByNodeIDKind[T any](items []T, kind string, idOf func(T) string) []T {
+	if kind == "" {
+		return items
+	}
+	ids := make([]string, len(items))
+	for i, x := range items {
+		ids[i] = idOf(x)
+	}
+	filteredIDs, _ := filterDirIDsByKind(ids, kind)
+	keep := make(map[string]bool, len(filteredIDs))
+	for _, id := range filteredIDs {
+		keep[id] = true
+	}
+	kept := items[:0]
+	for _, x := range items {
+		if keep[idOf(x)] {
+			kept = append(kept, x)
+		}
+	}
+	return kept
 }

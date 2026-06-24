@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -17,9 +16,9 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		if token == "" {
 			return mcp.NewToolResultError("token is required"), nil
 		}
-		kind := request.GetString("kind", "")
-		if _, ok := filterDirIDsByKind(nil, kind); !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		kind, errResult := validateKindParam(request)
+		if errResult != nil {
+			return errResult, nil
 		}
 
 		callers, err := g.GetCallers(token)
@@ -58,24 +57,7 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 			if lspErr == nil && len(lspRefs) > 0 {
 				// Apply kind filter to LSP refs too (same NodeID
 				// construct-path encoding).
-				if kind != "" {
-					nodeIDs := make([]string, len(lspRefs))
-					for i, r := range lspRefs {
-						nodeIDs[i] = r.NodeID
-					}
-					filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
-					keep := make(map[string]bool, len(filteredIDs))
-					for _, id := range filteredIDs {
-						keep[id] = true
-					}
-					kept := lspRefs[:0]
-					for _, r := range lspRefs {
-						if keep[r.NodeID] {
-							kept = append(kept, r)
-						}
-					}
-					lspRefs = kept
-				}
+				lspRefs = filterByNodeIDKind(lspRefs, kind, func(r lspRefLocation) string { return r.NodeID })
 				type callersResult struct {
 					Callers []string         `json:"callers"`
 					LSPRefs []lspRefLocation `json:"lsp_refs"`

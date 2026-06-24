@@ -40,9 +40,9 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 		if direction != "callers" && direction != "callees" && direction != "both" {
 			return mcp.NewToolResultError("direction must be 'callers', 'callees', or 'both'"), nil
 		}
-		kind := request.GetString("kind", "")
-		if _, ok := filterDirIDsByKind(nil, kind); !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		kind, errResult := validateKindParam(request)
+		if errResult != nil {
+			return errResult, nil
 		}
 
 		// Resolve starting definition(s) for the symbol via the defs map.
