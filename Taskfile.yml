@@ -28,13 +28,20 @@ tasks:
         sh: git rev-parse --short HEAD 2>/dev/null || echo "none"
       BUILD_DATE:
         sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
+      # Honest build version: the clean tag on a tagged build (e.g. v0.10.0),
+      # else a git-distance string (v0.9.0-9-gabc1234), else the version.txt
+      # base when git is unavailable. cmd.Version strips the leading "v".
+      GIT_VERSION:
+        sh: git describe --tags --always --dirty 2>/dev/null || cat internal/buildinfo/version.txt
     cmds:
-      # Version is NOT injected here — it is the single source of truth in
-      # internal/buildinfo (embedded version.txt). Only Commit/Date, which
-      # are genuinely build-specific, come in via -ldflags.
+      # cmd.Version is injected from `git describe` so the binary's reported
+      # version tracks the built code. The CLEAN release base still lives in
+      # internal/buildinfo (version.txt); server.json + melange derive from
+      # that, not from this build string.
       - >-
         go build         -ldflags "-X github.com/agentic-research/mache/cmd.Commit={{.GIT_COMMIT}}
-        -X github.com/agentic-research/mache/cmd.Date={{.BUILD_DATE}}"
+        -X github.com/agentic-research/mache/cmd.Date={{.BUILD_DATE}}
+        -X github.com/agentic-research/mache/cmd.buildVersion={{.GIT_VERSION}}"
         -o {{.BINARY_NAME}} .
       # No leading ./ — BINARY_NAME may be an absolute path (CI overrides it,
       # e.g. find-smells builds to /tmp/mache); ./ would yield .//tmp/mache.
@@ -388,6 +395,21 @@ tasks:
     cmds:
       - go run ./tools/server-json-gen/ > server.json
       - echo "regenerated server.json"
+
+  gen:version:
+    desc: |
+      Stamp the clean release version from internal/buildinfo/version.txt into
+      the artifacts that require a stable semver — melange.yaml + server.json —
+      then verify single-sourcing. Release flow: edit version.txt, run
+      `task gen:version`, commit, tag `v<version>`. (sed not yq, so CI without
+      yq still works; the .bak dance is portable across BSD/GNU sed.)
+    cmds:
+      - |
+        VER="$(tr -d '[:space:]' < internal/buildinfo/version.txt)"
+        sed -i.bak -E "s/^  version:.*/  version: ${VER}/" melange.yaml && rm -f melange.yaml.bak
+        echo "stamped melange.yaml version: ${VER}"
+      - task: gen:server-json
+      - task: version:check
 
   gen:server-json:check:
     desc: |

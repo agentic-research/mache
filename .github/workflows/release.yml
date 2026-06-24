@@ -50,6 +50,8 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
+          # Full history + tags so `git describe` works for the dev fallback.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
@@ -58,18 +60,44 @@ jobs:
 
       - name: Build mache
         # CGO on for the tree-sitter grammars only (they carry their own #cgo
-        # directives). No external libs, no FUSE, no sudo. Version is
-        # single-sourced from embedded internal/buildinfo; only Commit/Date
-        # come via ldflags.
+        # directives). No external libs, no FUSE, no sudo. The binary's
+        # cmd.Version is injected from the release TAG so it matches the tag
+        # exactly; the CLEAN release base in internal/buildinfo (version.txt)
+        # is what server.json + melange derive from — gated to agree below.
         env:
           CGO_ENABLED: '1'
+          TAG: ${{ env.TAG }}
         run: |
+          # TAG can originate from repository_dispatch client_payload (attacker-
+          # settable), so validate its shape before it's used anywhere — reject
+          # anything that isn't a clean semver release tag (no pre-release/build
+          # suffix; release tags are always vMAJOR.MINOR.PATCH and must equal the
+          # clean version.txt base checked below). Passed via env (not inline
+          # ${{ }}). The error message does NOT echo the raw TAG: pre-validation
+          # it may contain a CR/newline that would break out of the ::error::
+          # workflow command (workflow-command injection). After this gate TAG is
+          # known clean, so the mismatch error below can safely include it.
+          if [ -n "${TAG}" ] && ! printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release tag failed validation — expected a clean semver tag like v0.10.0 (no pre-release or build suffix)"
+            exit 1
+          fi
+          # Release-honesty gate: the tag must match the clean release base in
+          # version.txt, so we never publish a binary/package whose version
+          # disagrees with the tag. Bump internal/buildinfo/version.txt (and
+          # melange.yaml + server.json) to the new version before tagging.
+          BASE="v$(tr -d '[:space:]' < internal/buildinfo/version.txt)"
+          if [ -n "${TAG}" ] && [ "${TAG}" != "${BASE}" ]; then
+            echo "::error::release tag ${TAG} != version.txt ${BASE} — bump internal/buildinfo/version.txt, melange.yaml, and server.json to match the tag before releasing"
+            exit 1
+          fi
           GIT_COMMIT=$(git rev-parse --short HEAD)
           BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          VERSION="${TAG:-$(git describe --tags --always --dirty)}"
           go build \
             -ldflags "-s -w \
               -X github.com/agentic-research/mache/cmd.Commit=${GIT_COMMIT} \
-              -X github.com/agentic-research/mache/cmd.Date=${BUILD_DATE}" \
+              -X github.com/agentic-research/mache/cmd.Date=${BUILD_DATE} \
+              -X github.com/agentic-research/mache/cmd.buildVersion=${VERSION}" \
             -o ${{ matrix.artifact }} .
 
       - name: Codesign (macOS)
