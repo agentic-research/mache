@@ -30,6 +30,20 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
 		fuzzy := request.GetBool("fuzzy", false)
+		kind := request.GetString("kind", "")
+		if _, ok := filterDirIDsByKind(nil, kind); !ok {
+			return mcp.NewToolResultError(fmt.Sprintf("unknown kind %q — accepted values: %s", kind, strings.Join(supportedKinds(), ", "))), nil
+		}
+
+		// Helper: applies the kind filter to a slice of dirIDs. Returns
+		// (filtered, true) when filtering yielded a non-empty result the
+		// caller should treat as a hit. Returns (nil, false) when the
+		// kind filter excludes every candidate — the caller falls
+		// through to the next lookup path.
+		acceptKind := func(dirIDs []string) ([]string, bool) {
+			filtered, _ := filterDirIDsByKind(dirIDs, kind)
+			return filtered, len(filtered) > 0
+		}
 
 		// 1. Anchored exact match — case-sensitive. Use LookupDef
 		// when the backend supports it: O(1) map lookup, no
@@ -38,10 +52,12 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		// optional lookup method.
 		if dl, ok := g.(defsLookuper); ok {
 			if dirIDs := dl.LookupDef(symbol); len(dirIDs) > 0 {
-				if r := findDefinitionResultScoped(g, symbol, dirIDs); r != nil {
-					return r, nil
+				if filtered, hit := acceptKind(dirIDs); hit {
+					if r := findDefinitionResultScoped(g, symbol, filtered); r != nil {
+						return r, nil
+					}
+					return findDefinitionResult(symbol, filtered), nil
 				}
-				return findDefinitionResult(symbol, dirIDs), nil
 			}
 		}
 
@@ -55,10 +71,12 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		// the backend lacks a defsLookuper. Mirrors the old behavior.
 		if _, hasLookup := g.(defsLookuper); !hasLookup {
 			if dirIDs, ok := defs[symbol]; ok {
-				if r := findDefinitionResultScoped(g, symbol, dirIDs); r != nil {
-					return r, nil
+				if filtered, hit := acceptKind(dirIDs); hit {
+					if r := findDefinitionResultScoped(g, symbol, filtered); r != nil {
+						return r, nil
+					}
+					return findDefinitionResult(symbol, filtered), nil
 				}
-				return findDefinitionResult(symbol, dirIDs), nil
 			}
 		}
 
@@ -67,10 +85,12 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		symbolLower := strings.ToLower(symbol)
 		for token, ids := range defs {
 			if strings.ToLower(token) == symbolLower {
-				if r := findDefinitionResultScoped(g, symbol, ids); r != nil {
-					return r, nil
+				if filtered, hit := acceptKind(ids); hit {
+					if r := findDefinitionResultScoped(g, symbol, filtered); r != nil {
+						return r, nil
+					}
+					return findDefinitionResult(symbol, filtered), nil
 				}
-				return findDefinitionResult(symbol, ids), nil
 			}
 		}
 
@@ -93,20 +113,42 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// 4. LSP fallback: try _lsp_defs from a ley-line pre-baked DB.
+		// LSP results carry their construct path in NodeID, so the
+		// kind filter applies the same way.
 		if qg, ok := g.(refsQuerier); ok {
 			lspDefs, err := queryLSPDefs(qg, symbol)
 			if err == nil && len(lspDefs) > 0 {
-				type lspResult struct {
-					Symbol      string           `json:"symbol"`
-					Source      string           `json:"source"`
-					Definitions []lspDefLocation `json:"definitions"`
+				if kind != "" {
+					nodeIDs := make([]string, len(lspDefs))
+					for i, d := range lspDefs {
+						nodeIDs[i] = d.NodeID
+					}
+					filteredIDs, _ := filterDirIDsByKind(nodeIDs, kind)
+					keep := make(map[string]bool, len(filteredIDs))
+					for _, id := range filteredIDs {
+						keep[id] = true
+					}
+					kept := lspDefs[:0]
+					for _, d := range lspDefs {
+						if keep[d.NodeID] {
+							kept = append(kept, d)
+						}
+					}
+					lspDefs = kept
 				}
-				data, _ := json.MarshalIndent(lspResult{
-					Symbol:      symbol,
-					Source:      "lsp",
-					Definitions: lspDefs,
-				}, "", "  ")
-				return mcp.NewToolResultText(string(data)), nil
+				if len(lspDefs) > 0 {
+					type lspResult struct {
+						Symbol      string           `json:"symbol"`
+						Source      string           `json:"source"`
+						Definitions []lspDefLocation `json:"definitions"`
+					}
+					data, _ := json.MarshalIndent(lspResult{
+						Symbol:      symbol,
+						Source:      "lsp",
+						Definitions: lspDefs,
+					}, "", "  ")
+					return mcp.NewToolResultText(string(data)), nil
+				}
 			}
 		}
 
@@ -115,10 +157,14 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		if !fuzzy && len(symbol) >= minFuzzyLen {
 			hint = " — try fuzzy=true for substring matches"
 		}
-		if serveControl != "" {
-			return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q — daemon may still be parsing, retry shortly%s", symbol, hint)), nil
+		kindHint := ""
+		if kind != "" {
+			kindHint = fmt.Sprintf(" with kind=%s", kind)
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q%s", symbol, hint)), nil
+		if serveControl != "" {
+			return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q%s — daemon may still be parsing, retry shortly%s", symbol, kindHint, hint)), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("no definition found for %q%s%s", symbol, kindHint, hint)), nil
 	}
 }
 

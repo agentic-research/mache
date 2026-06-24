@@ -77,6 +77,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 		mcp.NewTool("find_definition",
 			mcp.WithDescription("Find where a symbol is declared. Use for 'where is X defined?', 'where does X come from?'. Default match is anchored: case-sensitive exact, then case-insensitive exact. Set fuzzy=true to also fall back to substring suggestions when no anchored match exists (recommended only for short queries in unfamiliar codebases — fuzzy is noisy in monorepos)."),
 			mcp.WithString("symbol", mcp.Required(), mcp.Description("Symbol name to find definition for (e.g. 'GetCallers' or 'auth.Validate')")),
+			mcp.WithString("kind", mcp.Description("Optional construct-kind filter to disambiguate when the same name appears in multiple kinds. Accepted values: function, method, type, constant, variable, import. Omit to return all kinds.")),
 			mcp.WithBoolean("fuzzy", mcp.Description("Fall back to substring matching when no anchored match is found (default false). Symbols shorter than 4 characters are never fuzzy-matched.")),
 		),
 		r.wrapHandler(makeFindDefinitionHandler),
