@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/agentic-research/mache/api"
@@ -23,14 +24,35 @@ import (
 )
 
 var (
-	// Version is the mache release version, sourced from the embedded
-	// internal/buildinfo (the single source of truth — see that package).
-	// Commit and Date are still injected at build time via -ldflags since
-	// they are genuinely build-specific; Version is not.
-	Version = buildinfo.Version
+	// Version is the binary's build version, shown by `mache version` and
+	// stamped into build artifacts (_mache_meta, the build-cache lockfile
+	// producer field, the MCP server version). `task build` and release.yml
+	// inject it from `git describe --tags` via -ldflags, so it tells the truth
+	// about the built code: a clean tag (0.10.0) on a tagged release, a
+	// git-distance string (0.9.0-9-gabc1234) between releases. A bare
+	// `go build` / `go test` (no ldflags) falls back to the clean release base
+	// in internal/buildinfo (version.txt).
+	//
+	// NOTE: server.json and melange.yaml derive from buildinfo.Version (the
+	// clean, committed, drift-checked release base) — never from this string —
+	// so a dev-distance build version can't break the server-json drift gate or
+	// produce an invalid apk package version.
+	Version = resolveBuildVersion()
 	Commit  = "none"
 	Date    = "unknown"
 )
+
+// buildVersion is injected via
+// -ldflags "-X github.com/agentic-research/mache/cmd.buildVersion=<git describe>".
+// Empty for a bare build; see Version's doc for the fallback.
+var buildVersion string
+
+func resolveBuildVersion() string {
+	if v := strings.TrimSpace(buildVersion); v != "" {
+		return strings.TrimPrefix(v, "v")
+	}
+	return buildinfo.Version
+}
 
 var (
 	schemaPath  string
