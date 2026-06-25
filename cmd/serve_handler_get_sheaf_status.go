@@ -52,6 +52,15 @@ func makeGetSheafStatusHandler(subscriberStatus func() (leyline.SubscriberStatus
 			}
 		}
 
+		// leyline binary provenance is independent of daemon reachability
+		// (it's "which binary did mache resolve"), so attach it to every
+		// response shape — including {available:false} (mache-0dcd98).
+		addProvenance := func(body map[string]any) {
+			if prov, ok := leyline.Provenance(); ok {
+				body["leyline"] = prov
+			}
+		}
+
 		unavailable := func(reason string) (*mcp.CallToolResult, error) {
 			body := map[string]any{
 				"available": false,
@@ -60,6 +69,7 @@ func makeGetSheafStatusHandler(subscriberStatus func() (leyline.SubscriberStatus
 			if subState != nil { // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
 				body["subscriber"] = subscriberFieldsFor(*subState) // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
 			} // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
+			addProvenance(body)
 			data, _ := json.Marshal(body)
 			return mcp.NewToolResultText(string(data)), nil
 		}
@@ -90,6 +100,7 @@ func makeGetSheafStatusHandler(subscriberStatus func() (leyline.SubscriberStatus
 		if subState != nil {
 			body["subscriber"] = subscriberFieldsFor(*subState)
 		}
+		addProvenance(body)
 		data, _ := json.Marshal(body)
 		return mcp.NewToolResultText(string(data)), nil
 	}
