@@ -140,9 +140,16 @@ func (w *ASTWalker) ExtractFileLevelRefs(sourceID, langName string) ([]string, e
 	seen := make(map[string]bool)
 	var refs []string
 	for _, p := range patterns {
+		// Unlike the generic Query path (where a selector may legitimately
+		// be unsupported), queryCallPattern generates SQL from a structured
+		// kind-chain — an error here is a real bug (invalid pattern or a
+		// failed query), not an unsupported pattern. Surface it rather than
+		// returning a silently-incomplete ref set: these tokens feed the
+		// _file_level: sentinel dead_code reads, so a short set with nil
+		// error would manifest as silent dead_code false positives.
 		rows, err := w.queryCallPattern(sourceID, p, false, "")
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("file-level ref pattern %s/%s: %w", p.OuterKind, p.LeafKind, err)
 		}
 		for _, r := range rows {
 			if r.token != "" && !seen[r.token] {
@@ -205,6 +212,12 @@ type callRow struct {
 func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifier bool, scopePrefix string) ([]callRow, error) {
 	if p.OuterKind == "" || p.LeafKind == "" {
 		return nil, fmt.Errorf("invalid CallPattern: OuterKind and LeafKind required")
+	}
+	// RequirePriorSibling references the immediate-ancestor alias (a_anc0),
+	// so it's meaningless without at least one ancestor. Reject rather than
+	// silently dropping the constraint, which would over-capture undetectably.
+	if p.RequirePriorSibling && len(p.Ancestors) == 0 {
+		return nil, fmt.Errorf("invalid CallPattern: RequirePriorSibling requires at least one ancestor")
 	}
 
 	// Build the ancestor JOIN chain.
@@ -274,7 +287,8 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 	// the immediate ancestor under the outer node (e.g. the key
 	// literal_element preceding the value literal_element in a
 	// keyed_element). Reproduces tree-sitter positional capture.
-	if p.RequirePriorSibling && len(p.Ancestors) > 0 {
+	// len(Ancestors) >= 1 is guaranteed by the validation above.
+	if p.RequirePriorSibling {
 		sb.WriteString(`
 			AND EXISTS (
 				SELECT 1 FROM nodes sib

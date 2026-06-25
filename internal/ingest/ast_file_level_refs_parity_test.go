@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 // fileLevelParitySrc exercises every file-level ref pattern:
@@ -104,6 +106,27 @@ func TestASTContextParity_Go(t *testing.T) {
 
 	assert.Equal(t, string(sitterCtx), string(astCtx),
 		"context blob must match across walkers")
+}
+
+// TestExtractFileLevelRefs_InvalidPatternErrors pins that a malformed
+// CallPattern surfaces instead of being silently swallowed (Copilot
+// review on #443). A RequirePriorSibling pattern with no ancestors is
+// invalid; queryCallPattern must reject it AND ExtractFileLevelRefs must
+// propagate the error — these tokens feed the _file_level: sentinel
+// dead_code reads, so a silently-incomplete set with nil error is a
+// latent correctness bug.
+func TestExtractFileLevelRefs_InvalidPatternErrors(t *testing.T) {
+	// Unique langName so we don't perturb the real "go" registry.
+	RegisterASTFileLevelRefPatterns("faketest_invalid", []CallPattern{
+		{OuterKind: "x", LeafKind: "y", RequirePriorSibling: true}, // no ancestors → invalid
+	})
+
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "x.db"))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = NewASTWalker(db).ExtractFileLevelRefs("f.go", "faketest_invalid")
+	require.Error(t, err, "malformed RequirePriorSibling pattern must surface, not silently skip")
 }
 
 func sortedCopy(in []string) []string {
