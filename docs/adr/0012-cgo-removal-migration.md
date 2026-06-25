@@ -1,7 +1,10 @@
 # ADR-0012: CGO Removal — Migration Plan
 
 Date: 2026-04-30
-Status: Accepted (steps 1–3 shipped; step 4 gated on `mache-33dc5f`)
+Status: Accepted (steps 1–3 shipped; step-4 engine mechanism shipped &
+parity-proven via S3/S4 — `mache-33cd7e`/`mache-33de70`; commitment point now
+gated on production activation of `SetASTWalker`, the deletion blockers, and
+`mache-33dc5f`)
 Supersedes inline mitigation in `mache-2y9w` (PR #257, #299)
 
 ## Context
@@ -139,7 +142,44 @@ Two PRs:
   see today's behavior unchanged. `--backend=tree-sitter` is the
   explicit escape hatch for in-process parsing.
 
-### Step 4 — Make leyline the required path (commitment point) ⏳ gated on `mache-33dc5f`
+### Step 4 — Make leyline the required path (commitment point) ⏳ gated on activation + `mache-33dc5f`
+
+**Engine-side progress (2026-06-25, `mache-33cd7e` + `mache-33de70`):** the
+work that makes the commitment point *possible* has landed and is
+byte-parity-proven, decomposed as S-slices off epic `mache-36d961`:
+
+- **Interface widening (S3, #431/#432/#433):** the engine no longer
+  type-switches on the concrete walker. The extractors it needed — lang/pkg
+  (`FileMeta`), location/doc-comments (`DocScope`), per-scope calls/refs
+  (`CallExtractor`), and file-level refs (`ExtractFileLevelRefs`, #443) — are
+  all on the `Match`/`Walker` interfaces, implemented by both backends.
+- **Phase-1 parse gating (S4, #445):** the tree-sitter parse + sitter
+  context/imports/file-level-refs now run only when `e.astWalker == nil`.
+  With an ASTWalker backend, **no CGO runs in ingest** (this also removes the
+  `mache-2y9w` SIGSEGV surface on that path). `TestASTQueryParity` ingests
+  the same source through both backends — with the CGO parse SKIPPED on the
+  AST side — and asserts byte-for-byte identical projection.
+
+**What's left for the commitment point is no longer the engine — it's
+*activation* and *deletion*:**
+
+1. **Activation — where `SetASTWalker` gets wired.** Today `SetASTWalker` has
+   no production caller; the default `mache <dir>` ingest still parses with
+   tree-sitter because **mache is its own parser at ingest time — there is no
+   `_ast` db to read from** (the `_ast` index is ingestion's *output*, not an
+   input). Activation means inserting a *parse-first* step in the read-only
+   source-ingest fast path (`cmd/mount.go`, the `SchemaUsesTreeSitter` branch
+   ~L366): run `leyline parse <src> -o <index>.db` to produce
+   `_ast`/`_source`/`_imports`, then `engine.SetASTWalker(NewASTWalker(db))`
+   before `engine.Ingest(<src>)`. `SelectWalker(db)` is the helper that picks
+   ASTWalker when `_ast` is present. Gate on leyline availability: present →
+   pure-Go AST ingest; absent → today's tree-sitter path. This is the pivot
+   the ADR already names — "ley-line produces, mache projects" — made real
+   for source ingestion, and it makes leyline a runtime dependency of
+   `mache <dir>` (the same Negative already noted for `mache build`).
+1. **Deletion blockers** (unchanged): `validate.go`, `lattice/infer.go`,
+   `linter.go` each still need a non-CGO answer before SitterWalker and the
+   grammars can be deleted.
 
 Drop SitterWalker fallback. Delete:
 
