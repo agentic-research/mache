@@ -16,6 +16,11 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	// destructive/open-world. WithToolAnnotation REPLACES the whole
 	// annotation struct, so we state every hint explicitly here
 	// (mache-974697 follow-up: the single-field overrides leaked defaults).
+	//
+	// Each preset is built once and reused across many AddTool calls. The
+	// ToolAnnotation is copied by value per tool but the inner *bool
+	// pointers are shared — safe because they are write-once (set here, read
+	// at tools/list, never mutated). Do not introduce in-place hint mutation.
 	readTool := mcp.WithToolAnnotation(mcp.ToolAnnotation{
 		ReadOnlyHint:    mcp.ToBoolPtr(true),
 		DestructiveHint: mcp.ToBoolPtr(false),
