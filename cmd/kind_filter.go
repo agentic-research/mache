@@ -81,16 +81,17 @@ var astNodeKindToCanonical = map[string]string{
 	"var_spec":             "variable",
 	"import_spec":          "import",
 	// Rust (function_item = function OR method — ancestry decides)
-	"function_item":   "function",
-	"struct_item":     "type",
-	"enum_item":       "type",
-	"trait_item":      "type",
-	"type_item":       "type",
-	"union_item":      "type",
-	"const_item":      "constant",
-	"static_item":     "constant",
-	"let_declaration": "variable",
-	"use_declaration": "import",
+	"function_item":           "function",
+	"function_signature_item": "method", // trait method signature (no body) — always a method
+	"struct_item":             "type",
+	"enum_item":               "type",
+	"trait_item":              "type",
+	"type_item":               "type",
+	"union_item":              "type",
+	"const_item":              "constant",
+	"static_item":             "constant",
+	"let_declaration":         "variable",
+	"use_declaration":         "import",
 	// Python (function_definition = function OR method — ancestry decides)
 	"function_definition": "function",
 	"class_definition":    "type",
@@ -142,12 +143,16 @@ func resolveKindFromAST(qg refsQuerier, nodeID string) string {
 // reports whether any ancestor's _ast.node_kind is a method container.
 // A single recursive CTE keeps this one round-trip regardless of depth.
 func astNodeHasMethodContainerAncestor(qg refsQuerier, nodeID string) bool {
+	// The depth column bounds recursion at 256 — real AST ancestry to a
+	// method container is shallow; the cap is purely a guard against a
+	// malformed leyline `nodes` table with a cyclic parent_id (which would
+	// otherwise spin forever). No legitimate source nests this deep.
 	rows, err := qg.QueryRefs(`
-		WITH RECURSIVE ancestors(id) AS (
-			SELECT parent_id FROM nodes WHERE id = ?
+		WITH RECURSIVE ancestors(id, depth) AS (
+			SELECT parent_id, 0 FROM nodes WHERE id = ?
 			UNION ALL
-			SELECT n.parent_id FROM nodes n JOIN ancestors a ON n.id = a.id
-			WHERE n.parent_id IS NOT NULL AND n.parent_id != ''
+			SELECT n.parent_id, a.depth + 1 FROM nodes n JOIN ancestors a ON n.id = a.id
+			WHERE n.parent_id IS NOT NULL AND n.parent_id != '' AND a.depth < 256
 		)
 		SELECT 1 FROM ancestors a JOIN _ast x ON x.node_id = a.id
 		WHERE x.node_kind IN ('impl_item','trait_item','class_definition','class_declaration')

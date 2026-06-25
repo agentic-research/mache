@@ -162,6 +162,45 @@ func TestKindDiscriminator_LeylineAST_FindDefinition(t *testing.T) {
 	})
 }
 
+// TestResolveKindFromAST_EdgeCases hardens the _ast resolver against the
+// two cases the PR #448 review surfaced:
+//   - a cyclic nodes.parent_id must NOT hang the recursive CTE (the depth
+//     cap bounds it); the node still resolves by its own node_kind.
+//   - function_signature_item (Rust trait method signature, no body)
+//     resolves to "method" directly, without needing ancestry.
+func TestResolveKindFromAST_EdgeCases(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "edge.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL DEFAULT 0);
+		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL DEFAULT 0, end_byte INTEGER NOT NULL DEFAULT 0);
+	`)
+	require.NoError(t, err)
+
+	// A <-> B parent_id cycle, with A a function_item. Without the depth
+	// cap the ancestry CTE spins forever; with it, resolution terminates.
+	_, err = db.Exec(`INSERT INTO nodes (id, parent_id, name) VALUES ('A','B','A'), ('B','A','B')`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO _ast (node_id, source_id, node_kind) VALUES ('A','f.rs','function_item'), ('B','f.rs','block')`)
+	require.NoError(t, err)
+
+	// A trait method signature — resolves to method by node_kind alone.
+	_, err = db.Exec(`INSERT INTO nodes (id, parent_id, name) VALUES ('sig','','sig')`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO _ast (node_id, source_id, node_kind) VALUES ('sig','f.rs','function_signature_item')`)
+	require.NoError(t, err)
+
+	g := &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db, path: dbPath}
+
+	require.Equal(t, "function", resolveKindFromAST(g, "A"),
+		"cyclic parent_id must terminate (depth cap) and resolve by own node_kind")
+	require.Equal(t, "method", resolveKindFromAST(g, "sig"),
+		"function_signature_item resolves to method without ancestry")
+}
+
 // TestKindDiscriminator_LeylineAST_FindCallers is the caller-side proof
 // for the same bug: find_callers narrows by the KIND of caller, and the
 // caller node_ids are leyline-shaped too. `helper` is called by both the

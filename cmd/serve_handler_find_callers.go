@@ -55,8 +55,11 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		if qg, ok := g.(refsQuerier); ok {
 			lspRefs, lspErr := queryLSPRefs(qg, token)
 			if lspErr == nil && len(lspRefs) > 0 {
-				// Apply kind filter to LSP refs too (same NodeID
-				// construct-path encoding).
+				// Apply kind filter to LSP refs. NOTE: this still uses
+				// path-segment matching (filterByNodeIDKind), not the
+				// _ast-aware resolver — so on a leyline _lsp projection
+				// with node-kind-shaped ids this filter under-matches.
+				// Tracked in mache-aba090 (symmetric to mache-5bb181).
 				lspRefs = filterByNodeIDKind(lspRefs, kind, func(r lspRefLocation) string { return r.NodeID })
 				type callersResult struct {
 					Callers []string         `json:"callers"`
