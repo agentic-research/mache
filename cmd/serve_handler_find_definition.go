@@ -41,7 +41,7 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		// kind filter excludes every candidate — the caller falls
 		// through to the next lookup path.
 		acceptKind := func(dirIDs []string) ([]string, bool) {
-			filtered, _ := filterDirIDsByKind(dirIDs, kind)
+			filtered, _ := filterDirIDsByKindGraph(g, dirIDs, kind)
 			return filtered, len(filtered) > 0
 		}
 
@@ -113,8 +113,12 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// 4. LSP fallback: try _lsp_defs from a ley-line pre-baked DB.
-		// LSP results carry their construct path in NodeID, so the
-		// kind filter applies the same way.
+		// NOTE: kind filtering here still uses path-segment matching
+		// (filterByNodeIDKind), not the _ast-aware resolver — so on a
+		// leyline _lsp projection with node-kind-shaped ids this filter
+		// under-matches. Tracked in mache-aba090 (symmetric to
+		// mache-5bb181); _lsp also exposes a symbol_kind column that may
+		// be the cleaner fix.
 		if qg, ok := g.(refsQuerier); ok {
 			lspDefs, err := queryLSPDefs(qg, symbol)
 			if err == nil && len(lspDefs) > 0 {

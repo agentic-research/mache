@@ -21,6 +21,11 @@ type inspectedTools struct {
 			InputSchema struct {
 				Properties map[string]any `json:"properties"`
 			} `json:"inputSchema"`
+			Annotations struct {
+				ReadOnlyHint    *bool `json:"readOnlyHint"`
+				DestructiveHint *bool `json:"destructiveHint"`
+				OpenWorldHint   *bool `json:"openWorldHint"`
+			} `json:"annotations"`
 		} `json:"tools"`
 	} `json:"result"`
 }
@@ -59,6 +64,40 @@ func inspectRegisteredToolsForInvariants(t *testing.T) inspectedTools {
 		t.Fatalf("tools/list returned no tools (body=%s)", body)
 	}
 	return parsed
+}
+
+// mutatingTools is the set of tools that modify state. Everything else
+// in mache's surface is a pure query/navigation tool and MUST advertise
+// readOnlyHint=true — otherwise MCP clients default to "destructive" and
+// show alarming labels in /mcp for read-only tools like semantic_search.
+var mutatingTools = map[string]bool{
+	"write_file": true,
+}
+
+// TestMCPRegistry_ToolsDeclareReadOnlyHint enforces that EVERY registered
+// tool carries an explicit readOnlyHint annotation, and that only the
+// known mutating tools (write_file) declare readOnlyHint=false. Without
+// the annotation, clients assume the worst (destructive) — the user-
+// visible bug where `/mcp` flagged semantic_search and other read tools
+// as destructive.
+//
+// Falsified by: adding a tool without a readOnlyHint annotation, or
+// mis-annotating a read tool as mutating (or vice versa).
+func TestMCPRegistry_ToolsDeclareReadOnlyHint(t *testing.T) {
+	tools := inspectRegisteredToolsForInvariants(t)
+	for _, tool := range tools.Result.Tools {
+		ro := tool.Annotations.ReadOnlyHint
+		if ro == nil {
+			t.Errorf("tool %q has no readOnlyHint annotation — clients default to destructive", tool.Name)
+			continue
+		}
+		switch {
+		case mutatingTools[tool.Name] && *ro:
+			t.Errorf("tool %q mutates state but is annotated readOnlyHint=true", tool.Name)
+		case !mutatingTools[tool.Name] && !*ro:
+			t.Errorf("read-only tool %q is annotated readOnlyHint=false", tool.Name)
+		}
+	}
 }
 
 // TestMCPRegistry_NoLineOrColumnParams enforces the bead-7d321e

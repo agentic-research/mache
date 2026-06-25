@@ -168,7 +168,7 @@ jobs:
               echo "No structural smells in changed files. ✓"
             fi
             echo ""
-            echo "_Rules: see [\`docs/ARCHITECTURE.md\`](../blob/main/docs/ARCHITECTURE.md#interplay-with-ley-line-open) for the full registry. Advisory only — these are heuristics, not gates._"
+            echo "_Rules: the registry is [\`cmd/smell_rules.go\`](../blob/main/cmd/smell_rules.go) (source of truth); see [the authoring guide](../blob/main/plugin/skills/authoring-smell-rules/SKILL.md) to add one. Advisory only — these are heuristics, not gates._"
           } > /tmp/comment.md
           cat /tmp/comment.md
 
