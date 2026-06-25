@@ -256,11 +256,13 @@ func DiscoverOrStart() (string, error) {
 	}
 
 	leylineBin, err := exec.LookPath("leyline")
+	source := "PATH"
 	if err != nil {
 		// Fallback: check ~/.mache/bin/leyline
 		localBin := filepath.Join(home, ".mache", "bin", "leyline")
 		if _, statErr := os.Stat(localBin); statErr == nil {
 			leylineBin = localBin
+			source = "cached" // ~/.mache/bin — un-versioned, can shadow the pin (mache-0acdf6)
 		} else if os.Getenv("MACHE_NO_LEYLINE") != "" {
 			// CI / bundle deployments set this to opt out of the
 			// network-fetch path entirely. Surface a clear error
@@ -274,8 +276,14 @@ func DiscoverOrStart() (string, error) {
 				return "", fmt.Errorf("leyline not on PATH and auto-download failed: %w", dlErr)
 			}
 			leylineBin = downloaded
+			source = "downloaded"
 		}
 	}
+	// Record which binary won, from which tier, at what version — so the
+	// resolution is visible in logs AND via get_sheaf_status (mache-0dcd98).
+	// This was invisible before, which made the stale-cached-0.4.1 skew
+	// (mache-0acdf6) an archaeology dig instead of a one-line answer.
+	recordResolvedLeyline(leylineBin, source)
 	dataDir := filepath.Join(home, ".mache")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", fmt.Errorf("create %s: %w", dataDir, err)
