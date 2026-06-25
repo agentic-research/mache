@@ -74,6 +74,46 @@ var mutatingTools = map[string]bool{
 	"write_file": true,
 }
 
+// openWorldTools reach an external entity (the ley-line daemon over UDS /
+// the arena) and so legitimately advertise openWorldHint=true. Every
+// other tool operates on the in-process projected graph and must be
+// closed-world. This pins the set so a leaked mcp-go default (which seeds
+// openWorldHint=true for ALL tools) can't slip back in.
+var openWorldTools = map[string]bool{
+	"semantic_search":  true,
+	"get_type_info":    true,
+	"get_diagnostics":  true,
+	"get_sheaf_status": true,
+}
+
+// TestMCPRegistry_AnnotationHintsHonest pins destructiveHint and
+// openWorldHint to their true values per tool. mcp.NewTool pre-seeds BOTH
+// to true (the MCP spec defaults), so this guards against the regression
+// where overriding only readOnlyHint leaves a read-only tool dishonestly
+// advertising destructiveHint=true / openWorldHint=true.
+//
+// Falsified by: a read tool advertising destructiveHint=true, a non-write
+// tool whose openWorldHint disagrees with openWorldTools, or write_file
+// not marked destructive.
+func TestMCPRegistry_AnnotationHintsHonest(t *testing.T) {
+	tools := inspectRegisteredToolsForInvariants(t)
+	for _, tool := range tools.Result.Tools {
+		de, ow := tool.Annotations.DestructiveHint, tool.Annotations.OpenWorldHint
+		if de == nil || ow == nil {
+			t.Errorf("tool %q missing destructiveHint/openWorldHint annotation", tool.Name)
+			continue
+		}
+		// Only the mutating tool may be destructive.
+		if *de != mutatingTools[tool.Name] {
+			t.Errorf("tool %q destructiveHint=%v, want %v", tool.Name, *de, mutatingTools[tool.Name])
+		}
+		// openWorldHint must match the pinned external-interaction set.
+		if *ow != openWorldTools[tool.Name] {
+			t.Errorf("tool %q openWorldHint=%v, want %v (leaked mcp-go default?)", tool.Name, *ow, openWorldTools[tool.Name])
+		}
+	}
+}
+
 // TestMCPRegistry_ToolsDeclareReadOnlyHint enforces that EVERY registered
 // tool carries an explicit readOnlyHint annotation, and that only the
 // known mutating tools (write_file) declare readOnlyHint=false. Without
