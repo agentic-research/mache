@@ -295,6 +295,13 @@ func DiscoverOrStart() (string, error) {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 
+	// Run the daemon as a process-group leader so that the `mache serve
+	// --control` child it spawns is reaped together with it — otherwise
+	// killing the daemon (timeout below, or StopManaged) orphans that
+	// child, which accumulates and contends for the shared arena/socket
+	// (mache-823d91).
+	setProcessGroup(cmd)
+
 	log.Printf("auto-starting leyline daemon: %s", strings.Join(cmd.Args, " "))
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start leyline: %w", err)
@@ -319,8 +326,8 @@ func DiscoverOrStart() (string, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Timed out — kill the process and report
-	_ = cmd.Process.Kill()
+	// Timed out — kill the whole group (daemon + any child it spawned) and report
+	_ = signalProcessGroup(cmd.Process, syscall.SIGKILL)
 	managed.proc = nil
 	managed.sock = ""
 	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within 5s", sockPath)
@@ -341,9 +348,11 @@ func StopManaged() {
 	pid := managed.proc.Pid
 	log.Printf("stopping managed leyline daemon (pid=%d)", pid)
 
-	// SIGTERM: leyline's signal handler unmounts NFS then exits
-	if err := managed.proc.Signal(syscall.SIGTERM); err != nil {
-		// Process already dead — just clean up
+	// SIGTERM the whole group: leyline's signal handler unmounts NFS then
+	// exits, and the `mache serve --control` child it spawned is terminated
+	// alongside it rather than orphaned (mache-823d91).
+	if err := signalProcessGroup(managed.proc, syscall.SIGTERM); err != nil {
+		// Group already gone — just clean up
 		_ = managed.proc.Release()
 		managed.proc = nil
 		managed.sock = ""
@@ -362,7 +371,7 @@ func StopManaged() {
 		log.Printf("leyline daemon (pid=%d) exited gracefully", pid)
 	case <-time.After(3 * time.Second):
 		log.Printf("leyline daemon (pid=%d) did not exit after SIGTERM, sending SIGKILL", pid)
-		_ = managed.proc.Kill()
+		_ = signalProcessGroup(managed.proc, syscall.SIGKILL)
 		<-done
 	}
 
