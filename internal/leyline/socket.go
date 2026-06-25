@@ -94,12 +94,43 @@ func (c *SocketClient) SubscribeDropped() uint64 {
 // low enough that the consumer notices within a second on a noisy stream.
 const maxConsecutiveParseFailures = 16
 
-// managed holds state for a leyline daemon subprocess auto-spawned by mache.
-// At most one managed daemon per process. Cleaned up on process exit.
-var managed struct {
+// managedDaemon owns the lifecycle of the leyline daemon subprocess
+// auto-spawned by mache. At most one per process, cleaned up on exit.
+//
+// ALL termination goes through its methods (signalGroup / discard) — no
+// caller signals .proc directly. The daemon is spawned as a process-group
+// leader (setProcessGroup) and these methods signal the whole GROUP, so
+// the `mache serve --control` child the daemon spawns is reaped with it
+// rather than orphaned (mache-823d91). Routing every kill site through one
+// seam is what keeps that discipline from drifting as sites are added;
+// TestManagedDaemon_AllTerminationViaSeam enforces it.
+type managedDaemon struct {
 	mu   sync.Mutex
 	proc *os.Process
 	sock string
+}
+
+var managed managedDaemon
+
+// signalGroup delivers sig to the daemon's whole process group. Caller
+// must hold mu. Returns the underlying error (e.g. ESRCH if the group is
+// already gone) so callers can branch on a dead daemon.
+func (m *managedDaemon) signalGroup(sig syscall.Signal) error {
+	return signalProcessGroup(m.proc, sig)
+}
+
+// discard SIGKILLs the daemon's group, removes its socket file, and clears
+// state. Caller must hold mu. The immediate, non-graceful counterpart to
+// StopManaged — used when a managed daemon is stale or failed to start.
+func (m *managedDaemon) discard() {
+	if m.proc != nil {
+		_ = signalProcessGroup(m.proc, syscall.SIGKILL)
+	}
+	if m.sock != "" {
+		_ = os.Remove(m.sock)
+	}
+	m.proc = nil
+	m.sock = ""
 }
 
 // DialSocket connects to the ley-line control socket at sockPath.
@@ -212,13 +243,10 @@ func DiscoverOrStart() (string, error) {
 		if isSocketAlive(managed.sock) {
 			return managed.sock, nil
 		}
-		// Stale managed daemon: reap and reset so the spawn block runs.
-		if managed.proc != nil {
-			_ = managed.proc.Kill()
-		}
-		_ = os.Remove(managed.sock)
-		managed.proc = nil
-		managed.sock = ""
+		// Stale managed daemon: reap its group + clear so the spawn block
+		// re-runs. discard() does the group-kill that avoids orphaning the
+		// daemon's mache child.
+		managed.discard()
 	}
 
 	// Find the leyline binary: PATH → ~/.mache/bin/ → auto-download
@@ -295,6 +323,13 @@ func DiscoverOrStart() (string, error) {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 
+	// Run the daemon as a process-group leader so that the `mache serve
+	// --control` child it spawns is reaped together with it — otherwise
+	// killing the daemon (timeout below, or StopManaged) orphans that
+	// child, which accumulates and contends for the shared arena/socket
+	// (mache-823d91).
+	setProcessGroup(cmd)
+
 	log.Printf("auto-starting leyline daemon: %s", strings.Join(cmd.Args, " "))
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start leyline: %w", err)
@@ -319,10 +354,8 @@ func DiscoverOrStart() (string, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Timed out — kill the process and report
-	_ = cmd.Process.Kill()
-	managed.proc = nil
-	managed.sock = ""
+	// Timed out — discard the group (daemon + any child it spawned) and report.
+	managed.discard()
 	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within 5s", sockPath)
 }
 
@@ -341,9 +374,11 @@ func StopManaged() {
 	pid := managed.proc.Pid
 	log.Printf("stopping managed leyline daemon (pid=%d)", pid)
 
-	// SIGTERM: leyline's signal handler unmounts NFS then exits
-	if err := managed.proc.Signal(syscall.SIGTERM); err != nil {
-		// Process already dead — just clean up
+	// SIGTERM the whole group: leyline's signal handler unmounts NFS then
+	// exits, and the `mache serve --control` child it spawned is terminated
+	// alongside it rather than orphaned (mache-823d91).
+	if err := managed.signalGroup(syscall.SIGTERM); err != nil {
+		// Group already gone — just clean up
 		_ = managed.proc.Release()
 		managed.proc = nil
 		managed.sock = ""
@@ -362,7 +397,7 @@ func StopManaged() {
 		log.Printf("leyline daemon (pid=%d) exited gracefully", pid)
 	case <-time.After(3 * time.Second):
 		log.Printf("leyline daemon (pid=%d) did not exit after SIGTERM, sending SIGKILL", pid)
-		_ = managed.proc.Kill()
+		_ = managed.signalGroup(syscall.SIGKILL)
 		<-done
 	}
 
