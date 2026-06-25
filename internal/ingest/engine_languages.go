@@ -134,6 +134,22 @@ func init() {
 		"import_declaration", "const_declaration", "var_declaration", "type_declaration",
 	})
 
+	// ASTWalker file-level ref patterns — the pure-Go mirror of the Go
+	// RegisterFileLevelRefQuery above. Each tree-sitter capture becomes a
+	// CallPattern kind-chain (queryCallPattern matches by parent_id):
+	//   (keyed_element (literal_element) (literal_element (identifier) @call))
+	//   (call_expression function: (identifier) @call)
+	//   (call_expression function: (selector_expression field: (field_identifier) @call))
+	//   (call_expression arguments: (argument_list (identifier) @call))
+	// Parity with SitterWalker.ExtractFileLevelRefs is asserted by
+	// TestASTFileLevelRefsParity_Go.
+	RegisterASTFileLevelRefPatterns("go", []CallPattern{
+		{OuterKind: "keyed_element", Ancestors: []string{"literal_element"}, LeafKind: "identifier", RequirePriorSibling: true},
+		{OuterKind: "call_expression", LeafKind: "identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"selector_expression"}, LeafKind: "field_identifier"},
+		{OuterKind: "call_expression", Ancestors: []string{"argument_list"}, LeafKind: "identifier"},
+	})
+
 	// ASTWalker (pure-Go path): batched JOIN-style fast path. One CallPattern
 	// per shape; ExtractCalls/ExtractQualifiedCalls translate each into a
 	// single SQL query that returns all matches in one pass.
