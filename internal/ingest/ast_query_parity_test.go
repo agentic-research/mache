@@ -80,6 +80,9 @@ func sitterToASTDB(tb testing.TB, dbPath, sourceFile, langName string, src []byt
 			id TEXT PRIMARY KEY, language TEXT NOT NULL,
 			content BLOB NOT NULL, path TEXT
 		);
+		CREATE TABLE _imports (
+			source_id TEXT NOT NULL, alias TEXT NOT NULL, path TEXT NOT NULL
+		);
 	`)
 	require.NoError(tb, err)
 
@@ -87,6 +90,24 @@ func sitterToASTDB(tb testing.TB, dbPath, sourceFile, langName string, src []byt
 	_, err = db.Exec("INSERT INTO _source (id, language, content, path) VALUES (?, ?, ?, NULL)",
 		sourceID, langName, src)
 	require.NoError(tb, err)
+
+	// Emit _imports the way ley-line's `leyline parse` would, by deriving
+	// the alias→path map from the SAME parse via the sitter extractor. This
+	// gives the ASTWalker path (which reads _imports, not the tree) the
+	// identical import set the sitter path computes inline — so after S4
+	// makes ingest serve imports from SQL, the projection's qualified-call
+	// resolution matches across backends instead of the AST side seeing
+	// zero imports.
+	if langName == "go" {
+		sw := NewSitterWalker()
+		imports := sw.ExtractGoImports(tree.RootNode(), src, l.Grammar())
+		sw.Close()
+		for alias, path := range imports {
+			_, err = db.Exec("INSERT INTO _imports (source_id, alias, path) VALUES (?, ?, ?)",
+				sourceID, alias, path)
+			require.NoError(tb, err)
+		}
+	}
 
 	tx, err := db.Begin()
 	require.NoError(tb, err)
