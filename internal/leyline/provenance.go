@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -60,8 +61,21 @@ func Provenance() (LeylineProvenance, bool) {
 		Version:         resolvedLeyline.version,
 		Source:          resolvedLeyline.source,
 		ExpectedVersion: leylineBinaryVersion,
-		VersionMatches:  resolvedLeyline.version != "" && strings.Contains(resolvedLeyline.version, tag),
+		VersionMatches:  versionContainsTag(resolvedLeyline.version, tag),
 	}, true
+}
+
+// versionContainsTag reports whether the pinned version tag appears as a
+// whole dotted-number token in a `--version` line — NOT a raw substring,
+// so the pin "0.5.1" does not false-match a "0.5.11" release. Tokenizes on
+// any non-[0-9.] rune, so "leyline 0.5.1 (open)" → ["0.5.1"].
+func versionContainsTag(version, tag string) bool {
+	if version == "" || tag == "" {
+		return false
+	}
+	return slices.Contains(strings.FieldsFunc(version, func(r rune) bool {
+		return (r < '0' || r > '9') && r != '.'
+	}), tag)
 }
 
 // queryBinaryVersion runs `<bin> --version` and returns the trimmed output
