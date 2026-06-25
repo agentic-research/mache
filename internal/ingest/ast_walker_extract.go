@@ -83,7 +83,11 @@ func RegisterASTContextKinds(langName string, kinds []string) {
 // from _source.
 //
 // Returns (nil, nil) when no context kinds are registered for the language.
-func (w *ASTWalker) ExtractContext(sourcePath, langName string) ([]byte, error) {
+//
+// sourceID is the _source/_ast key (the path relative to the ingest root, as
+// ley-line produces it) — NOT a filesystem path. Callers that hold a path use
+// Engine.sourceIDFor to derive it (mache-30edfa).
+func (w *ASTWalker) ExtractContext(sourceID, langName string) ([]byte, error) {
 	raw, ok := contextKindRegistry.Load(langName)
 	if !ok {
 		return nil, nil
@@ -93,7 +97,6 @@ func (w *ASTWalker) ExtractContext(sourcePath, langName string) ([]byte, error) 
 		return nil, nil
 	}
 
-	sourceID := filepath.Base(sourcePath)
 	source, err := w.readSource(w.db, sourceID)
 	if err != nil || source == nil {
 		return nil, err

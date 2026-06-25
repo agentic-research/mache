@@ -145,7 +145,9 @@ func runQueryParityMulti(t *testing.T, schemaPath, langName string, files []srcF
 
 	srcDir := t.TempDir()
 	for _, f := range files {
-		require.NoError(t, os.WriteFile(filepath.Join(srcDir, f.name), f.src, 0o644))
+		dst := filepath.Join(srcDir, filepath.FromSlash(f.name))
+		require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+		require.NoError(t, os.WriteFile(dst, f.src, 0o644))
 	}
 
 	// SitterWalker path: ingest the whole dir, parses live.
@@ -190,4 +192,20 @@ func TestASTQueryParity_MultiFile_Go(t *testing.T) {
 		}
 	}
 	require.True(t, sawBar, "Foo's callers must include Bar from b.go (cross-file edge); got %v", callers)
+}
+
+// TestASTQueryParity_MultiFile_Subdir_Go pins the source_id keying fix
+// (mache-30edfa): a file in a SUBDIRECTORY must project identically on the AST
+// path. Real leyline keys source_id by the path relative to the parse root
+// (e.g. "pkg/a.go"); the engine must query the AST db with that SAME relative
+// key, not filepath.Base ("a.go"). Before the fix the engine used base, so the
+// AST query found nothing for any non-root file and the projection diverged
+// from the sitter path — this test went RED. The fixture's _ast db is keyed by
+// the relative path, exactly as leyline produces it.
+func TestASTQueryParity_MultiFile_Subdir_Go(t *testing.T) {
+	files := []srcFile{
+		{name: "pkg/a.go", src: []byte("package pkg\n\nfunc Foo() int { return 1 }\n")},
+		{name: "main.go", src: []byte("package main\n\nfunc Bar() int { return 2 }\n")},
+	}
+	runQueryParityMulti(t, "../../examples/go-schema.json", "go", files, false)
 }
