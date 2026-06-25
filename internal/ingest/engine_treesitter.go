@@ -32,18 +32,27 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 	var workerWg sync.WaitGroup
 	for range numWorkers {
 		workerWg.Go(func() {
-			// Pin to one OS thread for the lifetime of the worker.
-			// tree-sitter's CGO bridge is sensitive to goroutine
-			// migration mid-call: when the Go runtime preempts and
-			// resumes a goroutine on a different OS thread while
-			// CGO is in flight, we've seen sporadic SIGSEGVs in
-			// internal/ingest tests on ubuntu-latest (mache-2y9w).
-			// LockOSThread isolates each parser/cursor pair to a
-			// stable thread; UnlockOSThread on exit lets the runtime
-			// reclaim the thread when the worker goroutine ends.
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
-			parser := sitter.NewParser()
+			// S4: with an ASTWalker backend this worker runs NO
+			// tree-sitter — so skip both the parser allocation
+			// (sitter.NewParser is itself a CGO call) and the
+			// LockOSThread pin. Only the CGO path needs either, so
+			// gating them here is what makes "no CGO runs in ingest"
+			// literally true on the AST path — not just the parse loop.
+			var parser *sitter.Parser
+			if e.astWalker == nil {
+				// Pin to one OS thread for the lifetime of the worker.
+				// tree-sitter's CGO bridge is sensitive to goroutine
+				// migration mid-call: when the Go runtime preempts and
+				// resumes a goroutine on a different OS thread while
+				// CGO is in flight, we've seen sporadic SIGSEGVs in
+				// internal/ingest tests on ubuntu-latest (mache-2y9w).
+				// LockOSThread isolates each parser/cursor pair to a
+				// stable thread; UnlockOSThread on exit lets the runtime
+				// reclaim the thread when the worker goroutine ends.
+				runtime.LockOSThread()
+				defer runtime.UnlockOSThread()
+				parser = sitter.NewParser()
+			}
 			for job := range jobs {
 				result := parsedTreeSitterFile{job: job}
 				absPath, err := filepath.Abs(job.path)
@@ -496,6 +505,14 @@ func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langNam
 		parser := sitter.NewParser()
 		parser.SetLanguage(grammar)
 		tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+		// Mirror the parallel worker's nil-tree guard: ParseCtx is
+		// documented to return (nil, nil) for non-error empty inputs, and
+		// processTreeSitterResult would then deref result.tree.RootNode()
+		// and panic. Convert it to a parse error so it routes to the
+		// BROKEN_ fallback instead.
+		if parseErr == nil && tree == nil {
+			parseErr = fmt.Errorf("tree-sitter returned nil tree") // coverage:ignore
+		}
 		result.tree = tree
 		result.parseErr = parseErr
 
