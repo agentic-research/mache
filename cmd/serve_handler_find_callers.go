@@ -36,7 +36,7 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		// filter narrows by what KIND of caller is calling — e.g.
 		// "show me only methods that call X." Empty kind is a no-op.
 		if kind != "" {
-			paths, _ = filterDirIDsByKind(paths, kind)
+			paths, _ = filterDirIDsByKindGraph(g, paths, kind)
 		}
 
 		// Cross-repo annotation: when running on a CompositeGraph,

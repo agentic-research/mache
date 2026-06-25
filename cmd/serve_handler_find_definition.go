@@ -41,7 +41,7 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		// kind filter excludes every candidate — the caller falls
 		// through to the next lookup path.
 		acceptKind := func(dirIDs []string) ([]string, bool) {
-			filtered, _ := filterDirIDsByKind(dirIDs, kind)
+			filtered, _ := filterDirIDsByKindGraph(g, dirIDs, kind)
 			return filtered, len(filtered) > 0
 		}
 

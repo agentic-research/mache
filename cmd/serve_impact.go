@@ -69,7 +69,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 		// impact through nodes whose kind matches" — depth>0 traversal
 		// follows callers/callees regardless of their construct kind.
 		if found && kind != "" {
-			roots, _ = filterDirIDsByKind(roots, kind)
+			roots, _ = filterDirIDsByKindGraph(g, roots, kind)
 			if len(roots) == 0 {
 				found = false
 			}
