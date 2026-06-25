@@ -28,22 +28,42 @@ mache version
 
 ## First run — MCP server
 
-The simplest way to use mache is as an MCP server pointed at a codebase or `.db` file:
+Running mache as an MCP server is **two decisions**: *what to point it at* (the source) and *how the client connects* (the transport). Get these right once and it just works.
+
+### Decision 1 — the source: directory vs `.db`
+
+`mache serve <source>` accepts either a **directory** or a **`.db` file**, and the choice is a real quality tradeoff:
+
+| Source                        | Command                                                          | Parsing tier                                                                                                                                                | Freshness                                                                                                  | Best for                                                      |
+| ----------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Directory**                 | `mache serve .`                                                  | tree-sitter (built-in). `find_callers`/`find_callees` are accurate on Go; weaker on Rust/Python/TS. No `get_type_info`/`get_diagnostics`/`semantic_search`. | Live — re-reads as files change.                                                                           | Go, or a zero-dependency quick start.                         |
+| **ley-line `.db` (snapshot)** | `leyline parse .` → `mache serve ./that.db`                      | semantic. `_ast` + `_lsp` tables make `find_callers`, `get_type_info`, `get_diagnostics` accurate **across all languages**.                                 | Static — reflects the code as of the last `leyline parse`. Re-run to refresh.                              | Rust/Python/TS, or any time you want compiler-grade accuracy. |
+| **ley-line live (hot-swap)**  | `mache serve --control <block>` with the ley-line daemon running | semantic (same as above).                                                                                                                                   | Live — the daemon re-parses on edit and mache **hot-swaps** the graph on each generation bump (zero-copy). | The best of both: semantic accuracy *and* live updates.       |
+
+Rule of thumb: **Go → a directory is fine. Everything else → point at a ley-line `.db`** (or run the live daemon). Pointing stdio at a leyline-parsed `.db` (e.g. `mache serve --stdio ./code.db`) is **correct and recommended**, not a mistake — it's how you get the accurate tier. See [ley-line-open](https://github.com/agentic-research/ley-line-open) to build the `.db`, and [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) for which tools need which tables.
+
+> `--control` is **optional** — you only need it for the live hot-swap tier above. Basic config never requires it.
+
+### Decision 2 — the transport: HTTP daemon vs stdio
+
+**HTTP (recommended — one daemon shared across all sessions):**
 
 ```bash
-mache serve .
-# starts on localhost:7532, auto-infers a schema, ready for clients
-```
-
-**Connect from Claude Code (HTTP, recommended — one server shared across sessions):**
-
-```bash
+mache serve .                 # ← long-running daemon on localhost:7532 — KEEP THIS RUNNING
 claude mcp add --transport http mache http://localhost:7532/mcp
 ```
 
-**Connect from Claude Code (stdio — subprocess per session, useful when the host manages lifecycle):**
+> ⚠️ `mache serve` (HTTP) is a **foreground daemon** — it blocks the terminal and must stay alive for the client to connect. Run it in a second terminal, background it (`mache serve . &`), or install it as a login service. If the client reports `localhost:7532/mcp` **connection refused**, the daemon isn't running — that's the #1 first-run gotcha. (A launchd LaunchAgent that keeps it alive across logins is tracked in mache-823d91.)
 
-`.mcp.json`:
+**stdio (subprocess per session — no standing daemon to babysit):**
+
+```bash
+claude mcp add mache -- mache serve --stdio .
+# or point at a leyline .db for the accurate tier:
+claude mcp add mache -- mache serve --stdio ./code.db
+```
+
+Add `--scope user|project|local` to either `claude mcp add` to control where the registration is written (`local` = this project only, `user` = all your projects). Or write `.mcp.json` by hand:
 
 ```json
 {
@@ -56,7 +76,7 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 }
 ```
 
-**Connect from Claude Desktop:**
+**Claude Desktop** (stdio only; use an absolute binary path):
 
 ```json
 {
@@ -69,7 +89,7 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 }
 ```
 
-Once connected, the agent can call `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, `get_impact`, `get_architecture`, `get_diagram`, `write_file`, `find_smells`, and `resolve_ref`. With [ley-line-open](https://github.com/agentic-research/ley-line-open) installed, three more tools become available: `semantic_search`, `get_type_info`, `get_diagnostics`.
+Once connected, the agent can call `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, `get_impact`, `get_architecture`, `get_diagram`, `write_file`, `find_smells`, and `resolve_ref`. With a ley-line-built `.db` (or the live daemon), three more light up: `semantic_search`, `get_type_info`, `get_diagnostics`.
 
 See the [MCP Server section in ARCHITECTURE.md](docs/ARCHITECTURE.md#core-abstractions) for the full tool inventory and the [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) section for which tools require a `.db` built by ley-line-open.
 

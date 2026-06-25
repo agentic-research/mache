@@ -13,11 +13,16 @@ Point it at a codebase. It parses the code, discovers the structure, and lets yo
 ```bash
 git clone https://github.com/agentic-research/mache.git
 cd mache && task build && task install
-mache serve .
+mache serve .   # ← long-running daemon on :7532 — keep it running (use a 2nd terminal)
 claude mcp add --transport http mache http://localhost:7532/mcp
 ```
 
-That's the 30-second path. For the full first-run flow — install on Linux/macOS, Claude Desktop / stdio configs, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
+That's the 30-second path for a **Go** codebase. Two things new users hit:
+
+- `mache serve` is a **daemon** — it must stay running, or the client gets `connection refused`. Background it or run it in another terminal.
+- For **Rust / Python / TypeScript**, point mache at a [ley-line-open](https://github.com/agentic-research/ley-line-open)-built `.db` instead of a directory (`mache serve ./code.db`) to get accurate `find_callers` + `get_type_info` + `get_diagnostics`. A bare directory uses the built-in tree-sitter tier, which is tuned for Go.
+
+For the full first-run flow — source choice (directory vs `.db` vs live hot-swap), HTTP vs stdio, `--scope`, Claude Desktop, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
 
 ## What it gives an agent
 
