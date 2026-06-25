@@ -278,6 +278,25 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 	return firstErr
 }
 
+// sourceIDFor returns the _ast/_source key for a file: the path RELATIVE to
+// the ingestion root, forward-slashed — exactly how ley-line's `leyline parse`
+// keys source_id (e.g. "pkg/a.go", not "a.go"). The ASTWalker query MUST use
+// this same key or it finds nothing for any file below the root (mache-30edfa).
+//
+// Falls back to the base name when RootPath is unset, when RootPath IS the file
+// (single-file ingestion, where Rel yields "."), or when the path escapes the
+// root — all cases where leyline would also key by the bare name.
+func (e *Engine) sourceIDFor(realPath string) string {
+	if e.RootPath == "" {
+		return filepath.Base(realPath)
+	}
+	rel, err := filepath.Rel(e.RootPath, realPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return filepath.Base(realPath)
+	}
+	return filepath.ToSlash(rel)
+}
+
 // processTreeSitterResult handles everything AFTER parsing for a single tree-sitter file.
 // Both ingestTreeSitter (sequential) and ingestTreeSitterParallel (phase 2) delegate here
 // to avoid divergent logic. The caller is responsible for populating the parsedTreeSitterFile
@@ -324,7 +343,10 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 	var root any
 	if e.astWalker != nil {
 		w = e.astWalker
-		sourceID := filepath.Base(result.job.path)
+		// source_id is the path RELATIVE to the ingest root, matching how
+		// ley-line keys _ast/_source (mache-30edfa) — NOT filepath.Base,
+		// which would miss every file below the root.
+		sourceID := e.sourceIDFor(result.realPath)
 		root = ASTRoot{
 			DB:           e.astWalker.db,
 			SourceID:     sourceID,
@@ -334,7 +356,7 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 		// extracts the sitter worker would have done are served here from
 		// SQL instead. Each mirrors the sitter extract it replaces; the
 		// projection parity gate asserts the results match byte-for-byte.
-		if ctxBytes, err := e.astWalker.ExtractContext(result.job.path, result.job.langName); err == nil {
+		if ctxBytes, err := e.astWalker.ExtractContext(sourceID, result.job.langName); err == nil {
 			result.context = ctxBytes
 		}
 		if result.job.langName == "go" {
