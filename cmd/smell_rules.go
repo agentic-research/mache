@@ -676,6 +676,12 @@ var smellRegistry = []SmellRule{
 				JOIN _ast d
 				  ON d.source_id = c.source_id
 				 AND (d.node_id = c.root_id OR d.node_id LIKE c.root_id || '/%%')
+				 -- Erase comments: they live in _ast as node_kind='comment'
+				 -- and would otherwise make the signature (and node_count
+				 -- metric) comment-sensitive — two bodies identical except
+				 -- for a comment would not match, a false negative that
+				 -- contradicts the "comments are erased" contract.
+				 AND d.node_kind != 'comment'
 				GROUP BY c.root_id, c.source_id
 			),
 			-- Signatures shared by 2+ functions are the clone groups.

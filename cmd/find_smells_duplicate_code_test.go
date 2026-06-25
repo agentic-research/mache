@@ -180,6 +180,79 @@ func TestFindSmells_DuplicateCode_ExcludesGenerated(t *testing.T) {
 	assert.Equal(t, 2, resp.Total, "only the two production clones; generated twin excluded")
 }
 
+// TestFindSmells_DuplicateCode_IgnoresComments pins that comment nodes
+// do not participate in the structural signature: two functions that are
+// identical except for an inline comment must still be detected as
+// clones (Copilot review on #442). Comments live in _ast as
+// node_kind='comment'; leaving them in the signature makes detection
+// comment-sensitive and produces false negatives that contradict the
+// rule's "comments are erased" contract.
+func TestFindSmells_DuplicateCode_IgnoresComments(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dupcomment.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE _ast (
+			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL,
+			start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
+			start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER
+		);
+		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
+		INSERT INTO _source VALUES ('d.go','go',x'0a'), ('e.go','go',x'0a');
+	`)
+	require.NoError(t, err)
+
+	type ast struct {
+		id, src, kind string
+		b             int
+	}
+	rows := []ast{
+		// fnD — plain.
+		{"d", "d.go", "function_declaration", 0},
+		{"d/body", "d.go", "block", 10},
+		{"d/body/ret", "d.go", "return_statement", 20},
+		{"d/body/ret/id", "d.go", "identifier", 25},
+		// fnE — identical structure PLUS an inline comment in the body.
+		{"e", "e.go", "function_declaration", 0},
+		{"e/body", "e.go", "block", 10},
+		{"e/body/cmt", "e.go", "comment", 15},
+		{"e/body/ret", "e.go", "return_statement", 20},
+		{"e/body/ret/id", "e.go", "identifier", 25},
+	}
+	for _, a := range rows {
+		_, err = db.Exec(
+			"INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0)",
+			a.id, a.src, a.kind, a.b, a.b+1,
+		)
+		require.NoError(t, err)
+	}
+	tg := &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
+	defer func() { _ = db.Close() }()
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule":       "duplicate_code",
+		"min_metric": 0,
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", resultText(t, res))
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	got := map[string]bool{}
+	for _, f := range resp.Findings {
+		got[f.NodeID] = true
+		assert.Equal(t, int64(4), f.Metric, "metric counts structural nodes only — the comment is erased")
+	}
+	require.Equal(t, 2, resp.Total, "fnD and fnE are clones despite the comment-only difference")
+	assert.True(t, got["d"], "fnD must be flagged")
+	assert.True(t, got["e"], "fnE must be flagged")
+}
+
 // TestFindSmells_DuplicateCode_DefaultFloorDropsTrivial pins that the
 // rule's DefaultMinMetric (24-node floor) is load-bearing: the 5-node
 // fixture clones are real structural duplicates, but below the default
