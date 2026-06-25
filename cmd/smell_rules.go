@@ -619,6 +619,87 @@ var smellRegistry = []SmellRule{
 		`,
 	},
 	{
+		ID:          "duplicate_code",
+		Languages:   []string{"go"},
+		Description: "Structurally-identical function/method bodies — Type-1/Type-2 code clones detected by leaf-erased AST structural hashing (Deckard-style), NOT token or name matching. Each function_declaration/method_declaration subtree is reduced to its signature: the document-ordered `(relative_depth:node_kind)` sequence of every descendant node. Identifiers, literals, and comments are erased (only node_kind survives), so two functions that differ only in variable names or constant values collide; two functions with different control-flow shapes do not. Functions sharing a signature with ≥1 other function are flagged — each clone instance is a separate finding pointing at the function's own file:line. Metric is the duplicated subtree's node count (bigger duplicated blocks rank first); pair with min_metric to drop trivial clones (default floor 24 nodes ≈ skips one-line accessors and matching stubs). This is the pure-Go baseline: it runs on any LLO-built .db with an _ast table and finds exact structural clones within the indexed scope. It does NOT do near-miss (gapped/Type-3) detection — that's the additive HDC/Merkle tier (LLO `_hdc`, mache-40ae5c). The depth+kind serialization is a strong structural approximation, not a perfect tree encoding, so rare distinct shapes can collide; the metric and file:line let an agent confirm. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) is excluded from candidates (wide identical method sets by design). Test files (`*_test.go`) are NOT excluded — duplicated test setup is a legitimate refactor target (extract a helper / table-driven test). Currently Go-only: the candidate-root kinds are Go's; other languages need their function kinds added to the WHERE.",
+		Requires:    []string{"_ast"},
+		ScopeColumn: "s.source_id",
+		// Heuristic floor: a duplicated subtree must be at least this
+		// many AST nodes to be reported by default. A trivial getter
+		// (`func (x X) F() int { return x.f }`) is ~8-12 nodes and
+		// would otherwise flag against every same-shaped accessor; 24
+		// keeps the long tail of matching stubs/getters out of the
+		// default view. Callers pass min_metric=0 to see every clone
+		// regardless of size, or a higher value to focus on big blocks.
+		DefaultMinMetric: 24,
+		Tags:             []string{"duplication", "structure"},
+		Query: `
+			-- Candidate clone roots: every function/method. The subtree
+			-- under each is reduced to a structural signature; roots whose
+			-- signature is shared by another root are clones.
+			WITH candidates AS (
+				SELECT node_id AS root_id, source_id,
+				       (LENGTH(node_id) - LENGTH(REPLACE(node_id, '/', ''))) AS root_depth,
+				       start_byte, end_byte, start_row, start_col
+				FROM _ast
+				WHERE node_kind IN ('function_declaration', 'method_declaration')
+				  -- Generated code (capnp / protobuf / *_generated / *.gen)
+				  -- emits wide identical method sets by design — that's not
+				  -- architectural duplication. Excluded from candidates so a
+				  -- generated function is neither flagged nor able to inflate
+				  -- a clone group. Mirrors dead_code / duplicate_definitions /
+				  -- god_file. Test files are deliberately NOT excluded:
+				  -- duplicated test setup is a legitimate refactor target
+				  -- (extract a helper / table-driven test).
+				  AND source_id NOT LIKE '%%.capnp.go'
+				  AND source_id NOT LIKE '%%.pb.go'
+				  AND source_id NOT LIKE '%%_generated.go'
+				  AND source_id NOT LIKE '%%.gen.go'
+			),
+			-- Signature = document-ordered (relative_depth ':' node_kind)
+			-- of every node in the subtree. Leaf-erased: only node_kind
+			-- contributes, so identifier/literal text is ignored (Type-2
+			-- clones collide). Relative depth disambiguates trees with the
+			-- same flat kind-bag but different nesting. group_concat ORDER
+			-- BY makes the sequence deterministic; start_byte gives
+			-- pre-order, node_id breaks parent/child byte ties (the parent
+			-- id is a prefix, so it sorts first).
+			sigs AS (
+				SELECT c.root_id, c.source_id,
+				       c.start_byte, c.end_byte, c.start_row, c.start_col,
+				       COUNT(*) AS node_count,
+				       group_concat(
+				           ((LENGTH(d.node_id) - LENGTH(REPLACE(d.node_id, '/', ''))) - c.root_depth) || ':' || d.node_kind,
+				           '>' ORDER BY d.start_byte, d.node_id
+				       ) AS sig
+				FROM candidates c
+				JOIN _ast d
+				  ON d.source_id = c.source_id
+				 AND (d.node_id = c.root_id OR d.node_id LIKE c.root_id || '/%%')
+				 -- Erase comments: they live in _ast as node_kind='comment'
+				 -- and would otherwise make the signature (and node_count
+				 -- metric) comment-sensitive — two bodies identical except
+				 -- for a comment would not match, a false negative that
+				 -- contradicts the "comments are erased" contract.
+				 AND d.node_kind != 'comment'
+				GROUP BY c.root_id, c.source_id
+			),
+			-- Signatures shared by 2+ functions are the clone groups.
+			clone_sigs AS (
+				SELECT sig FROM sigs GROUP BY sig HAVING COUNT(*) > 1
+			)
+			SELECT s.source_id,
+			       s.root_id AS node_id,
+			       s.start_byte, s.end_byte, s.start_row, s.start_col,
+			       s.node_count AS metric
+			FROM sigs s
+			JOIN clone_sigs g ON g.sig = s.sig
+			WHERE 1=1
+			%s
+			ORDER BY metric DESC, s.source_id, s.start_byte
+		`,
+	},
+	{
 		ID:          "god_file",
 		Description: "Source files whose distinct-definition count is at least 10 AND more than 3× the project mean — a fuzzy 'god file' detector that surfaces sprawl relative to the codebase's own distribution rather than a hard line-count cutoff. Metric is the def count, sorted descending. Cross-language since node_defs is populated by every backend. source_file is resolved via the construct dir's child leaves (the schema engine attaches Origin to source / ast.json / doc, not the wrapping dir), so this works on FCA-inferred mounts too. Generated code (`*.capnp.go`, `*.pb.go`, `*_generated.go`, `*.gen.go`) and Go test files (`*_test.go`) are excluded — generators produce wide method sets by design and test files accumulate many TestXxx / setupXxx helpers without representing architectural sprawl. Pairs with long_file (line-count via _ast) for a 'lots of code' vs 'lots of API' split.",
 		Requires:    []string{"node_defs", "nodes"},
