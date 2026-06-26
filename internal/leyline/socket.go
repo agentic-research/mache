@@ -717,21 +717,27 @@ func (c *SocketClient) Prioritize(files []string) error {
 // tagged releases have downloadable leyline-<os>-<arch> assets — the go.mod
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
-// As of this pin, go.mod tracks leyline-schema v0.5.3 and the matching
-// release with binary assets is v0.5.3. The Go schema-client and the daemon
-// binary travel together — mache built against schema vX.Y.Z must run a daemon
-// at the same major/minor or it will mis-decode the wire format. v0.5.3 ships
-// all four leyline-<os>-<arch> daemon binaries (darwin/linux × amd64/arm64),
-// including leyline-darwin-amd64 for Intel macs. (The release omits the
-// libleyline_fs-darwin-amd64 *staticlib* — same gap as v0.5.0/v0.5.1 — but mache
-// doesn't link the cgo FFI: internal/leyline/client.go is //go:build leyline,
-// off in releases, so the download path is unaffected.)
+// As of this pin, the daemon binary is v0.5.4 while go.mod tracks
+// leyline-schema v0.5.3. These can diverge by a PATCH: v0.5.4 (LLO #120) is
+// a daemon-only fix — it makes the LSP enrichment pass await rust-analyzer
+// indexer readiness (quiescent / $/progress end) before issuing hover/def/
+// ref queries — and ships NO wire/schema change, so the v0.5.3 Go
+// schema-client decodes a v0.5.4 daemon's responses identically. The
+// major/minor must still match (wire format); only the patch floats here.
+// v0.5.4 ships all four leyline-<os>-<arch> daemon binaries (darwin/linux ×
+// amd64/arm64). (The release omits the libleyline_fs-darwin-amd64
+// *staticlib* — same gap as v0.5.0–v0.5.3 — but mache doesn't link the cgo
+// FFI: internal/leyline/client.go is //go:build leyline, off in releases,
+// so the download path is unaffected.)
 //
-// BUMP THIS WHEN UPDATING leyline-schema in go.mod to a newer published tag.
+// BUMP THIS to the latest published ley-line-open release with binary assets;
+// bump the go.mod leyline-schema pin too whenever the WIRE format changes.
 //
 // Future hardening (mache-8kif): on socket connect, query the daemon's
-// `version` op and refuse to proceed if it disagrees with this constant.
-const leylineBinaryVersion = "v0.5.3"
+// version and refuse to proceed if it disagrees — though note LLO has no
+// `version` op today (verified against 0.5.x), so 8kif needs a different
+// mechanism.
+const leylineBinaryVersion = "v0.5.4"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private
