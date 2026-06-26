@@ -25,6 +25,14 @@ const lspEnrichHint = "Pre-enrich your database with ll-open, or install ley-lin
 	"See: github.com/agentic-research/ley-line-open\n" +
 	"Capability matrix: docs/ARCHITECTURE.md#interplay-with-ley-line-open"
 
+// lspEnrichTimeout bounds how long mache waits for the daemon's synchronous
+// `enrich` op (which spawns the language server and indexes the file). It
+// MUST exceed the daemon's per-language per-file budget — gopls's is 50s
+// (rust-analyzer indexes far faster). The prior 30s tripped mache's own
+// deadline before the daemon's, surfacing a confusing client-side
+// "i/o timeout" instead of the daemon's clean skip/result (mache-303036).
+const lspEnrichTimeout = 90 * time.Second
+
 func lspTableMissing(table, feature string) *mcp.CallToolResult {
 	return mcp.NewToolResultError(fmt.Sprintf("no %s table in database. To get %s, either:\n"+
 		"  1. Pre-enrich with: ll-open enrich-lsp (see github.com/agentic-research/ley-line-open)\n"+
@@ -230,7 +238,7 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 	defer func() { _ = client.Close() }()
 
 	// Enrichment phase — 30s timeout for LSP
-	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := client.SetDeadline(time.Now().Add(lspEnrichTimeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 	resp, err := client.Enrich("lsp", []string{relForEnrich(filePath)})
@@ -373,7 +381,7 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 	}
 	defer func() { _ = client.Close() }()
 
-	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := client.SetDeadline(time.Now().Add(lspEnrichTimeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 	resp, err := client.Enrich("lsp", []string{relForEnrich(filePath)})
