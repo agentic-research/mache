@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Canonical MCP transport endpoint. mache serves Streamable HTTP on this
@@ -25,6 +27,26 @@ var daemonAgentAutoload = true
 
 // logf writes a progress line, discarding the write error (best-effort output).
 func logf(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+
+// xmlText escapes s for use as plist <string> element text. os.Executable() can
+// resolve to a path with XML-significant characters (&, <, >) or quotes — e.g.
+// an app bundle under "/Applications/Mache Tools/" — which would otherwise
+// produce a malformed plist.
+func xmlText(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+// systemdQuote double-quotes s for a systemd ExecStart argument so a binary
+// path containing spaces (or quotes/backslashes) is treated as one argument
+// rather than split on whitespace. systemd honors \" and \\ inside double
+// quotes.
+func systemdQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
 
 // launchAgentPlist renders the macOS LaunchAgent plist that keepalives the
 // shared mache HTTP daemon, so the endpoint registered by `mache init` is
@@ -62,7 +84,7 @@ func launchAgentPlist(binPath, logPath string) string {
 	<string>%s</string>
 </dict>
 </plist>
-`, launchAgentLabel, binPath, macheHTTPListen, logPath, logPath)
+`, launchAgentLabel, xmlText(binPath), macheHTTPListen, xmlText(logPath), xmlText(logPath))
 }
 
 // systemdUserUnit renders the Linux systemd --user service that keepalives the
@@ -79,7 +101,7 @@ RestartSec=10
 
 [Install]
 WantedBy=default.target
-`, macheHTTPListen, binPath, macheHTTPListen)
+`, macheHTTPListen, systemdQuote(binPath), macheHTTPListen)
 }
 
 // installDaemonAgent writes and loads a per-user supervisor that keeps the

@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/xml"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,9 +32,40 @@ func TestLaunchAgentPlist_ShapeAndArgs(t *testing.T) {
 func TestSystemdUserUnit_ExecStart(t *testing.T) {
 	unit := systemdUserUnit("/usr/local/bin/mache")
 
-	assert.Contains(t, unit, "ExecStart=/usr/local/bin/mache serve --http "+macheHTTPListen)
+	// Path is double-quoted so systemd treats it as one argument.
+	assert.Contains(t, unit, `ExecStart="/usr/local/bin/mache" serve --http `+macheHTTPListen)
 	assert.Contains(t, unit, "Restart=on-failure")
 	assert.NotContains(t, unit, "--stdio")
+}
+
+// TestLaunchAgentPlist_EscapesSpecialChars guards against a nonstandard install
+// path (os.Executable can resolve under e.g. "/Applications/Mache Tools/")
+// producing a malformed plist.
+func TestLaunchAgentPlist_EscapesSpecialChars(t *testing.T) {
+	bin := "/Applications/Mache & Tools/<m>ache"
+	plist := launchAgentPlist(bin, "/tmp/a&b<c>.log")
+
+	// Must be well-formed XML end to end.
+	dec := xml.NewDecoder(strings.NewReader(plist))
+	for {
+		_, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err, "rendered plist must be valid XML")
+	}
+
+	// XML-significant chars from the path are escaped, not raw.
+	assert.Contains(t, plist, "&amp;")
+	assert.Contains(t, plist, "&lt;m&gt;ache")
+	assert.NotContains(t, plist, "<m>ache")
+	// The space survives (legal in element text) so the path is preserved.
+	assert.Contains(t, plist, "Mache &amp; Tools")
+}
+
+func TestSystemdUserUnit_QuotesSpacedPath(t *testing.T) {
+	unit := systemdUserUnit("/Applications/Mache Tools/mache")
+	assert.Contains(t, unit, `ExecStart="/Applications/Mache Tools/mache" serve --http `+macheHTTPListen)
 }
 
 func TestInstallDaemonAgent_WritesSupervisorFile(t *testing.T) {
