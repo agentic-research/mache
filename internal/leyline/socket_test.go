@@ -198,6 +198,44 @@ func TestQuery_ParsesRows(t *testing.T) {
 	}
 }
 
+// TestQuery_ParsesObjectRows pins the daemon's ACTUAL wire shape: rows are
+// objects keyed by column name + a separate ordered `columns` array, NOT
+// arrays of values. The prior parser dropped every object row, which made
+// every daemon query return nothing — the root cause of LSP get_type_info
+// surfacing no hover despite enrichment populating _lsp_hover (mache-303036).
+func TestQuery_ParsesObjectRows(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"columns": []any{"node_id", "hover_text"},
+			"rows": []any{
+				map[string]any{"node_id": "symbols/config", "hover_text": "pub mod config"},
+				map[string]any{"node_id": "symbols/auth", "hover_text": "pub mod auth"},
+			},
+		}
+	})
+
+	client, err := DialSocket(sockPath)
+	if err != nil {
+		t.Fatalf("DialSocket: %v", err)
+	}
+	defer client.Close() //nolint:errcheck
+
+	rows, err := client.Query("SELECT node_id, hover_text FROM _lsp_hover")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	// Object rows must be flattened in `columns` order: [node_id, hover_text].
+	if rows[0][0] != "symbols/config" || rows[0][1] != "pub mod config" {
+		t.Errorf("row0 mis-ordered: %v", rows[0])
+	}
+	if rows[1][0] != "symbols/auth" {
+		t.Errorf("row1[0] = %v, want symbols/auth", rows[1][0])
+	}
+}
+
 func TestDialSocket_ErrorOnMissingSocket(t *testing.T) {
 	_, err := DialSocket("/tmp/nonexistent-leyline-test.sock")
 	if err == nil {
