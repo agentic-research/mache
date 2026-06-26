@@ -26,7 +26,9 @@ For the full first-run flow — source choice (directory vs `.db` vs live hot-sw
 
 ## What it gives an agent
 
-Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) require [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require a `.db` built by ley-line-open.
+Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) draw on [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require a `.db` built by ley-line-open.
+
+**Live LSP enrichment.** `get_type_info` / `get_diagnostics` no longer need a pre-baked `.db` — pass a `file=` and mache auto-spawns the ley-line daemon, which drives the language server (rust-analyzer, gopls, …) on demand and projects real hover / type / diagnostic data into the graph. Verified end-to-end on **Rust and Go** (e.g. `get_type_info(symbol, file)` returns rust-analyzer's signature + doc comment). This is the same primitive [Serena](https://github.com/oraios/serena) is built on, but as one enrichment *tier* over a tree-sitter base that still works without a language server — see [`prior-art/`](prior-art/) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
 For the full tool inventory and capability matrix (which tools need which tables), see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
