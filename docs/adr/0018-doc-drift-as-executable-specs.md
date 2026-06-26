@@ -210,6 +210,24 @@ This ADR scopes down to the version that actually holds up: ship 3 rules + a gat
 
 ______________________________________________________________________
 
+## Appendix C — Convergence decision (2026-06-26)
+
+Appendix A anticipated the integration ("assay's 'undocumented entities' list feeds drift-rules as a per-repo rule when the repo opts in"). This appendix records the decision that operationalizes it, plus one argument Appendix A did not make.
+
+Triggered by a request to "peep ../assay and integrate it here." Three findings:
+
+1. **assay's falsifiable content is already mache's.** assay computes two directions: *staleness* (doc ref → no entity) is exactly `drift_doc_dead_symbol_reference` (`mache-fa12b3`); *coverage* (entity → no doc ref) is Appendix A's anticipated `drift_doc_missing_for_entity`, now filed as **`mache-1bdc95`** (`drift_doc_undocumented_export` — name TBD at implementation; same rule). The coverage direction is the one genuinely-missing falsifiable idea worth porting out of assay.
+
+1. **Substrate duplication (the new argument).** assay re-links `smacker/go-tree-sitter` (CGO) to extract Go entities — re-deriving precisely what ley-line already parses into the `.db` (`_ast.node_kind`, `nodes.name`, `_lsp_hover` for signatures + doc prose). That re-introduces the CGO dependency the constellation spent real effort removing (ADR-0012; the `mache-pure-go-arena` decade). mache's drift rules read `node_defs`/markdown-token projections that already exist — **no tree-sitter, no `--from-db`, no shell-out, no SDK extraction.** The integration is a SQL rule, not a tool dependency.
+
+1. **Repo topology is not the axis.** The `.db` is already the federation seam (ADR-0014); new *analyses* are smell rules over that seam, not new subsystems. So "roll assay into mache" is true for the falsifiable part (one rule) without making mache "massive." assay stays a distinct repo (decision: keep-as-is, revisit later) for the work this ADR deliberately defers — the deterministic artifact/usage-graph redesign (rosary decade `deterministic-artifact-usage-graph`) and the semantic frontier (`assay-dk6.4` MiniLM↔HDC, `assay-dk6.2` HTML/DOM claims).
+
+Tracked in rosary decade `0018-doc-drift-executable-specs` (thread `drift-rules` for the placeholder implementations incl. `mache-1bdc95`; thread `assay-convergence` for the decision record `mache-1c332f`).
+
+An open architectural question — should assay's deterministic graph, if it proceeds, consume ley-line's `.db`/arena instead of its own CGO parser? — is the same substrate-duplication argument and is left to the assay-spec decade, not decided here.
+
+______________________________________________________________________
+
 End of ADR-0018.
 
 [1]: https://github.com/github/spec-kit
