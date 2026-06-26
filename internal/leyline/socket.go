@@ -540,8 +540,17 @@ func (c *SocketClient) Enrich(pass string, files []string) (map[string]any, erro
 	return resp, nil
 }
 
-// Query runs a SQL query against the active arena buffer via the `query` op.
-// Returns the rows as [][]any.
+// Query runs a SQL query against the active arena buffer via the `query` op
+// and returns the rows as [][]any (one slice per row, column order matching
+// the SELECT / the response's `columns` field).
+//
+// The daemon's `query` op returns each row as a JSON OBJECT keyed by column
+// name ({"node_id":..,"hover_text":..}), with a separate ordered `columns`
+// array — NOT an array of values. (A legacy array-of-arrays shape is also
+// accepted for forward/back-compat.) The prior parser only handled the
+// array shape and silently dropped every object row, so any query against
+// the daemon returned zero rows — which is exactly why LSP get_type_info
+// surfaced no hover even though enrichment populated _lsp_hover (mache-303036).
 func (c *SocketClient) Query(sql string) ([][]any, error) {
 	resp, err := c.SendOp(map[string]any{
 		"op":  "query",
@@ -553,22 +562,34 @@ func (c *SocketClient) Query(sql string) ([][]any, error) {
 	if errMsg, ok := resp["error"]; ok {
 		return nil, fmt.Errorf("query: %v", errMsg)
 	}
-	rows, ok := resp["rows"]
-	if !ok {
+	rowsVal, hasRows := resp["rows"]
+	if !hasRows {
 		return nil, nil
 	}
-	// rows is []any where each element is []any
-	rawRows, ok := rows.([]any)
+	rawRows, ok := rowsVal.([]any)
 	if !ok {
-		return nil, fmt.Errorf("unexpected rows type: %T", rows)
+		return nil, fmt.Errorf("unexpected rows type: %T", rowsVal)
 	}
-	result := make([][]any, len(rawRows))
-	for i, r := range rawRows {
-		row, ok := r.([]any)
-		if !ok {
-			continue
+	// Ordered column names — used to flatten object-shaped rows in SELECT order.
+	var cols []string
+	if cv, ok := resp["columns"].([]any); ok {
+		cols = make([]string, len(cv))
+		for i, v := range cv {
+			cols[i] = fmt.Sprint(v)
 		}
-		result[i] = row
+	}
+	result := make([][]any, 0, len(rawRows))
+	for _, r := range rawRows {
+		switch row := r.(type) {
+		case []any: // legacy array-of-values shape
+			result = append(result, row)
+		case map[string]any: // daemon shape: object keyed by column name
+			ordered := make([]any, len(cols))
+			for i, col := range cols {
+				ordered[i] = row[col]
+			}
+			result = append(result, ordered)
+		}
 	}
 	return result, nil
 }
@@ -717,18 +738,17 @@ func (c *SocketClient) Prioritize(files []string) error {
 // tagged releases have downloadable leyline-<os>-<arch> assets — the go.mod
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
-// As of this pin, the daemon binary is v0.5.4 while go.mod tracks
-// leyline-schema v0.5.3. These can diverge by a PATCH: v0.5.4 (LLO #120) is
-// a daemon-only fix — it makes the LSP enrichment pass await rust-analyzer
-// indexer readiness (quiescent / $/progress end) before issuing hover/def/
-// ref queries — and ships NO wire/schema change, so the v0.5.3 Go
-// schema-client decodes a v0.5.4 daemon's responses identically. The
-// major/minor must still match (wire format); only the patch floats here.
-// v0.5.4 ships all four leyline-<os>-<arch> daemon binaries (darwin/linux ×
-// amd64/arm64). (The release omits the libleyline_fs-darwin-amd64
-// *staticlib* — same gap as v0.5.0–v0.5.3 — but mache doesn't link the cgo
-// FFI: internal/leyline/client.go is //go:build leyline, off in releases,
-// so the download path is unaffected.)
+// As of this pin, the daemon binary AND go.mod's leyline-schema both track
+// v0.5.5 — they travel together here because v0.5.5 carries a wire/schema
+// change (unlike the v0.5.4 daemon-only patch, where only the binary moved
+// and the schema stayed at v0.5.3). When the schema bumps, the binary pin
+// must move with it: mache built against schema vX.Y.Z must run a daemon at
+// the same version or it will mis-decode the wire format. v0.5.5 ships all
+// four leyline-<os>-<arch> daemon binaries (darwin/linux × amd64/arm64).
+// (The release omits the libleyline_fs-darwin-amd64 *staticlib* — same gap
+// as v0.5.0–v0.5.4 — but mache doesn't link the cgo FFI:
+// internal/leyline/client.go is //go:build leyline, off in releases, so the
+// download path is unaffected.)
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets;
 // bump the go.mod leyline-schema pin too whenever the WIRE format changes.
@@ -737,7 +757,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // version and refuse to proceed if it disagrees — though note LLO has no
 // `version` op today (verified against 0.5.x), so 8kif needs a different
 // mechanism.
-const leylineBinaryVersion = "v0.5.4"
+const leylineBinaryVersion = "v0.5.5"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private
