@@ -111,6 +111,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	defer registry.Close()
 	registry.repoCloneDir = repoCloneDir
 
+	// Configure the leyline daemon's --source so live LSP/embed enrichment
+	// (get_type_info / get_diagnostics with file=) can run: op_enrich
+	// requires the daemon to know the source tree (mache-303036). Only set
+	// when serving a source directory; a pre-baked .db carries its own
+	// _lsp* tables and needs no live enrichment.
+	if src := servedSourceDir(args, servePath, serveRepo != ""); src != "" {
+		leyline.SetDaemonSource(src)
+	}
+
 	// Start the sheaf-invalidate event subscriber (mache-c14c43).
 	// One subscriber per process feeds the router; the router fans
 	// events out to every lazyGraph's invalidator. When no daemon
@@ -657,6 +666,28 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 		_ = sg.Close()
 		extraCleanup()
 	}, nil
+}
+
+// servedSourceDir returns the absolute source-tree directory mache is
+// serving, for configuring the leyline daemon's --source. It prefers a
+// positional argument that is an existing directory; for --repo mode (no
+// positional source) the clone at basePath is the tree. Returns "" when
+// serving a pre-baked .db — there's no live source to enrich, and the .db
+// carries its own _lsp* tables.
+func servedSourceDir(args []string, basePath string, repoMode bool) string {
+	for _, a := range args {
+		if fi, err := os.Stat(a); err == nil && fi.IsDir() {
+			if abs, err := filepath.Abs(a); err == nil {
+				return abs
+			}
+		}
+	}
+	if repoMode {
+		if abs, err := filepath.Abs(basePath); err == nil {
+			return abs
+		}
+	}
+	return ""
 }
 
 // autoInvokeLeylineParse runs `leyline parse <sourceDir> -o <tmpdb>` and
