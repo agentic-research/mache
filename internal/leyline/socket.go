@@ -320,12 +320,21 @@ func DiscoverOrStart() (string, error) {
 	// Start leyline daemon as a background subprocess.
 	// `daemon` creates the UDS socket at <ctrl>.sock that mache connects to.
 	// `serve` mounts only (no socket) — wrong for our use case.
-	cmd := exec.Command(leylineBin, "daemon",
+	daemonArgs := []string{
+		"daemon",
 		"--arena", arenaPath,
 		"--arena-size-mib", "64",
 		"--control", ctrlPath,
 		"--mount", mountDir,
-	)
+	}
+	// --source lets the daemon run enrichment passes: op_enrich requires
+	// ctx.source_dir, so without it lsp/embed enrichment fails with "no
+	// --source configured". Set via SetDaemonSource at serve startup when
+	// serving a source tree; empty for pre-baked .db serves (mache-303036).
+	if src := DaemonSource(); src != "" {
+		daemonArgs = append(daemonArgs, "--source", src)
+	}
+	cmd := exec.Command(leylineBin, daemonArgs...)
 	// Detach from our stdio so it doesn't interfere with MCP transport
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -503,20 +512,30 @@ func (c *SocketClient) sendRaw(req map[string]any) ([]byte, error) {
 	return []byte(strings.TrimSpace(line)), nil
 }
 
-// Tool invokes a named tool with the given args via the `tool` op.
-// Returns the full response map on success.
-func (c *SocketClient) Tool(name string, args map[string]any) (map[string]any, error) {
-	req := map[string]any{
-		"op":   "tool",
-		"name": name,
-		"args": args,
+// Enrich runs a daemon enrichment pass (e.g. "lsp", "embed") over the
+// given files via the `enrich` op, populating the corresponding arena
+// tables (for "lsp": _lsp_hover / _lsp / _lsp_defs / _lsp_refs). `files`
+// are paths relative to the daemon's --source dir; nil/empty enriches every
+// file. The op is SYNCHRONOUS on the daemon side — it runs the pass and
+// snapshots the living db to the arena before responding — so a subsequent
+// Query observes the populated tables.
+//
+// This replaces the prior `tool` op: the leyline daemon's UDS dispatch
+// speaks named ops directly ({"op":"enrich","pass":...}); the MCP
+// tools/call envelope ({"op":"tool","name":...}) only exists on the HTTP
+// /mcp endpoint, so sending it over UDS returned "unknown op: tool"
+// (mache-303036).
+func (c *SocketClient) Enrich(pass string, files []string) (map[string]any, error) {
+	req := map[string]any{"op": "enrich", "pass": pass}
+	if len(files) > 0 {
+		req["files"] = files
 	}
 	resp, err := c.SendOp(req)
 	if err != nil {
 		return nil, err
 	}
 	if errMsg, ok := resp["error"]; ok {
-		return nil, fmt.Errorf("tool %s: %v", name, errMsg)
+		return nil, fmt.Errorf("enrich %s: %v", pass, errMsg)
 	}
 	return resp, nil
 }

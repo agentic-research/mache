@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -33,6 +34,22 @@ func lspTableMissing(table, feature string) *mcp.CallToolResult {
 
 func lspEnrichFailed(feature string) *mcp.CallToolResult {
 	return mcp.NewToolResultError(fmt.Sprintf("%s not available — LSP enrichment requires ley-line daemon.\n%s", feature, lspEnrichHint))
+}
+
+// relForEnrich makes filePath relative to the daemon's --source dir, which
+// is what the `enrich` op expects ("files relative to source dir"). An
+// absolute path under the source root is relativized; an already-relative
+// path, or one outside the root, is passed through unchanged.
+func relForEnrich(filePath string) string {
+	src := leyline.DaemonSource()
+	if src == "" || !filepath.IsAbs(filePath) {
+		return filePath
+	}
+	rel, err := filepath.Rel(src, filePath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return filePath
+	}
+	return rel
 }
 
 func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
@@ -146,7 +163,7 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
-	resp, err := client.Tool("lsp", map[string]any{"file": filePath})
+	resp, err := client.Enrich("lsp", []string{relForEnrich(filePath)})
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +300,7 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 	if err := client.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
-	resp, err := client.Tool("lsp", map[string]any{"file": filePath})
+	resp, err := client.Enrich("lsp", []string{relForEnrich(filePath)})
 	if err != nil {
 		return nil, err
 	}

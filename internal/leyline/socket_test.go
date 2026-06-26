@@ -111,17 +111,24 @@ func TestSendOp_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestTool_FormatsCorrectly(t *testing.T) {
+func TestEnrich_SendsNamedOpWireShape(t *testing.T) {
+	// Pin the EXACT wire shape leyline's UDS dispatch expects:
+	// {"op":"enrich","pass":"lsp","files":[...]} — NOT the old
+	// {"op":"tool","name":"lsp","args":{...}} (mache-303036).
 	sockPath := mockServer(t, func(req map[string]any) map[string]any {
-		name, _ := req["name"].(string)
-		args, _ := req["args"].(map[string]any)
-		file, _ := args["file"].(string)
+		if req["op"] != "enrich" {
+			return map[string]any{"error": "unknown op: " + fmt.Sprint(req["op"])}
+		}
+		files, _ := req["files"].([]any)
+		var first string
+		if len(files) > 0 {
+			first, _ = files[0].(string)
+		}
 		return map[string]any{
 			"ok":         true,
-			"tool":       name,
+			"pass_echo":  req["pass"],
+			"file_echo":  first,
 			"generation": 42,
-			"stats":      map[string]any{"symbols": 15, "hovers": 15, "diagnostics": 3},
-			"file_echo":  file,
 		}
 	})
 
@@ -131,25 +138,21 @@ func TestTool_FormatsCorrectly(t *testing.T) {
 	}
 	defer client.Close() //nolint:errcheck
 
-	resp, err := client.Tool("lsp", map[string]any{"file": "/tmp/main.go"})
+	resp, err := client.Enrich("lsp", []string{"crates/x/src/lib.rs"})
 	if err != nil {
-		t.Fatalf("Tool: %v", err)
+		t.Fatalf("Enrich: %v", err)
 	}
-	if resp["tool"] != "lsp" {
-		t.Errorf("expected tool=lsp, got %v", resp["tool"])
+	if resp["pass_echo"] != "lsp" {
+		t.Errorf("expected pass=lsp, got %v", resp["pass_echo"])
 	}
-	if resp["file_echo"] != "/tmp/main.go" {
-		t.Errorf("expected file_echo=/tmp/main.go, got %v", resp["file_echo"])
-	}
-	// generation comes back as float64 from JSON
-	if gen, ok := resp["generation"].(float64); !ok || gen != 42 {
-		t.Errorf("expected generation=42, got %v", resp["generation"])
+	if resp["file_echo"] != "crates/x/src/lib.rs" {
+		t.Errorf("expected file echoed, got %v", resp["file_echo"])
 	}
 }
 
-func TestTool_ReturnsErrorOnToolFailure(t *testing.T) {
+func TestEnrich_ReturnsErrorOnFailure(t *testing.T) {
 	sockPath := mockServer(t, func(req map[string]any) map[string]any {
-		return map[string]any{"error": "unknown tool: bad"}
+		return map[string]any{"error": "unknown enrichment pass: bad"}
 	})
 
 	client, err := DialSocket(sockPath)
@@ -158,12 +161,12 @@ func TestTool_ReturnsErrorOnToolFailure(t *testing.T) {
 	}
 	defer client.Close() //nolint:errcheck
 
-	_, err = client.Tool("bad", nil)
+	_, err = client.Enrich("bad", nil)
 	if err == nil {
-		t.Fatal("expected error for unknown tool")
+		t.Fatal("expected error for unknown pass")
 	}
-	if !strings.Contains(err.Error(), "unknown tool") {
-		t.Errorf("expected 'unknown tool' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "unknown enrichment pass") {
+		t.Errorf("expected pass error, got: %v", err)
 	}
 }
 
