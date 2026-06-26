@@ -278,9 +278,10 @@ func TestWriteClaudeMCPConfig_Fresh(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &root))
 	servers := root["mcpServers"].(map[string]any)
 	mache := servers["mache"].(map[string]any)
-	assert.Equal(t, "mache", mache["command"])
-	args := mache["args"].([]any)
-	assert.Equal(t, "serve", args[0])
+	// Canonical: HTTP endpoint, not a stdio command (ADR-0022).
+	assert.Equal(t, "http", mache["type"])
+	assert.Equal(t, macheHTTPURL, mache["url"])
+	assert.NotContains(t, mache, "command")
 }
 
 func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
@@ -305,7 +306,7 @@ func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
 	assert.Contains(t, servers, "mache")
 
 	mache := servers["mache"].(map[string]any)
-	assert.Equal(t, "/usr/local/bin/mache", mache["command"])
+	assert.Equal(t, macheHTTPURL, mache["url"])
 }
 
 func TestWriteClaudeMCPConfig_PreservesUnknownKeys(t *testing.T) {
@@ -384,7 +385,7 @@ func TestRegisterEditorMCP_Fresh(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &root))
 	servers := root["mcpServers"].(map[string]any)
 	mache := servers["mache"].(map[string]any)
-	assert.Equal(t, "/usr/local/bin/mache", mache["command"])
+	assert.Equal(t, macheHTTPURL, mache["url"])
 }
 
 func TestRegisterEditorMCP_MergeExisting(t *testing.T) {

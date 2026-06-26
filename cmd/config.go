@@ -155,15 +155,17 @@ func evalOrAbs(p string) (string, error) {
 	}
 }
 
-// mcpServerEntry is the mache entry written into MCP config files.
-type mcpServerEntry struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
+// httpServerEntry is the canonical MCP client entry for mache: a pointer to
+// the shared Streamable HTTP daemon (see ADR-0022). Onboarding never registers
+// a stdio command — `mache serve --stdio` is an explicit CI/sandbox escape
+// hatch, not an editor-registered transport.
+func httpServerEntry() map[string]any {
+	return map[string]any{"type": "http", "url": macheHTTPURL}
 }
 
 // writeClaudeMCPConfig writes or merges a mache entry into .claude/mcp.json.
 // Uses map[string]any as root type to preserve unknown top-level keys.
-func writeClaudeMCPConfig(projectDir, macheCommand string) error {
+func writeClaudeMCPConfig(projectDir, _ string) error {
 	claudeDir := filepath.Join(projectDir, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		return fmt.Errorf("create .claude dir: %w", err)
@@ -185,10 +187,7 @@ func writeClaudeMCPConfig(projectDir, macheCommand string) error {
 		servers = make(map[string]any)
 	}
 
-	servers["mache"] = mcpServerEntry{
-		Command: macheCommand,
-		Args:    []string{"serve"},
-	}
+	servers["mache"] = httpServerEntry()
 	root["mcpServers"] = servers
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -293,9 +292,7 @@ func detectEditors(binaryPath string) []editorConfig {
 			ConfigPath:   filepath.Join(home, ".config", "zed", "settings.json"),
 			ServerKey:    "context_servers",
 			SharedConfig: true,
-			EntryFunc: func(bp string) map[string]any {
-				return map[string]any{"source": "custom", "command": bp, "args": []string{"serve"}}
-			},
+			EntryFunc:    func(string) map[string]any { return httpServerEntry() },
 		},
 	}
 
@@ -312,17 +309,15 @@ func detectEditors(binaryPath string) []editorConfig {
 			Name:       "VS Code",
 			ConfigPath: vscodePath,
 			ServerKey:  "servers",
-			EntryFunc: func(bp string) map[string]any {
-				return map[string]any{"type": "stdio", "command": bp, "args": []string{"serve"}}
-			},
+			EntryFunc:  func(string) map[string]any { return httpServerEntry() },
 		})
 	}
 
 	return editors
 }
 
-func mcpServersEntry(binaryPath string) map[string]any {
-	return map[string]any{"command": binaryPath, "args": []string{"serve"}}
+func mcpServersEntry(string) map[string]any {
+	return httpServerEntry()
 }
 
 // registerEditorMCP upserts mache into an editor's MCP config file.
@@ -383,7 +378,10 @@ func registerClaudeCodeCLIImpl(binaryPath string) bool {
 	}
 	// Remove first (may fail if not registered — that's fine)
 	_ = exec.Command(claudePath, "mcp", "remove", "-s", "user", "mache").Run()
-	err = exec.Command(claudePath, "mcp", "add", "--scope", "user", "mache", "--", binaryPath, "serve").Run()
+	// Register the canonical Streamable HTTP endpoint (ADR-0022), not a stdio
+	// command. binaryPath is unused now — the daemon is shared, not spawned
+	// per client.
+	err = exec.Command(claudePath, "mcp", "add", "--scope", "user", "--transport", "http", "mache", macheHTTPURL).Run()
 	return err == nil
 }
 

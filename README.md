@@ -13,16 +13,17 @@ Point it at a codebase. It parses the code, discovers the structure, and lets yo
 ```bash
 git clone https://github.com/agentic-research/mache.git
 cd mache && task build && task install
-mache serve .   # ← long-running daemon on :7532 — keep it running (use a 2nd terminal)
-claude mcp add --transport http mache http://localhost:7532/mcp
+mache init --global   # installs the keepalive HTTP daemon (:7532) + registers detected editors
 ```
 
-That's the 30-second path for a **Go** codebase. Two things new users hit:
+That's the 30-second path for a **Go** codebase. `mache init --global` installs a per-user supervisor (launchd on macOS, systemd `--user` on Linux) that keeps the shared mache HTTP daemon alive on `localhost:7532` and registers it with Claude Code and any detected editors — no terminal to babysit. Then `mache init` (no flag) inside a project records what that project serves.
 
-- `mache serve` is a **daemon** — it must stay running, or the client gets `connection refused`. Background it or run it in another terminal.
+Two things new users hit:
+
+- **HTTP is the canonical transport.** One shared daemon serves every project, routing per session via the MCP roots protocol. `--stdio` exists only as an escape hatch for CI / sandboxes / headless agents and is never registered for editor use (see [ADR-0022](docs/adr/0022-mcp-transport-canonical.md)).
 - For **Rust / Python / TypeScript**, point mache at a [ley-line-open](https://github.com/agentic-research/ley-line-open)-built `.db` instead of a directory (`mache serve ./code.db`) to get accurate `find_callers` + `get_type_info` + `get_diagnostics`. A bare directory uses the built-in tree-sitter tier, which is tuned for Go.
 
-For the full first-run flow — source choice (directory vs `.db` vs live hot-swap), HTTP vs stdio, `--scope`, Claude Desktop, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
+For the full first-run flow — source choice (directory vs `.db` vs live hot-swap), the `--stdio` escape hatch, `--scope`, Claude Desktop, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
 
 ## What it gives an agent
 
@@ -85,7 +86,7 @@ The graph is the same on either path; MCP and the filesystem are two ways to tal
 | Capability                              | Status                                                                                           |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Tree-sitter parsing (28 langs)          | Stable                                                                                           |
-| MCP server (17 tools, stdio + HTTP)     | Stable                                                                                           |
+| MCP server (17 tools, HTTP canonical)   | Stable                                                                                           |
 | Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)                            |
 | Cross-references (callers/callees)      | Stable                                                                                           |
 | `find_smells` (9 structural rules)      | Stable. `fan_out_skew` is qualifier-aware via ley-line-open `BindingRecord.qualifier`            |
