@@ -52,6 +52,76 @@ func relForEnrich(filePath string) string {
 	return rel
 }
 
+// formatNoHoverMessage builds the user-facing string returned when LSP
+// enrichment completes but `_lsp_hover` has no row for the requested
+// symbol. Per-pass skip reasons (from leyline-v0.5.3+) are appended so
+// the operator sees WHY the enrich pass didn't write hover rows
+// (rust-analyzer not on PATH, scope mismatched _source.id, language has
+// no bundled server, etc.) instead of guessing.
+func formatNoHoverMessage(symbol, kind string, skipReasons []string) string {
+	var base string
+	if kind != "" {
+		base = fmt.Sprintf("LSP enrichment completed but no hover info found for %q with kind=%s", symbol, kind)
+	} else {
+		base = fmt.Sprintf("LSP enrichment completed but no hover info found for %q", symbol)
+	}
+	if len(skipReasons) == 0 {
+		return base
+	}
+	var sb strings.Builder
+	sb.WriteString(base)
+	sb.WriteString("\n\nEnrichment pass skip reasons:")
+	for _, r := range skipReasons {
+		sb.WriteString("\n  - ")
+		sb.WriteString(r)
+	}
+	return sb.String()
+}
+
+// extractEnrichSkipReasons returns the per-pass skip reasons surfaced by
+// the daemon's `enrich` op response. Each pass's `skipped` field is a
+// `[]string` carrying human-readable reasons that portions of the
+// requested scope did not write rows (no bundled LSP server for the
+// language, server not on PATH, scope matched no _source.id rows, etc.
+// — see ley-line-open's EnrichmentStats.skipped, bead 661727).
+//
+// Pre-leyline-v0.5.3 daemons drop this field at the capnp wire boundary
+// even when the JSON response carried it (Rust serde path worked, capnp
+// path did not). Returns nil for those daemons — callers must accept
+// nil-or-empty as "no skip-reason visibility available" rather than
+// "definitely nothing was skipped." The leyline binary pin lives at
+// `internal/leyline.leylineBinaryVersion`.
+func extractEnrichSkipReasons(resp map[string]any) []string {
+	passes, ok := resp["passes"].([]any)
+	if !ok {
+		return nil
+	}
+	var reasons []string
+	for _, p := range passes {
+		pmap, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		passName, _ := pmap["pass_name"].(string)
+		skipped, ok := pmap["skipped"].([]any)
+		if !ok {
+			continue
+		}
+		for _, s := range skipped {
+			str, ok := s.(string)
+			if !ok || str == "" {
+				continue
+			}
+			if passName != "" {
+				reasons = append(reasons, fmt.Sprintf("[%s] %s", passName, str))
+			} else {
+				reasons = append(reasons, str)
+			}
+		}
+	}
+	return reasons
+}
+
 func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		symbol := request.GetString("symbol", "")
@@ -168,6 +238,15 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 		return nil, err
 	}
 	log.Printf("LSP enrichment via ley-line daemon: %v", resp)
+	skipReasons := extractEnrichSkipReasons(resp)
+	if len(skipReasons) > 0 {
+		// Surface concretely so the operator sees WHY enrich silently
+		// returned 0 rows. Requires ley-line-open ≥ v0.5.3 (bead 661727).
+		log.Printf("LSP enrichment SKIPPED reasons (file=%s):", filePath)
+		for _, r := range skipReasons {
+			log.Printf("  - %s", r)
+		}
+	}
 
 	// Query phase — reuse same connection, reset deadline
 	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
@@ -213,15 +292,12 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 	}
 
 	if len(results) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q", symbol)), nil
+		return mcp.NewToolResultText(formatNoHoverMessage(symbol, "", skipReasons)), nil
 	}
 
 	results = filterByNodeIDKind(results, kind, func(r hoverResult) string { return r.NodeID })
 	if len(results) == 0 {
-		if kind != "" {
-			return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q with kind=%s", symbol, kind)), nil
-		}
-		return mcp.NewToolResultText(fmt.Sprintf("LSP enrichment completed but no hover info found for %q", symbol)), nil
+		return mcp.NewToolResultText(formatNoHoverMessage(symbol, kind, skipReasons)), nil
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")
@@ -305,6 +381,13 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 		return nil, err
 	}
 	log.Printf("LSP enrichment via ley-line daemon: %v", resp)
+	skipReasons := extractEnrichSkipReasons(resp)
+	if len(skipReasons) > 0 {
+		log.Printf("LSP enrichment SKIPPED reasons (file=%s):", filePath)
+		for _, r := range skipReasons {
+			log.Printf("  - %s", r)
+		}
+	}
 
 	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set query deadline: %w", err)
@@ -346,7 +429,7 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 
 	results = filterByNodeIDKind(results, kind, func(r diagResult) string { return r.NodeID })
 	if len(results) == 0 {
-		return noDiagnosticsResult(symbol, kind), nil
+		return noDiagnosticsResultWithSkipReasons(symbol, kind, skipReasons), nil
 	}
 
 	data, _ := json.MarshalIndent(results, "", "  ")
@@ -368,6 +451,30 @@ func noDiagnosticsResult(symbol, kind string) *mcp.CallToolResult {
 	default:
 		return mcp.NewToolResultText("no diagnostics found")
 	}
+}
+
+// noDiagnosticsResultWithSkipReasons appends per-pass enrich skip
+// reasons to the base "no diagnostics found" message so the operator
+// sees WHY the daemon didn't write any diagnostic rows for the file.
+// Requires ley-line-open ≥ v0.5.3 to populate skipReasons; older
+// daemons return an empty slice (silent path).
+func noDiagnosticsResultWithSkipReasons(symbol, kind string, skipReasons []string) *mcp.CallToolResult {
+	base := noDiagnosticsResult(symbol, kind)
+	if len(skipReasons) == 0 {
+		return base
+	}
+	var sb strings.Builder
+	for _, c := range base.Content {
+		if tc, ok := c.(mcp.TextContent); ok {
+			sb.WriteString(tc.Text)
+		}
+	}
+	sb.WriteString("\n\nEnrichment pass skip reasons:")
+	for _, r := range skipReasons {
+		sb.WriteString("\n  - ")
+		sb.WriteString(r)
+	}
+	return mcp.NewToolResultText(sb.String())
 }
 
 // queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph.
