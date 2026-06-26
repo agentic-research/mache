@@ -738,17 +738,23 @@ func (c *SocketClient) Prioritize(files []string) error {
 // tagged releases have downloadable leyline-<os>-<arch> assets — the go.mod
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
-// As of this pin, the daemon binary AND go.mod's leyline-schema both track
-// v0.5.5 — they travel together here because v0.5.5 carries a wire/schema
-// change (unlike the v0.5.4 daemon-only patch, where only the binary moved
-// and the schema stayed at v0.5.3). When the schema bumps, the binary pin
-// must move with it: mache built against schema vX.Y.Z must run a daemon at
-// the same version or it will mis-decode the wire format. v0.5.5 ships all
-// four leyline-<os>-<arch> daemon binaries (darwin/linux × amd64/arm64).
-// (The release omits the libleyline_fs-darwin-amd64 *staticlib* — same gap
-// as v0.5.0–v0.5.4 — but mache doesn't link the cgo FFI:
-// internal/leyline/client.go is //go:build leyline, off in releases, so the
-// download path is unaffected.)
+// As of this pin, the daemon binary is v0.5.7 while go.mod's leyline-schema
+// stays at v0.5.5: v0.5.6 and v0.5.7 are BOTH daemon-only LSP fixes with no
+// wire/schema change, so the v0.5.5 Go schema-client decodes a v0.5.7
+// daemon's responses identically.
+//   - v0.5.6: gopls workspace init (workspaceFolders + per-language
+//     initializationOptions).
+//   - v0.5.7: the LSP client now answers server→client requests
+//     (workspace/configuration, window/workDoneProgress/create) — without
+//     this gopls blocked indefinitely and Go enrichment produced 0 hovers;
+//     with it, get_type_info returns real Go hover end-to-end (mache-6584a0).
+//
+// The major/minor must still match the schema (wire format); only the patch
+// floats. v0.5.7 ships all four leyline-<os>-<arch> daemon binaries
+// (darwin/linux × amd64/arm64). (The release omits the
+// libleyline_fs-darwin-amd64 *staticlib* — same gap as v0.5.0–v0.5.6 — but
+// mache doesn't link the cgo FFI: internal/leyline/client.go is //go:build
+// leyline, off in releases, so the download path is unaffected.)
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets;
 // bump the go.mod leyline-schema pin too whenever the WIRE format changes.
@@ -757,7 +763,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // version and refuse to proceed if it disagrees — though note LLO has no
 // `version` op today (verified against 0.5.x), so 8kif needs a different
 // mechanism.
-const leylineBinaryVersion = "v0.5.5"
+const leylineBinaryVersion = "v0.5.7"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private
