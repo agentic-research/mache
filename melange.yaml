@@ -12,7 +12,7 @@ package:
   # Keep in sync with internal/buildinfo/version.txt — `task version:check`
   # asserts they agree. The binary's version comes from the embedded
   # buildinfo, not from this field.
-  version: 0.9.0
+  version: 0.10.0
   epoch: 0
   description: "Structural code intelligence — graph projection of source as MCP tools"
   copyright:

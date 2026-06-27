@@ -37,7 +37,8 @@ func TestInit_CreatesFiles(t *testing.T) {
 	mcpData, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(mcpData), "mache")
-	assert.Contains(t, string(mcpData), "serve")
+	assert.Contains(t, string(mcpData), macheHTTPURL)
+	assert.NotContains(t, string(mcpData), `"serve"`)
 
 	// Check .claude/CLAUDE.md
 	claudeMD, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
@@ -97,6 +98,11 @@ func TestInit_Global(t *testing.T) {
 	claudeCLIRegister = func(string) bool { return false }
 	t.Cleanup(func() { claudeCLIRegister = orig })
 
+	// Don't load a real launchd/systemd agent during the test — just write files.
+	origAutoload := daemonAgentAutoload
+	daemonAgentAutoload = false
+	t.Cleanup(func() { daemonAgentAutoload = origAutoload })
+
 	// Create a fake .cursor dir so registerEditorMCP finds it
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".cursor"), 0o755))
 
@@ -108,7 +114,8 @@ func TestInit_Global(t *testing.T) {
 	mcpData, err := os.ReadFile(filepath.Join(dir, ".cursor", "mcp.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(mcpData), "mache")
-	assert.Contains(t, string(mcpData), "serve")
+	assert.Contains(t, string(mcpData), macheHTTPURL)
+	assert.NotContains(t, string(mcpData), `"serve"`)
 
 	// No .mache.json should be created in global mode
 	_, err = os.Stat(filepath.Join(dir, ConfigFileName))

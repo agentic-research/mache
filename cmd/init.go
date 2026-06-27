@@ -56,13 +56,19 @@ func execInit(w io.Writer, macheCmd string, opts initOpts) error {
 }
 
 func execInitGlobal(w io.Writer, macheCmd string) error {
-	_, _ = fmt.Fprintln(w, "Registering mache MCP server with detected editors...")
+	_, _ = fmt.Fprintln(w, "Installing the shared mache HTTP daemon (keepalive supervisor)...")
+	_, _ = fmt.Fprintln(w)
+
+	installDaemonAgent(w, macheCmd)
+
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Registering mache MCP server (Streamable HTTP) with detected editors...")
 	_, _ = fmt.Fprintln(w)
 
 	registerAllEditors(w, macheCmd)
 
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "mache is now available as an MCP server. Restart your editor to activate.")
+	_, _ = fmt.Fprintf(w, "mache is now available as an MCP server at %s. Restart your editor to activate.\n", macheHTTPURL)
 	_, _ = fmt.Fprintln(w, "Run 'mache init' (without --global) in a project to configure what it serves.")
 	return nil
 }
@@ -123,7 +129,8 @@ func execInitProject(w io.Writer, macheCmd string, opts initOpts) error {
 	}
 	_, _ = fmt.Fprintf(w, "  Source: %s\n", opts.Source)
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "Run 'mache serve' to start the MCP server.")
+	_, _ = fmt.Fprintf(w, "This project is registered against the shared mache HTTP daemon (%s).\n", macheHTTPURL)
+	_, _ = fmt.Fprintln(w, "If you haven't already, run 'mache init --global' once to install and start it.")
 
 	return nil
 }

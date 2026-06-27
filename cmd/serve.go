@@ -27,13 +27,20 @@ var serveCmd = &cobra.Command{
 	Use:   "serve [data-source]",
 	Short: "Serve a Mache graph as an MCP server",
 	Long: `Starts an MCP (Model Context Protocol) server that exposes the graph
-as tools. By default starts a Streamable HTTP server on localhost:7532.
-Use --stdio for subprocess mode (client manages lifecycle).
+as tools.
+
+Streamable HTTP is the canonical transport (default, localhost:7532): one
+shared daemon serves every project, routing per session via the MCP roots
+protocol. 'mache init' registers clients against it. See ADR-0022.
+
+--stdio is an explicit escape hatch for CI, sandboxes, and headless/cron
+agents where no shared daemon should run. It is NOT registered by 'mache init'
+and should not be used for interactive editor setups.
 
 Examples:
-  mache serve ./data.db                  # HTTP on localhost:7532 (default)
+  mache serve ./data.db                  # HTTP on localhost:7532 (canonical)
   mache serve --http :9000 ./data.db     # HTTP on custom port (all interfaces)
-  mache serve --stdio ./data.db          # stdio (subprocess mode)
+  mache serve --stdio ./data.db          # stdio escape hatch (CI / sandbox)
   claude mcp add --transport http mache http://localhost:7532/mcp`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runServe,
@@ -52,7 +59,7 @@ var (
 func init() {
 	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Path to topology schema")
 	serveCmd.Flags().StringVar(&serveHTTP, "http", "localhost:7532", "Listen address for Streamable HTTP transport")
-	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Use stdio transport instead of HTTP (for subprocess mode)")
+	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Escape-hatch stdio transport for CI/sandbox/headless use (HTTP is canonical; never registered by `mache init`)")
 	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
 	serveCmd.Flags().StringVar(&serveRepo, "repo", "", "Git repo URL to clone and serve (ephemeral: cleaned up on exit)")
 	serveCmd.Flags().StringVar(&serveControl, "control", "", "Path to ley-line control block (reads from arena, enables hot-swap)")
