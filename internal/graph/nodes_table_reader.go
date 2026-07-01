@@ -37,14 +37,28 @@ const (
 // The caller owns the *sql.DB lifecycle — NodesTableReader holds a
 // reference but does not close it.
 type NodesTableReader struct {
-	db        *sql.DB
-	tableName string           // source records table ("results" or schema.Table)
-	render    TemplateRenderer // for record_id fallback rendering
-	levels    []*schemaLevel   // compiled schema levels
-	fileMode  os.FileMode      // permission for file nodes
-	dirMode   os.FileMode      // permission for dir nodes
-	sizeCache sync.Map         // file path → int64
-	cache     *ContentCache    // FIFO-bounded rendered content
+	db         *sql.DB
+	tableName  string           // source records table ("results" or schema.Table)
+	render     TemplateRenderer // for record_id fallback rendering
+	levels     []*schemaLevel   // compiled schema levels
+	fileMode   os.FileMode      // permission for file nodes
+	dirMode    os.FileMode      // permission for dir nodes
+	sizeCache  sync.Map         // file path → int64
+	cache      *ContentCache    // FIFO-bounded rendered content
+	hasContext bool             // nodes table carries the context column (mache-b8fe72)
+}
+
+// ColumnExists reports whether table has a column named col. Readers use it
+// to stay compatible with nodes tables written before a column was added
+// (e.g. `context`, mache-b8fe72) or produced by leyline, and writers use it
+// to decide whether an ALTER is needed.
+func ColumnExists(db *sql.DB, table, col string) bool {
+	rows, err := db.Query("SELECT 1 FROM pragma_table_info(?) WHERE name = ?", table, col)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = rows.Close() }()
+	return rows.Next()
 }
 
 // DB returns the underlying database connection.
@@ -56,13 +70,14 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 	levels []*schemaLevel, fileMode, dirMode os.FileMode, cacheSize int,
 ) *NodesTableReader {
 	return &NodesTableReader{
-		db:        db,
-		tableName: tableName,
-		render:    render,
-		levels:    levels,
-		fileMode:  fileMode,
-		dirMode:   dirMode,
-		cache:     NewContentCache(cacheSize),
+		db:         db,
+		tableName:  tableName,
+		render:     render,
+		levels:     levels,
+		fileMode:   fileMode,
+		dirMode:    dirMode,
+		cache:      NewContentCache(cacheSize),
+		hasContext: ColumnExists(db, "nodes", "context"),
 	}
 }
 
@@ -76,8 +91,17 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	var kind, size int
 	var mtimeNano int64
 	var recordID sql.NullString
-	err := r.db.QueryRow("SELECT kind, size, mtime, record_id FROM nodes WHERE id = ?", id).
-		Scan(&kind, &size, &mtimeNano, &recordID)
+	var context []byte
+	// Older / leyline-produced nodes tables predate the context column;
+	// only select it when present so GetNode stays backward-compatible
+	// (mache-b8fe72). node.Context feeds the `context` virtual file.
+	query := "SELECT kind, size, mtime, record_id FROM nodes WHERE id = ?"
+	dest := []any{&kind, &size, &mtimeNano, &recordID}
+	if r.hasContext {
+		query = "SELECT kind, size, mtime, record_id, context FROM nodes WHERE id = ?"
+		dest = append(dest, &context)
+	}
+	err := r.db.QueryRow(query, id).Scan(dest...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -94,6 +118,7 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		ID:      id,
 		Mode:    mode,
 		ModTime: time.Unix(0, mtimeNano),
+		Context: context,
 	}
 
 	if kind == NodeKindFile {

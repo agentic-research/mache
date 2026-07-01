@@ -58,6 +58,43 @@ func TestSQLiteWriter_GetNode_RoundTripsProperties(t *testing.T) {
 		"pkg Property must survive the round-trip too")
 }
 
+// TestSQLiteWriter_RoundTripsContext pins bead mache-b8fe72 on the write
+// side: node.Context (the imports/types the headline `cat context` vfile
+// serves) must (1) persist into the nodes.context column and (2) survive
+// SQLiteWriter.GetNode, which the engine's two-pass write re-reads to
+// preserve fields — same class as the Properties fix (mache-d28eb1). If
+// GetNode drops Context, the second-pass INSERT OR REPLACE nulls it even
+// after the column exists.
+func TestSQLiteWriter_RoundTripsContext(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ctx.db")
+	ctx := []byte("import (\n\t\"fmt\"\n)\n")
+
+	w, err := NewSQLiteWriter(dbPath)
+	require.NoError(t, err)
+
+	w.AddNode(&graph.Node{
+		ID:      "pkg/methods/Foo.Bar",
+		Mode:    os.ModeDir | 0o555,
+		ModTime: time.Unix(1700000000, 0),
+		Context: ctx,
+	})
+
+	got, err := w.GetNode("pkg/methods/Foo.Bar")
+	require.NoError(t, err)
+	assert.Equal(t, ctx, got.Context,
+		"SQLiteWriter.GetNode must round-trip Context (two-pass write protection)")
+	require.NoError(t, w.Close())
+
+	// The bytes actually landed in the nodes.context column.
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	var stored []byte
+	require.NoError(t, db.QueryRow(
+		`SELECT context FROM nodes WHERE id = ?`, "pkg/methods/Foo.Bar").Scan(&stored))
+	assert.Equal(t, ctx, stored, "AddNode must persist node.Context to the context column")
+}
+
 // LoadFileIndex is the read-side of incremental re-ingestion: when
 // `mache build` runs over a tree we've seen before, it loads this
 // table to skip files whose (path, mod_time, size) tuple is
