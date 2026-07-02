@@ -53,7 +53,7 @@ mache serve .                 # ← long-running daemon on localhost:7532 — KE
 claude mcp add --transport http mache http://localhost:7532/mcp
 ```
 
-> ⚠️ `mache serve` (HTTP) is a **foreground daemon** — it blocks the terminal and must stay alive for the client to connect. Run it in a second terminal, background it (`mache serve . &`), or install it as a login service. If the client reports `localhost:7532/mcp` **connection refused**, the daemon isn't running — that's the #1 first-run gotcha. (A launchd LaunchAgent that keeps it alive across logins is tracked in mache-823d91.)
+> ⚠️ `mache serve` (HTTP) is a **foreground daemon** — it blocks the terminal and must stay alive for the client to connect. If the client reports `localhost:7532/mcp` **connection refused**, the daemon isn't running — that's the #1 first-run gotcha. The fix is a one-time `mache init --global`, which installs a per-user supervisor (**launchd** LaunchAgent on macOS, **systemd `--user`** unit on Linux) that starts the daemon at login and keeps it alive across restarts — no terminal to babysit. For an ad-hoc run instead, background it (`mache serve . &`) in a second terminal.
 
 **stdio (subprocess per session — no standing daemon to babysit):**
 

@@ -1,3 +1,9 @@
+---
+status: current
+covers-version: v0.8.0
+last-verified: 2026-06-24
+---
+
 # Smell-debt baseline — 2026-06-24
 
 First measured snapshot of structural smell debt across the ART repos, the
