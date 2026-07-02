@@ -383,6 +383,12 @@ func DiscoverOrStart() (string, error) {
 		select {
 		case werr := <-waitErr:
 			managed.discard()
+			if werr == nil {
+				// Clean exit (status 0) before binding is still a failure —
+				// nothing is listening on the socket. Return an explicit error
+				// rather than wrapping nil (which renders "%!w(<nil>)").
+				return "", fmt.Errorf("leyline daemon exited cleanly (status 0) during startup before socket %s appeared", sockPath)
+			}
 			return "", fmt.Errorf("leyline daemon exited during startup before socket %s appeared: %w", sockPath, werr)
 		default:
 		}

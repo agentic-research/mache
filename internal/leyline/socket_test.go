@@ -1048,6 +1048,34 @@ func TestDiscoverOrStart_DaemonExitsDuringStartup(t *testing.T) {
 	assert.Empty(t, leftoverSock, "crash cleanup must clear managed.sock")
 }
 
+// TestDiscoverOrStart_DaemonExitsCleanlyDuringStartup covers the werr==nil
+// edge of the crash branch (Copilot review on #468): a daemon that exits with
+// status 0 before binding the socket is still a failure, and the error must
+// not wrap a nil (which would render "%!w(<nil>)").
+func TestDiscoverOrStart_DaemonExitsCleanlyDuringStartup(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	home := e2eHome(t)
+	binDir := filepath.Join(home, ".mache", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	// Answers --version fast, then exits 0 for the daemon invocation without
+	// binding a socket.
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'fake leyline'; exit 0;; esac\nexit 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "leyline"), []byte(fake), 0o755))
+
+	t.Setenv("HOME", home)
+	t.Setenv("LEYLINE_SOCKET", "")
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "")
+	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "30s")
+
+	_, err := DiscoverOrStart()
+	require.Error(t, err, "a daemon that exits 0 without binding is still a failure")
+	assert.Contains(t, err.Error(), "exited cleanly (status 0)")
+	assert.NotContains(t, err.Error(), "%!w", "must not wrap a nil error")
+}
+
 // TestDiscoverOrStart_ManagedFastPathReturnsLiveSocket pins fast-path 2
 // (the `managed.sock != "" && isSocketAlive(managed.sock)` happy branch
 // at lines 197-200). Normally a second in-process call short-circuits
