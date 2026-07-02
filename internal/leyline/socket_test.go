@@ -953,18 +953,18 @@ func e2eHome(t *testing.T) string {
 // TestDiscoverOrStart_LocalBinFallback_SocketTimeout covers two production
 // branches that the on-PATH happy path skips:
 //
-//   - The `~/.mache/bin/leyline` fallback (lines 218-222): leyline not on
-//     PATH but a cached binary exists in the local bin dir.
-//   - The "spawned but socket never appeared within 5s" timeout (lines
-//     300-303): exec.Start succeeds but the binary doesn't bind the
-//     daemon UDS, so the poll loop must time out, kill the process, and
-//     surface a distinctive error.
+//   - The `~/.mache/bin/leyline` fallback: leyline not on PATH but a cached
+//     binary exists in the local bin dir.
+//   - The "spawned but socket never appeared" timeout: exec.Start succeeds
+//     and the process stays alive, but it never binds the daemon UDS, so the
+//     poll loop must time out, kill the process, and surface a distinctive
+//     error naming the MACHE_LEYLINE_START_TIMEOUT knob.
 //
-// We satisfy both with /bin/sh as the fake binary — it ignores the
-// daemon flags, exits immediately, and never binds a socket. The poll
-// loop runs the full 5s before declaring failure, so this test costs
-// ~5s; that's the price of covering the timeout path without a more
-// elaborate harness binary.
+// The fake binary is a shell script that sleeps without binding a socket, and
+// MACHE_LEYLINE_START_TIMEOUT is pinned to 1s so the timeout path runs in ~1s
+// instead of the 15s default (mache-0a1ded). A binary that *exits* during
+// startup takes the separate crash branch — see
+// TestDiscoverOrStart_DaemonExitsDuringStartup.
 func TestDiscoverOrStart_LocalBinFallback_SocketTimeout(t *testing.T) {
 	resetManaged(t)
 	t.Cleanup(func() { resetManaged(t) })
@@ -972,31 +972,80 @@ func TestDiscoverOrStart_LocalBinFallback_SocketTimeout(t *testing.T) {
 	home := e2eHome(t)
 	binDir := filepath.Join(home, ".mache", "bin")
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
-	// Symlink /bin/sh into ~/.mache/bin/leyline. exec.LookPath against
-	// PATH must fail (sentinel path), then os.Stat on the local-bin
-	// fallback succeeds, so DiscoverOrStart picks up the fake binary
-	// from the cache location and proceeds to cmd.Start.
-	require.NoError(t, os.Symlink("/bin/sh", filepath.Join(binDir, "leyline")))
+	// A fake leyline that starts and stays alive but never binds the socket.
+	// exec.LookPath against PATH fails (sentinel path), os.Stat on the
+	// local-bin fallback succeeds, so DiscoverOrStart picks it up and spawns
+	// it; the poll loop then times out while the process is still running.
+	//
+	// It answers `--version` fast (so the resolved-version probe doesn't block
+	// on the sleep) and uses an absolute PATH for `sleep` because the test
+	// nukes PATH — otherwise `sleep` isn't found and the process would exit
+	// (taking the crash branch instead of the timeout branch).
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'fake leyline'; exit 0;; esac\nPATH=/bin:/usr/bin exec sleep 30\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "leyline"), []byte(fake), 0o755))
 
 	t.Setenv("HOME", home)
 	t.Setenv("LEYLINE_SOCKET", "")
 	t.Setenv("PATH", "/nonexistent-path-for-test")
 	t.Setenv("MACHE_NO_LEYLINE", "")
+	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "1s")
 
 	_, err := DiscoverOrStart()
 	require.Error(t, err, "fake binary that doesn't bind the socket must time out")
-	assert.Contains(t, err.Error(), "did not appear within 5s",
-		"timeout path must surface the documented 'socket did not appear' error")
+	assert.Contains(t, err.Error(), "did not appear within 1s",
+		"timeout path must surface the 'socket did not appear' error with the configured wait")
+	assert.Contains(t, err.Error(), "MACHE_LEYLINE_START_TIMEOUT",
+		"timeout error must point at the override knob")
 
-	// Singleton must be reset by the timeout cleanup (lines 301-302) so
-	// a follow-up DiscoverOrStart can retry without inheriting the
-	// dead fake process.
+	// Singleton must be reset by the timeout cleanup so a follow-up
+	// DiscoverOrStart can retry without inheriting the dead fake process.
 	managed.mu.Lock()
 	leftoverProc := managed.proc
 	leftoverSock := managed.sock
 	managed.mu.Unlock()
 	assert.Nil(t, leftoverProc, "timeout cleanup must clear managed.proc")
 	assert.Empty(t, leftoverSock, "timeout cleanup must clear managed.sock")
+}
+
+// TestDiscoverOrStart_DaemonExitsDuringStartup pins the crash branch added in
+// mache-0a1ded: if the spawned daemon exits before the socket appears, the
+// poll loop detects the exit and reports a startup crash rather than waiting
+// out the full timeout for a socket that can never appear. /bin/sh ignores the
+// daemon flags and exits immediately (non-zero), standing in for a leyline
+// that dies on startup.
+func TestDiscoverOrStart_DaemonExitsDuringStartup(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	home := e2eHome(t)
+	binDir := filepath.Join(home, ".mache", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, os.Symlink("/bin/sh", filepath.Join(binDir, "leyline")))
+
+	t.Setenv("HOME", home)
+	t.Setenv("LEYLINE_SOCKET", "")
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "")
+	// Generous timeout so the assertion proves we returned on exit-detection,
+	// not because the wait elapsed.
+	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "30s")
+
+	start := time.Now()
+	_, err := DiscoverOrStart()
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "a daemon that exits during startup must error")
+	assert.Contains(t, err.Error(), "exited during startup",
+		"crash path must surface the 'exited during startup' error, not a timeout")
+	assert.Less(t, elapsed, 5*time.Second,
+		"must return on exit-detection, not wait out the 30s timeout")
+
+	managed.mu.Lock()
+	leftoverProc := managed.proc
+	leftoverSock := managed.sock
+	managed.mu.Unlock()
+	assert.Nil(t, leftoverProc, "crash cleanup must clear managed.proc")
+	assert.Empty(t, leftoverSock, "crash cleanup must clear managed.sock")
 }
 
 // TestDiscoverOrStart_ManagedFastPathReturnsLiveSocket pins fast-path 2
