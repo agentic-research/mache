@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -355,25 +356,76 @@ func DiscoverOrStart() (string, error) {
 	managed.proc = cmd.Process
 	managed.sock = sockPath
 
-	// Background goroutine to wait on the process (prevent zombie)
-	go func() { _ = cmd.Wait() }()
+	// Wait on the process in the background (prevents a zombie) and surface
+	// its exit to the poll below so we can distinguish "daemon crashed on
+	// startup" from "daemon is still initializing" (mache-0a1ded). Buffered
+	// so the send never blocks after the poll returns.
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }()
 
 	// Poll for socket to appear AND accept a connection. Mere os.Stat is
 	// insufficient — the kernel can create the inode before the daemon
 	// finishes its accept loop bind, and a stat-only wait would return a
 	// path that DialSocket can't connect to.
-	deadline := time.Now().Add(5 * time.Second)
+	//
+	// The wait is configurable (MACHE_LEYLINE_START_TIMEOUT): a cold start —
+	// first run, arena init, enrichment setup, or contention with co-tenant
+	// daemons on the shared arena — can exceed the old fixed 5s.
+	timeout := leylineStartTimeout()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if isSocketAlive(sockPath) {
 			log.Printf("leyline daemon ready (pid=%d, socket=%s)", cmd.Process.Pid, sockPath)
 			return sockPath, nil
 		}
+		// If the daemon already exited, the socket will never appear — stop
+		// waiting and report it as a crash, not a timeout.
+		select {
+		case werr := <-waitErr:
+			managed.discard()
+			if werr == nil {
+				// Clean exit (status 0) before binding is still a failure —
+				// nothing is listening on the socket. Return an explicit error
+				// rather than wrapping nil (which renders "%!w(<nil>)").
+				return "", fmt.Errorf("leyline daemon exited cleanly (status 0) during startup before socket %s appeared", sockPath)
+			}
+			return "", fmt.Errorf("leyline daemon exited during startup before socket %s appeared: %w", sockPath, werr)
+		default:
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Timed out — discard the group (daemon + any child it spawned) and report.
+	// Timed out with the process still running — initializing too slowly or
+	// wedged. Discard the group (daemon + any child it spawned) and point at
+	// the knob to extend the wait and the likely-contended arena.
 	managed.discard()
-	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within 5s", sockPath)
+	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within %s — it may still be initializing or contending for %s; raise MACHE_LEYLINE_START_TIMEOUT to allow longer",
+		sockPath, timeout, arenaPath)
+}
+
+// defaultLeylineStartTimeout is how long DiscoverOrStart waits for a freshly
+// spawned daemon's socket to accept connections. Raised from the original
+// fixed 5s (mache-0a1ded): a cold start — first run, arena init, enrichment
+// setup, or contention with co-tenant daemons on the shared
+// ~/.mache/default.arena — routinely needs longer.
+const defaultLeylineStartTimeout = 15 * time.Second
+
+// leylineStartTimeout returns the socket-appear wait, overridable via
+// MACHE_LEYLINE_START_TIMEOUT (a Go duration like "30s", or a bare integer
+// interpreted as seconds). Invalid or non-positive values fall back to the
+// default.
+func leylineStartTimeout() time.Duration {
+	v := strings.TrimSpace(os.Getenv("MACHE_LEYLINE_START_TIMEOUT"))
+	if v == "" {
+		return defaultLeylineStartTimeout
+	}
+	if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		return d
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	return defaultLeylineStartTimeout
 }
 
 // StopManaged gracefully stops the auto-spawned leyline daemon, if any.
