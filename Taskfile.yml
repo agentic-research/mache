@@ -345,6 +345,11 @@ tasks:
     cmds:
       - bash scripts/docs-lint.sh
 
+  actions:lint:
+    desc: Fail if any .github/workflows `uses:` ref is not SHA-pinned (supply-chain; mache-b8900d)
+    cmds:
+      - bash scripts/actions-pin-lint.sh
+
   coverage-gate:
     desc: Run the diff-aware NEW-CODE coverage gate against the current branch
     vars:
@@ -438,6 +443,7 @@ tasks:
       - task: test
       - task: validate
       - task: docs:lint
+      - task: actions:lint
       - task: gen:server-json:check
 
   ci:
@@ -460,6 +466,7 @@ tasks:
       - task: test
       - task: validate
       - task: docs:lint
+      - task: actions:lint
       - task: gen:server-json:check
 
   # ────────────────────────────────────────────────────────────────

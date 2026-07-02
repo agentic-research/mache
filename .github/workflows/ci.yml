@@ -80,6 +80,10 @@ jobs:
       - name: Vet
         run: task vet
 
+      - name: Actions SHA-pin check
+        # Fail if any workflow `uses:` ref isn't SHA-pinned (mache-b8900d).
+        run: task actions:lint
+
       - name: Format check (gofumpt)
         # task fmt:check is the single source for the pinned gofumpt
         # invocation (it diffs instead of writing, so it's CI-safe and
