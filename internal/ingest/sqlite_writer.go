@@ -61,7 +61,12 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		mtime INTEGER NOT NULL,
 		record_id TEXT,
 		record JSON,
-		source_file TEXT
+		source_file TEXT,
+		-- context holds the imports/types visible to a construct scope,
+		-- served by the context virtual file (vfs.ContextHandler). Set at
+		-- ingest (engine_walk.go) and must survive the SQLite round-trip so
+		-- cat-context works on a mounted .db (mache-b8fe72).
+		context BLOB
 	);
 	CREATE INDEX IF NOT EXISTS idx_parent_name ON nodes(parent_id, name);
 	CREATE INDEX IF NOT EXISTS idx_source_file ON nodes(source_file);
@@ -132,6 +137,16 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
+	// Backward-compat: an incremental build may open a nodes table written
+	// before the context column existed. CREATE TABLE IF NOT EXISTS won't
+	// add it, so ALTER it in (mache-b8fe72). Fresh tables already have it.
+	if !graph.ColumnExists(db, "nodes", "context") {
+		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN context BLOB`); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("add nodes.context column: %w", err)
+		}
+	}
+
 	w := &SQLiteWriter{
 		db:        db,
 		batchSize: defaultBatchSize,
@@ -153,8 +168,8 @@ func (w *SQLiteWriter) beginTx() error {
 	}
 	// Prepare statement for fast inserts
 	w.stmtNode, err = w.tx.Prepare(`
-		INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file, context)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -443,7 +458,8 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		sourceFile = &sf
 	}
 
-	// 6. Insert
+	// 6. Insert. n.Context (imports/types for the `context` vfile) is stored
+	// in its own column so it survives to the mount — nil serializes to NULL.
 	_, err := w.stmtNode.Exec(
 		n.ID,
 		parentID,
@@ -454,6 +470,7 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		recordID,
 		record,
 		sourceFile,
+		n.Context,
 	)
 	if err != nil {
 		log.Printf("SQLiteWriter: insert failed for %s: %v", n.ID, err)
@@ -570,10 +587,11 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 	var kind int
 	var mtimeNano int64
 	var record sql.NullString
+	var context []byte
 	err := w.tx.QueryRow(
-		"SELECT kind, mtime, record FROM nodes WHERE id = ?",
+		"SELECT kind, mtime, record, context FROM nodes WHERE id = ?",
 		id,
-	).Scan(&kind, &mtimeNano, &record)
+	).Scan(&kind, &mtimeNano, &record, &context)
 	if err == sql.ErrNoRows {
 		return nil, graph.ErrNotFound
 	}
@@ -586,10 +604,14 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 		mode = os.ModeDir | 0o555
 	}
 
+	// Context must round-trip: the engine re-reads a node here between the
+	// two write passes; dropping it would let the second-pass INSERT OR
+	// REPLACE null out node.Context (mache-b8fe72, cf. Properties/mache-d28eb1).
 	n := &graph.Node{
 		ID:      id,
 		Mode:    mode,
 		ModTime: time.Unix(0, mtimeNano),
+		Context: context,
 	}
 	// Round-trip record JSON → Properties. Only meaningful for dir
 	// nodes (kind=1); file nodes (kind=0) carry rendered template
