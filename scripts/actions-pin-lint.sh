@@ -11,7 +11,9 @@
 #
 # Exemptions:
 #   - local composite refs `uses: ./...` (nothing to pin)
-#   - docker refs `uses: docker://...` (digest-pinned in their own format)
+# Docker refs (`uses: docker://image@sha256:<64-hex>`) must be digest-pinned;
+# a mutable docker tag (docker://alpine:3.19) is flagged like any other
+# unpinned ref.
 #
 # Usage: actions-pin-lint.sh [workflows-dir]   (defaults to repo .github/workflows)
 set -euo pipefail
@@ -25,21 +27,33 @@ if [ ! -d "$wf_dir" ]; then
 fi
 
 fail=0
-# Anchor on step-style `uses:` lines (optional leading `- `). grep -rn emits
-# file:line:content; we parse the file for reporting and the ref from content.
+# Anchor on step-style `uses:` lines (optional leading `- `). We use
+# `find … -exec grep -H` rather than `grep -r --include` because the latter's
+# flags are GNU extensions; this form is portable to BSD/macOS grep. grep -H
+# emits file:line:content; we parse the file for reporting and the ref from
+# the content.
 while IFS= read -r hit; do
 	file="${hit%%:*}"
 	ref="$(printf '%s' "$hit" | sed -E 's/.*uses:[[:space:]]*//; s/[[:space:]#].*//; s/["'"'"']//g')"
 	[ -n "$ref" ] || continue
 	case "$ref" in
-	./* | docker://*) continue ;;
+	./*) continue ;; # local composite action — nothing to pin
+	docker://*)
+		# Docker actions pin by digest: docker://image@sha256:<64-hex>.
+		if ! printf '%s' "$ref" | grep -qE '@sha256:[0-9a-fA-F]{64}$'; then
+			echo "UNPINNED: $file → $ref"
+			fail=1
+		fi
+		continue
+		;;
 	esac
+	# Everything after the last @ must be a 40-hex commit SHA (either case).
 	after="${ref##*@}"
-	if ! printf '%s' "$after" | grep -qE '^[0-9a-f]{40}$'; then
+	if ! printf '%s' "$after" | grep -qE '^[0-9a-fA-F]{40}$'; then
 		echo "UNPINNED: $file → $ref"
 		fail=1
 	fi
-done < <(grep -rniE '^[[:space:]]*-?[[:space:]]*uses:' "$wf_dir" --include='*.yml' --include='*.yaml' 2>/dev/null || true)
+done < <(find "$wf_dir" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec grep -nHE '^[[:space:]]*-?[[:space:]]*uses:' {} + 2>/dev/null || true)
 
 if [ "$fail" -ne 0 ]; then
 	echo

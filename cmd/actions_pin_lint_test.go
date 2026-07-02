@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,20 +43,24 @@ func TestActionsPinLint_FlagsUnpinnedRef(t *testing.T) {
 	out, err := exec.Command("bash", actionsPinScript(t), dir).CombinedOutput()
 	require.Error(t, err, "must exit non-zero when an unpinned ref is present\n%s", out)
 	assert.Contains(t, string(out), "UNPINNED")
-	assert.Contains(t, string(out), "actions/checkout@v4")
+	assert.Contains(t, string(out), "actions/checkout@v4", "bare tag must be flagged")
+	assert.Contains(t, string(out), "docker://alpine:3.19", "mutable docker tag must be flagged")
 	assert.NotContains(t, string(out), "setup-go", "SHA-pinned ref must not be flagged")
 	assert.NotContains(t, string(out), "actions/local", "local ./ ref is exempt")
-	assert.NotContains(t, string(out), "docker://", "docker ref is exempt")
 }
 
 func TestActionsPinLint_PassesWhenAllPinned(t *testing.T) {
 	dir := t.TempDir()
+	upperSHA := strings.Repeat("A", 40)     // uppercase 40-hex must be accepted
+	dockerDigest := strings.Repeat("a", 64) // docker digest pin
 	wf := "jobs:\n  a:\n    steps:\n" +
-		"      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0\n"
+		"      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0\n" +
+		"      - uses: actions/foo@" + upperSHA + "\n" +
+		"      - uses: docker://alpine@sha256:" + dockerDigest + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "wf.yml"), []byte(wf), 0o644))
 
 	out, err := exec.Command("bash", actionsPinScript(t), dir).CombinedOutput()
-	require.NoError(t, err, "must exit zero when all refs are SHA-pinned; got:\n%s", out)
+	require.NoError(t, err, "must exit zero when all refs are SHA-pinned (incl. uppercase SHA + docker digest); got:\n%s", out)
 	assert.Contains(t, string(out), "SHA-pinned")
 }
 
