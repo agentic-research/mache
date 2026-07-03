@@ -468,6 +468,13 @@ func renderListingMD(w io.Writer, listing any) error {
 }
 
 func renderFindings(w io.Writer, ruleID string, findings []smellFinding, format string) error {
+	// Emit an empty finding set as `[]`, not `null`: a nil slice marshals to
+	// null, which forces json consumers to special-case it and diverges from
+	// --format sarif (which always emits arrays). Zero findings is the common
+	// clean-gate case, so keep the shape a stable array.
+	if findings == nil {
+		findings = []smellFinding{}
+	}
 	resp := struct {
 		Rule     string         `json:"rule"`
 		Total    int            `json:"total"`
