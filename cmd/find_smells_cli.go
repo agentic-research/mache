@@ -73,6 +73,7 @@ Output formats:
   --format=md              human-readable markdown summary
   --format=ci              one-line-per-finding "file:line:col: severity: msg [rule-id]"
                            (gh / ripgrep / vale convention)
+  --format=sarif           SARIF 2.1.0 (one document over all rules; for GitHub code-scanning)
 
 Rule selection:
   --rule=ID                exact match (legacy)
@@ -245,16 +246,20 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 		results = append(results, ruleRunResult{rule: rule, findings: findings})
 	}
 
-	// Render — CI format streams lines across all rules; JSON/MD emit
-	// one envelope per rule so the legacy single-rule shape is preserved
-	// when the matcher returned exactly one match.
-	if findSmellsFormat == "ci" {
+	// Render — CI + SARIF render once across all rules; JSON/MD emit one
+	// envelope per rule so the legacy single-rule shape is preserved.
+	switch findSmellsFormat {
+	case "ci":
 		for _, r := range results {
 			if err := renderFindingsCI(cmd.OutOrStdout(), r.rule, r.findings); err != nil {
 				return 0, err
 			}
 		}
-	} else {
+	case "sarif":
+		if err := renderSARIF(cmd.OutOrStdout(), results, findSmellsBaselineRoot); err != nil {
+			return 0, err
+		}
+	default:
 		for _, r := range results {
 			if err := renderFindings(cmd.OutOrStdout(), r.rule.ID, r.findings, findSmellsFormat); err != nil {
 				return 0, err
@@ -545,7 +550,7 @@ func init() {
 	findSmellsCmd.Flags().StringVar(&findSmellsSourceID, "source-id", "", "scope rule to a single source file path")
 	findSmellsCmd.Flags().IntVar(&findSmellsLimit, "limit", 200, "cap result count per rule")
 	findSmellsCmd.Flags().Int64Var(&findSmellsMinMetric, "min-metric", 0, "drop findings whose metric is below this threshold")
-	findSmellsCmd.Flags().StringVar(&findSmellsFormat, "format", "json", "output format: json, md, or ci")
+	findSmellsCmd.Flags().StringVar(&findSmellsFormat, "format", "json", "output format: json, md, ci, or sarif")
 	findSmellsCmd.Flags().StringVar(&findSmellsFailOn, "fail-on", "error", "exit non-zero when findings reach severity: none | warn | error (ADR-0018)")
 	findSmellsCmd.Flags().StringVar(&findSmellsTags, "tags", "", "comma-separated tags; runs rules whose Tags contain ANY of these values (set union)")
 	findSmellsCmd.Flags().StringVar(&findSmellsBaseline, "baseline", "", "path to a committed smell baseline JSON; exit non-zero only on findings that EXCEED the baseline count per (rule,file) — the W5 ratchet")
