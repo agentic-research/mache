@@ -1,0 +1,285 @@
+{
+  "version": 1,
+  "counts": [
+    {
+      "rule_id": "dead_code",
+      "source_id": "cmd/cache_oci.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "cmd/config.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "examples/testdata/go_sample.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "internal/ingest/benchmark_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "mount/mount.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/cache.go",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/infer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/mount_nfs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_architecture.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_find_smells.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_find_definition.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_get_communities.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_impact.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_write.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/store_local.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_treesitter.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_walk.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/sitter_walker.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/leyline/socket.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/vfs/schema.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "mount/mount.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/notion-fetch/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/server-json-gen/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/sheaf-subscribe-probe/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/ingest/sitter_walker.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/nfsmount/graphfs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "cmd/serve_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "cmd/sheaf_subscribe_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "cmd/sheaf_wire_test.go",
+      "count": 5
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/graph/arena_writer_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/graph/live_graph_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/graph/writable_graph_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/ingest/engine_modtime_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/ingest/reingest_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/ingest/watcher_test.go",
+      "count": 9
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/procgroup_unix_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/sheaf_cascade_bench_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/sheaf_e2e_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/sheaf_subscriber_e2e_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/sheaf_subscriber_test.go",
+      "count": 5
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/socket_test.go",
+      "count": 9
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/writeback/splice_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "cmd/cache_oci.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "examples/testdata/go_sample.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/graph/nodes_table_reader.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/ingest/benchmark_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/leyline/daemon_source.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/leyline/version_check.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/linter/linter.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/writeback/validate.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "mount/mount.go",
+      "count": 1
+    }
+  ]
+}

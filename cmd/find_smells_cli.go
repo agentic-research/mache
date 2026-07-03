@@ -47,6 +47,10 @@ var (
 	// the committed baseline from the current scan. Bead mache-4d155c.
 	findSmellsBaseline      string
 	findSmellsWriteBaseline string
+	// findSmellsBaselineRoot relativizes source_id (which mache build records
+	// absolute) against this prefix before baselining/gating, so a committed
+	// baseline is portable across machines and CI. Bead mache-4da90e.
+	findSmellsBaselineRoot string
 )
 
 // exitFunc is the process-exit hook the CLI uses after RunE returns a
@@ -195,6 +199,17 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 		if missing, mErr := missingTables(qg, rule.Requires); mErr != nil {
 			return printAndCode(4, fmt.Errorf("pre-flight: %w", mErr))
 		} else if len(missing) > 0 {
+			// A glob/tag matched multiple rules: skip the ones whose tables
+			// aren't present (e.g. _ast rules on a pure-Go tree-sitter .db)
+			// rather than aborting the whole run — the gate assesses what it
+			// CAN. An explicitly-named single rule still errors (you asked for
+			// exactly it). Bead mache-4da90e (W5.3).
+			if len(matched) > 1 {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+					"find-smells: skipping rule %q — requires absent tables [%s]\n",
+					rule.ID, strings.Join(missing, ", "))
+				continue
+			}
 			backendNote := ""
 			if backend := queryBuildBackend(qg); backend != "" {
 				backendNote = fmt.Sprintf(" (built with backend=%q)", backend)
@@ -251,8 +266,9 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	// baseline (grandfathers current findings); --baseline gates on
 	// new-findings-vs-baseline, overriding --fail-on. Both operate on the
 	// flattened finding set.
+	scanned := relativizeFindings(allFindings(results), findSmellsBaselineRoot)
 	if findSmellsWriteBaseline != "" {
-		if err := writeBaseline(findSmellsWriteBaseline, computeBaseline(allFindings(results))); err != nil {
+		if err := writeBaseline(findSmellsWriteBaseline, computeBaseline(scanned)); err != nil {
 			return printAndCode(4, fmt.Errorf("write baseline %s: %w", findSmellsWriteBaseline, err))
 		}
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "wrote smell baseline: %s\n", findSmellsWriteBaseline)
@@ -263,7 +279,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 		if err != nil {
 			return printAndCode(4, fmt.Errorf("load baseline %s: %w", findSmellsBaseline, err))
 		}
-		if debt := newDebt(allFindings(results), base); len(debt) > 0 {
+		if debt := newDebt(scanned, base); len(debt) > 0 {
 			renderNewDebt(cmd.ErrOrStderr(), debt)
 			return 1, nil
 		}
@@ -534,5 +550,6 @@ func init() {
 	findSmellsCmd.Flags().StringVar(&findSmellsTags, "tags", "", "comma-separated tags; runs rules whose Tags contain ANY of these values (set union)")
 	findSmellsCmd.Flags().StringVar(&findSmellsBaseline, "baseline", "", "path to a committed smell baseline JSON; exit non-zero only on findings that EXCEED the baseline count per (rule,file) — the W5 ratchet")
 	findSmellsCmd.Flags().StringVar(&findSmellsWriteBaseline, "write-baseline", "", "regenerate the baseline JSON at this path from the current scan (grandfathers all current findings), then exit 0")
+	findSmellsCmd.Flags().StringVar(&findSmellsBaselineRoot, "baseline-root", "", "trim this path prefix from source_id before baselining/gating so a committed baseline is machine/CI-portable (e.g. --baseline-root \"$PWD\")")
 	rootCmd.AddCommand(findSmellsCmd)
 }

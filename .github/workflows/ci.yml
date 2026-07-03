@@ -84,6 +84,12 @@ jobs:
         # Fail if any workflow `uses:` ref isn't SHA-pinned (mache-b8900d).
         run: task actions:lint
 
+      - name: Smell gate
+        # Build a .db of the repo + fail on NEW structural findings vs the
+        # committed baseline (W5 ratchet, mache-4da90e). Local == CI: the same
+        # `task smells` a developer runs.
+        run: task smells
+
       - name: Format check (gofumpt)
         # task fmt:check is the single source for the pinned gofumpt
         # invocation (it diffs instead of writing, so it's CI-safe and

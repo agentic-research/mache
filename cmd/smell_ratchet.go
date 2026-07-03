@@ -6,7 +6,24 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 )
+
+// relativizeFindings trims root (plus a trailing separator) from each finding's
+// SourceID — mache build records absolute paths, so a committed baseline must
+// be relativized to stay portable across machines and CI. No-op when root == "".
+func relativizeFindings(findings []smellFinding, root string) []smellFinding {
+	if root == "" {
+		return findings
+	}
+	prefix := strings.TrimRight(root, string(os.PathSeparator)) + string(os.PathSeparator)
+	out := make([]smellFinding, len(findings))
+	for i, f := range findings {
+		f.SourceID = strings.TrimPrefix(f.SourceID, prefix)
+		out[i] = f
+	}
+	return out
+}
 
 // smellBaseline is the grandfathered count of findings per (rule_id, source_id)
 // — a count-based ratchet that generalizes rosary's god-files-vs-origin/main:
