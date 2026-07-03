@@ -27,7 +27,7 @@ For the full first-run flow — source choice (directory vs `.db` vs live hot-sw
 
 ## What it gives an agent
 
-Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) draw on [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers nine structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); four of those require a `.db` built by ley-line-open.
+Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) draw on [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers fourteen structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); five of those require a `.db` built by ley-line-open.
 
 **Live LSP enrichment.** `get_type_info` / `get_diagnostics` no longer need a pre-baked `.db` — pass a `file=` and mache auto-spawns the ley-line daemon, which drives the language server (rust-analyzer, gopls, …) on demand and projects real hover / type / diagnostic data into the graph. Verified end-to-end on **Rust and Go** (e.g. `get_type_info(symbol, file)` returns rust-analyzer's signature + doc comment). This is the same primitive [Serena](https://github.com/oraios/serena) is built on, but as one enrichment *tier* over a tree-sitter base that still works without a language server — see [`prior-art/`](prior-art/) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
@@ -89,7 +89,7 @@ The graph is the same on either path; MCP and the filesystem are two ways to tal
 | MCP server (17 tools, HTTP canonical)   | Stable                                                                                           |
 | Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)                            |
 | Cross-references (callers/callees)      | Stable                                                                                           |
-| `find_smells` (9 structural rules)      | Stable. `fan_out_skew` is qualifier-aware via ley-line-open `BindingRecord.qualifier`            |
+| `find_smells` (14 structural rules)     | Stable. `fan_out_skew` is qualifier-aware via ley-line-open `BindingRecord.qualifier`            |
 | Canonical views (ADR-0013)              | Stable. `v_refs`/`v_defs` with fidelity poset (`mention` ⊑ `binding`)                            |
 | Capnp event-log readthrough             | Stable. `${db}.bindings.capnp` is the cross-runtime contract for binding refs                    |
 | E2E tool harness + flamegraphs          | Stable. `task profile-tools-pprof` + `task flamegraphs` produce per-tool pprof + SVG flamegraphs |
@@ -135,15 +135,15 @@ Mache has two supported deployment shapes:
 **Bundle / image (canonical production path).** Mache ships its own
 [apko](https://github.com/chainguard-dev/apko) +
 [melange](https://github.com/chainguard-dev/melange) configs to produce a
-distroless OCI image (`mache:0.8.0`, ~33MB, x86_64 + aarch64). This is the
+distroless OCI image (`mache:0.11.0`, ~33MB, x86_64 + aarch64). This is the
 unit that a cluster orchestrator (e.g. cloister) deploys; inside the
 bundle, mache speaks to a co-located ley-line daemon over a UDS socket
 and is unreachable except via the orchestrator-mediated wire.
 
 ```bash
-task image                          # → mache.tar (mache:0.8.0)
+task image                          # → mache.tar (mache:0.11.0)
 docker load -i mache.tar
-docker run --rm -i mache:0.8.0 serve --stdio /path/to/source
+docker run --rm -i mache:0.11.0 serve --stdio /path/to/source
 ```
 
 Given a fixed `melange.rsa` signing key and pinned toolchain, the build is

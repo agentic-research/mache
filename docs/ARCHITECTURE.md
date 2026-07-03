@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.8.0
+covers-version: v0.11.0
 last-verified: 2026-05-10
 sources-of-truth:
   - internal/lang/lang.go
