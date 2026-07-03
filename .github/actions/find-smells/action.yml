@@ -1,0 +1,101 @@
+name: 'mache find-smells'
+description: 'Run the mache structural smell ratchet gate over the caller''s checkout; fail on new-vs-baseline findings and upload SARIF to code-scanning.'
+
+inputs:
+  mache-version:
+    description: 'mache release tag to download mache-linux-amd64 from. Must include `find-smells --format sarif` (>= v0.12.0).'
+    required: false
+    default: 'v0.12.0'
+  schema:
+    description: 'Path to a mache topology schema. Empty uses FCA schema inference.'
+    required: false
+    default: ''
+  baseline:
+    description: 'Path to the committed smell baseline (the ratchet floor).'
+    required: false
+    default: 'docs/smell-baseline.json'
+  fail-on-new:
+    description: 'Fail the job when findings exceed the baseline. Set false for advisory-only.'
+    required: false
+    default: 'true'
+  upload-sarif:
+    description: 'Emit SARIF and upload to GitHub code-scanning. Requires security-events: write in the calling job.'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install mache
+      shell: bash
+      env:
+        MACHE_VERSION: ${{ inputs.mache-version }}
+      run: |
+        set -euo pipefail
+        url="https://github.com/agentic-research/mache/releases/download/${MACHE_VERSION}/mache-linux-amd64"
+        echo "Downloading mache ${MACHE_VERSION} from ${url}"
+        curl -sSfL "$url" -o "${RUNNER_TEMP}/mache"
+        chmod +x "${RUNNER_TEMP}/mache"
+        echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
+
+    - name: Check baseline exists
+      shell: bash
+      env:
+        BASELINE: ${{ inputs.baseline }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$BASELINE" ]; then
+          echo "::error::mache find-smells: no baseline at '${BASELINE}'."
+          echo "::error::Bootstrap it once and commit the file, then re-run:"
+          echo "::error::  mache build . smells.db && mache find-smells --db smells.db --rule '*' --limit 100000 --baseline-root \"\$PWD\" --write-baseline ${BASELINE}"
+          exit 1
+        fi
+
+    - name: Build index
+      shell: bash
+      env:
+        SCHEMA: ${{ inputs.schema }}
+      run: |
+        set -euo pipefail
+        if [ -n "$SCHEMA" ]; then
+          mache build --schema "$SCHEMA" . "${RUNNER_TEMP}/repo.db"
+        else
+          mache build . "${RUNNER_TEMP}/repo.db"
+        fi
+
+    - name: Generate SARIF
+      if: ${{ inputs.upload-sarif == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --limit 100000 \
+          --baseline-root "$PWD" --format sarif > "${RUNNER_TEMP}/mache.sarif"
+
+    - name: Upload SARIF
+      if: ${{ inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
+      with:
+        sarif_file: ${{ runner.temp }}/mache.sarif
+
+    - name: Job summary
+      shell: bash
+      run: |
+        set -euo pipefail
+        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --limit 100000 \
+          --baseline-root "$PWD" --format md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Ratchet gate
+      shell: bash
+      env:
+        BASELINE: ${{ inputs.baseline }}
+        FAIL_ON_NEW: ${{ inputs.fail-on-new }}
+      run: |
+        set -uo pipefail
+        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --limit 100000 \
+          --baseline-root "$PWD" --baseline "$BASELINE"
+        code=$?
+        if [ "$FAIL_ON_NEW" != "true" ] && [ "$code" -eq 1 ]; then
+          echo "::warning::mache find-smells: new findings above baseline (advisory; fail-on-new=false)"
+          exit 0
+        fi
+        exit $code
