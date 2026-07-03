@@ -4,6 +4,42 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [v0.12.0] — 2026-07-03
+
+The "distribution" release (analysis-substrate → W6). v0.11.0 made the
+structural-smell **ratchet gate** work on mache's own tree; v0.12.0 makes it
+consumable by *any* repo. Two pieces: `find-smells` can now emit **SARIF**, and
+a **reusable composite GitHub Action** wraps the whole gate so downstream repos
+adopt it with one `uses:` line — no Go toolchain, no build-from-source.
+
+### Added
+
+- **`mache find-smells --format sarif`.** Emits a single SARIF 2.1.0 document
+  over all rules (`driver.rules[]` + flat `results[]`, 1-based regions,
+  repo-relative URIs) for upload to GitHub code-scanning. Built by rendering a
+  values map through mache's existing `internal/template` engine via an
+  embedded template — no SARIF library, no hand-built JSON.
+- **`.github/actions/find-smells` reusable composite action.** Any repo runs the
+  ratchet gate via
+  `uses: agentic-research/mache/.github/actions/find-smells@<sha>`: it downloads
+  the pinned prebuilt `mache-linux-amd64` release binary (CGO=1, ships
+  tree-sitter), fails loud if no baseline is committed, builds the index,
+  uploads SARIF **before** gating (so findings reach code-scanning even on a
+  failing run), writes a markdown job summary, then enforces the ratchet last.
+  Inputs: `mache-version`, `schema`, `baseline`, `fail-on-new`, `upload-sarif`.
+
+### Changed
+
+- **`scripts/actions-pin-lint.sh`** no-argument default now also scans
+  `.github/actions/`, so composite-action `uses:` refs are SHA-pin-gated by
+  `TestActionsPinLint_RepoIsClean` the same as workflow refs.
+
+### Fixed
+
+- **`server.json`** regenerated to match `version.txt` (was left stale at 0.10.0
+  after the v0.11.0 tag), so `task check` / `gen:server-json:check` pass on a
+  clean tree.
+
 ## [v0.11.0] — 2026-07-03
 
 The "analysis-substrate ratchet" release. The headline is a working local-first
@@ -219,4 +255,5 @@ reading new arenas — or vice versa — fails with a clear version-mismatch
 error rather than corrupting reads. Tag together; release-note the
 break in both repos.
 
+[v0.12.0]: https://github.com/agentic-research/mache/compare/v0.11.0...v0.12.0
 [v0.8.0]: https://github.com/agentic-research/mache/compare/v0.7.0...v0.8.0
