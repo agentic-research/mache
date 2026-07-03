@@ -127,6 +127,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		leyline.SetDaemonSource(src)
 	}
 
+	// Startup wire-compat handshake (mache-8kif): if a leyline daemon is
+	// already reachable, refuse to serve on a structural wire-format mismatch
+	// rather than decoding garbage on the first enrichment op. No-op when no
+	// daemon is running or it predates the leyline_version op.
+	if err := leyline.VerifyReachableDaemonVersion(); err != nil {
+		return err
+	}
+
 	// Start the sheaf-invalidate event subscriber (mache-c14c43).
 	// One subscriber per process feeds the router; the router fans
 	// events out to every lazyGraph's invalidator. When no daemon

@@ -811,10 +811,11 @@ func (c *SocketClient) Prioritize(files []string) error {
 // BUMP THIS to the latest published ley-line-open release with binary assets;
 // bump the go.mod leyline-schema pin too whenever the WIRE format changes.
 //
-// Future hardening (mache-8kif): on socket connect, query the daemon's
-// version and refuse to proceed if it disagrees — though note LLO has no
-// `version` op today (verified against 0.5.x), so 8kif needs a different
-// mechanism.
+// Doubles as this build's leyline schema-client version for the startup
+// wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
+// queries the daemon's leyline_version op and refuses on a structural
+// mismatch. Its major.minor is kept in lockstep with the go.mod leyline-schema
+// pin by the version-parity gate (mache-b8af69).
 const leylineBinaryVersion = "v0.5.7"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
