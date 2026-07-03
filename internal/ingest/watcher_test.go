@@ -3,6 +3,7 @@ package ingest
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -328,6 +329,23 @@ func TestWatcher_TargetIgnored(t *testing.T) {
 
 	assert.Equal(t, int32(0), called.Load(),
 		"files in target/, dist/, build/ should be ignored by watcher")
+
+	// The callback count alone can't distinguish "dir skipped, FD saved" from
+	// "dir watched, callback filtered, FD still leaked" — a refactor that keeps
+	// the callback filter but drops the SkipDir skip would pass the assertion
+	// above while reintroducing the FD leak (mache-336016). Assert the FD-level
+	// invariant directly: no ignored tree is in the watcher's WatchList, so no
+	// descriptor was consumed for it.
+	watched := w.watcher.WatchList()
+	require.Contains(t, watched, dir,
+		"the root dir must be watched — else this test is vacuous (nothing watched trivially ignores everything)")
+	for _, ignored := range []string{"target", "dist", "build"} {
+		prefix := filepath.Join(dir, ignored)
+		for _, p := range watched {
+			assert.False(t, p == prefix || strings.HasPrefix(p, prefix+string(filepath.Separator)),
+				"ignored dir %q must not be watched (FD leak) — found watched path %s", ignored, p)
+		}
+	}
 }
 
 // TestWatcher_GitignoreSkipsDirs verifies that the watcher respects .gitignore
