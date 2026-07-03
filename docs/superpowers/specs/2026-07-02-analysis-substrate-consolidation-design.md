@@ -115,47 +115,66 @@ Each becomes its own bead cluster / plan. Effort tags: S = hours, M = days, L = 
 - **W0 — Quick wins (standalone, now).** M1: arena `Version:1` negative-rejection test
   (mirrors the existing magic-guard test). M2: tighten `TestWatcher_TargetIgnored` to
   assert watched-path/FD count, not callback count. Effort: S each. No dependencies.
+
 - **W1 — LLO push (keystone).** `extract_rust` in `refs.rs` (Rust def/ref extraction →
   populates `node_defs`/`node_refs` for Rust); the `leyline_version` daemon op
   (`ley-line-open-b9db7f`); **M3** client-side handshake in mache (compare embedded
   schema-client version vs `compat_min`/`wire_format_major`, refuse on mismatch; closes
   `mache-8kif`, benefits both repos). Effort: `extract_rust` M–L (sizing risk); version
   op + M3 M. **Gates W2 and the polyglot half of W4.**
+
 - **W2 — Reachability projection.** Native `find_smells` SQL rules over the call graph
   (generalize `dead_code`; add reachability/entry-point rules). Likely needs a per-language
   "roots" config (what counts as an entry point). Effort: M. **Depends on W1.**
+
 - **W3 — assay → mache.** Fold assay's falsifiable coverage into mache as language-agnostic
   `drift_doc_*` SQL rules reading the `.db` (per `mache-1c332f`: `drift_doc_undocumented_export`
   = `mache-1bdc95`, staleness = `mache-fa12b3`); delete assay's Go tree-sitter traversal
   (`assay-b8d291`). assay keeps only its genuinely-novel frontier (semantic MiniLM↔HDC).
   Effort: M. Partially depends on W1 for polyglot; Go coverage works today.
+
 - **W4 — Rule consolidation.** Port the *structural class* of cloister `done-rules` +
   rosary Golden Rules into `find_smells` rules/manifest; wire rosary + cloister to consume
   `find_smells` as **real gates** (not advisory `|| true`); ship `find_smells` as a
   distributable/standalone lint (`mache-445887`). Effort: M–L. Depends on W5 (manifest) +
   W1 (for Rust structural rules).
-- **W5 — Manifest + baseline/ratchet + CI (the thin unifying layer).** One rule manifest
-  (id · class · engine · severity · tags · scope), one findings output format, one
-  baseline/ratchet (generalize rosary's god-files-vs-`origin/main` + the smell-debt
-  baseline doc into an enforced ratchet), one CI entry (`task check` → `mache <run>`).
-  Generalizes cloister's `done-rules` JSON shape. Effort: M. **Underlies W4.**
+
+- **W5 — Manifest + baseline/ratchet + local gate (the thin unifying layer).** One rule
+  manifest (id · class · engine · severity · tags · scope), one findings output (SARIF), one
+  baseline/ratchet (generalize rosary's god-files-vs-`origin/main` + the smell-debt baseline
+  doc into an enforced ratchet). Generalizes cloister's `done-rules` JSON shape. Crucially the
+  deliverable is a **local-runnable command** — a `task smells` target that runs
+  `mache find-smells` over the repo with the manifest + baseline — *not* a CI-only thing
+  (taskfile-CI-parity: the target IS the gate; CI and the pre-commit hook both invoke it).
+  Effort: M. **Underlies W4 and W6.**
+
+- **W6 — Distribution & adoption (the DONE-STATE).** A reusable GitHub Action that is a *thin
+  wrapper* over the W5 local command: `uses: agentic-research/mache/.github/actions/find-smells@<sha>`
+  checks out the caller, builds a leyline `.db`, runs `task smells` (shared manifest + the
+  repo's committed baseline), emits SARIF → inline PR annotations, exits non-zero on *new*
+  findings. Then migrate consumers off bespoke rules: cloister (pilot — its `done-rules` are
+  already "mache-shaped") deletes `done-runner.mjs` + `lint-*.mjs`; rosary deletes its shell
+  golden-rules; each becomes one step. Effort: L. **Depends on W4 + W5.** See §10 for the
+  measurable done-state.
 
 ### Dependency graph
 
 ```
-W0  (independent, do now)
-W1: extract_rust ──┬──► W2 reachability
-                   ├──► W4 (polyglot structural rules)
-                   └──► W3 (polyglot coverage; Go works pre-W1)
-W5: manifest/ratchet ──► W4
+W0  (independent, done)
+W1: extract_rust + version op ── SHIPPED (LLO #93 / v0.5.0); only mache-8kif client-side remained
+        ├──► W2 reachability ──► (feeds the dependency-reduction successor decade, §11)
+        ├──► W4 polyglot structural rules
+        └──► W3 polyglot coverage (Go slice works pre-W1)
+W5: manifest + ratchet + `task smells` LOCAL gate ──► W4 ──► W6 GHA + adoption (done-state)
 ```
 
 ### Recommended sequence
 
-1. **W0 now** — bank the two tests (highest ROI, S, no deps).
-1. **W1** — `extract_rust` first (keystone) alongside version-op/M3.
-1. **W2 + W3** in parallel once W1 lands (both ride the enriched substrate).
-1. **W5 then W4** — manifest before wiring consumers onto it.
+1. **W0** — the two test wins (done: M1 already-covered; M2 shipped).
+1. **~~W1~~ DONE** — `extract_rust` + `leyline_version` op shipped upstream; `mache-8kif` (client handshake) was the only remainder.
+1. **W2 + W3** — unblocked *today* (W1 done); ride the enriched substrate in parallel.
+1. **W5 (local `task smells` first) then W4** — the local command is the gate; W4 ports rules onto it.
+1. **W6** — wrap `task smells` in the GHA, pilot on cloister, then roll out. The finish line.
 
 ______________________________________________________________________
 
@@ -206,3 +225,47 @@ plan **obsoletes** (rather than integrates): assay's duplicate traversal, the ca
 embedding/shelling-out semgrep, and the per-repo bespoke structural checks. semgrep's
 remaining differentiator (dataflow/taint) becomes the north-star tier — owned natively,
 baked once, queried forever — not a runtime dependency.
+
+______________________________________________________________________
+
+## 10. Done-state — the local command, wrapped in a GHA
+
+The decade is *done* — not "ongoing rule-writing" — when this holds for every ART repo:
+
+> **One local command is the structural-quality gate**, and a thin GHA enforces it on PRs.
+
+1. **Local-first.** `mache find-smells` over the repo's `.db` against a shared, versioned rule
+   manifest + the repo's committed baseline is a single `task smells` target. A developer runs
+   it on their laptop; the pre-commit hook runs it; CI runs *the same target*. One definition
+   (taskfile-CI-parity) — CI can't diverge from local, and no repo needs the GHA to get value
+   (they get the local gate + hook immediately).
+1. **GHA is subordinate.** The reusable action is ~5 lines that run `task smells` and upload
+   SARIF. It *enforces*; it does not *define*. If it vanished, the gate still works locally and
+   in the hook.
+1. **Ratchet, not big-bang.** The baseline grandfathers existing debt; the gate fails only on
+   *new* findings, so a repo adopts without a cleanup sprint.
+
+**Measured by adoption, not authorship:** the metrics are **repos-migrated** and
+**bespoke-rule-scripts-deleted** (cloister's `done-runner.mjs` + `lint-*.mjs`, rosary's shell
+golden-rules), NOT rules-written. cloister is the pilot (its `done-rules` are already
+"mache-shaped"). The decade closes when the last repo's structural gate is the shared
+`task smells` command and its hand-rolled rule scripts are gone.
+
+______________________________________________________________________
+
+## 11. Successor — the `dependency-reduction` decade
+
+This decade's reachability tier (W2) is the enabler for the next goal — which is why that goal
+is *after*, not *within*, this one: **reachability is exactly what tells you a dependency is
+dead weight.**
+
+```
+W2 reachability ─► dead code ─► unused imports/modules ─► UNUSED DEPENDENCIES
+                                                          (nothing reachable imports it)
+```
+
+Post-consolidation, dependency reduction becomes a `find_smells` rule-pack
+(`unused_dependency`, `heavy_transitive_pull`, `dep_only_reached_from_dead_code`) plus a pruning
+campaign across **mache and LLO** — both have accreted deps; ADR-0006 cut CGO, this is the next
+cut. It *consumes* this decade's substrate + engine rather than competing with it. Tracked as
+the (proposed) `dependency-reduction` rosary decade; it stays proposed until W2 lands here.
