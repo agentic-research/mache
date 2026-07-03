@@ -4,6 +4,102 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [v0.11.0] — 2026-07-03
+
+The "analysis-substrate ratchet" release. The headline is a working local-first
+structural-smell **gate**: `mache find-smells --baseline` plus a `task smells`
+target ratchet mache's own codebase so *new* structural debt fails CI while
+existing debt is grandfathered — local, git hooks, and CI run the identical
+command. Also lands the consumer half of the ley-line wire-compat handshake,
+executable version-parity enforcement, and a fix that restores `cat context` on
+mounted `.db` files. (v0.9.0 and v0.10.0 shipped as tags but were never
+back-filled in this changelog; this entry resumes it.)
+
+### Added
+
+- **Count-based smell ratchet — `mache find-smells --baseline` / `--write-baseline`.**
+  A ratcheting gate over `find_smells` output: the committed baseline records
+  findings-per-`(rule_id, source_id)`, and the gate fails only on findings
+  *above* baseline (new debt) while the baseline may shrink freely. Counts, not
+  line numbers, are recorded, so the gate is stable across incidental line
+  shifts. `--baseline` gates and overrides `--fail-on` (exit 1 iff any
+  `(rule, file)` exceeds baseline, printing the new debt); `--write-baseline`
+  regenerates the committed file; `--baseline-root` relativizes `source_id` so
+  the baseline is machine/CI-portable. A glob/`*` run now skips rules whose
+  tables are absent instead of aborting. (#476, #477 — mache-491b9f, mache-4d155c)
+- **`task smells` — local-first repo gate on real source.** Builds a tree-sitter
+  `.db` of mache's own codebase and runs `find-smells --rule '*' --baseline`, so
+  the same command gates locally, in git hooks, and in CI (taskfile-CI-parity).
+  `docs/smell-baseline.json` grandfathers current debt. The prior dogfood target
+  is now `task smells:dogfood`; `task smells:baseline` regenerates. Wired into
+  `check` + `ci` and the CI lint job. (#478 — mache-4da90e)
+- **`task actions:lint` — SHA-pin gate for GitHub Actions.** Flags any workflow
+  `uses:` ref whose `@`-suffix isn't a 40-hex SHA (and any `docker://` ref not
+  pinned to `@sha256:<64-hex>`); local `./` refs are exempt. Makes the "all
+  actions SHA-pinned" supply-chain invariant executable. Wired into `check` +
+  `ci` and the CI lint job, with Go tests guarding the repo's own workflows.
+  (#470 — mache-b8900d)
+- **Startup ley-line wire-compat handshake.** If a ley-line daemon is already
+  reachable, mache queries its `leyline_version` op and refuses to serve on a
+  structural `wire_format_major` mismatch, or when this build's schema-client is
+  older than the daemon's `compat_min`. It never auto-starts a daemon to probe,
+  and no-ops when none is reachable or the daemon predates the op. Closes the
+  consumer half of the handshake guarding the silent parse-returns-0 drift that
+  bit v0.4.2→v0.4.3. (#474 — mache-8kif)
+
+### Changed
+
+- **Configurable ley-line daemon start timeout + crash-vs-timeout diagnostics.**
+  Auto-started daemons were failing with a hardcoded "socket did not appear
+  within 5s" on cold starts. The timeout is now configurable via
+  `MACHE_LEYLINE_START_TIMEOUT` (Go duration or bare seconds), default raised
+  5s → 15s, and a daemon that *crashes* on startup returns immediately with
+  "exited during startup: <status>" instead of waiting out the timeout; the
+  timeout error names the contended arena. (#468 — mache-0a1ded)
+
+### Fixed
+
+- **`cat context` now works on a mounted/built `.db`.** The `context` virtual
+  file (imports + types visible to a construct's scope) was silently empty for
+  every construct on a `.db`-backed mount: `node.Context` is populated at ingest
+  and worked in `MemoryStore`, but the SQLite path had no `context` column,
+  never persisted it, and never selected it on read. The nodes table now carries
+  a `context BLOB`, both `GetNode` read paths select it (guarded by a new
+  `graph.ColumnExists` so older / ley-line-produced tables degrade to empty
+  rather than erroring; incremental builds `ALTER` it in), and the writer
+  round-trips it through the two-pass write. (#467 — mache-b8fe72)
+
+### Internal
+
+- **Executable ley-line schema/binary version-parity gate.** A test fails CI on
+  a `major.minor` mismatch between the `go.mod` `leyline-schema` client pin and
+  the `leylineBinaryVersion` daemon-binary const (the wire format; patch may
+  float) — making executable the invariant a comment + a human previously
+  enforced. Complements the runtime handshake above. (#469 — mache-b8af69)
+- **Watcher FD-leak test hardened.** `TestWatcher_TargetIgnored` now asserts the
+  FD-level invariant directly — `WatchList()` excludes `target/`, `dist/`,
+  `build/` — instead of only counting callbacks, so a refactor that keeps the
+  callback filter but drops the `SkipDir` skip can no longer pass while
+  reintroducing the 129K-FD leak. (#473 — mache-336016)
+- **`docs:lint` fixed on main** — required frontmatter added to the dated
+  smell-debt-baseline snapshot that had reddened the gate. (#466 — mache-89e322)
+- Dependabot / toolchain bumps: `modernc.org/sqlite` 1.52.0→1.53.0,
+  `mark3labs/mcp-go` 0.55.0→0.55.1, `ley-line-open/clients/go/leyline-schema`,
+  `actions/checkout` 6→7, `actions/setup-go` 6.4.0→6.5.0,
+  `golangci/golangci-lint-action` 9.2.1→9.3.0, `softprops/action-gh-release`
+  3.0.0→3.0.1. (#457–#462, #472)
+
+### Documentation
+
+- **Daemon-lifecycle docs point at the shipped supervisor.** The
+  connection-refused gotcha in GETTING-STARTED now points at the
+  `mache init --global` keepalive supervisor (launchd/systemd, shipped v0.10.0)
+  instead of describing it as unbuilt. (#466 — mache-823d91)
+- **ART analysis-substrate scoping spec + done-state.** Design docs for the
+  analysis-substrate decade: the "everything is a projection of one
+  capnp-schema'd substrate" thesis, the W0–W6 decomposition, the local-first
+  gate done-state, and the successor dependency-reduction decade. (#471, #475)
+
 ## [v0.8.0] — 2026-05-09
 
 The "constellation wave" release. T2.4 wire-format alignment with
