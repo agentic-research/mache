@@ -71,3 +71,22 @@ func TestActionsPinLint_RepoIsClean(t *testing.T) {
 	out, err := exec.Command("bash", actionsPinScript(t)).CombinedOutput()
 	assert.NoError(t, err, "repo has unpinned workflow refs:\n%s", out)
 }
+
+// TestActionsPinLint_ScansActionsDir proves composite actions under
+// .github/actions are linted: an unpinned ref inside an action.yml must
+// be flagged. Guards against a glob regression that would let the W6.1
+// composite action ship an unpinned `uses:`.
+func TestActionsPinLint_ScansActionsDir(t *testing.T) {
+	root := t.TempDir()
+	actionDir := filepath.Join(root, ".github", "actions", "find-smells")
+	require.NoError(t, os.MkdirAll(actionDir, 0o755))
+	// Composite action with one unpinned external ref.
+	yml := "runs:\n  using: composite\n  steps:\n" +
+		"    - uses: github/codeql-action/upload-sarif@v3\n"
+	require.NoError(t, os.WriteFile(filepath.Join(actionDir, "action.yml"), []byte(yml), 0o644))
+
+	out, err := exec.Command("bash", actionsPinScript(t), filepath.Join(root, ".github", "actions")).CombinedOutput()
+	require.Error(t, err, "unpinned ref in action.yml must be flagged\n%s", out)
+	assert.Contains(t, string(out), "UNPINNED")
+	assert.Contains(t, string(out), "codeql-action/upload-sarif@v3")
+}

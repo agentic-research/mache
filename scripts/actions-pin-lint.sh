@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # actions-pin-lint.sh — fail if any GitHub Actions `uses:` ref under
-# .github/workflows/ is not pinned to a 40-hex commit SHA.
+# .github/workflows/ or .github/actions/ is not pinned to a 40-hex commit SHA.
 #
 # Why: a bare tag (actions/checkout@v4) is a mutable, remotely-controlled
 # pointer — a supply-chain foothold. Dependabot bumps these but occasionally
@@ -15,14 +15,25 @@
 # a mutable docker tag (docker://alpine:3.19) is flagged like any other
 # unpinned ref.
 #
-# Usage: actions-pin-lint.sh [workflows-dir]   (defaults to repo .github/workflows)
+# Usage: actions-pin-lint.sh [dir]   (defaults to repo .github/workflows + .github/actions)
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-wf_dir="${1:-$repo_root/.github/workflows}"
+# With an explicit arg, scan exactly that dir. With no arg, scan both the
+# workflows dir and the composite-actions dir so action.yml refs are gated
+# too (W6.1: .github/actions/find-smells).
+if [ "$#" -ge 1 ]; then
+	scan_dirs=("$1")
+else
+	scan_dirs=("$repo_root/.github/workflows" "$repo_root/.github/actions")
+fi
 
-if [ ! -d "$wf_dir" ]; then
-	echo "actions-pin-lint: no $wf_dir — nothing to check"
+present=()
+for d in "${scan_dirs[@]}"; do
+	[ -d "$d" ] && present+=("$d")
+done
+if [ "${#present[@]}" -eq 0 ]; then
+	echo "actions-pin-lint: no ${scan_dirs[*]} — nothing to check"
 	exit 0
 fi
 
@@ -53,7 +64,7 @@ while IFS= read -r hit; do
 		echo "UNPINNED: $file → $ref"
 		fail=1
 	fi
-done < <(find "$wf_dir" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec grep -nHE '^[[:space:]]*-?[[:space:]]*uses:' {} + 2>/dev/null || true)
+done < <(find "${present[@]}" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec grep -nHE '^[[:space:]]*-?[[:space:]]*uses:' {} + 2>/dev/null || true)
 
 if [ "$fail" -ne 0 ]; then
 	echo
