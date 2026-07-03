@@ -319,8 +319,8 @@ tasks:
     cmds:
       - go run main.go -file subject/parser.go -target FuzzParseToken
 
-  smells:
-    desc: Dogfood — index this repo and run the standalone find_smells rules locally
+  smells:dogfood:
+    desc: "Dogfood — index this repo and PRINT all standalone find_smells findings (no gate; see `task smells` for the ratchet gate)"
     deps: [build]
     vars:
       DB: /tmp/mache-smells.db
@@ -349,6 +349,33 @@ tasks:
     desc: Fail if any .github/workflows `uses:` ref is not SHA-pinned (supply-chain; mache-b8900d)
     cmds:
       - bash scripts/actions-pin-lint.sh
+
+  smells:
+    desc: "Structural smell gate — fail on NEW findings vs docs/smell-baseline.json (W5 local-first gate, mache-4da90e)"
+    deps: [build]
+    cmds:
+      - |
+        set -euo pipefail
+        DB="$(mktemp -t mache-smells.XXXXXX.db)"
+        trap 'rm -f "$DB"' EXIT
+        ./{{.BINARY_NAME}} build . "$DB" --backend tree-sitter >/dev/null
+        # --rule '*' skips rules whose tables are absent on the pure-Go .db;
+        # --baseline-root "$PWD" keeps the committed baseline machine/CI-portable.
+        ./{{.BINARY_NAME}} find-smells --db "$DB" --rule '*' --limit 100000 \
+          --baseline-root "$PWD" --baseline docs/smell-baseline.json >/dev/null
+
+  smells:baseline:
+    desc: "Regenerate docs/smell-baseline.json — grandfather current structural debt (run after a deliberate change)"
+    deps: [build]
+    cmds:
+      - |
+        set -euo pipefail
+        DB="$(mktemp -t mache-smells.XXXXXX.db)"
+        trap 'rm -f "$DB"' EXIT
+        ./{{.BINARY_NAME}} build . "$DB" --backend tree-sitter >/dev/null
+        ./{{.BINARY_NAME}} find-smells --db "$DB" --rule '*' --limit 100000 \
+          --baseline-root "$PWD" --write-baseline docs/smell-baseline.json >/dev/null
+        echo "regenerated docs/smell-baseline.json"
 
   coverage-gate:
     desc: Run the diff-aware NEW-CODE coverage gate against the current branch
@@ -444,6 +471,7 @@ tasks:
       - task: validate
       - task: docs:lint
       - task: actions:lint
+      - task: smells
       - task: gen:server-json:check
 
   ci:
@@ -467,6 +495,7 @@ tasks:
       - task: validate
       - task: docs:lint
       - task: actions:lint
+      - task: smells
       - task: gen:server-json:check
 
   # ────────────────────────────────────────────────────────────────

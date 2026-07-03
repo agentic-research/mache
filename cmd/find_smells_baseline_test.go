@@ -56,6 +56,41 @@ func TestFindSmellsCLI_BaselineRatchet_EndToEnd(t *testing.T) {
 	assert.Contains(t, buf.String(), "dead_code")
 }
 
+// TestRelativizeFindings pins the path-portability transform: mache build
+// records absolute source paths, so a committed baseline must be relativized.
+func TestRelativizeFindings(t *testing.T) {
+	root := filepath.Join("/abs", "repo")
+	in := []smellFinding{
+		{RuleID: "r", SourceID: filepath.Join(root, "cmd", "x.go")},
+		{RuleID: "r", SourceID: filepath.Join(root, "internal", "y.go")},
+	}
+	out := relativizeFindings(in, root)
+	assert.Equal(t, filepath.Join("cmd", "x.go"), out[0].SourceID)
+	assert.Equal(t, filepath.Join("internal", "y.go"), out[1].SourceID)
+	assert.Equal(t, in, relativizeFindings(in, ""), "empty root is a no-op")
+}
+
+// TestFindSmellsCLI_GlobSkipsUnavailableRules pins the W5.3 behavior that makes
+// task smells portable: a glob run skips rules whose tables are absent (e.g.
+// _ast rules on a pure-Go tree-sitter .db) instead of aborting.
+func TestFindSmellsCLI_GlobSkipsUnavailableRules(t *testing.T) {
+	dbPath := writeSmellCLIFixture(t) // nodes/node_defs/node_refs, NO _ast
+
+	saved := saveCLIFlags()
+	defer saved.restore()
+	findSmellsRule = "*"
+	findSmellsDBPath = dbPath
+	findSmellsFormat = "ci"
+
+	var buf bytes.Buffer
+	findSmellsCmd.SetOut(&buf)
+	findSmellsCmd.SetErr(&buf)
+	code, err := runFindSmells(findSmellsCmd, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, 2, code, "a glob must not abort on rules with missing tables")
+	assert.Contains(t, buf.String(), "skipping rule", "_ast rules are skipped on a pure-Go .db")
+}
+
 // TestBaseline_LoadWriteRoundTrip pins the on-disk baseline format.
 func TestBaseline_LoadWriteRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "b.json")
