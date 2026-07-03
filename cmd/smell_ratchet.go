@@ -1,6 +1,12 @@
 package cmd
 
-import "sort"
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+)
 
 // smellBaseline is the grandfathered count of findings per (rule_id, source_id)
 // — a count-based ratchet that generalizes rosary's god-files-vs-origin/main:
@@ -102,4 +108,48 @@ func sortFindingsByPosition(f []smellFinding) {
 		}
 		return f[i].StartByte < f[j].StartByte
 	})
+}
+
+// loadBaseline reads a committed smellBaseline JSON file.
+func loadBaseline(path string) (smellBaseline, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return smellBaseline{}, err
+	}
+	var b smellBaseline
+	if err := json.Unmarshal(data, &b); err != nil {
+		return smellBaseline{}, fmt.Errorf("parse baseline: %w", err)
+	}
+	return b, nil
+}
+
+// writeBaseline writes a deterministic (sorted) smellBaseline JSON file.
+func writeBaseline(path string, b smellBaseline) error {
+	data, err := json.MarshalIndent(b, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+// allFindings flattens the per-rule results into a single finding slice.
+func allFindings(results []ruleRunResult) []smellFinding {
+	var out []smellFinding
+	for _, r := range results {
+		out = append(out, r.findings...)
+	}
+	return out
+}
+
+// renderNewDebt prints the findings that exceed the baseline — the actionable
+// output of a ratcheted gate (one line per finding + a count header).
+func renderNewDebt(w io.Writer, debt []smellFinding) {
+	_, _ = fmt.Fprintf(w, "smell ratchet: %d NEW finding(s) above baseline:\n", len(debt))
+	for _, f := range debt {
+		loc := f.SourceID
+		if f.Line > 0 {
+			loc = fmt.Sprintf("%s:%d", f.SourceID, f.Line)
+		}
+		_, _ = fmt.Fprintf(w, "  [%s] %s\n", f.RuleID, loc)
+	}
 }
