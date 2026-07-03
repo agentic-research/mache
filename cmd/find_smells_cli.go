@@ -40,6 +40,13 @@ var (
 	findSmellsFormat    string
 	findSmellsFailOn    string
 	findSmellsTags      string
+
+	// findSmellsBaseline gates on new-findings-vs-baseline (the W5 ratchet):
+	// when set, exit non-zero iff any (rule,file) exceeds the committed
+	// baseline count, ignoring --fail-on. findSmellsWriteBaseline regenerates
+	// the committed baseline from the current scan. Bead mache-4d155c.
+	findSmellsBaseline      string
+	findSmellsWriteBaseline string
 )
 
 // exitFunc is the process-exit hook the CLI uses after RunE returns a
@@ -238,6 +245,29 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 				return 0, err
 			}
 		}
+	}
+
+	// W5 ratchet (mache-4d155c): --write-baseline regenerates the committed
+	// baseline (grandfathers current findings); --baseline gates on
+	// new-findings-vs-baseline, overriding --fail-on. Both operate on the
+	// flattened finding set.
+	if findSmellsWriteBaseline != "" {
+		if err := writeBaseline(findSmellsWriteBaseline, computeBaseline(allFindings(results))); err != nil {
+			return printAndCode(4, fmt.Errorf("write baseline %s: %w", findSmellsWriteBaseline, err))
+		}
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "wrote smell baseline: %s\n", findSmellsWriteBaseline)
+		return 0, nil
+	}
+	if findSmellsBaseline != "" {
+		base, err := loadBaseline(findSmellsBaseline)
+		if err != nil {
+			return printAndCode(4, fmt.Errorf("load baseline %s: %w", findSmellsBaseline, err))
+		}
+		if debt := newDebt(allFindings(results), base); len(debt) > 0 {
+			renderNewDebt(cmd.ErrOrStderr(), debt)
+			return 1, nil
+		}
+		return 0, nil
 	}
 
 	// Gate decision (ADR-0018). --fail-on=none preserves the legacy
@@ -502,5 +532,7 @@ func init() {
 	findSmellsCmd.Flags().StringVar(&findSmellsFormat, "format", "json", "output format: json, md, or ci")
 	findSmellsCmd.Flags().StringVar(&findSmellsFailOn, "fail-on", "error", "exit non-zero when findings reach severity: none | warn | error (ADR-0018)")
 	findSmellsCmd.Flags().StringVar(&findSmellsTags, "tags", "", "comma-separated tags; runs rules whose Tags contain ANY of these values (set union)")
+	findSmellsCmd.Flags().StringVar(&findSmellsBaseline, "baseline", "", "path to a committed smell baseline JSON; exit non-zero only on findings that EXCEED the baseline count per (rule,file) — the W5 ratchet")
+	findSmellsCmd.Flags().StringVar(&findSmellsWriteBaseline, "write-baseline", "", "regenerate the baseline JSON at this path from the current scan (grandfathers all current findings), then exit 0")
 	rootCmd.AddCommand(findSmellsCmd)
 }

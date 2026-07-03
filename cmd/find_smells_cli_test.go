@@ -590,6 +590,7 @@ func (s *stderrCapture) restore() {
 // ADR-0018 PR 2 to cover --fail-on / --tags and the exitFunc override.
 type cliFlagSnapshot struct {
 	rule, db, sourceID, format, failOn, tags string
+	baseline, writeBaseline                  string
 	limit                                    int
 	minMetric                                int64
 	exitFunc                                 func(int)
@@ -597,15 +598,17 @@ type cliFlagSnapshot struct {
 
 func saveCLIFlags() cliFlagSnapshot {
 	return cliFlagSnapshot{
-		rule:      findSmellsRule,
-		db:        findSmellsDBPath,
-		sourceID:  findSmellsSourceID,
-		format:    findSmellsFormat,
-		failOn:    findSmellsFailOn,
-		tags:      findSmellsTags,
-		limit:     findSmellsLimit,
-		minMetric: findSmellsMinMetric,
-		exitFunc:  exitFunc,
+		rule:          findSmellsRule,
+		db:            findSmellsDBPath,
+		sourceID:      findSmellsSourceID,
+		format:        findSmellsFormat,
+		failOn:        findSmellsFailOn,
+		tags:          findSmellsTags,
+		baseline:      findSmellsBaseline,
+		writeBaseline: findSmellsWriteBaseline,
+		limit:         findSmellsLimit,
+		minMetric:     findSmellsMinMetric,
+		exitFunc:      exitFunc,
 	}
 }
 
@@ -616,6 +619,8 @@ func (s cliFlagSnapshot) restore() {
 	findSmellsFormat = s.format
 	findSmellsFailOn = s.failOn
 	findSmellsTags = s.tags
+	findSmellsBaseline = s.baseline
+	findSmellsWriteBaseline = s.writeBaseline
 	findSmellsLimit = s.limit
 	findSmellsMinMetric = s.minMetric
 	exitFunc = s.exitFunc
