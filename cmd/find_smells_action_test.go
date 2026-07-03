@@ -53,9 +53,14 @@ func TestFindSmellsAction_Contract(t *testing.T) {
 			continue
 		}
 		rest := line[idx+len("inputs."):]
-		name := strings.FieldsFunc(rest, func(r rune) bool {
-			return !(r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'))
-		})[0]
+		isNameRune := func(r rune) bool {
+			return r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		}
+		end := strings.IndexFunc(rest, func(r rune) bool { return !isNameRune(r) })
+		if end < 0 {
+			end = len(rest)
+		}
+		name := rest[:end]
 		assert.Truef(t, declared[name], "action references undeclared input %q", name)
 	}
 	// The action must drive the real CLI surface.
