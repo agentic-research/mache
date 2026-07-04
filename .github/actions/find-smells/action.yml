@@ -3,9 +3,9 @@ description: 'Run the mache structural smell ratchet gate over the caller''s che
 
 inputs:
   mache-version:
-    description: 'mache release tag to download mache-linux-amd64 from. Must include `find-smells --format sarif` (>= v0.12.0).'
+    description: 'mache release tag to download mache-linux-amd64 from. >= v0.13.0 auto-provisions leyline so the build runs all 10 find_smells rules (LLO); >= v0.12.0 supports SARIF but runs the 5 tree-sitter rules only.'
     required: false
-    default: 'v0.12.0'
+    default: 'v0.13.0'
   schema:
     description: 'Path to a mache topology schema. Empty uses FCA schema inference.'
     required: false

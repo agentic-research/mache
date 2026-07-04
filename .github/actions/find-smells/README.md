@@ -36,10 +36,10 @@ Without it the action fails with the exact command above.
 
 ## Inputs
 
-| Input           | Default                    | Description                                                            |
-| --------------- | -------------------------- | ---------------------------------------------------------------------- |
-| `mache-version` | `v0.12.0`                  | Release tag for the `mache-linux-amd64` binary (>= v0.12.0 for SARIF). |
-| `schema`        | *(FCA infer)*              | Path to a mache topology schema.                                       |
-| `baseline`      | `docs/smell-baseline.json` | Committed ratchet floor.                                               |
-| `fail-on-new`   | `true`                     | Fail the job on new findings; `false` = advisory.                      |
-| `upload-sarif`  | `true`                     | Emit + upload SARIF to code-scanning.                                  |
+| Input           | Default                    | Description                                                                                                                                             |
+| --------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mache-version` | `v0.13.0`                  | Release tag for the `mache-linux-amd64` binary. >= v0.13.0 auto-provisions leyline (all 10 rules / LLO); >= v0.12.0 is SARIF + the 5 tree-sitter rules. |
+| `schema`        | *(FCA infer)*              | Path to a mache topology schema.                                                                                                                        |
+| `baseline`      | `docs/smell-baseline.json` | Committed ratchet floor.                                                                                                                                |
+| `fail-on-new`   | `true`                     | Fail the job on new findings; `false` = advisory.                                                                                                       |
+| `upload-sarif`  | `true`                     | Emit + upload SARIF to code-scanning.                                                                                                                   |
