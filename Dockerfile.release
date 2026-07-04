@@ -1,0 +1,37 @@
+# Dockerfile.release — mache's published multi-arch runtime image.
+#
+# NOT distroless: the bundled leyline (Rust) binary dynamically links
+# libsqlite3, so the base carries libsqlite3-0 + ca-certificates. mache's
+# own distroless apko.yaml / `task image` path is a separate, mache-only
+# local-dev image and is intentionally kept alongside this.
+#
+# Built by the release workflow's `image` job from pre-compiled binaries:
+#   image/linux-${TARGETARCH}/mache      (release matrix artifact)
+#   image/linux-${TARGETARCH}/leyline    (pinned ley-line-open binary)
+# Multi-arch via buildx; the correct per-arch binaries are copied in.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root, matches the distroless apko uid/gid.
+RUN groupadd -g 65532 mache && useradd -u 65532 -g mache -s /usr/sbin/nologin mache
+
+ARG TARGETARCH
+COPY image/linux-${TARGETARCH}/mache /usr/local/bin/mache
+COPY image/linux-${TARGETARCH}/leyline /usr/local/bin/leyline
+RUN chmod +x /usr/local/bin/mache /usr/local/bin/leyline
+
+USER mache
+
+# mache's own state dir (leyline cache + projection cache) and the tree to
+# project. Configure via a mounted .mache.json + MACHE_* env — no wrapper.
+ENV HOME=/data
+VOLUME /data
+VOLUME /source
+
+# Tooling-native: run mache directly. leyline is on PATH → LookPath finds it
+# → LLO in-container with zero runtime download.
+ENTRYPOINT ["/usr/local/bin/mache", "serve"]
+CMD ["/source"]
