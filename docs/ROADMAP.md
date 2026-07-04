@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.11.0
-last-verified: 2026-05-10
+covers-version: v0.12.0
+last-verified: 2026-07-03
 sources-of-truth:
   - CHANGELOG.md
   - .beads/

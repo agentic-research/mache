@@ -84,6 +84,14 @@ jobs:
         # Fail if any workflow `uses:` ref isn't SHA-pinned (mache-b8900d).
         run: task actions:lint
 
+      - name: Docs lint
+        # Fail if a top-level doc's covers-version drifts from the latest
+        # CHANGELOG release, or a mache language-count claim goes stale
+        # (mache-27347d). Same `task docs:lint` a developer runs locally —
+        # this closes the local==CI gap that let the v0.12.0 release ship
+        # with six stale covers-version markers undetected.
+        run: task docs:lint
+
       - name: Smell gate
         # Build a .db of the repo + fail on NEW structural findings vs the
         # committed baseline (W5 ratchet, mache-4da90e). Local == CI: the same
