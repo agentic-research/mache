@@ -81,9 +81,17 @@ Port kiln's proven recipe into mache's `release.yml` as a new `image` job that
 install `ca-certificates` + `libsqlite3-0`, create uid/gid 65532 `mache` user,
 `ARG TARGETARCH`, `COPY image/linux-${TARGETARCH}/{mache,leyline} /usr/local/bin/`,
 `chmod +x`, `USER mache`. leyline lands on PATH so mache's `LookPath("leyline")`
-finds it → **LLO in-container, zero runtime download.** Entrypoint: `mache serve`
-(the container's job is to serve MCP); revisit if a wrapper is needed for
-data-dir setup (port kiln's `entrypoint.sh` only if required).
+finds it → **LLO in-container, zero runtime download.**
+
+**Entrypoint — tooling-native, no wrapper script.** `ENTRYPOINT ["/usr/local/bin/mache", "serve"]` directly. Configuration is mache's own
+native surface, not a bash shim: a mounted **`.mache.json`** project config
+(`cmd/config.go`: source, schema, data source) + `MACHE_*` env vars
+(`MACHE_NO_LEYLINE`, `MACHE_LEYLINE_START_TIMEOUT`, etc.), and volumes for
+mache's own dirs — `/data` for its state (the `~/.mache` equivalent, where a
+downloaded/cached leyline and projection cache live) and `/source` for the tree
+to project. This drops kiln's `entrypoint.sh` entirely: anything the script
+would set up should be a mache config setting or env var, so the container's
+behavior is inspectable via mache's config, not hidden shell glue.
 
 **Permissions** the job needs: `packages: write` (push), `id-token: write`
 (cosign keyless + SLSA), `contents: read`.
@@ -113,6 +121,29 @@ stale-tag class of bug closed at the source. `gen:server-json:check` (already a
 CI gate) enforces server.json is regenerated. Field names match ADR-0038 /
 the MCP `2025-12-11` schema (verify exact casing against the schema when
 implementing).
+
+**Boundary — mache declares its source; storage-class + CAS are the
+consumer's concern.** mache's producer contract is deliberately narrow: it
+declares *what* it is (an `oci` package) and *where* (`ghcr.io/…/mache`),
+**tag-pinned** to its version. It does NOT declare a *storage class* (which
+provider/mirror — ghcr vs an R2/GCS/S3 registry mirror) or an *addressing
+scheme* (mutable tag vs content-addressed digest). Those are the consumer's
+(cloister's) policy:
+
+- **Tag vs digest (CAS):** the producer can only tag-pin — the image *digest*
+  isn't known when `server.json` is generated (the image is built *after*, in
+  the release job; chicken-and-egg). A consumer that wants immutable,
+  content-addressed pinning resolves the tag → `identifier@sha256:…` on its
+  side (ADR-0038 already anticipates the `@digest` form). mache emitting a
+  digest would require a second server.json regeneration post-build — out of
+  scope; tag-pin is the honest producer default.
+- **Provider/mirror (storage class):** which registry actually serves the
+  bytes, and any CAS/caching layer in front, is cloister's resolver/storage
+  policy — not something mache asserts. mache says "I'm at ghcr as vX.Y.Z";
+  cloister decides how to fetch/cache/verify it.
+
+This keeps the producer/consumer seam clean and is flagged as a **cloister
+concern** per the user; no mache-side work beyond the tag-pinned declaration.
 
 ### C3 — docs
 
