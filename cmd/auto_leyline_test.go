@@ -11,15 +11,19 @@ import (
 )
 
 // TestAutoInvokeLeylineParse_NoBinary verifies the helper returns a clear
-// error when leyline is not on PATH and not in the bundled location.
+// error when leyline is not on PATH, not in the bundled location, and
+// auto-download is opted out (MACHE_NO_LEYLINE). Without the opt-out the
+// helper would now attempt a network download (its intended behavior), so the
+// env var keeps this test hermetic.
 func TestAutoInvokeLeylineParse_NoBinary(t *testing.T) {
-	// Hide both PATH and the bundled location for this test
+	// Hide both PATH and the bundled location, and opt out of auto-download.
 	t.Setenv("PATH", "")
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	_, _, err := autoInvokeLeylineParse(t.TempDir())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "leyline")
+	assert.Contains(t, err.Error(), "MACHE_NO_LEYLINE")
 }
 
 // TestAutoInvokeLeylineParse_Success skips when leyline is unavailable.
