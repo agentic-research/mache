@@ -53,6 +53,9 @@ func TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing(t *testing.T) {
 	// Hide both PATH and the bundled location ($HOME/.mache/bin/leyline).
 	t.Setenv("PATH", "")
 	t.Setenv("HOME", t.TempDir())
+	// Opt out of the build-path auto-download (mache-0ed19b) so "leyline
+	// missing" surfaces as a clear error instead of a network fetch.
+	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	src := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"),
@@ -102,6 +105,9 @@ func TestBuildCmd_BackendDispatch(t *testing.T) {
 	buildBackend = "leyline"
 	t.Setenv("PATH", "")
 	t.Setenv("HOME", t.TempDir())
+	// Opt out of the build-path auto-download (mache-0ed19b) so "leyline
+	// missing" surfaces as a clear error instead of a network fetch.
+	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	src := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"),
@@ -165,6 +171,9 @@ func TestRunBuildViaLeyline_SchemaAutoOnlyWarns(t *testing.T) {
 	// Hide leyline so the call fails after the warning fires.
 	t.Setenv("PATH", "")
 	t.Setenv("HOME", t.TempDir())
+	// Opt out of the build-path auto-download (mache-0ed19b) so "leyline
+	// missing" surfaces as a clear error instead of a network fetch.
+	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	src := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"),

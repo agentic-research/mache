@@ -839,6 +839,37 @@ var leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-op
 // downloadLeyline fetches the pinned-version leyline binary from GitHub
 // releases (see leylineBinaryVersion) to the specified path. Returns the
 // path on success.
+// ResolveBinary locates a usable leyline binary and returns its path.
+// Resolution order: PATH → ~/.mache/bin/leyline → (when allowDownload)
+// auto-download the pinned ley-line-open release. This is the single
+// provisioning chokepoint shared by the serve path (autoInvokeLeylineParse)
+// and the build path, so `mache build` and `mache serve` acquire leyline
+// identically instead of the build path silently degrading to tree-sitter.
+//
+// Auto-download is skipped — returning an error rather than fetching — when
+// allowDownload is false, or when MACHE_NO_LEYLINE is set (the CI/offline
+// opt-out). A downloaded binary is cached at ~/.mache/bin/leyline for reuse.
+func ResolveBinary(allowDownload bool) (string, error) {
+	if p, err := exec.LookPath("leyline"); err == nil {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	bundled := filepath.Join(home, ".mache", "bin", "leyline")
+	if _, err := os.Stat(bundled); err == nil {
+		return bundled, nil
+	}
+	if !allowDownload {
+		return "", fmt.Errorf("leyline not on PATH and not at %s", bundled)
+	}
+	if os.Getenv("MACHE_NO_LEYLINE") != "" {
+		return "", fmt.Errorf("leyline not available and MACHE_NO_LEYLINE is set; install leyline or unset MACHE_NO_LEYLINE to auto-download")
+	}
+	return downloadLeyline(bundled)
+}
+
 func downloadLeyline(destPath string) (string, error) {
 	osName := runtime.GOOS // "darwin" or "linux"
 	arch := runtime.GOARCH // "arm64" or "amd64"

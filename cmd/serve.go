@@ -711,18 +711,14 @@ func servedSourceDir(args []string, basePath string, repoMode bool) string {
 // location, or if parsing fails. The caller should fall back to the
 // in-process ingest path on any error.
 func autoInvokeLeylineParse(sourceDir string) (string, func(), error) {
-	leylineBin, err := exec.LookPath("leyline")
+	// Resolve — and if absent, auto-download — the leyline binary via the same
+	// provisioning path mache serve uses, so `mache build` no longer silently
+	// degrades to tree-sitter merely because leyline isn't installed.
+	// MACHE_NO_LEYLINE opts out (returns an error the auto caller treats as
+	// "fall back to tree-sitter").
+	leylineBin, err := leyline.ResolveBinary(true)
 	if err != nil {
-		// Fallback: ~/.mache/bin/leyline (matches DiscoverOrStart's lookup)
-		home, herr := os.UserHomeDir()
-		if herr != nil {
-			return "", nil, fmt.Errorf("leyline not on PATH: %w", err)
-		}
-		bundled := filepath.Join(home, ".mache", "bin", "leyline")
-		if _, sErr := os.Stat(bundled); sErr != nil {
-			return "", nil, fmt.Errorf("leyline not on PATH and not at %s", bundled)
-		}
-		leylineBin = bundled
+		return "", nil, err
 	}
 
 	tmpFile, err := os.CreateTemp("", "mache-leyline-*.db")
