@@ -4,6 +4,30 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [v0.13.0] — 2026-07-04
+
+`mache build` now provisions leyline (LLO) itself, so the full 10-rule
+`find_smells` set and accurate cross-references are available anywhere mache
+runs — no separate leyline install. This makes the W6.1 `find-smells` composite
+action (and any consumer) get LLO for free on a plain CI runner.
+
+### Added
+
+- **`mache build` auto-downloads leyline.** `mache serve` already fetched the
+  pinned ley-line-open binary when absent; the build path now does too, via a
+  shared `leyline.ResolveBinary` (PATH → `~/.mache/bin/leyline` → download).
+  Default `--backend auto` prefers leyline, downloading if needed, and falls
+  back to in-process tree-sitter only when leyline is genuinely unavailable
+  (offline, or `MACHE_NO_LEYLINE=1`). The binary caches to `~/.mache/bin`.
+
+### Changed
+
+- **`docs:lint` is now a CI gate.** The docs-freshness check (`covers-version`
+  vs the latest CHANGELOG, mache language-count claims) runs in CI, not just
+  local `task check` — closing the local==CI gap that let v0.12.0 ship with
+  stale doc markers. Only version/lang-count mismatches fail; `last-verified`
+  age is warn-only.
+
 ## [v0.12.0] — 2026-07-03
 
 The "distribution" release (analysis-substrate → W6). v0.11.0 made the
@@ -256,4 +280,5 @@ error rather than corrupting reads. Tag together; release-note the
 break in both repos.
 
 [v0.12.0]: https://github.com/agentic-research/mache/compare/v0.11.0...v0.12.0
+[v0.13.0]: https://github.com/agentic-research/mache/compare/v0.12.0...v0.13.0
 [v0.8.0]: https://github.com/agentic-research/mache/compare/v0.7.0...v0.8.0
