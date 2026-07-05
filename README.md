@@ -155,6 +155,15 @@ inject a fixed keypair from a secret. The melange recipe builds with
 FFI client is gated behind the `leyline` build tag and is **not** compiled
 into the image (see [ADR-0006](docs/adr/0006-pure-go-mcp-first.md)).
 
+On release, mache also self-publishes a separate **leyline-bundled**
+multi-arch image to `ghcr.io/agentic-research/mache` (`debian-slim` +
+`libsqlite3`, since leyline links sqlite; the distroless apko image above
+stays the local-dev build). This image gets the ley-line-open-paired path
+with no runtime fetch. Mache declares its own source via `server.json`'s
+`packages[].oci` entry, tag-pinned — see
+[ARCHITECTURE.md § OCI distribution](docs/ARCHITECTURE.md#oci-distribution)
+for the full framing.
+
 **Local / dev path** — running `mache serve` or `mache mount` directly on
 your machine. Useful for laptop work, debugging, and writing schemas. In
 this mode mache may auto-discover or auto-download a `leyline` binary

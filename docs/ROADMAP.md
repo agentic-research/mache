@@ -28,7 +28,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - **Canonical views** (ADR-0013): `v_defs` / `v_refs` with `(mention ⊑ binding ⊑ reachability)` fidelity ordering — consumer rules query producer-agnostically
 - **Capnp event-log readthrough**: `${db}.bindings.capnp` is the cross-runtime contract for binding refs; `find_smells` reads the canonical event log directly
 - `callers/` and `callees/` virtual directories — self-gating, NFS-served as `graphFile`s
-- `find_smells` MCP tool: 9 structural rules (`magic_int_in_comparison`, `dead_code`, `cyclomatic_complexity`, `long_function`, `untested_function`, `duplicate_definitions`, `god_file`, `fan_out_skew`, `long_file`) with optional `min_metric` and `source_id` filters; `fan_out_skew` is qualifier-aware via T8.7. Advisory PR comments via `.github/workflows/find-smells.yml`
+- `find_smells` MCP tool: 14 rules — 10 code-structure (`dead_code`, `god_file`, `long_function`, `cyclomatic_complexity`, `duplicate_code`, `duplicate_definitions`, `fan_out_skew`, `long_file`, `untested_function`, `magic_int_in_comparison`), 3 doc-drift (`drift_doc_broken_internal_link`, `drift_doc_dead_symbol_reference`, `drift_doc_outdated_count`), 1 test (`sleep_in_test`) — with optional `min_metric` and `source_id` filters; `fan_out_skew` is qualifier-aware via T8.7. Advisory PR comments via `.github/workflows/find-smells.yml`
 - FCA + greedy entropy schema inference: `--infer` auto-generates topology from data
 - Virtual `_schema.json` at mount root exposing the active topology
 - **Hot-swap polling on `current_root`** — the writer (ley-line-open or mache itself) publishes a BLAKE3 root with each new arena; readers detect swaps via root inequality. Control-block + arena VERSION 2.
@@ -39,7 +39,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 
 - Memory: ~2GB peak for 323K NVD records (1.6M graph nodes with string IDs) — addressable via [GenerationalGraph](https://github.com/agentic-research/mache) (mache-2f1287)
 - Write-back formatting is Go and HCL/Terraform only; other languages validate but don't auto-format
-- Standalone (CGO) path produces `node_defs`/`node_refs` but not `_ast` — 4 of 9 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`) require a `.db` built by ley-line-open
+- Standalone (CGO) path produces `node_defs`/`node_refs` but not `_ast` — 5 of 14 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`, `duplicate_code`) require a `.db` built by ley-line-open
 - bbolt-backed `ext/boltdb` projection is opt-in (not in default `go.work`); used by venturi/trivy-db workflows
 
 ## Near-term
