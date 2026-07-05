@@ -130,6 +130,10 @@ jobs:
           set -euo pipefail
           # Single source of truth: the const mache already downloads by.
           v=$(grep -oE 'leylineBinaryVersion = "v[0-9.]+"' internal/leyline/socket.go | grep -oE 'v[0-9.]+')
+          if [ -z "$v" ]; then
+            echo "::error::could not parse leylineBinaryVersion from internal/leyline/socket.go — the const format may have changed" >&2
+            exit 1
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Download mache linux binaries
