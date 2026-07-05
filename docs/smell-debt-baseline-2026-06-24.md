@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.13.0
+covers-version: v0.14.0
 last-verified: 2026-06-24
 ---
 
