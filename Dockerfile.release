@@ -14,8 +14,14 @@
 #   image/linux-${TARGETARCH}/mache      (release matrix artifact)
 #   image/linux-${TARGETARCH}/leyline    (pinned ley-line-open binary)
 # Multi-arch via buildx; the correct per-arch binaries are copied in.
-FROM ubuntu:24.04
+# Base pinned by manifest-list digest (bump alongside a deliberate base
+# refresh) for reproducibility; the `:24.04` tag is kept for readability.
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 
+# hadolint ignore=DL3008
+# apt package versions float within the digest-pinned base — the base pin
+# bounds drift, and per-arch version-pinning (amd64 vs arm64 differ) is
+# brittle for these two stable packages. Revisit if reproducibility demands it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
