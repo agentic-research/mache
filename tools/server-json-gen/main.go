@@ -48,6 +48,13 @@ const serverName = "io.github.agentic-research/mache"
 // serverTitle is the display name shown in registry listings.
 const serverTitle = "mache"
 
+// ociImageIdentifier is the registry path mache's release publishes its
+// leyline-bundled OCI image to (see .github/workflows/release.yml image job).
+// Declared in server.json packages[] so consumers (cloister ADR-0038) derive
+// the bundle image from the version-pinned artifact instead of a hand-written
+// tag. Tag-pinned only — digest/CAS pinning is the consumer's concern.
+const ociImageIdentifier = "ghcr.io/agentic-research/mache"
+
 // serverDescription opens the registry listing. The MCP Registry
 // schema 2025-12-11 caps `description` at 100 chars — the long pitch
 // the previously hand-maintained server.json carried was actually
@@ -95,6 +102,7 @@ type serverDoc struct {
 	Version     string         `json:"version"`
 	Repository  repository     `json:"repository"`
 	WebsiteURL  string         `json:"websiteUrl"`
+	Packages    []packageEntry `json:"packages"`
 	Remotes     []remote       `json:"remotes"`
 	Meta        *orderedObject `json:"_meta"`
 }
@@ -102,6 +110,12 @@ type serverDoc struct {
 type repository struct {
 	URL    string `json:"url"`
 	Source string `json:"source"`
+}
+
+type packageEntry struct {
+	RegistryType string `json:"registryType"`
+	Identifier   string `json:"identifier"`
+	Version      string `json:"version"`
 }
 
 type remote struct {
@@ -286,6 +300,11 @@ func buildDoc() (*serverDoc, error) {
 			Source: repositorySource,
 		},
 		WebsiteURL: websiteURL,
+		Packages: []packageEntry{{
+			RegistryType: "oci",
+			Identifier:   ociImageIdentifier,
+			Version:      serverVersion,
+		}},
 		Remotes: []remote{
 			{
 				Type: "streamable-http",

@@ -147,6 +147,27 @@ tasks:
       - apko build apko.yaml mache:0.8.0 mache.tar --keyring-append melange.rsa.pub
       - 'echo "Built mache.tar — load with: docker load -i mache.tar"'
 
+  image:verify:
+    desc: "Build Dockerfile.release with the pinned leyline binary and run it — catches glibc/lib runtime mismatches between the image base and ley-line-open's binary BEFORE a release (the release image job can't be dry-run without a tag)."
+    cmds:
+      - |
+        set -euo pipefail
+        LL=$(grep -oE 'leylineBinaryVersion = "v[0-9.]+"' internal/leyline/socket.go | grep -oE 'v[0-9.]+')
+        case "$(uname -m)" in arm64|aarch64) A=arm64 ;; x86_64|amd64) A=amd64 ;; *) echo "unsupported arch $(uname -m)"; exit 1 ;; esac
+        BASE=$(grep -E '^FROM ' Dockerfile.release | tail -1 | awk '{print $2}')
+        echo "verifying leyline $LL (linux/$A) runs on Dockerfile.release base $BASE"
+        # Dockerfile.release COPYs from image/linux-$A/{mache,leyline}; the mache
+        # binary is a stub here (this target validates leyline's runtime deps vs
+        # the base — the real mache is exercised end-to-end by the release job).
+        trap 'rm -rf image; docker rmi mache-image-verify:local >/dev/null 2>&1 || true' EXIT
+        rm -rf image; mkdir -p "image/linux-$A"
+        printf '#!/bin/sh\necho stub\n' > "image/linux-$A/mache"
+        curl -sSfL "https://github.com/agentic-research/ley-line-open/releases/download/$LL/leyline-linux-$A" -o "image/linux-$A/leyline"
+        chmod +x "image/linux-$A/mache" "image/linux-$A/leyline"
+        docker build -q -f Dockerfile.release --build-arg "TARGETARCH=$A" --platform "linux/$A" -t mache-image-verify:local . >/dev/null
+        docker run --rm --platform "linux/$A" --entrypoint /usr/local/bin/leyline mache-image-verify:local --version
+        echo "image:verify OK — leyline runs in the release image base"
+
   validate:
     desc: Validate example schemas against synthetic SQLite fixtures
     cmds:

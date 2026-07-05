@@ -9,6 +9,13 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/agentic-research/mache/blob/main/GETTING-STARTED.md",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/agentic-research/mache",
+      "version": "0.13.0"
+    }
+  ],
   "remotes": [
     {
       "type": "streamable-http",
