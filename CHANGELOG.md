@@ -4,6 +4,32 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [v0.14.0] — 2026-07-04
+
+The "OCI distribution" release. mache now self-publishes a container image and
+declares where it's sourced from, so downstream (cloister et al.) resolve a
+version-pinned artifact instead of a hand-maintained, drift-prone tag.
+
+### Added
+
+- **Published OCI image** `ghcr.io/agentic-research/mache` — a leyline-bundled,
+  multi-arch (linux/amd64 + linux/arm64) image built + pushed + cosign-signed
+  (keyless) on every release tag. Containers get the full 10-rule LLO analysis
+  with zero runtime download. Base is `ubuntu:24.04` (glibc 2.39 — leyline
+  requires it; the old `debian:bookworm-slim` shipped 2.36 and leyline aborted
+  at runtime). Tooling-native entrypoint (`mache serve`; config via mounted
+  `.mache.json` + `MACHE_*`). `task image:verify` + a release-job runtime smoke
+  guard the base/glibc contract.
+- **`server.json` `packages[].oci`** — mache declares its own image source
+  (`registryType: oci`, `identifier`, `version`), version single-sourced from
+  `version.txt` so it can't drift from the pushed tag. Aligns with cloister
+  ADR-0038.
+
+### Changed
+
+- **Docs:** corrected the `find_smells` rule count (9 → 14: 10 code-structure +
+  3 doc-drift + 1 test) and added an OCI-distribution note.
+
 ## [v0.13.0] — 2026-07-04
 
 `mache build` now provisions leyline (LLO) itself, so the full 10-rule
@@ -281,4 +307,5 @@ break in both repos.
 
 [v0.12.0]: https://github.com/agentic-research/mache/compare/v0.11.0...v0.12.0
 [v0.13.0]: https://github.com/agentic-research/mache/compare/v0.12.0...v0.13.0
+[v0.14.0]: https://github.com/agentic-research/mache/compare/v0.13.0...v0.14.0
 [v0.8.0]: https://github.com/agentic-research/mache/compare/v0.7.0...v0.8.0
