@@ -152,6 +152,18 @@ jobs:
           done
           chmod +x image/linux-*/mache image/linux-*/leyline
 
+      - name: Smoke test the image (runtime — catches glibc/lib mismatches before push)
+        # `docker build` succeeds even if the bundled leyline can't run (COPY
+        # never executes it) — the failure is runtime-only. Build + RUN the
+        # runner-arch image and assert leyline actually executes, so a
+        # base/glibc mismatch fails the release job instead of publishing a
+        # broken image. mache is exercised via `version`; leyline via `--version`.
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile.release --build-arg TARGETARCH=amd64 -t mache-smoke:ci .
+          docker run --rm --entrypoint /usr/local/bin/mache mache-smoke:ci version
+          docker run --rm --entrypoint /usr/local/bin/leyline mache-smoke:ci --version
+
       - name: Log in to ghcr
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:

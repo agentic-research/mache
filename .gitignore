@@ -111,3 +111,6 @@ tools/KNOWN_ISSUES.md
 /melange.rsa
 /melange.rsa.pub
 /sbom-*.spdx.json
+
+# transient OCI build context (release image job + task image:verify)
+/image/

@@ -5,11 +5,16 @@
 # own distroless apko.yaml / `task image` path is a separate, mache-only
 # local-dev image and is intentionally kept alongside this.
 #
+# Base is ubuntu:24.04, NOT debian:bookworm-slim: ley-line-open's leyline
+# binary is built against glibc >= 2.39, and bookworm (Debian 12) ships glibc
+# 2.36 — leyline aborts at runtime with "GLIBC_2.39 not found". ubuntu 24.04
+# ships glibc 2.39. `task image:verify` catches this class of mismatch.
+#
 # Built by the release workflow's `image` job from pre-compiled binaries:
 #   image/linux-${TARGETARCH}/mache      (release matrix artifact)
 #   image/linux-${TARGETARCH}/leyline    (pinned ley-line-open binary)
 # Multi-arch via buildx; the correct per-arch binaries are copied in.
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libsqlite3-0 \
