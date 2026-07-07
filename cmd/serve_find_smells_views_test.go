@@ -123,6 +123,110 @@ func TestEnsureCanonicalViews_HandlesMissingLSPTables(t *testing.T) {
 	assert.Zero(t, bindingRefs, "no _lsp_refs → no binding rows")
 }
 
+// canonicalViewRows runs ensureCanonicalViews on a fresh db built by
+// setup() and returns the mention-fidelity v_defs and v_refs rows as
+// stable, ordered string slices for equality comparison.
+func canonicalViewRows(t *testing.T, name, setup string) (defs, refs []string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), name)
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(setup)
+	require.NoError(t, err)
+
+	require.NoError(t, ensureCanonicalViews(&sqlDBQuerier{db: db}))
+
+	dRows, err := db.Query(`SELECT token, node_id, fidelity FROM v_defs
+		WHERE fidelity = 'mention' ORDER BY token, node_id`)
+	require.NoError(t, err)
+	for dRows.Next() {
+		var tok, nid, fid string
+		require.NoError(t, dRows.Scan(&tok, &nid, &fid))
+		defs = append(defs, tok+"|"+nid+"|"+fid)
+	}
+	require.NoError(t, dRows.Close())
+
+	// Include every v_refs column so the parity assertion catches any
+	// shape drift (target_node_id, ref_uri, ref_line, qualifier).
+	rRows, err := db.Query(`SELECT referrer_node_id, token,
+		COALESCE(target_node_id, 'NULL'), COALESCE(ref_uri, 'NULL'),
+		COALESCE(CAST(ref_line AS TEXT), 'NULL'), fidelity, qualifier
+		FROM v_refs WHERE fidelity = 'mention' ORDER BY referrer_node_id, token`)
+	require.NoError(t, err)
+	for rRows.Next() {
+		var rn, tok, tgt, uri, line, fid, qual string
+		require.NoError(t, rRows.Scan(&rn, &tok, &tgt, &uri, &line, &fid, &qual))
+		refs = append(refs, rn+"|"+tok+"|"+tgt+"|"+uri+"|"+line+"|"+fid+"|"+qual)
+	}
+	require.NoError(t, rRows.Close())
+	return defs, refs
+}
+
+// TestEnsureCanonicalViews_FactEdgesByteParityWithLegacy is the ADR-0023
+// step 2 de-risk: the same logical defs/refs, sourced two ways, must yield
+// byte-identical v_defs / v_refs mention rows.
+//
+//   - legacy: node_defs / node_refs populated, no IR tables.
+//   - IR: fact_edges / symbols populated, node_defs / node_refs EMPTY — so
+//     any row that appears MUST have come through the fact_edges arm.
+//
+// Identical output proves the substrate swap is transparent to consumers.
+func TestEnsureCanonicalViews_FactEdgesByteParityWithLegacy(t *testing.T) {
+	// Two defs and two refs — enough to catch a bad join or a dropped row.
+	legacy := `
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		INSERT INTO node_defs VALUES ('add', 'util.go/func'), ('main', 'main.go/func');
+		INSERT INTO node_refs VALUES ('add', 'main.go/call'), ('println', 'main.go/call2');`
+
+	// IR db: node_defs / node_refs exist but are EMPTY; fact_edges + symbols
+	// carry the same logical data. symbol_id blobs are arbitrary-but-distinct;
+	// the join is on symbol_id equality, not on any 32-byte invariant.
+	ir := `
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE symbols (symbol_id BLOB NOT NULL, node_id TEXT NOT NULL);
+		CREATE TABLE fact_edges (src BLOB NOT NULL, dst BLOB, kind TEXT NOT NULL, token TEXT);
+		INSERT INTO symbols (symbol_id, node_id) VALUES
+			(X'01', 'util.go/func'), (X'02', 'main.go/func'),
+			(X'03', 'main.go/call'), (X'04', 'main.go/call2');
+		INSERT INTO fact_edges (src, dst, kind, token) VALUES
+			(X'01', NULL, 'defines', 'add'),
+			(X'02', NULL, 'defines', 'main'),
+			(X'03', X'01', 'references', 'add'),
+			(X'04', NULL, 'references', 'println');`
+
+	legacyDefs, legacyRefs := canonicalViewRows(t, "legacy.db", legacy)
+	irDefs, irRefs := canonicalViewRows(t, "ir.db", ir)
+
+	require.Len(t, legacyDefs, 2, "sanity: two mention defs")
+	require.Len(t, legacyRefs, 2, "sanity: two mention refs")
+	assert.Equal(t, legacyDefs, irDefs,
+		"v_defs mention rows must be byte-identical whether sourced from node_defs or fact_edges")
+	assert.Equal(t, legacyRefs, irRefs,
+		"v_refs mention rows must be byte-identical whether sourced from node_refs or fact_edges "+
+			"(target_node_id held NULL even though fact_edges.dst is resolved)")
+}
+
+// TestEnsureCanonicalViews_FactEdgesTakesPrecedenceOverEmptyLegacy pins the
+// probe: with the IR tables present, an EMPTY node_defs/node_refs must not
+// suppress the fact_edges-sourced rows (i.e. the swap engages, it doesn't
+// merely UNION).
+func TestEnsureCanonicalViews_FactEdgesTakesPrecedenceOverEmptyLegacy(t *testing.T) {
+	defs, refs := canonicalViewRows(t, "ir_only.db", `
+		CREATE TABLE node_defs (token TEXT, node_id TEXT);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT);
+		CREATE TABLE symbols (symbol_id BLOB NOT NULL, node_id TEXT NOT NULL);
+		CREATE TABLE fact_edges (src BLOB NOT NULL, dst BLOB, kind TEXT NOT NULL, token TEXT);
+		INSERT INTO symbols (symbol_id, node_id) VALUES (X'0a', 'a.go/f');
+		INSERT INTO fact_edges (src, dst, kind, token) VALUES (X'0a', NULL, 'defines', 'F');`)
+	assert.Equal(t, []string{"F|a.go/f|mention"}, defs,
+		"def must be sourced from fact_edges, not the empty node_defs")
+	assert.Empty(t, refs, "no references edges → no mention refs")
+}
+
 func TestEnsureCanonicalViews_HandlesLegacyLSPTables(t *testing.T) {
 	// Pre-Step-1 _lsp_* schema (no def_token / referrer_node_id /
 	// ref_token columns). The probe must detect the absence and fall

@@ -41,7 +41,38 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		return fmt.Errorf("probe _lsp_defs: %w", err)
 	}
 
-	defsBody := `SELECT token, node_id, 'mention' AS fidelity FROM node_defs`
+	// Unified code-fact IR (ADR-0023 step 2): when the db carries the IR
+	// tables (ley-line-open's `fact_edges` + `symbols`), source the
+	// mention arm from `fact_edges` instead of `node_defs`/`node_refs`.
+	// The producer derives `fact_edges`' defines/references arms from the
+	// same tree-sitter extraction that feeds `node_defs`/`node_refs`, so
+	// the swap is byte-parity by construction; the probe falls back to the
+	// legacy tables on dbs without the IR (older producers). `symbols`
+	// carries `node_id`, so the join re-attaches the parse-run locator the
+	// mention views expose. Same dual-read discipline as the T8.8 capnp
+	// migration — probe the producer's shape, keep the consumer SQL fixed.
+	// Requires both tables: an edges-without-symbols db falls back rather
+	// than emit an empty (unjoinable) view.
+	hasFactEdges, err := tableHasColumn(qg, "fact_edges", "kind")
+	if err != nil {
+		return fmt.Errorf("probe fact_edges: %w", err)
+	}
+	if hasFactEdges {
+		hasSymbols, err := tableHasColumn(qg, "symbols", "node_id")
+		if err != nil {
+			return fmt.Errorf("probe symbols: %w", err)
+		}
+		hasFactEdges = hasSymbols
+	}
+
+	defsMentionArm := `SELECT token, node_id, 'mention' AS fidelity FROM node_defs`
+	if hasFactEdges {
+		defsMentionArm = `SELECT fe.token AS token, s.node_id AS node_id, 'mention' AS fidelity
+			FROM fact_edges fe JOIN symbols s ON s.symbol_id = fe.src
+			WHERE fe.kind = 'defines'`
+	}
+
+	defsBody := defsMentionArm
 	if hasLSPDefsToken {
 		defsBody += `
 			UNION ALL
@@ -56,7 +87,7 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	// doesn't populate it) and for pre-T8.7 capnp records (default
 	// '' per schema-evolution invariant). See mache-6c0d07 for the
 	// fan_out_skew metric that consumes it.
-	refsBody := `SELECT node_id AS referrer_node_id,
+	refsMentionArm := `SELECT node_id AS referrer_node_id,
 	       token,
 	       NULL  AS target_node_id,
 	       NULL  AS ref_uri,
@@ -64,6 +95,23 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	       'mention' AS fidelity,
 	       ''    AS qualifier
 	FROM node_refs`
+	if hasFactEdges {
+		// target_node_id is held NULL to match the node_refs mention shape
+		// byte-for-byte. `fact_edges` DOES carry the resolved `dst`, but
+		// surfacing it is a binding-fidelity enhancement for a later slice;
+		// forcing NULL here keeps this a pure, provable substrate swap.
+		refsMentionArm = `SELECT s.node_id AS referrer_node_id,
+		       fe.token AS token,
+		       NULL  AS target_node_id,
+		       NULL  AS ref_uri,
+		       NULL  AS ref_line,
+		       'mention' AS fidelity,
+		       ''    AS qualifier
+		FROM fact_edges fe JOIN symbols s ON s.symbol_id = fe.src
+		WHERE fe.kind = 'references'`
+	}
+
+	refsBody := refsMentionArm
 	// Binding-fidelity rows come from the per-connection
 	// _capnp_binding_refs TEMP table, populated from the sibling
 	// .bindings.capnp event log by LoadCapnpBindings (mache-190508).
