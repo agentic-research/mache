@@ -199,6 +199,34 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: cosign sign --yes "ghcr.io/agentic-research/mache@${DIGEST}"
 
+      - name: Verify the published image (pullable + runs + signature valid)
+        # Post-push guard on the distribution contract (packages[].oci in
+        # server.json points here). The pre-push smoke step catches glibc/lib
+        # mismatches on the locally-built image; this asserts the *published*
+        # artifact: both tags resolve, the image runs, and the cosign keyless
+        # signature verifies against this workflow's identity. Fails the
+        # release if any regresses (e.g. a package-visibility/ACL change makes
+        # it unpullable, or signing silently no-ops).
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TAG: ${{ env.TAG }}
+        run: |
+          set -euo pipefail
+          IMG="ghcr.io/agentic-research/mache"
+          # Both tags are resolvable (pullable) from the registry.
+          for t in "${TAG}" latest; do
+            docker buildx imagetools inspect "${IMG}:${t}" >/dev/null
+            echo "pullable: ${IMG}:${t}"
+          done
+          # The published image executes (runner-arch variant of the manifest list).
+          docker run --rm --entrypoint /usr/local/bin/mache "${IMG}@${DIGEST}" version
+          # Keyless cosign signature verifies against THIS workflow's OIDC identity.
+          cosign verify \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/agentic-research/mache/\.github/workflows/release\.yml@" \
+            "${IMG}@${DIGEST}" >/dev/null
+          echo "verified: pullable (both tags), runs, cosign signature valid"
+
   release:
     if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' || github.event.client_payload.tag != '')
     needs: build
