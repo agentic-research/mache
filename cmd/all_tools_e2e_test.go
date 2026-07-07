@@ -280,7 +280,7 @@ func runToolMatrix(t *testing.T, g graph.Graph, fixtureDir, backend string, opts
 		{"get_architecture", makeGetArchitectureHandler, map[string]any{}},
 		{"get_diagram", makeGetDiagramHandler, map[string]any{"layout": "TD"}},
 		{"resolve_ref", makeResolveRefHandler, map[string]any{"token": "mod:./billing", "base_path": fixtureDir}},
-		{"find_smells", makeFindSmellsHandler, map[string]any{"rule": "dead_code", "limit": float64(20)}},
+		{"find_smells", func(g graph.Graph) server.ToolHandlerFunc { return makeFindSmellsHandler(g) }, map[string]any{"rule": "dead_code", "limit": float64(20)}},
 		// write_file is intentionally skipped — happy path mutates
 		// the fixture and would invalidate downstream tool results
 		// in this single-pass harness. A separate write-path harness

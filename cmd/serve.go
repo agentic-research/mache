@@ -118,6 +118,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 	defer registry.Close()
 	registry.repoCloneDir = repoCloneDir
 
+	// Resolve the external smell-rules dir ONCE at startup from
+	// $MACHE_SMELL_RULES_DIR or the served project's .mache.json
+	// (serve has no explicit flag for it). The find_smells handler
+	// rescans this fixed dir per request, so dropping a new rule file
+	// into it is picked up live — no restart, no reconnect. Changing
+	// the dir itself still needs a restart, which is fine.
+	registry.smellRulesDir = resolveSmellRulesDir("", registry.resolvedBasePath())
+	if registry.smellRulesDir != "" {
+		log.Printf("find_smells: external rules dir = %s (rescanned per request)", registry.smellRulesDir)
+	}
+
 	// Configure the leyline daemon's --source so live LSP/embed enrichment
 	// (get_type_info / get_diagnostics with file=) can run: op_enrich
 	// requires the daemon to know the source tree (mache-303036). Only set

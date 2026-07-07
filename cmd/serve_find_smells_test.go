@@ -593,7 +593,7 @@ func TestFindSmells_DigestTruncatedReflectsScanNotFilter(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	d, err := buildSmellDigest(tg, 5, 10)
+	d, err := buildSmellDigest(tg, smellRegistry, 5, 10)
 	require.NoError(t, err)
 	var lf *ruleDigest
 	for i := range d.ByRule {

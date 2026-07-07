@@ -21,6 +21,11 @@ const ConfigFileName = ".mache.json"
 // ProjectConfig represents the .mache.json project configuration.
 type ProjectConfig struct {
 	Sources []SourceConfig `json:"sources"`
+	// SmellRulesDir points at a directory of external SmellRule JSON
+	// files (see LoadExternalSmellRules). A relative value is resolved
+	// against the .mache.json's own directory for portability; see
+	// resolveSmellRulesDir. Optional — omit to use built-in rules only.
+	SmellRulesDir string `json:"smellRulesDir,omitempty"`
 }
 
 // SourceConfig describes a single data source within a project.

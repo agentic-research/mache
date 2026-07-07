@@ -40,6 +40,7 @@ var (
 	findSmellsFormat    string
 	findSmellsFailOn    string
 	findSmellsTags      string
+	findSmellsRulesDir  string
 
 	// findSmellsBaseline gates on new-findings-vs-baseline (the W5 ratchet):
 	// when set, exit non-zero iff any (rule,file) exceeds the committed
@@ -125,12 +126,28 @@ ships at Severity=warn (which is every rule today) when --fail-on=error.`,
 // Error printing for non-zero codes still happens here (mirroring the
 // old cliExit), so cobra doesn't double-print.
 func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
+	// Resolve the active rule set (built-ins + external) fresh on every
+	// invocation so a rule JSON added to the dir since the last run is
+	// picked up with no rebuild. projectDir is the process working
+	// directory: the CLI is run from the repo root in CI (where
+	// .mache.json lives), matching how `mache serve` treats its base
+	// path. Precedence: --rules-dir > MACHE_SMELL_RULES_DIR > .mache.json.
+	cwd, _ := os.Getwd()
+	rulesDir := resolveSmellRulesDir(findSmellsRulesDir, cwd)
+	activeRules, err := activeSmellRules(rulesDir)
+	if err != nil {
+		// The CLI surfaces external-load errors loudly (a bad rule file
+		// should fail the run, not be silently dropped). Exit 4 = the
+		// general db/config error class.
+		return printAndCode(4, fmt.Errorf("load external smell rules from %s: %w", rulesDir, err))
+	}
+
 	// Discovery mode: no rule glob -> dump the listing. No db required.
 	// Tags filter is intentionally NOT applied to discovery — listing
 	// is meant to show every registered rule so an agent can decide
 	// which tags to pass.
 	if findSmellsRule == "" {
-		return 0, renderListing(cmd.OutOrStdout(), findSmellsFormat)
+		return 0, renderListing(cmd.OutOrStdout(), activeRules, findSmellsFormat)
 	}
 
 	// Validate --fail-on early so a typo surfaces before we open the db.
@@ -144,7 +161,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	// allRuleIDs() returns alphabetical; matchRules preserves registry
 	// order so multiple-match runs are deterministic.
 	tagSet := parseTags(findSmellsTags)
-	matched, err := matchRules(findSmellsRule, tagSet)
+	matched, err := matchRules(activeRules, findSmellsRule, tagSet)
 	if err != nil {
 		return printAndCode(3, fmt.Errorf(
 			"invalid --rule glob %q: %w", findSmellsRule, err,
@@ -153,7 +170,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	if len(matched) == 0 {
 		return printAndCode(3, fmt.Errorf(
 			"no rules match --rule=%q --tags=%q — available: %s — run with no --rule for full descriptions",
-			findSmellsRule, findSmellsTags, strings.Join(allRuleIDs(), ", "),
+			findSmellsRule, findSmellsTags, strings.Join(allRuleIDs(activeRules), ", "),
 		))
 	}
 
@@ -340,17 +357,21 @@ func parseTags(csv string) map[string]struct{} {
 }
 
 // matchRules resolves a --rule pattern (exact ID or glob) intersected
-// with the --tags filter to the concrete subset of smellRegistry rules
+// with the --tags filter to the concrete subset of the given rule set
 // that should run. The pattern is matched via filepath.Match, which
 // supports `*`, `?`, and `[...]`. A pattern without metacharacters
 // behaves as exact-match (same as the legacy code path).
+//
+// The rules argument is the active set (built-ins + external) the caller
+// resolved for this invocation, so external rules are selectable too.
+// Pointers into that slice are returned, so it must outlive the result.
 //
 // Tags semantics are union (match-any): a rule passes when ANY of its
 // Tags is in the requested set. Empty tagSet disables the filter.
 //
 // Registry order is preserved so multi-match output is deterministic
 // across runs.
-func matchRules(pattern string, tagSet map[string]struct{}) ([]*SmellRule, error) {
+func matchRules(rules []SmellRule, pattern string, tagSet map[string]struct{}) ([]*SmellRule, error) {
 	// Eagerly validate the pattern so a typo like '[' surfaces here,
 	// not deep inside the loop where filepath.Match would return
 	// ErrBadPattern repeatedly.
@@ -358,8 +379,8 @@ func matchRules(pattern string, tagSet map[string]struct{}) ([]*SmellRule, error
 		return nil, err
 	}
 	var out []*SmellRule
-	for i := range smellRegistry {
-		r := &smellRegistry[i]
+	for i := range rules {
+		r := &rules[i]
 		ok, _ := filepath.Match(pattern, r.ID)
 		if !ok {
 			continue
@@ -419,8 +440,8 @@ func gateDecision(failOn string, results []ruleRunResult) int {
 	return 0
 }
 
-func renderListing(w io.Writer, format string) error {
-	listing := rulesListing()
+func renderListing(w io.Writer, rules []SmellRule, format string) error {
+	listing := rulesListing(rules)
 	if format == "md" {
 		return renderListingMD(w, listing)
 	}
@@ -560,6 +581,7 @@ func init() {
 	findSmellsCmd.Flags().StringVar(&findSmellsFormat, "format", "json", "output format: json, md, ci, or sarif")
 	findSmellsCmd.Flags().StringVar(&findSmellsFailOn, "fail-on", "error", "exit non-zero when findings reach severity: none | warn | error (ADR-0018)")
 	findSmellsCmd.Flags().StringVar(&findSmellsTags, "tags", "", "comma-separated tags; runs rules whose Tags contain ANY of these values (set union)")
+	findSmellsCmd.Flags().StringVar(&findSmellsRulesDir, "rules-dir", "", "directory of external SmellRule JSON files to merge with the built-ins (overrides MACHE_SMELL_RULES_DIR and .mache.json smellRulesDir); rescanned every run")
 	findSmellsCmd.Flags().StringVar(&findSmellsBaseline, "baseline", "", "path to a committed smell baseline JSON; exit non-zero only on findings that EXCEED the baseline count per (rule,file) — the W5 ratchet")
 	findSmellsCmd.Flags().StringVar(&findSmellsWriteBaseline, "write-baseline", "", "regenerate the baseline JSON at this path from the current scan (grandfathers all current findings), then exit 0")
 	findSmellsCmd.Flags().StringVar(&findSmellsBaselineRoot, "baseline-root", "", "trim this path prefix from source_id before baselining/gating so a committed baseline is machine/CI-portable (e.g. --baseline-root \"$PWD\")")

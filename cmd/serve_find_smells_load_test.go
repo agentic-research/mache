@@ -298,58 +298,60 @@ func TestLoadExternalSmellRules_AcceptsBuiltinShapedScopeColumn(t *testing.T) {
 	assert.Equal(t, "external_coalesce_scope", rules[0].ID)
 }
 
-// snapshotSmellRegistry captures the current registry so a test
-// that mutates it via appendExternalRulesFromEnv can restore the
-// original state. The package-level smellRegistry is the source
-// of truth for the rules listing — tests that leave it dirty
-// would corrupt subsequent test cases that expect only built-ins.
-func snapshotSmellRegistry(t *testing.T) {
-	t.Helper()
-	saved := make([]SmellRule, len(smellRegistry))
-	copy(saved, smellRegistry)
-	t.Cleanup(func() { smellRegistry = saved })
-}
+// activeSmellRules replaces the old init()-time append path: externals
+// are merged with a fresh copy of the built-in registry PER CALL, never
+// mutating the global. The tests below migrate the coverage that used to
+// live on appendExternalRulesFromEnv onto activeSmellRules.
 
-func TestAppendExternalRulesFromEnv_EmptyEnvIsNoOp(t *testing.T) {
-	snapshotSmellRegistry(t)
-	added, err := appendExternalRulesFromEnv("")
+func TestActiveSmellRules_EmptyDirReturnsBuiltinsOnly(t *testing.T) {
+	rules, err := activeSmellRules("")
 	require.NoError(t, err)
-	assert.Equal(t, 0, added)
+	assert.Len(t, rules, len(smellRegistry), "empty dir must yield exactly the built-ins")
 }
 
-func TestAppendExternalRulesFromEnv_AppendsLoadedRules(t *testing.T) {
-	snapshotSmellRegistry(t)
+func TestActiveSmellRules_DoesNotMutateGlobalRegistry(t *testing.T) {
+	before := len(smellRegistry)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ext.json"), []byte(`{
+		"ID": "test_active_no_mutate",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
+	}`), 0o644))
+
+	rules, err := activeSmellRules(dir)
+	require.NoError(t, err)
+	assert.Len(t, rules, before+1, "returned set must include the external rule")
+	assert.Len(t, smellRegistry, before,
+		"activeSmellRules must NOT append to the package global (no init-time mutation)")
+}
+
+func TestActiveSmellRules_MergesBuiltinsAndExternal(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ext1.json"), []byte(`{
-		"ID": "test_appender_rule_1",
+		"ID": "test_active_rule_1",
 		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
 	}`), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ext2.json"), []byte(`{
-		"ID": "test_appender_rule_2",
+		"ID": "test_active_rule_2",
 		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
 	}`), 0o644))
 
-	beforeCount := len(smellRegistry)
-	added, err := appendExternalRulesFromEnv(dir)
+	rules, err := activeSmellRules(dir)
 	require.NoError(t, err)
-	assert.Equal(t, 2, added)
-	assert.Len(t, smellRegistry, beforeCount+2)
 
-	// Both rules are findable through the listing path.
-	ids := allRuleIDs()
-	assert.Contains(t, ids, "test_appender_rule_1")
-	assert.Contains(t, ids, "test_appender_rule_2")
+	ids := allRuleIDs(rules)
+	assert.Contains(t, ids, "test_active_rule_1")
+	assert.Contains(t, ids, "test_active_rule_2")
+	assert.Contains(t, ids, "dead_code", "built-ins must still be present alongside externals")
 }
 
-func TestAppendExternalRulesFromEnv_LoadErrorSkipsAllRules(t *testing.T) {
-	snapshotSmellRegistry(t)
+func TestActiveSmellRules_RejectsCollisionButKeepsBuiltins(t *testing.T) {
 	dir := t.TempDir()
-	// One valid rule, one collision with a built-in. The whole
-	// load fails (fail-fast), so neither is appended — even the
-	// valid one is dropped, mirroring the init() "skip the whole
-	// extension on any error" contract.
+	// A valid rule plus one colliding with a built-in. The load is
+	// fail-fast so the whole external set is dropped, but the built-ins
+	// come back with the error so serve can fall back to them — the
+	// safety property the old init() skip-on-error contract guaranteed.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a_valid.json"), []byte(`{
-		"ID": "test_skip_appender_valid",
+		"ID": "test_active_valid",
 		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
 	}`), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "b_collide.json"), []byte(`{
@@ -357,22 +359,48 @@ func TestAppendExternalRulesFromEnv_LoadErrorSkipsAllRules(t *testing.T) {
 		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
 	}`), 0o644))
 
-	beforeCount := len(smellRegistry)
-	added, err := appendExternalRulesFromEnv(dir)
-	require.Error(t, err, "collision must be returned, not swallowed")
-	assert.Equal(t, 0, added)
-	assert.Len(t, smellRegistry, beforeCount, "registry must be untouched after a load error")
-	assert.NotContains(t, allRuleIDs(), "test_skip_appender_valid",
+	rules, err := activeSmellRules(dir)
+	require.Error(t, err, "collision must be surfaced, not swallowed")
+	assert.Contains(t, err.Error(), "already defined")
+	assert.Len(t, rules, len(smellRegistry),
+		"on load error the built-ins are returned so serve can fall back")
+	assert.NotContains(t, allRuleIDs(rules), "test_active_valid",
 		"the valid rule must NOT leak in when its sibling fails (atomic load)")
 }
 
-func TestAppendExternalRulesFromEnv_MissingDirIsNoOp(t *testing.T) {
-	snapshotSmellRegistry(t)
-	beforeCount := len(smellRegistry)
-	added, err := appendExternalRulesFromEnv(filepath.Join(t.TempDir(), "no-such-dir"))
-	require.NoError(t, err, "missing dir is treated as 'extension not configured'")
-	assert.Equal(t, 0, added)
-	assert.Len(t, smellRegistry, beforeCount)
+func TestActiveSmellRules_MissingDirReturnsBuiltins(t *testing.T) {
+	rules, err := activeSmellRules(filepath.Join(t.TempDir(), "no-such-dir"))
+	require.NoError(t, err, "missing dir is treated as 'not configured'")
+	assert.Len(t, rules, len(smellRegistry))
+}
+
+// TestActiveSmellRules_LiveReload is the KEY behavior this feature ships:
+// a rule JSON added to the dir AFTER a first call is visible on the
+// SECOND call, with no re-init, no restart, no reconnect. This is the
+// live-reload property — the whole point of moving the load off init().
+func TestActiveSmellRules_LiveReload(t *testing.T) {
+	dir := t.TempDir()
+
+	// First call: empty dir -> built-ins only.
+	first, err := activeSmellRules(dir)
+	require.NoError(t, err)
+	assert.NotContains(t, allRuleIDs(first), "test_live_reload_rule",
+		"rule must not exist before its file is dropped")
+	firstCount := len(first)
+
+	// Drop a new rule file into the same dir — simulating an operator
+	// adding a rule while the daemon is up.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "late.json"), []byte(`{
+		"ID": "test_live_reload_rule",
+		"Query": "SELECT 0,0,0,0,0,0,0 FROM nodes %s"
+	}`), 0o644))
+
+	// Second call rescans the dir — no re-init in between — and sees it.
+	second, err := activeSmellRules(dir)
+	require.NoError(t, err)
+	assert.Contains(t, allRuleIDs(second), "test_live_reload_rule",
+		"a rule added after the first call must appear on the second (live reload)")
+	assert.Len(t, second, firstCount+1)
 }
 
 // TestLoadExternalSmellRules_ShippedExamplesLoadCleanly is the

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -13,8 +14,26 @@ import (
 
 // makeFindSmellsHandler returns the MCP handler. With no `rule` arg
 // it lists all registered rules; with a rule it runs the scan.
-func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
+//
+// The optional rulesDir is the directory of external rule JSON files
+// resolved once at serve startup (flag / env / .mache.json). The
+// handler re-scans it PER REQUEST via activeSmellRules, so a rule file
+// dropped into the dir is picked up on the next call with no restart —
+// the live-reload property. It's variadic so the ~80 existing test
+// callsites that pass only a graph keep compiling (dir defaults to ""
+// = built-in rules only). On an external-load error the handler logs
+// and falls back to the built-ins so a bad rule file can't take the
+// daemon down.
+func makeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandlerFunc {
+	dir := ""
+	if len(rulesDir) > 0 {
+		dir = rulesDir[0]
+	}
 	return func(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		rules, err := activeSmellRules(dir)
+		if err != nil {
+			log.Printf("smell rules: using built-ins only; external load from %s failed: %v", dir, err)
+		}
 		ruleID := strings.TrimSpace(request.GetString("rule", ""))
 		sourceID := strings.TrimSpace(request.GetString("source_id", ""))
 		limitFloat := request.GetFloat("limit", 200)
@@ -25,7 +44,7 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		if ruleID == "" {
 			// Discovery mode — list rules.
-			return mcp.NewToolResultText(jsonOrPanic(rulesListing())), nil
+			return mcp.NewToolResultText(jsonOrPanic(rulesListing(rules))), nil
 		}
 
 		if ruleID == "*" {
@@ -36,7 +55,7 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 			if !ok { // coverage:ignore — all test graphs implement refsQuerier
 				return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
 			} // coverage:ignore
-			digest, err := buildSmellDigest(qg, 5, 10)
+			digest, err := buildSmellDigest(qg, rules, 5, 10)
 			if err != nil { // coverage:ignore — buildSmellDigest only errors on DB IO; unreachable with in-memory fixtures
 				return mcp.NewToolResultError(fmt.Sprintf("digest: %v", err)), nil // coverage:ignore
 			} // coverage:ignore
@@ -44,16 +63,16 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		var rule *SmellRule
-		for i := range smellRegistry {
-			if smellRegistry[i].ID == ruleID {
-				rule = &smellRegistry[i]
+		for i := range rules {
+			if rules[i].ID == ruleID {
+				rule = &rules[i]
 				break
 			}
 		}
 		if rule == nil {
 			return mcp.NewToolResultError(fmt.Sprintf(
 				"unknown rule %q — available: %s. Call this tool with no rule for full descriptions.",
-				ruleID, strings.Join(allRuleIDs(), ", "),
+				ruleID, strings.Join(allRuleIDs(rules), ", "),
 			)), nil
 		}
 
@@ -134,12 +153,14 @@ func makeFindSmellsHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
-// allRuleIDs returns the registered rule IDs in alphabetical order.
+// allRuleIDs returns the given rules' IDs in alphabetical order.
 // Used by the unknown-rule error message so agents/users see what
 // they could have typed without having to call the registry first.
-func allRuleIDs() []string {
-	ids := make([]string, 0, len(smellRegistry))
-	for _, r := range smellRegistry {
+// Takes the active rule set (built-ins + external) rather than reading
+// the smellRegistry global so external rules show up in the hint.
+func allRuleIDs(rules []SmellRule) []string {
+	ids := make([]string, 0, len(rules))
+	for _, r := range rules {
 		ids = append(ids, r.ID)
 	}
 	sort.Strings(ids)
@@ -147,8 +168,10 @@ func allRuleIDs() []string {
 }
 
 // rulesListing produces the JSON returned when find_smells is called
-// without a rule. Stable order so agents can cache the listing.
-func rulesListing() any {
+// without a rule. Stable order so agents can cache the listing. Takes
+// the active rule set (built-ins + external) so externally-loaded rules
+// appear in discovery.
+func rulesListing(rules []SmellRule) any {
 	type ruleSummary struct {
 		ID               string   `json:"id"`
 		Languages        []string `json:"languages,omitempty"`
@@ -158,9 +181,9 @@ func rulesListing() any {
 		Severity         Severity `json:"severity"` // always emitted; "warn" when rule omits the field
 		Tags             []string `json:"tags,omitempty"`
 	}
-	out := make([]ruleSummary, 0, len(smellRegistry))
-	for i := range smellRegistry {
-		r := &smellRegistry[i]
+	out := make([]ruleSummary, 0, len(rules))
+	for i := range rules {
+		r := &rules[i]
 		out = append(out, ruleSummary{
 			ID:               r.ID,
 			Languages:        r.Languages,
