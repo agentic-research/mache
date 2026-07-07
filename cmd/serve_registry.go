@@ -33,6 +33,7 @@ type graphRegistry struct {
 	graphs          sync.Map // rootPath -> *lazyGraph
 	sessions        sync.Map // sessionID -> rootPath
 	repoCloneDir    string   // base clone dir for --repo mode (empty otherwise)
+	smellRulesDir   string   // external smell-rules dir resolved once at startup (env/.mache.json); find_smells rescans it per request
 	worktrees       sync.Map // sessionID -> worktree path (for cleanup)
 	worktreeOnces   sync.Map // sessionID -> *sync.Once (serialize creation)
 	repoClones      sync.Map // repo URL → *repoClone (hosted mode cache)

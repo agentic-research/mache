@@ -102,9 +102,12 @@ func (r *SmellRule) Effective() Severity {
 	}
 }
 
-// smellRegistry holds the registered rules. Built-ins below; external
-// rules from $MACHE_SMELL_RULES_DIR are appended in init() so they
-// participate in discovery, listing, and dispatch the same way.
+// smellRegistry holds the BUILT-IN rules only. External rules from the
+// resolved smell-rules dir (flag / $MACHE_SMELL_RULES_DIR / .mache.json
+// smellRulesDir) are merged with a copy of this slice per find_smells
+// request in activeSmellRules — never appended to this global — so they
+// participate in discovery, listing, and dispatch the same way while
+// remaining live-reloadable.
 var smellRegistry = []SmellRule{
 	{
 		ID:          "magic_int_in_comparison",

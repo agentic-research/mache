@@ -41,18 +41,20 @@ type smellDigest struct {
 	DrillHelp string       `json:"drill_help"`
 }
 
-// buildSmellDigest runs every registered rule whose Requires tables are present
-// and rolls the findings up into an L1 digest. Rules whose tables are absent are
-// reported in Skipped rather than erroring — the same graceful-degradation the
-// per-rule pre-flight uses.
-func buildSmellDigest(qg refsQuerier, worstN, fileTopN int) (smellDigest, error) {
+// buildSmellDigest runs every rule in the given set whose Requires tables are
+// present and rolls the findings up into an L1 digest. Rules whose tables are
+// absent are reported in Skipped rather than erroring — the same
+// graceful-degradation the per-rule pre-flight uses. The rules argument is the
+// active set (built-ins + external) resolved by the caller, so externally-loaded
+// rules participate in the digest.
+func buildSmellDigest(qg refsQuerier, rules []SmellRule, worstN, fileTopN int) (smellDigest, error) {
 	d := smellDigest{
 		DrillHelp: "drill down with rule=<id> (+ optional source_id=<file>) for the full findings of one rule, each with its real file:line from _ast.",
 	}
 	byFile := map[string]int{}
 
-	for i := range smellRegistry {
-		rule := &smellRegistry[i]
+	for i := range rules {
+		rule := &rules[i]
 		missing, err := missingTables(qg, rule.Requires)
 		if err != nil {
 			return smellDigest{}, err

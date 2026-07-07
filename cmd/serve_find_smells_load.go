@@ -11,26 +11,31 @@ import (
 
 // SmellRulesEnvVar names the environment variable that points to a
 // directory of JSON files containing additional SmellRule entries.
-// External rules are appended to the built-in registry at process
-// start and are otherwise indistinguishable from built-ins — same
-// MCP shape, same query contract, same pre-flight table check.
+// External rules are merged with the built-in registry per find_smells
+// request (see activeSmellRules) and are otherwise indistinguishable
+// from built-ins — same MCP shape, same query contract, same pre-flight
+// table check. Loading per-request (rather than once at package init)
+// is what makes rule files live-reloadable: drop a new JSON in the dir
+// and the next call sees it, no restart.
 //
 // Each file in the directory must be a single SmellRule object
 // (not an array — one rule per file keeps diffs clean and avoids
 // "the third rule errored, what was the first?" debugging). The
 // loader is fail-fast: a single read / parse / validation /
 // collision error aborts loading, returning the error to the
-// caller. init() logs and skips all external rules in that case
-// so a typo can't take down the server; tests assert the error
+// caller. serve logs and falls back to built-ins in that case so a
+// typo can't take down the server; the CLI surfaces the error
 // directly.
 const SmellRulesEnvVar = "MACHE_SMELL_RULES_DIR"
 
 // builtinSmellRuleIDs is a snapshot of the rule IDs in
-// smellRegistry as it stood at package load — captured before any
-// external rules are appended. Used by LoadExternalSmellRules for
-// collision detection so the "this collides with a built-in"
-// message stays accurate even if external rules are loaded
-// multiple times or after init() has mutated smellRegistry.
+// smellRegistry as it stood at package load. smellRegistry now holds
+// ONLY the built-ins (externals are merged per-request in
+// activeSmellRules, never appended to the global), so this snapshot
+// equals the built-in set for the process lifetime. It's used by
+// LoadExternalSmellRules for collision detection so the "this collides
+// with a built-in" message stays accurate across repeated per-request
+// loads.
 var builtinSmellRuleIDs = func() map[string]struct{} {
 	ids := make(map[string]struct{}, len(smellRegistry))
 	for _, r := range smellRegistry {

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/agentic-research/mache/internal/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -236,6 +237,10 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithString("source_id", mcp.Description("Limit the scan to one parsed source file (matches _source.id, e.g. 'main.go').")),
 			mcp.WithNumber("limit", mcp.Description("Max findings (default 200).")),
 		),
-		r.wrapHandler(makeFindSmellsHandler),
+		r.wrapHandler(func(g graph.Graph) server.ToolHandlerFunc {
+			// Bind the startup-resolved rules dir; the handler rescans it
+			// per request for live rule reload (mache smell-rules config).
+			return makeFindSmellsHandler(g, r.smellRulesDir)
+		}),
 	)
 }
