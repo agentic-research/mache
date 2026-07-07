@@ -108,6 +108,18 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 		}
 	}
 
+	// Step 4.5: Member-gated connected-components post-split.
+	// Louvain phase-1 local moving can leave a community internally
+	// disconnected — its members split into pieces that only connect through
+	// nodes OUTSIDE the community (Traag et al. 2019, "From Louvain to
+	// Leiden"). Because a community is the sheaf cache-invalidation unit, a
+	// disconnected one is a correctness hazard. Split any such community into
+	// its connected components: monotonically finer, deterministic, split-only
+	// (never merges), and NOT full Leiden (no coarsening/aggregation, no
+	// randomness). Runs BEFORE minCommunitySize filtering and BEFORE the final
+	// modularity computation so both reflect the post-split partition.
+	community = splitDisconnectedCommunities(adj, community, n)
+
 	// Step 5: Collect results
 	commMap := map[int][]string{}
 	for idx, c := range community {
@@ -214,26 +226,99 @@ func deltaModularity(kiIn, sigmaTotal, ki, m2 float64) float64 {
 	return kiIn/m2 - (sigmaTotal*ki)/(m2*m2)
 }
 
-// computeModularity calculates the modularity of a partition.
-// Q = (1/2m) * sum_ij [ A_ij - (ki*kj)/(2m) ] * delta(ci, cj)
-// degree is a pre-computed slice of weighted node degrees.
+// computeModularity calculates the modularity of a partition in O(E).
+//
+// Algebraically identical to the textbook O(N^2) double sum
+//
+//	Q = (1/2m) * sum_ij [ A_ij - (ki*kj)/(2m) ] * delta(ci, cj)
+//
+// but grouped per community so it needs a single pass over the edges plus one
+// over the nodes:
+//
+//	Q = sum_c [ inW_c/m2 - (commDegree_c/m2)^2 ]
+//
+// where inW_c is the total weight of edges internal to community c (both
+// directions, matching the ordered-pair double sum) and commDegree_c is the
+// sum of node degrees in c. m2 is the total edge weight (2m).
 func computeModularity(adj []map[int]float64, community []int, degree []float64, m2 float64, n int) float64 {
 	if m2 == 0 {
 		return 0
 	}
-	q := 0.0
+	inW := make(map[int]float64, n)     // internal edge weight per community
+	commDeg := make(map[int]float64, n) // summed degree per community
 	for i := range n {
-		ki := degree[i]
-		for j := range n {
-			if community[i] != community[j] {
-				continue
+		c := community[i]
+		commDeg[c] += degree[i]
+		for j, w := range adj[i] {
+			if community[j] == c {
+				inW[c] += w
 			}
-			kj := degree[j]
-			aij := adj[i][j] // 0 if no edge
-			q += aij - (ki*kj)/m2
 		}
 	}
-	return q / m2
+	q := 0.0
+	for c, cd := range commDeg {
+		frac := cd / m2
+		q += inW[c]/m2 - frac*frac // inW[c] is 0 for edgeless communities
+	}
+	return q
+}
+
+// splitDisconnectedCommunities enforces the invariant that every returned
+// community is internally connected. For each community it induces the subgraph
+// over ONLY that community's members (edges to out-of-community nodes are
+// ignored) and runs BFS to find connected components; a community with more
+// than one component is relabeled into one community per component.
+//
+// The pass is split-only (it never merges two communities), deterministic
+// (communities and BFS seeds are visited in sorted order, so component labels
+// are stable), and monotonically finer than the input partition. It reuses the
+// same BFS connectivity oracle as ConnectedComponents, gated to the member set.
+// Returns a fresh label slice; the input community slice is not mutated.
+func splitDisconnectedCommunities(adj []map[int]float64, community []int, n int) []int {
+	// Group node indices by their current community label.
+	members := make(map[int][]int)
+	for i := range n {
+		members[community[i]] = append(members[community[i]], i)
+	}
+
+	labels := make([]int, 0, len(members))
+	for c := range members {
+		labels = append(labels, c)
+	}
+	sort.Ints(labels)
+
+	result := make([]int, n)
+	visited := make([]bool, n)
+	nextLabel := 0
+	for _, c := range labels {
+		memberSet := make(map[int]bool, len(members[c]))
+		for _, idx := range members[c] {
+			memberSet[idx] = true
+		}
+		seeds := members[c]
+		sort.Ints(seeds) // deterministic component labeling
+		for _, start := range seeds {
+			if visited[start] {
+				continue
+			}
+			label := nextLabel
+			nextLabel++
+			queue := []int{start}
+			visited[start] = true
+			for len(queue) > 0 {
+				node := queue[0]
+				queue = queue[1:]
+				result[node] = label
+				for neighbor := range adj[node] {
+					if memberSet[neighbor] && !visited[neighbor] {
+						visited[neighbor] = true
+						queue = append(queue, neighbor)
+					}
+				}
+			}
+		}
+	}
+	return result
 }
 
 // ConnectedComponents finds connected components in the refs graph projection.

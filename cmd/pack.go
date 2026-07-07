@@ -248,14 +248,9 @@ func writeCommunitiesSection(w *bufio.Writer, g graph.Graph, maxEntries int) {
 	if len(refs) == 0 {
 		return
 	}
-	// Skip community detection on very large graphs — Louvain is O(n^2)
-	// in worst case and we want pack to be fast even on big corpora.
-	const communityLimit = 5000
-	if len(refs) > communityLimit {
-		_, _ = fmt.Fprintf(w, "## Dependency layers\n\n_Skipped: ref token count (%d) exceeds the %d threshold for fast community detection. Run `mcp get_communities --summary=true` if needed._\n\n", len(refs), communityLimit)
-		return
-	}
-
+	// Community detection is now near-linear: the scan is O(E), modularity is
+	// O(E), and the connected-components post-split is O(V+E). No size gate —
+	// always run detection.
 	result := graph.DetectCommunities(refs, 2)
 	if len(result.Communities) == 0 {
 		return
