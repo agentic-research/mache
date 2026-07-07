@@ -308,3 +308,31 @@ func TestModularityParity_ONvsONE(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectCommunities_Deterministic pins mache-ff7e31: identical input must
+// yield identical community IDs + Membership across runs, not just identical
+// as sets. Three equal-sized triangles (no shared tokens) → three size-3
+// communities, so the size sort has a 3-way tie; combined with Go's per-run
+// map-iteration randomization, any of the three nondeterminism sites
+// (buildProjection node indexing, phase-1 ΔQ tie-break, final size sort) would
+// permute IDs run-to-run if not made order-independent.
+func TestDetectCommunities_Deterministic(t *testing.T) {
+	refs := map[string][]string{
+		"ta": {"a1", "a2", "a3"},
+		"tb": {"b1", "b2", "b3"},
+		"tc": {"c1", "c2", "c3"},
+		// a weak bridge token so phase-1 has a non-trivial choice to break.
+		"bridge": {"a3", "b1"},
+	}
+	first := DetectCommunities(refs, 2)
+	require.NotEmpty(t, first.Communities)
+	for run := 0; run < 40; run++ {
+		got := DetectCommunities(refs, 2)
+		require.Equal(t, first.Membership, got.Membership, "run %d: Membership diverged", run)
+		require.Equal(t, len(first.Communities), len(got.Communities), "run %d: community count", run)
+		for j := range first.Communities {
+			require.Equal(t, first.Communities[j].ID, got.Communities[j].ID, "run %d comm %d: ID", run, j)
+			require.Equal(t, first.Communities[j].Members, got.Communities[j].Members, "run %d comm %d: Members", run, j)
+		}
+	}
+}

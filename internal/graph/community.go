@@ -91,9 +91,17 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 				neighborComms[oldComm] = 0
 			}
 
-			for c, kiIn := range neighborComms {
+			// Iterate candidate communities in sorted order with a strict `>`
+			// so ΔQ ties break deterministically (lowest community index wins),
+			// not by Go map iteration order. (mache-ff7e31)
+			candidateComms := make([]int, 0, len(neighborComms))
+			for c := range neighborComms {
+				candidateComms = append(candidateComms, c)
+			}
+			sort.Ints(candidateComms)
+			for _, c := range candidateComms {
 				sigmaTotal := commDegree[c]
-				delta := deltaModularity(kiIn, sigmaTotal, ki, totalWeight)
+				delta := deltaModularity(neighborComms[c], sigmaTotal, ki, totalWeight)
 				if delta > bestDelta {
 					bestDelta = delta
 					bestComm = c
@@ -143,9 +151,16 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 		id++
 	}
 
-	// Sort by size descending
+	// Sort by size descending, breaking ties on the (already-sorted) first
+	// member — a TOTAL order, so equal-sized communities get stable, input-
+	// order-independent IDs. `sort.Slice` alone would preserve the random
+	// commMap iteration order on ties. Members is non-empty (len >=
+	// minCommunitySize >= 1). (mache-ff7e31)
 	sort.Slice(communities, func(i, j int) bool {
-		return len(communities[i].Members) > len(communities[j].Members)
+		if len(communities[i].Members) != len(communities[j].Members) {
+			return len(communities[i].Members) > len(communities[j].Members)
+		}
+		return communities[i].Members[0] < communities[j].Members[0]
 	})
 	// Re-assign IDs after sort
 	for i := range communities {
@@ -176,11 +191,20 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 // buildProjection converts bipartite refs (token→[]nodeID) into an undirected
 // weighted adjacency list (nodeIndex→{neighborIndex: weight}).
 func buildProjection(refs map[string][]string) ([]map[int]float64, map[string]int, []string) {
-	// Assign integer indices to nodes
+	// Assign integer indices to nodes. Iterate tokens in SORTED order so the
+	// node→index mapping is a pure function of `refs`, not of Go map iteration
+	// order — otherwise the whole partition (which is keyed on these indices)
+	// varies run-to-run on identical input. (mache-ff7e31)
+	tokens := make([]string, 0, len(refs))
+	for tok := range refs {
+		tokens = append(tokens, tok)
+	}
+	sort.Strings(tokens)
+
 	nodeIndex := make(map[string]int)
 	var indexToNode []string
-	for _, nodes := range refs {
-		for _, n := range nodes {
+	for _, tok := range tokens {
+		for _, n := range refs[tok] {
 			if _, ok := nodeIndex[n]; !ok {
 				nodeIndex[n] = len(indexToNode)
 				indexToNode = append(indexToNode, n)
