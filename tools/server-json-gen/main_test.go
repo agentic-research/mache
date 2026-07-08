@@ -17,10 +17,15 @@ func TestBuildDoc_EmitsOCIPackage(t *testing.T) {
 	if p.RegistryType != "oci" {
 		t.Errorf("registryType = %q, want \"oci\"", p.RegistryType)
 	}
-	if p.Identifier != "ghcr.io/agentic-research/mache" {
-		t.Errorf("identifier = %q, want ghcr.io/agentic-research/mache", p.Identifier)
+	// OCI packages carry the tag IN the identifier (registry/repo:tag) per the
+	// pinned MCP schema, v-prefixed to match release.yml's `:${TAG}` so a
+	// resolver can actually pull it. serverVersion is single-sourced from buildinfo.
+	wantIdent := "ghcr.io/agentic-research/mache:v" + serverVersion
+	if p.Identifier != wantIdent {
+		t.Errorf("identifier = %q, want %q (tag embedded + v-prefixed to match the published image)", p.Identifier, wantIdent)
 	}
-	if p.Version != serverVersion {
-		t.Errorf("version = %q, want serverVersion %q (single-sourced from buildinfo)", p.Version, serverVersion)
+	// The standalone `version` field is npm/pypi/nuget-only; OCI must omit it.
+	if p.Version != "" {
+		t.Errorf("version = %q, want empty (OCI version lives in the identifier tag)", p.Version)
 	}
 }
