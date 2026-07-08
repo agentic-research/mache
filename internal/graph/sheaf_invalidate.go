@@ -119,6 +119,51 @@ func (si *SheafInvalidator) CommunityResultForRouting() *CommunityResult { // co
 	return si.result      // coverage:ignore — read-only accessor; reduction tracked in mache-89b5dd.
 }
 
+// InvalidateAllScoped evicts every node the invalidator's
+// CommunityResult claims membership for, WITHOUT calling the sheaf
+// backend to compute a cascade. Returns the number of nodes evicted.
+//
+// This is the coarse-v1 "invalidate everything" path used by the
+// watcher-driven `daemon.sheaf.invalidate` topic (LLO PR #140, LLO
+// v0.6+). The daemon has already declared its entire working set
+// stale by the time it emits `scope: "all-known"`, so re-cascading
+// per-region against the daemon would be redundant chatter — we
+// know the answer is "all of them". A future fine-grained
+// (`scope: "changed-only"`) emit path exists (LLO bead `e40566`); it
+// stays on the per-region cascade path via InvalidateNodesWithCascade.
+//
+// No-op when the invalidator, graph, or CommunityResult is nil (same
+// null-safety contract as InvalidateNodesWithCascade). Skipping the
+// backend also means this method does not touch si.sheaf, so it's
+// safe to call even when no SheafBackend is installed — the
+// membership snapshot is enough.
+func (si *SheafInvalidator) InvalidateAllScoped() int {
+	if si == nil || si.graph == nil {
+		return 0
+	}
+
+	// Snapshot Membership under the read lock, then release it before
+	// touching the graph — Graph.Invalidate can hold its own lock and
+	// we don't want to nest.
+	si.mu.RLock()
+	storedResult := si.result
+	si.mu.RUnlock()
+
+	if storedResult == nil {
+		return 0
+	}
+
+	invalidated := make(map[string]struct{}, len(storedResult.Membership))
+	for nodeID := range storedResult.Membership {
+		if _, seen := invalidated[nodeID]; seen {
+			continue
+		}
+		si.graph.Invalidate(nodeID)
+		invalidated[nodeID] = struct{}{}
+	}
+	return len(invalidated)
+}
+
 // InvalidateNodesWithCascade is the batched-by-region variant of
 // InvalidateWithCascade. The watcher passes every node touched by a
 // file edit; this method dedupes them to the underlying set of unique
