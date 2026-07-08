@@ -78,11 +78,19 @@ func versionContainsTag(version, tag string) bool {
 	}), tag)
 }
 
+// probeTimeout bounds the `<bin> --version` probe so a hung binary can't
+// block the spawn path. 2s is ample in prod (resolving a local binary's
+// version); it's a package var only so tests can widen it — under
+// `go test -race ./...` the fake-binary subprocess can be starved past 2s by
+// cross-package contention, which is a test-environment artifact, not a prod
+// concern (mache-3a0da5).
+var probeTimeout = 2 * time.Second
+
 // queryBinaryVersion runs `<bin> --version` and returns the trimmed output
 // (best-effort, "" on any error). Bounded so a hung binary can't block the
 // spawn path; provenance is informational, never load-bearing.
 func queryBinaryVersion(bin string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, bin, "--version").Output()
 	if err != nil {
