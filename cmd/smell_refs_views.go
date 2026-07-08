@@ -41,11 +41,51 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		return fmt.Errorf("probe _lsp_defs: %w", err)
 	}
 
-	defsBody := `SELECT token, node_id, 'mention' AS fidelity FROM node_defs`
+	// Additive node_hash passthrough (mache-ff9a9d). The merkle-AST
+	// producer (LLO) writes an additive node_hash BLOB column onto the
+	// occurrence tables (node_defs / node_refs / _ast): identical
+	// subtrees dedup to one node_content row keyed by that 32-byte
+	// hash, and each OCCURRENCE carries a pointer back to it. mache
+	// reads the occurrence layer unchanged (keyed on token / node_id);
+	// we surface node_hash as a trailing additive column so downstream
+	// consumers can group/annotate by content identity WITHOUT changing
+	// the token/node_id keying.
+	//
+	// INVARIANT: node_hash is ONE-TO-MANY — a deduped subtree appears at
+	// many occurrences, so the same node_hash recurs across many
+	// (token, node_id) rows. Resolution always targets an occurrence
+	// (node_id), NEVER a node_hash; a JOIN on node_hash assuming a
+	// single row is a fan-out bug (mirror of be6136).
+	//
+	// Standalone-mache .db files (written by NewSQLiteWriter, no merkle
+	// producer) have no node_hash column. We probe and emit `NULL AS
+	// node_hash` in that case — same trailing-column shape on every db,
+	// mirroring how `qualifier` is always present in v_refs. Existing
+	// consumers select explicit column lists (never SELECT *), so the
+	// added trailing column is transparent to them; the rows they read
+	// are byte-identical to before.
+	hasDefsNodeHash, err := tableHasColumn(qg, "node_defs", "node_hash")
+	if err != nil {
+		return fmt.Errorf("probe node_defs.node_hash: %w", err)
+	}
+	hasRefsNodeHash, err := tableHasColumn(qg, "node_refs", "node_hash")
+	if err != nil {
+		return fmt.Errorf("probe node_refs.node_hash: %w", err)
+	}
+
+	defsHashExpr := "NULL"
+	if hasDefsNodeHash {
+		defsHashExpr = "node_hash"
+	}
+	defsBody := `SELECT token, node_id, 'mention' AS fidelity, ` +
+		defsHashExpr + ` AS node_hash FROM node_defs`
 	if hasLSPDefsToken {
+		// Binding-fidelity def rows come from _lsp_defs, which has no
+		// merkle node_hash concept — emit NULL to keep UNION arity.
 		defsBody += `
 			UNION ALL
-			SELECT def_token AS token, node_id, 'binding' AS fidelity
+			SELECT def_token AS token, node_id, 'binding' AS fidelity,
+			       NULL AS node_hash
 			FROM _lsp_defs
 			WHERE def_token != ''`
 	}
@@ -56,13 +96,18 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	// doesn't populate it) and for pre-T8.7 capnp records (default
 	// '' per schema-evolution invariant). See mache-6c0d07 for the
 	// fan_out_skew metric that consumes it.
+	refsHashExpr := "NULL"
+	if hasRefsNodeHash {
+		refsHashExpr = "node_hash"
+	}
 	refsBody := `SELECT node_id AS referrer_node_id,
 	       token,
 	       NULL  AS target_node_id,
 	       NULL  AS ref_uri,
 	       NULL  AS ref_line,
 	       'mention' AS fidelity,
-	       ''    AS qualifier
+	       ''    AS qualifier,
+	       ` + refsHashExpr + ` AS node_hash
 	FROM node_refs`
 	// Binding-fidelity rows come from the per-connection
 	// _capnp_binding_refs TEMP table, populated from the sibling
@@ -78,6 +123,8 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	// between LLO writer and mache reader (rather than only
 	// preventing them by flag). LLO continues writing _lsp_refs in
 	// the transition window; mache no longer reads it.
+	// _capnp_binding_refs has no merkle node_hash concept — emit NULL
+	// to keep UNION arity with the mention arm's trailing node_hash.
 	refsBody += `
 		UNION ALL
 		SELECT referrer_node_id,
@@ -86,7 +133,8 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		       ref_uri,
 		       ref_line,
 		       'binding' AS fidelity,
-		       qualifier
+		       qualifier,
+		       NULL AS node_hash
 		FROM _capnp_binding_refs`
 
 	stmts := []string{

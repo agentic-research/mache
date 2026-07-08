@@ -116,6 +116,139 @@ func TestRouteSheafEvent_MultipleRegionsInOneEvent(t *testing.T) {
 		"every region in the event must invalidate its members")
 }
 
+// TestRouteSheafEvent_AllKnownScopeEvictsEverything pins the coarse-v1
+// behavior of the LLO v0.6+ watcher-driven `daemon.sheaf.invalidate`
+// topic (LLO PR #140, bead `ley-line-open-3b3476`). When the daemon
+// declares its whole working set stale via `scope: "all-known"`, the
+// routing layer must evict EVERY node the invalidator's CommunityResult
+// claims membership for — not just the ones listed in the payload's
+// region_ids field.
+//
+// The distinction matters because the daemon's watcher-driven emit
+// lists every currently-known region regardless of what actually
+// changed (there's no file→region map on the daemon side pre-fine-
+// grained, LLO bead `e40566`). Treating that list as a whitelist under
+// changed-only semantics would let the routing layer silently under-
+// invalidate: a region present in mache's Membership but omitted from
+// the daemon's snapshot (e.g. the daemon lost the complex during a
+// crash-recover window) would be treated as fresh.
+//
+// The test constructs a CommunityResult with THREE regions, then fires
+// an all-known event whose payload lists only ONE region ID. All
+// three region members must be invalidated — proving the routing
+// layer read Scope, not region_ids.
+func TestRouteSheafEvent_AllKnownScopeEvictsEverything(t *testing.T) {
+	g := &fakeGraph{}
+	si := graph.NewSheafInvalidator(g, nil, &graph.CommunityResult{
+		Communities: []graph.Community{
+			{ID: 1, Members: []string{"a"}},
+			{ID: 2, Members: []string{"b"}},
+			{ID: 3, Members: []string{"c"}},
+		},
+		Membership: map[string]int{"a": 1, "b": 2, "c": 3},
+	})
+
+	// Payload lists only region 1, but scope=all-known says
+	// "everything is stale". All three members must be evicted.
+	routeSheafEvent(leyline.SheafInvalidateEvent{
+		Invalidated: []int{1},
+		Scope:       leyline.ScopeAllKnown,
+		Generation:  100,
+	}, []*graph.SheafInvalidator{si})
+
+	assert.ElementsMatch(t, []string{"a", "b", "c"}, g.Invalidated(),
+		"all-known scope must evict every node in Membership, not just those in the payload's region_ids")
+}
+
+// TestRouteSheafEvent_UnknownScopeFallsBackToAllKnown pins the safe-
+// default contract: any scope value the router doesn't recognise MUST
+// be treated as coarse-v1 all-known. Over-invalidating is safe; under-
+// invalidating is not. If a future LLO release ships a new scope value
+// (e.g. "delta-only") before mache has learned to parse it, the
+// existing router will still evict every cached entry — never serve
+// stale data because it didn't recognise a sentinel.
+//
+// Complements the log line the router emits — this test doesn't
+// assert the log (would couple to log format) but proves the behavior
+// the log describes.
+func TestRouteSheafEvent_UnknownScopeFallsBackToAllKnown(t *testing.T) {
+	g := &fakeGraph{}
+	si := graph.NewSheafInvalidator(g, nil, &graph.CommunityResult{
+		Communities: []graph.Community{
+			{ID: 5, Members: []string{"x", "y"}},
+		},
+		Membership: map[string]int{"x": 5, "y": 5},
+	})
+
+	routeSheafEvent(leyline.SheafInvalidateEvent{
+		Invalidated: []int{5},
+		Scope:       "future-scope-mache-does-not-know",
+		Generation:  200,
+	}, []*graph.SheafInvalidator{si})
+
+	assert.ElementsMatch(t, []string{"x", "y"}, g.Invalidated(),
+		"unknown scope must fall through to all-known (evict everything) — over-invalidate rather than serve stale")
+}
+
+// TestRouteSheafEvent_ChangedOnlyExplicitBehavesLikeEmpty pins that
+// the explicit `scope: "changed-only"` sentinel produces the same
+// per-region dispatch as the pre-v0.6 empty-scope shape. Once LLO
+// bead `e40566` ships fine-grained mode, the watcher-driven emit
+// will populate this field; mache must route it through the SAME
+// path as the current empty-scope consumer-driven emit.
+//
+// The pin is behavioral: given identical region lists, empty scope
+// and explicit "changed-only" scope must invalidate the same
+// members. If they diverge, the routing switch has drifted.
+func TestRouteSheafEvent_ChangedOnlyExplicitBehavesLikeEmpty(t *testing.T) {
+	cr := &graph.CommunityResult{
+		Communities: []graph.Community{{ID: 7, Members: []string{"a", "b"}}},
+		Membership:  map[string]int{"a": 7, "b": 7},
+	}
+
+	// Explicit "changed-only".
+	explicitG := &fakeGraph{}
+	explicitSI := graph.NewSheafInvalidator(explicitG, nil, cr)
+	routeSheafEvent(leyline.SheafInvalidateEvent{
+		Invalidated: []int{7},
+		Scope:       leyline.ScopeChangedOnly,
+	}, []*graph.SheafInvalidator{explicitSI})
+
+	// Empty (pre-v0.6).
+	emptyG := &fakeGraph{}
+	emptySI := graph.NewSheafInvalidator(emptyG, nil, cr)
+	routeSheafEvent(leyline.SheafInvalidateEvent{
+		Invalidated: []int{7},
+		Scope:       "",
+	}, []*graph.SheafInvalidator{emptySI})
+
+	assert.ElementsMatch(t, explicitG.Invalidated(), emptyG.Invalidated(),
+		"explicit changed-only scope and empty scope must produce identical invalidations")
+}
+
+// TestRouteSheafEvent_AllKnownNoResultNoOps pins the graceful-degradation
+// contract when the coarse-v1 event fires before any get_communities
+// install: with no CommunityResult, there's nothing to iterate, so the
+// router silently no-ops. This matters because the LLO watcher fires
+// on EVERY successful enrichment tick, including during the startup
+// window before mache has run community detection. Emitting a log
+// line per tick under those conditions would spam the operator — the
+// c14c43 contract says "log + skip" for changed-only, but coarse-v1
+// skips silently.
+func TestRouteSheafEvent_AllKnownNoResultNoOps(t *testing.T) {
+	g := &fakeGraph{}
+	// No CommunityResult installed yet.
+	si := graph.NewSheafInvalidator(g, nil, nil)
+
+	routeSheafEvent(leyline.SheafInvalidateEvent{
+		Invalidated: []int{1, 2, 3},
+		Scope:       leyline.ScopeAllKnown,
+	}, []*graph.SheafInvalidator{si})
+
+	assert.Empty(t, g.Invalidated(),
+		"all-known event before any CommunityResult install must no-op silently")
+}
+
 // fakeGraph is a minimal graph.Graph that records Invalidate calls
 // for assertion. Mirrors the mockGraph in internal/graph but lives
 // here so the cmd-package routing test isn't coupled to that file's

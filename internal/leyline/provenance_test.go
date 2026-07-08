@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestProvenance_RecordAndReport verifies the resolved-leyline provenance
@@ -21,6 +22,15 @@ func TestProvenance_RecordAndReport(t *testing.T) {
 	}
 	resetResolved()
 	t.Cleanup(resetResolved)
+
+	// The 2s prod probe timeout is too tight for this test's fake-binary
+	// subprocess under full-suite -race contention (mache-3a0da5); widen it so
+	// the test still exercises the real exec+parse path without deadline
+	// flakiness. Package tests are sequential (no t.Parallel), so overriding
+	// the package var is race-safe.
+	origTimeout := probeTimeout
+	probeTimeout = 30 * time.Second
+	t.Cleanup(func() { probeTimeout = origTimeout })
 
 	// Before any resolution: ok=false, but expected version still reported.
 	if p, ok := Provenance(); ok || p.ExpectedVersion != leylineBinaryVersion {
@@ -72,4 +82,30 @@ func writeFakeLeyline(t *testing.T, versionLine string) string {
 		t.Fatalf("write fake leyline: %v", err)
 	}
 	return p
+}
+
+// TestQueryBinaryVersion_HonorsProbeTimeout proves probeTimeout is load-bearing:
+// a binary that only prints its version after sleeping past a tiny deadline
+// yields "" (deadline fired), while a generous deadline resolves the same
+// binary. Falsifiable — if the probe ignored probeTimeout, the tiny-deadline
+// case would still return the version and this test would fail (mache-3a0da5).
+func TestQueryBinaryVersion_HonorsProbeTimeout(t *testing.T) {
+	orig := probeTimeout
+	t.Cleanup(func() { probeTimeout = orig })
+
+	slow := filepath.Join(t.TempDir(), "leyline")
+	script := "#!/bin/sh\nsleep 1\necho 'leyline " + leylineBinaryVersion + " (open)'\n"
+	if err := os.WriteFile(slow, []byte(script), 0o755); err != nil {
+		t.Fatalf("write slow fake leyline: %v", err)
+	}
+
+	probeTimeout = 50 * time.Millisecond
+	if v := queryBinaryVersion(slow); v != "" {
+		t.Errorf("deadline should fire: got %q, want empty", v)
+	}
+
+	probeTimeout = 5 * time.Second
+	if v := queryBinaryVersion(slow); v == "" {
+		t.Error("generous deadline should resolve the version, got empty")
+	}
 }

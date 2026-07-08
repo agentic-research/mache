@@ -265,6 +265,163 @@ func TestSheafSubscriber_StopIdempotentAndAlwaysWaits(t *testing.T) {
 		"after Stop returns, state MUST be Disconnected")
 }
 
+// TestSheafSubscriber_DispatchesWatcherDrivenEvent pins the LLO v0.6+
+// coarse-v1 payload contract (LLO PR #140, bead
+// `ley-line-open-3b3476`). The watcher-driven `daemon.sheaf.invalidate`
+// topic carries an extended payload:
+//
+//	{"topic": "daemon.sheaf.invalidate",
+//	 "data": {"region_ids": [...],
+//	          "count": N,
+//	          "scope": "all-known",
+//	          "changed_files": [...],
+//	          "current_root": "<64-hex>",
+//	          "generation": "N", "prior_generation": "N",
+//	          "timestamp_ms": "N"}}
+//
+// All the numeric fields (generation, prior_generation, timestamp_ms)
+// arrive as quoted strings on the wire per capnp-json convention,
+// matching what LLO's `emit_watcher_sheaf_invalidate` emits (see
+// PR #140).
+//
+// This test drives the parser directly through the mock daemon path:
+// push the exact envelope, assert every field parses onto the shared
+// SheafInvalidateEvent struct. Without this pin, a future LLO wire
+// change (e.g. dropping the timestamp field, or renaming a key)
+// would break silently — the mock daemon happily pushes whatever we
+// give it and the routing layer only cares about Scope + Invalidated.
+func TestSheafSubscriber_DispatchesWatcherDrivenEvent(t *testing.T) {
+	sockPath := startSubscribeMockServer(t, mockBehavior{
+		acceptSubscribe: true,
+		pushEvents: []map[string]any{
+			{
+				"event":  true,
+				"seq":    1.0,
+				"source": "leyline",
+				"topic":  "daemon.sheaf.invalidate",
+				"data": map[string]any{
+					"region_ids":       []any{4.0, 5.0, 6.0},
+					"count":            3.0,
+					"scope":            "all-known",
+					"changed_files":    []any{"pkg/a.rs", "pkg/b.rs"},
+					"current_root":     strings.Repeat("a", 64),
+					"generation":       "12", // quoted-string Int64
+					"prior_generation": "11",
+					"timestamp_ms":     "1720000000000",
+				},
+			},
+		},
+	})
+
+	var (
+		handled  atomic.Int32
+		gotEvent SheafInvalidateEvent
+		eventMu  sync.Mutex
+	)
+	handler := func(ev SheafInvalidateEvent) {
+		eventMu.Lock()
+		gotEvent = ev
+		eventMu.Unlock()
+		handled.Add(1)
+	}
+
+	sub := NewSheafSubscriber(sockPath, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sub.Start(ctx)
+	t.Cleanup(sub.Stop)
+
+	require.Eventually(t, func() bool {
+		return handled.Load() > 0
+	}, 2*time.Second, 25*time.Millisecond, "handler must fire on daemon.sheaf.invalidate")
+
+	eventMu.Lock()
+	got := gotEvent
+	eventMu.Unlock()
+
+	assert.Equal(t, []int{4, 5, 6}, got.Invalidated,
+		"region_ids must decode into Invalidated (shared field with pre-v0.6 shape)")
+	assert.Equal(t, uint64(12), got.Generation, "quoted-string generation parses")
+	assert.Equal(t, uint64(11), got.PriorGeneration, "quoted-string prior_generation parses")
+	assert.Equal(t, 3, got.Count, "count round-trips")
+	assert.Equal(t, ScopeAllKnown, got.Scope, "coarse-v1 scope decodes verbatim")
+	assert.Equal(t, []string{"pkg/a.rs", "pkg/b.rs"}, got.ChangedFiles, "changed_files decode")
+	assert.Equal(t, strings.Repeat("a", 64), got.CurrentRoot, "current_root decodes")
+	assert.Equal(t, int64(1720000000000), got.TimestampMs, "quoted-string timestamp_ms parses")
+
+	assert.Equal(t, uint64(12), sub.Status().LastGeneration,
+		"Status.LastGeneration mirrors the new topic's generation counter")
+}
+
+// TestSheafSubscriber_PreV06PayloadUnaffected pins the backward-compat
+// half of the LLO v0.6+ rollout: the pre-v0.6 `sheaf.invalidate` topic
+// (consumer-driven, emitted from `op_sheaf_invalidate`) has no
+// `scope`, `region_ids`, `changed_files`, `current_root`, or
+// `timestamp_ms` fields, and its region list lives in `invalidated`.
+// The subscriber must still parse it — mache's own calls to
+// `op_sheaf_invalidate` (via SheafInvalidator.InvalidateNodesWithCascade)
+// generate exactly this event flow.
+//
+// The zero values for the new fields are the correct signal for the
+// routing layer to infer ScopeChangedOnly (see cmd/sheaf_subscribe.go's
+// routeSheafEvent switch).
+func TestSheafSubscriber_PreV06PayloadUnaffected(t *testing.T) {
+	sockPath := startSubscribeMockServer(t, mockBehavior{
+		acceptSubscribe: true,
+		pushEvents: []map[string]any{
+			{
+				"event":  true,
+				"seq":    1.0,
+				"source": "leyline",
+				"topic":  "sheaf.invalidate",
+				"data": map[string]any{
+					"invalidated":      []any{9.0},
+					"count":            1.0,
+					"generation":       42.0, // pre-v0.6 emitted raw numbers
+					"prior_generation": 41.0,
+				},
+			},
+		},
+	})
+
+	var (
+		handled  atomic.Int32
+		gotEvent SheafInvalidateEvent
+		eventMu  sync.Mutex
+	)
+	handler := func(ev SheafInvalidateEvent) {
+		eventMu.Lock()
+		gotEvent = ev
+		eventMu.Unlock()
+		handled.Add(1)
+	}
+
+	sub := NewSheafSubscriber(sockPath, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sub.Start(ctx)
+	t.Cleanup(sub.Stop)
+
+	require.Eventually(t, func() bool {
+		return handled.Load() > 0
+	}, 2*time.Second, 25*time.Millisecond, "handler must still fire on pre-v0.6 sheaf.invalidate")
+
+	eventMu.Lock()
+	got := gotEvent
+	eventMu.Unlock()
+
+	assert.Equal(t, []int{9}, got.Invalidated,
+		"pre-v0.6 `invalidated` field must still decode into Invalidated")
+	assert.Equal(t, uint64(42), got.Generation, "raw-number generation still parses")
+	assert.Equal(t, uint64(41), got.PriorGeneration, "raw-number prior_generation still parses")
+	assert.Equal(t, "", got.Scope,
+		"pre-v0.6 event has no scope — leave empty so router infers changed-only")
+	assert.Nil(t, got.ChangedFiles,
+		"pre-v0.6 event has no changed_files — must decode to nil, not a fabricated slice")
+	assert.Equal(t, "", got.CurrentRoot, "pre-v0.6 event has no current_root")
+	assert.Equal(t, int64(0), got.TimestampMs, "pre-v0.6 event has no timestamp_ms")
+}
+
 // TestSheafSubscriber_StopHaltsLoop pins clean shutdown: Stop()
 // terminates the subscribe goroutine + closes the underlying socket.
 // Under -race, any leaked goroutine writing through the conn after

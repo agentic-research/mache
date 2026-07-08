@@ -1,0 +1,19 @@
+{
+  "ID": "drift_doc_broken_internal_link",
+  "Languages": [
+    "markdown"
+  ],
+  "Description": "v1 placeholder (ADR-0018 PR 3). Spec: every markdown internal link `[text](relative/path)` should resolve to an existing file on disk (external URLs — http/https/mailto — are skipped). Catches doc reorganizations that left stale links. Current implementation: no findings — SQL cannot stat the filesystem, so the firing logic requires a host-side post-processing step in runSmellRule that checks each candidate link's path on disk. That's a small refactor tracked as a separate follow-up bead under mache-e1b6c8. The rule appears in the listing today so PR 2's --rule 'drift_doc_*' glob has something to match and PR 4's pre-commit hook can wire the rule pack ahead of the firing logic landing.",
+  "Query": "\n\t\t\t-- Placeholder: returns zero rows. Real implementation needs\n\t\t\t-- host-side filesystem stat for each markdown link target;\n\t\t\t-- pure SQL cannot do this. Follow-up bead under mache-e1b6c8.\n\t\t\tSELECT '' AS source_id, '' AS node_id,\n\t\t\t       0 AS start_byte, 0 AS end_byte,\n\t\t\t       0 AS start_row, 0 AS start_col,\n\t\t\t       0 AS metric\n\t\t\tWHERE 1=0\n\t\t\t%s\n\t\t",
+  "ScopeColumn": "COALESCE(md.source_file, '')",
+  "Requires": [
+    "nodes"
+  ],
+  "DefaultMinMetric": 0,
+  "Severity": "warn",
+  "Tags": [
+    "docs",
+    "drift",
+    "links"
+  ]
+}

@@ -816,7 +816,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. Its major.minor is kept in lockstep with the go.mod leyline-schema
 // pin by the version-parity gate (mache-b8af69).
-const leylineBinaryVersion = "v0.5.7"
+const leylineBinaryVersion = "v0.6.0"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private

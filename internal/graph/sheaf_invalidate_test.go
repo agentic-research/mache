@@ -650,3 +650,63 @@ func TestSheafInvalidator_InvalidateNodesWithCascade_FallbackPaths(t *testing.T)
 		assert.Empty(t, g.Invalidated())
 	})
 }
+
+// TestSheafInvalidator_InvalidateAllScoped pins the coarse-v1
+// "invalidate every sheaf-scoped node" path used by the LLO v0.6+
+// watcher-driven `daemon.sheaf.invalidate` topic (LLO PR #140).
+//
+// Contract:
+//  1. Every node in Membership is passed to graph.Invalidate exactly
+//     once (dedup by node ID).
+//  2. The SheafBackend is NOT called. The daemon has already declared
+//     everything stale — re-cascading region-by-region would be
+//     redundant chatter.
+//  3. nil receiver / nil graph / nil CommunityResult all no-op with
+//     zero return (same null-safety contract as InvalidateNodesWithCascade).
+func TestSheafInvalidator_InvalidateAllScoped(t *testing.T) {
+	t.Run("evicts_every_membership_entry_without_calling_backend", func(t *testing.T) {
+		g := &mockGraph{}
+		backend := &mockSheafBackend{}
+		cr := &CommunityResult{
+			Communities: []Community{
+				{ID: 1, Members: []string{"a", "b"}},
+				{ID: 2, Members: []string{"c"}},
+			},
+			Membership: map[string]int{"a": 1, "b": 1, "c": 2},
+		}
+		si := NewSheafInvalidator(g, backend, cr)
+
+		count := si.InvalidateAllScoped()
+
+		assert.Equal(t, 3, count, "every node in Membership must be evicted exactly once")
+		assert.ElementsMatch(t, []string{"a", "b", "c"}, g.Invalidated(),
+			"all three membership entries invalidated")
+		assert.Empty(t, backend.Calls(),
+			"backend must NOT be called under all-known — daemon already did the work")
+	})
+
+	t.Run("no_result_no_ops", func(t *testing.T) {
+		g := &mockGraph{}
+		si := NewSheafInvalidator(g, nil, nil)
+
+		count := si.InvalidateAllScoped()
+
+		assert.Equal(t, 0, count)
+		assert.Empty(t, g.Invalidated(),
+			"no CommunityResult → nothing to iterate → silent no-op (matches route layer's pre-topology contract)")
+	})
+
+	t.Run("nil_receiver_safe", func(t *testing.T) {
+		var nilSi *SheafInvalidator
+		assert.Equal(t, 0, nilSi.InvalidateAllScoped(),
+			"nil receiver must be safe (matches HasResult/InvalidateNodesWithCascade contract)")
+	})
+
+	t.Run("nil_graph_no_ops", func(t *testing.T) {
+		cr := &CommunityResult{Membership: map[string]int{"a": 1}}
+		si := NewSheafInvalidator(nil, nil, cr)
+
+		assert.Equal(t, 0, si.InvalidateAllScoped(),
+			"nil graph short-circuits — the invalidator has no target to evict against")
+	})
+}

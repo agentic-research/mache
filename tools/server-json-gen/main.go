@@ -115,7 +115,7 @@ type repository struct {
 type packageEntry struct {
 	RegistryType string `json:"registryType"`
 	Identifier   string `json:"identifier"`
-	Version      string `json:"version"`
+	Version      string `json:"version,omitempty"`
 }
 
 type remote struct {
@@ -302,8 +302,11 @@ func buildDoc() (*serverDoc, error) {
 		WebsiteURL: websiteURL,
 		Packages: []packageEntry{{
 			RegistryType: "oci",
-			Identifier:   ociImageIdentifier,
-			Version:      serverVersion,
+			// OCI packages carry the tag IN the identifier (registry/repo:tag)
+			// per the pinned MCP registry schema; the standalone `version` field
+			// is npm/pypi/nuget-only. The tag matches release.yml's `:${TAG}`
+			// (v-prefixed), so a resolver reading identifier can actually pull it.
+			Identifier: ociImageIdentifier + ":v" + serverVersion,
 		}},
 		Remotes: []remote{
 			{

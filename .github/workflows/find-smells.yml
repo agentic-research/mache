@@ -1,43 +1,46 @@
 name: find_smells
 
-# Advisory PR review using mache's own find_smells rule registry.
-# Builds the binary, indexes the PR head, runs the five rules that
-# work on the standalone (no-LLO) cross-ref tables (dead_code,
-# untested_function, duplicate_definitions, fan_out_skew, god_file —
-# all on node_defs / node_refs / nodes), and posts a comment listing
-# findings whose source_id was touched by this PR. The four
-# _ast-only rules (magic_int_in_comparison, cyclomatic_complexity,
-# long_function, long_file) need an LLO-built .db, not exercised
-# here. Never fails the build; the rules are heuristic and gating
-# would produce noise + frustration (mache-iegm / find_smells design).
+# Structural smell GATE for mache PRs. Invokes the `task smells`
+# Taskfile target (taskfile-ci-parity: CI calls the target, it does
+# NOT re-implement the command inline) — the same gate `task check`
+# and `task ci` run locally and the pre-push hook enforces. The target
+# builds mache (tree-sitter backend), indexes this repo, runs
+# `find-smells --rule '*' --baseline docs/smell-baseline.json`, and
+# exits non-zero on any NEW finding vs the committed baseline. The
+# `_ast`-dependent rules skip automatically on the standalone (no-LLO)
+# .db via `--rule '*'`; the cross-ref rules enforce.
+#
+# This REPLACES the previous advisory comment-only workflow — a new
+# smell now fails the PR. To grandfather a deliberate structural
+# change, regenerate the baseline (`task smells:baseline`) and commit
+# docs/smell-baseline.json in the same PR.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      # Only run when Go source changes — docs / examples don't
-      # affect smell findings and would just spam the comment thread.
+      # Source, the rule definitions, the baseline, and this workflow —
+      # anything that can change the finding set vs the baseline.
       - '**.go'
       - 'go.mod'
       - 'go.sum'
+      - 'cmd/rules/*.json'
+      - 'docs/smell-baseline.json'
       - '.github/workflows/find-smells.yml'
 
 permissions:
-  # Required to post / edit the PR comment.
-  pull-requests: write
   contents: read
 
 jobs:
-  scan:
+  smells:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Need the merge-base so we can list files changed in the PR.
-          fetch-depth: 0
-          # LFS-tracked tree-sitter grammar fixtures are needed for
-          # `go build` to succeed (parser.c is otherwise an LFS pointer).
+          # LFS-tracked tree-sitter grammar fixtures are needed for the
+          # CGO tree-sitter build (`task smells` builds with
+          # --backend tree-sitter); parser.c is otherwise an LFS pointer.
           lfs: true
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -51,148 +54,8 @@ jobs:
           GOTOOLCHAIN: auto
         run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
-      - name: Build mache
-        # Use the Taskfile recipe (codesign step is darwin-gated, skipped on
-        # ubuntu); override the output path to the throwaway binary.
-        run: task build BINARY_NAME=/tmp/mache
-
-      - name: Index repo
-        # The standalone (CGO) path produces nodes / node_defs /
-        # node_refs but not _ast. The four rules we run here only
-        # need the cross-ref tables, so we don't need an LLO-built
-        # .db.
-        run: /tmp/mache build --schema examples/go-schema.json . /tmp/repo.db
-
-      - name: List files changed in PR
-        id: changed
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          # Diff base...head, keep only Go source files. The
-          # workflow's paths filter triggers on `.go` AND on its own
-          # `.yml`, so this PR may have zero Go files changed (e.g.
-          # this very PR only edits the workflow). `grep -E '\.go$'`
-          # with `set -e -o pipefail` would fail the step in that
-          # case — append `|| true` so an empty match short-circuits
-          # cleanly to skip=true rather than error.
-          git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | { grep -E '\.go$' || true; } \
-            | jq -R -s -c 'split("\n") | map(select(length > 0))' \
-            > /tmp/changed.json
-          cat /tmp/changed.json
-          # Set skip=true when the changed-files array is empty.
-          # Filtering against this list happens in the next step via
-          # literal substring `contains()` (not regex), so we don't
-          # need to pre-compute a regex pattern here. Going through
-          # regex alternation would silently mis-match because '.'
-          # in '.go' is a regex metacharacter; literal `contains()`
-          # avoids that class of bug.
-          if [ "$(jq 'length' /tmp/changed.json)" = "0" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run find_smells rules
-        if: steps.changed.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          # Run the five rules that don't need _ast (work on the
-          # standalone CGO ingestion path's node_defs / node_refs /
-          # nodes tables). The four _ast-only rules
-          # (magic_int_in_comparison, cyclomatic_complexity,
-          # long_function, long_file) need an LLO-built .db.
-          #
-          # Filter findings by literal substring match against the
-          # changed-files list. We use `contains` rather than `test`
-          # because `.` in '.go' is a regex metacharacter — `test`
-          # against 'cmd/serve.go' would silently match
-          # 'cmd/serveXgo' too. `contains` is literal substring.
-          for rule in dead_code untested_function duplicate_definitions fan_out_skew god_file; do
-            /tmp/mache find-smells --db /tmp/repo.db --rule "$rule" \
-              --format json --limit 1000 \
-              | jq --slurpfile changed /tmp/changed.json \
-                  '.findings = (.findings | map(. as $f | select($changed[0] | any(. as $c | $f.source_id | contains($c)))))' \
-              > "/tmp/${rule}.json"
-            echo "=== $rule ==="
-            jq '.findings | length' "/tmp/${rule}.json"
-          done
-
-      - name: Render comment
-        if: steps.changed.outputs.skip != 'true'
-        env:
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          {
-            echo "## find_smells (advisory)"
-            echo ""
-            echo "Scoped to files changed in this PR. Rules below run on the standalone (no-LLO) cross-ref tables; \`_ast\` rules (cyclomatic_complexity, long_function, long_file, magic_int_in_comparison) are not exercised here."
-            echo ""
-            total=0
-            for rule in dead_code untested_function duplicate_definitions fan_out_skew god_file; do
-              count=$(jq '.findings | length' "/tmp/${rule}.json")
-              total=$((total + count))
-              if [ "$count" -gt 0 ]; then
-                echo "<details>"
-                echo "<summary><b>${rule}</b> — ${count} finding(s) in changed files</summary>"
-                echo ""
-                echo "| Source | Node | Metric |"
-                echo "| --- | --- | ---: |"
-                # Render each finding row. Strip the runner workspace
-                # prefix from source_id (so paths are repo-relative)
-                # AND wrap the path in a Markdown link to the file at
-                # this PR's head SHA — readers can click straight to
-                # the offending file. GITHUB_WORKSPACE is the
-                # canonical absolute path of the checked-out repo on
-                # the runner.
-                jq -r --arg ws "$GITHUB_WORKSPACE/" \
-                       --arg base "https://github.com/${REPO}/blob/${HEAD_SHA}" \
-                  '.findings | .[:20] | .[] |
-                     ((.source_id // "") | sub($ws; "")) as $rel |
-                     "| [\($rel)](\($base)/\($rel)) | \(.node_id // "") | \(.metric // 0) |"' \
-                  "/tmp/${rule}.json"
-                if [ "$count" -gt 20 ]; then
-                  echo ""
-                  echo "_(showing top 20 of ${count})_"
-                fi
-                echo ""
-                echo "</details>"
-                echo ""
-              fi
-            done
-            if [ "$total" -eq 0 ]; then
-              echo "No structural smells in changed files. ✓"
-            fi
-            echo ""
-            echo "_Rules: the registry is [\`cmd/smell_rules.go\`](../blob/main/cmd/smell_rules.go) (source of truth); see [the authoring guide](../blob/main/plugin/skills/authoring-smell-rules/SKILL.md) to add one. Advisory only — these are heuristics, not gates._"
-          } > /tmp/comment.md
-          cat /tmp/comment.md
-
-      - name: Post / update PR comment
-        if: steps.changed.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # Find an existing find_smells comment to edit. We tag the
-          # comment body with a hidden marker so subsequent runs of
-          # this workflow on the same PR update in place rather than
-          # accumulating one comment per push.
-          MARKER="<!-- find-smells-gha -->"
-          BODY="$MARKER"$'\n'"$(cat /tmp/comment.md)"
-          existing=$(gh api "repos/${REPO}/issues/${PR}/comments" \
-            --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0].id // empty")
-          if [ -n "$existing" ]; then
-            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" \
-              -f body="$BODY"
-            echo "edited existing comment $existing"
-          else
-            gh pr comment "$PR" --body "$BODY"
-            echo "created new comment"
-          fi
+      - name: Smell gate
+        # Invoke the Taskfile target — do NOT re-implement the command
+        # inline (taskfile-ci-parity). `task smells` builds mache, indexes
+        # this repo, and fails on any NEW finding vs docs/smell-baseline.json.
+        run: task smells

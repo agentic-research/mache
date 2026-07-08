@@ -97,6 +97,9 @@ tasks:
 
   lint:
     desc: Run golangci-lint
+    preconditions:
+      - sh: command -v golangci-lint
+        msg: "golangci-lint required — install: https://golangci-lint.run/usage/install/"
     cmds:
       - golangci-lint run ./...
 
@@ -136,6 +139,11 @@ tasks:
 
   image:
     desc: Build OCI image (melange + apko) → mache.tar (mache:0.8.0)
+    preconditions:
+      - sh: command -v melange
+        msg: "melange required — install: https://github.com/chainguard-dev/melange"
+      - sh: command -v apko
+        msg: "apko required — install: https://github.com/chainguard-dev/apko"
     cmds:
       # Reproducible keygen: regenerate when either half of the keypair
       # is missing — `melange build` needs `melange.rsa` and `apko build`
@@ -149,6 +157,11 @@ tasks:
 
   image:verify:
     desc: "Build Dockerfile.release with the pinned leyline binary and run it — catches glibc/lib runtime mismatches between the image base and ley-line-open's binary BEFORE a release (the release image job can't be dry-run without a tag)."
+    preconditions:
+      - sh: command -v docker
+        msg: "docker required — https://docs.docker.com/get-docker/"
+      - sh: command -v curl
+        msg: "curl required — install curl"
     cmds:
       - |
         set -euo pipefail
@@ -481,6 +494,12 @@ tasks:
         fi
         echo "server.json is up to date"
 
+  gates:preflight:
+    desc: "Static preflight — fail if any gate task invokes an external binary with no guard (preconditions / command -v / go install / test -f). See internal/lint + tools/gate-preflight."
+    cmds:
+      # go/go run is toolchain-safe, so this gate needs no precondition itself.
+      - go run ./tools/gate-preflight Taskfile.yml
+
   check:
     desc: "Dev gate (mutating: `fmt` rewrites files with -w). For the non-mutating 1:1-with-CI gate use `task ci`."
     cmds:
@@ -493,6 +512,7 @@ tasks:
       - task: docs:lint
       - task: actions:lint
       - task: smells
+      - task: gates:preflight
       - task: gen:server-json:check
 
   ci:
@@ -517,6 +537,7 @@ tasks:
       - task: docs:lint
       - task: actions:lint
       - task: smells
+      - task: gates:preflight
       - task: gen:server-json:check
 
   # ────────────────────────────────────────────────────────────────

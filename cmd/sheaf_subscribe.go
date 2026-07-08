@@ -86,18 +86,59 @@ func (r *sheafEventRouter) dispatch(ev leyline.SheafInvalidateEvent) { // covera
 } // coverage:ignore — subscriber handler shim; reduction tracked in mache-89b5dd.
 
 // routeSheafEvent is the pure routing function. Given an event and a
-// slice of invalidators, it asks each invalidator to invalidate the
-// nodes belonging to any region in ev.Invalidated. Invalidators with
-// no CommunityResult (or no matching regions) silently no-op.
+// slice of invalidators, it dispatches on the event's Scope
+// (LLO v0.6+ coarse-v1 payload contract, LLO PR #140):
 //
-// If NO invalidator claims any region in the event, the event is
-// logged + skipped per the c14c43 contract (question 4) — we do not
-// buffer events waiting for a CommunityResult to appear. The cascade
-// math the event reports is only meaningful relative to the topology
-// that produced it; by the time a future get_communities install
-// runs, the topology will have been re-pushed and the daemon will
-// re-cascade from there.
+//   - [leyline.ScopeChangedOnly] or empty (pre-v0.6 consumer-driven
+//     topic): fine-grained per-region eviction. Each invalidator
+//     invalidates the nodes whose community IDs appear in
+//     ev.Invalidated. Invalidators with no CommunityResult (or no
+//     matching regions) silently no-op. Empty scope maps here because
+//     the pre-v0.6 wire didn't carry the field.
+//
+//   - [leyline.ScopeAllKnown] (LLO v0.6+ watcher-driven coarse-v1):
+//     evict every sheaf-scoped cache entry each invalidator holds.
+//     The daemon has told us its whole working set is stale;
+//     re-cascading region-by-region against the daemon would be
+//     redundant chatter, so we invalidate locally via
+//     [graph.SheafInvalidator.InvalidateAllScoped].
+//
+//   - Any other non-empty Scope: log a warning and treat as
+//     ScopeAllKnown. Over-invalidating is always safe; the failure
+//     mode we refuse is silently serving stale data because we
+//     didn't recognise a new sentinel.
+//
+// If NO invalidator claims any region under changed-only, the event
+// is logged + skipped per the c14c43 contract (question 4) — we do
+// not buffer events waiting for a CommunityResult to appear. The
+// cascade math the event reports is only meaningful relative to the
+// topology that produced it; by the time a future get_communities
+// install runs, the topology will have been re-pushed and the daemon
+// will re-cascade from there. The all-known path skips this guard
+// because it invalidates via membership, not via specific IDs.
 func routeSheafEvent(ev leyline.SheafInvalidateEvent, invalidators []*graph.SheafInvalidator) {
+	switch ev.Scope {
+	case "", leyline.ScopeChangedOnly:
+		routeSheafEventChangedOnly(ev, invalidators)
+	case leyline.ScopeAllKnown:
+		routeSheafEventAllKnown(ev, invalidators)
+	default:
+		// Unknown scope — future LLO release added a value we don't
+		// know. Log at the level agents will actually see, then fall
+		// through to the safest behavior. This is the SAFE-DEFAULT
+		// gate; if we ever add a scope that intentionally requires
+		// less-than-all invalidation, do NOT reuse ScopeAllKnown as
+		// its fallback here — add an explicit case for it.
+		log.Printf("sheaf event: unknown scope %q (generation=%d count=%d); treating as %q (over-invalidating rather than serve stale)",
+			ev.Scope, ev.Generation, ev.Count, leyline.ScopeAllKnown)
+		routeSheafEventAllKnown(ev, invalidators)
+	}
+}
+
+// routeSheafEventChangedOnly is the fine-grained per-region path.
+// Extracted from the prior routeSheafEvent body verbatim so the
+// dispatcher above stays a pure switch.
+func routeSheafEventChangedOnly(ev leyline.SheafInvalidateEvent, invalidators []*graph.SheafInvalidator) {
 	if len(ev.Invalidated) == 0 { // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
 		return // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
 	} // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
@@ -115,6 +156,25 @@ func routeSheafEvent(ev leyline.SheafInvalidateEvent, invalidators []*graph.Shea
 	if !matched {
 		log.Printf("sheaf event skipped (no invalidator claims any of regions %v): generation=%d count=%d",
 			ev.Invalidated, ev.Generation, ev.Count)
+	}
+}
+
+// routeSheafEventAllKnown is the coarse-v1 "invalidate everything"
+// path. For each invalidator with an installed CommunityResult, evict
+// every node in its Membership. Invalidators without a result no-op
+// (nothing to invalidate — the cascade for that window is unreachable
+// until a get_communities install runs).
+//
+// We deliberately do NOT emit the "no invalidator matched" log the
+// changed-only path emits: coarse-v1 events fire on every watcher
+// cycle regardless of whether mache has a result yet, and an early
+// serve session where get_communities hasn't run would spam the log.
+func routeSheafEventAllKnown(ev leyline.SheafInvalidateEvent, invalidators []*graph.SheafInvalidator) {
+	for _, si := range invalidators {
+		if !si.HasResult() {
+			continue
+		}
+		si.InvalidateAllScoped()
 	}
 }
 

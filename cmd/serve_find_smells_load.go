@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,11 +103,8 @@ func LoadExternalSmellRules(dir string) ([]SmellRule, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		var rule SmellRule
-		if err := json.Unmarshal(raw, &rule); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
-		}
-		if err := validateSmellRule(rule); err != nil {
+		rule, err := parseSmellRuleJSON(raw)
+		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		if origin, exists := seen[rule.ID]; exists {
