@@ -178,6 +178,43 @@ tasks:
 	}
 }
 
+// TestCheckTaskfile_ContainerNetworkToolsRequireGuard locks the operator
+// decision that container/network tooling (docker, curl, wget) is NOT
+// ambient-safe — a gate task invoking them unguarded is a gap, and a
+// `command -v` precondition clears it.
+func TestCheckTaskfile_ContainerNetworkToolsRequireGuard(t *testing.T) {
+	unguarded := `version: '3'
+tasks:
+  image:verify:
+    desc: Build and run the release image
+    cmds:
+      - curl -sSfL https://example.com/bin -o bin
+      - docker build -t app .
+`
+	gaps, err := CheckTaskfile(writeTaskfile(t, unguarded))
+	require.NoError(t, err)
+	require.Len(t, gaps, 2)
+	assert.Equal(t, "curl", gaps[0].Tool)
+	assert.Equal(t, "docker", gaps[1].Tool)
+
+	guarded := `version: '3'
+tasks:
+  image:verify:
+    desc: Build and run the release image
+    preconditions:
+      - sh: command -v docker
+        msg: "docker required"
+      - sh: command -v curl
+        msg: "curl required"
+    cmds:
+      - curl -sSfL https://example.com/bin -o bin
+      - docker build -t app .
+`
+	gaps, err = CheckTaskfile(writeTaskfile(t, guarded))
+	require.NoError(t, err)
+	assert.Empty(t, gaps)
+}
+
 // TestCheckTaskfile_MissingFile surfaces a read error rather than panicking.
 func TestCheckTaskfile_MissingFile(t *testing.T) {
 	_, err := CheckTaskfile(filepath.Join(t.TempDir(), "nope.yml"))
