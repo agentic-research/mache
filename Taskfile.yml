@@ -157,6 +157,11 @@ tasks:
 
   image:verify:
     desc: "Build Dockerfile.release with the pinned leyline binary and run it — catches glibc/lib runtime mismatches between the image base and ley-line-open's binary BEFORE a release (the release image job can't be dry-run without a tag)."
+    preconditions:
+      - sh: command -v docker
+        msg: "docker required — https://docs.docker.com/get-docker/"
+      - sh: command -v curl
+        msg: "curl required — install curl"
     cmds:
       - |
         set -euo pipefail

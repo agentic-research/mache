@@ -71,10 +71,11 @@ var gateKeywords = map[string]struct{}{
 }
 
 // safeBinaries are tokens that are NEVER external-tool gaps: shell builtins,
-// coreutils, the Go/git/bash toolchain, and ambient CI infrastructure. Their
-// absence fails loudly and universally (a missing `grep`/`docker`/`curl` is not
-// a silent supply-chain no-op), so declaring a precondition for them adds noise
-// without catching the class of defect this lint targets.
+// coreutils, and the Go/git/bash toolchain — the ambient shell surface a
+// Taskfile always has. Everything else, including container/network tooling
+// (docker, curl, wget), is treated as an external tool that a gate task must
+// guard, so a missing one yields a loud, actionable `msg` rather than a cryptic
+// failure.
 var safeBinaries = map[string]struct{}{
 	// shell builtins / keywords
 	":": {}, ".": {}, "[": {}, "[[": {}, "]]": {}, "test": {}, "true": {},
@@ -100,8 +101,6 @@ var safeBinaries = map[string]struct{}{
 	"whoami": {}, "hostname": {}, "arch": {}, "which": {},
 	// language / SCM toolchain
 	"go": {}, "git": {}, "bash": {}, "sh": {}, "zsh": {}, "make": {},
-	// ambient CI infrastructure (see safeBinaries doc)
-	"docker": {}, "curl": {}, "wget": {},
 }
 
 // guardRe extracts the tool name from an inline existence check.
