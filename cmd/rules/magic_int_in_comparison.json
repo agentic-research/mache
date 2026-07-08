@@ -1,0 +1,16 @@
+{
+  "ID": "magic_int_in_comparison",
+  "Languages": [
+    "go"
+  ],
+  "Description": "Go binary expressions where an int_literal appears as a direct operand. Each match is a candidate magic constant — replace with a named const if the value carries domain meaning.",
+  "Query": "\n\t\t\tSELECT lit.source_id, lit.node_id, lit.start_byte, lit.end_byte, lit.start_row, lit.start_col, 0 AS metric\n\t\t\tFROM _ast lit\n\t\t\tJOIN nodes n   ON n.id = lit.node_id\n\t\t\tJOIN nodes p   ON p.id = n.parent_id\n\t\t\tJOIN _ast pa   ON pa.node_id = p.id\n\t\t\tWHERE lit.node_kind  = 'int_literal'\n\t\t\t  AND pa.node_kind   = 'binary_expression'\n\t\t\t%s\n\t\t\tORDER BY lit.source_id, lit.start_byte\n\t\t",
+  "ScopeColumn": "lit.source_id",
+  "Requires": [
+    "_ast",
+    "nodes"
+  ],
+  "DefaultMinMetric": 0,
+  "Severity": "",
+  "Tags": null
+}

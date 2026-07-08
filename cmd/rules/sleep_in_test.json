@@ -1,0 +1,16 @@
+{
+  "ID": "sleep_in_test",
+  "Languages": [
+    "go"
+  ],
+  "Description": "Calls to time.Sleep / time.After / time.NewTimer / time.NewTicker / time.AfterFunc from inside Go test files (`*_test.go`). Sleep-based synchronization is a flakiness anti-pattern: tests that wait wall-clock time instead of polling an observable condition (channel close, monitor event, exit-code check) drift between machines and CI environments. Prefer `testing.T.Eventually`, `Monitor`-style notifications, or `until \u003ccond\u003e; do sleep 0.5; done` polling loops. Cross-backend rule (uses node_refs + nodes, no _ast required). Static heuristic — captures the bare token after call-extraction so a non-time.Sleep method on an unrelated type (e.g. a custom Sleep() on a mock) is a false positive; documented divergence rather than over-engineering. Benchmark files are still flagged — sleep-based timing measurement in benchmarks is wrong for the same flakiness reason; if you need it explicitly, exclude the file via the rule's allowlist (TBD, tracked under mache-96341d).",
+  "Query": "\n\t\t\tSELECT COALESCE(n.source_file, n.id) AS source_id,\n\t\t\t       n.id AS node_id,\n\t\t\t       0 AS start_byte, 0 AS end_byte,\n\t\t\t       0 AS start_row, 0 AS start_col,\n\t\t\t       0 AS metric\n\t\t\tFROM node_refs r\n\t\t\tJOIN nodes n ON n.id = r.node_id\n\t\t\tWHERE r.token IN ('Sleep', 'After', 'NewTimer', 'NewTicker', 'AfterFunc')\n\t\t\t  AND COALESCE(n.source_file, '') LIKE '%%_test.go'\n\t\t\t%s\n\t\t\tORDER BY source_id, node_id\n\t\t",
+  "ScopeColumn": "COALESCE(n.source_file, '')",
+  "Requires": [
+    "node_refs",
+    "nodes"
+  ],
+  "DefaultMinMetric": 0,
+  "Severity": "",
+  "Tags": null
+}
