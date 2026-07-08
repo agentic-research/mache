@@ -3,7 +3,7 @@
   "name": "io.github.agentic-research/mache",
   "title": "mache",
   "description": "Project source trees, SQLite, and JSON as a structured filesystem with MCP code-intelligence tools.",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "repository": {
     "url": "https://github.com/agentic-research/mache",
     "source": "github"
@@ -12,7 +12,8 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/agentic-research/mache:v0.16.1"
+      "identifier": "ghcr.io/agentic-research/mache",
+      "version": "v0.16.2"
     }
   ],
   "remotes": [

@@ -302,11 +302,14 @@ func buildDoc() (*serverDoc, error) {
 		WebsiteURL: websiteURL,
 		Packages: []packageEntry{{
 			RegistryType: "oci",
-			// OCI packages carry the tag IN the identifier (registry/repo:tag)
-			// per the pinned MCP registry schema; the standalone `version` field
-			// is npm/pypi/nuget-only. The tag matches release.yml's `:${TAG}`
-			// (v-prefixed), so a resolver reading identifier can actually pull it.
-			Identifier: ociImageIdentifier + ":v" + serverVersion,
+			// ADR-0041 canonical form: identifier is the image name WITHOUT a tag;
+			// version is the git tag (v-prefixed, matching release.yml's `:${TAG}`).
+			// cloister's resolver (cloister-091106) resolves tag→digest and pins
+			// identifier@digest. NOT tag-in-identifier — that was the 3-way
+			// designation drift ADR-0041 rejected. Producer + contract must agree
+			// (mache-39e443). The digest is cloister's concern, not emitted here.
+			Identifier: ociImageIdentifier,
+			Version:    "v" + serverVersion,
 		}},
 		Remotes: []remote{
 			{
