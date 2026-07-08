@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -57,6 +59,16 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 	leylineBin, err := exec.LookPath("leyline")
 	if err != nil {
 		t.Skip("leyline binary not on PATH — skipping cross-runtime subscriber e2e")
+	}
+
+	// Mache pins to LLO v0.6+ (PR #147 unified emit under
+	// `daemon.sheaf.invalidate`; the pre-v0.6 `sheaf.invalidate` topic
+	// is no longer subscribed). A stale local leyline (v0.5.x) would
+	// emit only on the retired topic and this test would falsely trip
+	// the "daemon did not publish" assertion. Skip cleanly instead —
+	// CI installs a fresh binary; local devs get a clear reason string.
+	if reason := leylinePreV06Skip(leylineBin); reason != "" {
+		t.Skip(reason)
 	}
 
 	sockPath, daemonCleanup := startDaemonForE2E(t, leylineBin)
@@ -255,4 +267,37 @@ func pushTopologyForE2E(sc *SheafClient, regs []region, rests []restriction) err
 		return &topologyError{msg: toStr(e)}
 	}
 	return nil
+}
+
+// leylinePreV06Skip returns a non-empty skip reason if the leyline
+// binary at bin is a pre-v0.6 release (or its version is unreadable —
+// treated as "skip cleanly" since we can't confirm the daemon speaks
+// the unified `daemon.sheaf.invalidate` topic). Returns "" when the
+// binary is v0.6+ and the test should run.
+//
+// `leyline --version` prints `leyline <semver> (open)` on one line.
+// Anything else (custom builds, garbled output) is treated as
+// unknown and skipped.
+func leylinePreV06Skip(bin string) string {
+	out, err := exec.Command(bin, "--version").CombinedOutput()
+	if err != nil {
+		return "unable to read leyline --version output; skipping cross-runtime subscriber e2e"
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 || fields[0] != "leyline" {
+		return "unrecognized leyline --version output; skipping cross-runtime subscriber e2e"
+	}
+	parts := strings.SplitN(fields[1], ".", 3)
+	if len(parts) < 2 {
+		return "unparseable leyline version; skipping cross-runtime subscriber e2e"
+	}
+	major, majErr := strconv.Atoi(parts[0])
+	minor, minErr := strconv.Atoi(parts[1])
+	if majErr != nil || minErr != nil {
+		return "non-numeric leyline version; skipping cross-runtime subscriber e2e"
+	}
+	if major == 0 && minor < 6 {
+		return "leyline " + fields[1] + " is pre-v0.6 (emits retired `sheaf.invalidate` topic); mache subscribes only to `daemon.sheaf.invalidate` (LLO PR #147)"
+	}
+	return ""
 }

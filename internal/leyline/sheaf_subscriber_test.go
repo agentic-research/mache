@@ -18,11 +18,19 @@ import (
 )
 
 // TestSheafSubscriber_DispatchesEvent pins the core contract: when the
-// daemon emits a sheaf.invalidate event, the subscriber's handler fires
-// with the parsed event payload. Without this wiring, mache observes no
-// signal from invalidations triggered outside its own initiator path
-// (the auto-leyline gap mache-6c9e1d, plus any future multi-consumer
-// scenarios).
+// daemon emits a daemon.sheaf.invalidate event, the subscriber's
+// handler fires with the parsed event payload. Without this wiring,
+// mache observes no signal from invalidations triggered outside its
+// own initiator path (the auto-leyline gap mache-6c9e1d, plus any
+// future multi-consumer scenarios).
+//
+// Payload uses the consumer-driven shape (raw-number generation,
+// `invalidated` region field) that mache's own `op_sheaf_invalidate`
+// calls produce. Since LLO PR #147 unified emit, both shapes arrive
+// on `daemon.sheaf.invalidate`; this test also pins the parser's
+// tolerance for the `invalidated` field name (see
+// TestSheafSubscriber_DispatchesWatcherDrivenEvent for the
+// `region_ids` counterpart).
 //
 // The mock daemon accepts the `subscribe` op, returns ok, then pushes
 // one event line. The subscriber should:
@@ -37,11 +45,7 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 			// v0.4.3 event envelope: top-level event metadata + payload
 			// nested under `data`. Pinned empirically against the
 			// daemon's actual emit shape (see
-			// tools/sheaf-subscribe-probe/main.go output:
-			//   {"event":true,"seq":N,"source":"leyline",
-			//    "topic":"sheaf.invalidate",
-			//    "data":{"count":N,"generation":N,"invalidated":[…],
-			//            "prior_generation":N}}).
+			// tools/sheaf-subscribe-probe/main.go output).
 			//
 			// Pre-LLO-v0.4.3 the daemon never emitted the event at
 			// all (ley-line-open-5caa59), so the original version of
@@ -53,7 +57,7 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 				"event":  true,
 				"seq":    1.0,
 				"source": "leyline",
-				"topic":  "sheaf.invalidate",
+				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
 					"invalidated":      []any{1.0, 2.0, 3.0},
 					"count":            3.0,
@@ -91,7 +95,8 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 	eventMu.Lock()
 	got := gotEvent
 	eventMu.Unlock()
-	assert.Equal(t, []int{1, 2, 3}, got.Invalidated, "invalidated region IDs round-trip")
+	assert.Equal(t, []int{1, 2, 3}, got.Invalidated,
+		"`invalidated` field must decode into Invalidated (parser field-name tolerance)")
 	assert.Equal(t, uint64(7), got.Generation, "generation must parse from event payload (nested under data)")
 	assert.Equal(t, 3, got.Count, "count round-trips")
 
@@ -125,7 +130,7 @@ func TestSheafSubscriber_ReconnectsAfterDisconnect(t *testing.T) {
 					"event":  true,
 					"seq":    1.0,
 					"source": "leyline",
-					"topic":  "sheaf.invalidate",
+					"topic":  "daemon.sheaf.invalidate",
 					"data": map[string]any{
 						"invalidated":      []any{10.0},
 						"count":            1.0,
@@ -140,7 +145,7 @@ func TestSheafSubscriber_ReconnectsAfterDisconnect(t *testing.T) {
 					"event":  true,
 					"seq":    2.0,
 					"source": "leyline",
-					"topic":  "sheaf.invalidate",
+					"topic":  "daemon.sheaf.invalidate",
 					"data": map[string]any{
 						"invalidated":      []any{20.0},
 						"count":            1.0,
@@ -353,19 +358,23 @@ func TestSheafSubscriber_DispatchesWatcherDrivenEvent(t *testing.T) {
 		"Status.LastGeneration mirrors the new topic's generation counter")
 }
 
-// TestSheafSubscriber_PreV06PayloadUnaffected pins the backward-compat
-// half of the LLO v0.6+ rollout: the pre-v0.6 `sheaf.invalidate` topic
-// (consumer-driven, emitted from `op_sheaf_invalidate`) has no
-// `scope`, `region_ids`, `changed_files`, `current_root`, or
-// `timestamp_ms` fields, and its region list lives in `invalidated`.
-// The subscriber must still parse it — mache's own calls to
-// `op_sheaf_invalidate` (via SheafInvalidator.InvalidateNodesWithCascade)
-// generate exactly this event flow.
+// TestSheafSubscriber_ConsumerDrivenPayloadShape pins parser tolerance
+// for the consumer-driven payload shape mache's own
+// `op_sheaf_invalidate` calls produce (via
+// SheafInvalidator.InvalidateNodesWithCascade): the region list lives
+// in `invalidated`, `generation` / `prior_generation` are raw JSON
+// numbers, and the coarse-v1 fields (`scope`, `region_ids`,
+// `changed_files`, `current_root`, `timestamp_ms`) are all absent.
 //
-// The zero values for the new fields are the correct signal for the
-// routing layer to infer ScopeChangedOnly (see cmd/sheaf_subscribe.go's
-// routeSheafEvent switch).
-func TestSheafSubscriber_PreV06PayloadUnaffected(t *testing.T) {
+// Since LLO PR #147 unified emit, this shape arrives on
+// `daemon.sheaf.invalidate` alongside the watcher-driven shape (see
+// TestSheafSubscriber_DispatchesWatcherDrivenEvent); the subscriber
+// must parse both without a per-shape branch.
+//
+// The zero values for the coarse-v1 fields are the correct signal
+// for the routing layer to infer ScopeChangedOnly (see
+// cmd/sheaf_subscribe.go's routeSheafEvent switch).
+func TestSheafSubscriber_ConsumerDrivenPayloadShape(t *testing.T) {
 	sockPath := startSubscribeMockServer(t, mockBehavior{
 		acceptSubscribe: true,
 		pushEvents: []map[string]any{
@@ -373,11 +382,11 @@ func TestSheafSubscriber_PreV06PayloadUnaffected(t *testing.T) {
 				"event":  true,
 				"seq":    1.0,
 				"source": "leyline",
-				"topic":  "sheaf.invalidate",
+				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
 					"invalidated":      []any{9.0},
 					"count":            1.0,
-					"generation":       42.0, // pre-v0.6 emitted raw numbers
+					"generation":       42.0, // consumer-driven emit uses raw numbers
 					"prior_generation": 41.0,
 				},
 			},
@@ -404,22 +413,22 @@ func TestSheafSubscriber_PreV06PayloadUnaffected(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return handled.Load() > 0
-	}, 2*time.Second, 25*time.Millisecond, "handler must still fire on pre-v0.6 sheaf.invalidate")
+	}, 2*time.Second, 25*time.Millisecond, "handler must fire on consumer-driven payload shape")
 
 	eventMu.Lock()
 	got := gotEvent
 	eventMu.Unlock()
 
 	assert.Equal(t, []int{9}, got.Invalidated,
-		"pre-v0.6 `invalidated` field must still decode into Invalidated")
+		"`invalidated` field must decode into Invalidated (parser field-name tolerance)")
 	assert.Equal(t, uint64(42), got.Generation, "raw-number generation still parses")
 	assert.Equal(t, uint64(41), got.PriorGeneration, "raw-number prior_generation still parses")
 	assert.Equal(t, "", got.Scope,
-		"pre-v0.6 event has no scope — leave empty so router infers changed-only")
+		"consumer-driven emit has no scope — leave empty so router infers changed-only")
 	assert.Nil(t, got.ChangedFiles,
-		"pre-v0.6 event has no changed_files — must decode to nil, not a fabricated slice")
-	assert.Equal(t, "", got.CurrentRoot, "pre-v0.6 event has no current_root")
-	assert.Equal(t, int64(0), got.TimestampMs, "pre-v0.6 event has no timestamp_ms")
+		"consumer-driven emit has no changed_files — must decode to nil, not a fabricated slice")
+	assert.Equal(t, "", got.CurrentRoot, "consumer-driven emit has no current_root")
+	assert.Equal(t, int64(0), got.TimestampMs, "consumer-driven emit has no timestamp_ms")
 }
 
 // TestSheafSubscriber_StopHaltsLoop pins clean shutdown: Stop()
