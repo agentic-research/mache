@@ -1,0 +1,19 @@
+{
+  "ID": "drift_doc_outdated_count",
+  "Languages": [
+    "markdown"
+  ],
+  "Description": "v1 placeholder (ADR-0018 PR 3). Spec: numeric claims in markdown like 'supports 28 languages' or '17 MCP tools' should match a SQL ground-truth query the repo author provides in .mache/drift-counts.toml (the schema is sketched in ADR-0018 Open Question 2). Generalizes the cloister-style narrow-lint pattern already implemented in bash as check #4 in scripts/docs-lint.sh for language-count claims. Current implementation: no findings — the firing logic needs a TOML loader, a regex extractor for '(\\d+) (tools|languages|rules)' patterns in markdown, and a per-claim SQL execution loop. Those three pieces are tracked as a separate follow-up bead under mache-e1b6c8. The rule appears in the listing today so PR 2's --rule 'drift_doc_*' glob has something to match and PR 4's pre-commit hook can wire the rule pack ahead of the firing logic landing.",
+  "Query": "\n\t\t\t-- Placeholder: returns zero rows. Real implementation needs\n\t\t\t-- a .mache/drift-counts.toml loader, a regex extractor for\n\t\t\t-- numeric claims in markdown, and a per-claim SQL execution\n\t\t\t-- loop. Follow-up bead under mache-e1b6c8.\n\t\t\tSELECT '' AS source_id, '' AS node_id,\n\t\t\t       0 AS start_byte, 0 AS end_byte,\n\t\t\t       0 AS start_row, 0 AS start_col,\n\t\t\t       0 AS metric\n\t\t\tWHERE 1=0\n\t\t\t%s\n\t\t",
+  "ScopeColumn": "COALESCE(md.source_file, '')",
+  "Requires": [
+    "nodes"
+  ],
+  "DefaultMinMetric": 0,
+  "Severity": "warn",
+  "Tags": [
+    "docs",
+    "drift",
+    "counts"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "ID": "drift_doc_dead_symbol_reference",
+  "Languages": [
+    "markdown"
+  ],
+  "Description": "v1 placeholder (ADR-0018 PR 3). Spec: every backtick-fenced token `Foo` or `pkg.Bar` in markdown should refer to a real symbol defined in node_defs; a missing definition signals the doc has drifted from the code (renamed/removed function/type still referenced in docs). Current implementation: no findings — the firing logic requires a backtick-token preprocessor (either a derived _doc_tokens view populated by the markdown ingestion path, or a SQLite regex extension) which is tracked as a separate follow-up bead under mache-e1b6c8. The rule appears in the listing today so PR 2's --rule 'drift_doc_*' glob has something to match and PR 4's pre-commit hook can wire the rule pack ahead of the firing logic landing.",
+  "Query": "\n\t\t\t-- Placeholder: returns zero rows. Real implementation needs\n\t\t\t-- a derived view of backtick-fenced tokens extracted from\n\t\t\t-- markdown source. Follow-up bead under mache-e1b6c8.\n\t\t\tSELECT '' AS source_id, '' AS node_id,\n\t\t\t       0 AS start_byte, 0 AS end_byte,\n\t\t\t       0 AS start_row, 0 AS start_col,\n\t\t\t       0 AS metric\n\t\t\tWHERE 1=0\n\t\t\t%s\n\t\t",
+  "ScopeColumn": "COALESCE(md.source_file, '')",
+  "Requires": [
+    "nodes",
+    "node_defs"
+  ],
+  "DefaultMinMetric": 0,
+  "Severity": "warn",
+  "Tags": [
+    "docs",
+    "drift"
+  ]
+}

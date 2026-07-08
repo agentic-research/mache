@@ -1,0 +1,15 @@
+{
+  "ID": "long_function",
+  "Languages": [
+    "go"
+  ],
+  "Description": "Functions and methods sorted descending by body line count (end_row - start_row). Default threshold is 81 lines — matches the historical strict `\u003e 80` SQL floor exactly, so agents calling without min_metric see the same long-function set as before. Pass min_metric to adjust: 200 for 'definitely review now', 120 for 'noteworthy', 0 to see everything sorted by length. Pair with cyclomatic_complexity for a sister metric on the same nodes.",
+  "Query": "\n\t\t\tSELECT fn.source_id,\n\t\t\t       fn.node_id,\n\t\t\t       fn.start_byte,\n\t\t\t       fn.end_byte,\n\t\t\t       fn.start_row,\n\t\t\t       fn.start_col,\n\t\t\t       (fn.end_row - fn.start_row) AS metric\n\t\t\tFROM _ast fn\n\t\t\tWHERE fn.node_kind IN ('function_declaration','method_declaration')\n\t\t\t%s\n\t\t\tORDER BY metric DESC, fn.source_id, fn.start_byte\n\t\t",
+  "ScopeColumn": "fn.source_id",
+  "Requires": [
+    "_ast"
+  ],
+  "DefaultMinMetric": 81,
+  "Severity": "",
+  "Tags": null
+}

@@ -1,0 +1,15 @@
+{
+  "ID": "cyclomatic_complexity",
+  "Languages": [
+    "go"
+  ],
+  "Description": "Per-function cyclomatic complexity, computed as the count of control-flow AST nodes (if/for/case/select-case) inside each function or method body. Findings are sorted descending by metric — agents typically only care about the top N, so pair with `min_metric` to set a cutoff (e.g. 10 for 'noteworthy', 20 for 'review now'). Rule scopes via fn.source_id when source_id is provided.",
+  "Query": "\n\t\t\tSELECT fn.source_id,\n\t\t\t       fn.node_id,\n\t\t\t       fn.start_byte,\n\t\t\t       fn.end_byte,\n\t\t\t       fn.start_row,\n\t\t\t       fn.start_col,\n\t\t\t       COUNT(branch.node_id) AS metric\n\t\t\tFROM _ast fn\n\t\t\tLEFT JOIN _ast branch\n\t\t\t  ON branch.source_id = fn.source_id\n\t\t\t  AND branch.node_id LIKE fn.node_id || '/%%'\n\t\t\t  AND branch.node_kind IN ('if_statement','for_statement','case_clause','expression_case','type_case','communication_case','default_case')\n\t\t\tWHERE fn.node_kind IN ('function_declaration','method_declaration')\n\t\t\t%s\n\t\t\tGROUP BY fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col\n\t\t\tORDER BY metric DESC, fn.source_id, fn.start_byte\n\t\t",
+  "ScopeColumn": "fn.source_id",
+  "Requires": [
+    "_ast"
+  ],
+  "DefaultMinMetric": 0,
+  "Severity": "",
+  "Tags": null
+}
