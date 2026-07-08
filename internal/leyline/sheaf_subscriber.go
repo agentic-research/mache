@@ -7,8 +7,22 @@ import (
 	"time"
 )
 
-// SheafSubscriber owns a long-lived `subscribe` connection to the ley-line
-// daemon, dispatching pushed `sheaf.invalidate` events to a handler.
+// SheafSubscriber owns a long-lived `subscribe` connection to the
+// ley-line daemon, dispatching pushed sheaf-invalidate events to a
+// handler.
+//
+// Two topics feed the same handler:
+//
+//   - `sheaf.invalidate` — pre-v0.6 consumer-driven emit from
+//     `op_sheaf_invalidate` (mache calls this from its own watcher via
+//     [SheafClient.Invalidate]).
+//   - `daemon.sheaf.invalidate` — LLO v0.6+ watcher-driven emit from
+//     the daemon's own enrichment cycle (LLO PR #140 / bead
+//     `ley-line-open-3b3476`), carrying the coarse-v1 payload shape
+//     documented on [SheafInvalidateEvent].
+//
+// Both variants decode to a single [SheafInvalidateEvent]; the routing
+// layer in cmd/sheaf_subscribe.go dispatches on the Scope field.
 //
 // FIXED UPSTREAM (LLO v0.4.3, ley-line-open-5caa59): pre-v0.4.3 LLO
 // daemons did NOT actually deliver sheaf.invalidate events to UDS
@@ -92,19 +106,98 @@ type SheafSubscriber struct {
 // implementations must guard their own state.
 type EventHandler func(SheafInvalidateEvent)
 
-// SheafInvalidateEvent is the parsed shape of a sheaf.invalidate event
-// pushed by the daemon. Generation is parsed from the wire's quoted-
-// string Int64 (capnp-json convention, see PR #382's parseUint64).
+// Sheaf-invalidation scope values carried on the wire.
+//
+// The scope field is emitted by LLO v0.6+ on the watcher-driven
+// `daemon.sheaf.invalidate` topic (LLO PR #140, bead
+// `ley-line-open-3b3476`). The pre-v0.6 consumer-driven
+// `sheaf.invalidate` topic does not carry the field — mache treats
+// its absence as [ScopeChangedOnly] (the historical per-region
+// behavior) so existing callers keep working unchanged.
+const (
+	// ScopeChangedOnly is the fine-grained per-region contract:
+	// invalidate only the caches for regions listed in RegionIDs.
+	// Emitted by:
+	//   - the consumer-driven `sheaf.invalidate` topic (payload has
+	//     no `scope` field; mache infers this variant),
+	//   - the future fine-grained daemon-driven emit (LLO bead
+	//     `e40566`, not yet shipped).
+	ScopeChangedOnly = "changed-only"
+
+	// ScopeAllKnown is the coarse-v1 contract shipped by LLO v0.6:
+	// evict every sheaf-scoped cache entry. Region IDs are still
+	// carried (they list every known region) but callers should NOT
+	// treat them as a whitelist — the daemon is reporting the whole
+	// working set as stale.
+	ScopeAllKnown = "all-known"
+)
+
+// SheafInvalidateEvent is the parsed shape of a sheaf-invalidate event
+// pushed by the daemon. Two on-wire variants collapse to this struct:
+//
+//   - Topic `sheaf.invalidate` (LLO ≤ v0.5, consumer-driven — emitted
+//     from `op_sheaf_invalidate` when a client calls it):
+//     `{invalidated, count, generation, prior_generation}`.
+//   - Topic `daemon.sheaf.invalidate` (LLO v0.6+, watcher-driven —
+//     emitted from the daemon's enrichment cycle, LLO PR #140):
+//     `{region_ids, count, scope, changed_files, current_root,
+//     generation, prior_generation, timestamp_ms}`.
+//
+// `Generation` and `PriorGeneration` are parsed from either raw JSON
+// numbers or capnp-json quoted-string Int64 (see parseUint64) so a
+// single struct handles both encodings without a per-topic parse.
 type SheafInvalidateEvent struct {
-	// Invalidated region IDs the cascade marked stale.
+	// Invalidated carries the region identifiers the daemon named in
+	// the payload. Populated from `invalidated` (consumer-driven) or
+	// `region_ids` (watcher-driven). Interpretation depends on Scope
+	// (see the constants above): under ScopeChangedOnly this is a
+	// whitelist to invalidate; under ScopeAllKnown it's a snapshot of
+	// every known region and callers should evict everything.
+	//
+	// The field keeps its pre-v0.6 name (rather than being renamed to
+	// `RegionIDs`) to preserve the public-API contract of the mache
+	// event surface. The `region_ids` wire field is decoded into it
+	// too.
 	Invalidated []int
-	// Generation is the daemon's monotonic counter at the time of the
-	// cascade. Agents compare this to a previously-cached value to
-	// decide whether their snapshot is still fresh.
+
+	// Generation is the daemon's monotonic counter after the emit.
+	// Agents compare this to a previously-cached value to decide
+	// whether their snapshot is still fresh.
 	Generation uint64
+
+	// PriorGeneration is the counter value before this event's bump.
+	// Populated on both topics.
+	PriorGeneration uint64
+
 	// Count mirrors len(Invalidated); kept as a separate wire field
 	// because the daemon emits it that way.
 	Count int
+
+	// Scope classifies the event: [ScopeChangedOnly] or [ScopeAllKnown].
+	// See the constants for semantics + wire-emission provenance. The
+	// dispatcher treats an unknown non-empty value as ScopeAllKnown
+	// (over-invalidate rather than serve stale) and logs a warning so
+	// a new future scope value isn't silently dropped.
+	//
+	// Empty when parsed from the consumer-driven topic (which
+	// pre-dates the field) — cmd routing infers ScopeChangedOnly for
+	// the empty case.
+	Scope string
+
+	// ChangedFiles lists the files whose reparse triggered the emit.
+	// Watcher-driven topic only; empty from the consumer-driven topic
+	// (which has no file context — the caller decides which regions
+	// to poke).
+	ChangedFiles []string
+
+	// CurrentRoot is the 64-hex BLAKE3 root of the substrate state
+	// after the emit. Watcher-driven topic only; may be empty when
+	// the daemon's controller read failed (best-effort, degrades
+	// honestly per LLO PR #140).
+	CurrentRoot string
+
+	// TimestampMs is now_ms() at emit time. Watcher-driven topic only.
+	TimestampMs int64
 }
 
 // SubscriberState classifies the subscriber's connection state.
@@ -268,7 +361,22 @@ func (s *SheafSubscriber) run(ctx context.Context) {
 		}
 
 		// Subscribe.
-		evCh, err := sock.Subscribe([]string{"sheaf.invalidate"})
+		//
+		// Two topics feed the same dispatch:
+		//   - `sheaf.invalidate` — pre-v0.6 consumer-driven emit
+		//     (from `op_sheaf_invalidate` on client-triggered ops).
+		//   - `daemon.sheaf.invalidate` — LLO v0.6+ watcher-driven
+		//     emit (from the daemon's own file-change enrichment,
+		//     LLO PR #140 / bead `ley-line-open-3b3476`). Closes the
+		//     sheaf-invalidation loop end-to-end so mache no longer
+		//     needs to poke the daemon after every observed file
+		//     change.
+		//
+		// The subscribe response replays historical events, so
+		// resubscribing over an existing conn will re-drain topics
+		// that had events during the disconnect window — safe under
+		// the daemon's dedup on generation counter.
+		evCh, err := sock.Subscribe([]string{"sheaf.invalidate", "daemon.sheaf.invalidate"})
 		if err != nil { // coverage:ignore — Subscribe error path (post-dial); reduction tracked in mache-89b5dd.
 			s.setState(StateDisconnected, fmt.Sprintf("subscribe: %v", err)) // coverage:ignore — Subscribe error path; reduction tracked in mache-89b5dd.
 			_ = sock.Close()                                                 // coverage:ignore — Subscribe error path; reduction tracked in mache-89b5dd.
@@ -318,30 +426,43 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 }
 
 // dispatch parses a single event map and calls the handler. Events
-// with a non-matching topic are silently dropped — they're structurally
-// impossible from the daemon side (we only subscribed to one topic),
-// so reaching them indicates a daemon-side bug rather than a runtime
-// condition agents need to observe. Updated from the prior "logged
-// and skipped" docstring (PR #384 Copilot #2) to match what the code
-// actually does; the runtime log line would just be noise on a
-// subscribed-topic stream.
+// with a topic mache did not subscribe to are silently dropped —
+// they're structurally impossible from the daemon side (we only
+// subscribed to two topics), so reaching them indicates a daemon-side
+// bug rather than a runtime condition agents need to observe. Updated
+// from the prior "logged and skipped" docstring (PR #384 Copilot #2)
+// to match what the code actually does; the runtime log line would
+// just be noise on a subscribed-topic stream.
 //
-// Wire shape (pinned against LLO v0.4.3 via
-// tools/sheaf-subscribe-probe/main.go):
+// Two wire shapes are unified here:
 //
-//	{"event": true, "seq": N, "source": "leyline",
-//	 "topic": "sheaf.invalidate",
-//	 "data": {"invalidated": [...], "generation": N, "count": N,
-//	          "prior_generation": N}}
+//  1. Consumer-driven `sheaf.invalidate` (LLO ≤ v0.5, pinned against
+//     LLO v0.4.3 via tools/sheaf-subscribe-probe/main.go):
+//
+//     {"event": true, "seq": N, "source": "leyline",
+//     "topic": "sheaf.invalidate",
+//     "data": {"invalidated": [...], "generation": N, "count": N,
+//     "prior_generation": N}}
+//
+//  2. Watcher-driven `daemon.sheaf.invalidate` (LLO v0.6+, LLO
+//     PR #140 / bead `ley-line-open-3b3476`):
+//
+//     {"event": true, "seq": N, "source": "leyline",
+//     "topic": "daemon.sheaf.invalidate",
+//     "data": {"region_ids": [...], "count": N, "scope": "all-known",
+//     "changed_files": [...], "current_root": "<hex>",
+//     "generation": "N", "prior_generation": "N",
+//     "timestamp_ms": "N"}}
 //
 // Payload fields are nested under `data`. Pre-v0.4.3 the daemon
 // never delivered the event at all (ley-line-open-5caa59), so the
 // envelope wasn't observable from mache's side until the fix shipped.
 func (s *SheafSubscriber) dispatch(ev map[string]any) {
 	topic, _ := ev["topic"].(string)
-	if topic != "sheaf.invalidate" { // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
-		// Only sheaf.invalidate is subscribed; silently ignore the
-		// impossible case rather than emit log noise per event.
+	if topic != "sheaf.invalidate" && topic != "daemon.sheaf.invalidate" { // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
+		// Only the two sheaf-invalidate topics are subscribed;
+		// silently ignore the impossible case rather than emit log
+		// noise per event.
 		return // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 	} // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 
@@ -351,9 +472,20 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) {
 	// the topic-was-delivered signal and can decide what to do.
 	data, _ := ev["data"].(map[string]any)
 
+	// Region IDs live in `region_ids` on the watcher-driven topic and
+	// `invalidated` on the consumer-driven topic. Read both — the one
+	// that's present wins; if both are somehow present the
+	// watcher-driven `region_ids` takes precedence (its emit is the
+	// canonical source of "here's what's stale").
+	regions := parseIntSlice(data["region_ids"])
+	if len(regions) == 0 {
+		regions = parseIntSlice(data["invalidated"])
+	}
+
 	parsed := SheafInvalidateEvent{
-		Invalidated: parseIntSlice(data["invalidated"]),
-		Generation:  parseUint64(data["generation"]),
+		Invalidated:     regions,
+		Generation:      parseUint64(data["generation"]),
+		PriorGeneration: parseUint64(data["prior_generation"]),
 	}
 	if v, ok := data["count"].(float64); ok {
 		parsed.Count = int(v)
@@ -361,12 +493,62 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) {
 		parsed.Count = len(parsed.Invalidated) // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
 	} // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
 
+	// New coarse-v1 fields (watcher-driven topic). Absent on the
+	// consumer-driven topic; the zero values are the correct default
+	// for the routing layer to infer ScopeChangedOnly.
+	if scope, ok := data["scope"].(string); ok {
+		parsed.Scope = scope
+	}
+	parsed.ChangedFiles = parseStringSlice(data["changed_files"])
+	if root, ok := data["current_root"].(string); ok {
+		parsed.CurrentRoot = root
+	}
+	parsed.TimestampMs = parseInt64(data["timestamp_ms"])
+
 	s.mu.Lock()
 	s.lastEvent = time.Now()
 	s.lastGeneration = parsed.Generation
 	s.mu.Unlock()
 
 	s.handler(parsed)
+}
+
+// parseStringSlice extracts []string from a JSON-decoded []any.
+// Returns nil for a nil / non-slice input, and skips non-string
+// entries within the slice (rather than aborting) so a malformed
+// entry doesn't drop otherwise-valid file paths.
+func parseStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// parseInt64 accepts a float64 (raw JSON number) or a string (capnp-
+// json's quoted-Int64 rendering) and returns the corresponding int64.
+// Returns 0 for any other shape. Timestamp fields cross the 2^53
+// safe-integer ceiling around year 2255, so the quoted-string form
+// isn't strictly needed today, but LLO emits timestamps as strings
+// (see PR #140's `now_ms().to_string()`) for consistency with the
+// generation counters, and this helper matches that shape.
+func parseInt64(v any) int64 {
+	switch x := v.(type) {
+	case float64:
+		return int64(x)
+	case string:
+		var n int64
+		_, _ = fmt.Sscanf(x, "%d", &n)
+		return n
+	default:
+		return 0
+	}
 }
 
 // setState updates the connection state under the write lock. Reason
