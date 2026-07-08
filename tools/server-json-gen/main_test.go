@@ -17,15 +17,14 @@ func TestBuildDoc_EmitsOCIPackage(t *testing.T) {
 	if p.RegistryType != "oci" {
 		t.Errorf("registryType = %q, want \"oci\"", p.RegistryType)
 	}
-	// OCI packages carry the tag IN the identifier (registry/repo:tag) per the
-	// pinned MCP schema, v-prefixed to match release.yml's `:${TAG}` so a
-	// resolver can actually pull it. serverVersion is single-sourced from buildinfo.
-	wantIdent := "ghcr.io/agentic-research/mache:v" + serverVersion
-	if p.Identifier != wantIdent {
-		t.Errorf("identifier = %q, want %q (tag embedded + v-prefixed to match the published image)", p.Identifier, wantIdent)
+	// ADR-0041 canonical form: identifier is TAGLESS (the image name); version is
+	// the git tag (v-prefixed, matching release.yml's `:${TAG}`). cloister resolves
+	// tag→digest and pins identifier@digest. serverVersion single-sourced from buildinfo.
+	if p.Identifier != "ghcr.io/agentic-research/mache" {
+		t.Errorf("identifier = %q, want tagless ghcr.io/agentic-research/mache (ADR-0041)", p.Identifier)
 	}
-	// The standalone `version` field is npm/pypi/nuget-only; OCI must omit it.
-	if p.Version != "" {
-		t.Errorf("version = %q, want empty (OCI version lives in the identifier tag)", p.Version)
+	wantVer := "v" + serverVersion
+	if p.Version != wantVer {
+		t.Errorf("version = %q, want %q (the git tag; ADR-0041 — cloister resolves tag→digest)", p.Version, wantVer)
 	}
 }
