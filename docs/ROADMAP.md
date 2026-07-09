@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.14.0
-last-verified: 2026-07-03
+covers-version: v0.16.2
+last-verified: 2026-07-08
 sources-of-truth:
   - CHANGELOG.md
   - .beads/
@@ -11,7 +11,7 @@ supersedes: []
 
 # Roadmap
 
-## Current state (as of May 2026, post-v0.8.0)
+## Current state (as of 2026-07, through v0.16.2)
 
 v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0**. The wire format between them is now content-addressable: substrate identity is the BLAKE3 `current_root` of the arena payload, not a monotonic generation counter. Old mache reading new arenas (or vice versa) fails loudly with a clear version-mismatch error rather than corrupting reads. See [CHANGELOG.md § v0.8.0](../CHANGELOG.md) for the full break, [ADR-0014](adr/0014-mache-in-constellation.md) for the architectural framing.
 
@@ -20,7 +20,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - 28-language tree-sitter parsing via the standalone CGO path; pure-Go path via [ley-line-open](https://github.com/agentic-research/ley-line-open) `.db` files (see [ARCHITECTURE.md § Interplay with ley-line-open](ARCHITECTURE.md#interplay-with-ley-line-open))
 - Two graph backends: `MemoryStore` (in-memory map for source ingestion) and `SQLiteGraph` (zero-copy SQL over ley-line-open `.db`)
 - NFS-only mount via `go-nfs` + `billy` (FUSE was removed in v0.7.0 per ADR-0006; for FUSE today, use `leyline serve` from ley-line-open)
-- MCP server with **17 tools**: 14 work standalone, 3 require ley-line-open enrichment (`semantic_search`, `get_type_info`, `get_diagnostics`); `find_smells` partially degrades on tree-sitter-only mounts (rules requiring `_ast` need a `.db` built by ley-line-open). The full list: `get_overview`, `find_callers`, `find_callees`, `find_definition`, `search`, `list_directory`, `read_file`, `semantic_search`, `write_file`, `get_type_info`, `get_diagnostics`, `get_impact`, `get_communities`, `get_diagram`, `get_architecture`, `find_smells`, `resolve_ref`.
+- MCP server with **18 tools**: 14 work standalone, 3 require ley-line-open enrichment (`semantic_search`, `get_type_info`, `get_diagnostics`), and `get_sheaf_status` reports the ley-line daemon's cache state (returns `{available: false}` when the daemon is unreachable, so it is safe to call anywhere); `find_smells` partially degrades on tree-sitter-only mounts (rules requiring `_ast` need a `.db` built by ley-line-open). The full list: `get_overview`, `find_callers`, `find_callees`, `find_definition`, `search`, `list_directory`, `read_file`, `semantic_search`, `write_file`, `get_type_info`, `get_diagnostics`, `get_sheaf_status`, `get_impact`, `get_communities`, `get_diagram`, `get_architecture`, `find_smells`, `resolve_ref`.
 - Write-back pipeline: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins` (no re-ingest)
 - Draft mode: invalid writes save as drafts, node path stays stable, errors surface via `_diagnostics/`
 - Context awareness: virtual `context` files expose imports/globals to agents
@@ -28,7 +28,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - **Canonical views** (ADR-0013): `v_defs` / `v_refs` with `(mention ⊑ binding ⊑ reachability)` fidelity ordering — consumer rules query producer-agnostically
 - **Capnp event-log readthrough**: `${db}.bindings.capnp` is the cross-runtime contract for binding refs; `find_smells` reads the canonical event log directly
 - `callers/` and `callees/` virtual directories — self-gating, NFS-served as `graphFile`s
-- `find_smells` MCP tool: 14 rules — 10 code-structure (`dead_code`, `god_file`, `long_function`, `cyclomatic_complexity`, `duplicate_code`, `duplicate_definitions`, `fan_out_skew`, `long_file`, `untested_function`, `magic_int_in_comparison`), 3 doc-drift (`drift_doc_broken_internal_link`, `drift_doc_dead_symbol_reference`, `drift_doc_outdated_count`), 1 test (`sleep_in_test`) — with optional `min_metric` and `source_id` filters; `fan_out_skew` is qualifier-aware via T8.7. Advisory PR comments via `.github/workflows/find-smells.yml`
+- `find_smells` MCP tool: 14 rules — 10 code-structure (`dead_code`, `god_file`, `long_function`, `cyclomatic_complexity`, `duplicate_code`, `duplicate_definitions`, `fan_out_skew`, `long_file`, `untested_function`, `magic_int_in_comparison`), 3 doc-drift (`drift_doc_broken_internal_link`, `drift_doc_dead_symbol_reference`, `drift_doc_outdated_count`), 1 test (`sleep_in_test`) — with optional `min_metric` and `source_id` filters; `fan_out_skew` is qualifier-aware via T8.7. Enforced as a PR gate via `.github/workflows/find-smells.yml` (runs `task smells`, fails on any new finding vs the committed `docs/smell-baseline.json` — since v0.16.0, replacing the earlier advisory comment-only workflow)
 - FCA + greedy entropy schema inference: `--infer` auto-generates topology from data
 - Virtual `_schema.json` at mount root exposing the active topology
 - **Hot-swap polling on `current_root`** — the writer (ley-line-open or mache itself) publishes a BLAKE3 root with each new arena; readers detect swaps via root inequality. Control-block + arena VERSION 2.

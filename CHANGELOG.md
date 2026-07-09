@@ -4,6 +4,89 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [v0.16.2] — 2026-07-08
+
+`server.json`'s OCI package now follows the ADR-0041 ecosystem contract; this
+release also ships deterministic community detection and watcher-driven sheaf
+cache invalidation.
+
+### Changed
+
+- **`server.json` `packages[].oci` → ADR-0041 canonical form** — `identifier` is
+  the tagless image name (`ghcr.io/agentic-research/mache`) with `version` = the
+  git tag (`v0.16.2`). cloister's resolver resolves tag→digest and pins
+  `identifier@digest`. Supersedes v0.16.1's tag-in-identifier shape, which
+  ADR-0041 rejected. (`mache-39e443`)
+
+### Added
+
+- **Deterministic community detection** — connected-components post-split, O(E)
+  modularity, and sorted tie-breaks, so `get_communities` returns identical
+  partitions run-to-run (the sheaf cache key is now stable). (`mache-e1fa1f`,
+  `mache-ff7e31`)
+- **Watcher-driven sheaf invalidation** — mache consumes LLO v0.6+'s
+  `daemon.sheaf.invalidate` events (region-scoped `current_root`/`generation`
+  payload) to flush MCP-tool caches incrementally instead of polling; the dead
+  legacy `sheaf.invalidate` subscription was dropped. (`mache-e4c4ea`,
+  `mache-30c634`)
+
+## [v0.16.1] — 2026-07-08
+
+### Fixed
+
+- **`server.json` OCI tag drift** — `packages[].oci` declared
+  `identifier: ghcr.io/agentic-research/mache` + `version: 0.16.0` while the
+  image is tagged `:v0.16.0`, so a resolver reading `identifier:version` hit a
+  nonexistent `:0.16.0`. (Reshaped to the ADR-0041 form in v0.16.2.)
+  (`mache-03745c`)
+
+## [v0.16.0] — 2026-07-08
+
+Smell rules become data, and mache's gates start enforcing.
+
+### Added
+
+- **Gate-preflight lint** (`internal/lint`, `tools/gate-preflight`) — flags
+  Taskfile gate tasks that invoke an external tool without a preflight guard
+  (`command -v` / `preconditions:` / `go install` / artifact check), so a
+  missing tool fails loud instead of silently no-opping a gate. Wired as
+  `gates:preflight` into `check` + `ci`. (`mache-f0e96a`)
+
+### Changed
+
+- **Smell rules externalized to embedded JSON** — the 14 builtin rules moved
+  from Go struct literals to `cmd/rules/*.json`, loaded via `//go:embed`. Rules
+  are now data (same SQL, byte-identical findings vs baseline); external
+  `MACHE_SMELL_RULES_DIR` rules still append/override. (`mache-b0b979`)
+- **`find-smells.yml` now enforces** — runs `task smells` on PRs and fails on new
+  findings vs `docs/smell-baseline.json` (was advisory / never-fail).
+
+## [v0.15.0] — 2026-07-08
+
+The merkle IR release: mache reads ley-line-open's content-addressed AST.
+
+### Added
+
+- **`node_hash` reader passthrough** — `v_defs`/`v_refs` expose the merkle
+  `node_hash` additively (probe-guarded; `NULL` on standalone dbs, so existing
+  output is byte-identical), plus a one-to-many fan-out guard (a deduped subtree
+  appears at many occurrences; resolution stays per-occurrence, never keyed on
+  `node_hash`). (`mache-ff9a9d`, `mache-ffabd1`)
+
+### Changed
+
+- **Pinned leyline v0.5.7 → v0.6.0** — the merkle-AST IR producer:
+  content-addressed `node_hash` + deduped `node_content` replace the old
+  location-keyed `symbol_id`/`symbols`/`fact_edges` (identical subtrees store
+  once). `go.mod` `leyline-schema` + `leylineBinaryVersion` both move to 0.6,
+  kept in lockstep by the version-parity gate. (`mache-3f0d59`)
+
+### Fixed
+
+- **De-flaked `TestProvenance_RecordAndReport`** under `-race` — the version
+  probe's 2s exec timeout was starved by full-suite contention; extracted to an
+  overridable `probeTimeout` (prod behavior unchanged). (`mache-3a0da5`)
+
 ## [v0.14.0] — 2026-07-04
 
 The "OCI distribution" release. mache now self-publishes a container image and
