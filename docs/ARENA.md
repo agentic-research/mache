@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.14.0
-last-verified: 2026-07-03
+covers-version: v0.16.2
+last-verified: 2026-07-08
 sources-of-truth:
   - scripts/arena.sh
 audience: [contributors, evaluators, agent developers]

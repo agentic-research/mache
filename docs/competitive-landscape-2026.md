@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.14.0
-last-verified: 2026-07-03
+covers-version: v0.16.2
+last-verified: 2026-07-08
 sources-of-truth:
   - CHANGELOG.md
   - docs/ROADMAP.md
@@ -21,12 +21,12 @@ This document surveys nine tools that overlap with mache's territory — code in
 
 The unit of comparison is **mache paired with [ley-line-open](https://github.com/agentic-research/ley-line-open)**, not standalone mache. This pairing is the supported configuration shipped together as a coordinated release wave (v0.8.0 ↔ ley-line-open v0.2.0), and the architectural framing was made explicit in [ADR-0014](adr/0014-mache-in-constellation.md) and the CGO-removal path of [ADR-0012](adr/0012-cgo-removal-migration.md).
 
-- **mache** is the projection engine, MCP server (17 tools), NFS expression layer, and write-back pipeline. Pure Go on the paired path; falls back to a CGO tree-sitter walker when leyline-built `.db` artifacts aren't available.
+- **mache** is the projection engine, MCP server (18 tools), NFS expression layer, and write-back pipeline. Pure Go on the paired path; falls back to a CGO tree-sitter walker when leyline-built `.db` artifacts aren't available.
 - **ley-line-open** produces the substrate mache consumes: the AST tables, the capnp binding event log, LSP outputs (`_lsp_defs` / `_lsp_refs` / `_lsp_hover` / `_lsp`), and fastembed embeddings (`all-MiniLM-L6-v2`, the same model Continue.dev ships).
 
-A few mache tools only light up when a ley-line-open `.db` is present: `semantic_search`, `get_type_info`, `get_diagnostics`, and 5 of the 14 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`, `duplicate_code` — the `_ast`-dependent subset). The other thirteen MCP tools work standalone. Throughout this doc, "mache" means the paired configuration unless a row or comparison is explicitly called out as standalone-only.
+A few mache tools only light up when a ley-line-open `.db` is present: `semantic_search`, `get_type_info`, `get_diagnostics`, and 5 of the 14 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`, `duplicate_code` — the `_ast`-dependent subset). The other fourteen MCP tools work standalone. Throughout this doc, "mache" means the paired configuration unless a row or comparison is explicitly called out as standalone-only.
 
-Mache is an **AI-native projection engine**: declarative JSON schemas turn structured data (JSON, SQLite, source code) into a navigable graph, exposed equally as a primary MCP server (17 tools) or an in-process NFS server (`go-nfs` + `billy` — an embedded server, not an OS export). The filesystem is one expression layer; the graph engine is the product. It supports AST decomposition (28 languages via tree-sitter or ley-line-open `leyline parse`), identity-preserving write-back with tree-sitter validation, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings via the ley-line-open event log), `find_smells` structural rules (qualifier-aware), Louvain community detection, schema inference via FCA + greedy entropy, semantic search over `all-MiniLM-L6-v2` embeddings (via ley-line-open), pre-baked LSP results (defs/refs/hover/diagnostics) without a runtime daemon, an `fsnotify` file watcher for incremental re-ingest (`cmd/serve.go`), and content-addressable substrate identity (`current_root`) for hot-swap.
+Mache is an **AI-native projection engine**: declarative JSON schemas turn structured data (JSON, SQLite, source code) into a navigable graph, exposed equally as a primary MCP server (18 tools) or an in-process NFS server (`go-nfs` + `billy` — an embedded server, not an OS export). The filesystem is one expression layer; the graph engine is the product. It supports AST decomposition (28 languages via tree-sitter or ley-line-open `leyline parse`), identity-preserving write-back with tree-sitter validation, cross-references (`callers/`, `callees/`, address refs, capnp-backed bindings via the ley-line-open event log), `find_smells` structural rules (qualifier-aware), Louvain community detection, schema inference via FCA + greedy entropy, semantic search over `all-MiniLM-L6-v2` embeddings (via ley-line-open), pre-baked LSP results (defs/refs/hover/diagnostics) without a runtime daemon, an `fsnotify` file watcher for incremental re-ingest (`cmd/serve.go`), and content-addressable substrate identity (`current_root`) for hot-swap.
 
 ______________________________________________________________________
 
@@ -81,7 +81,7 @@ ______________________________________________________________________
 - FCA-based schema inference.
 - Semantic search via embeddings (`semantic_search` MCP tool, fastembed-backed via ley-line-open).
 - `callees/` virtual directories (forward call graph) and the `callers/` self-gating virtual dirs.
-- `find_smells` structural rules (9, qualifier-aware).
+- `find_smells` structural rules (14, qualifier-aware).
 
 **Gaps worth closing:**
 
@@ -297,8 +297,8 @@ ______________________________________________________________________
 
 **Gaps worth closing:**
 
-- PR-review productization. mache exposes the primitives — `get_impact` (already shipped) traces change blast radius through `callers/callees`, and `find_smells` flags structural issues. What's missing is the GitHub PR workflow on top: a bot that reads diffs, calls `get_impact` + `find_smells`, and posts inline review comments. (`.github/workflows/find-smells.yml` exists for advisory PR comments — a starting point.)
-- ast-grep integration: ast-grep's pattern-matching could complement tree-sitter queries for more expressive structural search beyond the 9 `find_smells` rules.
+- PR-review productization. mache exposes the primitives — `get_impact` (already shipped) traces change blast radius through `callers/callees`, and `find_smells` flags structural issues. What's missing is the GitHub PR workflow on top: a bot that reads diffs, calls `get_impact` + `find_smells`, and posts inline review comments. (`.github/workflows/find-smells.yml` now enforces `task smells` as a PR gate — failing on any new finding vs the committed `docs/smell-baseline.json`, since v0.16.0 — but posting inline review comments is still the missing productization step.)
+- ast-grep integration: ast-grep's pattern-matching could complement tree-sitter queries for more expressive structural search beyond the 14 `find_smells` rules.
 
 **Sources:** [CodeRabbit](https://www.coderabbit.ai/), [CodeRabbit docs](https://docs.coderabbit.ai/), [Architecture blog](https://learnwithparam.com/blog/architecting-coderabbit-ai-agent-at-scale), [Google Cloud blog](https://cloud.google.com/blog/products/ai-machine-learning/how-coderabbit-built-its-ai-code-review-agent-with-google-cloud-run)
 
