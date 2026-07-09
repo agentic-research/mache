@@ -148,3 +148,57 @@ func tokenFromNodeID(nodeID string) string {
 	}
 	return nodeID
 }
+
+// TestDuplicateDefinitions_LeylineGoMethods_NotFlagged pins that the fix is not
+// Rust-only: leyline parses GO methods the same way — bare token under
+// `method_declaration_N`, NO `methods/` segment — so LLO-Go methods collide by
+// token exactly like Rust. (The mache Go-SCHEMA's `methods/` path is a
+// tree-sitter+go-schema artifact, absent from every leyline projection.)
+func TestDuplicateDefinitions_LeylineGoMethods_NotFlagged(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "llogo.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
+			record_id TEXT, record JSON, source_file TEXT
+		);
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- LLO-Go methods: bare token under method_declaration_N (Foo.New, Bar.New, ...).
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
+			('main.go/method_declaration_0', NULL, 'New',     1, 0, 'main.go'),
+			('main.go/method_declaration_2', NULL, 'New',     1, 0, 'main.go'),
+			('main.go/method_declaration_1', NULL, 'Compute', 1, 0, 'main.go'),
+			('main.go/method_declaration_3', NULL, 'Compute', 1, 0, 'main.go'),
+			-- Genuine free-function duplicate (top-level function_declaration in
+			-- two files) — must still be flagged.
+			('a.go/function_declaration_0', NULL, 'DupFree', 1, 0, 'a.go'),
+			('b.go/function_declaration_0', NULL, 'DupFree', 1, 0, 'b.go');
+
+		INSERT INTO node_defs (token, node_id) VALUES
+			('New',     'main.go/method_declaration_0'),
+			('New',     'main.go/method_declaration_2'),
+			('Compute', 'main.go/method_declaration_1'),
+			('Compute', 'main.go/method_declaration_3'),
+			('DupFree', 'a.go/function_declaration_0'),
+			('DupFree', 'b.go/function_declaration_0');
+	`)
+	require.NoError(t, err)
+
+	findings := runDuplicateDefinitions(t, &smellTestGraph{db: db})
+
+	var sawDupFree bool
+	for _, f := range findings {
+		assert.NotContainsf(t, f.NodeID, "method_declaration",
+			"LLO-Go method %q must not be flagged as a duplicate definition (mache-22fecf)", f.NodeID)
+		if f.NodeID == "a.go/function_declaration_0" || f.NodeID == "b.go/function_declaration_0" {
+			sawDupFree = true
+		}
+	}
+	assert.True(t, sawDupFree, "a genuine free-function duplicate must still be flagged")
+}
