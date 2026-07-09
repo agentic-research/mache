@@ -98,8 +98,13 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_treesitter.go",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "fan_out_skew",
@@ -119,7 +124,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/vfs/schema.go",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "fan_out_skew",
