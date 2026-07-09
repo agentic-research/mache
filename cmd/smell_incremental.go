@@ -46,6 +46,11 @@ const cyclomaticRuleID = "cyclomatic_complexity"
 // hash. hits/misses are per-process counters the tests and bench read to prove
 // the cache is actually load-bearing (a memo that never caches would show zero
 // hits and pass correctness trivially — the oracle asserts hits > 0).
+//
+// NOT safe for concurrent use, and it grows unbounded — a deleted or edited
+// subtree's hash stays resident. Phase-1 callers are single-scan, so neither
+// bites. The phase-2 long-lived concurrent daemon MUST add synchronization and
+// an eviction policy before wiring this in (tracked: mache-a1989b).
 type smellMemo struct {
 	metric map[string]int64 // node_hash hex → cyclomatic metric
 	hits   int              // occurrences served from the memo without recompute
@@ -142,9 +147,12 @@ func runCyclomaticComplexityMemo(qg refsQuerier, sourceID string, limit int, mem
 	}
 
 	// Match the rule's ORDER BY metric DESC, source_id, start_byte. (source_id,
-	// start_byte) is unique per occurrence, so the order is total and
-	// deterministic — a prerequisite for byte-identical parity.
-	sort.Slice(out, func(i, j int) bool {
+	// start_byte) is unique per top-level function/method occurrence, so the
+	// order is total and deterministic — a prerequisite for byte-identical
+	// parity. SliceStable (not Slice) as belt-and-suspenders: if that
+	// uniqueness ever breaks for a new node kind, a stable sort keeps the
+	// truncation boundary predictable rather than arbitrary.
+	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Metric != out[j].Metric {
 			return out[i].Metric > out[j].Metric
 		}
@@ -157,8 +165,11 @@ func runCyclomaticComplexityMemo(qg refsQuerier, sourceID string, limit int, mem
 		out = out[:limit]
 	}
 
-	// Parity with runSmellRule (no-op for cyclomatic: spans are already set, so
-	// enrichLocations finds nothing to backfill).
+	// Call enrichLocations for exact parity with runSmellRule (which always
+	// calls it). For cyclomatic it backfills nothing meaningful — spans are
+	// already set — EXCEPT a function at byte 0 / row 0 satisfies needsLoc and
+	// gets rewritten with the same zero values, which runSmellRule does too, so
+	// the parity holds either way.
 	if err := enrichLocations(qg, out); err != nil {
 		return nil, err
 	}

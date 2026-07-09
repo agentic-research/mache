@@ -148,9 +148,13 @@ func cyclomaticRule(t testing.TB) *SmellRule {
 
 const oracleLimit = 100000
 
-// TestCyclomaticMemo_KindsMatchRule pins that the fixture's countedKinds are
-// exactly the kinds the rule's SQL counts — a drift guard so the oracle can't
-// silently stop exercising a kind the rule cares about.
+// TestCyclomaticMemo_KindsMatchRule is the drift guard across all three copies
+// of the counted-kind set: the rule SQL (cyclomatic_complexity.json), the
+// PRODUCTION const cyclomaticBranchKinds (the list that actually computes the
+// memoized metric), and the test's countedKinds (what the fixtures exercise).
+// The production const is the load-bearing one — a memo that counts a different
+// kind set than the rule diverges — so it is checked against the rule directly,
+// not just incidentally via the oracle.
 func TestCyclomaticMemo_KindsMatchRule(t *testing.T) {
 	q := cyclomaticRule(t).Query
 	for _, k := range countedKinds {
@@ -159,6 +163,13 @@ func TestCyclomaticMemo_KindsMatchRule(t *testing.T) {
 	for _, k := range uncountedKinds {
 		assert.NotContainsf(t, q, "'"+k+"'", "rule now counts %q — it must move to countedKinds", k)
 	}
+	// The production kind set must match the rule too — this is the copy that
+	// computes the metric, so its drift is a real byte-identity bug.
+	for _, k := range cyclomaticBranchKinds {
+		assert.Containsf(t, q, "'"+k+"'", "rule no longer counts %q — update cyclomaticBranchKinds", k)
+	}
+	assert.ElementsMatch(t, countedKinds, cyclomaticBranchKinds,
+		"test countedKinds and production cyclomaticBranchKinds must stay in sync")
 }
 
 // TestCyclomaticMemo_DuplicatedSubtrees is oracle case (b): a subtree that
@@ -286,7 +297,127 @@ func TestCyclomaticMemo_DifferentialOracle_RandomEdits(t *testing.T) {
 
 		assert.Equalf(t, jsonOrPanic(want), jsonOrPanic(got),
 			"memoized diverged from full scan at step %d", step)
-		_ = db.Close()
+		// db is closed by buildASTFixture's t.Cleanup — no explicit close here.
 	}
 	assert.True(t, sawHit, "the persistent memo must serve at least one cache hit across the edit sequence")
+}
+
+// TestCyclomaticMemo_LimitTruncation exercises the out[:limit] path (the main
+// oracle uses limit=100000 and never truncates). Includes a tie group that
+// straddles the limit boundary, stressing the stable-sort tie-break
+// (metric DESC, source_id, start_byte) against SQL's ORDER BY..LIMIT.
+func TestCyclomaticMemo_LimitTruncation(t *testing.T) {
+	var funcs []fixFunc
+	// Four functions with metric 2 (same shape, distinct hashes+locations) that
+	// straddle a limit cut, plus a couple of distinct metrics above/below.
+	tie := []string{"if_statement", "for_statement"} // metric 2
+	for i := range 4 {
+		funcs = append(funcs, fixFunc{
+			sourceID:  fmt.Sprintf("pkg/tie%d.go", i),
+			nodeID:    fmt.Sprintf("pkg/tie%d.go/T", i),
+			hash:      hashFor(fmt.Sprintf("tie-%d", i)),
+			branches:  tie,
+			startByte: i * 500,
+			startRow:  i * 20,
+		})
+	}
+	funcs = append(funcs,
+		fixFunc{sourceID: "pkg/hi.go", nodeID: "pkg/hi.go/H", hash: hashFor("hi"), branches: []string{"if_statement", "for_statement", "case_clause", "type_case"}, startByte: 9000, startRow: 900},
+		fixFunc{sourceID: "pkg/lo.go", nodeID: "pkg/lo.go/L", hash: hashFor("lo"), branches: []string{"if_statement"}, startByte: 9500, startRow: 950},
+	)
+
+	db := buildASTFixture(t, funcs)
+	qg := &sqlDBQuerier{db: db}
+
+	for _, limit := range []int{1, 3, 5} {
+		want, err := runSmellRule(qg, cyclomaticRule(t), "", limit)
+		require.NoError(t, err)
+		got, err := runCyclomaticComplexityMemo(qg, "", limit, newSmellMemo())
+		require.NoError(t, err)
+		assert.Equalf(t, jsonOrPanic(want), jsonOrPanic(got),
+			"memoized diverged from full scan at limit=%d", limit)
+		assert.LessOrEqualf(t, len(got), limit, "limit=%d must truncate", limit)
+	}
+}
+
+// TestCyclomaticMemo_HashlessAndMixed exercises the f.hashHex=="" path: some
+// functions carry no node_hash (nil), mixed with hashed ones. Hashless
+// functions must be computed every scan (never cached) and parity must hold
+// across a re-run of the persistent memo.
+func TestCyclomaticMemo_HashlessAndMixed(t *testing.T) {
+	funcs := []fixFunc{
+		{sourceID: "pkg/a.go", nodeID: "pkg/a.go/Hashed", hash: hashFor("h1"), branches: []string{"if_statement", "for_statement"}, startByte: 0, startRow: 0},
+		{sourceID: "pkg/a.go", nodeID: "pkg/a.go/Nil1", hash: nil, branches: []string{"if_statement", "case_clause", "block"}, startByte: 1000, startRow: 50},
+		{sourceID: "pkg/b.go", nodeID: "pkg/b.go/Nil2", hash: nil, branches: []string{"for_statement"}, startByte: 2000, startRow: 100},
+		{sourceID: "pkg/b.go", nodeID: "pkg/b.go/HashedDup", hash: hashFor("h1"), branches: []string{"if_statement", "for_statement"}, startByte: 3000, startRow: 150},
+	}
+	db := buildASTFixture(t, funcs)
+	qg := &sqlDBQuerier{db: db}
+	want, err := runSmellRule(qg, cyclomaticRule(t), "", oracleLimit)
+	require.NoError(t, err)
+
+	memo := newSmellMemo()
+	for run := range 2 {
+		got, err := runCyclomaticComplexityMemo(qg, "", oracleLimit, memo)
+		require.NoError(t, err)
+		assert.Equalf(t, jsonOrPanic(want), jsonOrPanic(got), "mixed-hash parity failed on run %d", run)
+	}
+	// The two hashless functions are computed on every scan (never cached): 2
+	// per run × 2 runs = 4 hashless computes. The shared h1 subtree is computed
+	// once and cache-hit thereafter.
+	assert.GreaterOrEqual(t, memo.misses, 4, "each hashless occurrence must be (re)computed every scan")
+}
+
+// TestCyclomaticMemo_SourceScoped exercises scanASTFunctions' sourceID!="" WHERE
+// clause: a multi-source fixture scanned scoped to one source must match the
+// scoped full scan byte-for-byte.
+func TestCyclomaticMemo_SourceScoped(t *testing.T) {
+	funcs := []fixFunc{
+		{sourceID: "pkg/a.go", nodeID: "pkg/a.go/A1", hash: hashFor("a1"), branches: []string{"if_statement", "for_statement"}, startByte: 0, startRow: 0},
+		{sourceID: "pkg/a.go", nodeID: "pkg/a.go/A2", hash: hashFor("a2"), branches: []string{"case_clause"}, startByte: 500, startRow: 25},
+		{sourceID: "pkg/b.go", nodeID: "pkg/b.go/B1", hash: hashFor("b1"), branches: []string{"if_statement", "if_statement", "for_statement"}, startByte: 0, startRow: 0},
+	}
+	db := buildASTFixture(t, funcs)
+	qg := &sqlDBQuerier{db: db}
+
+	want, err := runSmellRule(qg, cyclomaticRule(t), "pkg/a.go", oracleLimit)
+	require.NoError(t, err)
+	got, err := runCyclomaticComplexityMemo(qg, "pkg/a.go", oracleLimit, newSmellMemo())
+	require.NoError(t, err)
+	assert.Equal(t, jsonOrPanic(want), jsonOrPanic(got), "source-scoped scan must match")
+	for _, f := range got {
+		assert.Equal(t, "pkg/a.go", f.SourceID, "scoped scan must not leak other sources")
+	}
+}
+
+// TestCyclomaticMemo_NoHashColumn exercises scanASTFunctions' hasHash==false
+// branch: an _ast with NO node_hash column at all (a standalone / non-merkle
+// producer). Every function is computed (nothing cacheable) and parity holds.
+func TestCyclomaticMemo_NoHashColumn(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "nohash.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE _ast (
+			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL,
+			start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
+			start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER
+		);
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		INSERT INTO _ast VALUES ('s.go/F', 's.go', 'function_declaration', 0, 500, 0, 0, 20, 0);
+		INSERT INTO _ast VALUES ('s.go/F/if', 's.go', 'if_statement', 10, 20, 1, 0, 0, 0);
+		INSERT INTO _ast VALUES ('s.go/F/for', 's.go', 'for_statement', 30, 40, 2, 0, 0, 0);
+		INSERT INTO _ast VALUES ('s.go/G', 's.go', 'method_declaration', 600, 900, 30, 0, 45, 0);
+	`)
+	require.NoError(t, err)
+	qg := &sqlDBQuerier{db: db}
+
+	want, err := runSmellRule(qg, cyclomaticRule(t), "", oracleLimit)
+	require.NoError(t, err)
+	memo := newSmellMemo()
+	got, err := runCyclomaticComplexityMemo(qg, "", oracleLimit, memo)
+	require.NoError(t, err)
+	assert.Equal(t, jsonOrPanic(want), jsonOrPanic(got), "no-node_hash-column parity must hold")
+	assert.Equal(t, 0, memo.hits, "no node_hash column ⟹ nothing cacheable ⟹ zero cache hits")
 }

@@ -19,7 +19,7 @@ import (
 // MemoWarm/ns-per-op well below FullScan is the phase-1 result.
 
 // seedCyclomaticMemoFixture builds an _ast db of nFuncs function occurrences
-// spread over distinct distinct subtrees, each with a node_hash. Every subtree
+// spread over `distinct` unique subtrees, each with a node_hash. Every subtree
 // has three counted branches, so the metric is a constant 3 — the point is the
 // scan cost, not the metric spread.
 func seedCyclomaticMemoFixture(b *testing.B, nFuncs, distinct int) []fixFunc {
