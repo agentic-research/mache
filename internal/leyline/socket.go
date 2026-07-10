@@ -791,18 +791,20 @@ func (c *SocketClient) Prioritize(files []string) error {
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
 // As of this pin, the daemon binary and go.mod's leyline-schema are both
-// v0.7.0 — LLO releases the binary and the Go schema-client in lockstep
+// v0.7.1 — LLO releases the binary and the Go schema-client in lockstep
 // (SCHEMA_VERSION == BINARY_VERSION in the daemon's version.rs). v0.7.0 raised
-// the daemon's compat_min_schema_version to 0.6.0 and added the source_blobs /
-// capnp_blobs / _ast_pointer tables, the unified daemon.sheaf.invalidate topic
-// (payload key region_ids→invalidated, which mache tolerates by parsing both),
-// and cross-language def/ref extraction with qualified method tokens + Python/
-// JS/TS coverage + populated nodes.source_file — the fidelity fixes that
-// mache's own smell rules first surfaced (ley-line-open-caf423).
+// the daemon's compat_min_schema_version to 0.6.0 and added source_blobs /
+// capnp_blobs / _ast_pointer, the unified daemon.sheaf.invalidate topic (payload
+// key region_ids→invalidated, tolerated by parsing both), and cross-language
+// def/ref extraction (qualified method tokens + Python/JS/TS + populated
+// nodes.source_file, ley-line-open-caf423). v0.7.1 is a WIRE-UNCHANGED sheaf-
+// correctness patch (δ⁰ orientation-invariance, cascade fixed-point, threshold
+// in norm space, stalks-store-rates) — consumers get more accurate invalidation
+// sets, no client changes required.
 //
 // The major/minor must still match the schema (wire format); only the patch
-// floats. v0.7.0 ships all four leyline-<os>-<arch> daemon binaries
-// (darwin/linux × amd64/arm64).
+// floats — so version-check (leylineVersionMatchesPin) accepts any 0.7.x. v0.7.1
+// ships all four leyline-<os>-<arch> daemon binaries (darwin/linux × amd64/arm64).
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets;
 // bump the go.mod leyline-schema pin too whenever the WIRE format changes.
@@ -812,7 +814,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. Its major.minor is kept in lockstep with the go.mod leyline-schema
 // pin by the version-parity gate (mache-b8af69).
-const leylineBinaryVersion = "v0.7.0"
+const leylineBinaryVersion = "v0.7.1"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private
