@@ -718,6 +718,7 @@ func swapLeylineReleaseURLTemplate(t *testing.T, replacement string) {
 // uncovered in PR #388; this test closes that gap hermetically.
 func TestDownloadLeyline_HappyPath(t *testing.T) {
 	const wantBody = "fake-leyline-binary-payload"
+	pinLeylineSHA(t, []byte(wantBody)) // accept the served payload's SHA (mache-46af85)
 
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

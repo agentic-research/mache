@@ -846,8 +846,16 @@ var leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-op
 // allowDownload is false, or when MACHE_NO_LEYLINE is set (the CI/offline
 // opt-out). A downloaded binary is cached at ~/.mache/bin/leyline for reuse.
 func ResolveBinary(allowDownload bool) (string, error) {
+	// A leyline on PATH is used ONLY if it is the pinned version. A stale local
+	// install (the recurring "0.5.7 shadows the pin" trap) or a raw-main build
+	// reports a different version and produces different _ast output than the
+	// pinned release — silently diverging local runs from CI. Reject it and fall
+	// through rather than trust whatever happens to be on PATH.
 	if p, err := exec.LookPath("leyline"); err == nil {
-		return p, nil
+		if leylineVersionMatchesPin(p) {
+			return p, nil
+		}
+		log.Printf("leyline on PATH (%s) is not the pinned %s — ignoring it; resolving the pinned binary", p, leylineBinaryVersion)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -855,13 +863,16 @@ func ResolveBinary(allowDownload bool) (string, error) {
 	}
 	bundled := filepath.Join(home, ".mache", "bin", "leyline")
 	if _, err := os.Stat(bundled); err == nil {
-		return bundled, nil
+		if leylineVersionMatchesPin(bundled) {
+			return bundled, nil
+		}
+		log.Printf("cached leyline (%s) is not the pinned %s — re-resolving", bundled, leylineBinaryVersion)
 	}
 	if !allowDownload {
-		return "", fmt.Errorf("leyline not on PATH and not at %s", bundled)
+		return "", fmt.Errorf("no leyline matching the pinned %s found on PATH or at %s (auto-download disabled)", leylineBinaryVersion, bundled)
 	}
 	if os.Getenv("MACHE_NO_LEYLINE") != "" {
-		return "", fmt.Errorf("leyline not available and MACHE_NO_LEYLINE is set; install leyline or unset MACHE_NO_LEYLINE to auto-download")
+		return "", fmt.Errorf("no leyline matching the pinned %s available and MACHE_NO_LEYLINE is set; install leyline %s or unset MACHE_NO_LEYLINE to auto-download", leylineBinaryVersion, leylineBinaryVersion)
 	}
 	return downloadLeyline(bundled)
 }
@@ -916,6 +927,13 @@ func downloadLeyline(destPath string) (string, error) {
 		return "", fmt.Errorf("write: %w", err)
 	}
 	_ = tmp.Close()
+
+	// Supply-chain integrity: the downloaded bytes must match the pinned
+	// release SHA-256 before we install or run them (mache-46af85).
+	if err := verifyLeylineSHA256(tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
 
 	// Make executable
 	if err := os.Chmod(tmpPath, 0o755); err != nil {
