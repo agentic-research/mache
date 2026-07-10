@@ -11,5 +11,5 @@
   ],
   "DefaultMinMetric": 81,
   "Severity": "",
-  "Tags": null
+  "Tags": ["ast-gate"]
 }
