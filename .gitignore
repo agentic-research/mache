@@ -114,3 +114,21 @@ tools/KNOWN_ISSUES.md
 
 # transient OCI build context (release image job + task image:verify)
 /image/
+
+# runtime embedding model cache (fastembed) — regenerated on demand
+**/.fastembed_cache/
+
+# session resume scratch (RESUME.md's own header: gitignore or delete when stale)
+/RESUME.md
+
+# stale README restructure artifacts (the WIP is recoverable from git stash)
+/README.md.bak
+/README.md.diff
+
+# local scratch / probe tools (uncommitted experiments from prior sessions)
+/tools/listchildren-probe/
+/tools/phaseb-validate/
+/tools/sheaf-probe/
+/tools/sheaf-subscribe-probe/
+/tools/sheaf-wire-check/
+/tools/uds-smoke/
