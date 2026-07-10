@@ -107,6 +107,13 @@ jobs:
         # `task smells` a developer runs.
         run: task smells
 
+      - name: Smell gate (_ast / leyline)
+        # Dogfood the _ast-requiring rules (long_function / long_file /
+        # duplicate_code) via a leyline-built _ast .db — the pure-Go tree-sitter
+        # `smells` gate above can't see them. Same `task smells:ast` a developer
+        # runs; mache auto-downloads the pinned leyline (mache-46af85 part 2).
+        run: task smells:ast
+
       - name: Format check (gofumpt)
         # task fmt:check is the single source for the pinned gofumpt
         # invocation (it diffs instead of writing, so it's CI-safe and
