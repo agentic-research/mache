@@ -1,0 +1,15 @@
+# yamllint config for mache CI/build YAML (mache-466a65). Style rules that add
+# noise without catching real bugs are disabled; actionlint handles workflow
+# semantics + shellcheck. yamllint enforces structural validity + basic hygiene.
+extends: relaxed
+rules:
+  line-length: disable
+  document-start: disable
+  comments: disable
+  truthy: disable
+ignore: |
+  /testdata/
+  /packages/
+  /image/
+  /node_modules/
+  /.task/

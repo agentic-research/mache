@@ -80,9 +80,18 @@ jobs:
       - name: Vet
         run: task vet
 
-      - name: Actions SHA-pin check
-        # Fail if any workflow `uses:` ref isn't SHA-pinned (mache-b8900d).
-        run: task actions:lint
+      - name: Actions lint (actionlint + SHA-pin)
+        # actionlint (workflow semantics + shellcheck of `run:` blocks) plus the
+        # SHA-pin supply-chain gate. Same `task lint:actions` a developer runs
+        # locally (mache-466a65 / mache-b8900d). actionlint runs via `go run`.
+        run: task lint:actions
+
+      - name: YAML lint
+        # yamllint over tracked CI/build YAML (relaxed .yamllint). Same
+        # `task lint:yaml` a developer runs; CI provides the tool (mache-466a65).
+        run: |
+          python3 -m pip install --quiet yamllint
+          task lint:yaml
 
       - name: Docs lint
         # Fail if a top-level doc's covers-version drifts from the latest

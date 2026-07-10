@@ -399,6 +399,27 @@ tasks:
     cmds:
       - bash scripts/actions-pin-lint.sh
 
+  lint:actions:
+    desc: "Lint GitHub Actions workflows — actionlint (semantics + shellcheck) + the SHA-pin gate (mache-466a65)"
+    deps: [actions:lint]
+    cmds:
+      # actionlint: prefer an installed binary (fast local dev), else `go run`
+      # the pinned module — go-toolchain-safe, so CI needs no separate install.
+      - >-
+        command -v actionlint >/dev/null 2>&1 && actionlint
+        || go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+  lint:yaml:
+    desc: "Lint tracked CI/build YAML with yamllint (relaxed .yamllint config; mache-466a65)"
+    cmds:
+      # Guard (gate-preflight): require yamllint, with an install hint. Lint only
+      # TRACKED yaml (excludes gitignored scratch + testdata fixtures by
+      # construction) so the gate is stable regardless of local scratch.
+      - >-
+        command -v yamllint >/dev/null 2>&1
+        || { echo "yamllint required — install: pip install yamllint"; exit 1; };
+        git ls-files '*.yml' '*.yaml' | grep -vE 'testdata/' | xargs yamllint -c .yamllint
+
   smells:
     desc: "Structural smell gate — fail on NEW findings vs docs/smell-baseline.json (W5 local-first gate, mache-4da90e)"
     deps: [build]
@@ -525,7 +546,8 @@ tasks:
       - task: test
       - task: validate
       - task: docs:lint
-      - task: actions:lint
+      - task: lint:actions
+      - task: lint:yaml
       - task: smells
       - task: gates:preflight
       - task: gen:server-json:check
@@ -550,7 +572,8 @@ tasks:
       - task: test
       - task: validate
       - task: docs:lint
-      - task: actions:lint
+      - task: lint:actions
+      - task: lint:yaml
       - task: smells
       - task: gates:preflight
       - task: gen:server-json:check
