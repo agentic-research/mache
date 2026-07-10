@@ -96,7 +96,12 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - go test -tags boltdb -race -gcflags=all=-d=checkptr=0 -v ./...
+      # -timeout 20m (go test defaults to 10m/package): the cmd integration
+      # suite runs right at the 10m boundary on the slower macOS CI runner and
+      # intermittently trips `panic: test timed out after 10m0s` (mache-9cd0f5).
+      # This target is the single source CI invokes (ci.yml + integration.yml
+      # both `task test`), so the bump keeps local == CI.
+      - go test -tags boltdb -race -gcflags=all=-d=checkptr=0 -timeout 20m -v ./...
 
   test-coverage:
     desc: Run tests with coverage
