@@ -52,6 +52,16 @@ tasks:
       - go.mod
       - go.sum
       - entitlements.plist
+      # go:embed'd assets are baked into the binary — a change to any of them
+      # yields a different binary, but Task's up-to-date check skips the rebuild
+      # unless they're listed here. Omitting them left a STALE binary on a
+      # rule-only edit, which the smell gate (deps:[build]) then ran against —
+      # producing phantom "NEW findings" and masking an incomplete rule fix
+      # (mache-46af85). Keep this list in sync with the //go:embed directives.
+      - "cmd/rules/*.json"
+      - "cmd/schemas/*.json"
+      - "cmd/schemas/sarif.tmpl"
+      - "internal/buildinfo/version.txt"
     generates:
       - "{{.BINARY_NAME}}"
 
