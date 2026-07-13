@@ -790,31 +790,45 @@ func (c *SocketClient) Prioritize(files []string) error {
 // tagged releases have downloadable leyline-<os>-<arch> assets — the go.mod
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
-// As of this pin, the daemon binary and go.mod's leyline-schema are both
-// v0.7.1 — LLO releases the binary and the Go schema-client in lockstep
-// (SCHEMA_VERSION == BINARY_VERSION in the daemon's version.rs). v0.7.0 raised
-// the daemon's compat_min_schema_version to 0.6.0 and added source_blobs /
-// capnp_blobs / _ast_pointer, the unified daemon.sheaf.invalidate topic (payload
-// key region_ids→invalidated, tolerated by parsing both), and cross-language
-// def/ref extraction (qualified method tokens + Python/JS/TS + populated
-// nodes.source_file, ley-line-open-caf423). v0.7.1 is a WIRE-UNCHANGED sheaf-
-// correctness patch (δ⁰ orientation-invariance, cascade fixed-point, threshold
-// in norm space, stalks-store-rates) — consumers get more accurate invalidation
-// sets, no client changes required.
+// As of this pin, the daemon binary is v0.7.5 while go.mod's leyline-schema
+// stays v0.7.1 — deliberately. The 0.7.1→0.7.5 daemon bumps are all
+// WIRE-UNCHANGED (wire_format_major=1, compat_min_schema_version stays 0.6.0):
+// v0.7.2 added the additive, node_hash-keyed _cfg / _cfg_edge tables (the
+// analysis-substrate CFG scaffold — schema only; row population is deferred to
+// LLO ley-line-open-a0fadd, so the tables come up empty on parse) and fixed the
+// ingest walker to honor .gitignore (LLO PR #178); v0.7.3 was a confinement /
+// cloister fix (v1 BLAKE3 digest); v0.7.4 added the additive node_refs
+// container_node_id column (nearest enclosing def), which closes mache's
+// ref-based smell-rule parity (fan_out_skew / untested_function — bead
+// ley-line-open-b9d1d5); v0.7.5 added the arena-owner sentinel (kills the
+// cross-repo cache-pollution class) and the additive node_defs.canonical_kind
+// column (closed κ vocabulary — lets dead_code filter WHERE canonical_kind IN
+// ('function','method','type'), collapsing its leyline over-report). All
+// additive — mache does not consume the new columns / CFG types yet (that is
+// the LLO-only smell-gate consolidation, mache-608a3c), and the v0.7.2–v0.7.5
+// leyline-schema Go submodule tags are unpublished (clients/go/leyline-schema
+// stops at v0.7.1), so the schema-client pin remains at v0.7.1. The
+// version-parity gate (mache-b8af69) enforces MAJOR.MINOR agreement only —
+// 0.7 == 0.7 — so this is in contract. Earlier context: v0.7.0 raised compat_min
+// to 0.6.0 and added source_blobs / capnp_blobs / _ast_pointer, the unified
+// daemon.sheaf.invalidate topic, and cross-language def/ref extraction
+// (ley-line-open-caf423); v0.7.1 was a sheaf-correctness patch (δ⁰
+// orientation-invariance, cascade fixed-point).
 //
 // The major/minor must still match the schema (wire format); only the patch
-// floats — so version-check (leylineVersionMatchesPin) accepts any 0.7.x. v0.7.1
+// floats — so version-check (leylineVersionMatchesPin) accepts any 0.7.x. v0.7.5
 // ships all four leyline-<os>-<arch> daemon binaries (darwin/linux × amd64/arm64).
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets;
-// bump the go.mod leyline-schema pin too whenever the WIRE format changes.
+// bump the go.mod leyline-schema pin too whenever the WIRE format changes (i.e.
+// wire_format_major or the major.minor moves — a patch-only daemon bump does not).
 //
 // Doubles as this build's leyline schema-client version for the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. Its major.minor is kept in lockstep with the go.mod leyline-schema
 // pin by the version-parity gate (mache-b8af69).
-const leylineBinaryVersion = "v0.7.1"
+const leylineBinaryVersion = "v0.7.5"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private
