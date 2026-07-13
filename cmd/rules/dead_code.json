@@ -11,5 +11,5 @@
   ],
   "DefaultMinMetric": 0,
   "Severity": "",
-  "Tags": null
+  "Tags": ["gate"]
 }

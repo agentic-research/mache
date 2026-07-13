@@ -9,5 +9,5 @@
   ],
   "DefaultMinMetric": 1501,
   "Severity": "",
-  "Tags": ["ast-gate"]
+  "Tags": ["gate"]
 }
