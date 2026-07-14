@@ -76,7 +76,13 @@ runs:
     # `smells` target in mache's own Taskfile (build, then
     # `find-smells --rule '*' --limit 100000 --baseline-root --baseline`).
     # cmd/find_smells_action_test.go asserts the two invocation shapes
-    # stay in sync — change them together.
+    # stay in sync — change them together. Known temporary divergence
+    # (mache-608a3c): the Taskfile gate adds the gate-tag rule filter
+    # (the ratchet set, excluding the min-0 firehoses); this action pins
+    # a released mache whose embedded rules predate the gate retag, so
+    # that filter here would match zero rules. Adopt it when the default
+    # mache-version above is bumped to a release shipping gate-tagged
+    # rules — the parity test enforces exactly this reconvergence.
     - name: Build index
       shell: bash
       env:
