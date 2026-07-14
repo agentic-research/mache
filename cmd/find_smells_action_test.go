@@ -12,29 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// moduleRoot walks up from the test's working directory to the
-// directory containing go.mod.
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	require.NoError(t, err)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("go.mod not found walking up from cwd")
-		}
-		dir = parent
-	}
-}
-
 // actionYAMLPath locates .github/actions/find-smells/action.yml from the
 // module root.
 func actionYAMLPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(moduleRoot(t), ".github", "actions", "find-smells", "action.yml")
+	return filepath.Join(macheRepoRoot(t), ".github", "actions", "find-smells", "action.yml")
 }
 
 // TestFindSmellsAction_Contract asserts the composite action exists, is a
@@ -90,7 +72,7 @@ func TestFindSmellsAction_Contract(t *testing.T) {
 // the note in .github/actions/find-smells/README.md ("Contract with
 // mache's own gate").
 func TestFindSmellsAction_TaskfileParity(t *testing.T) {
-	root := moduleRoot(t)
+	root := macheRepoRoot(t)
 	actionRaw, err := os.ReadFile(actionYAMLPath(t))
 	require.NoError(t, err)
 	taskRaw, err := os.ReadFile(filepath.Join(root, "Taskfile.yml"))
