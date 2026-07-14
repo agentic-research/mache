@@ -70,11 +70,11 @@ func resolvePinnedLeylineForLattice(t *testing.T) string {
 // TestInferFromASTDBParity_Go verifies InferFromASTDB (pure Go, leyline
 // _ast) produces the same topology as InferFromTreeSitterRoots (CGO
 // tree-sitter) on the same fixture sources with the same config.
-func TestInferFromASTDBParity_Go(t *testing.T) {
-	leylineBin := resolvePinnedLeylineForLattice(t)
-
-	fixtures := map[string][]byte{
-		"main.go": []byte(`package demo
+// parityFixtures covers the construct spread the go-schema projects:
+// functions, methods (pointer + value receivers), a struct, an
+// interface, consts, vars, and imports across two files.
+var parityFixtures = map[string][]byte{
+	"main.go": []byte(`package demo
 
 import "fmt"
 
@@ -90,7 +90,7 @@ func Caller() {
 	fmt.Println(Hello())
 }
 `),
-		"types.go": []byte(`package demo
+	"types.go": []byte(`package demo
 
 type Greeter struct {
 	Name string
@@ -108,8 +108,12 @@ func (g Greeter) String() string {
 	return g.Name
 }
 `),
-	}
+}
 
+func TestInferFromASTDBParity_Go(t *testing.T) {
+	leylineBin := resolvePinnedLeylineForLattice(t)
+
+	fixtures := parityFixtures
 	srcDir := t.TempDir()
 	names := make([]string, 0, len(fixtures))
 	for name, content := range fixtures {

@@ -10,20 +10,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// seedSyntheticASTDB creates the three leyline tables (_ast, node_child,
-// node_content) and inserts a Go function_declaration with name/parameters/
-// body field children plus a fieldless `func` keyword child, mirroring the
-// verified leyline v0.7.5 data model (field is NULL for fieldless children;
-// node_child includes anonymous tokens; _ast holds only named nodes).
-func seedSyntheticASTDB(t *testing.T) *sql.DB {
-	t.Helper()
-
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "synthetic.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	ddl := []string{
-		`CREATE TABLE _ast (
+// syntheticASTDDL mirrors the leyline v0.7.5 table shapes FlattenASTDB
+// reads (verified against a real parse output).
+var syntheticASTDDL = []string{
+	`CREATE TABLE _ast (
 			node_id TEXT PRIMARY KEY,
 			source_id TEXT NOT NULL,
 			node_kind TEXT NOT NULL,
@@ -35,14 +25,14 @@ func seedSyntheticASTDB(t *testing.T) *sql.DB {
 			end_col INTEGER NOT NULL,
 			node_hash BLOB REFERENCES node_content(node_hash)
 		)`,
-		`CREATE TABLE node_child (
+	`CREATE TABLE node_child (
 			parent_hash BLOB NOT NULL REFERENCES node_content(node_hash),
 			ordinal INTEGER NOT NULL,
 			child_hash BLOB NOT NULL REFERENCES node_content(node_hash),
 			field TEXT,
 			PRIMARY KEY (parent_hash, ordinal)
 		)`,
-		`CREATE TABLE node_content (
+	`CREATE TABLE node_content (
 			node_hash BLOB PRIMARY KEY,
 			node_tag INTEGER NOT NULL,
 			kind TEXT NOT NULL,
@@ -51,11 +41,29 @@ func seedSyntheticASTDB(t *testing.T) *sql.DB {
 			token TEXT,
 			arity INTEGER NOT NULL
 		)`,
-	}
-	for _, stmt := range ddl {
+}
+
+func seedSyntheticASTDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "synthetic.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, stmt := range syntheticASTDDL {
 		_, err := db.Exec(stmt)
 		require.NoError(t, err)
 	}
+	seedSyntheticASTRows(t, db)
+	return db
+}
+
+// seedSyntheticASTRows inserts the fixture rows: a Go function_declaration
+// with name/parameters/body field children plus a fieldless anonymous
+// `func` keyword child (field NULL, like real leyline output), and a
+// second source (other.py) exercising the sourceLike filter.
+func seedSyntheticASTRows(t *testing.T, db *sql.DB) {
+	t.Helper()
 
 	hashFunc := []byte("h-func")
 	hashKw := []byte("h-kw")
@@ -132,8 +140,6 @@ func seedSyntheticASTDB(t *testing.T) *sql.DB {
 		)
 		require.NoError(t, err)
 	}
-
-	return db
 }
 
 func TestFlattenASTDB_Synthetic(t *testing.T) {
