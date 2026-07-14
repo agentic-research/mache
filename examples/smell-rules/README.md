@@ -1,46 +1,58 @@
-# External smell rules
+# Smell rules — a copyable starter
 
-Drop-in `*.json` files that define additional `find_smells` rules,
-loaded at process start when `MACHE_SMELL_RULES_DIR` points at the
-directory containing them.
+This directory is a working starter kit for mache's structural smell
+gate. If you have never seen mache before, read this file top to
+bottom: it covers what a rule is, how custom rules compose with the
+built-ins, how to bootstrap a baseline, how to wire the CI gate into
+your own repo, and how the ratchet model keeps a codebase from getting
+structurally worse.
 
-```bash
-export MACHE_SMELL_RULES_DIR=$(pwd)/examples/smell-rules
-mache serve --http :7532
-```
+Background in one paragraph: `mache build <src> <out.db>` parses a
+source tree into a SQLite database of code structure — construct nodes
+(`nodes`), definitions (`node_defs`), references (`node_refs`), and,
+when the leyline backend is used, raw AST spans (`_ast`). A **smell
+rule** is a SQL query over that database. `mache find-smells` runs
+rules and reports each row they return as a *finding*: a (file, node,
+span, metric) tuple describing one structural problem.
 
-Each external rule shows up in `find_smells` discovery (the no-arg
-listing) and as a runnable rule (`find_smells rule=<id>`) the same
-way built-ins do.
+## 1. What a rule is
 
-## File layout
+One JSON object per file. The example rules in this directory are
+copy-paste templates:
 
-One rule per file. The filename has no semantic meaning beyond
-sort order during load — pick something that matches the rule ID
-for clarity.
+| File                                                             | Demonstrates                                                                                          |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [`fatal_call_in_library.json`](fatal_call_in_library.json)       | Binary rule (`0 AS metric`), cross-reference tables only, `%%` escaping, the empty-`source_file` trap |
+| [`long_test_function.json`](long_test_function.json)             | Metric rule with `DefaultMinMetric`, `_ast`-backed, auto-skips on backends without `_ast`             |
+| [`long_unexported_function.json`](long_unexported_function.json) | Joining `_ast` spans to `nodes` for name-based filtering                                              |
 
-## Rule shape
+The shape:
 
 ```json
 {
-  "ID": "long_unexported_function",
-  "Description": "Unexported Go functions whose body exceeds 200 lines.",
-  "Requires": ["_ast", "nodes"],
+  "ID": "long_test_function",
+  "Description": "What it flags, why it matters, and known false positives.",
+  "Requires": ["_ast"],
   "ScopeColumn": "fn.source_id",
-  "Query": "SELECT fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col, (fn.end_row - fn.start_row) AS metric FROM _ast fn JOIN nodes n ON n.id = fn.node_id WHERE ... %s ORDER BY metric DESC"
+  "DefaultMinMetric": 121,
+  "Severity": "warn",
+  "Tags": ["tests"],
+  "Query": "SELECT fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col, (fn.end_row - fn.start_row) AS metric FROM _ast fn WHERE ... %s ORDER BY metric DESC"
 }
 ```
 
-| Field              | Required    | Notes                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ID`               | yes         | Stable identifier. Must not collide with a built-in.                                                                                                                                                                                                                                                                                                                                                  |
-| `Description`      | recommended | Shown in the rule listing — agents read this.                                                                                                                                                                                                                                                                                                                                                         |
-| `Requires`         | recommended | SQL tables the query reads. Used for the pre-flight "this rule needs `_ast`, your backend doesn't have it" diagnostic.                                                                                                                                                                                                                                                                                |
-| `ScopeColumn`      | optional    | SQL expression compared to `source_id` when callers pass a `source_id` arg. Leave blank to disable scoping.                                                                                                                                                                                                                                                                                           |
-| `Query`            | yes         | SQL with **exactly one `%s`** placeholder for the scope clause.                                                                                                                                                                                                                                                                                                                                       |
-| `DefaultMinMetric` | optional    | Integer threshold the handler applies when the caller omits `min_metric`. Use for metric-bearing rules where the natural query output has a long tail of low-metric noise (e.g. `long_function` defaults to 81 lines). An explicit `min_metric=0` from the caller still overrides — agents that want everything sorted can opt out. Omit the field to leave threshold control entirely to the caller. |
+| Field              | Required    | Notes                                                                                                                                                                              |
+| ------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ID`               | yes         | Stable identifier. Must not collide with a built-in or another custom rule.                                                                                                        |
+| `Description`      | recommended | Shown in the rule listing — agents and humans read this to decide whether to run the rule. Document known false positives here.                                                    |
+| `Requires`         | recommended | SQL tables the query reads. Powers the pre-flight "this rule needs `_ast`, your backend doesn't have it" diagnostic (and the auto-skip under `--rule '*'`).                        |
+| `ScopeColumn`      | optional    | SQL expression compared to the caller's `source_id` arg to scope a run to one file. Leave blank to disable scoping.                                                                |
+| `Query`            | yes         | SQL with **exactly one `%s`** placeholder where the scope clause is spliced in.                                                                                                    |
+| `DefaultMinMetric` | optional    | Threshold applied when the caller omits `min_metric`. Use for metric rules whose natural output has a long tail of low-metric noise. An explicit `min_metric` (even 0) overrides.  |
+| `Severity`         | optional    | `off` / `warn` / `error` (ESLint precedent, ADR-0018). Empty means `warn`. The gate decision is made at invocation via `--fail-on`; the rule only states how serious a finding is. |
+| `Tags`             | optional    | Free-form labels for `--tags=a,b` selection (union semantics). Keep it to 3–5 per rule.                                                                                            |
 
-## The query contract
+### The query contract
 
 Every query MUST select these seven columns in this order:
 
@@ -48,53 +60,185 @@ Every query MUST select these seven columns in this order:
 source_id, node_id, start_byte, end_byte, start_row, start_col, metric
 ```
 
-- `source_id` — the source file path, used for filtering.
-- `node_id` — the construct dir or AST node ID being flagged.
-- `start_byte`, `end_byte` — byte range of the offending span.
-- `start_row`, `start_col` — 0-based line/column (the handler converts to 1-based for the response).
-- `metric` — integer score. Use `0` for binary rules with no metric.
+- `source_id` — the source file path.
+- `node_id` — the construct dir or AST node being flagged.
+- `start_byte`, `end_byte` — byte range of the offending span (0 if unknown).
+- `start_row`, `start_col` — 0-based line/column (the handler converts to 1-based).
+- `metric` — integer score, descending sort recommended. Use `0 AS metric` for binary rules.
 
-Any rule that doesn't match this column shape will produce a SQL
-error at run time and the agent will get a tool error.
+A rule that doesn't match this column shape produces a SQL error at run
+time.
 
-## SQL caveats
+## 2. How built-ins and custom rules compose
 
-- **Escape `%` chars.** The query is `fmt.Sprintf`'d at run time
-  to splice in the optional scope clause. Any `%` that isn't part
-  of `%s` must be escaped as `%%`. The loader rejects rules with
-  unescaped `%` at startup (regression: a stray `%` in a `LIKE`
-  pattern would corrupt the query at the first call).
-- **Table availability.** Built-in mache produces `nodes`,
-  `node_refs`, `node_defs`. ley-line-parsed `.db` files
-  additionally have `_ast`, `_source`, `_imports`, and `_lsp*`.
-  Declare in `Requires` so the pre-flight check catches missing
-  tables before the SQL runs.
+Mache ships built-in rules embedded in the binary (`cmd/rules/*.json`
+in this repo — same JSON format, same validation). Run
+`mache find-smells` with no `--rule` to list everything that's
+registered.
 
-## Common pitfalls
+Custom rules live in a directory of `*.json` files — like this one —
+and are **merged with the built-ins on every invocation**. The
+directory is resolved with this precedence:
 
-A few schema quirks bite first-time rule authors. The built-in rules
-work around them, so consult `cmd/serve_find_smells.go` for prior art
-before assuming a "natural" SQL query will do what you expect.
+1. `--rules-dir <dir>` flag
+1. `MACHE_SMELL_RULES_DIR` environment variable
+1. `smellRulesDir` in the project's `.mache.json` (relative paths are
+   project-relative and containment-checked)
+1. none — built-ins only
+
+```bash
+# Point mache at this directory and list the merged rule set:
+mache find-smells --rules-dir examples/smell-rules
+
+# Or via the environment (also honored by `mache serve` / MCP):
+export MACHE_SMELL_RULES_DIR="$PWD/examples/smell-rules"
+mache find-smells --db repo.db --rule long_test_function
+```
+
+Once loaded, custom rules are indistinguishable from built-ins: they
+appear in the listing, run under `--rule '*'` globs and `--tags`
+filters, participate in baselines, and hit the same pre-flight table
+check. The directory is re-scanned per invocation (and per MCP
+request), so dropping in a new file needs no restart. Loading is
+fail-fast: one malformed rule aborts the whole custom set — the CLI
+surfaces the error; `mache serve` logs it and falls back to built-ins.
+
+## 3. Bootstrapping a baseline
+
+An existing codebase will have findings on day one. You don't fix them
+all first — you **grandfather** them into a committed baseline and gate
+only on *new* debt:
+
+```bash
+# 1. Index your repo (downloads/uses leyline automatically when available):
+mache build . smells.db
+
+# 2. Record the current findings as the floor and commit the file:
+mache find-smells --db smells.db --rule '*' --limit 100000 \
+  --baseline-root "$PWD" --write-baseline docs/smell-baseline.json
+git add docs/smell-baseline.json
+```
+
+Notes:
+
+- `docs/smell-baseline.json` is the conventional default path — the
+  composite action below defaults to it. Any path works as long as the
+  action's `baseline` input agrees.
+- `--baseline-root "$PWD"` relativizes recorded file paths so the
+  baseline is portable across machines and CI.
+- `--rule '*'` runs every registered rule and silently skips rules
+  whose `Requires` tables aren't in the .db — so the same command works
+  on any backend.
+- Regenerate the baseline with the same mache version (and the same
+  custom-rules dir) your CI uses, or counts can differ.
+
+## 4. Wiring the CI gate in your repo
+
+Mache ships a composite GitHub Action
+([`.github/actions/find-smells`](../../.github/actions/find-smells/README.md))
+that downloads a pinned mache release, indexes the checkout, gates
+against your committed baseline, and uploads SARIF to the
+code-scanning tab. Complete minimal workflow:
+
+```yaml
+# .github/workflows/smells.yml
+name: smells
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write   # for the SARIF upload; drop with upload-sarif: false
+
+jobs:
+  smells:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: agentic-research/mache/.github/actions/find-smells@main   # pin a SHA in production
+        with:
+          baseline: docs/smell-baseline.json   # the default; shown for clarity
+```
+
+To include the custom rules from a directory in your repo, export the
+env var for the job:
+
+```yaml
+    env:
+      MACHE_SMELL_RULES_DIR: ${{ github.workspace }}/smell-rules
+```
+
+(Custom rules change the finding set — regenerate the baseline with the
+same env var set.)
+
+## 5. The ratchet model
+
+The gate is a **ratchet**, not a linter with a fixed zero-findings bar:
+
+- The committed baseline records, per (rule, file), how many findings
+  existed when it was written.
+- `find-smells --baseline <path>` exits non-zero **only when a
+  (rule, file) count exceeds its baseline entry** — brand-new findings
+  in new files, or extra findings in known files, fail; grandfathered
+  debt passes.
+- Fixing debt makes the next `--write-baseline` strictly smaller — the
+  ratchet only tightens.
+- When a PR deliberately adds a finding (rare, but legitimate),
+  regenerate and commit the baseline in the same PR so the review sees
+  the decision.
+
+Mache dogfoods this exact loop on itself: the `smells` target in
+[`Taskfile.yml`](../../Taskfile.yml) runs the same
+`find-smells --rule '*' --limit 100000 --baseline-root --baseline`
+invocation the composite action uses (a Go test,
+`TestFindSmellsAction_TaskfileParity`, keeps the two in sync), and
+`task smells:baseline` regenerates the floor.
+
+______________________________________________________________________
+
+## Appendix: authoring caveats
+
+### Escape `%` chars
+
+The query is `fmt.Sprintf`'d at run time to splice in the optional
+scope clause. Any `%` that isn't the single `%s` placeholder must be
+escaped as `%%` — SQL `LIKE '%foo%'` becomes `LIKE '%%foo%%'`. The
+loader rejects rules with unescaped `%` at startup.
+
+### Which tables exist depends on the build backend
+
+`mache build` dispatches to leyline when available (backend `auto`),
+else the in-process tree-sitter backend:
+
+- **Both backends**: `nodes`, `node_defs`, `node_refs` (plus the
+  `v_defs` / `v_refs` canonical views).
+- **leyline only**: `_ast`, `_source`, `_imports`, `_lsp*`.
+
+Declare every table your query reads in `Requires` so the pre-flight
+check reports "rule X needs table Y" instead of a raw
+`no such table: _ast` — and so `--rule '*'` can skip the rule cleanly.
+To see which backend produced a `.db`:
+
+```bash
+sqlite3 my.db "SELECT key, value FROM _mache_meta"
+```
 
 ### `nodes.source_file` is empty for construct dirs
 
-The schema engine attaches `source_file` to the leaf rendered files
+The schema engine attaches `source_file` to leaf rendered files
 (`source`, `ast.json`, `doc`) but **not** to the wrapping construct
-directory itself. So a query like
+directory. So:
 
 ```sql
 SELECT id FROM nodes WHERE source_file NOT LIKE '%test.go'
 ```
 
-won't filter construct dirs the way you'd expect. Every dir's
-`source_file` is `''`, and `'' NOT LIKE '%test.go'` evaluates true,
-so construct dirs are **included** in the result — *the predicate
-doesn't filter them at all*. The "is this construct in a test file?"
-question can only be answered by walking the dir's child rows (where
-`source_file` is non-empty) and projecting the answer up.
-
-Use the COALESCE-via-child idiom the built-in `dead_code` rule uses
-(`cmd/serve_find_smells.go:241`):
+does not exclude construct dirs — their `source_file` is `''`, and
+`'' NOT LIKE '%test.go'` is true, so they all pass the predicate. Add a
+non-empty guard (see `fatal_call_in_library.json`), or resolve the
+file via child leaves with the COALESCE idiom the built-in `dead_code`
+rule uses:
 
 ```sql
 WITH child_source AS (
@@ -110,62 +254,24 @@ LEFT JOIN child_source cs ON cs.node_id = n.id
 ```
 
 The `NULLIF(..., '')` is load-bearing — `COALESCE` only skips NULLs,
-not empty strings, so without it the empty `n.source_file` shadows
-the resolved child `source_file`.
+not empty strings.
 
 ### Joining `node_defs` to an `_ast` row
 
-`node_defs.node_id` is the construct dir (`functions/Foo`), while the
-matching `_ast` row's `node_id` is the AST path under the source
-(`<type_decl>/type_spec` or similar). A `=` join
-
-```sql
-SELECT ... FROM node_defs d JOIN _ast a ON a.node_id = d.node_id
-```
-
-returns nothing because the two columns refer to different things.
-Use a `LIKE` join with the construct-dir path as a prefix:
+`node_defs.node_id` is the construct dir (`functions/Foo`) while the
+matching `_ast` row's `node_id` is the AST path under the source. A
+`=` join returns nothing; use a prefix `LIKE` join:
 
 ```sql
 SELECT ... FROM node_defs d
 JOIN _ast a ON a.node_id LIKE d.node_id || '/%%'
 ```
 
-(Remember to escape the SQL `%` as `%%` — see SQL caveats below.)
+### Validation
 
-### Backend produced different tables
-
-`mache build` may dispatch to leyline or the in-process tree-sitter
-backend depending on what's on PATH. Leyline produces `_ast`,
-`_source`, `_imports`, `_lsp*` in addition to the shared
-`nodes` / `node_defs` / `node_refs` tables; the in-process backend
-produces `v_defs` / `v_refs` / `_index_coverage` and no `_ast`.
-
-Declare every table your query reads in `Requires` so the pre-flight
-check returns a friendly "rule X needs table Y" error instead of a
-raw `no such table: _ast`. To check which backend produced an
-existing `.db`, look at the `_mache_meta` table:
-
-```bash
-sqlite3 my.db "SELECT key, value FROM _mache_meta"
-```
-
-## Validation
-
-The loader validates every rule at startup:
-
-- Non-empty `ID`, no collision with a built-in or another external
-- Non-empty `Query` with exactly one `%s` placeholder
-- `fmt.Sprintf` over the query produces no `%!` error markers
-  (catches unescaped `%` chars in `LIKE` patterns and similar)
-
-A validation failure aborts the load and logs a warning — mache
-starts without external rules rather than failing to boot. Tests
-call `LoadExternalSmellRules` directly and assert errors loudly.
-
-## Example rule
-
-[`long_unexported_function.json`](long_unexported_function.json) is
-an example rule that flags Go functions with lowercase names whose
-body spans more than 200 source lines. Drop the file in your
-`MACHE_SMELL_RULES_DIR` and call `find_smells rule=long_unexported_function`.
+The loader validates every rule at load time: non-empty `ID` with no
+collisions, non-empty `Query` with exactly one `%s`, no unescaped `%`,
+and a whitelist check on `ScopeColumn` characters. The rules in this
+directory are load-tested by `cmd/serve_find_smells_load_test.go`
+(`TestLoadExternalSmellRules_ShippedExamplesLoadCleanly`), so they
+can't rot silently.

@@ -1,0 +1,9 @@
+{
+  "ID": "fatal_call_in_library",
+  "Description": "Calls to Fatal / Fatalf / Fatalln outside main.go and test files. log.Fatal in library code exits the whole process from a place the caller can't intercept — return an error instead and let main decide. BINARY rule: it has no meaningful magnitude, so it emits 0 AS metric (the query contract still requires the metric column). Works on every backend (node_refs + nodes only, no _ast needed). Heuristic caveat: node_refs stores the bare call token, so a custom Fatalf method on your own logger type is a false positive — same documented divergence as the built-in sleep_in_test rule. This rule also demonstrates the two classic authoring traps: (1) every SQL '%' is escaped as '%%' because the query is fmt.Sprintf'd to splice the scope clause; (2) NOT LIKE needs a non-empty source_file guard, because construct dirs carry source_file = '' and '' NOT LIKE pattern is TRUE — without the guard every construct dir in the repo would be flagged.",
+  "Requires": ["node_refs", "nodes"],
+  "ScopeColumn": "COALESCE(n.source_file, '')",
+  "Severity": "warn",
+  "Tags": ["errors", "library-hygiene"],
+  "Query": "SELECT COALESCE(n.source_file, n.id) AS source_id, n.id AS node_id, 0 AS start_byte, 0 AS end_byte, 0 AS start_row, 0 AS start_col, 0 AS metric FROM node_refs r JOIN nodes n ON n.id = r.node_id WHERE r.token IN ('Fatal', 'Fatalf', 'Fatalln') AND COALESCE(n.source_file, '') != '' AND n.source_file NOT LIKE '%%_test.go' AND n.source_file NOT LIKE '%%/main.go' AND n.source_file != 'main.go' %s ORDER BY source_id, node_id"
+}
