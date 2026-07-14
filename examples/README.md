@@ -1,28 +1,38 @@
-# Mache Example Schemas
+# Mache Examples
 
-This directory contains example topologies (schemas) for Mache, demonstrating how to project various data sources into filesystem hierarchies.
+This directory is a flat mix of four different kinds of artifact. Use
+this map:
 
-## Table of Contents
+| You want to...                                                     | Go to                                                                  |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Project a data source or codebase as a filesystem (write a schema) | [Topology schemas](#topology-schemas) below                            |
+| Adopt the structural smell gate / write custom smell rules         | [`smell-rules/`](smell-rules/README.md) — a self-contained starter kit |
+| See the agent-audit projection pattern (markdown → JSON → mount)   | [Audit tooling](#audit-tooling)                                        |
+| Find the sample inputs the schemas are tested against              | [Test fixtures](#test-fixtures)                                        |
 
-- [Data Sources (JSON/SQLite)](#data-sources-jsonsqlite)
-  - [NVD Schema (`nvd-schema.json`)](#nvd-schema)
-  - [KEV Schema (`kev-schema.json`)](#kev-schema)
-  - [LLM Conversations (`llm-conversations-schema.json`)](#llm-conversations)
-- [MCP (Model Context Protocol)](#mcp-model-context-protocol)
-  - [MCP Server Manifest (`mcp-schema.json`)](#mcp-server-manifest)
-  - [MCP Registry (`mcp-registry-schema.json`)](#mcp-registry)
-- [Source Code (Tree-sitter)](#source-code-tree-sitter)
-  - [Go Schema (`go-schema.json`)](#go-schema)
-  - [Python Schema (`python-schema.json`)](#python-schema)
-  - [SQL Schema (`sql-schema.json`)](#sql-schema)
-  - [Cobra CLI Schema (`cli-schema.json`)](#cobra-cli-schema)
-- [Testing](#testing)
+**Start here** if you're new: read a small schema
+([`kev-schema.json`](kev-schema.json) for JSON data,
+[`go-schema.json`](go-schema.json) for source code) alongside its
+section below — every schema is the same pattern: `nodes` describe
+directories, `files`/`file_sets` describe the rendered leaf files, and
+selectors (JSONPath for data, tree-sitter queries for code) pick what
+lands where. Smell rules are a separate mechanism (SQL over the built
+`.db`, not schemas) — see
+[`smell-rules/README.md`](smell-rules/README.md).
 
-## Data Sources (JSON/SQLite)
+## Topology schemas
 
-These schemas map structured JSON data into navigable directory trees. They use the `.item.` accessor because the primary data source is Venturi SQLite databases where records are wrapped as `{"schema":"...", "identifier":"...", "item":{...}}`.
+Declarative JSON schemas that drive `mache mount` / `mache build` /
+`mache serve`, projecting a data source into a navigable tree.
 
-### NVD Schema
+### Data sources (JSON / SQLite)
+
+These schemas map structured JSON data into directory trees. They use
+the `.item.` accessor because the primary data source is Venturi
+SQLite databases where records are wrapped as
+`{"schema":"...", "identifier":"...", "item":{...}}`.
+
+#### NVD Schema
 
 [`nvd-schema.json`](nvd-schema.json) — Maps the National Vulnerability Database (NVD) JSON feed into a hierarchy of `Year/Month/ID`.
 
@@ -34,7 +44,7 @@ These schemas map structured JSON data into navigable directory trees. They use 
         - `/:cve_id` (e.g., `CVE-2024-1234`)
           - `description`, `published`, `status`, `raw.json`
 
-### KEV Schema
+#### KEV Schema
 
 [`kev-schema.json`](kev-schema.json) — Maps the CISA Known Exploited Vulnerabilities catalog.
 
@@ -44,7 +54,7 @@ These schemas map structured JSON data into navigable directory trees. They use 
     - `/:cve_id` (e.g., `CVE-2021-1234`)
       - `vendor`, `product`, `description`, `date-added`, `due-date`, `raw.json`
 
-### LLM Conversations
+#### LLM Conversations
 
 [`llm-conversations-schema.json`](llm-conversations-schema.json) — Projects LLM conversation exports into a structured archive.
 
@@ -56,11 +66,17 @@ These schemas map structured JSON data into navigable directory trees. They use 
         - `/:conversation_id`
           - `title`, `transcript`, `system-prompt`, `token-usage`, `raw.json`
 
-## MCP (Model Context Protocol)
+#### Other data schemas
+
+- [`bdr-schema.json`](bdr-schema.json) / [`bdr-hierarchy-schema.json`](bdr-hierarchy-schema.json) — Project a beads issue database (`issues` table) as flat and dependency-hierarchy trees respectively (`title`, `description`, `status`, `priority` per bead).
+- [`notion-schema.json`](notion-schema.json) / [`notion-repos-schema.json`](notion-repos-schema.json) — Project Notion page exports: a flat pages view, and a layered repo-catalog view (`/repos/:layer/:name` with `purpose`/`path` leaves).
+- [`trivy-ghsa-schema.json`](trivy-ghsa-schema.json) — Projects Venturi GitHub Advisory data into the trivy-db BoltDB layout (`--format boltdb` output path).
+
+### MCP (Model Context Protocol)
 
 These schemas project MCP server capabilities into browsable filesystem trees. MCP is a JSON-RPC 2.0 protocol for connecting AI agents to external tools, resources, and prompts.
 
-### MCP Server Manifest
+#### MCP Server Manifest
 
 [`mcp-schema.json`](mcp-schema.json) — Projects a single MCP server's `tools/list` response into a navigable tree of tools, resources, and prompts.
 
@@ -78,7 +94,7 @@ These schemas project MCP server capabilities into browsable filesystem trees. M
 
 The `input-schema.json` file is the key artifact — it contains the JSON Schema for a tool's parameters, making the capability space greppable without loading everything into context.
 
-### MCP Registry
+#### MCP Registry
 
 [`mcp-registry-schema.json`](mcp-registry-schema.json) — Projects the MCP server registry (thousands of servers) into a namespace/server hierarchy.
 
@@ -91,11 +107,12 @@ The `input-schema.json` file is the key artifact — it contains the JSON Schema
 
 This schema uses `Refs` cross-references on server names, enabling the `callers/` virtual directory to answer "which namespaces provide servers with similar names."
 
-## Source Code (Tree-sitter)
+### Source code (tree-sitter)
 
-These schemas use Tree-sitter S-expression queries to project source code ASTs into logical views.
+These schemas use tree-sitter S-expression queries to project source
+code ASTs into logical views.
 
-### Go Schema
+#### Go Schema
 
 [`go-schema.json`](go-schema.json) — Projects Go source into package-organized views.
 
@@ -105,7 +122,7 @@ These schemas use Tree-sitter S-expression queries to project source code ASTs i
     - `imports/`, `functions/`, `methods/`, `types/`, `constants/`, `variables/`
 - **Sample Data:** [`testdata/go_sample.go`](testdata/go_sample.go)
 
-### Python Schema
+#### Python Schema
 
 [`python-schema.json`](python-schema.json) — Projects Python source into classes, functions, and imports.
 
@@ -116,7 +133,7 @@ These schemas use Tree-sitter S-expression queries to project source code ASTs i
   - `functions/` — top-level functions
 - **Sample Data:** [`testdata/python_sample.py`](testdata/python_sample.py)
 
-### SQL Schema
+#### SQL Schema
 
 [`sql-schema.json`](sql-schema.json) — Projects SQL DDL into tables and views.
 
@@ -126,7 +143,7 @@ These schemas use Tree-sitter S-expression queries to project source code ASTs i
   - `views/` — `CREATE VIEW` statements
 - **Sample Data:** [`testdata/sql_sample.sql`](testdata/sql_sample.sql)
 
-### Cobra CLI Schema
+#### Cobra CLI Schema
 
 [`cli-schema.json`](cli-schema.json) — Extracts CLI command structure from Go code using the [Cobra](https://github.com/spf13/cobra) library.
 
@@ -137,11 +154,64 @@ These schemas use Tree-sitter S-expression queries to project source code ASTs i
     - `flags/` — flag definitions with `info` details
 - **Sample Data:** [`testdata/cli_sample.go`](testdata/cli_sample.go)
 
+#### Other source schemas
+
+- [`rust-schema.json`](rust-schema.json) — Rust functions/types with LSP-backed leaves (`hover`, `diagnostics`, `definitions`, `references` from the `_lsp*` tables a ley-line build produces).
+- [`terraform-schema.json`](terraform-schema.json) — Terraform/HCL resources with the same LSP file set.
+- [`markdown-schema.json`](markdown-schema.json) — Markdown sections by heading (tree-sitter `markdown` grammar).
+
+## Smell rules
+
+[`smell-rules/`](smell-rules/README.md) is a **copyable starter kit**
+for the structural smell gate: example custom rules (the JSON DSL the
+built-in `cmd/rules/*.json` rules also use), plus a README that walks
+a brand-new repo through the whole surface — rule shape, how custom
+rules overlay the built-ins (`MACHE_SMELL_RULES_DIR`), bootstrapping a
+baseline, wiring the
+[`find-smells` composite action](../.github/actions/find-smells/README.md)
+in CI, and the ratchet model. Unlike everything else in `examples/`,
+smell rules are not topology schemas — they're SQL queries over the
+`.db` that `mache build` produces.
+
+## Audit tooling
+
+A worked example of projecting agent-coordination markdown as a
+queryable filesystem:
+
+- [`audit-indexer.py`](audit-indexer.py) — Parses an `.audit/`
+  directory of coordination files (`STATUS.md`, `MASTER-TRIAGE.md`,
+  `SCORECARD.md`, `BEAD-PLAN.md`, per-dimension audits) into a single
+  `.index.json`.
+- [`audit-schema.json`](audit-schema.json) — The topology schema that
+  mounts that index (`findings/` with `title`/`severity`/`status`/`dimension`
+  leaves).
+- [`test-audit/`](test-audit) — Sample `.audit/` input files for
+  trying the indexer end-to-end:
+
+```bash
+python examples/audit-indexer.py examples/test-audit/
+mache mount examples/test-audit/.index.json --schema examples/audit-schema.json /tmp/audit
+```
+
+## Test fixtures
+
+- [`testdata/`](testdata) — Sample source files (`go_sample.go`,
+  `python_sample.py`, `sql_sample.sql`, `cli_sample.go`) the
+  tree-sitter schemas are validated against.
+- [`mcp-sample-manifest.json`](mcp-sample-manifest.json),
+  [`llm-conversations-sample.json`](llm-conversations-sample.json) —
+  Sample JSON inputs for the MCP and LLM-conversation schemas.
+
 ## Testing
 
-Tree-sitter examples are validated by [`examples_test.go`](examples_test.go) using the sample data in `testdata/`. JSON/SQLite schemas are tested by the integration tests in `internal/ingest/`.
+Tree-sitter examples are validated by
+[`examples_test.go`](examples_test.go) using the sample data in
+`testdata/`. JSON/SQLite schemas are tested by the integration tests
+in `internal/ingest/`. The example smell rules are load-tested by
+`cmd/serve_find_smells_load_test.go`.
 
 ```bash
 task test -- -run TestTreeSitterExamples ./examples/...
 task test -- -run TestSchemasParse ./examples/...
+go test ./cmd/ -run TestLoadExternalSmellRules_ShippedExamplesLoadCleanly
 ```

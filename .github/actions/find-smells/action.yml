@@ -3,15 +3,36 @@ description: 'Run the mache structural smell ratchet gate over the caller''s che
 
 inputs:
   mache-version:
-    description: 'mache release tag to download mache-linux-amd64 from. >= v0.13.0 auto-provisions leyline so the build runs all 10 find_smells rules (LLO); >= v0.12.0 supports SARIF but runs the 5 tree-sitter rules only.'
+    description: >-
+      mache release tag to download mache-linux-amd64 from.
+      >= v0.13.0 auto-provisions leyline during `mache build` (backend
+      auto), so the _ast-backed rules (long_function, long_file,
+      duplicate_code, cyclomatic_complexity, ...) run in addition to the
+      cross-reference rules; rules whose required tables are absent are
+      skipped automatically by --rule '*'. >= v0.12.0 supports SARIF but
+      has no leyline auto-provisioning, so only the cross-reference
+      (nodes/node_defs/node_refs) rules run.
     required: false
-    default: 'v0.13.0'
+    default: 'v0.16.2'
   schema:
-    description: 'Path to a mache topology schema. Empty uses FCA schema inference.'
+    description: >-
+      Path to a mache topology schema. Empty uses FCA schema inference.
+      When set, the build is forced to --backend tree-sitter: the
+      leyline backend (preferred by backend auto) does not honor
+      build-time schemas, so without the override the build would only
+      WARN (a log line CI never fails on) and produce a .db that lacks
+      the schema.
     required: false
     default: ''
   baseline:
-    description: 'Path to the committed smell baseline (the ratchet floor).'
+    description: >-
+      Path to the committed smell baseline (the ratchet floor). This
+      default is THE documented baseline location — mache's own
+      Taskfile `smells` gate uses the same path, and
+      cmd/find_smells_action_test.go asserts the two stay in sync. If
+      the gate-consolidation workstream renames the baseline file,
+      change it here, in the Taskfile, and in this action's README
+      together.
     required: false
     default: 'docs/smell-baseline.json'
   fail-on-new:
@@ -51,6 +72,11 @@ runs:
           exit 1
         fi
 
+    # Core invocation contract: the find-smells calls below mirror the
+    # `smells` target in mache's own Taskfile (build, then
+    # `find-smells --rule '*' --limit 100000 --baseline-root --baseline`).
+    # cmd/find_smells_action_test.go asserts the two invocation shapes
+    # stay in sync — change them together.
     - name: Build index
       shell: bash
       env:
@@ -58,7 +84,10 @@ runs:
       run: |
         set -euo pipefail
         if [ -n "$SCHEMA" ]; then
-          mache build --schema "$SCHEMA" . "${RUNNER_TEMP}/repo.db"
+          # The leyline backend (preferred by the default backend=auto)
+          # ignores build-time schemas; force the in-process tree-sitter
+          # backend so the caller's schema is actually honored.
+          mache build --schema "$SCHEMA" --backend tree-sitter . "${RUNNER_TEMP}/repo.db"
         else
           mache build . "${RUNNER_TEMP}/repo.db"
         fi

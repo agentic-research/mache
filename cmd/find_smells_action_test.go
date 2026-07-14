@@ -3,6 +3,8 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,18 +16,7 @@ import (
 // module root.
 func actionYAMLPath(t *testing.T) string {
 	t.Helper()
-	dir, err := os.Getwd()
-	require.NoError(t, err)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return filepath.Join(dir, ".github", "actions", "find-smells", "action.yml")
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("go.mod not found walking up from cwd")
-		}
-		dir = parent
-	}
+	return filepath.Join(macheRepoRoot(t), ".github", "actions", "find-smells", "action.yml")
 }
 
 // TestFindSmellsAction_Contract asserts the composite action exists, is a
@@ -68,4 +59,57 @@ func TestFindSmellsAction_Contract(t *testing.T) {
 	assert.Contains(t, src, "--format sarif")
 	assert.Contains(t, src, "--write-baseline")
 	assert.Contains(t, src, "--baseline ")
+}
+
+// TestFindSmellsAction_TaskfileParity asserts the composite action's core
+// gate invocation matches the Taskfile `smells` target's invocation shape
+// (taskfile-ci-parity: the action is the CONSUMER-facing twin of the gate
+// mache's own CI runs via `task smells`). It doesn't compare the scripts
+// byte-for-byte — the action adds download/SARIF/summary steps by design —
+// it pins the shared contract: same rule selection, same limit, same
+// baseline-root portability trick, and the SAME documented default
+// baseline path. Any deliberate divergence must update both files plus
+// the note in .github/actions/find-smells/README.md ("Contract with
+// mache's own gate").
+func TestFindSmellsAction_TaskfileParity(t *testing.T) {
+	root := macheRepoRoot(t)
+	actionRaw, err := os.ReadFile(actionYAMLPath(t))
+	require.NoError(t, err)
+	taskRaw, err := os.ReadFile(filepath.Join(root, "Taskfile.yml"))
+	require.NoError(t, err)
+	action, taskfile := string(actionRaw), string(taskRaw)
+
+	// The shared core invocation shape. Both gates must run every rule
+	// (auto-skipping absent-table rules), uncapped in practice, with a
+	// portable baseline root.
+	const coreShape = "--rule '*' --limit 100000"
+	assert.Contains(t, action, coreShape,
+		"action must run the same rule-selection + limit shape as `task smells`")
+	assert.Contains(t, taskfile, coreShape,
+		"Taskfile smells gate must run the same rule-selection + limit shape as the action")
+	assert.Contains(t, action, "--baseline-root")
+	assert.Contains(t, taskfile, "--baseline-root")
+
+	// The single documented default baseline path. The action input
+	// default and the Taskfile gate must name the same file; the
+	// consuming-repo docs (action README, examples/smell-rules/README.md)
+	// reference this default rather than inventing their own.
+	const defaultBaseline = "docs/smell-baseline.json"
+	assert.Contains(t, action, "default: '"+defaultBaseline+"'",
+		"action baseline input default must be the documented path")
+	assert.Contains(t, taskfile, "--baseline "+defaultBaseline,
+		"Taskfile smells gate must gate on the documented baseline path")
+
+	// The action's default mache-version must be a well-formed release
+	// tag at or above v0.13.0 — the floor its input description documents
+	// (leyline auto-provisioning; below that the description's behavior
+	// notes would be wrong for the default).
+	m := regexp.MustCompile(`default: 'v(\d+)\.(\d+)\.\d+'`).FindStringSubmatch(action)
+	require.NotNil(t, m, "action must declare a semver default for mache-version")
+	major, err := strconv.Atoi(m[1])
+	require.NoError(t, err)
+	minor, err := strconv.Atoi(m[2])
+	require.NoError(t, err)
+	assert.True(t, major > 0 || minor >= 13,
+		"default mache-version %s predates v0.13.0 leyline auto-provisioning; the input description would be stale", m[0])
 }

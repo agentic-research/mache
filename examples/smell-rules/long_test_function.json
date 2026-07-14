@@ -1,0 +1,10 @@
+{
+  "ID": "long_test_function",
+  "Description": "Go test-file functions sorted descending by body line count (end_row - start_row). A 120+ line test usually bundles several behaviors into one function; split it into subtests or table cases so a failure names the behavior that broke. METRIC rule with a DefaultMinMetric of 121: callers who omit min_metric get only the 121+ line offenders, an explicit --min-metric (including 0) overrides — that's the standard threshold pattern for any rule whose natural output has a long tail of small, uninteresting rows. Requires the _ast table (produced by leyline / ley-line-open builds; the pure tree-sitter backend doesn't emit it), so on a .db without _ast the rule is skipped automatically under --rule '*'. Deliberately more lenient than the built-in long_function (81): test length is a softer signal than production-function length.",
+  "Requires": ["_ast"],
+  "ScopeColumn": "fn.source_id",
+  "DefaultMinMetric": 121,
+  "Severity": "warn",
+  "Tags": ["tests"],
+  "Query": "SELECT fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col, (fn.end_row - fn.start_row) AS metric FROM _ast fn WHERE fn.node_kind IN ('function_declaration', 'method_declaration') AND fn.source_id LIKE '%%_test.go' %s ORDER BY metric DESC, fn.source_id, fn.start_byte"
+}
