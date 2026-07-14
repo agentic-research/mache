@@ -1,8 +1,8 @@
 # Mache
 
-Mache turns code and structured data into a navigable graph — functions, types, cross-references, and call chains — exposed as MCP tools or a mounted filesystem.
+Mache projects structured data into a navigable graph. Point a declarative schema at any structured source — JSON documents, SQLite databases, source code — and mache exposes the projection as MCP tools or a mounted filesystem, so an agent (or you) can explore the topology instead of grepping flat files.
 
-Point it at a codebase. It parses the code, discovers the structure, and lets your agent (or you) explore by following call chains, jumping to definitions, and reading context — instead of grepping through flat files.
+One engine, many projections. The schemas in [`examples/`](examples/README.md) project CVE feeds (NVD, KEV), Notion exports, Trivy scan results, Terraform, Markdown, LLM conversation logs, and audit trails with the same machinery that projects Go or Rust source. **Code intelligence is the flagship application of that engine** — the most-developed projection, where the graph gains functions, types, cross-references, call chains, structural smell rules, and optional LSP-grade enrichment.
 
 > *Mache* (/mɑʃe/ *mah-shay*): from *papier-mâché* — raw material, crushed and remolded into shape.
 
@@ -16,52 +16,28 @@ cd mache && task build && task install
 mache init --global   # installs the keepalive HTTP daemon (:7532) + registers detected editors
 ```
 
-That's the 30-second path for a **Go** codebase. `mache init --global` installs a per-user supervisor (launchd on macOS, systemd `--user` on Linux) that keeps the shared mache HTTP daemon alive on `localhost:7532` and registers it with Claude Code and any detected editors — no terminal to babysit. Then `mache init` (no flag) inside a project records what that project serves.
+That's the 30-second path for the flagship application — code intelligence on a **Go** codebase. `mache init --global` installs a per-user supervisor (launchd on macOS, systemd `--user` on Linux) that keeps the shared mache HTTP daemon alive on `localhost:7532` and registers it with Claude Code and any detected editors — no terminal to babysit. Then `mache init` (no flag) inside a project records what that project serves.
 
 Two things new users hit:
 
 - **HTTP is the canonical transport.** One shared daemon serves every project, routing per session via the MCP roots protocol. `--stdio` exists only as an escape hatch for CI / sandboxes / headless agents and is never registered for editor use (see [ADR-0022](docs/adr/0022-mcp-transport-canonical.md)).
 - For **Rust / Python / TypeScript**, point mache at a [ley-line-open](https://github.com/agentic-research/ley-line-open)-built `.db` instead of a directory (`mache serve ./code.db`) to get accurate `find_callers` + `get_type_info` + `get_diagnostics`. A bare directory uses the built-in tree-sitter tier, which is tuned for Go.
 
+To project non-code data instead, hand `mache serve` (or `mache mount`) a schema with `--schema` and point it at your JSON or SQLite source — the [example schemas](examples/README.md) cover NVD, KEV, Notion, Trivy, Terraform, and more.
+
 For the full first-run flow — source choice (directory vs `.db` vs live hot-swap), the `--stdio` escape hatch, `--scope`, Claude Desktop, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
 
-## What it gives an agent
+## Code intelligence: what it gives an agent
 
-Seventeen MCP tools wrap the projected graph (sixteen read-surface plus `write_file`). Fourteen work standalone; three (`semantic_search`, `get_type_info`, `get_diagnostics`) draw on [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers fourteen structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); five of those require a `.db` built by ley-line-open.
+The code projection is where the engine is deepest. Eighteen MCP tools wrap the projected graph (seventeen read-surface plus `write_file`). Fourteen work standalone; four (`semantic_search`, `get_type_info`, `get_diagnostics`, `get_sheaf_status`) draw on [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers fourteen structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); five of those require a `.db` built by ley-line-open.
 
 **Live LSP enrichment.** `get_type_info` / `get_diagnostics` no longer need a pre-baked `.db` — pass a `file=` and mache auto-spawns the ley-line daemon, which drives the language server (rust-analyzer, gopls, …) on demand and projects real hover / type / diagnostic data into the graph. Verified end-to-end on **Rust and Go** (e.g. `get_type_info(symbol, file)` returns rust-analyzer's signature + doc comment). This is the same primitive [Serena](https://github.com/oraios/serena) is built on, but as one enrichment *tier* over a tree-sitter base that still works without a language server — see [`prior-art/`](prior-art/) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
 For the full tool inventory and capability matrix (which tools need which tables), see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
-## Portable cache (mache-aeb262)
-
-`mache cache` push/pulls the projected `.db` as a content-addressed bundle so CI / new dev machines / agents don't re-parse a million lines on every cold start.
-
-```bash
-# Emit a portable bundle from a built db.
-mache cache push --db ./mache.db ./cache-out
-
-# Restore a fresh db from a bundle.
-mache cache pull --out-db ./restored.db ./cache-out
-
-# Push to a remote OCI registry (build-cache/v1 transport).
-mache cache push --db ./mache.db ./cache-out \
-    --remote https://cache.example.com --scope myrepo/abc123 --tag latest
-
-# Pull from a remote registry into a local cache dir, then restore.
-mache cache pull --out-db ./restored.db ./cache-in \
-    --remote https://cache.example.com --scope myrepo/abc123 --ref latest
-
-# CI-friendly: assert a bundle is intact + verifiable, without restoring.
-mache cache verify \
-    --remote https://cache.example.com --scope myrepo/abc123 --ref latest
-```
-
-When the source db has an `_ast` table, chunks carry the AST node rows too — pull restores both `_source` AND `_ast`, so the restored db is queryable without re-parsing. When `_ast` is absent, chunks are raw source bytes (Phase 1 fallback).
-
-See [`docs/cache/phase-4-chunk-shape.md`](docs/cache/phase-4-chunk-shape.md) for the wire format and [`cloister-spec/build-cache/v1/`](https://github.com/agentic-research/cloister/tree/main/cloister-spec/build-cache/v1) for the OCI transport spec.
-
 ## How it works
+
+Every projection follows the same shape: a schema declares the topology, walkers extract nodes and edges from the source (JSONPath for JSON, direct SQL for SQLite, AST queries for code), and the resulting graph is served over MCP or mounted as a filesystem. The source-code path — the most developed — looks like this:
 
 ```mermaid
 flowchart LR
@@ -128,6 +104,34 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
+## Portable cache (mache-aeb262)
+
+`mache cache` push/pulls the projected `.db` as a content-addressed bundle so CI / new dev machines / agents don't re-parse a million lines on every cold start.
+
+```bash
+# Emit a portable bundle from a built db.
+mache cache push --db ./mache.db ./cache-out
+
+# Restore a fresh db from a bundle.
+mache cache pull --out-db ./restored.db ./cache-out
+
+# Push to a remote OCI registry (build-cache/v1 transport).
+mache cache push --db ./mache.db ./cache-out \
+    --remote https://cache.example.com --scope myrepo/abc123 --tag latest
+
+# Pull from a remote registry into a local cache dir, then restore.
+mache cache pull --out-db ./restored.db ./cache-in \
+    --remote https://cache.example.com --scope myrepo/abc123 --ref latest
+
+# CI-friendly: assert a bundle is intact + verifiable, without restoring.
+mache cache verify \
+    --remote https://cache.example.com --scope myrepo/abc123 --ref latest
+```
+
+When the source db has an `_ast` table, chunks carry the AST node rows too — pull restores both `_source` AND `_ast`, so the restored db is queryable without re-parsing. When `_ast` is absent, chunks are raw source bytes (Phase 1 fallback).
+
+See [`docs/cache/phase-4-chunk-shape.md`](docs/cache/phase-4-chunk-shape.md) for the wire format and [`cloister-spec/build-cache/v1/`](https://github.com/agentic-research/cloister/tree/main/cloister-spec/build-cache/v1) for the OCI transport spec.
+
 ## Deployment modes
 
 Mache has two supported deployment shapes:
@@ -181,7 +185,7 @@ the orchestrator).
 - [Roadmap](docs/ROADMAP.md) — what's landed, near-term, long-term
 - [ADRs](docs/adr/) — Architectural Decision Records
 - [Prior art & landscape](docs/PRIOR_ART.md) — what mache builds on, how it compares
-- [Example schemas](examples/README.md) — NVD, KEV, Go source, MCP registry
+- [Example schemas](examples/README.md) — NVD, KEV, Notion, Trivy, Terraform, Markdown, LLM conversations, Go/Python/Rust/SQL source, MCP registry
 - [Contributing](CONTRIBUTING.md)
 
 ## License
