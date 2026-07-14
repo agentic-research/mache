@@ -1319,6 +1319,50 @@ func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
 	assert.Equal(t, "a.go", resp.Findings[0].SourceID)
 }
 
+// TestFindSmells_DeadCodeSkipsFixtureCorpus asserts the testdata/ +
+// test_data/ exclusion (mache-608a3c): fixture corpus is parsed but
+// never called by design, so every fixture def would otherwise flag as
+// dead. On the leyline projection this dominated the rule's output —
+// 302 of mache's 321 pre-filter findings were Rust snapshot fixtures
+// under testdata/ (the .go-scoped go-schema never ingested those dirs,
+// but leyline parses everything tracked).
+func TestFindSmells_DeadCodeSkipsFixtureCorpus(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+		-- All four are unreferenced. Only the non-fixture one may flag.
+		INSERT INTO node_defs VALUES
+		  ('RealDead',   'pkg/real.go/function_declaration_0'),
+		  ('FixtureFn',  'testdata/fix.rs/function_item_0'),
+		  ('NestedFix',  'internal/x/testdata/deep.go/function_declaration_0'),
+		  ('JsFixture',  'tests/test_data/js/t.js/function_declaration');
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/real.go/function_declaration_0',              '', 'RealDead',  1, 0, 'pkg/real.go', ''),
+		  ('testdata/fix.rs/function_item_0',                 '', 'FixtureFn', 1, 0, 'testdata/fix.rs', ''),
+		  ('internal/x/testdata/deep.go/function_declaration_0', '', 'NestedFix', 1, 0, 'internal/x/testdata/deep.go', ''),
+		  ('tests/test_data/js/t.js/function_declaration',    '', 'JsFixture', 1, 0, 'tests/test_data/js/t.js', '');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "dead_code",
+	}))
+	require.NoError(t, err)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.Equal(t, 1, resp.Total, "fixture-corpus defs (testdata/, test_data/) must not flag as dead")
+	assert.Equal(t, "pkg/real.go/function_declaration_0", resp.Findings[0].NodeID)
+}
+
 // TestFindSmells_CyclomaticComplexity seeds two functions with
 // different control-flow counts and asserts the rule returns them
 // ranked by metric DESC.
