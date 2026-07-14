@@ -1,21 +1,26 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
-	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// inferFromTreeSitterFile reads a source file, parses it with tree-sitter,
-// and infers a topology schema. Returns an error if parsing fails.
-func inferFromTreeSitterFile(inf *lattice.Inferrer, path string, lang *sitter.Language, label string) (*api.Topology, error) {
-	log.Printf("Inferring schema from %s source via Tree-sitter...", label)
+// inferFromSourceFile infers a topology schema for a single source file by
+// leyline-parsing it into an _ast database and running pure-Go FCA inference
+// over that — no in-process tree-sitter (CGO-free inference path).
+//
+// leyline parse only accepts directories, so the file is copied into a
+// throwaway temp dir first. Inference consumes only AST shape, never file
+// paths, so the copy is lossless for this purpose.
+func inferFromSourceFile(inf *lattice.Inferrer, path string, l *lang.Language) (*api.Topology, error) {
+	log.Printf("Inferring schema from %s source via leyline _ast...", l.DisplayName)
 	start := time.Now()
 	defer func() { log.Printf("Schema inference done in %v", time.Since(start)) }()
 
@@ -23,14 +28,24 @@ func inferFromTreeSitterFile(inf *lattice.Inferrer, path string, lang *sitter.La
 	if err != nil {
 		return nil, err
 	}
-	parser := sitter.NewParser()
-	parser.SetLanguage(lang)
-	tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
-	if parseErr != nil { // coverage:ignore — tree-sitter ParseCtx surfaces three error classes (per convertTSTree in smacker/go-tree-sitter): ctx cancellation, ErrNoLanguage, ErrOperationLimit. ErrNoLanguage is ruled out by SetLanguage(lang) above; ErrOperationLimit is unreachable because mache never calls SetOperationLimit anywhere in cmd/. Context cancellation requires a propagated cancel that this synchronous call path doesn't construct.
-		return nil, fmt.Errorf("tree-sitter parse failed for %s: %w", path, parseErr) // coverage:ignore
-	} // coverage:ignore
-	if tree == nil { // coverage:ignore — defensive nil check; ParseCtx returns nil tree only when it also returns an error, already handled above
-		return nil, fmt.Errorf("tree-sitter returned nil tree for %s", path) // coverage:ignore
-	} // coverage:ignore
-	return inf.InferFromTreeSitter(tree.RootNode())
+	tmpDir, err := os.MkdirTemp("", "mache-infer-")
+	if err != nil {
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if err := os.WriteFile(filepath.Join(tmpDir, filepath.Base(path)), content, 0o600); err != nil {
+		return nil, fmt.Errorf("stage %s for leyline parse: %w", path, err)
+	}
+
+	astDB, cleanup, err := autoInvokeLeylineParse(tmpDir)
+	if err != nil {
+		return nil, fmt.Errorf("leyline parse %s: %w", path, err)
+	}
+	defer cleanup()
+
+	savedLang := inf.Config.Language
+	inf.Config.Language = l.Name
+	defer func() { inf.Config.Language = savedLang }()
+
+	return inf.InferFromASTDB(astDB)
 }

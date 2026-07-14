@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/leyline"
 )
 
 func TestDetectProjectLanguages_Mixed(t *testing.T) {
@@ -139,4 +141,32 @@ func TestInferDirSchema_NoSourceFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, topo)
 	assert.Empty(t, topo.Nodes)
+}
+
+// TestInferLanguages_LeylineASTDB exercises the rewired pure-Go inference
+// bucket end-to-end: leyline-parse a Go fixture once, then run per-language
+// FCA inference against the produced _ast database. (Every registered
+// language currently ships a preset, so inferDirSchema only reaches this
+// path for preset-less languages — the helper is tested directly.)
+// Skips when the pinned leyline binary is unavailable (never downloads).
+func TestInferLanguages_LeylineASTDB(t *testing.T) {
+	if _, err := leyline.ResolveBinary(false); err != nil {
+		t.Skipf("pinned leyline not available without download: %v", err)
+	}
+
+	dir := t.TempDir()
+	src := []byte("package sample\n\ntype Greeter struct{ Name string }\n\nfunc Hello() string { return \"hi\" }\n\nfunc (g Greeter) Greet() string { return g.Name }\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sample.go"), src, 0o644))
+
+	dbPath, cleanup, err := autoInvokeLeylineParse(dir)
+	require.NoError(t, err)
+	defer cleanup()
+
+	nodes, err := inferLanguages(dbPath, []string{"go"}, map[string]int{"go": 1})
+	require.NoError(t, err)
+	require.Len(t, nodes, 1, "expected one namespace-wrapped node")
+	assert.Equal(t, "go", nodes[0].Name)
+	assert.Equal(t, "go", nodes[0].Language)
+	assert.Equal(t, "$", nodes[0].Selector)
+	assert.NotEmpty(t, nodes[0].Children, "FCA over the _ast db should produce child nodes")
 }
