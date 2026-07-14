@@ -101,18 +101,15 @@ jobs:
         # with six stale covers-version markers undetected.
         run: task docs:lint
 
-      - name: Smell gate
-        # Build a .db of the repo + fail on NEW structural findings vs the
-        # committed baseline (W5 ratchet, mache-4da90e). Local == CI: the same
-        # `task smells` a developer runs.
+      - name: Smell gate (leyline / _ast)
+        # Single structural smell gate: build a leyline _ast .db of the tracked
+        # tree + fail on NEW findings vs the committed baseline (W5 ratchet,
+        # mache-4da90e). The _ast .db is a superset of the old pure-Go .db, so
+        # ALL `gate`-tagged rules run on it — the former pure-Go tree-sitter
+        # `smells` gate was folded in here (mache-608a3c; CGO removal
+        # mache-37ae8b). Local == CI: the same `task smells` a developer runs;
+        # mache auto-downloads the pinned leyline.
         run: task smells
-
-      - name: Smell gate (_ast / leyline)
-        # Dogfood the _ast-requiring rules (long_function / long_file /
-        # duplicate_code) via a leyline-built _ast .db — the pure-Go tree-sitter
-        # `smells` gate above can't see them. Same `task smells:ast` a developer
-        # runs; mache auto-downloads the pinned leyline (mache-46af85 part 2).
-        run: task smells:ast
 
       - name: Format check (gofumpt)
         # task fmt:check is the single source for the pinned gofumpt

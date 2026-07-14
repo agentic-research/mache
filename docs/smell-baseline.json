@@ -3,17 +3,42 @@
   "counts": [
     {
       "rule_id": "dead_code",
-      "source_id": "cmd/cache_oci.go",
-      "count": 1
+      "source_id": "cmd/all_tools_e2e_test.go",
+      "count": 2
     },
     {
       "rule_id": "dead_code",
       "source_id": "cmd/config.go",
+      "count": 2
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "cmd/init.go",
       "count": 1
     },
     {
       "rule_id": "dead_code",
-      "source_id": "examples/testdata/go_sample.go",
+      "source_id": "cmd/pack.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "cmd/serve.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "cmd/serve_resolve_ref.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "internal/graph/graph_suite_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "internal/graph/sqlite_resolver_test.go",
       "count": 1
     },
     {
@@ -23,13 +48,1193 @@
     },
     {
       "rule_id": "dead_code",
+      "source_id": "internal/lang/lang.go",
+      "count": 1
+    },
+    {
+      "rule_id": "dead_code",
       "source_id": "mount/mount.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/all_tools_self_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/cache_oci.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/call_extractor_ast_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/cli_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/config_test.go",
+      "count": 10
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/dead_code_skip_list_retreat_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/escape_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/find_smells_cli_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/kind_filter.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/leyline.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/leyline_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/schemas.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_find_callers_bench_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_find_definition_bench_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_find_smells_bench_test.go",
+      "count": 5
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_find_smells_load_test.go",
+      "count": 9
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_find_smells_test.go",
+      "count": 31
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_find_smells_views_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_hosted.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_listdir_bench_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_lsp.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_registry.go",
+      "count": 8
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_resolve_ref.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_search_bench_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_test.go",
+      "count": 33
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_write_test.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/sheaf_subscribe_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/sheaf_wire_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/uds_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/unmount_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/control/control_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/arena_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/community_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/composite_defs_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/composite_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/delete_file_nodes_perf_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/graph_suite_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/graph_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/hotswap.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/memstore.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/memstore_refs.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/shared_test.go",
+      "count": 7
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/sheaf_invalidate_test.go",
+      "count": 7
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/sqlite_graph_refs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/sqlite_resolver_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/store_local.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/vdirpath.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/vdirpath_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/writable_graph.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_file_level_refs_parity_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_parity_test.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker_bench_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker_core_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/diagram_test.go",
+      "count": 7
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/parent_match.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sitter_flatten_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sitter_walker.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sitter_walker_test.go",
+      "count": 14
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "count": 7
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "count": 25
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/watcher_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lang/lang.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lattice/greedy.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lattice/project.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/client.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/sheaf.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/sheaf_cascade_bench_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/sheaf_subscriber.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/sheaf_subscriber_e2e_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/sheaf_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "count": 12
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/trigger_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lint/tool_preflight_test.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/json_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/materialize_test.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/file.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "count": 14
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/callers.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/context.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/location.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/resolver.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/resolver_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/writeback/format_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/writeback/splice_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/writeback/validate_test.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main_test.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/fixtures-snapshot/main.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/fuzz-gen/subject/parser.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/fuzz-gen/tasks/task_1771121798/parser.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "validate/validate_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "api/schema.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/all_tools_self_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/config.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/find_smells_duplicate_code_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/leyline_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/pack.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_architecture.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_find_smells_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_find_smells_views_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_backfill_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_find_callees.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_find_callers.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_find_definition.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_get_communities.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_get_overview.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_read_file.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_handler_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_lsp.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_test.go",
+      "count": 10
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/testdata/preset_fixtures/rust/lib.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/untested_function_leyline_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/utils.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/graph/graph.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/graph/quotient.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/graph/sqlite_graph_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/ast_walker_calls_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/interfaces.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/sqlite_loader_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/sqlite_writer_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/lattice/project.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/leyline/procgroup_other.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/leyline/procgroup_unix.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/leyline/sheaf.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/leyline/wire.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/materialize/materialize_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/nfsmount/server.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testfixtures/curate.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testfixtures/registry.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/vfs/types.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/writeback/splice_inode_other_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/writeback/splice_inode_unix_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "mount/mount.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/accrete.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/atom.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/channels.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/decompose.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/harmony.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/lib.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/parse.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/provenance.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/thread.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/crypto/src/classify.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/crypto/src/lib.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/backend.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bdr_enrich.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead.rs",
+      "count": 5
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_sqlite.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/capture.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/cli.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/prompt.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/providers.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/session.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/sweep.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/tests.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/mod.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/observations.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dsse.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/github.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/github_mirror.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/handoff.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/linear.rs",
+      "count": 5
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/linear_tracker.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
+      "count": 10
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/manifest.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/migrate.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_chain.rs",
+      "count": 5
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_flat.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_lww.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_orset.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/fold.rs",
+      "count": 8
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/integration_tests.rs",
+      "count": 15
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/log.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/log_sqlite.rs",
+      "count": 5
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/mod.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/quarantine.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/registry.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/tree_fold.rs",
+      "count": 5
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/orchestrate/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/orchestrate/transcript.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/pipeline.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/plugin.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/pool.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/queue.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/helpers.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/mod.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/tests.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/vcs.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/verify.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/repo_cache.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/scanner.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/scope.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/secrets.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/github_webhook.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/scope_args.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ticket_load.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/tools.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/session.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/sprites.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/sprites_provider.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_sqlite.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/testutil.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/vcs.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/verify.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/workspace/mod.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/workspace/sweep.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/xref.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/tests/cli_integration.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/coverage-gate/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fixtures-snapshot/main.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fuzz-gen/subject/parser.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fuzz-gen/tasks/task_1771121798/parser.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/gen-lsp-fixture/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/mcp-fetch/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/notion-fetch/main.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/cache.go",
-      "count": 3
+      "count": 5
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/cache_oci.go",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -39,6 +1244,16 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/infer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/leyline.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/mount_control.go",
       "count": 1
     },
     {
@@ -63,12 +1278,12 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_find_definition.go",
+      "source_id": "cmd/serve_handler_get_communities.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_get_communities.go",
+      "source_id": "cmd/serve_handler_list_directory.go",
       "count": 1
     },
     {
@@ -78,8 +1293,28 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_semantic_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handlers.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "cmd/serve_impact.go",
       "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_lsp.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_registry.go",
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -88,7 +1323,42 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "ext/boltdb/boltdb.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "graph/sqlite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/arena_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/memstore_refsdb.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph_callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph_refs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph_scan.go",
       "count": 1
     },
     {
@@ -103,32 +1373,177 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_sqlite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_treesitter.go",
       "count": 3
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/sitter_walker.go",
+      "source_id": "internal/ingest/git.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/leyline/socket.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/vfs/schema.go",
+      "source_id": "internal/linter/linter.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/lsp/binding_log.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/materialize/json.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/testfixtures/curate.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/testfixtures/registry.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/writeback/splice.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
       "count": 3
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "mount/mount.go",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/providers.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/github_mirror.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/linear.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/mod.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/orchestration.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/threading.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/triage.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/verify.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/workspace_ops.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
+      "count": 7
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/tests/cli_integration.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/coverage-gate/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/fuzz-gen/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/mcp-fetch/main.go",
       "count": 1
     },
     {
@@ -137,13 +1552,8 @@
       "count": 1
     },
     {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/server-json-gen/main.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/sheaf-subscribe-probe/main.go",
+      "rule_id": "god_file",
+      "source_id": "cmd/serve_registry.go",
       "count": 1
     },
     {
@@ -154,6 +1564,566 @@
     {
       "rule_id": "god_file",
       "source_id": "internal/nfsmount/graphfs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/parse.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/backend.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_dolt.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_sqlite.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/tests.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/pipeline.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/plugin.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/queue.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/tests.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/scope.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_sqlite.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/verify.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "cmd/serve_find_smells_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "cmd/serve_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "internal/leyline/socket_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_sqlite.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/tests.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/all_tools_e2e_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/cache.go",
+      "count": 5
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/cache_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/dead_code_skip_list_retreat_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/falsifiability_lsp_projection_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/falsifiability_skip_list_ablation_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/infer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/kind_discriminator_leyline_ast_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/leyline.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/leyline_callees_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/mount_control.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/mount_nfs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/pack.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/preset_fixture_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_architecture.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_find_smells.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_find_smells_bench_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_find_smells_test.go",
+      "count": 3
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_find_smells_views_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_handler_find_definition.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_handler_get_communities.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_handler_get_overview.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_handler_list_directory.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_handler_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_handlers.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_impact.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_lsp.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_registry.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/serve_write.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/smell_findings.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/smell_incremental.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "cmd/smell_refs_views.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "ext/boltdb/boltdb.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sqlite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sqlite_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/arena_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/community.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/graph_suite_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/memstore_callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/memstore_write.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/quotient.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/quotient_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/sheaf_invalidate.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/sqlite_graph_callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/sqlite_graph_scan.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/graph/sqlite_graph_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/address_refs_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/ast_query_parity_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/ast_walker.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/ast_walker_calls.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/ast_walker_selector.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/ast_walker_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_ingest.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_languages.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_modtime_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_sqlite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_treesitter.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_walk.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/git.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/sitter_walker.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/lattice/grammar_introspect_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/lattice/greedy.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/lattice/project_ast.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/leyline/sheaf_e2e_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/leyline/sheaf_subscriber_e2e_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/leyline/socket.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/leyline/trigger.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/template/render_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/writeback/splice.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/coverage-gate/main.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/coverage-gate/main_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/gen-lsp-fixture/main.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/mcp-fetch/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/notion-fetch/main.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/server-json-gen/main.go",
       "count": 1
     },
     {
@@ -189,7 +2159,7 @@
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/ingest/engine_modtime_test.go",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "sleep_in_test",
@@ -199,7 +2169,7 @@
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/ingest/watcher_test.go",
-      "count": 9
+      "count": 14
     },
     {
       "rule_id": "sleep_in_test",
@@ -244,11 +2214,6 @@
     {
       "rule_id": "untested_function",
       "source_id": "cmd/cache_oci.go",
-      "count": 1
-    },
-    {
-      "rule_id": "untested_function",
-      "source_id": "examples/testdata/go_sample.go",
       "count": 1
     },
     {

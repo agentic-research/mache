@@ -79,14 +79,24 @@ func TestFindSmellsAction_TaskfileParity(t *testing.T) {
 	require.NoError(t, err)
 	action, taskfile := string(actionRaw), string(taskRaw)
 
-	// The shared core invocation shape. Both gates must run every rule
-	// (auto-skipping absent-table rules), uncapped in practice, with a
-	// portable baseline root.
-	const coreShape = "--rule '*' --limit 100000"
-	assert.Contains(t, action, coreShape,
-		"action must run the same rule-selection + limit shape as `task smells`")
-	assert.Contains(t, taskfile, coreShape,
-		"Taskfile smells gate must run the same rule-selection + limit shape as the action")
+	// The core invocation shape: run every rule (auto-skipping
+	// absent-table rules), uncapped in practice, with a portable
+	// baseline root. TEMPORARY divergence (mache-608a3c): mache's own
+	// Taskfile gate additionally scopes to `--tags=gate` — the ratchet
+	// rule set, excluding the min-0 firehoses — but the action pins a
+	// RELEASED mache whose embedded rules predate the `gate` retag, so
+	// `--tags=gate` there would match zero rules and exit 3. Once the
+	// action's default mache-version is bumped to a release that ships
+	// gate-tagged rules, add `--tags=gate` to the action's invocations
+	// and collapse these two constants back into one.
+	const actionShape = "--rule '*' --limit 100000"
+	const taskfileShape = "--rule '*' --tags=gate --limit 100000"
+	assert.Contains(t, action, actionShape,
+		"action must run the documented rule-selection + limit shape")
+	assert.NotContains(t, action, "--tags=",
+		"the action must not use --tags until its pinned mache release ships gate-tagged rules — bump the default mache-version first, then reconverge the shapes (mache-608a3c)")
+	assert.Contains(t, taskfile, taskfileShape,
+		"Taskfile smells gate must run the gate-tagged ratchet shape")
 	assert.Contains(t, action, "--baseline-root")
 	assert.Contains(t, taskfile, "--baseline-root")
 
@@ -97,7 +107,10 @@ func TestFindSmellsAction_TaskfileParity(t *testing.T) {
 	const defaultBaseline = "docs/smell-baseline.json"
 	assert.Contains(t, action, "default: '"+defaultBaseline+"'",
 		"action baseline input default must be the documented path")
-	assert.Contains(t, taskfile, "--baseline "+defaultBaseline,
+	// The Taskfile parameterizes the flag ({{.BASELINE_FLAG}} is
+	// --baseline for the gate, --write-baseline for regeneration) but
+	// must name the same documented path.
+	assert.Contains(t, taskfile, "{{.BASELINE_FLAG}} "+defaultBaseline,
 		"Taskfile smells gate must gate on the documented baseline path")
 
 	// The action's default mache-version must be a well-formed release

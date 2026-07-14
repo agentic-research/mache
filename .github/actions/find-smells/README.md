@@ -63,9 +63,20 @@ runs is the gate you consume. `cmd/find_smells_action_test.go`
 the default baseline path stay in sync, so drift fails mache's CI rather than
 surprising a consuming repo.
 
-One intentional difference: mache's own repo splits the gate into two
-baselines (`task smells` with a forced tree-sitter backend +
-`task smells:ast` over a leyline build) for parity reasons internal to this
-repo. The action uses a single build (backend auto) and a single baseline —
-bootstrap the baseline with the same mache version the action runs and the
-two always agree.
+Two intentional differences from mache's own gate (mache-608a3c
+consolidated it onto a single leyline build + single baseline, so the
+builds now match):
+
+1. mache's Taskfile gate scopes to `--tags=gate` — the ratchet rule set,
+   excluding the min-0 firehose rules (`cyclomatic_complexity`,
+   `magic_int_in_comparison`). The action runs `--rule '*'` because its
+   pinned release predates the `gate` retag of the embedded rules;
+   `--tags=gate` will be adopted when the default `mache-version` is
+   bumped to a release that ships them (the parity test encodes this
+   reconvergence condition).
+1. mache's gate builds from the tracked tree (`git archive HEAD`); the
+   action builds from the checkout, which is equivalent on a clean CI
+   checkout.
+
+Bootstrap the baseline with the same mache version the action runs and
+the two always agree.

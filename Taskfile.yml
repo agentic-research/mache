@@ -420,69 +420,53 @@ tasks:
         || { echo "yamllint required — install: pip install yamllint"; exit 1; };
         git ls-files '*.yml' '*.yaml' | grep -vE 'testdata/' | xargs yamllint -c .yamllint
 
-  smells:
-    desc: "Structural smell gate — fail on NEW findings vs docs/smell-baseline.json (W5 local-first gate, mache-4da90e)"
-    deps: [build]
-    cmds:
-      - |
-        set -euo pipefail
-        DB="$(mktemp -t mache-smells.XXXXXX.db)"
-        trap 'rm -f "$DB"' EXIT
-        ./{{.BINARY_NAME}} build . "$DB" --backend tree-sitter >/dev/null
-        # --rule '*' skips rules whose tables are absent on the pure-Go .db;
-        # --baseline-root "$PWD" keeps the committed baseline machine/CI-portable.
-        ./{{.BINARY_NAME}} find-smells --db "$DB" --rule '*' --limit 100000 \
-          --baseline-root "$PWD" --baseline docs/smell-baseline.json >/dev/null
-
-  smells:baseline:
-    desc: "Regenerate docs/smell-baseline.json — grandfather current structural debt (run after a deliberate change)"
-    deps: [build]
-    cmds:
-      - |
-        set -euo pipefail
-        DB="$(mktemp -t mache-smells.XXXXXX.db)"
-        trap 'rm -f "$DB"' EXIT
-        ./{{.BINARY_NAME}} build . "$DB" --backend tree-sitter >/dev/null
-        ./{{.BINARY_NAME}} find-smells --db "$DB" --rule '*' --limit 100000 \
-          --baseline-root "$PWD" --write-baseline docs/smell-baseline.json >/dev/null
-        echo "regenerated docs/smell-baseline.json"
-
   # Shared internal step: build a leyline _ast .db from the TRACKED tree only,
-  # then run the ast-gate rules with the given find-smells baseline flag
-  # ($BASELINE_FLAG). Tracked-only (git archive HEAD) is the PARITY fix: leyline
-  # does not yet respect .gitignore (ley-line-open-a8e4ce), so building `.` would
-  # ingest a dev's untracked scratch and diverge from CI's clean checkout. Uses
-  # `git archive | tar` — portable across BSD/GNU (an earlier `git ls-files |
-  # cpio -0` copied ZERO files on macOS's BSD cpio, silently emptying the
-  # baseline; mache-c380d2). HEAD == exactly what CI checks out. mache-46af85.
-  smells:ast:run:
+  # then run the `gate`-tagged rules with the given find-smells baseline flag
+  # ($BASELINE_FLAG). This is the SINGLE smell gate — mache-608a3c consolidated
+  # the former pure-Go tree-sitter `smells` gate onto leyline. The _ast .db is a
+  # strict SUPERSET of the old pure-Go .db (it carries node_defs/node_refs/nodes
+  # AND _ast/_ast_pointer), so every `gate`-tagged rule runs with zero coverage
+  # loss and the CGO tree-sitter backend is no longer needed for the gate
+  # (mache-37ae8b, CGO removal).
+  #
+  # Tracked-only (git archive HEAD) is the PARITY fix: leyline < v0.7.2 does not
+  # respect .gitignore (ley-line-open-a8e4ce; fixed in v0.7.2 PR #178), so
+  # building `.` would ingest a dev's untracked scratch and diverge from CI's
+  # clean checkout. Uses `git archive | tar` — portable across BSD/GNU (an
+  # earlier `git ls-files | cpio -0` copied ZERO files on macOS's BSD cpio,
+  # silently emptying the baseline; mache-c380d2). HEAD == exactly what CI checks
+  # out. Building into a real temp dir ($SRC) also makes the gate immune to the
+  # $PWD-symlink baseline-root mismatch that broke the old `.`/$PWD pure-Go gate
+  # (~/github -> ~/remotes: $PWD symlink != the binary's canonicalized build
+  # root, so every finding mismatched the baseline and showed as NEW).
+  smells:run:
     internal: true
     deps: [build]
     cmds:
       - |
         set -euo pipefail
         command -v tar >/dev/null 2>&1 || { echo "tar required (git archive extract)"; exit 1; }
-        SRC="$(mktemp -d)"; DB="$(mktemp -t mache-smells-ast.XXXXXX.db)"
+        SRC="$(mktemp -d)"; DB="$(mktemp -t mache-smells.XXXXXX.db)"
         trap 'rm -rf "$SRC" "$DB"' EXIT
         git archive HEAD | tar -x -C "$SRC"
         ./{{.BINARY_NAME}} build "$SRC" "$DB" --backend leyline >/dev/null
-        # --tags=ast-gate scopes to the excess-shaped _ast rules; the min-0
+        # --tags=gate scopes to the excess-shaped ratchet rules; the min-0
         # firehoses (cyclomatic_complexity/magic_int_in_comparison) are NOT gated.
-        ./{{.BINARY_NAME}} find-smells --db "$DB" --rule '*' --tags=ast-gate --limit 100000 \
-          --baseline-root "$SRC" {{.BASELINE_FLAG}} docs/smell-baseline-ast.json >/dev/null
+        ./{{.BINARY_NAME}} find-smells --db "$DB" --rule '*' --tags=gate --limit 100000 \
+          --baseline-root "$SRC" {{.BASELINE_FLAG}} docs/smell-baseline.json >/dev/null
 
-  smells:ast:
-    desc: "Structural smell gate over the leyline _ast projection — ratchets the _ast-only rules (long_function/long_file/duplicate_code) the pure-Go tree-sitter `smells` gate can't see. Tracked-files-only (parity-safe). mache-46af85 part 2."
+  smells:
+    desc: "Structural smell gate over the leyline _ast projection — fail on NEW findings vs docs/smell-baseline.json. Single backend (leyline, pure-Go pipeline), tracked-files-only (parity-safe). mache-608a3c / mache-4da90e."
     cmds:
-      - task: smells:ast:run
+      - task: smells:run
         vars: { BASELINE_FLAG: "--baseline" }
 
-  smells:ast:baseline:
-    desc: "Regenerate docs/smell-baseline-ast.json (leyline _ast projection) — run after a deliberate _ast-rule change or a leyline version bump"
+  smells:baseline:
+    desc: "Regenerate docs/smell-baseline.json (leyline _ast projection) — grandfather current structural debt after a deliberate change or a leyline version bump"
     cmds:
-      - task: smells:ast:run
+      - task: smells:run
         vars: { BASELINE_FLAG: "--write-baseline" }
-      - echo "regenerated docs/smell-baseline-ast.json"
+      - echo "regenerated docs/smell-baseline.json"
 
   coverage-gate:
     desc: Run the diff-aware NEW-CODE coverage gate against the current branch
@@ -586,7 +570,6 @@ tasks:
       - task: lint:actions
       - task: lint:yaml
       - task: smells
-      - task: smells:ast
       - task: gates:preflight
       - task: gen:server-json:check
 
@@ -613,7 +596,6 @@ tasks:
       - task: lint:actions
       - task: lint:yaml
       - task: smells
-      - task: smells:ast
       - task: gates:preflight
       - task: gen:server-json:check
 

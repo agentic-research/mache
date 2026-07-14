@@ -68,6 +68,21 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	if err != nil {
 		return fmt.Errorf("probe node_defs.node_hash: %w", err)
 	}
+
+	// canonical_kind is LLO's closed κ vocabulary (function / method / type /
+	// module / constant / ...) written onto node_defs (v0.7.5+, bead
+	// ley-line-open-b9d1d5 sibling). It normalizes the per-language tree-sitter
+	// kinds (function_declaration / function_item / function_definition → the
+	// single canonical 'function') so rules filter by ONE canonical value
+	// instead of the mache-schema 'functions/' node_id path (which the leyline
+	// projection doesn't use) or an ever-growing per-language kind list. Surface
+	// it as a trailing additive column on v_defs; NULL on legacy dbs (and on the
+	// LSP binding arm, which has no κ concept) so `canonical_kind = 'function'`
+	// filters degrade to "no match" there rather than erroring. (mache-608a3c)
+	hasDefsCanonicalKind, err := tableHasColumn(qg, "node_defs", "canonical_kind")
+	if err != nil {
+		return fmt.Errorf("probe node_defs.canonical_kind: %w", err)
+	}
 	hasRefsNodeHash, err := tableHasColumn(qg, "node_refs", "node_hash")
 	if err != nil {
 		return fmt.Errorf("probe node_refs.node_hash: %w", err)
@@ -80,11 +95,12 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	// call-SITE path there (a unique leaf per call) and instead emits the
 	// enclosing def as a separate additive column, node_refs.container_node_id
 	// (ley-line-open v0.7.4+, bead ley-line-open-b9d1d5). Without this, GROUP BY
-	// referrer_node_id yields n=1 per call site and fan_out_skew returns 0 on
-	// leyline. Probe for the column and prefer it; NULLIF falls back to node_id
-	// for the ~1% of leyline refs (top-level / file scope) with no enclosing
-	// def, and the whole expression degrades to node_id on legacy dbs lacking
-	// the column — so tree-sitter/mache-schema behavior is unchanged. (mache-ba3dc6)
+	// referrer_node_id yields n=1 per call site and fan_out_skew and
+	// untested_function's test-caller arm return 0 on leyline. Probe for the
+	// column and prefer it; NULLIF falls back to node_id for the ~1% of leyline
+	// refs (top-level / file scope) with no enclosing def, and the whole
+	// expression degrades to node_id on legacy dbs lacking the column — so
+	// tree-sitter/mache-schema behavior is unchanged. (mache-ba3dc6)
 	hasRefsContainer, err := tableHasColumn(qg, "node_refs", "container_node_id")
 	if err != nil {
 		return fmt.Errorf("probe node_refs.container_node_id: %w", err)
@@ -94,15 +110,20 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	if hasDefsNodeHash {
 		defsHashExpr = "node_hash"
 	}
+	defsCanonExpr := "NULL"
+	if hasDefsCanonicalKind {
+		defsCanonExpr = "canonical_kind"
+	}
 	defsBody := `SELECT token, node_id, 'mention' AS fidelity, ` +
-		defsHashExpr + ` AS node_hash FROM node_defs`
+		defsHashExpr + ` AS node_hash, ` + defsCanonExpr + ` AS canonical_kind FROM node_defs`
 	if hasLSPDefsToken {
 		// Binding-fidelity def rows come from _lsp_defs, which has no
-		// merkle node_hash concept — emit NULL to keep UNION arity.
+		// merkle node_hash or κ canonical_kind concept — emit NULL for
+		// both to keep UNION arity.
 		defsBody += `
 			UNION ALL
 			SELECT def_token AS token, node_id, 'binding' AS fidelity,
-			       NULL AS node_hash
+			       NULL AS node_hash, NULL AS canonical_kind
 			FROM _lsp_defs
 			WHERE def_token != ''`
 	}

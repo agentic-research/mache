@@ -3,6 +3,7 @@ package leyline
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,6 +80,17 @@ func TestLeylineVersionMatchesPin(t *testing.T) {
 
 	wrong := writeLeylineStub(t, filepath.Join(mustMkdir(t, dir, "old")), "leyline 0.5.7 (open)")
 	assert.False(t, leylineVersionMatchesPin(wrong), "a wrong version must NOT match")
+
+	// Patch drift within the pinned major.minor must NOT match either: LLO
+	// patch releases change the emitted _ast schema (v0.7.4 added
+	// container_node_id, v0.7.5 added canonical_kind), so a floating patch
+	// silently diverges local builds from CI's exact pinned download
+	// (mache-608a3c).
+	pinParts := parseSemverParts(leylineBinaryVersion)
+	patchDrift := fmt.Sprintf("%d.%d.%d", pinParts[0], pinParts[1], pinParts[2]+1)
+	drift := writeLeylineStub(t, filepath.Join(mustMkdir(t, dir, "drift")), "leyline "+patchDrift+" (open)")
+	assert.False(t, leylineVersionMatchesPin(drift),
+		"a patch-drifted version within the pinned major.minor must NOT match")
 
 	garbage := writeLeylineStub(t, filepath.Join(mustMkdir(t, dir, "junk")), "not a version")
 	assert.False(t, leylineVersionMatchesPin(garbage), "unparseable output must NOT match")
