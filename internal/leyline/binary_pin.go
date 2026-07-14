@@ -33,13 +33,20 @@ var leylinePinnedSHA256 = map[string]string{
 }
 
 // leylineVersionMatchesPin runs `<path> --version` and reports whether the
-// binary's major.minor equals leylineBinaryVersion's. Patch floats — per the
-// pin contract, major.minor is the wire/schema surface, and a patch bump is a
-// daemon-only fix (see the leylineBinaryVersion doc). A binary that won't run or
-// whose version can't be parsed does NOT match: mache must refuse an
+// binary's version EXACTLY equals leylineBinaryVersion (major.minor.patch).
+//
+// The pin was originally major.minor with patch floating, on the theory that
+// a patch bump is a daemon-only fix. LLO's release practice broke that
+// assumption: v0.7.4 added node_refs.container_node_id and v0.7.5 added
+// node_defs.canonical_kind — patch releases that CHANGED the emitted _ast
+// schema. Under the floating pin, a PATH leyline 0.7.3 satisfied a v0.7.5 pin
+// and silently produced dbs missing the columns the smell gate's rules probe
+// for, zeroing fan_out_skew/untested_function locally while CI (which
+// downloads the exact pinned release, SHA-verified) saw them — precisely the
+// divergence the pin exists to prevent (mache-608a3c). A binary that won't
+// run or whose version can't be parsed does NOT match: mache must refuse an
 // unverifiable leyline rather than let a wrong-version parse silently diverge
-// from CI. This is the guard against "never use the local version / a raw-main
-// build" — only the pinned version is accepted.
+// from CI. Only the exact pinned version is accepted.
 func leylineVersionMatchesPin(path string) bool {
 	out, err := exec.Command(path, "--version").Output()
 	if err != nil {
@@ -51,7 +58,7 @@ func leylineVersionMatchesPin(path string) bool {
 	}
 	want := parseSemverParts(leylineBinaryVersion)
 	have := parseSemverParts(got)
-	return want[0] == have[0] && want[1] == have[1]
+	return want == have
 }
 
 // extractSemver pulls the first "MAJOR.MINOR[.PATCH]" token from a version line
