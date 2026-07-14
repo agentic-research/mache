@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -227,29 +228,22 @@ func init() {
 // If the user explicitly passed --backend=leyline, leyline being
 // missing is a real error worth reporting, not a fallback trigger.
 //
-// schemaExplicit is true when --backend=leyline was passed on the
-// CLI (vs. auto-selected). It controls the --schema-with-leyline
-// behavior: a passed-but-ignored --schema is an error in the
-// explicit case (user contradiction), and a loud WARNING in the
-// auto case (user didn't choose leyline but still passed --schema).
-// The leyline backend never honors --schema — schema projection
-// happens at serve/mount time — so either way the flag is silently
-// dropped without one of these messages.
-func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
+// schemaExplicit is retained for call-site symmetry but no longer
+// gates anything: the leyline path now HONORS --schema (mache-73b885)
+// by running the pure-Go Engine+ASTWalker projection over the
+// leyline-parsed _ast db — the same composition the leyline parity
+// gate (internal/ingest/ast_parity_test.go) asserts is byte-identical
+// to the in-process tree-sitter projection. Before this, --schema was
+// warn-and-ignored on the auto path and an error on the explicit
+// path, which forced schema users onto the CGO backend (the composite
+// action's `--backend tree-sitter` workaround).
+func runBuildViaLeyline(source, output string, _ bool) error {
 	if schemaPath != "" {
-		if schemaExplicit {
-			return fmt.Errorf(
-				"--backend=leyline does not honor --schema=%q "+
-					"(schema projection happens at serve/mount time). "+
-					"Either drop --schema and pass it to `mache serve`/`mache mount`, "+
-					"or use --backend=tree-sitter to build with this schema baked in",
-				schemaPath)
+		schema, err := resolveSchema(schemaPath, ".")
+		if err != nil {
+			return fmt.Errorf("load schema: %w", err)
 		}
-		log.Printf("WARNING: --backend=auto selected the leyline path; "+
-			"--schema=%q is being ignored (leyline doesn't apply build-time schemas). "+
-			"Pass --backend=tree-sitter to build with this schema, "+
-			"or pass --schema to `mache serve`/`mache mount` instead.",
-			schemaPath)
+		return runBuildViaLeylineSchema(source, output, schema)
 	}
 	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
 	if err != nil {
@@ -268,6 +262,55 @@ func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 	}
 	log.Printf("Built %s from %s via leyline", output, source)
 	_ = writeBuildMetadata(output, "leyline")
+	warnIfEmptyBuild(output, source, "leyline")
+	return nil
+}
+
+// runBuildViaLeylineSchema builds a schema-shaped .db WITHOUT the CGO
+// tree-sitter backend (mache-73b885): `leyline parse` produces a temp
+// _ast/_source db, and the existing pure-Go Engine+ASTWalker projection
+// runs the schema over it into a fresh SQLiteWriter output — the exact
+// composition internal/ingest/ast_parity_test.go proves byte-identical
+// to the Engine+SitterWalker path. The output matches what
+// `--backend=tree-sitter --schema X` produces today (nodes/node_defs/
+// node_refs per the schema; no _ast table — the temp db is discarded),
+// so downstream consumers see no shape change, only a CGO-free producer.
+func runBuildViaLeylineSchema(source, output string, schema *api.Topology) error {
+	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
+	if err != nil {
+		return fmt.Errorf("leyline backend: %w", err)
+	}
+	defer cleanup()
+
+	db, err := sql.Open("sqlite", tmpPath)
+	if err != nil {
+		return fmt.Errorf("open leyline parse output %s: %w", tmpPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	_ = os.Remove(output) // Overwrite, matching the in-process path.
+	writer, err := ingest.NewSQLiteWriter(output)
+	if err != nil {
+		return err
+	}
+	engine := ingest.NewEngine(schema, writer)
+	engine.SetASTWalker(ingest.NewASTWalker(db))
+
+	start := time.Now()
+	log.Printf("Building %s from %s (leyline parse + schema projection)...", output, source)
+	if err := engine.Ingest(source); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	log.Printf("Done in %v.", time.Since(start))
+
+	// Close-before-stamp for the same reason as the in-process path:
+	// the writer's open transaction holds the schema lock, and a close
+	// failure can mean a truncated .db — fatal, not warnable.
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close sqlite writer: %w", err)
+	}
+	_ = writeBuildMetadata(output, "leyline+schema")
 	warnIfEmptyBuild(output, source, "leyline")
 	return nil
 }

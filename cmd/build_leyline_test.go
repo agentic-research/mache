@@ -1,11 +1,12 @@
 package cmd
 
 import (
+	"database/sql"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,10 +73,20 @@ func TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing(t *testing.T) {
 // available. When it is, parses a tiny Go tree and asserts the
 // output .db exists with non-zero size at the user-supplied path
 // (not the temp path autoInvokeLeylineParse uses internally).
-func TestRunBuildViaLeyline_HappyPath(t *testing.T) {
-	if _, err := exec.LookPath("leyline"); err != nil {
-		t.Skip("leyline binary not on PATH")
+// requirePinnedLeyline skips the test unless the exact-pinned leyline
+// is already resolvable WITHOUT a network download (PATH or the
+// ~/.mache/bin cache). LookPath alone is the wrong gate since the
+// exact-version pin (mache-608a3c): a stale PATH leyline no longer
+// satisfies the pin, and we don't want tests fetching from GitHub.
+func requirePinnedLeyline(t *testing.T) {
+	t.Helper()
+	if _, err := leyline.ResolveBinary(false); err != nil {
+		t.Skipf("pinned leyline not available without download: %v", err)
 	}
+}
+
+func TestRunBuildViaLeyline_HappyPath(t *testing.T) {
+	requirePinnedLeyline(t)
 	saved := saveBuildFlags()
 	defer saved.restore()
 
@@ -124,55 +135,46 @@ func TestBuildCmd_BackendDispatch(t *testing.T) {
 		"dispatch must reach runBuildViaLeyline, not the in-process engine")
 }
 
-// TestRunBuildViaLeyline_SchemaExplicitErrors pins issue #2 in
-// claude/fix-mache-schema-bugs-6vBkF: passing `--schema` together
-// with an explicit `--backend=leyline` is a user contradiction
-// (leyline doesn't honor build-time schemas) and must surface as
-// a clean error rather than a passive log.Info.
-//
-// Detection path: schemaPath set + schemaExplicit=true must error
-// before runBuildViaLeyline ever shells out to leyline. We don't
-// need a leyline binary on PATH because the check fires before
-// autoInvokeLeylineParse.
-func TestRunBuildViaLeyline_SchemaExplicitErrors(t *testing.T) {
+// TestRunBuildViaLeyline_SchemaLoadErrorSurfaces pins the new schema
+// branch (mache-73b885): --schema on the leyline path is now HONORED,
+// so a broken schema path must surface as a load error BEFORE any
+// shell-out to leyline (no binary needed for this test). This replaces
+// the retired "explicit backend + schema is a contradiction" error.
+func TestRunBuildViaLeyline_SchemaLoadErrorSurfaces(t *testing.T) {
 	saved := saveBuildFlags()
 	defer saved.restore()
 
-	// Force the failing combination — user passed --schema and
-	// --backend=leyline simultaneously.
-	schemaPath = "/tmp/whatever-schema.json"
+	schemaPath = filepath.Join(t.TempDir(), "does-not-exist.json")
 
 	src := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"),
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, true /* schemaExplicit */)
-	require.Error(t, err, "--schema with --backend=leyline must error")
-	assert.Contains(t, err.Error(), "--backend=leyline",
-		"error must identify the conflicting backend flag")
-	assert.Contains(t, err.Error(), "--schema",
-		"error must identify the conflicting schema flag")
+	err := runBuildViaLeyline(src, output, true)
+	require.Error(t, err, "a missing schema file must fail the build")
+	assert.Contains(t, err.Error(), "load schema",
+		"error must come from the schema-load step, not a backend contradiction")
 }
 
-// TestRunBuildViaLeyline_SchemaAutoOnlyWarns pins issue #2: when
-// --backend was auto-selected (not explicit), passing --schema
-// still gets ignored, but it's a WARNING, not an error. The user
-// didn't pick leyline, so we don't punish them — just tell them
-// loudly. This case still tries to actually parse, so it'll fail
-// without a leyline binary; we just assert the warning fired by
-// inspecting the error chain (the leyline-missing error is
-// downstream of our warn-and-continue).
-func TestRunBuildViaLeyline_SchemaAutoOnlyWarns(t *testing.T) {
+// TestRunBuildViaLeyline_SchemaProceedsToParse pins that a VALID
+// schema no longer errors or gets dropped on the leyline path: with
+// the binary hidden, the failure must be leyline-missing (i.e. we got
+// PAST schema loading and into the parse step), not any schema-flag
+// complaint. Replaces the retired warn-and-ignore behavior test.
+func TestRunBuildViaLeyline_SchemaProceedsToParse(t *testing.T) {
 	saved := saveBuildFlags()
 	defer saved.restore()
 
-	schemaPath = "/tmp/whatever-schema.json"
-	// Hide leyline so the call fails after the warning fires.
+	// Minimal but VALID topology file.
+	schemaFile := filepath.Join(t.TempDir(), "schema.json")
+	require.NoError(t, os.WriteFile(schemaFile,
+		[]byte(`{"version":"v1alpha1"}`), 0o644))
+	schemaPath = schemaFile
+
+	// Hide leyline so the parse step fails deterministically.
 	t.Setenv("PATH", "")
 	t.Setenv("HOME", t.TempDir())
-	// Opt out of the build-path auto-download (mache-0ed19b) so "leyline
-	// missing" surfaces as a clear error instead of a network fetch.
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	src := t.TempDir()
@@ -180,16 +182,59 @@ func TestRunBuildViaLeyline_SchemaAutoOnlyWarns(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, false /* schemaExplicit */)
-	// The leyline binary is missing, so this errors — but the error
-	// must be the leyline-missing one (after the warning), NOT the
-	// schema-contradiction one (which would mean we never got past
-	// the warning branch).
+	err := runBuildViaLeyline(src, output, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "leyline backend",
-		"auto-mode + --schema must warn and continue (not error on the schema flag)")
+		"a valid schema must proceed to the leyline parse step")
 	assert.NotContains(t, err.Error(), "does not honor --schema",
-		"auto-mode must NOT raise the explicit-only error")
+		"the schema-contradiction error is retired — schemas are honored now")
+}
+
+// TestRunBuildViaLeylineSchema_ProducesSchemaShapedDB is the
+// end-to-end pin for schema-on-leyline (mache-73b885): building with
+// the Go example schema through the leyline backend must produce a
+// SCHEMA-shaped nodes table (construct-category dirs like
+// 'functions/'), i.e. the Engine+ASTWalker projection ran — not
+// leyline's own node layout, and not an ignored schema. Engine-level
+// byte-parity with the SitterWalker projection is separately pinned
+// by internal/ingest/ast_parity_test.go.
+func TestRunBuildViaLeylineSchema_ProducesSchemaShapedDB(t *testing.T) {
+	requirePinnedLeyline(t)
+	saved := saveBuildFlags()
+	defer saved.restore()
+
+	// resolveSchema containment-checks relative paths against the
+	// process cwd, so stage the example schema inside a temp cwd
+	// rather than reaching out of the package dir with "..".
+	schemaBytes, err := os.ReadFile(filepath.Join("..", "examples", "go-schema.json"))
+	require.NoError(t, err)
+	work := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(work, "schema.json"), schemaBytes, 0o644))
+	t.Chdir(work)
+	schemaPath = "schema.json"
+
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"),
+		[]byte("package main\n\nfunc Exported() int { return 1 }\n\nfunc main() {}\n"), 0o644))
+
+	output := filepath.Join(t.TempDir(), "out.db")
+	require.NoError(t, runBuildViaLeyline(src, output, true))
+
+	db, err := sql.Open("sqlite", output)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var n int
+	require.NoError(t, db.QueryRow(
+		"SELECT COUNT(*) FROM nodes WHERE id LIKE '%functions/%'").Scan(&n))
+	assert.Positive(t, n,
+		"schema projection must produce go-schema construct dirs (functions/)")
+
+	var backend string
+	require.NoError(t, db.QueryRow(
+		"SELECT value FROM _mache_meta WHERE key = 'backend'").Scan(&backend))
+	assert.Equal(t, "leyline+schema", backend,
+		"metadata must record the schema-projected leyline backend")
 }
 
 // silence unused-import warning when tests don't reference cobra.
