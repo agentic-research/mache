@@ -33,16 +33,6 @@
     },
     {
       "rule_id": "dead_code",
-      "source_id": "examples/testdata/go_sample.go",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "examples/testdata/python_sample.py",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
       "source_id": "internal/graph/graph_suite_test.go",
       "count": 4
     },
@@ -64,196 +54,6 @@
     {
       "rule_id": "dead_code",
       "source_id": "mount/mount.go",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/thread.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/tests/channels_test.rs",
-      "count": 8
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/tests/integration_test.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/tests/phase1_integration_test.rs",
-      "count": 11
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/crypto/src/classify.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/crypto/tests/round_trip.rs",
-      "count": 27
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/cli.rs",
-      "count": 5
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
-      "count": 9
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/decompose.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/tests.rs",
-      "count": 60
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/tests.rs",
-      "count": 16
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/linear.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/linear_tracker.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/notes.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/integration_tests.rs",
-      "count": 14
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/log_sqlite.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/quarantine.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/orchestrate/fanout.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/orchestrate/plan_gate.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/orchestrate/tests.rs",
-      "count": 8
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/orchestrate/transcript.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/tests.rs",
-      "count": 64
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/github_webhook.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/landing.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/session.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/store.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_sqlite.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/vcs.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/workspace/tests.rs",
-      "count": 27
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/tests/cli_integration.rs",
-      "count": 18
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/tests/ipc_docker_e2e.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "testdata/snapshots/medium-rust-rosary/tests/note_skill_routing.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "tests/test_data/js/test.js",
       "count": 1
     },
     {
@@ -848,6 +648,11 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "cmd/untested_function_leyline_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "cmd/utils.go",
       "count": 1
     },
@@ -904,7 +709,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/leyline/sheaf.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1422,8 +1227,328 @@
       "count": 1
     },
     {
-      "rule_id": "duplicate_definitions",
-      "source_id": "tools/sheaf-subscribe-probe/main.go",
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/cache.go",
+      "count": 5
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/cache_oci.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/infer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/leyline.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/mount_control.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/mount_nfs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_architecture.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_find_smells.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_get_communities.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_list_directory.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handler_semantic_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_handlers.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_impact.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_lsp.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_registry.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_write.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "ext/boltdb/boltdb.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "graph/sqlite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/arena_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/memstore_refsdb.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph_callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph_refs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/sqlite_graph_scan.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/graph/store_local.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_sqlite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_treesitter.go",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_walk.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/git.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/leyline/socket.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/linter/linter.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/lsp/binding_log.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/materialize/json.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/testfixtures/curate.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/testfixtures/registry.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/writeback/splice.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/providers.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/github_mirror.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/linear.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/mod.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/orchestration.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/threading.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/triage.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/verify.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/workspace_ops.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
+      "count": 7
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/tests/cli_integration.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/coverage-gate/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/fuzz-gen/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/mcp-fetch/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/notion-fetch/main.go",
       "count": 1
     },
     {
@@ -2002,11 +2127,6 @@
       "count": 1
     },
     {
-      "rule_id": "long_function",
-      "source_id": "tools/sheaf-subscribe-probe/main.go",
-      "count": 1
-    },
-    {
       "rule_id": "sleep_in_test",
       "source_id": "cmd/serve_test.go",
       "count": 2
@@ -2089,6 +2209,46 @@
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/writeback/splice_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "cmd/cache_oci.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/graph/nodes_table_reader.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/ingest/benchmark_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/leyline/daemon_source.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/leyline/version_check.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/linter/linter.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "internal/writeback/validate.go",
+      "count": 1
+    },
+    {
+      "rule_id": "untested_function",
+      "source_id": "mount/mount.go",
       "count": 1
     }
   ]
