@@ -123,6 +123,75 @@ func TestEnsureCanonicalViews_HandlesMissingLSPTables(t *testing.T) {
 	assert.Zero(t, bindingRefs, "no _lsp_refs → no binding rows")
 }
 
+// TestEnsureCanonicalViews_ReferrerFromContainerNodeID pins the leyline
+// caller-aggregation fix (mache-ba3dc6): when node_refs carries the additive
+// container_node_id column (ley-line-open v0.7.4+, the nearest enclosing def),
+// v_refs.referrer_node_id resolves to it so caller-aggregating rules
+// (fan_out_skew) group by the real caller instead of the unique call-site
+// node_id. Empty/NULL containers fall back to node_id.
+func TestEnsureCanonicalViews_ReferrerFromContainerNodeID(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "container.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, container_node_id TEXT);
+		-- two calls from inside the SAME enclosing function (its def node),
+		-- plus one ref whose container is empty (top-level / file scope).
+		INSERT INTO node_refs VALUES
+			('helperA', 'f.go/function_declaration/call_expression_0', 'f.go/function_declaration'),
+			('helperB', 'f.go/function_declaration/call_expression_1', 'f.go/function_declaration'),
+			('toplevel', 'f.go/call_expression_top', '');
+	`)
+	require.NoError(t, err)
+
+	qg := &sqlDBQuerier{db: db}
+	require.NoError(t, ensureCanonicalViews(qg))
+
+	// Both calls resolve to the ONE enclosing def → caller aggregation sees a
+	// fan-out of 2, not two singletons (the bug: call-site node_id is unique).
+	var distinctReferrers, callsFromEnclosing int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(DISTINCT referrer_node_id) FROM v_refs WHERE fidelity='mention' AND token IN ('helperA','helperB')`).Scan(&distinctReferrers))
+	assert.Equal(t, 1, distinctReferrers, "both calls resolve to the one enclosing def via container_node_id")
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM v_refs WHERE referrer_node_id='f.go/function_declaration'`).Scan(&callsFromEnclosing))
+	assert.Equal(t, 2, callsFromEnclosing)
+
+	// Empty container falls back to the call-site node_id.
+	var topReferrer string
+	require.NoError(t, db.QueryRow(
+		`SELECT referrer_node_id FROM v_refs WHERE token='toplevel'`).Scan(&topReferrer))
+	assert.Equal(t, "f.go/call_expression_top", topReferrer, "empty container_node_id falls back to node_id")
+}
+
+// TestEnsureCanonicalViews_ReferrerFallsBackWithoutContainer pins the
+// legacy/tree-sitter shape: node_refs WITHOUT a container_node_id column →
+// referrer_node_id is node_id (the mache-schema caller construct), unchanged.
+func TestEnsureCanonicalViews_ReferrerFallsBackWithoutContainer(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy_refs.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT);
+		INSERT INTO node_refs VALUES ('Foo', 'functions/Caller/source');
+	`)
+	require.NoError(t, err)
+
+	qg := &sqlDBQuerier{db: db}
+	require.NoError(t, ensureCanonicalViews(qg))
+
+	var referrer string
+	require.NoError(t, db.QueryRow(
+		`SELECT referrer_node_id FROM v_refs WHERE token='Foo'`).Scan(&referrer))
+	assert.Equal(t, "functions/Caller/source", referrer, "no container_node_id column → referrer is node_id")
+}
+
 func TestEnsureCanonicalViews_HandlesLegacyLSPTables(t *testing.T) {
 	// Pre-Step-1 _lsp_* schema (no def_token / referrer_node_id /
 	// ref_token columns). The probe must detect the absence and fall

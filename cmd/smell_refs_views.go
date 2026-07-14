@@ -73,6 +73,23 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		return fmt.Errorf("probe node_refs.node_hash: %w", err)
 	}
 
+	// referrer_node_id is meant to be the ENCLOSING definition of each ref
+	// (its caller), so caller-aggregating rules group by the real caller.
+	// The mache-schema/tree-sitter projection puts the enclosing construct in
+	// node_refs.node_id directly. The leyline AST-native projection puts the
+	// call-SITE path there (a unique leaf per call) and instead emits the
+	// enclosing def as a separate additive column, node_refs.container_node_id
+	// (ley-line-open v0.7.4+, bead ley-line-open-b9d1d5). Without this, GROUP BY
+	// referrer_node_id yields n=1 per call site and fan_out_skew returns 0 on
+	// leyline. Probe for the column and prefer it; NULLIF falls back to node_id
+	// for the ~1% of leyline refs (top-level / file scope) with no enclosing
+	// def, and the whole expression degrades to node_id on legacy dbs lacking
+	// the column — so tree-sitter/mache-schema behavior is unchanged. (mache-ba3dc6)
+	hasRefsContainer, err := tableHasColumn(qg, "node_refs", "container_node_id")
+	if err != nil {
+		return fmt.Errorf("probe node_refs.container_node_id: %w", err)
+	}
+
 	defsHashExpr := "NULL"
 	if hasDefsNodeHash {
 		defsHashExpr = "node_hash"
@@ -100,7 +117,11 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	if hasRefsNodeHash {
 		refsHashExpr = "node_hash"
 	}
-	refsBody := `SELECT node_id AS referrer_node_id,
+	refsReferrerExpr := "node_id"
+	if hasRefsContainer {
+		refsReferrerExpr = "COALESCE(NULLIF(container_node_id, ''), node_id)"
+	}
+	refsBody := `SELECT ` + refsReferrerExpr + ` AS referrer_node_id,
 	       token,
 	       NULL  AS target_node_id,
 	       NULL  AS ref_uri,
