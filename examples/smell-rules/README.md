@@ -126,9 +126,9 @@ Notes:
   action's `baseline` input agrees.
 - `--baseline-root "$PWD"` relativizes recorded file paths so the
   baseline is portable across machines and CI.
-- `--rule '*'` runs every registered rule and silently skips rules
-  whose `Requires` tables aren't in the .db — so the same command works
-  on any backend.
+- `--rule '*'` runs every registered rule and skips rules whose
+  `Requires` tables aren't in the .db without failing (a `skipping rule ...` notice goes to stderr) — so the same command works on any
+  backend.
 - Regenerate the baseline with the same mache version (and the same
   custom-rules dir) your CI uses, or counts can differ.
 

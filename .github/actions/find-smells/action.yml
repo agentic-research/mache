@@ -19,8 +19,9 @@ inputs:
       Path to a mache topology schema. Empty uses FCA schema inference.
       When set, the build is forced to --backend tree-sitter: the
       leyline backend (preferred by backend auto) does not honor
-      build-time schemas, so without the override the schema would be
-      silently ignored.
+      build-time schemas, so without the override the build would only
+      WARN (a log line CI never fails on) and produce a .db that lacks
+      the schema.
     required: false
     default: ''
   baseline:
