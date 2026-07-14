@@ -249,7 +249,18 @@ func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 		if err != nil {
 			return fmt.Errorf("load schema: %w", err)
 		}
-		return runBuildViaLeylineSchema(source, output, schema, schemaExplicit)
+		// A preset ref ("go", "sql", "terraform", ...) IS a language name,
+		// and the preset JSONs carry no Node.Language hints — feed the ref
+		// to the coverage guard so `--schema sql` fails loudly when the
+		// pinned leyline has no sql grammar (#524 re-review: the hint-based
+		// guard alone let the preset case project hollow).
+		var presetLangs []string
+		if _, ok := presetSchemas[schemaPath]; ok {
+			if l := lang.ForName(schemaPath); l != nil {
+				presetLangs = []string{l.Name}
+			}
+		}
+		return runBuildViaLeylineSchema(source, output, schema, schemaExplicit, presetLangs)
 	}
 	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
 	if err != nil {
@@ -281,7 +292,7 @@ func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 // `--backend=tree-sitter --schema X` produces today (nodes/node_defs/
 // node_refs per the schema; no _ast table — the temp db is discarded),
 // so downstream consumers see no shape change, only a CGO-free producer.
-func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schemaExplicit bool) error {
+func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schemaExplicit bool, extraLangs []string) error {
 	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
 	if err != nil {
 		return fmt.Errorf("leyline backend: %w", err)
@@ -300,7 +311,7 @@ func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schem
 	// (empty category dirs still count as nodes). Keep the pre-73b885
 	// loudness split: hard error when the user explicitly picked this
 	// backend, loud warning on auto.
-	if gaps, gerr := leylineSchemaCoverageGaps(db, schema, source); gerr != nil {
+	if gaps, gerr := leylineSchemaCoverageGaps(db, schema, source, extraLangs); gerr != nil {
 		return fmt.Errorf("leyline schema coverage probe: %w", gerr)
 	} else if len(gaps) > 0 {
 		if schemaExplicit {

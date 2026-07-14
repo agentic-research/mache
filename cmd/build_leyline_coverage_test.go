@@ -52,14 +52,14 @@ func TestLeylineSchemaCoverageGaps(t *testing.T) {
 	}
 
 	// sql files exist, zero sql _ast rows → gap. go parsed fine → no gap.
-	gaps, err := leylineSchemaCoverageGaps(db, schemaFor("go", "sql"), src)
+	gaps, err := leylineSchemaCoverageGaps(db, schemaFor("go", "sql"), src, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sql"}, gaps,
 		"sql has source files but no _ast rows; go parsed")
 
 	// A schema language with NO source files is not a gap — nothing to
 	// project, identical to the tree-sitter backend's behavior.
-	gaps, err = leylineSchemaCoverageGaps(db, schemaFor("go", "rust"), src)
+	gaps, err = leylineSchemaCoverageGaps(db, schemaFor("go", "rust"), src, nil)
 	require.NoError(t, err)
 	assert.Empty(t, gaps, "no .rs files in source — absence is not a gap")
 
@@ -67,7 +67,7 @@ func TestLeylineSchemaCoverageGaps(t *testing.T) {
 	nested := &api.Topology{Version: "v1alpha1", Nodes: []api.Node{
 		{Name: "root", Children: []api.Node{{Name: "tables", Language: "sql"}}},
 	}}
-	gaps, err = leylineSchemaCoverageGaps(db, nested, src)
+	gaps, err = leylineSchemaCoverageGaps(db, nested, src, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sql"}, gaps)
 
@@ -75,14 +75,25 @@ func TestLeylineSchemaCoverageGaps(t *testing.T) {
 	gaps, err = leylineSchemaCoverageGaps(db, &api.Topology{
 		Version: "v1alpha1",
 		Nodes:   []api.Node{{Name: "anything"}},
-	}, src)
+	}, src, nil)
 	require.NoError(t, err)
 	assert.Nil(t, gaps)
 
 	// Unknown language string is ignored (matches engine behavior).
-	gaps, err = leylineSchemaCoverageGaps(db, schemaFor("klingon"), src)
+	gaps, err = leylineSchemaCoverageGaps(db, schemaFor("klingon"), src, nil)
 	require.NoError(t, err)
 	assert.Empty(t, gaps)
+
+	// extraLangs covers the preset-ref case (#524 re-review): preset
+	// schemas carry ZERO Language hints, so a hint-less topology plus
+	// extraLangs=["sql"] must still report the gap.
+	gaps, err = leylineSchemaCoverageGaps(db, &api.Topology{
+		Version: "v1alpha1",
+		Nodes:   []api.Node{{Name: "tables"}},
+	}, src, []string{"sql"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sql"}, gaps,
+		"a hint-less schema with a preset-derived language must still gap")
 }
 
 // TestRunBuildViaLeylineSchema_UnparseableLanguageErrors is the e2e pin for
@@ -95,21 +106,29 @@ func TestRunBuildViaLeylineSchema_UnparseableLanguageErrors(t *testing.T) {
 	saved := saveBuildFlags()
 	defer saved.restore()
 
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "util.sql"),
+		[]byte("CREATE TABLE users (id INTEGER PRIMARY KEY);\n"), 0o644))
+	output := filepath.Join(t.TempDir(), "out.db")
+
+	// The ORIGINAL #524 repro: the sql PRESET ref. Preset schemas carry
+	// no Language hints, so this exercises the preset-derived language
+	// stamp, not the hint collector.
+	schemaPath = "sql"
+	err := runBuildViaLeyline(src, output, true /* explicit backend */)
+	require.Error(t, err, "preset-ref hollow projection must not build silently on the explicit backend")
+	assert.Contains(t, err.Error(), "sql", "error must name the unparseable language")
+	assert.Contains(t, err.Error(), "--backend=tree-sitter", "error must point at the working escape hatch")
+
+	// Same via an explicit Language-hinted schema FILE (the hint collector).
 	work := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(work, "schema.json"),
 		[]byte(`{"version":"v1alpha1","nodes":[{"name":"tables","selector":"(create_table_statement) @t","language":"sql"}]}`), 0o644))
 	t.Chdir(work)
 	schemaPath = "schema.json"
-
-	src := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(src, "util.sql"),
-		[]byte("CREATE TABLE users (id INTEGER PRIMARY KEY);\n"), 0o644))
-
-	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, true /* explicit backend */)
-	require.Error(t, err, "hollow projection must not build silently on the explicit backend")
-	assert.Contains(t, err.Error(), "sql", "error must name the unparseable language")
-	assert.Contains(t, err.Error(), "--backend=tree-sitter", "error must point at the working escape hatch")
+	err = runBuildViaLeyline(src, output, true /* explicit backend */)
+	require.Error(t, err, "hint-based hollow projection must not build silently on the explicit backend")
+	assert.Contains(t, err.Error(), "sql")
 
 	// Auto path: warns and builds (advisory), does not error.
 	require.NoError(t, runBuildViaLeyline(src, output, false /* auto */),

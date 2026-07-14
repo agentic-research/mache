@@ -21,10 +21,24 @@ import (
 // restores that loudness with an accurate diagnosis: warnIfEmptyBuild can't
 // catch it because the empty category dirs still count as nodes.
 //
-// A schema with no Language hints returns nil (nothing attributable — data
-// schemas over JSON/SQLite never reach the leyline path anyway).
-func leylineSchemaCoverageGaps(db *sql.DB, schema *api.Topology, source string) ([]string, error) {
+// Languages are attributed from two places: Node.Language hints in the
+// topology, plus extraLangs from the caller — the 31 preset schemas
+// (cmd/schemas/*.json) and the example schemas carry ZERO Language hints
+// (verified in the #524 re-review: `--schema sql` projected hollow right
+// through the hint-based guard), but a preset REF is itself a language
+// name, so the build path passes it in. The stamp is guard-side only:
+// writing Language onto the topology's nodes would change engine
+// projection semantics (filterNodesByLanguage treats empty as match-all).
+// A schema with no attributable language returns nil (data schemas over
+// JSON/SQLite never reach the leyline path anyway; hint-less FILE-path
+// source schemas remain unguarded — documented limitation).
+func leylineSchemaCoverageGaps(db *sql.DB, schema *api.Topology, source string, extraLangs []string) ([]string, error) {
 	langs := map[string]bool{}
+	for _, l := range extraLangs {
+		if l != "" {
+			langs[l] = true
+		}
+	}
 	var collect func(nodes []api.Node)
 	collect = func(nodes []api.Node) {
 		for i := range nodes {
