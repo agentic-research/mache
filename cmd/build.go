@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/agentic-research/mache/api"
@@ -228,22 +229,27 @@ func init() {
 // If the user explicitly passed --backend=leyline, leyline being
 // missing is a real error worth reporting, not a fallback trigger.
 //
-// schemaExplicit is retained for call-site symmetry but no longer
-// gates anything: the leyline path now HONORS --schema (mache-73b885)
-// by running the pure-Go Engine+ASTWalker projection over the
-// leyline-parsed _ast db — the same composition the leyline parity
-// gate (internal/ingest/ast_parity_test.go) asserts is byte-identical
-// to the in-process tree-sitter projection. Before this, --schema was
+// The leyline path now HONORS --schema (mache-73b885) by running the
+// pure-Go Engine+ASTWalker projection over the leyline-parsed _ast db
+// — the same composition the leyline parity gate
+// (internal/ingest/ast_parity_test.go) asserts is byte-identical to
+// the in-process tree-sitter projection. Before this, --schema was
 // warn-and-ignored on the auto path and an error on the explicit
 // path, which forced schema users onto the CGO backend (the composite
 // action's `--backend tree-sitter` workaround).
-func runBuildViaLeyline(source, output string, _ bool) error {
+//
+// schemaExplicit preserves that loudness contract for the one case
+// leyline genuinely can't serve: a schema language leyline has no
+// grammar for (it parses ~11 of the 28 registry languages) would
+// otherwise project HOLLOW category dirs with zero warnings — the
+// coverage guard errors on the explicit backend and warns on auto.
+func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 	if schemaPath != "" {
 		schema, err := resolveSchema(schemaPath, ".")
 		if err != nil {
 			return fmt.Errorf("load schema: %w", err)
 		}
-		return runBuildViaLeylineSchema(source, output, schema)
+		return runBuildViaLeylineSchema(source, output, schema, schemaExplicit)
 	}
 	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
 	if err != nil {
@@ -275,7 +281,7 @@ func runBuildViaLeyline(source, output string, _ bool) error {
 // `--backend=tree-sitter --schema X` produces today (nodes/node_defs/
 // node_refs per the schema; no _ast table — the temp db is discarded),
 // so downstream consumers see no shape change, only a CGO-free producer.
-func runBuildViaLeylineSchema(source, output string, schema *api.Topology) error {
+func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schemaExplicit bool) error {
 	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
 	if err != nil {
 		return fmt.Errorf("leyline backend: %w", err)
@@ -287,6 +293,28 @@ func runBuildViaLeylineSchema(source, output string, schema *api.Topology) error
 		return fmt.Errorf("open leyline parse output %s: %w", tmpPath, err)
 	}
 	defer func() { _ = db.Close() }()
+
+	// Coverage guard: a schema language leyline has no grammar for
+	// yields ZERO _ast rows while its source files silently land in
+	// _project_files — a hollow projection warnIfEmptyBuild can't see
+	// (empty category dirs still count as nodes). Keep the pre-73b885
+	// loudness split: hard error when the user explicitly picked this
+	// backend, loud warning on auto.
+	if gaps, gerr := leylineSchemaCoverageGaps(db, schema, source); gerr != nil {
+		return fmt.Errorf("leyline schema coverage probe: %w", gerr)
+	} else if len(gaps) > 0 {
+		if schemaExplicit {
+			return fmt.Errorf(
+				"--backend=leyline cannot project schema language(s) %s: leyline parsed no %s source "+
+					"(no grammar in the pinned leyline). Use --backend=tree-sitter for these languages "+
+					"until leyline gains them",
+				strings.Join(gaps, ", "), strings.Join(gaps, "/"))
+		}
+		log.Printf("WARNING: leyline parsed no source for schema language(s) %s — "+
+			"their category dirs will be EMPTY and the files land in _project_files/. "+
+			"Use --backend=tree-sitter for these languages until leyline gains them.",
+			strings.Join(gaps, ", "))
+	}
 
 	_ = os.Remove(output) // Overwrite, matching the in-process path.
 	writer, err := ingest.NewSQLiteWriter(output)

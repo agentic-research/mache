@@ -47,5 +47,21 @@ func inferFromSourceFile(inf *lattice.Inferrer, path string, l *lang.Language) (
 	inf.Config.Language = l.Name
 	defer func() { inf.Config.Language = savedLang }()
 
-	return inf.InferFromASTDB(astDB)
+	topo, err := inf.InferFromASTDB(astDB)
+	if err != nil {
+		return nil, err
+	}
+	// The pinned leyline parses ~11 of the 28 registry languages; for the
+	// rest the parse yields zero _ast rows and inference degrades to an
+	// empty topology — the file then mounts under _project_files/. The old
+	// in-process tree-sitter path could infer these languages, so say
+	// LOUDLY why the schema is empty rather than silently degrading
+	// (review finding on mache-73b885).
+	if topo == nil || len(topo.Nodes) == 0 {
+		log.Printf("WARNING: leyline produced no usable AST for %s (%s) — "+
+			"no schema inferred; the pinned leyline may not have a grammar for this "+
+			"language yet, so the file will project under _project_files/",
+			path, l.DisplayName)
+	}
+	return topo, nil
 }
