@@ -117,6 +117,17 @@ func TestFileErrors_NonexistentReturnsNil(t *testing.T) {
 	assert.Nil(t, errs)
 }
 
+func TestContentErrors_BrokenHCLPopulatesSlice(t *testing.T) {
+	// #527 re-review residual: the diagnostics flavor skipped the in-process
+	// HCL branch, so external diagnostic UIs saw "supported, no errors" for
+	// broken HCL while Content() errored. No daemon is wired — HCL must not
+	// need one.
+	errs := ContentErrors([]byte(`resource "x" { broken {{{`), "main.tf")
+	assert.NotEmpty(t, errs, "broken HCL must produce diagnostics, not silence")
+	assert.NoError(t, Content([]byte("resource \"x\" \"y\" {\n  count = 1\n}\n"), "ok.tf"))
+	assert.Empty(t, ContentErrors([]byte("resource \"x\" \"y\" {\n  count = 1\n}\n"), "ok.tf"))
+}
+
 func TestSupportedExtension(t *testing.T) {
 	// Since mache-73b885 the supported set is the leyline daemon's validate
 	// language set — .tf/.hcl, .sql, .yaml, .md, .toml (covered by the old

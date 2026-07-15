@@ -371,3 +371,36 @@ func TestWriteFile_FormatChangedFalseWhenAlreadyClean(t *testing.T) {
 	assert.True(t, resp.FormatApplied)
 	assert.False(t, resp.FormatChanged, "clean input must not be reported as format-changed")
 }
+
+// TestServeWriteFile_InfraFailureStatusDistinct pins the #527 review fix:
+// when the validator INFRASTRUCTURE is unavailable (vs the content being
+// broken), write_file must report status "validator_unavailable" — not
+// falsely claim "validation_error". A dead socket + MACHE_NO_LEYLINE +
+// empty HOME guarantees no daemon can be acquired.
+func TestServeWriteFile_InfraFailureStatusDistinct(t *testing.T) {
+	store, nodePath, _ := buildWriteGraph(t)
+
+	// Kill the daemon acquisition path AFTER the graph was built (the
+	// builder wires a working fake; override it).
+	deadSock := filepath.Join(t.TempDir(), "dead.sock")
+	t.Setenv("LEYLINE_SOCKET", deadSock)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", "/nonexistent-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	handler := makeWriteFileHandler(store)
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"path":    nodePath,
+		"content": "package main\n\nfunc Hello() {\n\treturn\n}\n",
+	}))
+	require.NoError(t, err)
+
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	assert.Equal(t, "validator_unavailable", resp.Status,
+		"infra failure must not be reported as a validation_error")
+	assert.NotEmpty(t, resp.Error)
+}

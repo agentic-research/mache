@@ -10,11 +10,13 @@ package writeback
 // a one-off spawn cost on the first write otherwise).
 //
 // Language coverage CHANGED with the migration: the daemon validates the
-// extension keys in leylineValidateLangs below. Extensions that mache's old
-// in-process grammar set covered but the daemon does not (e.g. .tf/.hcl,
-// .yaml, .sql, .md, .toml) now PASS THROUGH unvalidated — same contract as an
-// unknown extension. For HCL/Terraform, FormatBuffer's hclwrite step remains
-// the only structural check on the write path.
+// extension keys in leylineValidateLangs below, and HCL/Terraform validates
+// IN-PROCESS via hclsyntax (hclwrite.Format is a token formatter, NOT a
+// validator — it mangles broken input, which is why the in-process check
+// exists). Every other extension the old in-process grammar set covered
+// (.sql/.yaml/.md/.toml/.json plus the C-family/JVM/scripting set) passes
+// through UNVALIDATED — same contract as an unknown extension — until
+// leyline grows the grammars (ley-line-open-e5addb).
 
 import (
 	"fmt"
@@ -151,15 +153,28 @@ func isHCLPath(filePath string) bool {
 // 1-based), so subtract one. Returns the first error diagnostic as a
 // *ValidationError, matching the Go path's first-error contract.
 func validateHCL(content []byte, filePath string) error {
+	errs := hclErrors(content, filePath)
+	if len(errs) == 0 {
+		return nil
+	}
+	first := errs[0]
+	return &first
+}
+
+// hclErrors returns every hclsyntax error diagnostic as a ValidationError
+// (0-based positions; hcl's are 1-based). Shared by validateHCL (first-error
+// contract) and ASTErrors (all-errors diagnostics flavor).
+func hclErrors(content []byte, filePath string) []ValidationError {
 	_, diags := hclsyntax.ParseConfig(content, filePath, hcl.InitialPos)
 	if !diags.HasErrors() {
 		return nil
 	}
+	var errs []ValidationError
 	for _, d := range diags {
 		if d.Severity != hcl.DiagError {
 			continue
 		}
-		ve := &ValidationError{FilePath: filePath, Message: d.Summary}
+		ve := ValidationError{FilePath: filePath, Message: d.Summary}
 		if d.Subject != nil {
 			if d.Subject.Start.Line > 0 {
 				ve.Line = uint32(d.Subject.Start.Line - 1) // #nosec G115 -- hcl lines are small positive ints
@@ -168,9 +183,12 @@ func validateHCL(content []byte, filePath string) error {
 				ve.Column = uint32(d.Subject.Start.Column - 1) // #nosec G115
 			}
 		}
-		return ve
+		errs = append(errs, ve)
 	}
-	return &ValidationError{FilePath: filePath, Message: "HCL contains errors"}
+	if len(errs) == 0 {
+		errs = append(errs, ValidationError{FilePath: filePath, Message: "HCL contains errors"})
+	}
+	return errs
 }
 
 // ASTErrors returns all ERROR/MISSING node locations in the content for
@@ -179,6 +197,11 @@ func validateHCL(content []byte, filePath string) error {
 // daemon is unavailable — this is the diagnostic-rendering flavor and has no
 // error channel, matching the historical contract.
 func ASTErrors(content []byte, filePath string) []ValidationError {
+	// HCL mirrors validateRemote's in-process branch — ALL error
+	// diagnostics, not just the first (this is the diagnostics flavor).
+	if isHCLPath(filePath) {
+		return hclErrors(content, filePath)
+	}
 	key := langKeyForPath(filePath)
 	if key == "" {
 		return nil
