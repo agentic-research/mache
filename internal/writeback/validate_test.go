@@ -119,13 +119,21 @@ func TestValidate_UnknownExtension_PassThroughWithoutDaemon(t *testing.T) {
 	assert.NoError(t, Validate([]byte(`this is not valid code in any language {{{`), "test.txt"))
 }
 
-func TestValidate_TerraformExtension_PassThroughWithoutDaemon(t *testing.T) {
-	// Documented behavior change (mache-73b885): .tf/.hcl were validated by
-	// the old in-process grammar set but are NOT in the leyline daemon's
-	// validate language set — they now pass through unvalidated (hclwrite
-	// in FormatBuffer remains the only structural check for them).
+func TestValidate_TerraformValidatesInProcess_WithoutDaemon(t *testing.T) {
+	// .tf/.hcl are NOT in the leyline daemon's validate set — they validate
+	// IN-PROCESS via hclsyntax (pure Go), restoring the pre-73b885 draft
+	// behavior. Without this, broken HCL passed through AND hclwrite.Format
+	// (a token formatter, not a validator) mangled it before splicing
+	// (#527 review should-fix). Dead socket proves no daemon contact.
 	useDeadSocket(t)
-	assert.NoError(t, Validate([]byte(`resource "x" { broken {{{`), "main.tf"))
+
+	err := Validate([]byte(`resource "x" { broken {{{`), "main.tf")
+	var ve *ValidationError
+	require.ErrorAs(t, err, &ve, "broken HCL must fail as a ValidationError (draftable)")
+	assert.Equal(t, "main.tf", ve.FilePath)
+
+	assert.NoError(t, Validate([]byte("resource \"x\" \"y\" {\n  count = 1\n}\n"), "main.tf"),
+		"valid HCL must pass without daemon contact")
 }
 
 func TestValidate_DaemonUnreachable_IsErrorNotPass(t *testing.T) {
@@ -262,8 +270,9 @@ func TestSupportedPath(t *testing.T) {
 		{"lib.rs", true},
 		{"app.ex", true},
 		{"script.exs", true},
-		{"MAIN.GO", true}, // extension matching is case-insensitive
-		{"infra.tf", false},
+		{"MAIN.GO", true},  // extension matching is case-insensitive
+		{"infra.tf", true}, // HCL validates in-process via hclsyntax
+		{"mod.hcl", true},
 		{"conf.yaml", false},
 		{"query.sql", false},
 		{"README.md", false},

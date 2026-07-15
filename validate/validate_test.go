@@ -131,7 +131,7 @@ func TestSupportedExtension(t *testing.T) {
 		{"comp.tsx", true},
 		{"lib.rs", true},
 		{"app.ex", true},
-		{"infra.tf", false},  // was true pre-mache-73b885
+		{"infra.tf", true},   // HCL validates in-process via hclsyntax (mache-73b885)
 		{"README.md", false}, // was true pre-mache-73b885
 		{"data.json", false},
 		{"no_extension", false},

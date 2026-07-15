@@ -30,10 +30,10 @@ func TestE2E_Validate_Verdicts(t *testing.T) {
 		{"broken go missing brace", "test.go", "package main\n\nfunc hello() string {\n\treturn \"world\"\n// missing closing brace\n", true},
 		{"valid python", "test.py", "def hello():\n    return \"world\"\n", false},
 		{"broken python", "test.py", "def hello(\n    return \"world\"\n", true},
-		// Preserved-and-documented behavior: .tf is not in the daemon's
-		// validate set, so even syntactically broken HCL passes validation
-		// (FormatBuffer's hclwrite is the remaining structural check).
-		{"terraform pass-through", "main.tf", `resource "x" { broken {{{`, false},
+		// .tf is not in the daemon's validate set — it validates
+		// IN-PROCESS via hclsyntax, so broken HCL still drafts.
+		{"terraform broken drafts", "main.tf", `resource "x" { broken {{{`, true},
+		{"terraform valid passes", "ok.tf", "resource \"x\" \"y\" {\n  count = 1\n}\n", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

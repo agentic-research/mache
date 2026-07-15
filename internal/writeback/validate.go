@@ -21,6 +21,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+
 	"github.com/agentic-research/mache/internal/leyline"
 )
 
@@ -61,9 +64,14 @@ func langKeyForPath(filePath string) string {
 }
 
 // SupportedPath reports whether filePath's extension is syntax-validated on
-// the write path (i.e. recognized by the leyline daemon's validate op).
+// write-back — by the leyline daemon (Go/Python/JS/TS/TSX/Rust/Elixir) or
+// in-process (HCL/Terraform via hclsyntax). Everything else — including
+// .sql/.yaml/.md/.toml/.json and the C-family/JVM/scripting extensions the
+// old in-process grammar set covered — passes through UNVALIDATED and
+// splices as written; there is no structural check for those until leyline
+// grows the grammars.
 func SupportedPath(filePath string) bool {
-	return langKeyForPath(filePath) != ""
+	return isHCLPath(filePath) || langKeyForPath(filePath) != ""
 }
 
 // Validate checks content for syntax errors via the leyline daemon and
@@ -93,6 +101,14 @@ func ValidateWithAST(content []byte, filePath string) (*leyline.ASTPayload, erro
 // emit_ast pipeline covers fewer languages than the validator; requesting it
 // for an uncovered language is a daemon-side hard error).
 func validateRemote(content []byte, filePath string, wantAST bool) (*leyline.ASTPayload, error) {
+	// HCL/Terraform validates IN-PROCESS via hclsyntax (pure Go, same
+	// hashicorp/hcl module hclwrite comes from) — restoring the pre-73b885
+	// draft behavior. Without this, broken HCL passed through unvalidated
+	// AND FormatBuffer's hclwrite.Format (a token formatter, NOT a
+	// validator) MANGLED it before splicing to disk (#527 review).
+	if isHCLPath(filePath) {
+		return nil, validateHCL(content, filePath)
+	}
 	key := langKeyForPath(filePath)
 	if key == "" {
 		return nil, nil // not validated — pass through
@@ -118,6 +134,43 @@ func validateRemote(content []byte, filePath string, wantAST bool) (*leyline.AST
 		return nil, &ValidationError{FilePath: filePath, Message: "AST contains errors"}
 	}
 	return res.AST, nil
+}
+
+// isHCLPath reports whether filePath is HCL/Terraform — validated
+// in-process (see validateRemote) rather than via the leyline daemon.
+func isHCLPath(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".tf", ".hcl":
+		return true
+	}
+	return false
+}
+
+// validateHCL syntax-checks HCL/Terraform content with hclsyntax.ParseConfig.
+// hcl positions are 1-based; ValidationError is 0-based (Error() re-renders
+// 1-based), so subtract one. Returns the first error diagnostic as a
+// *ValidationError, matching the Go path's first-error contract.
+func validateHCL(content []byte, filePath string) error {
+	_, diags := hclsyntax.ParseConfig(content, filePath, hcl.InitialPos)
+	if !diags.HasErrors() {
+		return nil
+	}
+	for _, d := range diags {
+		if d.Severity != hcl.DiagError {
+			continue
+		}
+		ve := &ValidationError{FilePath: filePath, Message: d.Summary}
+		if d.Subject != nil {
+			if d.Subject.Start.Line > 0 {
+				ve.Line = uint32(d.Subject.Start.Line - 1) // #nosec G115 -- hcl lines are small positive ints
+			}
+			if d.Subject.Start.Column > 0 {
+				ve.Column = uint32(d.Subject.Start.Column - 1) // #nosec G115
+			}
+		}
+		return ve
+	}
+	return &ValidationError{FilePath: filePath, Message: "HCL contains errors"}
 }
 
 // ASTErrors returns all ERROR/MISSING node locations in the content for

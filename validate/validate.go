@@ -3,9 +3,12 @@
 // This is the public API for mache's AST validation. Since mache-73b885 it is
 // backed by the pinned leyline daemon's `validate` op (ley-line-open >=
 // v0.7.8) instead of in-process tree-sitter, and supports Go, Python,
-// JavaScript, TypeScript/TSX, Rust, and Elixir. Extensions the daemon does
-// not validate (including .sql, .tf/.hcl, .yaml, .md, .toml, which the old
-// in-process grammar set covered) pass through with no error. A leyline
+// JavaScript, TypeScript/TSX, Rust, and Elixir; HCL/Terraform validates
+// in-process via hclsyntax. EVERY other extension passes through with no
+// error — including .sql/.yaml/.md/.toml/.json AND the ~25 further
+// extensions the old in-process grammar set covered (.c/.cpp/.java/.rb/
+// .php/.kt/.lua/.sh/...). Content in those languages splices as written,
+// with no structural check, until leyline grows the grammars. A leyline
 // daemon is acquired lazily on first use (see internal/leyline
 // ValidateContent for the latency profile); daemon-acquisition failures
 // surface as ordinary errors, never as false "valid" results.
