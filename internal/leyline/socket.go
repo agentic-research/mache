@@ -250,36 +250,26 @@ func DiscoverOrStart() (string, error) {
 		managed.discard()
 	}
 
-	// Find the leyline binary: PATH → ~/.mache/bin/ → auto-download
+	// Find the leyline binary through the SAME pin-checked chokepoint as
+	// the build path (ResolveBinary: PATH → ~/.mache/bin → SHA-verified
+	// download, each candidate accepted only on the exact pinned version).
+	// This block previously did a raw LookPath + unchecked cache stat —
+	// the drift ResolveBinary was built to kill (mache-0acdf6): a stale
+	// PATH leyline would be SPAWNED as the daemon, and with the write-back
+	// validate op requiring >= v0.7.8 every write would draft with a
+	// daemon-too-old diagnostic. An already-RUNNING daemon (fast paths
+	// above) is still honored as-is — it is the user's own; the wire
+	// handshake and per-op probes cover that case. ResolveBinary respects
+	// MACHE_NO_LEYLINE before downloading.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-
-	leylineBin, err := exec.LookPath("leyline")
-	source := "PATH"
+	leylineBin, err := ResolveBinary(true)
 	if err != nil {
-		// Fallback: check ~/.mache/bin/leyline
-		localBin := filepath.Join(home, ".mache", "bin", "leyline")
-		if _, statErr := os.Stat(localBin); statErr == nil {
-			leylineBin = localBin
-			source = "cached" // ~/.mache/bin — un-versioned, can shadow the pin (mache-0acdf6)
-		} else if os.Getenv("MACHE_NO_LEYLINE") != "" {
-			// CI / bundle deployments set this to opt out of the
-			// network-fetch path entirely. Surface a clear error
-			// rather than attempting a download that's likely to
-			// 404 against an unpublished ley-line-open release.
-			return "", fmt.Errorf("leyline not on PATH and MACHE_NO_LEYLINE is set; install leyline or unset MACHE_NO_LEYLINE")
-		} else {
-			// Auto-download from GitHub releases
-			downloaded, dlErr := downloadLeyline(localBin)
-			if dlErr != nil {
-				return "", fmt.Errorf("leyline not on PATH and auto-download failed: %w", dlErr)
-			}
-			leylineBin = downloaded
-			source = "downloaded"
-		}
+		return "", fmt.Errorf("no pinned leyline to spawn: %w", err)
 	}
+	source := "resolved-pinned"
 	// Record which binary won, from which tier, at what version — so the
 	// resolution is visible in logs AND via get_sheaf_status (mache-0dcd98).
 	// This was invisible before, which made the stale-cached-0.4.1 skew
@@ -830,7 +820,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. Its major.minor is kept in lockstep with the go.mod leyline-schema
 // pin by the version-parity gate (mache-b8af69).
-const leylineBinaryVersion = "v0.7.5"
+const leylineBinaryVersion = "v0.7.8"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private

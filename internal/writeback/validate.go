@@ -1,19 +1,39 @@
 package writeback
 
+// Syntax validation for the write-back pipeline.
+//
+// Since mache-73b885 this package holds NO in-process tree-sitter: validation
+// is delegated to the pinned leyline daemon's `validate` op (ley-line-open >=
+// v0.7.8), which runs the same grammars the `_ast` producer uses. The daemon
+// is acquired lazily per call via leyline.ValidateContent (DiscoverOrStart);
+// see that function's doc for the latency profile (sub-ms with a live daemon,
+// a one-off spawn cost on the first write otherwise).
+//
+// Language coverage CHANGED with the migration: the daemon validates the
+// extension keys in leylineValidateLangs below, and HCL/Terraform validates
+// IN-PROCESS via hclsyntax (hclwrite.Format is a token formatter, NOT a
+// validator — it mangles broken input, which is why the in-process check
+// exists). Every other extension the old in-process grammar set covered
+// (.sql/.yaml/.md/.toml/.json plus the C-family/JVM/scripting set) passes
+// through UNVALIDATED — same contract as an unknown extension — until
+// leyline grows the grammars (ley-line-open-e5addb).
+
 import (
-	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 
-	"github.com/agentic-research/mache/internal/lang"
+	"github.com/agentic-research/mache/internal/leyline"
 )
 
 // ValidationError contains structured information about a syntax error.
 type ValidationError struct {
 	FilePath string
 	Line     uint32 // 0-indexed
-	Column   uint32 // 0-indexed
+	Column   uint32 // 0-indexed (byte offset within the line)
 	Message  string
 }
 
@@ -21,119 +41,183 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s:%d:%d: %s", e.FilePath, e.Line+1, e.Column+1, e.Message)
 }
 
-// Validate parses content with tree-sitter and returns an error if the AST
-// contains syntax errors. Files with no known tree-sitter language pass
-// through without validation (returns nil).
-func Validate(content []byte, filePath string) error {
-	grammar := LanguageForPath(filePath)
-	if grammar == nil {
-		return nil // unknown language — pass through
-	}
-
-	parser := sitter.NewParser()
-	parser.SetLanguage(grammar)
-
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	if err != nil {
-		return fmt.Errorf("tree-sitter parse failed for %s: %w", filePath, err)
-	}
-
-	root := tree.RootNode()
-	if root == nil {
-		return fmt.Errorf("tree-sitter returned nil root for %s", filePath)
-	}
-
-	if !root.HasError() {
-		return nil
-	}
-
-	// Walk tree to find first ERROR node for a useful error message
-	errNode := findFirstError(root)
-	if errNode != nil {
-		return &ValidationError{
-			FilePath: filePath,
-			Line:     uint32(errNode.StartPoint().Row),
-			Column:   uint32(errNode.StartPoint().Column),
-			Message:  "syntax error in AST",
-		}
-	}
-
-	return &ValidationError{
-		FilePath: filePath,
-		Line:     0,
-		Column:   0,
-		Message:  "AST contains errors",
-	}
+// leylineValidateLangs is the set of extension keys the pinned leyline
+// daemon's validate op accepts (ley-line-open rs/ll-open/fs/src/validate.rs
+// language_for_extension). The key doubles as the wire `language` value.
+var leylineValidateLangs = map[string]bool{
+	"go":  true,
+	"py":  true,
+	"js":  true,
+	"ts":  true,
+	"tsx": true,
+	"rs":  true,
+	"ex":  true,
+	"exs": true,
 }
 
-// ASTErrors returns all ERROR node locations in the content for diagnostic reporting.
-// Returns nil if no errors or unknown language.
-func ASTErrors(content []byte, filePath string) []ValidationError {
-	grammar := LanguageForPath(filePath)
-	if grammar == nil {
-		return nil
+// langKeyForPath maps a file path to the leyline validate language key, or ""
+// when the extension is not validated (pass-through).
+func langKeyForPath(filePath string) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(filePath)), ".")
+	if leylineValidateLangs[ext] {
+		return ext
 	}
+	return ""
+}
 
-	parser := sitter.NewParser()
-	parser.SetLanguage(grammar)
+// SupportedPath reports whether filePath's extension is syntax-validated on
+// write-back — by the leyline daemon (Go/Python/JS/TS/TSX/Rust/Elixir) or
+// in-process (HCL/Terraform via hclsyntax). Everything else — including
+// .sql/.yaml/.md/.toml/.json and the C-family/JVM/scripting extensions the
+// old in-process grammar set covered — passes through UNVALIDATED and
+// splices as written; there is no structural check for those until leyline
+// grows the grammars.
+func SupportedPath(filePath string) bool {
+	return isHCLPath(filePath) || langKeyForPath(filePath) != ""
+}
 
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
+// Validate checks content for syntax errors via the leyline daemon and
+// returns a *ValidationError for the first ERROR/MISSING node. Files whose
+// extension the daemon does not validate pass through (returns nil).
+// Daemon-acquisition failures and daemon-too-old responses are returned as
+// ordinary (non-ValidationError) errors so callers can distinguish "your code
+// is broken" from "the validator is unavailable".
+func Validate(content []byte, filePath string) error {
+	_, err := validateRemote(content, filePath, false)
+	return err
+}
+
+// ValidateWithAST is Validate plus AST rows from the SAME parse: for
+// languages with an emit_ast-capable extractor that mache lints (Go today),
+// a clean validation also returns the daemon's SQL-shaped AST payload so the
+// linter can run without a second parse. For every other validated language
+// it behaves exactly like Validate and returns (nil, nil) on success.
+// Pass-through extensions return (nil, nil).
+func ValidateWithAST(content []byte, filePath string) (*leyline.ASTPayload, error) {
+	return validateRemote(content, filePath, true)
+}
+
+// validateRemote runs one daemon validate round trip. wantAST requests
+// emit_ast, which is only sent for Go — the only language mache has AST lint
+// rules for, and a member of the daemon extractor's supported subset (the
+// emit_ast pipeline covers fewer languages than the validator; requesting it
+// for an uncovered language is a daemon-side hard error).
+func validateRemote(content []byte, filePath string, wantAST bool) (*leyline.ASTPayload, error) {
+	// HCL/Terraform validates IN-PROCESS via hclsyntax (pure Go, same
+	// hashicorp/hcl module hclwrite comes from) — restoring the pre-73b885
+	// draft behavior. Without this, broken HCL passed through unvalidated
+	// AND FormatBuffer's hclwrite.Format (a token formatter, NOT a
+	// validator) MANGLED it before splicing to disk (#527 review).
+	if isHCLPath(filePath) {
+		return nil, validateHCL(content, filePath)
+	}
+	key := langKeyForPath(filePath)
+	if key == "" {
+		return nil, nil // not validated — pass through
+	}
+	emit := wantAST && key == "go"
+
+	res, err := leyline.ValidateContent(content, key, filePath, emit)
 	if err != nil {
+		return nil, fmt.Errorf("validate %s: %w", filePath, err)
+	}
+	if !res.OK {
+		if len(res.Errors) > 0 {
+			first := res.Errors[0]
+			return nil, &ValidationError{
+				FilePath: filePath,
+				Line:     first.Row,
+				Column:   first.Col,
+				Message:  first.Message,
+			}
+		}
+		// Defensive: the daemon reports ok=false with a populated errors
+		// array; an empty one still must not validate the write.
+		return nil, &ValidationError{FilePath: filePath, Message: "AST contains errors"}
+	}
+	return res.AST, nil
+}
+
+// isHCLPath reports whether filePath is HCL/Terraform — validated
+// in-process (see validateRemote) rather than via the leyline daemon.
+func isHCLPath(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".tf", ".hcl":
+		return true
+	}
+	return false
+}
+
+// validateHCL syntax-checks HCL/Terraform content with hclsyntax.ParseConfig.
+// hcl positions are 1-based; ValidationError is 0-based (Error() re-renders
+// 1-based), so subtract one. Returns the first error diagnostic as a
+// *ValidationError, matching the Go path's first-error contract.
+func validateHCL(content []byte, filePath string) error {
+	errs := hclErrors(content, filePath)
+	if len(errs) == 0 {
 		return nil
 	}
+	first := errs[0]
+	return &first
+}
 
-	root := tree.RootNode()
-	if root == nil || !root.HasError() {
+// hclErrors returns every hclsyntax error diagnostic as a ValidationError
+// (0-based positions; hcl's are 1-based). Shared by validateHCL (first-error
+// contract) and ASTErrors (all-errors diagnostics flavor).
+func hclErrors(content []byte, filePath string) []ValidationError {
+	_, diags := hclsyntax.ParseConfig(content, filePath, hcl.InitialPos)
+	if !diags.HasErrors() {
 		return nil
 	}
-
 	var errs []ValidationError
-	collectErrors(root, filePath, &errs)
+	for _, d := range diags {
+		if d.Severity != hcl.DiagError {
+			continue
+		}
+		ve := ValidationError{FilePath: filePath, Message: d.Summary}
+		if d.Subject != nil {
+			if d.Subject.Start.Line > 0 {
+				ve.Line = uint32(d.Subject.Start.Line - 1) // #nosec G115 -- hcl lines are small positive ints
+			}
+			if d.Subject.Start.Column > 0 {
+				ve.Column = uint32(d.Subject.Start.Column - 1) // #nosec G115
+			}
+		}
+		errs = append(errs, ve)
+	}
+	if len(errs) == 0 {
+		errs = append(errs, ValidationError{FilePath: filePath, Message: "HCL contains errors"})
+	}
 	return errs
 }
 
-// findFirstError does a depth-first search for the first ERROR node.
-func findFirstError(node *sitter.Node) *sitter.Node {
-	if node.IsError() || node.IsMissing() {
-		return node
+// ASTErrors returns all ERROR/MISSING node locations in the content for
+// diagnostic reporting (0-based positions, straight off the daemon wire).
+// Returns nil if the content is clean, the extension is not validated, or the
+// daemon is unavailable — this is the diagnostic-rendering flavor and has no
+// error channel, matching the historical contract.
+func ASTErrors(content []byte, filePath string) []ValidationError {
+	// HCL mirrors validateRemote's in-process branch — ALL error
+	// diagnostics, not just the first (this is the diagnostics flavor).
+	if isHCLPath(filePath) {
+		return hclErrors(content, filePath)
 	}
-	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(i)
-		if child.HasError() || child.IsError() || child.IsMissing() {
-			found := findFirstError(child)
-			if found != nil {
-				return found
-			}
-		}
-	}
-	return nil
-}
-
-// collectErrors gathers all ERROR/MISSING nodes in the tree.
-func collectErrors(node *sitter.Node, filePath string, errs *[]ValidationError) {
-	if node.IsError() || node.IsMissing() {
-		*errs = append(*errs, ValidationError{
-			FilePath: filePath,
-			Line:     uint32(node.StartPoint().Row),
-			Column:   uint32(node.StartPoint().Column),
-			Message:  "syntax error in AST",
-		})
-		return // don't recurse into error children
-	}
-	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(i)
-		if child.HasError() || child.IsError() || child.IsMissing() {
-			collectErrors(child, filePath, errs)
-		}
-	}
-}
-
-// LanguageForPath maps file extensions to tree-sitter languages.
-// Delegates to the lang registry — supports all 18 languages automatically.
-func LanguageForPath(filePath string) *sitter.Language {
-	l := lang.ForPath(filePath)
-	if l == nil {
+	key := langKeyForPath(filePath)
+	if key == "" {
 		return nil
 	}
-	return l.Grammar()
+	res, err := leyline.ValidateContent(content, key, filePath, false)
+	if err != nil || res.OK {
+		return nil
+	}
+	errs := make([]ValidationError, 0, len(res.Errors))
+	for _, e := range res.Errors {
+		errs = append(errs, ValidationError{
+			FilePath: filePath,
+			Line:     e.Row,
+			Column:   e.Col,
+			Message:  e.Message,
+		})
+	}
+	return errs
 }

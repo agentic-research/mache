@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,12 +20,36 @@ import (
 // hclwrite) with validation. These tests pin the new contract:
 // validation always runs; formatting is opt-out via format=false.
 
+// fakeValidateDaemon wires a plumbing-fake leyline daemon (mache-73b885:
+// syntax validation rides the daemon's validate op). These tests exercise
+// format/splice mechanics, not parsing, so a brace-balance heuristic is a
+// sufficient verdict for the fixtures here; the real parser is covered by
+// internal/writeback's gated e2e suite.
+func fakeValidateDaemon(t *testing.T) {
+	t.Helper()
+	sock := lltest.FakeDaemon(t, func(req map[string]any) any {
+		content, _ := req["content"].(string)
+		if strings.Count(content, "{") != strings.Count(content, "}") {
+			return map[string]any{
+				"ok": false,
+				"errors": []any{map[string]any{
+					"row": 0, "col": 0, "byte_start": 0, "byte_end": 0, "message": "syntax error",
+				}},
+				"diagnostics": []any{},
+			}
+		}
+		return map[string]any{"ok": true, "errors": []any{}, "diagnostics": []any{}}
+	})
+	t.Setenv("LEYLINE_SOCKET", sock)
+}
+
 // buildWriteGraph creates a MemoryStore plus a real source file on disk
 // so the splice pipeline (validate → optional format → splice → update)
 // has something to write into. Returns the graph, the node path, and
 // the source file path.
 func buildWriteGraph(t *testing.T) (*graph.MemoryStore, string, string) {
 	t.Helper()
+	fakeValidateDaemon(t)
 
 	// Source file with deliberately-unformatted Go that gofumpt will
 	// rewrite (extra blank lines + tabs vs spaces in the body).
@@ -196,6 +221,7 @@ func TestWriteFile_ValidationStillRunsWhenFormatFalse(t *testing.T) {
 // write_file must surface that to the caller via "ok_graph_stale" plus
 // a graph_warning, not silently report "ok".
 func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
+	fakeValidateDaemon(t)
 	original := "package main\n\nfunc Hello() {}\n"
 	srcPath := filepath.Join(t.TempDir(), "main.go")
 	require.NoError(t, os.WriteFile(srcPath, []byte(original), 0o644))
@@ -344,4 +370,37 @@ func TestWriteFile_FormatChangedFalseWhenAlreadyClean(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
 	assert.True(t, resp.FormatApplied)
 	assert.False(t, resp.FormatChanged, "clean input must not be reported as format-changed")
+}
+
+// TestServeWriteFile_InfraFailureStatusDistinct pins the #527 review fix:
+// when the validator INFRASTRUCTURE is unavailable (vs the content being
+// broken), write_file must report status "validator_unavailable" — not
+// falsely claim "validation_error". A dead socket + MACHE_NO_LEYLINE +
+// empty HOME guarantees no daemon can be acquired.
+func TestServeWriteFile_InfraFailureStatusDistinct(t *testing.T) {
+	store, nodePath, _ := buildWriteGraph(t)
+
+	// Kill the daemon acquisition path AFTER the graph was built (the
+	// builder wires a working fake; override it).
+	deadSock := filepath.Join(t.TempDir(), "dead.sock")
+	t.Setenv("LEYLINE_SOCKET", deadSock)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", "/nonexistent-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+
+	handler := makeWriteFileHandler(store)
+	result, err := handler(context.Background(), makeRequest(map[string]any{
+		"path":    nodePath,
+		"content": "package main\n\nfunc Hello() {\n\treturn\n}\n",
+	}))
+	require.NoError(t, err)
+
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	assert.Equal(t, "validator_unavailable", resp.Status,
+		"infra failure must not be reported as a validation_error")
+	assert.NotEmpty(t, resp.Error)
 }

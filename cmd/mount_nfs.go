@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -35,12 +36,25 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 				return fmt.Errorf("node not found: %w", err)
 			}
 
-			// 1. Validate syntax before touching source file
-			if err := writeback.Validate(content, origin.FilePath); err != nil {
+			// 1. Validate syntax before touching source file. ONE leyline
+			// parse serves both validation and (for Go) the lint rules
+			// below via the returned AST payload — no second parse.
+			astPayload, err := writeback.ValidateWithAST(content, origin.FilePath)
+			if err != nil {
+				// Syntax failure and validator-infra failure (daemon
+				// unreachable / too old) both draft — the pre-existing
+				// contract — but the _diagnostics message distinguishes
+				// them so an editor user can tell "my code is broken"
+				// from "the validator is down" (#527 review).
+				diag := err.Error()
+				var ve *writeback.ValidationError
+				if !errors.As(err, &ve) {
+					diag = "validator unavailable (draft saved, source untouched): " + diag
+				}
 				log.Printf("writeback: validation failed for %s: %v (saving draft)", origin.FilePath, err)
 				// Store diagnostic for _diagnostics/ virtual dir
 				if isMemStore {
-					store.WriteStatus.Store(filepath.Dir(nodeID), err.Error())
+					store.WriteStatus.Store(filepath.Dir(nodeID), diag)
 					// Save as Draft
 					draft := make([]byte, len(content))
 					copy(draft, content)
@@ -52,9 +66,12 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 			// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform)
 			formatted := writeback.FormatBuffer(content, origin.FilePath)
 
-			// Linting (Warning only)
+			// Linting (Warning only). Runs on the pre-format AST — for the
+			// snippet writes this path receives, FormatBuffer is a no-op
+			// (format.Source needs a whole file), so line numbers agree;
+			// any residual drift is acceptable for a warning-only signal.
 			if strings.HasSuffix(origin.FilePath, ".go") {
-				if diags, err := linter.Lint(formatted, "go"); err == nil && len(diags) > 0 {
+				if diags, err := linter.LintAST(astPayload); err == nil && len(diags) > 0 {
 					var sb strings.Builder
 					for _, d := range diags {
 						sb.WriteString(d.String() + "\n")

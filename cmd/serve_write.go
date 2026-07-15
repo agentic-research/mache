@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -63,8 +64,17 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 				Path   string `json:"path"`
 				File   string `json:"file"`
 			}
+			// Syntax failures ("your code is broken") and validator-infra
+			// failures (daemon unreachable / too old) are different facts;
+			// the status field must not claim validation_error for the
+			// latter (#527 review).
+			status := "validation_error"
+			var ve *writeback.ValidationError
+			if !errors.As(err, &ve) {
+				status = "validator_unavailable"
+			}
 			data, _ := json.MarshalIndent(valResult{
-				Status: "validation_error",
+				Status: status,
 				Error:  err.Error(),
 				Path:   path,
 				File:   origin.FilePath,

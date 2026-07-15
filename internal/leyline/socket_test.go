@@ -982,13 +982,17 @@ func TestDiscoverOrStart_LocalBinFallback_SocketTimeout(t *testing.T) {
 	// on the sleep) and uses an absolute PATH for `sleep` because the test
 	// nukes PATH — otherwise `sleep` isn't found and the process would exit
 	// (taking the crash branch instead of the timeout branch).
-	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'fake leyline'; exit 0;; esac\nPATH=/bin:/usr/bin exec sleep 30\n"
+	// Must report the PINNED version: DiscoverOrStart's spawn path now goes
+	// through ResolveBinary (exact pin), so an unversioned stub would be
+	// rejected and trigger a download instead of exercising the timeout.
+	pin := strings.TrimPrefix(leylineBinaryVersion, "v")
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'leyline " + pin + " (open)'; exit 0;; esac\nPATH=/bin:/usr/bin exec sleep 30\n"
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "leyline"), []byte(fake), 0o755))
 
 	t.Setenv("HOME", home)
 	t.Setenv("LEYLINE_SOCKET", "")
 	t.Setenv("PATH", "/nonexistent-path-for-test")
-	t.Setenv("MACHE_NO_LEYLINE", "")
+	t.Setenv("MACHE_NO_LEYLINE", "1") // belt-and-braces: never download in tests
 	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "1s")
 
 	_, err := DiscoverOrStart()
@@ -1021,12 +1025,17 @@ func TestDiscoverOrStart_DaemonExitsDuringStartup(t *testing.T) {
 	home := e2eHome(t)
 	binDir := filepath.Join(home, ".mache", "bin")
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
-	require.NoError(t, os.Symlink("/bin/sh", filepath.Join(binDir, "leyline")))
+	// Pin-versioned stub (spawn path is ResolveBinary-gated) that exits
+	// non-zero for the daemon invocation — stands in for a leyline that
+	// dies on startup. The former /bin/sh symlink can't answer --version.
+	pin := strings.TrimPrefix(leylineBinaryVersion, "v")
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'leyline " + pin + " (open)'; exit 0;; esac\nexit 2\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "leyline"), []byte(fake), 0o755))
 
 	t.Setenv("HOME", home)
 	t.Setenv("LEYLINE_SOCKET", "")
 	t.Setenv("PATH", "/nonexistent-path-for-test")
-	t.Setenv("MACHE_NO_LEYLINE", "")
+	t.Setenv("MACHE_NO_LEYLINE", "1") // belt-and-braces: never download in tests
 	// Generous timeout so the assertion proves we returned on exit-detection,
 	// not because the wait elapsed.
 	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "30s")
@@ -1062,13 +1071,14 @@ func TestDiscoverOrStart_DaemonExitsCleanlyDuringStartup(t *testing.T) {
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
 	// Answers --version fast, then exits 0 for the daemon invocation without
 	// binding a socket.
-	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'fake leyline'; exit 0;; esac\nexit 0\n"
+	pin := strings.TrimPrefix(leylineBinaryVersion, "v")
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'leyline " + pin + " (open)'; exit 0;; esac\nexit 0\n"
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "leyline"), []byte(fake), 0o755))
 
 	t.Setenv("HOME", home)
 	t.Setenv("LEYLINE_SOCKET", "")
 	t.Setenv("PATH", "/nonexistent-path-for-test")
-	t.Setenv("MACHE_NO_LEYLINE", "")
+	t.Setenv("MACHE_NO_LEYLINE", "1") // belt-and-braces: never download in tests
 	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "30s")
 
 	_, err := DiscoverOrStart()
