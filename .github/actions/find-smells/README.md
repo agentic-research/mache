@@ -45,13 +45,13 @@ agree on it. If you keep your baseline elsewhere, pass the `baseline` input.
 
 ## Inputs
 
-| Input           | Default                    | Description                                                                                                                                                                                                          |
-| --------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mache-version` | `v0.16.2`                  | Release tag for the `mache-linux-amd64` binary. >= v0.13.0 auto-provisions leyline, so the `_ast`-backed rules run too; >= v0.12.0 is SARIF + the cross-reference rules only. Absent-table rules skip automatically. |
-| `schema`        | *(FCA infer)*              | Path to a mache topology schema. Setting it forces `--backend tree-sitter` (leyline ignores build-time schemas).                                                                                                     |
-| `baseline`      | `docs/smell-baseline.json` | Committed ratchet floor (see above).                                                                                                                                                                                 |
-| `fail-on-new`   | `true`                     | Fail the job on new findings; `false` = advisory.                                                                                                                                                                    |
-| `upload-sarif`  | `true`                     | Emit + upload SARIF to code-scanning.                                                                                                                                                                                |
+| Input           | Default                    | Description                                                                                                                                                                                                                                 |
+| --------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mache-version` | `v0.17.0`                  | Release tag for the `mache-linux-amd64` binary. >= v0.17.0 ships gate-tagged rules (required — the gate runs `--tags=gate`); >= v0.13.0 auto-provisions leyline, so the `_ast`-backed rules run too. Absent-table rules skip automatically. |
+| `schema`        | *(FCA infer)*              | Path to a mache topology schema. Setting it forces `--backend tree-sitter` (leyline ignores build-time schemas).                                                                                                                            |
+| `baseline`      | `docs/smell-baseline.json` | Committed ratchet floor (see above).                                                                                                                                                                                                        |
+| `fail-on-new`   | `true`                     | Fail the job on new findings; `false` = advisory.                                                                                                                                                                                           |
+| `upload-sarif`  | `true`                     | Emit + upload SARIF to code-scanning.                                                                                                                                                                                                       |
 
 ## Contract with mache's own gate
 
@@ -67,13 +67,11 @@ Two intentional differences from mache's own gate (mache-608a3c
 consolidated it onto a single leyline build + single baseline, so the
 builds now match):
 
-1. mache's Taskfile gate scopes to `--tags=gate` — the ratchet rule set,
-   excluding the min-0 firehose rules (`cyclomatic_complexity`,
-   `magic_int_in_comparison`). The action runs `--rule '*'` because its
-   pinned release predates the `gate` retag of the embedded rules;
-   `--tags=gate` will be adopted when the default `mache-version` is
-   bumped to a release that ships them (the parity test encodes this
-   reconvergence condition).
+1. Both gates scope to `--tags=gate` — the ratchet rule set, excluding
+   the min-0 firehose rules (`cyclomatic_complexity`,
+   `magic_int_in_comparison`). Reconverged at v0.17.0, the first
+   release shipping gate-tagged rules; the parity test pins the shared
+   shape on both sides.
 1. mache's gate builds from the tracked tree (`git archive HEAD`); the
    action builds from the checkout, which is equivalent on a clean CI
    checkout.
