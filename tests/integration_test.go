@@ -99,8 +99,7 @@ func setup(t *testing.T) *testFixture {
 // and exposed via LEYLINE_SOCKET so the pipeline under test finds it.
 func requireWriteDaemon(t *testing.T) {
 	t.Helper()
-	sock := lltest.StartPinnedDaemon(t)
-	t.Setenv("LEYLINE_SOCKET", sock)
+	lltest.UsePinnedDaemon(t)
 }
 
 // realWriteBack replicates the cmd/mount_nfs.go NFS write-back pipeline:

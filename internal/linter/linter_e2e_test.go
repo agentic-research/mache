@@ -16,8 +16,7 @@ import (
 )
 
 func TestE2E_Lint_NilSlice_Flagged(t *testing.T) {
-	sock := lltest.StartPinnedDaemon(t)
-	t.Setenv("LEYLINE_SOCKET", sock)
+	lltest.UsePinnedDaemon(t)
 
 	src := []byte("package main\n\nvar x []int\n\nfunc f() {\n\tvar z []byte\n\t_ = z\n}\n")
 	diags, err := Lint(src, "go")
@@ -29,8 +28,7 @@ func TestE2E_Lint_NilSlice_Flagged(t *testing.T) {
 }
 
 func TestE2E_Lint_InitializedSlices_Clean(t *testing.T) {
-	sock := lltest.StartPinnedDaemon(t)
-	t.Setenv("LEYLINE_SOCKET", sock)
+	lltest.UsePinnedDaemon(t)
 
 	src := []byte("package main\n\nvar y []string = nil\n\nfunc f() {\n\tw := []int{1}\n\t_ = w\n\t_ = y\n}\n")
 	diags, err := Lint(src, "go")
@@ -41,8 +39,7 @@ func TestE2E_Lint_InitializedSlices_Clean(t *testing.T) {
 func TestE2E_Lint_FunctionSnippet_Parses(t *testing.T) {
 	// NFS write-back sends function-body snippets without a package clause;
 	// tree-sitter-go accepts them, so lint must work on snippets too.
-	sock := lltest.StartPinnedDaemon(t)
-	t.Setenv("LEYLINE_SOCKET", sock)
+	lltest.UsePinnedDaemon(t)
 
 	src := []byte("func HelloWorld() {\n\tvar s []int\n\t_ = s\n}\n")
 	diags, err := Lint(src, "go")

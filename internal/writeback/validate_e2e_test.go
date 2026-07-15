@@ -17,19 +17,41 @@ import (
 	"github.com/agentic-research/mache/internal/lltest"
 )
 
-func usePinnedDaemon(t *testing.T) {
-	t.Helper()
-	sock := lltest.StartPinnedDaemon(t)
-	t.Setenv("LEYLINE_SOCKET", sock)
-}
+func TestE2E_Validate_Verdicts(t *testing.T) {
+	lltest.UsePinnedDaemon(t)
 
-func TestE2E_Validate_ValidGo(t *testing.T) {
-	usePinnedDaemon(t)
-	assert.NoError(t, Validate([]byte("package main\n\nfunc hello() string {\n\treturn \"world\"\n}\n"), "test.go"))
+	tests := []struct {
+		name    string
+		path    string
+		src     string
+		wantErr bool
+	}{
+		{"valid go", "test.go", "package main\n\nfunc hello() string {\n\treturn \"world\"\n}\n", false},
+		{"broken go missing brace", "test.go", "package main\n\nfunc hello() string {\n\treturn \"world\"\n// missing closing brace\n", true},
+		{"valid python", "test.py", "def hello():\n    return \"world\"\n", false},
+		{"broken python", "test.py", "def hello(\n    return \"world\"\n", true},
+		// Preserved-and-documented behavior: .tf is not in the daemon's
+		// validate set, so even syntactically broken HCL passes validation
+		// (FormatBuffer's hclwrite is the remaining structural check).
+		{"terraform pass-through", "main.tf", `resource "x" { broken {{{`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Validate([]byte(tc.src), tc.path)
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ve *ValidationError
+			require.ErrorAs(t, err, &ve, "real syntax failures must surface as ValidationError")
+			assert.Equal(t, tc.path, ve.FilePath)
+		})
+	}
 }
 
 func TestE2E_Validate_BrokenGo_Positions(t *testing.T) {
-	usePinnedDaemon(t)
+	lltest.UsePinnedDaemon(t)
 
 	// Verified against the v0.7.8 daemon: the first ERROR node for this
 	// buffer is at 0-based row 2, col 12 (the `{ BROKEN SYNTAX` region).
@@ -44,37 +66,8 @@ func TestE2E_Validate_BrokenGo_Positions(t *testing.T) {
 	assert.Contains(t, ve.Message, "syntax error")
 }
 
-func TestE2E_Validate_BrokenGo_MissingBrace(t *testing.T) {
-	usePinnedDaemon(t)
-	err := Validate([]byte("package main\n\nfunc hello() string {\n\treturn \"world\"\n// missing closing brace\n"), "test.go")
-	require.Error(t, err)
-	var ve *ValidationError
-	require.ErrorAs(t, err, &ve)
-}
-
-func TestE2E_Validate_BrokenPython(t *testing.T) {
-	usePinnedDaemon(t)
-	err := Validate([]byte("def hello(\n    return \"world\"\n"), "test.py")
-	require.Error(t, err)
-	var ve *ValidationError
-	require.ErrorAs(t, err, &ve)
-}
-
-func TestE2E_Validate_ValidPython(t *testing.T) {
-	usePinnedDaemon(t)
-	assert.NoError(t, Validate([]byte("def hello():\n    return \"world\"\n"), "test.py"))
-}
-
-func TestE2E_Validate_TerraformPassThrough(t *testing.T) {
-	// Preserved-and-documented behavior: .tf is not in the daemon's
-	// validate set, so even syntactically broken HCL passes validation
-	// (FormatBuffer's hclwrite is the remaining structural check).
-	usePinnedDaemon(t)
-	assert.NoError(t, Validate([]byte(`resource "x" { broken {{{`), "main.tf"))
-}
-
 func TestE2E_ValidateWithAST_ReturnsRowsFromSameParse(t *testing.T) {
-	usePinnedDaemon(t)
+	lltest.UsePinnedDaemon(t)
 
 	src := []byte("package main\n\nvar x []int\n\nfunc f() {\n\tvar y []string = nil\n\t_ = y\n}\n")
 	ast, err := ValidateWithAST(src, "main.go")
@@ -96,7 +89,7 @@ func TestE2E_ValidateWithAST_ReturnsRowsFromSameParse(t *testing.T) {
 }
 
 func TestE2E_ASTErrors_EnumeratesAll(t *testing.T) {
-	usePinnedDaemon(t)
+	lltest.UsePinnedDaemon(t)
 	errs := ASTErrors([]byte("package main\n\nfunc hello() {\n\tx :=\n}\n"), "test.go")
 	require.NotEmpty(t, errs)
 	assert.Equal(t, "test.go", errs[0].FilePath)

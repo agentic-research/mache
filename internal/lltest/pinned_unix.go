@@ -15,10 +15,18 @@ import (
 	"github.com/agentic-research/mache/internal/leyline"
 )
 
+// UsePinnedDaemon spawns a private pinned daemon (see StartPinnedDaemon) and
+// points LEYLINE_SOCKET at it for the remainder of the test, which is how
+// every gated e2e consumer wires the daemon into mache's discovery path.
+func UsePinnedDaemon(t *testing.T) {
+	t.Helper()
+	t.Setenv("LEYLINE_SOCKET", StartPinnedDaemon(t))
+}
+
 // StartPinnedDaemon spawns the SHA-pinned leyline binary from
 // ~/.mache/bin/leyline as a PRIVATE daemon (own arena/control/socket in a
 // short-lived temp dir — no interference with the shared ~/.mache arena) and
-// returns its socket path for t.Setenv("LEYLINE_SOCKET", ...).
+// returns its socket path.
 //
 // Gated, never downloads: the test SKIPS when the binary is absent or its
 // --version does not match leyline.PinnedBinaryVersion(). It deliberately
@@ -27,19 +35,7 @@ import (
 func StartPinnedDaemon(t *testing.T) string {
 	t.Helper()
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("lltest: no home dir, cannot locate pinned leyline: %v", err)
-	}
-	bin := filepath.Join(home, ".mache", "bin", "leyline")
-	out, err := exec.Command(bin, "--version").Output()
-	if err != nil {
-		t.Skipf("lltest: pinned leyline not runnable at %s (never downloading in tests): %v", bin, err)
-	}
-	want := strings.TrimPrefix(leyline.PinnedBinaryVersion(), "v")
-	if !strings.Contains(string(out), want) {
-		t.Skipf("lltest: leyline at %s reports %q, want pinned %s — skipping (never downloading in tests)", bin, strings.TrimSpace(string(out)), want)
-	}
+	bin := pinnedBinaryOrSkip(t)
 
 	// /tmp keeps the socket path under the ~104-byte sun_path limit; the
 	// daemon binds <control-stem>.sock next to the control file.
@@ -47,7 +43,6 @@ func StartPinnedDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("lltest: create pinned daemon dir: %v", err)
 	}
-	sock := filepath.Join(dir, "d.sock")
 
 	cmd := exec.Command(bin, "daemon",
 		"--arena", filepath.Join(dir, "d.arena"),
@@ -66,6 +61,33 @@ func StartPinnedDaemon(t *testing.T) string {
 		_ = os.RemoveAll(dir)
 	})
 
+	return awaitSocket(t, filepath.Join(dir, "d.sock"))
+}
+
+// pinnedBinaryOrSkip resolves ~/.mache/bin/leyline and verifies it reports
+// the pinned version, skipping the test otherwise.
+func pinnedBinaryOrSkip(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("lltest: no home dir, cannot locate pinned leyline: %v", err)
+	}
+	bin := filepath.Join(home, ".mache", "bin", "leyline")
+	out, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		t.Skipf("lltest: pinned leyline not runnable at %s (never downloading in tests): %v", bin, err)
+	}
+	want := strings.TrimPrefix(leyline.PinnedBinaryVersion(), "v")
+	if !strings.Contains(string(out), want) {
+		t.Skipf("lltest: leyline at %s reports %q, want pinned %s — skipping (never downloading in tests)", bin, strings.TrimSpace(string(out)), want)
+	}
+	return bin
+}
+
+// awaitSocket polls until a UDS listener answers at sock or the deadline
+// passes.
+func awaitSocket(t *testing.T, sock string) string {
+	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if conn, err := net.Dial("unix", sock); err == nil {
