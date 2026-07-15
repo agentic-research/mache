@@ -5,23 +5,27 @@ inputs:
   mache-version:
     description: >-
       mache release tag to download mache-linux-amd64 from.
-      >= v0.13.0 auto-provisions leyline during `mache build` (backend
-      auto), so the _ast-backed rules (long_function, long_file,
-      duplicate_code, cyclomatic_complexity, ...) run in addition to the
-      cross-reference rules; rules whose required tables are absent are
-      skipped automatically by --rule '*'. >= v0.12.0 supports SARIF but
-      has no leyline auto-provisioning, so only the cross-reference
-      (nodes/node_defs/node_refs) rules run.
+      >= v0.17.0 ships gate-tagged rules, so the ratchet runs the same
+      `--tags=gate` selection as mache's own Taskfile gate (min-0
+      firehose rules like cyclomatic_complexity are excluded from the
+      gate but still available ad hoc). >= v0.13.0 auto-provisions
+      leyline during `mache build` (backend auto), so the _ast-backed
+      rules run in addition to the cross-reference rules; absent-table
+      rules are skipped automatically. Versions below v0.17.0 have no
+      gate-tagged rules and fail with 'no rules match' — pin an older
+      action revision instead of overriding this downward.
     required: false
-    default: 'v0.16.2'
+    default: 'v0.17.0'
   schema:
     description: >-
       Path to a mache topology schema. Empty uses FCA schema inference.
-      When set, the build is forced to --backend tree-sitter: the
-      leyline backend (preferred by backend auto) does not honor
-      build-time schemas, so without the override the build would only
-      WARN (a log line CI never fails on) and produce a .db that lacks
-      the schema.
+      When set, the build is forced to --backend tree-sitter for
+      LANGUAGE COVERAGE: since v0.17.0 the leyline backend honors
+      build-time schemas, but the pinned leyline parses ~11 of the 28
+      registry languages while the in-process tree-sitter tier covers
+      all 28. The forcing goes away when the CGO tree-sitter backend is
+      deleted (mache-37ae8b); unparseable schema languages then fail
+      loudly via the coverage guard.
     required: false
     default: ''
   baseline:
@@ -68,21 +72,17 @@ runs:
         if [ ! -f "$BASELINE" ]; then
           echo "::error::mache find-smells: no baseline at '${BASELINE}'."
           echo "::error::Bootstrap it once and commit the file, then re-run:"
-          echo "::error::  mache build . smells.db && mache find-smells --db smells.db --rule '*' --limit 100000 --baseline-root \"\$PWD\" --write-baseline ${BASELINE}"
+          echo "::error::  mache build . smells.db && mache find-smells --db smells.db --rule '*' --tags=gate --limit 100000 --baseline-root \"\$PWD\" --write-baseline ${BASELINE}"
           exit 1
         fi
 
     # Core invocation contract: the find-smells calls below mirror the
     # `smells` target in mache's own Taskfile (build, then
-    # `find-smells --rule '*' --limit 100000 --baseline-root --baseline`).
+    # `find-smells --rule '*' --tags=gate --limit 100000 --baseline-root --baseline`).
     # cmd/find_smells_action_test.go asserts the two invocation shapes
-    # stay in sync — change them together. Known temporary divergence
-    # (mache-608a3c): the Taskfile gate adds the gate-tag rule filter
-    # (the ratchet set, excluding the min-0 firehoses); this action pins
-    # a released mache whose embedded rules predate the gate retag, so
-    # that filter here would match zero rules. Adopt it when the default
-    # mache-version above is bumped to a release shipping gate-tagged
-    # rules — the parity test enforces exactly this reconvergence.
+    # stay in sync — change them together. Reconverged at v0.17.0
+    # (mache-3ac299): both gates run the `--tags=gate` ratchet rule set
+    # (min-0 firehoses excluded).
     - name: Build index
       shell: bash
       env:
@@ -103,7 +103,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --limit 100000 \
+        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --tags=gate --limit 100000 \
           --baseline-root "$PWD" --format sarif > "${RUNNER_TEMP}/mache.sarif"
 
     - name: Upload SARIF
@@ -116,7 +116,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --limit 100000 \
+        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --tags=gate --limit 100000 \
           --baseline-root "$PWD" --format md >> "$GITHUB_STEP_SUMMARY"
 
     - name: Ratchet gate
@@ -126,7 +126,7 @@ runs:
         FAIL_ON_NEW: ${{ inputs.fail-on-new }}
       run: |
         set -uo pipefail
-        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --limit 100000 \
+        mache find-smells --db "${RUNNER_TEMP}/repo.db" --rule '*' --tags=gate --limit 100000 \
           --baseline-root "$PWD" --baseline "$BASELINE"
         code=$?
         if [ "$FAIL_ON_NEW" != "true" ] && [ "$code" -eq 1 ]; then

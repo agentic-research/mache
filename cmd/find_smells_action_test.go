@@ -79,24 +79,16 @@ func TestFindSmellsAction_TaskfileParity(t *testing.T) {
 	require.NoError(t, err)
 	action, taskfile := string(actionRaw), string(taskRaw)
 
-	// The core invocation shape: run every rule (auto-skipping
-	// absent-table rules), uncapped in practice, with a portable
-	// baseline root. TEMPORARY divergence (mache-608a3c): mache's own
-	// Taskfile gate additionally scopes to `--tags=gate` — the ratchet
-	// rule set, excluding the min-0 firehoses — but the action pins a
-	// RELEASED mache whose embedded rules predate the `gate` retag, so
-	// `--tags=gate` there would match zero rules and exit 3. Once the
-	// action's default mache-version is bumped to a release that ships
-	// gate-tagged rules, add `--tags=gate` to the action's invocations
-	// and collapse these two constants back into one.
-	const actionShape = "--rule '*' --limit 100000"
-	const taskfileShape = "--rule '*' --tags=gate --limit 100000"
-	assert.Contains(t, action, actionShape,
-		"action must run the documented rule-selection + limit shape")
-	assert.NotContains(t, action, "--tags=",
-		"the action must not use --tags until its pinned mache release ships gate-tagged rules — bump the default mache-version first, then reconverge the shapes (mache-608a3c)")
-	assert.Contains(t, taskfile, taskfileShape,
-		"Taskfile smells gate must run the gate-tagged ratchet shape")
+	// The core invocation shape, RECONVERGED at v0.17.0 (mache-3ac299):
+	// both gates run the `--tags=gate` ratchet rule set (min-0
+	// firehoses excluded), uncapped in practice, with a portable
+	// baseline root. If either side changes selection, both files and
+	// the action README's contract section move together.
+	const coreShape = "--rule '*' --tags=gate --limit 100000"
+	assert.Contains(t, action, coreShape,
+		"action must run the same gate-tagged rule-selection + limit shape as `task smells`")
+	assert.Contains(t, taskfile, coreShape,
+		"Taskfile smells gate must run the same gate-tagged rule-selection + limit shape as the action")
 	assert.Contains(t, action, "--baseline-root")
 	assert.Contains(t, taskfile, "--baseline-root")
 
@@ -114,15 +106,15 @@ func TestFindSmellsAction_TaskfileParity(t *testing.T) {
 		"Taskfile smells gate must gate on the documented baseline path")
 
 	// The action's default mache-version must be a well-formed release
-	// tag at or above v0.13.0 — the floor its input description documents
-	// (leyline auto-provisioning; below that the description's behavior
-	// notes would be wrong for the default).
+	// tag at or above v0.17.0 — the first release shipping gate-tagged
+	// rules; below that `--tags=gate` matches zero rules and the gate
+	// exits 3 ('no rules match').
 	m := regexp.MustCompile(`default: 'v(\d+)\.(\d+)\.\d+'`).FindStringSubmatch(action)
 	require.NotNil(t, m, "action must declare a semver default for mache-version")
 	major, err := strconv.Atoi(m[1])
 	require.NoError(t, err)
 	minor, err := strconv.Atoi(m[2])
 	require.NoError(t, err)
-	assert.True(t, major > 0 || minor >= 13,
-		"default mache-version %s predates v0.13.0 leyline auto-provisioning; the input description would be stale", m[0])
+	assert.True(t, major > 0 || minor >= 17,
+		"default mache-version %s predates v0.17.0 gate-tagged rules; --tags=gate would match nothing", m[0])
 }
