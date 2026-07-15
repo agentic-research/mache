@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.16.2
+covers-version: v0.17.0
 last-verified: 2026-07-08
 sources-of-truth:
   - internal/lang/lang.go
@@ -191,7 +191,7 @@ This is the path under [ADR-0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first
 
 ### OCI distribution
 
-On release, mache self-publishes a leyline-bundled multi-arch image to `ghcr.io/agentic-research/mache` — the leyline binary ships inside the container, so a consumer running the image gets the ley-line-open-paired path with no runtime fetch (LLO with no network round-trip at startup). This image is `debian-slim` + `libsqlite3`, not the distroless [apko](https://github.com/chainguard-dev/apko)/[melange](https://github.com/chainguard-dev/melange) build described under [§ Deployment modes](../README.md#deployment-modes) — leyline links `libsqlite3` dynamically, which the distroless recipe doesn't carry, so distroless stays the local-dev/CI-bundle path and `debian-slim` is the leyline-bundled release path. Mache declares its own source via `server.json`'s `packages[].oci` entry in the ADR-0041 canonical form: a tagless `identifier` (`"ghcr.io/agentic-research/mache"`) plus a `version` that is the git tag (`"v0.16.2"`), so a resolver reads `identifier:version`. cloister's resolver then resolves tag→digest and pins `identifier@digest`; digest pinning / content-addressing is left to that consumer. (v0.16.1 briefly declared `version: "0.16.0"` against a `:v0.16.0` image — the tag-drift bug ADR-0041 rejected — reshaped here in v0.16.2.)
+On release, mache self-publishes a leyline-bundled multi-arch image to `ghcr.io/agentic-research/mache` — the leyline binary ships inside the container, so a consumer running the image gets the ley-line-open-paired path with no runtime fetch (LLO with no network round-trip at startup). This image is `debian-slim` + `libsqlite3`, not the distroless [apko](https://github.com/chainguard-dev/apko)/[melange](https://github.com/chainguard-dev/melange) build described under [§ Deployment modes](../README.md#deployment-modes) — leyline links `libsqlite3` dynamically, which the distroless recipe doesn't carry, so distroless stays the local-dev/CI-bundle path and `debian-slim` is the leyline-bundled release path. Mache declares its own source via `server.json`'s `packages[].oci` entry in the ADR-0041 canonical form: a tagless `identifier` (`"ghcr.io/agentic-research/mache"`) plus a `version` that is the git tag (`"v0.17.0"`), so a resolver reads `identifier:version`. cloister's resolver then resolves tag→digest and pins `identifier@digest`; digest pinning / content-addressing is left to that consumer. (v0.16.1 briefly declared `version: "0.16.0"` against a `:v0.16.0` image — the tag-drift bug ADR-0041 rejected — reshaped here in v0.16.2.)
 
 ### Tool capability matrix
 

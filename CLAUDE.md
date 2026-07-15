@@ -12,7 +12,7 @@ task test           # Run all tests (go test -v ./...)
 task lint           # golangci-lint run ./...
 task fmt            # gofumpt -w -extra .
 task vet            # go vet ./...
-task check          # fmt + vet + lint + test + validate (full CI-equivalent)
+task check          # full CI-equivalent: fmt + vet + lint + parity + test + validate + docs/actions/yaml lints + smells + gates:preflight + server-json
 task validate       # SQLite ingestion tests only
 task test-go-schema # Self-hosting smoke test (ingests mache's own source)
 task tidy           # go mod tidy
@@ -77,7 +77,7 @@ All supported languages are defined in a single `Registry` slice in `internal/la
 
 ### Example Schemas
 
-`examples/` contains three schemas showing the pattern: `nvd-schema.json` (temporal sharding by year/month), `kev-schema.json` (flat), `go-schema.json` (tree-sitter queries for Go source).
+`examples/` holds ~15 topology schemas (data: `nvd-schema.json` temporal sharding, `kev-schema.json` flat, plus notion/trivy/terraform/markdown/sql/mcp-registry and more; source code: `go-schema.json`, `python-schema.json`, `rust-schema.json`) and the copyable `examples/smell-rules/` starter kit for the smell gate. `examples/README.md` maps them all.
 
 ## Conventions
 

@@ -4,6 +4,59 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [v0.17.0] — 2026-07-14
+
+The CGO-removal wave, part one: the structural smell gate runs entirely on the
+leyline `_ast` projection, schema builds and FCA inference no longer need the
+in-process tree-sitter backend, and the leyline binary pin is exact.
+
+### Changed
+
+- **Exact leyline pin (correctness fix)** — `leylineVersionMatchesPin` now
+  requires exact `major.minor.patch`. Previously the patch floated, so a stale
+  PATH leyline (e.g. 0.7.3) satisfied the v0.7.5 pin and silently produced dbs
+  missing `container_node_id`/`canonical_kind`, zeroing `fan_out_skew`/
+  `untested_function` locally while CI saw them. LLO patch releases can change
+  the emitted `_ast` schema, so the patch does not float. (`mache-608a3c`, #523)
+- **Single leyline smell gate** — `task smells` builds the tracked tree via the
+  pinned leyline and runs all `gate`-tagged rules against one unified
+  `docs/smell-baseline.json`; the pure-Go tree-sitter gate and
+  `smell-baseline-ast.json` are retired. `untested_function` ported to the
+  leyline projection (caller resolution via `container_node_id`, Go-convention
+  scope, fixture-corpus exclusion; 757→8 on mache) and `dead_code` excludes
+  `testdata/`/`test_data/` corpus (321→16). (`mache-608a3c`/`mache-ba24f3`, #523)
+- **`--schema` works on the leyline backend** — `mache build --schema X`
+  projects via the pure-Go Engine+ASTWalker over the leyline parse (parity-gate
+  proven byte-identical to the in-process projection). A coverage guard makes
+  unparseable schema languages LOUD: hard error on `--backend=leyline` (naming
+  the language and the tree-sitter escape hatch), warning on auto — including
+  preset refs like `--schema sql`. (`mache-73b885`, #524)
+- **FCA inference from `_ast`** — `mache infer` and mount `--infer` leyline-parse
+  once and infer per language from the `_ast` tables (`FlattenASTDB`/
+  `InferFromASTDB`); `sitter.NewParser` is gone from both paths. Record and
+  topology parity with the tree-sitter path is test-pinned. (`mache-73b885`, #524)
+- **README repositioned** — mache is a schema-driven engine that projects
+  structured data into a navigable graph; code intelligence is the flagship
+  application. Tool count corrected to eighteen. (`mache-fe558b`, #521)
+
+### Added
+
+- **`examples/smell-rules/` starter kit** — copyable rules + a newcomer README
+  covering the rule JSON shape, builtin/overlay composition, baseline bootstrap,
+  a complete workflow snippet, and the ratchet model. (`mache-fe3a4a`, #522)
+- `TestFindSmellsAction_TaskfileParity` pins the composite-action ↔ Taskfile
+  gate contract, including the deliberate divergences that reconverge when the
+  action's default `mache-version` bumps to this release. (`mache-fe3a4a`/#522,
+  `mache-608a3c`/#523)
+
+### Fixed
+
+- **Composite action `schema` input was silently ignored** on ≥ v0.13.0 — the
+  auto backend prefers leyline, which (pre-#524) did not honor build-time
+  schemas. The action forces `--backend tree-sitter` when `schema` is set;
+  with this release's schema-on-leyline that forcing becomes unnecessary and
+  is removed in the action reconvergence follow-up. (`mache-fe3a4a`, #522)
+
 ## [v0.16.2] — 2026-07-08
 
 `server.json`'s OCI package now follows the ADR-0041 ecosystem contract; this

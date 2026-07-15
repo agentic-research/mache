@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.16.2
-last-verified: 2026-07-08
+covers-version: v0.17.0
+last-verified: 2026-07-14
 sources-of-truth:
   - CHANGELOG.md
   - .beads/
@@ -11,7 +11,7 @@ supersedes: []
 
 # Roadmap
 
-## Current state (as of 2026-07, through v0.16.2)
+## Current state (as of 2026-07, through v0.17.0)
 
 v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0**. The wire format between them is now content-addressable: substrate identity is the BLAKE3 `current_root` of the arena payload, not a monotonic generation counter. Old mache reading new arenas (or vice versa) fails loudly with a clear version-mismatch error rather than corrupting reads. See [CHANGELOG.md § v0.8.0](../CHANGELOG.md) for the full break, [ADR-0014](adr/0014-mache-in-constellation.md) for the architectural framing.
 
@@ -34,6 +34,8 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - **Hot-swap polling on `current_root`** — the writer (ley-line-open or mache itself) publishes a BLAKE3 root with each new arena; readers detect swaps via root inequality. Control-block + arena VERSION 2.
 - **e2e MCP-tool harness** with per-tool latency + alloc profile, CPU + heap pprof capture, and `task profile-tools-pprof` / `task flamegraphs`
 - **Snapshot memoization**: `MemoryStore.{Defs,Refs}Map` cached, invalidated on `AddDef` / `AddRef` / `DeleteFileNodes`
+- **Single leyline smell gate** (v0.17.0): `task smells` builds the tracked tree via the exact-pinned leyline and runs all `gate`-tagged rules against one `docs/smell-baseline.json`; the pure-Go tree-sitter gate is retired. The leyline binary pin is exact `major.minor.patch` — LLO patch releases can change the emitted `_ast` schema
+- **Schema builds + FCA inference without CGO** (v0.17.0): `mache build --schema X` projects via the pure-Go Engine+ASTWalker over the leyline parse (with a coverage guard that errors/warns when a schema language has no leyline grammar — leyline currently parses ~11 of the 28 registry languages); `mache infer` and mount `--infer` infer from `_ast` tables. Remaining in-process tree-sitter: the no-`_ast` SelectWalker fallback, write-back validation, and the linter (CGO-removal PR-B, mache-37ae8b)
 
 **Known limitations:**
 

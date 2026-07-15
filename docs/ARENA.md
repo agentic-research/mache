@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.16.2
+covers-version: v0.17.0
 last-verified: 2026-07-08
 sources-of-truth:
   - scripts/arena.sh
