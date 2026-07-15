@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,20 +8,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
-	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/linter"
+	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // testFixture bundles the shared state for integration tests:
-// a real Go source file, an inferred schema, a MemoryStore graph,
+// a real Go source file, a schema, a MemoryStore graph,
 // and a GraphFS wired with the real write-back pipeline.
 type testFixture struct {
 	srcDir  string
@@ -42,8 +40,32 @@ func HelloWorld() {
 }
 `
 
-// setup creates a temp dir with a Go source file, infers a schema via FCA,
-// ingests the source into a MemoryStore, and wires up the real write-back
+// goFunctionsSchema projects Go functions as functions/<name>/source —
+// the same layout the FCA-inferred schema used to produce for this fixture.
+// Hand-written since mache-73b885 removed this package's direct tree-sitter
+// fixture parsing (inference itself is covered by internal/lattice and the
+// cmd infer tests).
+func goFunctionsSchema() *api.Topology {
+	return &api.Topology{
+		Version: "v1",
+		Nodes: []api.Node{{
+			Name:     "functions",
+			Selector: "$",
+			Language: "go",
+			Children: []api.Node{{
+				Name:     "{{.name}}",
+				Selector: "(function_declaration name: (identifier) @name) @scope",
+				Files: []api.Leaf{{
+					Name:            "source",
+					ContentTemplate: "{{.scope}}",
+				}},
+			}},
+		}},
+	}
+}
+
+// setup creates a temp dir with a Go source file, ingests it into a
+// MemoryStore under goFunctionsSchema, and wires up the real write-back
 // callback on a GraphFS instance.
 func setup(t *testing.T) *testFixture {
 	t.Helper()
@@ -52,21 +74,7 @@ func setup(t *testing.T) *testFixture {
 	srcFile := filepath.Join(srcDir, "main.go")
 	require.NoError(t, os.WriteFile(srcFile, []byte(testGoSource), 0o644))
 
-	// Infer schema from directory via FCA (replicates cmd/mount.go --infer logic)
-	content, err := os.ReadFile(srcFile)
-	require.NoError(t, err)
-	parser := sitter.NewParser()
-	parser.SetLanguage(golang.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, content)
-	require.NoError(t, err)
-	records := ingest.FlattenAST(tree.RootNode())
-	require.NotEmpty(t, records, "FlattenAST should produce records")
-
-	inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
-	inf.Config.Method = "fca"
-	inf.Config.Language = "go" // Set language for proper node tagging
-	schema, err := inf.InferFromRecords(records)
-	require.NoError(t, err, "schema inference failed")
+	schema := goFunctionsSchema()
 
 	// Ingest into MemoryStore
 	store := graph.NewMemoryStore()
@@ -85,8 +93,19 @@ func setup(t *testing.T) *testFixture {
 	}
 }
 
-// realWriteBack replicates the cmd/mount.go NFS write-back pipeline:
-// validate → format (gofumpt) → lint → splice → surgical update.
+// requireWriteDaemon gates tests that exercise the write-back pipeline: since
+// mache-73b885, validation + lint run through the leyline daemon's validate
+// op. A PRIVATE pinned daemon (never downloaded; skip when absent) is spawned
+// and exposed via LEYLINE_SOCKET so the pipeline under test finds it.
+func requireWriteDaemon(t *testing.T) {
+	t.Helper()
+	sock := lltest.StartPinnedDaemon(t)
+	t.Setenv("LEYLINE_SOCKET", sock)
+}
+
+// realWriteBack replicates the cmd/mount_nfs.go NFS write-back pipeline:
+// validate(+emit_ast) → format (gofumpt) → lint (same parse) → splice →
+// surgical update.
 func realWriteBack(store *graph.MemoryStore) func(string, graph.SourceOrigin, []byte) error {
 	return func(nodeID string, origin graph.SourceOrigin, content []byte) error {
 		node, err := store.GetNode(nodeID)
@@ -94,8 +113,10 @@ func realWriteBack(store *graph.MemoryStore) func(string, graph.SourceOrigin, []
 			return fmt.Errorf("node not found: %w", err)
 		}
 
-		// 1. Validate syntax
-		if err := writeback.Validate(content, origin.FilePath); err != nil {
+		// 1. Validate syntax — ONE leyline parse also yields the AST rows
+		// the linter consumes below.
+		astPayload, err := writeback.ValidateWithAST(content, origin.FilePath)
+		if err != nil {
 			store.WriteStatus.Store(filepath.Dir(nodeID), err.Error())
 			draft := make([]byte, len(content))
 			copy(draft, content)
@@ -106,9 +127,9 @@ func realWriteBack(store *graph.MemoryStore) func(string, graph.SourceOrigin, []
 		// 2. Format (gofumpt for Go, hclwrite for HCL)
 		formatted := writeback.FormatBuffer(content, origin.FilePath)
 
-		// 3. Lint (warning only)
+		// 3. Lint (warning only) — reuses step 1's parse
 		if strings.HasSuffix(origin.FilePath, ".go") {
-			if diags, err := linter.Lint(formatted, "go"); err == nil && len(diags) > 0 {
+			if diags, err := linter.LintAST(astPayload); err == nil && len(diags) > 0 {
 				var sb strings.Builder
 				for _, d := range diags {
 					sb.WriteString(d.String() + "\n")
@@ -165,10 +186,10 @@ func readNode(t *testing.T, gfs *nfsmount.GraphFS, path string) string {
 	return string(buf[:n])
 }
 
-func TestIntegration_InferAndIngest(t *testing.T) {
+func TestIntegration_IngestAndProject(t *testing.T) {
 	fix := setup(t)
 
-	// The inferred schema + ingestion should produce a HelloWorld node
+	// The schema + ingestion should produce a HelloWorld node
 	node, err := fix.store.GetNode("functions/HelloWorld/source")
 	require.NoError(t, err, "functions/HelloWorld/source should exist in graph")
 	assert.Contains(t, string(node.Data), "Original Content Long Long Long")
@@ -183,6 +204,7 @@ func TestIntegration_ContextAwareness(t *testing.T) {
 }
 
 func TestIntegration_Truncation(t *testing.T) {
+	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// Write shorter content — old tail must not remain in source file
@@ -197,6 +219,7 @@ func TestIntegration_Truncation(t *testing.T) {
 }
 
 func TestIntegration_Diagnostics(t *testing.T) {
+	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// Write broken syntax
@@ -219,6 +242,7 @@ func TestIntegration_Diagnostics(t *testing.T) {
 }
 
 func TestIntegration_Recovery(t *testing.T) {
+	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// First: write broken syntax to set diagnostic state
@@ -239,6 +263,7 @@ func TestIntegration_Recovery(t *testing.T) {
 }
 
 func TestIntegration_SequentialWrites(t *testing.T) {
+	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// Two sequential writes to the same node — both should land.
@@ -262,6 +287,7 @@ func TestIntegration_SequentialWrites(t *testing.T) {
 }
 
 func TestIntegration_GofumptFormat(t *testing.T) {
+	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// FormatGoBuffer uses format.Source which requires a complete Go file.
@@ -281,4 +307,33 @@ func TestIntegration_GofumptFormat(t *testing.T) {
 	diag := readNode(t, fix.gfs, "/functions/HelloWorld/_diagnostics/last-write-status")
 	assert.Contains(t, diag, "ok",
 		"write-back pipeline should complete successfully")
+}
+
+func TestIntegration_LintDiagnostic_NilSlice(t *testing.T) {
+	requireWriteDaemon(t)
+	fix := setup(t)
+
+	// A valid write containing an uninitialized slice declaration must
+	// splice AND surface the warning-only lint diagnostic — produced from
+	// the SAME leyline parse that validated the write.
+	snippet := "func HelloWorld() {\n\tvar s []int\n\t_ = s\n}\n"
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source", []byte(snippet))
+
+	src, err := os.ReadFile(fix.srcFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(src), "var s []int",
+		"lint findings are warnings — the write must still splice")
+
+	lint := readNode(t, fix.gfs, "/functions/HelloWorld/_diagnostics/lint")
+	assert.Contains(t, lint, "Nil slice declaration",
+		"lint diagnostic should surface via _diagnostics/lint")
+	assert.Contains(t, lint, "line 2:",
+		"diagnostic line is 1-based in String() (var s []int is snippet line 2)")
+
+	// A clean follow-up write clears the lint diagnostic.
+	writeToNode(t, fix.gfs, "/functions/HelloWorld/source",
+		[]byte("func HelloWorld() {\n\tfmt.Println(\"clean\")\n}\n"))
+	lint = readNode(t, fix.gfs, "/functions/HelloWorld/_diagnostics/lint")
+	assert.Contains(t, lint, "clean",
+		"lint diagnostic should reset after a clean write")
 }
