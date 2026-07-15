@@ -815,9 +815,11 @@ func (c *SocketClient) Prioritize(files []string) error {
 // (ley-line-open-caf423); v0.7.1 was a sheaf-correctness patch (δ⁰
 // orientation-invariance, cascade fixed-point).
 //
-// The major/minor must still match the schema (wire format); only the patch
-// floats — so version-check (leylineVersionMatchesPin) accepts any 0.7.x. v0.7.5
-// ships all four leyline-<os>-<arch> daemon binaries (darwin/linux × amd64/arm64).
+// The version-check (leylineVersionMatchesPin) is EXACT major.minor.patch —
+// LLO patch releases have changed the emitted _ast schema (0.7.4 added
+// container_node_id, 0.7.5 added canonical_kind), so the patch does NOT
+// float (mache-608a3c). v0.7.5 ships all four leyline-<os>-<arch> daemon
+// binaries (darwin/linux × amd64/arm64).
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets;
 // bump the go.mod leyline-schema pin too whenever the WIRE format changes (i.e.

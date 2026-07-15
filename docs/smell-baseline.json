@@ -1228,6 +1228,11 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "cmd/build.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "cmd/cache.go",
       "count": 5
     },
@@ -1239,11 +1244,6 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/find_smells_cli.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/infer.go",
       "count": 1
     },
     {
@@ -1749,11 +1749,6 @@
     {
       "rule_id": "long_function",
       "source_id": "cmd/find_smells_cli.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/infer.go",
       "count": 1
     },
     {

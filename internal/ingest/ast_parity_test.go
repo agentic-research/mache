@@ -22,13 +22,15 @@ import (
 // as Engine+SitterWalker for a given language. This is the parity gate for
 // tree-sitter CGO deletion per language.
 //
-// Requires: leyline binary on PATH (skips if not available).
+// Requires: the exact-pinned leyline (PATH or ~/.mache/bin cache; skips otherwise).
 func runParityTest(t *testing.T, schemaPath, lang, sourceFile string, sourceContent []byte) {
 	t.Helper()
 
-	if _, err := exec.LookPath("leyline"); err != nil {
-		t.Skip("leyline binary not on PATH — skipping parity test")
-	}
+	// Resolve the exact-pinned leyline (never a floating PATH binary —
+	// review finding on mache-73b885: this gate previously ran against
+	// whatever PATH leyline was installed, e.g. 0.7.3, while the pin was
+	// 0.7.5 whose PATCH releases change the emitted _ast schema).
+	leylineBin := resolvePinnedLeyline(t)
 
 	schemaData, err := os.ReadFile(schemaPath)
 	require.NoError(t, err)
@@ -51,7 +53,7 @@ func runParityTest(t *testing.T, schemaPath, lang, sourceFile string, sourceCont
 
 	// --- ASTWalker path (pure Go, via leyline parse) ---
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	cmd := exec.Command("leyline", "parse", srcDir, "-o", dbPath, "--lang", lang)
+	cmd := exec.Command(leylineBin, "parse", srcDir, "-o", dbPath, "--lang", lang)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "leyline parse failed: %s", string(out))
 

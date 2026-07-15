@@ -1,20 +1,23 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
-	sitter "github.com/smacker/go-tree-sitter"
 )
+
+// inferSampleRecords bounds how many _ast records feed FCA inference per
+// language. Replaces the old 200-file sampling cap from the in-process
+// tree-sitter path: records (AST nodes) are the unit leyline-backed
+// inference streams, so the bound is expressed in records.
+const inferSampleRecords = 50000
 
 // sourceCodePresets maps language names to their preset schema keys.
 // Derived from the lang registry at init time — adding a language
@@ -117,9 +120,16 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 		log.Printf("  %s: using preset schema", l)
 	}
 
-	// 2. FCA inference for remaining languages
+	// 2. FCA inference for remaining languages — leyline-parse the tree ONCE
+	// into an _ast database, then run pure-Go inference per language against it.
 	if len(inferLangs) > 0 {
-		inferredNodes, err := inferLanguages(dataPath, inferLangs, languageCounts)
+		astDB, cleanup, err := autoInvokeLeylineParse(dataPath)
+		if err != nil {
+			return nil, fmt.Errorf("leyline parse for inference: %w", err)
+		}
+		defer cleanup()
+
+		inferredNodes, err := inferLanguages(astDB, inferLangs, languageCounts)
 		if err != nil {
 			return nil, fmt.Errorf("inference: %w", err)
 		}
@@ -133,106 +143,35 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 	return &api.Topology{Version: api.SchemaVersion, Nodes: allNodes}, nil
 }
 
-// inferLanguages runs parallel tree-sitter sampling + FCA inference for the
-// given languages. Returns namespace-wrapped nodes for each language.
-func inferLanguages(dataPath string, langs []string, languageCounts map[string]int) ([]api.Node, error) {
-	type langResult struct {
-		lang    string
-		records []any
-		err     error
-	}
-
-	resultsChan := make(chan langResult, len(langs))
-	var wg sync.WaitGroup
-
+// inferLanguages runs pure-Go FCA inference for the given languages against
+// a leyline-parsed _ast database (no in-process tree-sitter). Returns
+// namespace-wrapped nodes for each language, mirroring the shape
+// lattice.InferMultiLanguage produces.
+func inferLanguages(astDBPath string, langs []string, languageCounts map[string]int) ([]api.Node, error) {
+	var nodes []api.Node
 	for _, targetLang := range langs {
-		wg.Add(1)
-		go func(targetName string) {
-			defer wg.Done()
-
-			var records []any
-			fileCount := 0
-			sampleLimit := 200
-
-			walkErr := filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return err
-				}
-				if info.IsDir() {
-					if path != dataPath && ingest.ShouldSkipDir(filepath.Base(path)) {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				if fileCount >= sampleLimit {
-					return nil
-				}
-				if ingest.ShouldSkipFile(path, info.Size()) {
-					return nil
-				}
-				l := lang.ForExt(filepath.Ext(path))
-				if l == nil || l.Name != targetName {
-					return nil
-				}
-				content, readErr := os.ReadFile(path)
-				if readErr != nil {
-					return nil
-				}
-				parser := sitter.NewParser()
-				parser.SetLanguage(l.Grammar())
-				tree, _ := parser.ParseCtx(context.Background(), nil, content)
-				if tree != nil {
-					records = append(records, ingest.FlattenASTWithLanguage(tree.RootNode(), l.Name)...)
-				}
-				fileCount++
-				return nil
-			})
-
-			log.Printf("  %s: sampled %d/%d files for inference", targetName, fileCount, languageCounts[targetName])
-
-			if walkErr != nil {
-				resultsChan <- langResult{lang: targetName, err: walkErr}
-				return
-			}
-			resultsChan <- langResult{lang: targetName, records: records}
-		}(targetLang)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultsChan)
-	}()
-
-	// Collect results
-	recordsByLang := make(map[string][]any)
-	for result := range resultsChan {
-		if result.err != nil {
-			return nil, fmt.Errorf("scan %s: %w", result.lang, result.err)
+		inf := &lattice.Inferrer{
+			Config: lattice.InferConfig{
+				Method:     "fca",
+				SampleSize: inferSampleRecords,
+				Language:   targetLang,
+			},
 		}
-		if len(result.records) > 0 {
-			recordsByLang[result.lang] = result.records
+		topo, err := inf.InferFromASTDB(astDBPath)
+		if err != nil {
+			return nil, fmt.Errorf("infer %s: %w", targetLang, err)
 		}
+		if len(topo.Nodes) == 0 {
+			log.Printf("infer: %s FCA produced empty schema, files will go to _project_files/", targetLang)
+			continue
+		}
+		log.Printf("  %s: inferred schema from leyline _ast (%d files)", targetLang, languageCounts[targetLang])
+		nodes = append(nodes, api.Node{
+			Name:     targetLang,
+			Selector: "$", // Passthrough selector
+			Language: targetLang,
+			Children: topo.Nodes,
+		})
 	}
-
-	if len(recordsByLang) == 0 {
-		return nil, nil
-	}
-
-	// Run FCA inference
-	inf := &lattice.Inferrer{
-		Config: lattice.InferConfig{Method: "fca"},
-	}
-
-	topo, err := inf.InferMultiLanguage(recordsByLang)
-	if err != nil {
-		return nil, err
-	}
-
-	totalRecords := 0
-	for _, recs := range recordsByLang {
-		totalRecords += len(recs)
-	}
-	log.Printf("  inferred schema from %d records (%d languages)", totalRecords, len(recordsByLang))
-
-	return topo.Nodes, nil
+	return nodes, nil
 }

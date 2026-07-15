@@ -197,7 +197,7 @@ var rootCmd = &cobra.Command{
 			default:
 				// Try tree-sitter language lookup from the registry
 				if l := lang.ForExt(ext); l != nil {
-					inferred, err = inferFromTreeSitterFile(inf, dataPath, l.Grammar(), l.DisplayName)
+					inferred, err = inferFromSourceFile(inf, dataPath, l)
 				} else {
 					// Check if it's a directory
 					info, errStat := os.Stat(dataPath)
