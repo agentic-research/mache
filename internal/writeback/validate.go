@@ -9,14 +9,15 @@ package writeback
 // see that function's doc for the latency profile (sub-ms with a live daemon,
 // a one-off spawn cost on the first write otherwise).
 //
-// Language coverage CHANGED with the migration: the daemon validates the
-// extension keys in leylineValidateLangs below, and HCL/Terraform validates
-// IN-PROCESS via hclsyntax (hclwrite.Format is a token formatter, NOT a
-// validator — it mangles broken input, which is why the in-process check
-// exists). Every other extension the old in-process grammar set covered
-// (.sql/.yaml/.md/.toml/.json plus the C-family/JVM/scripting set) passes
-// through UNVALIDATED — same contract as an unknown extension — until
-// leyline grows the grammars (ley-line-open-e5addb).
+// Language coverage: since ley-line-open v0.8.0 the daemon validates EVERY
+// mache registry language except cue (no tree-sitter-0.26 cue grammar), so
+// daemonValidates gates on "recognized source extension, not cue, not HCL".
+// HCL/Terraform validates IN-PROCESS via hclsyntax (hclwrite.Format is a
+// token formatter, NOT a validator — it mangles broken input; the daemon
+// also validates HCL now, but the in-process path is faster and needs no
+// daemon). Only cue and unrecognized extensions pass through unvalidated.
+// The daemon identifies the language from the path, so mache keeps no
+// per-extension language-id map (the old one missed .cc/.cxx/.mjs aliases).
 
 import (
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/leyline"
 )
 
@@ -41,39 +43,30 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s:%d:%d: %s", e.FilePath, e.Line+1, e.Column+1, e.Message)
 }
 
-// leylineValidateLangs is the set of extension keys the pinned leyline
-// daemon's validate op accepts (ley-line-open rs/ll-open/fs/src/validate.rs
-// language_for_extension). The key doubles as the wire `language` value.
-var leylineValidateLangs = map[string]bool{
-	"go":  true,
-	"py":  true,
-	"js":  true,
-	"ts":  true,
-	"tsx": true,
-	"rs":  true,
-	"ex":  true,
-	"exs": true,
-}
-
-// langKeyForPath maps a file path to the leyline validate language key, or ""
-// when the extension is not validated (pass-through).
-func langKeyForPath(filePath string) string {
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(filePath)), ".")
-	if leylineValidateLangs[ext] {
-		return ext
+// daemonValidates reports whether filePath is syntax-validated by the leyline
+// daemon (as opposed to in-process HCL, or pass-through). Since ley-line-open
+// v0.8.0 the daemon validates every registry language EXCEPT cue (no
+// tree-sitter-0.26 cue grammar exists), so the gate is "recognized source
+// extension, not cue, not HCL" — the language itself is identified by the
+// daemon from the path, so mache never maintains a per-extension language-id
+// map (the old map missed C++'s .cc/.cxx/.hpp aliases, JS's .mjs, etc.).
+func daemonValidates(filePath string) bool {
+	l := lang.ForPath(filePath)
+	if l == nil {
+		return false // unrecognized extension → pass through
 	}
-	return ""
+	if l.Name == "cue" {
+		return false // no tree-sitter-0.26 cue grammar; daemon rejects it
+	}
+	return !isHCLPath(filePath) // HCL validates in-process (below)
 }
 
 // SupportedPath reports whether filePath's extension is syntax-validated on
-// write-back — by the leyline daemon (Go/Python/JS/TS/TSX/Rust/Elixir) or
-// in-process (HCL/Terraform via hclsyntax). Everything else — including
-// .sql/.yaml/.md/.toml/.json and the C-family/JVM/scripting extensions the
-// old in-process grammar set covered — passes through UNVALIDATED and
-// splices as written; there is no structural check for those until leyline
-// grows the grammars.
+// write-back — by the leyline daemon (every registry language except cue,
+// since ley-line-open v0.8.0) or in-process (HCL/Terraform via hclsyntax).
+// Only cue and unrecognized extensions pass through unvalidated.
 func SupportedPath(filePath string) bool {
-	return isHCLPath(filePath) || langKeyForPath(filePath) != ""
+	return isHCLPath(filePath) || daemonValidates(filePath)
 }
 
 // Validate checks content for syntax errors via the leyline daemon and
@@ -111,13 +104,15 @@ func validateRemote(content []byte, filePath string, wantAST bool) (*leyline.AST
 	if isHCLPath(filePath) {
 		return nil, validateHCL(content, filePath)
 	}
-	key := langKeyForPath(filePath)
-	if key == "" {
-		return nil, nil // not validated — pass through
+	if !daemonValidates(filePath) {
+		return nil, nil // cue / unrecognized extension — pass through
 	}
-	emit := wantAST && key == "go"
+	// emit_ast is Go-only (the sole language mache has AST lint rules for).
+	// language="" → the daemon infers it from the path, which handles every
+	// extension alias (.cc/.cxx/.mjs/...) without a per-extension map.
+	emit := wantAST && lang.ForPath(filePath).Name == "go"
 
-	res, err := leyline.ValidateContent(content, key, filePath, emit)
+	res, err := leyline.ValidateContent(content, "", filePath, emit)
 	if err != nil {
 		return nil, fmt.Errorf("validate %s: %w", filePath, err)
 	}
@@ -202,11 +197,10 @@ func ASTErrors(content []byte, filePath string) []ValidationError {
 	if isHCLPath(filePath) {
 		return hclErrors(content, filePath)
 	}
-	key := langKeyForPath(filePath)
-	if key == "" {
+	if !daemonValidates(filePath) {
 		return nil
 	}
-	res, err := leyline.ValidateContent(content, key, filePath, false)
+	res, err := leyline.ValidateContent(content, "", filePath, false)
 	if err != nil || res.OK {
 		return nil
 	}

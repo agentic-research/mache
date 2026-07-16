@@ -795,15 +795,18 @@ func (c *SocketClient) Prioritize(files []string) error {
 // column (closed κ vocabulary — lets dead_code filter WHERE canonical_kind IN
 // ('function','method','type'), collapsing its leyline over-report). All
 // additive — mache does not consume the new columns / CFG types yet (that is
-// the LLO-only smell-gate consolidation, mache-608a3c), and the v0.7.2–v0.7.5
+// the LLO-only smell-gate consolidation, mache-608a3c), and the v0.7.2–v0.8.0
 // leyline-schema Go submodule tags are unpublished (clients/go/leyline-schema
-// stops at v0.7.1), so the schema-client pin remains at v0.7.1. The
-// version-parity gate (mache-b8af69) enforces MAJOR.MINOR agreement only —
-// 0.7 == 0.7 — so this is in contract. Earlier context: v0.7.0 raised compat_min
-// to 0.6.0 and added source_blobs / capnp_blobs / _ast_pointer, the unified
-// daemon.sheaf.invalidate topic, and cross-language def/ref extraction
-// (ley-line-open-caf423); v0.7.1 was a sheaf-correctness patch (δ⁰
-// orientation-invariance, cascade fixed-point).
+// stops at v0.7.1) BECAUSE THE WIRE HASN'T CHANGED — wire_format_major=1 with
+// compat floor 0.6.0 has held from v0.7.0 through v0.8.0, so the v0.7.1 schema
+// client still decodes v0.8.0's wire. The version-parity gate (mache-b8af69)
+// checks the schema pin sits in [leylineSchemaCompatFloor, binary], not that
+// it equals the binary minor (that only held while everything was 0.7.x).
+// Earlier context: v0.7.0 raised compat_min to 0.6.0 and added source_blobs /
+// capnp_blobs / _ast_pointer, the unified daemon.sheaf.invalidate topic, and
+// cross-language def/ref extraction (ley-line-open-caf423); v0.7.1 was a
+// sheaf-correctness patch; v0.8.0 added validate coverage (27/28),
+// node_refs.qualifier, and extraction epochs — all additive, wire unchanged.
 //
 // The version-check (leylineVersionMatchesPin) is EXACT major.minor.patch —
 // LLO patch releases have changed the emitted _ast schema (0.7.4 added
@@ -811,16 +814,30 @@ func (c *SocketClient) Prioritize(files []string) error {
 // float (mache-608a3c). v0.7.5 ships all four leyline-<os>-<arch> daemon
 // binaries (darwin/linux × amd64/arm64).
 //
-// BUMP THIS to the latest published ley-line-open release with binary assets;
-// bump the go.mod leyline-schema pin too whenever the WIRE format changes (i.e.
-// wire_format_major or the major.minor moves — a patch-only daemon bump does not).
+// BUMP THIS to the latest published ley-line-open release with binary assets.
+// The go.mod leyline-schema pin only needs bumping when the WIRE format
+// changes (a new schema module tag is published) — a binary-version bump with
+// unchanged wire (like v0.8.0) does NOT require a schema bump; the parity gate
+// enforces the [floor, binary] range that makes this safe.
 //
 // Doubles as this build's leyline schema-client version for the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
-// mismatch. Its major.minor is kept in lockstep with the go.mod leyline-schema
-// pin by the version-parity gate (mache-b8af69).
-const leylineBinaryVersion = "v0.7.8"
+// mismatch.
+const leylineBinaryVersion = "v0.8.0"
+
+// leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
+// whose wire format the pinned binary still accepts (ley-line-open's
+// compat_min_schema_version). The schema Go module
+// (clients/go/leyline-schema, go.mod pinned) is tagged SEPARATELY from the
+// binary and only re-cut when the capnp wire types change — so it lags the
+// binary version legitimately (v0.8.0 binary, but the wire has been
+// wire_format_major=1 / floor 0.6.0 since well before, so the newest schema
+// tag is still v0.7.1). The parity gate asserts the go.mod schema pin sits in
+// [floor, binary], NOT that it equals the binary's minor (which only held by
+// coincidence while everything was in the 0.7.x line). BUMP this when
+// ley-line-open raises compat_min_schema_version. (mache-b8af69 / mache-dcb808)
+const leylineSchemaCompatFloor = "v0.6.0"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
 // ley-line-open repository. The earlier URL pointed at the private

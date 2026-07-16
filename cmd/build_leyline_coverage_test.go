@@ -15,7 +15,8 @@ import (
 // seedCoverageFixture builds a synthetic leyline-parse db containing _ast
 // rows ONLY for Go, plus a source dir holding both a .go and a .sql file —
 // the exact hollow-projection shape the review of mache-73b885 reproduced
-// live (leyline v0.7.5 has no sql grammar, so sql schema dirs project
+// live (as of ley-line-open v0.8.0 only CUE lacks a grammar; sql/java/etc.
+// all parse now, so cue is the sole hollow-projection language)
 // empty with zero warnings).
 func seedCoverageFixture(t *testing.T) (*sql.DB, string) {
 	t.Helper()
@@ -107,28 +108,29 @@ func TestRunBuildViaLeylineSchema_UnparseableLanguageErrors(t *testing.T) {
 	defer saved.restore()
 
 	src := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(src, "util.sql"),
-		[]byte("CREATE TABLE users (id INTEGER PRIMARY KEY);\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "conf.cue"),
+		[]byte("package conf\n\nx: 1\n"), 0o644))
 	output := filepath.Join(t.TempDir(), "out.db")
 
-	// The ORIGINAL #524 repro: the sql PRESET ref. Preset schemas carry
-	// no Language hints, so this exercises the preset-derived language
-	// stamp, not the hint collector.
-	schemaPath = "sql"
+	// cue is the SOLE language ley-line-open v0.8.0 has no grammar for
+	// (no tree-sitter-0.26 cue grammar exists) — the last hollow-projection
+	// case after sql/java/etc. gained grammars. Preset ref (no Language
+	// hints) exercises the preset-derived language stamp.
+	schemaPath = "cue"
 	err := runBuildViaLeyline(src, output, true /* explicit backend */)
 	require.Error(t, err, "preset-ref hollow projection must not build silently on the explicit backend")
-	assert.Contains(t, err.Error(), "sql", "error must name the unparseable language")
+	assert.Contains(t, err.Error(), "cue", "error must name the unparseable language")
 	assert.Contains(t, err.Error(), "--backend=tree-sitter", "error must point at the working escape hatch")
 
 	// Same via an explicit Language-hinted schema FILE (the hint collector).
 	work := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(work, "schema.json"),
-		[]byte(`{"version":"v1alpha1","nodes":[{"name":"tables","selector":"(create_table_statement) @t","language":"sql"}]}`), 0o644))
+		[]byte(`{"version":"v1alpha1","nodes":[{"name":"fields","selector":"(field) @f","language":"cue"}]}`), 0o644))
 	t.Chdir(work)
 	schemaPath = "schema.json"
 	err = runBuildViaLeyline(src, output, true /* explicit backend */)
 	require.Error(t, err, "hint-based hollow projection must not build silently on the explicit backend")
-	assert.Contains(t, err.Error(), "sql")
+	assert.Contains(t, err.Error(), "cue")
 
 	// Auto path: warns and builds (advisory), does not error.
 	require.NoError(t, runBuildViaLeyline(src, output, false /* auto */),
