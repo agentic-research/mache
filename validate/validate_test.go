@@ -129,9 +129,10 @@ func TestContentErrors_BrokenHCLPopulatesSlice(t *testing.T) {
 }
 
 func TestSupportedExtension(t *testing.T) {
-	// Since mache-73b885 the supported set is the leyline daemon's validate
-	// language set — .tf/.hcl, .sql, .yaml, .md, .toml (covered by the old
-	// in-process grammar set) are now pass-through, .ex/.exs are new.
+	// Since ley-line-open v0.8.0 the daemon validates every mache registry
+	// language except cue; HCL/Terraform validates in-process. Only cue,
+	// .json (data, no tree-sitter Language), and unrecognized extensions
+	// pass through.
 	tests := []struct {
 		path string
 		want bool
@@ -142,9 +143,13 @@ func TestSupportedExtension(t *testing.T) {
 		{"comp.tsx", true},
 		{"lib.rs", true},
 		{"app.ex", true},
-		{"infra.tf", true},   // HCL validates in-process via hclsyntax (mache-73b885)
-		{"README.md", false}, // was true pre-mache-73b885
-		{"data.json", false},
+		{"infra.tf", true},  // HCL validates in-process via hclsyntax
+		{"README.md", true}, // v0.8.0: markdown validated
+		{"query.sql", true},
+		{"conf.yaml", true},
+		{"Main.java", true},  // C-family/JVM now validated too
+		{"foo.cue", false},   // the ONE unvalidated registry language
+		{"data.json", false}, // data, not a tree-sitter language
 		{"no_extension", false},
 	}
 	for _, tc := range tests {

@@ -55,8 +55,10 @@ func TestValidate_ValidGo_FakeDaemon(t *testing.T) {
 
 	require.NotNil(t, gotReq, "daemon must be consulted for .go content")
 	assert.Equal(t, "validate", gotReq["op"])
-	assert.Equal(t, "go", gotReq["language"], "language key must be sent (it wins over path)")
-	assert.Equal(t, "test.go", gotReq["path"])
+	assert.Equal(t, "test.go", gotReq["path"],
+		"path drives the daemon's language inference (no per-extension language-id map)")
+	_, hasLang := gotReq["language"]
+	assert.False(t, hasLang, "language must be omitted — the daemon infers it from the path")
 	assert.Equal(t, "package main\n", gotReq["content"])
 	_, hasEmit := gotReq["emit_ast"]
 	assert.False(t, hasEmit, "plain Validate must not request emit_ast")
@@ -99,7 +101,8 @@ func TestValidate_DaemonWithoutErrorsKey_IsHardError(t *testing.T) {
 	require.Error(t, err)
 	var ve *ValidationError
 	assert.False(t, errors.As(err, &ve), "daemon-too-old must not be a ValidationError")
-	assert.Contains(t, err.Error(), "v0.7.8")
+	assert.Contains(t, err.Error(), "errors", "must name the missing errors field")
+	assert.Contains(t, err.Error(), "daemon too old", "must diagnose the daemon as too old")
 }
 
 func TestValidate_DaemonErrorEnvelope_IsHardError(t *testing.T) {
@@ -188,7 +191,8 @@ func TestValidateWithAST_EmitRequestedButMissing_IsHardError(t *testing.T) {
 
 	_, err := ValidateWithAST([]byte("package main\n"), "test.go")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "v0.7.8")
+	assert.Contains(t, err.Error(), "ast", "must name the missing AST payload")
+	assert.Contains(t, err.Error(), "daemon too old", "must diagnose the daemon as too old")
 }
 
 func TestValidateWithAST_NonGoValidatedLanguage_NoEmit(t *testing.T) {
@@ -207,13 +211,19 @@ func TestValidateWithAST_NonGoValidatedLanguage_NoEmit(t *testing.T) {
 	assert.Nil(t, ast)
 	require.NotNil(t, gotReq)
 	_, hasEmit := gotReq["emit_ast"]
-	assert.False(t, hasEmit)
-	assert.Equal(t, "py", gotReq["language"])
+	assert.False(t, hasEmit, "non-Go validated language must not request emit_ast")
+	assert.Equal(t, "test.py", gotReq["path"])
+	_, hasLang := gotReq["language"]
+	assert.False(t, hasLang, "language inferred from path")
 }
 
 func TestValidateWithAST_PassThroughExtension_NilNil(t *testing.T) {
+	// .xyz is not a recognized source extension → pass through, daemon
+	// never contacted (dead socket would error if dialed). Note .md/.sql/
+	// .yaml are VALIDATED since v0.8.0 — only cue + unknown extensions
+	// pass through now.
 	useDeadSocket(t)
-	ast, err := ValidateWithAST([]byte("whatever"), "notes.md")
+	ast, err := ValidateWithAST([]byte("whatever"), "notes.xyz")
 	assert.NoError(t, err)
 	assert.Nil(t, ast)
 }
@@ -273,11 +283,13 @@ func TestSupportedPath(t *testing.T) {
 		{"MAIN.GO", true},  // extension matching is case-insensitive
 		{"infra.tf", true}, // HCL validates in-process via hclsyntax
 		{"mod.hcl", true},
-		{"conf.yaml", false},
-		{"query.sql", false},
-		{"README.md", false},
-		{"data.json", false},
-		{"no_extension", false},
+		{"conf.yaml", true}, // v0.8.0: daemon validates all registry langs
+		{"query.sql", true}, // except cue
+		{"README.md", true},
+		{"data.json", false},    // .json has no tree-sitter Language (data, not source)
+		{"foo.cue", false},      // the ONE unvalidated registry language
+		{"no_extension", false}, // unrecognized → pass through
+		{"pic.png", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.path, func(t *testing.T) {

@@ -106,6 +106,21 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		return fmt.Errorf("probe node_refs.container_node_id: %w", err)
 	}
 
+	// node_refs.qualifier (ley-line-open v0.8.0, bead ley-line-open-4dde42):
+	// the receiver/selector text of a call site — the bare-token row of a
+	// dual-emit pair carries its qualifier (the `Println` row carries `fmt`;
+	// `obj.Method()` carries `obj`; '' for bare calls). Before v0.8.0 the
+	// mention arm had no qualifier source, so it emitted a constant '' and
+	// only capnp binding rows carried one. Surfacing it lets package-scoped
+	// rules GROUP BY structurally (fan_out_skew) and resolve stdlib-vs-local
+	// callees through _imports (fatal_call rung-1, mache-4dc205). Probe and
+	// prefer it; degrades to '' on legacy dbs — tree-sitter/mache-schema
+	// behavior is unchanged.
+	hasRefsQualifier, err := tableHasColumn(qg, "node_refs", "qualifier")
+	if err != nil {
+		return fmt.Errorf("probe node_refs.qualifier: %w", err)
+	}
+
 	defsHashExpr := "NULL"
 	if hasDefsNodeHash {
 		defsHashExpr = "node_hash"
@@ -142,13 +157,17 @@ func ensureCanonicalViews(qg refsQuerier) error {
 	if hasRefsContainer {
 		refsReferrerExpr = "COALESCE(NULLIF(container_node_id, ''), node_id)"
 	}
+	refsQualExpr := "''"
+	if hasRefsQualifier {
+		refsQualExpr = "COALESCE(qualifier, '')"
+	}
 	refsBody := `SELECT ` + refsReferrerExpr + ` AS referrer_node_id,
 	       token,
 	       NULL  AS target_node_id,
 	       NULL  AS ref_uri,
 	       NULL  AS ref_line,
 	       'mention' AS fidelity,
-	       ''    AS qualifier,
+	       ` + refsQualExpr + ` AS qualifier,
 	       ` + refsHashExpr + ` AS node_hash
 	FROM node_refs`
 	// Binding-fidelity rows come from the per-connection

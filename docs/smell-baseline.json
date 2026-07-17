@@ -13,6 +13,16 @@
     },
     {
       "rule_id": "dead_code",
+      "source_id": "internal/treesitter/elixir/scanner.c",
+      "count": 7
+    },
+    {
+      "rule_id": "dead_code",
+      "source_id": "internal/treesitter/elixir/tree_sitter/parser.h",
+      "count": 16
+    },
+    {
+      "rule_id": "dead_code",
       "source_id": "mount/mount.go",
       "count": 1
     },
@@ -469,7 +479,7 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/writeback/validate_test.go",
-      "count": 6
+      "count": 2
     },
     {
       "rule_id": "duplicate_code",
@@ -603,8 +613,18 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "cmd/testdata/preset_fixtures/bash/build.sh",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "cmd/testdata/preset_fixtures/rust/lib.rs",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/testdata/preset_fixtures/sql/schema.sql",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -615,6 +635,11 @@
       "rule_id": "duplicate_definitions",
       "source_id": "cmd/utils.go",
       "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "examples/testdata/sql_sample.sql",
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
@@ -698,6 +723,11 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "internal/treesitter/elixir/tree_sitter/parser.h",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "internal/vfs/types.go",
       "count": 1
     },
@@ -715,6 +745,16 @@
       "rule_id": "duplicate_definitions",
       "source_id": "mount/mount.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "scripts/arena.sh",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "scripts/leyline-integration-test.sh",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -944,7 +984,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/mod.rs",
-      "count": 4
+      "count": 5
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1148,6 +1188,26 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "tests/llm_refactor_challenge.sh",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tests/test_data/sql/test.sql",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tests/torture_test.sh",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tests/verify_git_projection.sh",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "tools/coverage-gate/main.go",
       "count": 1
     },
@@ -1188,6 +1248,11 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "cmd/agent.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "cmd/build.go",
       "count": 1
     },
@@ -1199,7 +1264,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/cache_oci.go",
-      "count": 2
+      "count": 4
     },
     {
       "rule_id": "fan_out_skew",
@@ -1214,7 +1279,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/mount_control.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1229,7 +1294,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/serve.go",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "fan_out_skew",
@@ -1288,6 +1353,11 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "cmd/serve_hosted.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "cmd/serve_impact.go",
       "count": 1
     },
@@ -1299,7 +1369,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/serve_registry.go",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -1313,12 +1383,12 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/control/control.go",
+      "source_id": "internal/graph/arena_writer.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/arena_writer.go",
+      "source_id": "internal/graph/community.go",
       "count": 1
     },
     {
@@ -1329,7 +1399,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/graph/memstore_refsdb.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1403,6 +1473,11 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/lattice/greedy.go",
       "count": 1
     },
@@ -1419,16 +1494,6 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/leyline/trigger.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/linter/linter.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/lsp/binding_log.go",
       "count": 1
     },
     {
@@ -1464,16 +1529,26 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
       "count": 2
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/providers.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/github_mirror.rs",
       "count": 1
     },
     {
@@ -1489,11 +1564,16 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/mod.rs",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/orchestration.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/threading.rs",
       "count": 1
     },
     {
@@ -1514,17 +1594,22 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
-      "count": 4
+      "count": 7
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
-      "count": 2
+      "count": 4
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1534,6 +1619,11 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "testdata/snapshots/medium-rust-rosary/tests/cli_integration.rs",
       "count": 1
     },
     {
@@ -1564,6 +1654,11 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "tools/notion-fetch/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/server-json-gen/main.go",
       "count": 1
     },
     {
@@ -2244,16 +2339,6 @@
     {
       "rule_id": "untested_function",
       "source_id": "internal/leyline/version_check.go",
-      "count": 1
-    },
-    {
-      "rule_id": "untested_function",
-      "source_id": "internal/linter/linter.go",
-      "count": 1
-    },
-    {
-      "rule_id": "untested_function",
-      "source_id": "internal/writeback/validate.go",
       "count": 1
     },
     {

@@ -167,6 +167,62 @@ func TestEnsureCanonicalViews_ReferrerFromContainerNodeID(t *testing.T) {
 	assert.Equal(t, "f.go/call_expression_top", topReferrer, "empty container_node_id falls back to node_id")
 }
 
+// TestEnsureCanonicalViews_QualifierFromNodeRefs pins the node_refs.qualifier
+// passthrough (ley-line-open v0.8.0, mache-dcb808): the mention arm surfaces
+// the ref's qualifier (receiver/selector text) instead of the pre-v0.8.0
+// hardcoded ”. Legacy dbs without the column degrade to ”.
+func TestEnsureCanonicalViews_QualifierFromNodeRefs(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "qual.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, qualifier TEXT);
+		INSERT INTO node_refs VALUES
+			('Println', 'f.go/call_0', 'fmt'),
+			('Method',  'f.go/call_1', 'obj'),
+			('bareCall','f.go/call_2', NULL);
+	`)
+	require.NoError(t, err)
+
+	qg := &sqlDBQuerier{db: db}
+	require.NoError(t, ensureCanonicalViews(qg))
+
+	var q string
+	require.NoError(t, db.QueryRow(`SELECT qualifier FROM v_refs WHERE token='Println'`).Scan(&q))
+	assert.Equal(t, "fmt", q, "mention arm must surface node_refs.qualifier")
+	require.NoError(t, db.QueryRow(`SELECT qualifier FROM v_refs WHERE token='Method'`).Scan(&q))
+	assert.Equal(t, "obj", q)
+	require.NoError(t, db.QueryRow(`SELECT qualifier FROM v_refs WHERE token='bareCall'`).Scan(&q))
+	assert.Equal(t, "", q, "NULL qualifier degrades to empty string")
+}
+
+// TestEnsureCanonicalViews_QualifierAbsentDegradesToEmpty pins the legacy
+// path: a node_refs WITHOUT a qualifier column must still build v_refs with
+// an empty qualifier (no error).
+func TestEnsureCanonicalViews_QualifierAbsentDegradesToEmpty(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "noqual.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE node_defs (token TEXT, node_id TEXT);
+		CREATE TABLE node_refs (token TEXT, node_id TEXT);
+		INSERT INTO node_refs VALUES ('x', 'f.go/call_0');
+	`)
+	require.NoError(t, err)
+
+	qg := &sqlDBQuerier{db: db}
+	require.NoError(t, ensureCanonicalViews(qg), "missing qualifier column must not error")
+
+	var q string
+	require.NoError(t, db.QueryRow(`SELECT qualifier FROM v_refs WHERE token='x'`).Scan(&q))
+	assert.Equal(t, "", q)
+}
+
 // TestEnsureCanonicalViews_ReferrerFallsBackWithoutContainer pins the
 // legacy/tree-sitter shape: node_refs WITHOUT a container_node_id column →
 // referrer_node_id is node_id (the mache-schema caller construct), unchanged.
