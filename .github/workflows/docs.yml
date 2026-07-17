@@ -1,0 +1,53 @@
+# docs-lint gate — runs `task docs:lint` on documentation changes.
+#
+# Background (bead mache-4515db): ci.yml paths-ignores **.md + docs/** so the
+# heavy Go/integration matrix doesn't run on doc-only changes. But `task
+# docs:lint` lives INSIDE that ignored job, so the ONE check meant to gate
+# docs (covers-version vs CHANGELOG, last-verified staleness, mache
+# language-count claims vs internal/lang/lang.go) never ran on doc-only PRs.
+# This workflow closes that gap with the inverse trigger: it runs ONLY on doc
+# changes, so between the two workflows every change is covered exactly once.
+#
+# docs-lint.sh is grep-based (no Go compilation), so this stays fast.
+
+name: docs-lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - CHANGELOG.md
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - CHANGELOG.md
+
+permissions:
+  contents: read
+
+jobs:
+  docs-lint:
+    name: task docs:lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          lfs: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install Task
+        # Match ci.yml: go install bypasses arduino/setup-task's release-CDN
+        # 502s; GOTOOLCHAIN=auto lets Go fetch the toolchain task v3.50.0 needs.
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
+
+      - name: Docs lint
+        run: task docs:lint
