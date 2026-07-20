@@ -84,7 +84,10 @@ func (w *ASTWalker) ExtractCalls(sourcePath, langName string) ([]string, error) 
 // the _source key (filepath.Base of the file). Empty scopeID would match the
 // whole file; callers pass a real construct id.
 func (w *ASTWalker) ExtractCallsScoped(sourceID, scopeID, langName string) ([]string, error) {
-	toks := w.fileCallTokens(sourceID, langName)
+	toks, err := w.fileCallTokens(sourceID, langName)
+	if err != nil {
+		return nil, err
+	}
 	prefix := scopeID + "/"
 	seen := make(map[string]bool)
 	var calls []string
@@ -117,10 +120,10 @@ type scopedCallToken struct {
 // of a whole-repo projection after the node-index fix (mache-4f3840). Tokens
 // are kept undeduplicated here (the same token may live under several
 // constructs); the per-construct caller dedups within its scope.
-func (w *ASTWalker) fileCallTokens(sourceID, langName string) []scopedCallToken {
+func (w *ASTWalker) fileCallTokens(sourceID, langName string) ([]scopedCallToken, error) {
 	key := sourceID + "\x00" + langName
 	if v, ok := w.callTokenCache.Load(key); ok {
-		return v.([]scopedCallToken)
+		return v.([]scopedCallToken), nil
 	}
 
 	var out []scopedCallToken
@@ -129,7 +132,14 @@ func (w *ASTWalker) fileCallTokens(sourceID, langName string) []scopedCallToken 
 			for _, p := range patterns {
 				rows, err := w.queryCallPattern(sourceID, p, false, "") // whole file
 				if err != nil {
-					continue
+					// queryCallPattern builds SQL from a STRUCTURED kind-chain,
+					// so an error is a real/transient DB failure, not an
+					// unsupported selector. Surface it and DON'T cache the
+					// partial set — caching an empty result forever would
+					// silently and permanently empty this file's callees on a
+					// long-lived serve (mache-015f5c).
+					return nil, fmt.Errorf("file call tokens %s/%s (%s/%s): %w",
+						sourceID, langName, p.OuterKind, p.LeafKind, err)
 				}
 				for _, r := range rows {
 					if r.token == "" {
@@ -142,7 +152,7 @@ func (w *ASTWalker) fileCallTokens(sourceID, langName string) []scopedCallToken 
 	}
 
 	w.callTokenCache.Store(key, out)
-	return out
+	return out, nil
 }
 
 // fileLevelRefPatternRegistry stores per-language CallPatterns used by

@@ -1,6 +1,9 @@
 package ingest
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // fileIndex materializes one source file's nodes/_ast rows in memory so the
 // ASTWalker can navigate the tree without a SQL query per parent node. The
@@ -77,7 +80,10 @@ func (w *ASTWalker) loadFileIndex(sourceID string) (*fileIndex, error) {
 		var astKind string
 		if err := rows.Scan(&n.id, &n.parentID, &n.name, &n.nodeKind,
 			&n.record, &astKind, &n.startByte, &n.endByte); err != nil {
-			continue
+			// Surface a scan failure rather than silently dropping the row —
+			// a partial index would under-populate navigation with no signal
+			// (mache-015f5c). The old SQL finders returned this error too.
+			return nil, fmt.Errorf("scan file index row for %s: %w", sourceID, err)
 		}
 		idx.byKind[astKind] = append(idx.byKind[astKind], n)
 	}
