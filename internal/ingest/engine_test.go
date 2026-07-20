@@ -162,6 +162,7 @@ func (g Greeter) String() string {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, goFile)
 	require.NoError(t, engine.Ingest(goFile))
 
 	// Package directory
@@ -242,6 +243,7 @@ func (g Greeter)  String() string { return g.Name }
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, goFile)
 	require.NoError(t, engine.Ingest(goFile))
 
 	// Both rendered shapes should be registered.
@@ -280,6 +282,7 @@ func main() {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, goFile)
 	require.NoError(t, engine.Ingest(goFile))
 
 	// imports grouping directory exists
@@ -331,6 +334,7 @@ type TypeB struct{}
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Both files contribute to the same package directory
@@ -388,6 +392,7 @@ var (
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, goFile)
 	require.NoError(t, engine.Ingest(goFile))
 
 	// Grouped types: each gets its own source, not the whole block
@@ -438,6 +443,7 @@ func init() {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// The first init() keeps its original name
@@ -509,6 +515,7 @@ func Util() {}
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Visible file was ingested
@@ -550,6 +557,7 @@ func Other() {}
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Verify that Main calls Other

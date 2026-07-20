@@ -8,7 +8,6 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/ingest"
-	sitter "github.com/smacker/go-tree-sitter"
 )
 
 // InferConfig controls the schema inference pipeline.
@@ -96,38 +95,6 @@ func (inf *Inferrer) InferFromRecords(records []any) (*api.Topology, error) {
 	}
 
 	return Project(concepts, ctx, config), nil
-}
-
-// InferFromTreeSitter infers a topology from a parsed Tree-sitter AST.
-// Always uses the FCA path (ProjectAST) because the greedy path generates
-// JSONPath selectors which are incompatible with tree-sitter ingestion.
-// ProjectAST generates proper S-expression selectors for tree-sitter queries.
-func (inf *Inferrer) InferFromTreeSitter(root *sitter.Node) (*api.Topology, error) {
-	return inf.InferFromTreeSitterRoots(root)
-}
-
-// InferFromTreeSitterRoots infers a topology by accumulating records from
-// multiple AST roots before running FCA. Single-file inference can miss
-// node types absent from that file (e.g., a file with only top-level
-// functions yields no methods/, even though the rest of the project has
-// receiver methods). Callers that have access to several parsed files
-// should pass them all so the inferred schema covers the project.
-func (inf *Inferrer) InferFromTreeSitterRoots(roots ...*sitter.Node) (*api.Topology, error) {
-	var records []any
-	for _, root := range roots {
-		if root == nil {
-			continue
-		}
-		records = append(records, ingest.FlattenAST(root)...)
-	}
-
-	// Force FCA method for AST data — greedy generates JSONPath selectors
-	// that fail when the engine tries to use them as tree-sitter queries.
-	saved := inf.Config.Method
-	inf.Config.Method = "fca"
-	defer func() { inf.Config.Method = saved }()
-
-	return inf.InferFromRecords(records)
 }
 
 // InferFromSQLite infers a topology by streaming records from a SQLite database.

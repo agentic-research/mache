@@ -23,8 +23,8 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 	case ".json":
 		return e.ingestJSON(path, modTime)
 	default:
-		if lang, langName := langForExt(ext); lang != nil {
-			return e.ingestTreeSitter(path, lang, langName, modTime)
+		if langName, ok := langForExt(ext); ok {
+			return e.ingestSourceFile(path, langName, modTime)
 		}
 		if isBinaryFile(path) { // coverage:ignore
 			return nil // coverage:ignore

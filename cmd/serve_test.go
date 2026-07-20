@@ -2319,14 +2319,23 @@ func TestArena_AllTools(t *testing.T) {
 	require.NoError(t, err, "resolveSchema(go) failed")
 	require.NotNil(t, schema)
 
-	// Build a real MemoryStore via the engine ingestion pipeline.
+	// Build a real MemoryStore via the engine ingestion pipeline. ADR-0012
+	// step 4 removed in-process CGO tree-sitter, so source projection goes
+	// through ley-line: parse internal/graph into an `_ast` db and wire an
+	// ASTWalker + the pure-Go AST call extractor. Skips when the pinned
+	// leyline isn't available (no download in tests).
 	store := graph.NewMemoryStore()
 	resolver := graph.NewSQLiteResolver(machetmpl.Render)
 	store.SetResolver(resolver.Resolve)
-	store.SetCallExtractor(newCallExtractor())
 	defer resolver.Close()
 
 	engine := ingest.NewEngine(schema, store)
+	astDB, astCleanup, ppErr := attachLeylineASTWalkerForTest(t, graphDir, engine)
+	if ppErr != nil {
+		t.Skipf("pinned leyline unavailable for source projection: %v", ppErr)
+	}
+	defer astCleanup()
+	store.SetCallExtractor(newASTCallExtractor(astDB))
 	require.NoError(t, engine.Ingest(graphDir), "ingestion of internal/graph failed")
 
 	// Initialize the refs database (needed by search, get_type_info, get_diagnostics).

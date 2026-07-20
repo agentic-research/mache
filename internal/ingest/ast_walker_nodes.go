@@ -44,6 +44,63 @@ func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind, sourceID str
 	return nodes, rows.Err()
 }
 
+// findChildrenByKindAST finds ALL descendants matching a node_kind under a
+// parent, at the depth implied by ancestry (empty ancestry = direct children),
+// ordered by start_byte. It is the multi-result sibling of findChildByKindAST:
+// used when a selector's @scope is an INNER node kind that can occur multiple
+// times under one outer match — e.g. grouped Go declarations `type ( A; B )`,
+// where a single type_declaration contains two type_spec nodes. tree-sitter
+// yields one match per inner node; this mirrors that.
+func (w *ASTWalker) findChildrenByKindAST(db *sql.DB, parentID, kind, sourceID string, ancestry []string) ([]astNode, error) {
+	const baseCols = `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
+	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
+	 FROM nodes n
+	 JOIN _ast a ON a.node_id = n.id
+	 WHERE `
+
+	var query string
+	var args []any
+	if len(ancestry) == 0 {
+		query = baseCols + "n.id LIKE ? AND n.id NOT LIKE ? AND a.node_kind = ?"
+		args = []any{parentID + "/%", parentID + "/%/%", kind}
+	} else {
+		var depthPattern strings.Builder
+		depthPattern.WriteString(parentID)
+		for range len(ancestry) + 1 {
+			depthPattern.WriteString("/%")
+		}
+		query = baseCols + "n.id LIKE ? AND n.id NOT LIKE ? AND a.node_kind = ?"
+		args = []any{depthPattern.String(), depthPattern.String() + "/%", kind}
+	}
+	if sourceID != "" {
+		query += " AND a.source_id = ?"
+		args = append(args, sourceID)
+	}
+	query += " ORDER BY a.start_byte ASC"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []astNode
+	for rows.Next() {
+		var n astNode
+		if err := rows.Scan(&n.id, &n.parentID, &n.name, &n.kind, &n.record, &n.startByte, &n.endByte); err != nil {
+			continue
+		}
+		if len(ancestry) > 0 {
+			suffix := strings.TrimPrefix(n.id, parentID+"/")
+			if !matchAncestry(suffix, ancestry) {
+				continue
+			}
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // findChildByKindAST finds the first descendant matching a node_kind via _ast table,
 // optionally verifying that the node's ID path contains the required ancestor kinds.
 // Ordered by start_byte ASC for deterministic first-occurrence behavior.

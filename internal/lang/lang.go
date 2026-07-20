@@ -8,83 +8,55 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/bash"
-	treec "github.com/smacker/go-tree-sitter/c"
-	"github.com/smacker/go-tree-sitter/cpp"
-	"github.com/smacker/go-tree-sitter/csharp"
-	"github.com/smacker/go-tree-sitter/css"
-	"github.com/smacker/go-tree-sitter/cue"
-	"github.com/smacker/go-tree-sitter/dockerfile"
-	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/smacker/go-tree-sitter/groovy"
-	"github.com/smacker/go-tree-sitter/hcl"
-	"github.com/smacker/go-tree-sitter/html"
-	"github.com/smacker/go-tree-sitter/java"
-	"github.com/smacker/go-tree-sitter/javascript"
-	"github.com/smacker/go-tree-sitter/kotlin"
-	"github.com/smacker/go-tree-sitter/lua"
-	markdownts "github.com/smacker/go-tree-sitter/markdown/tree-sitter-markdown"
-	"github.com/smacker/go-tree-sitter/php"
-	"github.com/smacker/go-tree-sitter/protobuf"
-	"github.com/smacker/go-tree-sitter/python"
-	"github.com/smacker/go-tree-sitter/ruby"
-	"github.com/smacker/go-tree-sitter/rust"
-	"github.com/smacker/go-tree-sitter/scala"
-	"github.com/smacker/go-tree-sitter/sql"
-	"github.com/smacker/go-tree-sitter/swift"
-	"github.com/smacker/go-tree-sitter/toml"
-	"github.com/smacker/go-tree-sitter/typescript/typescript"
-	"github.com/smacker/go-tree-sitter/yaml"
-
-	"github.com/agentic-research/mache/internal/treesitter/elixir"
 )
 
 // Language is the single source of truth for a supported language.
+//
+// Grammar factories were removed in ADR-0012 step 4: mache no longer parses
+// source in-process (CGO tree-sitter is gone). ley-line parses source into an
+// `_ast` db and mache projects it, so the registry only needs identity and
+// routing metadata — names, extensions, preset schema, sentinel files.
 type Language struct {
-	Name          string                                   // canonical name: "go", "python", "terraform"
-	Aliases       []string                                 // backward-compat names: e.g. "hcl" for terraform
-	DisplayName   string                                   // human label: "Go", "Python", "HCL/Terraform"
-	Extensions    []string                                 // file extensions including dot: ".go", ".py"
-	Grammar       func() *sitter.Language                  // tree-sitter grammar factory (lazy, CGO-safe)
-	PresetSchema  string                                   // embedded schema key (empty = no preset)
-	SentinelFiles []string                                 // files that identify a project: "go.mod", "Cargo.toml"
-	EnrichNode    func(n *sitter.Node, rec map[string]any) // language-specific AST enrichment (nil for most)
+	Name          string   // canonical name: "go", "python", "terraform"
+	Aliases       []string // backward-compat names: e.g. "hcl" for terraform
+	DisplayName   string   // human label: "Go", "Python", "HCL/Terraform"
+	Extensions    []string // file extensions including dot: ".go", ".py"
+	PresetSchema  string   // embedded schema key (empty = no preset)
+	SentinelFiles []string // files that identify a project: "go.mod", "Cargo.toml"
 }
 
 // Registry is the authoritative list of all supported languages.
 // Add a language here and every consumer picks it up automatically.
 var Registry = []Language{
-	{Name: "go", DisplayName: "Go", Extensions: []string{".go"}, Grammar: golang.GetLanguage, PresetSchema: "go", SentinelFiles: []string{"go.mod", "go.sum"}},
-	{Name: "python", DisplayName: "Python", Extensions: []string{".py"}, Grammar: python.GetLanguage, PresetSchema: "python", SentinelFiles: []string{"pyproject.toml", "requirements.txt", "setup.py"}},
-	{Name: "javascript", DisplayName: "JavaScript", Extensions: []string{".js"}, Grammar: javascript.GetLanguage, PresetSchema: "javascript", SentinelFiles: []string{"package.json"}},
-	{Name: "typescript", DisplayName: "TypeScript", Extensions: []string{".ts", ".tsx"}, Grammar: typescript.GetLanguage, PresetSchema: "typescript"},
-	{Name: "sql", DisplayName: "SQL", Extensions: []string{".sql"}, Grammar: sql.GetLanguage, PresetSchema: "sql"},
-	{Name: "terraform", Aliases: []string{"hcl"}, DisplayName: "HCL/Terraform", Extensions: []string{".tf", ".hcl"}, Grammar: hcl.GetLanguage, PresetSchema: "terraform", EnrichNode: enrichHCLNode},
-	{Name: "yaml", DisplayName: "YAML", Extensions: []string{".yaml", ".yml"}, Grammar: yaml.GetLanguage, PresetSchema: "yaml"},
-	{Name: "rust", DisplayName: "Rust", Extensions: []string{".rs"}, Grammar: rust.GetLanguage, PresetSchema: "rust", SentinelFiles: []string{"Cargo.toml"}},
-	{Name: "toml", DisplayName: "TOML", Extensions: []string{".toml"}, Grammar: toml.GetLanguage, PresetSchema: "toml"},
-	{Name: "elixir", DisplayName: "Elixir", Extensions: []string{".ex", ".exs"}, Grammar: elixir.GetLanguage, PresetSchema: "elixir", SentinelFiles: []string{"mix.exs"}},
-	{Name: "java", DisplayName: "Java", Extensions: []string{".java"}, Grammar: java.GetLanguage, PresetSchema: "java", SentinelFiles: []string{"pom.xml", "build.gradle"}},
-	{Name: "c", DisplayName: "C", Extensions: []string{".c", ".h"}, Grammar: treec.GetLanguage, PresetSchema: "c"},
-	{Name: "cpp", DisplayName: "C++", Extensions: []string{".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh"}, Grammar: cpp.GetLanguage, PresetSchema: "cpp", SentinelFiles: []string{"CMakeLists.txt"}},
-	{Name: "ruby", DisplayName: "Ruby", Extensions: []string{".rb"}, Grammar: ruby.GetLanguage, PresetSchema: "ruby", SentinelFiles: []string{"Gemfile"}},
-	{Name: "php", DisplayName: "PHP", Extensions: []string{".php"}, Grammar: php.GetLanguage, PresetSchema: "php", SentinelFiles: []string{"composer.json"}},
-	{Name: "kotlin", DisplayName: "Kotlin", Extensions: []string{".kt", ".kts"}, Grammar: kotlin.GetLanguage, PresetSchema: "kotlin"},
-	{Name: "swift", DisplayName: "Swift", Extensions: []string{".swift"}, Grammar: swift.GetLanguage, PresetSchema: "swift", SentinelFiles: []string{"Package.swift"}},
-	{Name: "scala", DisplayName: "Scala", Extensions: []string{".scala", ".sc"}, Grammar: scala.GetLanguage, PresetSchema: "scala", SentinelFiles: []string{"build.sbt"}},
-	// --- Added grammars (preset schemas live alongside the core set) ---
-	{Name: "bash", DisplayName: "Bash", Extensions: []string{".sh", ".bash"}, Grammar: bash.GetLanguage, PresetSchema: "bash"},
-	{Name: "csharp", DisplayName: "C#", Extensions: []string{".cs"}, Grammar: csharp.GetLanguage, PresetSchema: "csharp"},
-	{Name: "css", DisplayName: "CSS", Extensions: []string{".css"}, Grammar: css.GetLanguage, PresetSchema: "css"},
-	{Name: "cue", DisplayName: "CUE", Extensions: []string{".cue"}, Grammar: cue.GetLanguage, PresetSchema: "cue"},
-	{Name: "dockerfile", DisplayName: "Dockerfile", Extensions: []string{".dockerfile"}, Grammar: dockerfile.GetLanguage, PresetSchema: "dockerfile", SentinelFiles: []string{"Dockerfile"}},
-	{Name: "groovy", DisplayName: "Groovy", Extensions: []string{".groovy"}, Grammar: groovy.GetLanguage, PresetSchema: "groovy", SentinelFiles: []string{"Jenkinsfile"}},
-	{Name: "html", DisplayName: "HTML", Extensions: []string{".html", ".htm"}, Grammar: html.GetLanguage, PresetSchema: "html"},
-	{Name: "lua", DisplayName: "Lua", Extensions: []string{".lua"}, Grammar: lua.GetLanguage, PresetSchema: "lua"},
-	{Name: "markdown", DisplayName: "Markdown", Extensions: []string{".md", ".markdown"}, Grammar: markdownts.GetLanguage, PresetSchema: "markdown"},
-	{Name: "protobuf", DisplayName: "Protocol Buffers", Extensions: []string{".proto"}, Grammar: protobuf.GetLanguage, PresetSchema: "protobuf"},
+	{Name: "go", DisplayName: "Go", Extensions: []string{".go"}, PresetSchema: "go", SentinelFiles: []string{"go.mod", "go.sum"}},
+	{Name: "python", DisplayName: "Python", Extensions: []string{".py"}, PresetSchema: "python", SentinelFiles: []string{"pyproject.toml", "requirements.txt", "setup.py"}},
+	{Name: "javascript", DisplayName: "JavaScript", Extensions: []string{".js"}, PresetSchema: "javascript", SentinelFiles: []string{"package.json"}},
+	{Name: "typescript", DisplayName: "TypeScript", Extensions: []string{".ts", ".tsx"}, PresetSchema: "typescript"},
+	{Name: "sql", DisplayName: "SQL", Extensions: []string{".sql"}, PresetSchema: "sql"},
+	{Name: "terraform", Aliases: []string{"hcl"}, DisplayName: "HCL/Terraform", Extensions: []string{".tf", ".hcl"}, PresetSchema: "terraform"},
+	{Name: "yaml", DisplayName: "YAML", Extensions: []string{".yaml", ".yml"}, PresetSchema: "yaml"},
+	{Name: "rust", DisplayName: "Rust", Extensions: []string{".rs"}, PresetSchema: "rust", SentinelFiles: []string{"Cargo.toml"}},
+	{Name: "toml", DisplayName: "TOML", Extensions: []string{".toml"}, PresetSchema: "toml"},
+	{Name: "elixir", DisplayName: "Elixir", Extensions: []string{".ex", ".exs"}, PresetSchema: "elixir", SentinelFiles: []string{"mix.exs"}},
+	{Name: "java", DisplayName: "Java", Extensions: []string{".java"}, PresetSchema: "java", SentinelFiles: []string{"pom.xml", "build.gradle"}},
+	{Name: "c", DisplayName: "C", Extensions: []string{".c", ".h"}, PresetSchema: "c"},
+	{Name: "cpp", DisplayName: "C++", Extensions: []string{".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh"}, PresetSchema: "cpp", SentinelFiles: []string{"CMakeLists.txt"}},
+	{Name: "ruby", DisplayName: "Ruby", Extensions: []string{".rb"}, PresetSchema: "ruby", SentinelFiles: []string{"Gemfile"}},
+	{Name: "php", DisplayName: "PHP", Extensions: []string{".php"}, PresetSchema: "php", SentinelFiles: []string{"composer.json"}},
+	{Name: "kotlin", DisplayName: "Kotlin", Extensions: []string{".kt", ".kts"}, PresetSchema: "kotlin"},
+	{Name: "swift", DisplayName: "Swift", Extensions: []string{".swift"}, PresetSchema: "swift", SentinelFiles: []string{"Package.swift"}},
+	{Name: "scala", DisplayName: "Scala", Extensions: []string{".scala", ".sc"}, PresetSchema: "scala", SentinelFiles: []string{"build.sbt"}},
+	// --- Added languages (preset schemas live alongside the core set) ---
+	{Name: "bash", DisplayName: "Bash", Extensions: []string{".sh", ".bash"}, PresetSchema: "bash"},
+	{Name: "csharp", DisplayName: "C#", Extensions: []string{".cs"}, PresetSchema: "csharp"},
+	{Name: "css", DisplayName: "CSS", Extensions: []string{".css"}, PresetSchema: "css"},
+	{Name: "cue", DisplayName: "CUE", Extensions: []string{".cue"}, PresetSchema: "cue"},
+	{Name: "dockerfile", DisplayName: "Dockerfile", Extensions: []string{".dockerfile"}, PresetSchema: "dockerfile", SentinelFiles: []string{"Dockerfile"}},
+	{Name: "groovy", DisplayName: "Groovy", Extensions: []string{".groovy"}, PresetSchema: "groovy", SentinelFiles: []string{"Jenkinsfile"}},
+	{Name: "html", DisplayName: "HTML", Extensions: []string{".html", ".htm"}, PresetSchema: "html"},
+	{Name: "lua", DisplayName: "Lua", Extensions: []string{".lua"}, PresetSchema: "lua"},
+	{Name: "markdown", DisplayName: "Markdown", Extensions: []string{".md", ".markdown"}, PresetSchema: "markdown"},
+	{Name: "protobuf", DisplayName: "Protocol Buffers", Extensions: []string{".proto"}, PresetSchema: "protobuf"},
 }
 
 // Derived indexes — built once at init, never mutated.
@@ -144,44 +116,4 @@ func Extensions() []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// enrichHCLNode adds synthetic attributes for HCL blocks so FCA groups
-// blocks with consistent structure. Moved here from ingest/language.go
-// to keep the registry self-contained.
-func enrichHCLNode(n *sitter.Node, rec map[string]any) {
-	if n.Type() != "block" {
-		return
-	}
-
-	var (
-		hasIdentifier  bool
-		stringLitCount int
-		hasBody        bool
-	)
-
-	count := int(n.ChildCount())
-	for i := range count {
-		child := n.Child(i)
-		if child == nil || !child.IsNamed() {
-			continue
-		}
-
-		switch child.Type() {
-		case "identifier":
-			hasIdentifier = true
-		case "string_lit":
-			stringLitCount++
-		case "body":
-			hasBody = true
-		}
-	}
-
-	if hasIdentifier && stringLitCount > 0 && hasBody {
-		rec["type"] = "hcl_container"
-		rec["has_name"] = true
-		rec["field_name_type"] = "string_lit"
-		rec["has_body"] = true
-		rec["field_body_type"] = "body"
-	}
 }

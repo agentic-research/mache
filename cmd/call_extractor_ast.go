@@ -8,35 +8,43 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 )
 
-// pickCallExtractor returns the pure-Go ASTWalker-backed extractor
-// when `_ast` is present in the active .db, falling back to the
-// CGO SitterWalker-backed extractor otherwise. This is the per-site
-// dispatch point used by mache serve / mache mount when wiring a
+// pickCallExtractor returns the pure-Go ASTWalker-backed extractor when `_ast`
+// is present in the active .db, and a no-op extractor otherwise. This is the
+// per-site dispatch point used by mache serve / mache mount when wiring a
 // CallExtractor onto a SQLiteGraph.
 //
-// Detection is a single SQL query against sqlite_master. Errors
-// during detection log + fall through to the CGO extractor — never
-// take down the wiring on a transient SQL hiccup.
-//
-// ADR-0012 step 3 makes this picker unconditional (always AST) once
-// `mache build` invokes `leyline parse`. Step 4 deletes the CGO
-// branch entirely along with newCallExtractor and SitterWalker.
+// Detection is a single SQL query against sqlite_master. ADR-0012 step 4
+// removed in-process CGO tree-sitter, so there is no CGO fallback: a db with
+// no `_ast` table (or a nil db, or a detection error) yields the no-op
+// extractor rather than crashing the wiring. Every source projection carries
+// `_ast` (ley-line parses it), so the no-op only applies to non-source backends.
 func pickCallExtractor(db *sql.DB) graph.CallExtractor {
 	if db == nil {
-		return newCallExtractor()
+		return noopCallExtractor()
 	}
 	var hasAST int
 	err := db.QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_ast'`,
 	).Scan(&hasAST)
 	if err != nil {
-		log.Printf("call extractor: _ast detection failed (%v); using CGO fallback", err)
-		return newCallExtractor()
+		log.Printf("call extractor: _ast detection failed (%v); using no-op extractor", err)
+		return noopCallExtractor()
 	}
 	if hasAST == 0 {
-		return newCallExtractor()
+		return noopCallExtractor()
 	}
 	return newASTCallExtractor(db)
+}
+
+// noopCallExtractor returns a CallExtractor that resolves no calls. Used for
+// backends with no pre-parsed `_ast` table (e.g. JSON/data-only graphs, or the
+// composite cross-mount fallback when a mount carries no AST). Since ADR-0012
+// step 4 removed in-process CGO tree-sitter, there is no parser to fall back
+// to — the honest answer for a non-source backend is "no calls".
+func noopCallExtractor() graph.CallExtractor {
+	return func(_ []byte, _, _ string) ([]graph.QualifiedCall, error) {
+		return nil, nil
+	}
 }
 
 // newASTCallExtractor returns a graph.CallExtractor backed by SQL queries

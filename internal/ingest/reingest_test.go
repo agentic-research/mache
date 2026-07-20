@@ -37,6 +37,7 @@ func TestEngine_ReIngestFile(t *testing.T) {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Verify initial state
@@ -47,6 +48,10 @@ func TestEngine_ReIngestFile(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	err = os.WriteFile(goFile, []byte("package main\nfunc Goodbye() {}\n"), 0o644)
 	require.NoError(t, err)
+
+	// Re-parse after the edit so the ASTWalker reads the updated _ast
+	// (frozen-_ast gap: ReIngestFile projects whatever the _ast db holds).
+	attachLeylineAST(t, engine, tmpDir)
 
 	// ReIngestFile should update just this file
 	err = engine.ReIngestFile(goFile)
@@ -73,6 +78,7 @@ func TestEngine_ReIngestFile_PreservesRootPath(t *testing.T) {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Verify: node paths are relative to RootPath (tmpDir)
@@ -83,6 +89,9 @@ func TestEngine_ReIngestFile_PreservesRootPath(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	err = os.WriteFile(goFile, []byte("package pkg\nfunc Helper() {}\n"), 0o644)
 	require.NoError(t, err)
+
+	// Re-parse after the edit so the ASTWalker reads the updated _ast.
+	attachLeylineAST(t, engine, tmpDir)
 
 	err = engine.ReIngestFile(goFile)
 	require.NoError(t, err)

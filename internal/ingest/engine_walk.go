@@ -190,14 +190,15 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	}
 
 	for _, match := range matches {
-		// Skip self-match if requested (e.g. for recursive schemas to avoid infinite loops)
+		// Skip self-match if requested (e.g. for recursive schemas to avoid
+		// infinite loops). On the AST path a match's scope is identified by
+		// its node id (ASTRoot.ParentPrefix), so parent==child when the
+		// resolved scope node id is identical and non-empty.
 		if schema.SkipSelfMatch {
-			// Check for Tree-sitter node equality using byte ranges
-			if parentRoot, ok := ctx.(SitterRoot); ok { // coverage:ignore
-				if childCtx, ok := match.Context().(SitterRoot); ok { // coverage:ignore
-					if parentRoot.Node.StartByte() == childCtx.Node.StartByte() && // coverage:ignore
-						parentRoot.Node.EndByte() == childCtx.Node.EndByte() && // coverage:ignore
-						parentRoot.Node.Type() == childCtx.Node.Type() { // coverage:ignore
+			if parentRoot, ok := ctx.(ASTRoot); ok { // coverage:ignore
+				if childCtx, ok := match.Context().(ASTRoot); ok { // coverage:ignore
+					if parentRoot.ParentPrefix != "" && // coverage:ignore
+						parentRoot.ParentPrefix == childCtx.ParentPrefix { // coverage:ignore
 						continue // coverage:ignore
 					}
 				}

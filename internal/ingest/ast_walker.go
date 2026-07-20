@@ -181,23 +181,50 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		}
 	}
 
-	var matches []Match
+	// Expand each outer node into scope units. When @scope is the outer node
+	// (the common case), there is one unit per outer node. When @scope is an
+	// INNER node kind (e.g. `(type_declaration (type_spec ...) @scope)`), a
+	// single outer node expands to one unit PER inner scope node — so grouped
+	// declarations like `type ( Alpha; Beta )` project each member, matching
+	// tree-sitter's one-match-per-inner-node semantics.
+	innerScope := pattern.scopeKind != "" && pattern.scopeKind != pattern.outerKind
+	var scopePrefix []string
+	if innerScope {
+		scopePrefix = append(append([]string{}, pattern.scopeAncestry...), pattern.scopeKind)
+	}
+
+	type scopeUnit struct {
+		outerID string  // capture base for captures NOT under the @scope
+		scope   astNode // the @scope node: text/range/ParentPrefix + capture base for captures under it
+	}
+	var units []scopeUnit
 	for _, scopeNode := range scopeNodes {
+		if !innerScope {
+			units = append(units, scopeUnit{outerID: scopeNode.id, scope: scopeNode})
+			continue
+		}
+		inners, err := w.findChildrenByKindAST(ar.DB, scopeNode.id, pattern.scopeKind, ar.SourceID, pattern.scopeAncestry)
+		if err != nil {
+			return nil, fmt.Errorf("find inner scope %s: %w", pattern.scopeKind, err)
+		}
+		if len(inners) == 0 {
+			// No inner scope resolved — fall back to the outer node as the scope
+			// (preserves the prior single-node behavior for odd shapes).
+			units = append(units, scopeUnit{outerID: scopeNode.id, scope: scopeNode})
+			continue
+		}
+		for _, in := range inners {
+			units = append(units, scopeUnit{outerID: scopeNode.id, scope: in})
+		}
+	}
+
+	var matches []Match
+	for _, unit := range units {
 		values := make(map[string]any)
 		captureRanges := make(map[string][2]int)
 		missingRequired := false
 
-		// Resolve the @scope node. It may be an inner node, e.g.
-		// `(type_declaration (type_spec ...) @scope)` binds @scope to type_spec,
-		// not the outer match — so the scope text excludes the `type ` keyword.
-		// Use it for the scope source text and the match byte range (write-back
-		// origin), mirroring SitterWalker.
-		scopeForText := scopeNode
-		if pattern.scopeKind != "" && pattern.scopeKind != pattern.outerKind {
-			if sn, err := w.findChildByKindAST(ar.DB, scopeNode.id, pattern.scopeKind, ar.SourceID, pattern.scopeAncestry); err == nil && sn != nil {
-				scopeForText = *sn
-			}
-		}
+		scopeForText := unit.scope
 		// Inject the scope node's source text as "scope", mirroring SitterWalker —
 		// so leaf templates like {{.scope}} (the most common source-leaf template)
 		// render the construct's source instead of "<no value>".
@@ -213,7 +240,16 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			if cap.name == "scope" { // coverage:ignore — see comment above; unreachable via public API
 				continue // coverage:ignore — same as above
 			}
-			child, err := w.findChildByKindAST(ar.DB, scopeNode.id, cap.kind, ar.SourceID, cap.ancestry)
+			// Captures nested under the @scope node resolve relative to the inner
+			// scope (with the scope prefix stripped from their ancestry); captures
+			// elsewhere resolve relative to the outer node with full ancestry.
+			base := unit.outerID
+			ancestry := cap.ancestry
+			if innerScope && ancestryHasPrefix(cap.ancestry, scopePrefix) {
+				base = unit.scope.id
+				ancestry = cap.ancestry[len(scopePrefix):]
+			}
+			child, err := w.findChildByKindAST(ar.DB, base, cap.kind, ar.SourceID, ancestry)
 			if err != nil || child == nil {
 				if requiredCaptures[cap.name] {
 					missingRequired = true
@@ -301,10 +337,11 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 // Close is a no-op — the ASTWalker doesn't own the database connection.
 func (w *ASTWalker) Close() {}
 
-// SelectWalker inspects a SQLite database and returns the best Walker.
-// If the database has an _ast table (produced by ley-line's ll-open/ts),
-// returns an ASTWalker (pure Go, no CGO). Otherwise returns a SitterWalker
-// (requires CGO tree-sitter bindings).
+// SelectWalker inspects a SQLite database and returns the ASTWalker when the
+// database has an `_ast` table (produced by ley-line's ll-open/ts). Since
+// ADR-0012 step 4 removed in-process CGO tree-sitter, a database WITHOUT an
+// `_ast` table is an error — there is no fallback walker. Callers must parse
+// source through ley-line first (see runBuildViaLeylineSchema / autoInvokeLeylineParse).
 func SelectWalker(db *sql.DB) (Walker, error) {
 	var count int
 	err := db.QueryRow(
@@ -313,10 +350,11 @@ func SelectWalker(db *sql.DB) (Walker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect sqlite_master for _ast table: %w", err)
 	}
-	if count > 0 {
-		return NewASTWalker(db), nil
+	if count == 0 {
+		return nil, fmt.Errorf("no _ast table in database: mache requires a " +
+			"ley-line-parsed source db (in-process tree-sitter was removed in ADR-0012 step 4)")
 	}
-	return NewSitterWalker(), nil
+	return NewASTWalker(db), nil
 }
 
 // --- Internal types ---

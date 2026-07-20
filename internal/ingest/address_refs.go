@@ -3,8 +3,6 @@ package ingest
 import (
 	"strconv"
 	"sync"
-
-	sitter "github.com/smacker/go-tree-sitter"
 )
 
 // addressRefEntry binds a tree-sitter query to a token-scheme prefix.
@@ -41,103 +39,6 @@ func RegisterAddressRefQuery(langName, scheme, query string) {
 		addressRefRegistry.Store(langName, entries)
 		return
 	}
-}
-
-// addressRefQueryCacheKey identifies a compiled address ref query by language
-// name and scheme (since a language can have multiple address ref queries).
-type addressRefQueryCacheKey struct {
-	langName string
-	scheme   string
-}
-
-// ExtractAddressRefs runs all registered address ref queries for the given
-// language against the AST node. Returns deduplicated, scheme-prefixed tokens
-// (e.g., "env:DATABASE_URL"). String captures are automatically unquoted.
-func (w *SitterWalker) ExtractAddressRefs(root *sitter.Node, source []byte, lang *sitter.Language, langName string) ([]string, error) {
-	if root == nil || lang == nil || len(source) == 0 {
-		return nil, nil
-	}
-	raw, ok := addressRefRegistry.Load(langName)
-	if !ok {
-		return nil, nil
-	}
-	entries := raw.([]addressRefEntry)
-	if len(entries) == 0 {
-		return nil, nil
-	}
-
-	seen := make(map[string]bool)
-	var tokens []string
-
-	for _, entry := range entries {
-		q, err := w.getAddressRefQuery(lang, langName, entry)
-		if err != nil {
-			return nil, err
-		}
-
-		qc := sitter.NewQueryCursor()
-		qc.Exec(q, root)
-
-		for {
-			m, ok := qc.NextMatch()
-			if !ok {
-				break
-			}
-
-			// Enforce #eq? / #not-eq? predicates.
-			m = qc.FilterPredicates(m, source)
-			if len(m.Captures) == 0 {
-				continue
-			}
-
-			for _, c := range m.Captures {
-				name := q.CaptureNameForId(c.Index)
-				if name != "ref" {
-					continue // skip anchor captures like @_pkg, @_func
-				}
-
-				start := c.Node.StartByte()
-				end := c.Node.EndByte()
-				if start >= uint32(len(source)) || end > uint32(len(source)) {
-					continue
-				}
-
-				raw := string(source[start:end])
-				value := unquoteCapture(raw)
-				if value == "" {
-					continue
-				}
-
-				token := entry.Scheme + ":" + value
-				if !seen[token] {
-					seen[token] = true
-					tokens = append(tokens, token)
-				}
-			}
-		}
-		qc.Close()
-	}
-
-	return tokens, nil
-}
-
-// getAddressRefQuery returns a cached compiled query for an address ref entry.
-func (w *SitterWalker) getAddressRefQuery(lang *sitter.Language, langName string, entry addressRefEntry) (*sitter.Query, error) {
-	key := addressRefQueryCacheKey{langName: langName, scheme: entry.Scheme}
-	if cached, ok := w.addressRefQueryCache.Load(key); ok {
-		return cached.(*sitter.Query), nil
-	}
-
-	q, err := sitter.NewQuery([]byte(entry.Query), lang)
-	if err != nil {
-		return nil, err
-	}
-	actual, loaded := w.addressRefQueryCache.LoadOrStore(key, q)
-	if loaded {
-		q.Close()
-		return actual.(*sitter.Query), nil
-	}
-	return q, nil
 }
 
 // unquoteCapture strips surrounding quotes from a tree-sitter string capture.

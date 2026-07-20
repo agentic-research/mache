@@ -402,6 +402,18 @@ var rootCmd = &cobra.Command{
 				if fileIndex != nil {
 					eng.SetFileIndex(fileIndex)
 				}
+				// ley-line parses source into an `_ast` db and the engine
+				// projects it via ASTWalker — in-process CGO tree-sitter was
+				// removed (ADR-0012 step 4). The `_ast` db stays open for the
+				// mount lifetime so callees/ resolve via the pure-Go AST
+				// extractor. ley-line is MANDATORY (guardrail 2): a resolution
+				// failure is a hard error, not a silent empty index.
+				astDB, astCleanup, ppErr := attachLeylineASTWalker(dataPath, eng)
+				if ppErr != nil {
+					_ = writer.Close()
+					return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
+				}
+				defer astCleanup()
 				if err := eng.Ingest(dataPath); err != nil {
 					_ = writer.Close()
 					return fmt.Errorf("ingestion failed: %w", err)
@@ -441,7 +453,9 @@ var rootCmd = &cobra.Command{
 					// Keep the index file for incremental re-ingestion on next mount.
 				}()
 
-				sg.SetCallExtractor(pickCallExtractor(sg.DB()))
+				// The projected index carries no `_ast` table, so callees/
+				// resolve through the ley-line `_ast` db kept open above.
+				sg.SetCallExtractor(newASTCallExtractor(astDB))
 				g = sg
 			} else {
 				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
@@ -450,10 +464,20 @@ var rootCmd = &cobra.Command{
 				defer resolver.Close()
 				store.SetResolver(resolver.Resolve)
 
-				// Wire call extractor for callees/ resolution
-				store.SetCallExtractor(newCallExtractor())
-
 				engine = ingest.NewEngine(schema, store)
+
+				// Source (tree-sitter) schemas need a ley-line `_ast` db + an
+				// ASTWalker (ADR-0012 step 4 — no in-process CGO). Non-source
+				// schemas (JSON, .git records) don't. Wire the AST-backed
+				// call extractor only when there's an `_ast` db to read.
+				if ingest.SchemaUsesTreeSitter(schema) && filepath.Ext(dataPath) != ".git" {
+					astDB, astCleanup, ppErr := attachLeylineASTWalker(dataPath, engine)
+					if ppErr != nil {
+						return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
+					}
+					defer astCleanup()
+					store.SetCallExtractor(newASTCallExtractor(astDB))
+				}
 
 				if filepath.Ext(dataPath) == ".git" {
 					log.Printf("Ingesting git history from %s...", dataPath)
