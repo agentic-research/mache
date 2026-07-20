@@ -197,9 +197,9 @@ func TestRunBuildViaLeyline_SchemaProceedsToParse(t *testing.T) {
 // the Go example schema through the leyline backend must produce a
 // SCHEMA-shaped nodes table (construct-category dirs like
 // 'functions/'), i.e. the Engine+ASTWalker projection ran — not
-// leyline's own node layout, and not an ignored schema. Engine-level
-// byte-parity with the SitterWalker projection is separately pinned
-// by internal/ingest/ast_parity_test.go.
+// leyline's own node layout, and not an ignored schema. ASTWalker
+// projection correctness is covered by `task test:ast` (the in-process
+// tree-sitter projector it was once parity-checked against is gone).
 func TestRunBuildViaLeylineSchema_ProducesSchemaShapedDB(t *testing.T) {
 	requirePinnedLeyline(t)
 	saved := saveBuildFlags()

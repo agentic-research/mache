@@ -51,8 +51,8 @@ func inferFromSourceFile(inf *lattice.Inferrer, path string, l *lang.Language) (
 	if err != nil {
 		return nil, err
 	}
-	// The pinned leyline parses ~11 of the 28 registry languages; for the
-	// rest the parse yields zero _ast rows and inference degrades to an
+	// The pinned leyline parses 27 of the 28 registry languages (all but
+	// cue); for the rest the parse yields zero _ast rows and inference degrades to an
 	// empty topology — the file then mounts under _project_files/. The old
 	// in-process tree-sitter path could infer these languages, so say
 	// LOUDLY why the schema is empty rather than silently degrading

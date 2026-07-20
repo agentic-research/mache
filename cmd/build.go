@@ -60,20 +60,16 @@ func init() {
 // If the user explicitly passed --backend=leyline, leyline being
 // missing is a real error worth reporting, not a fallback trigger.
 //
-// The leyline path now HONORS --schema (mache-73b885) by running the
-// pure-Go Engine+ASTWalker projection over the leyline-parsed _ast db
-// — the same composition the leyline parity gate
-// (internal/ingest/ast_parity_test.go) asserts is byte-identical to
-// the in-process tree-sitter projection. Before this, --schema was
-// warn-and-ignored on the auto path and an error on the explicit
-// path, which forced schema users onto the CGO backend (the composite
-// action's `--backend tree-sitter` workaround).
+// The leyline path HONORS --schema (mache-73b885) by running the pure-Go
+// Engine+ASTWalker projection over the leyline-parsed _ast db. In-process
+// tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so this is now
+// the only projector; ASTWalker correctness is covered by `task test:ast`.
 //
-// schemaExplicit preserves that loudness contract for the one case
-// leyline genuinely can't serve: a schema language leyline has no
-// grammar for (it parses ~11 of the 28 registry languages) would
-// otherwise project HOLLOW category dirs with zero warnings — the
-// coverage guard errors on the explicit backend and warns on auto.
+// schemaExplicit preserves a loudness contract for the one case leyline
+// genuinely can't serve: a schema language leyline has no grammar for (it
+// parses most of the 28 registry languages — all but cue today) would
+// otherwise project HOLLOW category dirs with zero warnings — the coverage
+// guard errors on the explicit backend and warns on auto.
 func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 	if schemaPath != "" {
 		schema, err := resolveSchema(schemaPath, ".")
@@ -114,15 +110,14 @@ func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 	return nil
 }
 
-// runBuildViaLeylineSchema builds a schema-shaped .db WITHOUT the CGO
-// tree-sitter backend (mache-73b885): `leyline parse` produces a temp
-// _ast/_source db, and the existing pure-Go Engine+ASTWalker projection
-// runs the schema over it into a fresh SQLiteWriter output — the exact
-// composition internal/ingest/ast_parity_test.go proves byte-identical
-// to the Engine+SitterWalker path. The output matches what
-// `--backend=tree-sitter --schema X` produces today (nodes/node_defs/
-// node_refs per the schema; no _ast table — the temp db is discarded),
-// so downstream consumers see no shape change, only a CGO-free producer.
+// runBuildViaLeylineSchema builds a schema-shaped .db (mache-73b885):
+// `leyline parse` produces a temp _ast/_source db, and the pure-Go
+// Engine+ASTWalker projection runs the schema over it into a fresh
+// SQLiteWriter output. In-process tree-sitter was removed in ADR-0012 step 4,
+// so ASTWalker is the sole projector (correctness: `task test:ast`). The
+// output is the standard schema shape (nodes/node_defs/node_refs per the
+// schema; no _ast table — the temp db is discarded), so downstream consumers
+// see no shape change, only a CGO-free producer.
 func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schemaExplicit bool, extraLangs []string) error {
 	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
 	if err != nil {
@@ -152,14 +147,14 @@ func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schem
 	} else if len(gaps) > 0 {
 		if schemaExplicit {
 			return fmt.Errorf(
-				"--backend=leyline cannot project schema language(s) %s: leyline parsed no %s source "+
-					"(no grammar in the pinned leyline). Use --backend=tree-sitter for these languages "+
-					"until leyline gains them",
+				"cannot project schema language(s) %s: the pinned ley-line has no grammar for %s, so it "+
+					"parsed no such source. In-process tree-sitter was removed in ADR-0012 step 4, so there "+
+					"is no fallback parser — wait for ley-line to add these grammars, or drop them from the schema",
 				strings.Join(gaps, ", "), strings.Join(gaps, "/"))
 		}
-		log.Printf("WARNING: leyline parsed no source for schema language(s) %s — "+
+		log.Printf("WARNING: ley-line has no grammar for schema language(s) %s — "+
 			"their category dirs will be EMPTY and the files land in _project_files/. "+
-			"Use --backend=tree-sitter for these languages until leyline gains them.",
+			"There is no in-process fallback (ADR-0012 step 4); wait for ley-line to add these grammars.",
 			strings.Join(gaps, ", "))
 	}
 
