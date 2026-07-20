@@ -41,7 +41,7 @@ Every projection follows the same shape: a schema declares the topology, walkers
 
 ```mermaid
 flowchart LR
-    Source["source dir"] -->|"tree-sitter (CGO)<br/>OR leyline parse"| Graph
+    Source["source dir"] -->|"leyline parse<br/>(pure Go)"| Graph
     LSP["leyline lsp<br/>(LSP enrichment from<br/>ley-line-open)"] -->|"sibling .bindings.capnp<br/>(typed event log)"| BindingLog
     BindingLog -->|"ReadBindingLog"| Graph["Graph<br/>(MemoryStore or<br/>SQLiteGraph)"]
     Graph -->|"v_refs / v_defs<br/>(canonical views,<br/>fidelity poset)"| MCP["MCP tools"]
@@ -50,7 +50,7 @@ flowchart LR
     FS -.- Agent
 ```
 
-1. **Parse** — tree-sitter parses source into AST nodes (28 languages). The modern path is `leyline parse` (from ley-line-open); CGO `SitterWalker` is the fallback.
+1. **Parse** — `leyline parse` (from ley-line-open) turns source into an `_ast` database (27 of 28 languages — all but cue, which has no tree-sitter grammar anywhere). mache reads it pure-Go via the `ASTWalker`; in-process CGO tree-sitter was removed in [ADR-0012](docs/adr/0012-cgo-removal-migration.md) step 4.
 1. **Infer** — schema inference (FCA + greedy entropy) discovers the natural groupings (`functions/`, `types/`, `classes/`)
 1. **Link** — cross-reference extraction builds a call graph from identifiers and imports. When the LSP pass from ley-line-open has run, refs flow through a sibling `.bindings.capnp` typed event log (per [ADR-0013](docs/adr/0013-refs-defs-canonical-schema.md)) rather than SQL columns — the wire format is the cross-runtime contract.
 1. **Project** — the graph is exposed as MCP tools (primary) or a mounted filesystem (optional)
@@ -155,9 +155,10 @@ reproducible — same input git tree, same image hash. `task image`
 auto-generates a dev keypair when one is missing (APK signatures will
 differ across freshly-generated keys), so for byte-stable artifacts in CI
 inject a fixed keypair from a secret. The melange recipe builds with
-`CGO_ENABLED=1` (required for the elixir tree-sitter binding); the leyline
-FFI client is gated behind the `leyline` build tag and is **not** compiled
-into the image (see [ADR-0006](docs/adr/0006-pure-go-mcp-first.md)).
+`CGO_ENABLED=0` — mache is pure Go since [ADR-0012](docs/adr/0012-cgo-removal-migration.md)
+step 4 removed in-process tree-sitter. (The `leyline_fs` FFI client is gated
+behind the `leyline` build tag and is **not** compiled into the image — see
+[ADR-0006](docs/adr/0006-pure-go-mcp-first.md).)
 
 On release, mache also self-publishes a separate **leyline-bundled**
 multi-arch image to `ghcr.io/agentic-research/mache` (`debian-slim` +
