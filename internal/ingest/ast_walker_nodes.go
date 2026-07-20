@@ -10,6 +10,16 @@ import (
 // function_declaration_0, function_declaration_1). We match by _ast.node_kind
 // which stores the original tree-sitter kind without suffixes.
 func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind, sourceID string) ([]astNode, error) {
+	// Per-file fast path: answer from the in-memory index (loaded once) instead
+	// of a fresh indexed scan per call (mache-4f3840). The whole-db path
+	// (sourceID == "") has no single file to materialize, so it keeps the SQL.
+	if sourceID != "" {
+		idx, err := w.fileIndex(sourceID)
+		if err != nil {
+			return nil, err
+		}
+		return idx.nodesByKind(parentPrefix, kind), nil
+	}
 	query := `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
 	                COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
 	         FROM nodes n
@@ -52,6 +62,14 @@ func (w *ASTWalker) findNodesByKind(db *sql.DB, parentPrefix, kind, sourceID str
 // where a single type_declaration contains two type_spec nodes. tree-sitter
 // yields one match per inner node; this mirrors that.
 func (w *ASTWalker) findChildrenByKindAST(db *sql.DB, parentID, kind, sourceID string, ancestry []string) ([]astNode, error) {
+	// In-memory fast path (mache-4f3840); whole-db path keeps the SQL below.
+	if sourceID != "" {
+		idx, err := w.fileIndex(sourceID)
+		if err != nil {
+			return nil, err
+		}
+		return idx.childrenByKind(parentID, kind, ancestry), nil
+	}
 	const baseCols = `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
 	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
 	 FROM nodes n
@@ -110,6 +128,14 @@ func (w *ASTWalker) findChildrenByKindAST(db *sql.DB, parentID, kind, sourceID s
 // plus a NOT LIKE excluding deeper descendants. This avoids scanning all
 // descendants in Go — only nodes at the exact expected depth are returned.
 func (w *ASTWalker) findChildByKindAST(db *sql.DB, parentID, kind, sourceID string, ancestry []string) (*astNode, error) {
+	// In-memory fast path (mache-4f3840); whole-db path keeps the SQL below.
+	if sourceID != "" {
+		idx, err := w.fileIndex(sourceID)
+		if err != nil {
+			return nil, err
+		}
+		return idx.childByKind(parentID, kind, ancestry), nil
+	}
 	const baseCols = `SELECT n.id, n.parent_id, n.name, n.kind, COALESCE(n.record, ''),
 	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0)
 	 FROM nodes n

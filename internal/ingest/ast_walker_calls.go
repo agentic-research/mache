@@ -84,29 +84,65 @@ func (w *ASTWalker) ExtractCalls(sourcePath, langName string) ([]string, error) 
 // the _source key (filepath.Base of the file). Empty scopeID would match the
 // whole file; callers pass a real construct id.
 func (w *ASTWalker) ExtractCallsScoped(sourceID, scopeID, langName string) ([]string, error) {
-	raw, ok := callPatternRegistry.Load(langName)
-	if !ok {
-		return nil, nil
-	}
-	patterns := raw.([]CallPattern)
-	if len(patterns) == 0 {
-		return nil, nil
-	}
+	toks := w.fileCallTokens(sourceID, langName)
+	prefix := scopeID + "/"
 	seen := make(map[string]bool)
 	var calls []string
-	for _, p := range patterns {
-		rows, err := w.queryCallPattern(sourceID, p, false, scopeID)
-		if err != nil {
+	for _, t := range toks {
+		// Byte-identical to the old per-construct `n_leaf.id LIKE scopeID||'/%'`
+		// scope filter, but over the whole-file token set computed once.
+		if scopeID != "" && !strings.HasPrefix(t.nodeID, prefix) {
 			continue
 		}
-		for _, r := range rows {
-			if r.token != "" && !seen[r.token] {
-				seen[r.token] = true
-				calls = append(calls, r.token)
-			}
+		if !seen[t.token] {
+			seen[t.token] = true
+			calls = append(calls, t.token)
 		}
 	}
 	return calls, nil
+}
+
+// scopedCallToken is one whole-file call token plus the id of its leaf node,
+// so per-construct ExtractCallsScoped can attribute it by node-id prefix.
+type scopedCallToken struct {
+	nodeID string
+	token  string
+}
+
+// fileCallTokens runs every registered call pattern against the WHOLE file
+// ONCE (queryCallPattern is already a batched JOIN, so this is O(nodes) per
+// pattern) and caches the (leaf id, token) pairs keyed by (sourceID, lang).
+// ExtractCallsScoped then filters these by construct prefix in Go instead of
+// re-running queryCallPattern per construct — that per-construct path was 49%
+// of a whole-repo projection after the node-index fix (mache-4f3840). Tokens
+// are kept undeduplicated here (the same token may live under several
+// constructs); the per-construct caller dedups within its scope.
+func (w *ASTWalker) fileCallTokens(sourceID, langName string) []scopedCallToken {
+	key := sourceID + "\x00" + langName
+	if v, ok := w.callTokenCache.Load(key); ok {
+		return v.([]scopedCallToken)
+	}
+
+	var out []scopedCallToken
+	if raw, ok := callPatternRegistry.Load(langName); ok {
+		if patterns := raw.([]CallPattern); len(patterns) > 0 {
+			for _, p := range patterns {
+				rows, err := w.queryCallPattern(sourceID, p, false, "") // whole file
+				if err != nil {
+					continue
+				}
+				for _, r := range rows {
+					if r.token == "" {
+						continue
+					}
+					out = append(out, scopedCallToken{nodeID: r.leafID, token: r.token})
+				}
+			}
+		}
+	}
+
+	w.callTokenCache.Store(key, out)
+	return out
 }
 
 // fileLevelRefPatternRegistry stores per-language CallPatterns used by
@@ -198,6 +234,7 @@ func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.
 type callRow struct {
 	token     string
 	qualifier string
+	leafID    string // n_leaf.id — used to attribute the call to a construct
 }
 
 // queryCallPattern runs a single batched SQL query for the given CallPattern
@@ -232,7 +269,7 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 	//
 	// Each level requires: nodes table for parent_id chain, _ast for kind.
 	var sb strings.Builder
-	sb.WriteString(`SELECT n_leaf.record AS call_token`)
+	sb.WriteString(`SELECT n_leaf.record AS call_token, n_leaf.id AS leaf_id`)
 	if wantQualifier && p.QualifierKind != "" {
 		sb.WriteString(`, COALESCE(n_pkg.record, '') AS pkg`)
 	} else {
@@ -312,11 +349,11 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 
 	var out []callRow
 	for rows.Next() {
-		var token, pkg string
-		if err := rows.Scan(&token, &pkg); err != nil {
+		var token, leafID, pkg string
+		if err := rows.Scan(&token, &leafID, &pkg); err != nil {
 			continue
 		}
-		out = append(out, callRow{token: token, qualifier: pkg})
+		out = append(out, callRow{token: token, qualifier: pkg, leafID: leafID})
 	}
 	return out, rows.Err()
 }

@@ -24,6 +24,28 @@ type ASTWalker struct {
 	langCache   sync.Map // sourceID -> string
 	pkgCache    sync.Map // sourceID -> string
 	sourceCache sync.Map // sourceID -> []byte
+	// addrRefCache memoizes the whole-file address-ref extraction keyed by
+	// sourceID+"\x00"+lang. Per-construct ExtractAddressRefsScoped filters these
+	// by node-id prefix instead of re-running the generic Query per construct —
+	// that per-construct storm was 84% of a whole-repo projection (mache-4f3840).
+	addrRefCache sync.Map // sourceID+"\x00"+lang -> []scopedAddrRef
+	// indexCache holds the per-file in-memory node index. Materializing every
+	// file's nodes/_ast rows ONCE and answering navigation from memory restores
+	// the O(nodes) tree walk that per-node SQL had turned into O(nodes²)
+	// (mache-4f3840). Keyed by sourceID.
+	indexCache sync.Map // sourceID -> *fileIndex
+	// callTokenCache memoizes the whole-file call extraction (leaf id + token)
+	// per (sourceID, lang) so ExtractCallsScoped attributes by node-id prefix
+	// instead of re-running queryCallPattern per construct.
+	callTokenCache sync.Map // sourceID+"\x00"+lang -> []scopedCallToken
+}
+
+// scopedAddrRef is one whole-file address-ref match: the token plus the id of
+// the AST node it was captured on, so per-construct callers can attribute it by
+// node-id prefix.
+type scopedAddrRef struct {
+	nodeID string
+	token  string
 }
 
 // fileLang returns the source language for sourceID, computed once and cached.
@@ -110,8 +132,58 @@ func (w *ASTWalker) docExtendStart(sourceID, scopeID string, scopeStart uint32) 
 
 // NewASTWalker creates a walker backed by a SQLite database containing
 // ley-line's _ast, _source, and nodes tables.
+//
+// It tunes the read connection for the projection's access pattern: a very
+// high volume of point/range B-tree seeks (findNodesByKind + per-capture
+// findChildByKindAST for every construct). Two SQLite/database-sql facts make
+// the untuned default pathological on a whole-repo projection (mache-4f3840,
+// where 94% of CPU sat in syscall.rawsyscalln under sqlite3BtreeMoveto —
+// pages re-read from disk via pread on nearly every seek):
+//
+//  1. The SQLite page cache is PER-CONNECTION, and database/sql's default pool
+//     rotates queries across connections — each with a COLD cache — so the
+//     working set never stays resident.
+//  2. The default cache (~2 MB) is far smaller than a parsed repo's _ast/nodes
+//     b-trees, so even one connection thrashes under LRU eviction.
+//
+// Pinning to a single persistent connection with a large cache keeps the
+// working set warm across every seek. Reads serialize on the one connection,
+// but the projection already consumes each result set fully before issuing
+// nested queries (no single goroutine ever needs two connections at once), so
+// this cannot deadlock — and the cache-warmth win dwarfs any lost read
+// parallelism. tuneReadConn is best-effort: a failed pragma degrades to the
+// old slow-but-correct behavior rather than failing the build.
 func NewASTWalker(db *sql.DB) *ASTWalker {
+	tuneReadConn(db)
 	return &ASTWalker{db: db}
+}
+
+// tuneReadConn pins db to one persistent connection and grows its page cache,
+// so PRAGMA cache_size (per-connection) sticks and the projection's B-tree
+// seeks hit a warm cache instead of re-reading pages from disk. See
+// NewASTWalker for why this is load-bearing (mache-4f3840).
+func tuneReadConn(db *sql.DB) {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	// locking_mode=EXCLUSIVE is the load-bearing pragma: without it, every
+	// db.Query is its own implicit transaction that acquires AND releases a
+	// POSIX file lock (fcntl F_SETLK) on the db file. Across the projection's
+	// hundreds of thousands of tiny read queries that lock/unlock dance was
+	// ~81% of CPU (mache-4f3840). EXCLUSIVE acquires the lock ONCE and holds it
+	// for the connection's life, so subsequent statements skip the fcntl
+	// syscalls entirely. Safe because the temp _ast db is exclusively ours
+	// (ley-line already closed it) and we pinned a single connection above.
+	_, _ = db.Exec("PRAGMA locking_mode = EXCLUSIVE")
+	// Negative cache_size is in KiB: -262144 = 256 MiB, comfortably larger
+	// than the b-trees for a whole-repo projection so the working set stays
+	// resident once the lock overhead is gone.
+	_, _ = db.Exec("PRAGMA cache_size = -262144")
+	_, _ = db.Exec("PRAGMA temp_store = MEMORY")
+	// mmap the db so page reads are memory-mapped accesses rather than pread
+	// syscalls. 2 GiB covers a whole-repo _ast db; a no-op on drivers/platforms
+	// without xFetch mmap support, so it can only help.
+	_, _ = db.Exec("PRAGMA mmap_size = 2147483648")
 }
 
 // EnsureIndexes creates compound indexes on the _ast table for query
@@ -166,10 +238,14 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		return nil, fmt.Errorf("find %s nodes: %w", pattern.outerKind, err)
 	}
 
-	// Read source content for byte-range extraction
+	// Read source content for byte-range extraction — via the per-file
+	// sourceCache (fileSource), NOT a raw readSource. Query runs once per
+	// schema selector per file, so an uncached read re-fetched+decompressed
+	// the full file content ~N-selectors times per file; on a whole-repo
+	// projection that was the dominant cost (mache-4f3840).
 	var source []byte
 	if ar.SourceID != "" {
-		source, _ = w.readSource(ar.DB, ar.SourceID)
+		source = w.fileSource(ar.SourceID)
 	}
 
 	// Identify required captures: any capture whose name doesn't start with "_"

@@ -12,13 +12,15 @@ import (
 // fixture resolves to mache's own repo root, builds an end-to-end
 // SQLiteGraph, and the resulting graph has structure.
 func TestRegistry_Get_MacheSelfReturnsLiveGraph(t *testing.T) {
-	// mache-self projects the WHOLE mache repo. Since ADR-0012 step 4
-	// (mache-37ae8b) removed in-process tree-sitter, this routes through
-	// leyline parse + the ASTWalker schema projection, which is
-	// pathologically slow at repo scale (mache-4f3840 — a v0.18.0 release
-	// blocker). Gate behind the large-tier opt-in until that lands.
+	// mache-self projects the WHOLE mache repo through leyline parse + the
+	// ASTWalker schema projection (ADR-0012 step 4 removed in-process
+	// tree-sitter). The O(nodes²) projection blowup is FIXED (mache-4f3840:
+	// per-file in-memory node index + once-per-file call/ref extraction), so
+	// this now completes in ~20s rather than hanging. It stays behind the
+	// large-tier opt-in purely for size — it's a full-repo integration fixture,
+	// not a per-PR unit test.
 	if os.Getenv("MACHE_E2E_LARGE") == "" {
-		t.Skip("whole-repo mache-self projection is slow (mache-4f3840); set MACHE_E2E_LARGE=1 to run")
+		t.Skip("large-tier full-repo fixture (~20s); set MACHE_E2E_LARGE=1 to run")
 	}
 
 	g := Get(t, "mache-self")
@@ -58,13 +60,15 @@ func TestRegistry_Get_UnknownIDFails(t *testing.T) {
 // same test binary return the SAME *SQLiteGraph pointer — the
 // fixture is materialized once and reused.
 func TestRegistry_Get_CachesPerProcess(t *testing.T) {
-	// mache-self projects the WHOLE mache repo. Since ADR-0012 step 4
-	// (mache-37ae8b) removed in-process tree-sitter, this routes through
-	// leyline parse + the ASTWalker schema projection, which is
-	// pathologically slow at repo scale (mache-4f3840 — a v0.18.0 release
-	// blocker). Gate behind the large-tier opt-in until that lands.
+	// mache-self projects the WHOLE mache repo through leyline parse + the
+	// ASTWalker schema projection (ADR-0012 step 4 removed in-process
+	// tree-sitter). The O(nodes²) projection blowup is FIXED (mache-4f3840:
+	// per-file in-memory node index + once-per-file call/ref extraction), so
+	// this now completes in ~20s rather than hanging. It stays behind the
+	// large-tier opt-in purely for size — it's a full-repo integration fixture,
+	// not a per-PR unit test.
 	if os.Getenv("MACHE_E2E_LARGE") == "" {
-		t.Skip("whole-repo mache-self projection is slow (mache-4f3840); set MACHE_E2E_LARGE=1 to run")
+		t.Skip("large-tier full-repo fixture (~20s); set MACHE_E2E_LARGE=1 to run")
 	}
 
 	first := Get(t, "mache-self")
