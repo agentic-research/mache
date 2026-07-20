@@ -59,13 +59,16 @@ jobs:
           go-version-file: go.mod
 
       - name: Build mache
-        # CGO on for the tree-sitter grammars only (they carry their own #cgo
-        # directives). No external libs, no FUSE, no sudo. The binary's
-        # cmd.Version is injected from the release TAG so it matches the tag
-        # exactly; the CLEAN release base in internal/buildinfo (version.txt)
-        # is what server.json + melange derive from — gated to agree below.
+        # PURE GO since ADR-0012 step 4 (mache-37ae8b): in-process tree-sitter
+        # was removed — leyline is the universal parser — so the release binary
+        # is CGO-free. (The leyline_fs FFI in internal/leyline/client.go is a
+        # separate `//go:build leyline` dev-only surface, never in the release
+        # binary.) The binary's cmd.Version is injected from the release TAG so
+        # it matches the tag exactly; the CLEAN release base in
+        # internal/buildinfo (version.txt) is what server.json + melange derive
+        # from — gated to agree below.
         env:
-          CGO_ENABLED: '1'
+          CGO_ENABLED: '0'
           TAG: ${{ env.TAG }}
         run: |
           # TAG can originate from repository_dispatch client_payload (attacker-

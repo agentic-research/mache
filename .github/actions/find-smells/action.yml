@@ -19,13 +19,14 @@ inputs:
   schema:
     description: >-
       Path to a mache topology schema. Empty uses FCA schema inference.
-      When set, the build is forced to --backend tree-sitter for
-      LANGUAGE COVERAGE: since v0.17.0 the leyline backend honors
-      build-time schemas, but the pinned leyline parses ~11 of the 28
-      registry languages while the in-process tree-sitter tier covers
-      all 28. The forcing goes away when the CGO tree-sitter backend is
-      deleted (mache-37ae8b); unparseable schema languages then fail
-      loudly via the coverage guard.
+      The leyline backend honors build-time schemas and parses 27 of the
+      28 registry languages (all but cue, which has no tree-sitter
+      grammar anywhere); the in-process tree-sitter backend was removed
+      in ADR-0012 step 4, so schema builds go through leyline.
+      Historical note: earlier versions forced --backend tree-sitter here
+      because leyline ignored schemas and parsed fewer languages — no
+      longer needed and the flag is gone. Unparseable schema languages
+      (cue) fail loudly via the coverage guard.
     required: false
     default: ''
   baseline:
@@ -90,10 +91,9 @@ runs:
       run: |
         set -euo pipefail
         if [ -n "$SCHEMA" ]; then
-          # The leyline backend (preferred by the default backend=auto)
-          # ignores build-time schemas; force the in-process tree-sitter
-          # backend so the caller's schema is actually honored.
-          mache build --schema "$SCHEMA" --backend tree-sitter . "${RUNNER_TEMP}/repo.db"
+          # leyline honors build-time schemas (ADR-0012 step 4 removed the
+          # in-process tree-sitter backend).
+          mache build --schema "$SCHEMA" . "${RUNNER_TEMP}/repo.db"
         else
           mache build . "${RUNNER_TEMP}/repo.db"
         fi

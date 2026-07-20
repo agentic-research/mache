@@ -101,7 +101,7 @@ tasks:
       # intermittently trips `panic: test timed out after 10m0s` (mache-9cd0f5).
       # This target is the single source CI invokes (ci.yml + integration.yml
       # both `task test`), so the bump keeps local == CI.
-      - go test -tags boltdb -race -gcflags=all=-d=checkptr=0 -timeout 20m -v ./...
+      - go test -tags boltdb -race -timeout 20m -v ./...
 
   test-coverage:
     desc: Run tests with coverage
@@ -207,15 +207,10 @@ tasks:
     cmds:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
 
-  parity:
-    desc: ASTWalker↔SitterWalker byte-level projection parity — self-contained (no leyline), always runs
+  test:ast:
+    desc: "ASTWalker correctness over real leyline _ast — fast named signal (skips if the pinned leyline isn't cached; never downloads). Replaces the retired sitter↔AST parity gate — in-process tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so there is no second projector to be parity WITH."
     cmds:
-      - go test -run 'TestASTQueryParity' ./internal/ingest/
-
-  parity:conformance:
-    desc: "Axis-2: parity vs real leyline-produced _ast (requires leyline on PATH; skips otherwise)"
-    cmds:
-      - go test -tags leyline -v -run 'TestASTParity' ./internal/ingest/
+      - go test -run 'ExtractAddressRefs|InferFromASTDB|ASTWalker|FlattenASTDB' ./internal/ingest/ ./internal/lattice/
 
   profile-tools:
     desc: E2E harness — exercise every MCP tool, emit per-tool latency/alloc manifest (mache-6b6da6)
@@ -563,7 +558,7 @@ tasks:
       - task: fmt
       - task: vet
       - task: lint
-      - task: parity
+      - task: test:ast
       - task: test
       - task: validate
       - task: docs:lint
@@ -582,11 +577,11 @@ tasks:
     # re-implement the commands inline (the principle from the version
     # single-sourcing work). Folding CI onto one `task ci` invocation is a
     # follow-up. Non-mutating: fmt:check verifies instead of rewriting, so a dirty
-    # tree fails the gate. `task test` already runs the parity gate
-    # (TestASTQueryParity); `parity` is listed first for fast, named signal.
+    # tree fails the gate. `task test:ast` is a fast named signal for ASTWalker correctness over
+    # real leyline `_ast` (the sitter parity gate was retired with CGO removal).
     desc: Non-mutating CI-equivalent gate — run this (or let the pre-push hook) to be 1:1 with CI before pushing
     cmds:
-      - task: parity
+      - task: test:ast
       - task: fmt:check
       - task: vet
       - task: lint
