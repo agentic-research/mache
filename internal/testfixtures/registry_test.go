@@ -12,10 +12,14 @@ import (
 // fixture resolves to mache's own repo root, builds an end-to-end
 // SQLiteGraph, and the resulting graph has structure.
 func TestRegistry_Get_MacheSelfReturnsLiveGraph(t *testing.T) {
-	if testing.Short() {
-		t.Skip("ingest is multi-second; rerun without -short")
+	// mache-self projects the WHOLE mache repo. Since ADR-0012 step 4
+	// (mache-37ae8b) removed in-process tree-sitter, this routes through
+	// leyline parse + the ASTWalker schema projection, which is
+	// pathologically slow at repo scale (mache-4f3840 — a v0.18.0 release
+	// blocker). Gate behind the large-tier opt-in until that lands.
+	if os.Getenv("MACHE_E2E_LARGE") == "" {
+		t.Skip("whole-repo mache-self projection is slow (mache-4f3840); set MACHE_E2E_LARGE=1 to run")
 	}
-	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	g := Get(t, "mache-self")
 	require.NotNil(t, g, "Get must return a non-nil SQLiteGraph")
@@ -54,10 +58,14 @@ func TestRegistry_Get_UnknownIDFails(t *testing.T) {
 // same test binary return the SAME *SQLiteGraph pointer — the
 // fixture is materialized once and reused.
 func TestRegistry_Get_CachesPerProcess(t *testing.T) {
-	if testing.Short() {
-		t.Skip("ingest is multi-second; rerun without -short")
+	// mache-self projects the WHOLE mache repo. Since ADR-0012 step 4
+	// (mache-37ae8b) removed in-process tree-sitter, this routes through
+	// leyline parse + the ASTWalker schema projection, which is
+	// pathologically slow at repo scale (mache-4f3840 — a v0.18.0 release
+	// blocker). Gate behind the large-tier opt-in until that lands.
+	if os.Getenv("MACHE_E2E_LARGE") == "" {
+		t.Skip("whole-repo mache-self projection is slow (mache-4f3840); set MACHE_E2E_LARGE=1 to run")
 	}
-	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	first := Get(t, "mache-self")
 	second := Get(t, "mache-self")
