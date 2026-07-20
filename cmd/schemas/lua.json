@@ -7,7 +7,7 @@
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(function_statement) @scope",
+          "selector": "(function_declaration) @scope",
           "files": [
             {
               "name": "source",
@@ -19,22 +19,6 @@
     },
     {
       "name": "locals",
-      "selector": "$",
-      "children": [
-        {
-          "name": "{{.index}}",
-          "selector": "(local) @scope",
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "variable_declarations",
       "selector": "$",
       "children": [
         {

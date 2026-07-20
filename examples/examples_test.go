@@ -9,6 +9,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,8 +45,8 @@ func TestMCPSchemaIngest(t *testing.T) {
 	absPath, err := filepath.Abs("mcp-sample-manifest.json")
 	require.NoError(t, err)
 
-	err = engine.Ingest(absPath)
-	require.NoError(t, err, "MCP manifest ingestion failed")
+	// JSON data (not source) — projected by the JsonWalker, no leyline parse.
+	require.NoError(t, engine.Ingest(absPath), "ingestion failed")
 
 	expectedNodes := []string{
 		"tools",
@@ -144,8 +145,7 @@ func TestTreeSitterExamples(t *testing.T) {
 			absSamplePath, err := filepath.Abs(tc.sampleFile)
 			require.NoError(t, err)
 
-			err = engine.Ingest(absSamplePath)
-			require.NoError(t, err, "ingestion failed")
+			lltest.IngestSourceViaLeyline(t, engine, absSamplePath)
 
 			for _, path := range tc.expectedNodes {
 				_, err := store.GetNode(path)

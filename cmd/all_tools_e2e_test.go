@@ -16,6 +16,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lltest"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/require"
@@ -189,7 +190,7 @@ func buildSQLiteBackend(t *testing.T, fixtureDir string, schema *api.Topology) (
 	writer, err := ingest.NewSQLiteWriter(dbPath)
 	require.NoError(t, err, "sqlite writer")
 	engine := ingest.NewEngine(schema, writer)
-	require.NoError(t, engine.Ingest(fixtureDir), "sqlite ingest")
+	lltest.IngestSourceViaLeyline(t, engine, fixtureDir)
 	require.NoError(t, writer.Close(), "sqlite writer close")
 
 	sg, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)

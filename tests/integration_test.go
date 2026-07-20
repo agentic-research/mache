@@ -79,7 +79,7 @@ func setup(t *testing.T) *testFixture {
 	// Ingest into MemoryStore
 	store := graph.NewMemoryStore()
 	engine := ingest.NewEngine(schema, store)
-	require.NoError(t, engine.Ingest(srcDir), "ingestion failed")
+	lltest.IngestSourceViaLeyline(t, engine, srcDir)
 
 	// Wire GraphFS with real write-back
 	gfs := nfsmount.NewGraphFS(store, schema)
