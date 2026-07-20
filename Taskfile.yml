@@ -207,6 +207,20 @@ tasks:
     cmds:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
 
+  leyline:ensure:
+    desc: "Provision the pinned ley-line binary into the local cache (~/.mache/bin) so the sole-parser projection tests RUN deterministically instead of skipping. CI runs this before `task test` — otherwise projection tests skip on a cold cache and green CI falsely implies they ran (mache-01c467). Idempotent: a no-op when the pinned binary is already cached."
+    deps: [build]
+    cmds:
+      - |
+        set -euo pipefail
+        SRC="$(mktemp -d)"; DB="$(mktemp -t mache-llwarm.XXXXXX.db)"
+        printf 'package p\nfunc warm() {}\n' > "$SRC/warm.go"
+        # `mache build` → autoInvokeLeylineParse → ResolveBinary(true), which
+        # downloads the pinned leyline into ~/.mache/bin if absent (SHA-verified).
+        ./{{.BINARY_NAME}} build "$SRC" "$DB" >/dev/null
+        rm -rf "$SRC" "$DB"
+        echo "leyline provisioned into local cache"
+
   test:ast:
     desc: "ASTWalker correctness over real leyline _ast — fast named signal (skips if the pinned leyline isn't cached; never downloads). Replaces the retired sitter↔AST parity gate — in-process tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so there is no second projector to be parity WITH."
     cmds:

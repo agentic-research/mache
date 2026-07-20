@@ -29,6 +29,15 @@ func IngestSourceViaLeyline(t *testing.T, engine *ingest.Engine, srcPath string)
 
 	bin, err := leyline.ResolveBinary(false) // never download in tests
 	if err != nil {
+		// In CI the pinned leyline MUST be provisioned (`task leyline:ensure`
+		// runs before `task test`), so a skip here would let green CI falsely
+		// imply the sole-parser projection path was exercised (mache-01c467).
+		// Fail loudly in CI; skip only in a local offline run.
+		if os.Getenv("CI") != "" {
+			t.Fatalf("pinned leyline unavailable in CI (%v) — provision it before tests "+
+				"with `task leyline:ensure`; source projection requires it after "+
+				"in-process tree-sitter removal (mache-37ae8b)", err)
+		}
 		t.Skipf("pinned leyline unavailable (%v); source projection requires it "+
 			"after in-process tree-sitter removal (mache-37ae8b)", err)
 	}
