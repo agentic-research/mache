@@ -135,6 +135,11 @@ func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schem
 		return fmt.Errorf("open leyline parse output %s: %w", tmpPath, err)
 	}
 	defer func() { _ = db.Close() }()
+	// One-shot build over a private temp _ast db mache exclusively owns — opt
+	// into the aggressive read tuning (single conn + EXCLUSIVE lock + mmap).
+	// Safe here precisely because nothing else touches tmpPath; the served
+	// path deliberately does NOT do this (mache-010123).
+	ingest.TuneReadConnForBuild(db)
 
 	// Coverage guard: a schema language leyline has no grammar for
 	// yields ZERO _ast rows while its source files silently land in
