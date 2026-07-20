@@ -495,6 +495,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 		}
 		astCleanup = cleanup
 		store.SetCallExtractor(newASTCallExtractor(astDB))
+		store.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
 	}
 
 	if err := engine.Ingest(dataSource); err != nil {
@@ -733,6 +734,7 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 		return nil, nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)
 	}
 	sg.SetCallExtractor(pickCallExtractor(sg.DB()))
+	sg.SetScopedCallExtractor(pickScopedCallExtractor(sg.DB()))
 	if err := sg.EagerScan(); err != nil {
 		_ = sg.Close()
 		extraCleanup()

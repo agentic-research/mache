@@ -176,3 +176,67 @@ func TestPickCallExtractor_HandlesNilDB(t *testing.T) {
 	extract := pickCallExtractor(nil)
 	assert.NotNil(t, extract, "nil DB must yield the CGO fallback, not a nil closure")
 }
+
+// TestNewASTScopedCallExtractor_ResolvesGoCall pins the scoped-extractor
+// wiring (bead mache-fd9982): unlike newASTCallExtractor, sourceID/scopeID
+// here are the REAL `_ast` source_id + scope node id, not a graph node id.
+// With an empty scopeID (whole-file match, mirroring the unscoped fixture),
+// it must still resolve the same call newASTCallExtractor finds.
+func TestNewASTScopedCallExtractor_ResolvesGoCall(t *testing.T) {
+	db, sourcePath := seedASTCallFixture(t)
+	defer func() { _ = db.Close() }()
+
+	extract := newASTScopedCallExtractor(db)
+	calls, err := extract(sourcePath, "", "go")
+	require.NoError(t, err)
+	require.Len(t, calls, 1, "synthetic call_expression(identifier=Bar) must surface")
+	assert.Equal(t, "Bar", calls[0].Token)
+	assert.Empty(t, calls[0].Qualifier, "bare identifier pattern has no qualifier")
+}
+
+// TestNewASTScopedCallExtractor_NonexistentScopeReturnsEmpty pins the
+// scoping contract: a scopeID prefix that matches nothing in `_ast` yields
+// no calls, not an error — the same "stale/mismatched id degrades to empty"
+// shape as the unscoped extractor's nonexistent-source-path test.
+func TestNewASTScopedCallExtractor_NonexistentScopeReturnsEmpty(t *testing.T) {
+	db, sourcePath := seedASTCallFixture(t)
+	defer func() { _ = db.Close() }()
+
+	extract := newASTScopedCallExtractor(db)
+	calls, err := extract(sourcePath, "no/such/scope", "go")
+	require.NoError(t, err)
+	assert.Empty(t, calls)
+}
+
+// TestPickScopedCallExtractor_PrefersASTWhenAvailable mirrors
+// TestPickCallExtractor_PrefersASTWhenAvailable for the scoped picker: a
+// .db carrying `_ast` yields a working scoped extractor.
+func TestPickScopedCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
+	db, sourcePath := seedASTCallFixture(t)
+	defer func() { _ = db.Close() }()
+
+	extract := pickScopedCallExtractor(db)
+	require.NotNil(t, extract)
+	calls, err := extract(sourcePath, "", "go")
+	require.NoError(t, err)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "Bar", calls[0].Token)
+}
+
+// TestPickScopedCallExtractor_NilWhenASTAbsentOrDBNil pins the inverse of
+// the CallExtractor picker: since there is no CGO fallback for the scoped
+// extractor, absence of `_ast` (or a nil db) must yield nil, not a closure
+// that would silently no-op. Callers (GetCallees) already treat a nil
+// scopedExtractor as "fall back to the legacy path".
+func TestPickScopedCallExtractor_NilWhenASTAbsentOrDBNil(t *testing.T) {
+	assert.Nil(t, pickScopedCallExtractor(nil))
+
+	dbPath := filepath.Join(t.TempDir(), "noast.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT, parent_id TEXT, name TEXT, kind INTEGER, mtime INTEGER, source_file TEXT, record TEXT);`)
+	require.NoError(t, err)
+
+	assert.Nil(t, pickScopedCallExtractor(db))
+}

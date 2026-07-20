@@ -92,3 +92,24 @@ func (m *parentAwareMatch) ScopeCalls() []string {
 	}
 	return nil
 }
+
+// ASTSourceID forwards to the inner match if it implements ASTScope. Nested
+// constructs (e.g. methods under a struct) are always wrapped in
+// parentAwareMatch — without this forward they'd lose the AST scope mapping
+// the engine persists onto their graph node, and find_callees would stay
+// broken for exactly the constructs most likely to need scoped resolution
+// (bead mache-fd9982).
+func (m *parentAwareMatch) ASTSourceID() string {
+	if as, ok := m.inner.(ASTScope); ok {
+		return as.ASTSourceID()
+	}
+	return ""
+}
+
+// ASTScopeID forwards to the inner match if it implements ASTScope.
+func (m *parentAwareMatch) ASTScopeID() string {
+	if as, ok := m.inner.(ASTScope); ok {
+		return as.ASTScopeID()
+	}
+	return ""
+}

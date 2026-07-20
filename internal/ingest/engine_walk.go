@@ -413,6 +413,24 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				}
 			}
 		}
+
+		// Persist the AST scope mapping (real _ast source_id + scope node id)
+		// onto the construct so serve-time find_callees can recover a scoped+
+		// qualified callee query directly from the graph node, instead of
+		// re-deriving it from the graph node id — which is NOT an _ast key and
+		// produced zero rows every time (bead mache-fd9982). Only astMatch
+		// (pure-Go, _ast-backed) implements ASTScope; sitterMatch (CGO
+		// tree-sitter) needs no such mapping since its extractor re-parses
+		// already-scoped content bytes directly.
+		if as, ok := match.(ASTScope); ok {
+			if srcID, scopeID := as.ASTSourceID(), as.ASTScopeID(); srcID != "" && scopeID != "" {
+				if node.Properties == nil {
+					node.Properties = make(map[string][]byte)
+				}
+				node.Properties["ast_source_id"] = []byte(srcID)
+				node.Properties["ast_scope_id"] = []byte(scopeID)
+			}
+		}
 		store.AddNode(node)
 
 		// Collect file children for batch write (single lock acquisition).

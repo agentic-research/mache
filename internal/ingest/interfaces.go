@@ -73,3 +73,29 @@ type CallExtractor interface {
 	// within this match's scope. Per-construct, not whole-file.
 	ScopeCalls() []string
 }
+
+// ASTScope is implemented by matches backed by a pre-parsed `_ast` table
+// (astMatch) to expose the two identifiers a serve-time scoped+qualified
+// callee query needs: the real `_ast`/`_source` key for the file, and the
+// scope node id under which calls should be constrained (the same
+// SourceID/ParentPrefix that ScopeCalls itself uses).
+//
+// The graph node id assigned to a construct (e.g.
+// "cmd/functions/evalOrAbs") is NEITHER of these — it's a schema-rendered
+// path, not an _ast key. Feeding it as source_id/scope id produces zero
+// `_ast` rows every time (bead mache-fd9982 root cause: find_callees was
+// silently broken on the serve/mount path). The engine persists these two
+// identifiers onto the construct's graph node (Properties
+// "ast_source_id"/"ast_scope_id") so GetCallees can recover them without
+// re-deriving anything from the node id.
+//
+// sitterMatch (CGO tree-sitter) does not implement this: its CallExtractor
+// re-parses already byte-range-scoped content directly and needs no
+// separate scope id.
+type ASTScope interface {
+	// ASTSourceID returns the real `_ast`/`_source` key for this match's file.
+	ASTSourceID() string
+	// ASTScopeID returns the `_ast` scope node id (ctx.ParentPrefix) this
+	// construct's calls are constrained to.
+	ASTScopeID() string
+}

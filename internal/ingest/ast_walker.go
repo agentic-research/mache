@@ -499,6 +499,19 @@ func (m *astMatch) ScopeCalls() []string {
 	return calls
 }
 
+// ASTSourceID implements ASTScope — the real `_ast`/`_source` key for this
+// match's file (NOT a graph node id; see bead mache-fd9982).
+func (m *astMatch) ASTSourceID() string {
+	return m.ctx.SourceID
+}
+
+// ASTScopeID implements ASTScope — the `_ast` scope node id this match's
+// calls are constrained to (the same value ScopeCalls passes to
+// ExtractCallsScoped as scopeID).
+func (m *astMatch) ASTScopeID() string {
+	return m.ctx.ParentPrefix
+}
+
 type astNode struct {
 	id        string
 	parentID  string

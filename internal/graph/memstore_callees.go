@@ -64,10 +64,22 @@ func addGoImport(imports map[string]string, alias, path string) {
 	imports[alias] = path
 }
 
-// GetCallees implements Graph. It parses the node's source to find calls,
-// then looks up those tokens in the defs index to find definitions.
+// GetCallees implements Graph. It extracts calls made by the construct, then
+// looks up those tokens in the defs index to find definitions.
+//
+// Two extraction paths are supported:
+//
+//  1. AST-scoped (preferred): when the construct's Properties carry
+//     "ast_source_id"/"ast_scope_id" (persisted at projection time by
+//     engine_walk.go — see ingest.ASTScope), GetCallees queries the
+//     pre-parsed `_ast` table directly, scoped to this construct. This is
+//     the fix for bead mache-fd9982: the legacy path below fed the GRAPH
+//     node id (e.g. "cmd/functions/evalOrAbs") as if it were the `_ast`
+//     source_id, which matched zero rows every time.
+//  2. Legacy content-based extractor: re-parses the construct's "source"
+//     file content. Kept for non-AST backends (or .dbs projected before
+//     this fix that lack the ast_source_id/ast_scope_id Properties).
 func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
-	// 1. Find the "source" file child
 	s.mu.RLock()
 	id = NormalizeID(id)
 	node, ok := s.nodes[id]
@@ -77,29 +89,7 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 		return nil, nil
 	}
 
-	var sourceID string
-	for _, childID := range node.Children {
-		if filepath.Base(childID) == "source" {
-			sourceID = childID
-			break
-		}
-	}
-	if sourceID == "" {
-		return nil, nil
-	}
-
-	// 2. Read content
-	srcNode, err := s.GetNode(sourceID)
-	if err != nil {
-		return nil, err
-	}
-	size := srcNode.ContentSize()
-	buf := make([]byte, size)
-	if _, err := s.ReadContent(sourceID, buf, 0); err != nil {
-		return nil, err
-	}
-
-	// 3. Determine langName from construct directory Properties
+	// Determine langName from construct directory Properties
 	var langName string
 	if node.Properties != nil {
 		if v, ok := node.Properties["lang"]; ok {
@@ -107,13 +97,54 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 		}
 	}
 
-	// 4. Extract qualified calls
-	if s.extractor == nil {
-		return nil, nil
+	var qcalls []QualifiedCall
+	scoped := false
+	if s.scopedExtractor != nil && node.Properties != nil {
+		astSrcID, hasSrc := node.Properties["ast_source_id"]
+		astScopeID, hasScope := node.Properties["ast_scope_id"]
+		if hasSrc && hasScope && len(astSrcID) > 0 && len(astScopeID) > 0 {
+			calls, err := s.scopedExtractor(string(astSrcID), string(astScopeID), langName)
+			if err != nil {
+				return nil, fmt.Errorf("extract calls (ast-scoped): %w", err)
+			}
+			qcalls = calls
+			scoped = true
+		}
 	}
-	qcalls, err := s.extractor(buf, sourceID, langName)
-	if err != nil {
-		return nil, fmt.Errorf("extract calls: %w", err)
+
+	if !scoped {
+		// 1. Find the "source" file child
+		var sourceID string
+		for _, childID := range node.Children {
+			if filepath.Base(childID) == "source" {
+				sourceID = childID
+				break
+			}
+		}
+		if sourceID == "" {
+			return nil, nil
+		}
+
+		// 2. Read content
+		srcNode, err := s.GetNode(sourceID)
+		if err != nil {
+			return nil, err
+		}
+		size := srcNode.ContentSize()
+		buf := make([]byte, size)
+		if _, err := s.ReadContent(sourceID, buf, 0); err != nil {
+			return nil, err
+		}
+
+		// 3. Extract qualified calls
+		if s.extractor == nil {
+			return nil, nil
+		}
+		calls, err := s.extractor(buf, sourceID, langName)
+		if err != nil {
+			return nil, fmt.Errorf("extract calls: %w", err)
+		}
+		qcalls = calls
 	}
 
 	// 5. Resolve tokens via defs index (qualified → import fallback → bare)

@@ -230,6 +230,46 @@ func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.
 	return calls, nil
 }
 
+// ExtractQualifiedCallsScoped is the per-construct equivalent of
+// ExtractQualifiedCalls: it returns qualified call tokens whose leaf node
+// lives under scopeID's id-path, instead of the whole file. sourceID is the
+// real `_ast`/`_source` key (e.g. "agent.go"), NOT a graph node id — feeding
+// a graph node id here (e.g. "cmd/functions/evalOrAbs") matches zero `_ast`
+// rows, which was the root cause of find_callees silently returning nothing
+// on the serve/mount path (bead mache-fd9982). Callers recover the correct
+// (sourceID, scopeID) pair from the construct's graph node Properties
+// ("ast_source_id"/"ast_scope_id"), persisted at projection time by
+// engine_walk.go via the ASTScope interface. Empty scopeID matches the
+// whole file, mirroring ExtractQualifiedCalls.
+func (w *ASTWalker) ExtractQualifiedCallsScoped(sourceID, scopeID, langName string) ([]graph.QualifiedCall, error) {
+	raw, ok := callPatternRegistry.Load(langName)
+	if !ok {
+		return nil, nil
+	}
+	patterns := raw.([]CallPattern)
+
+	seen := make(map[string]bool)
+	var calls []graph.QualifiedCall
+	for _, p := range patterns {
+		rows, err := w.queryCallPattern(sourceID, p, true, scopeID)
+		if err != nil {
+			continue
+		}
+		for _, r := range rows {
+			if r.token == "" {
+				continue
+			}
+			key := r.qualifier + "." + r.token
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			calls = append(calls, graph.QualifiedCall{Token: r.token, Qualifier: r.qualifier})
+		}
+	}
+	return calls, nil
+}
+
 // callRow is one extracted call from a single SQL pattern query.
 type callRow struct {
 	token     string

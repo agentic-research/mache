@@ -354,6 +354,7 @@ var rootCmd = &cobra.Command{
 				defer func() { _ = sg.Close() }()
 
 				sg.SetCallExtractor(pickCallExtractor(sg.DB()))
+				sg.SetScopedCallExtractor(pickScopedCallExtractor(sg.DB()))
 
 				start := time.Now()
 				log.Print("Scanning records...")
@@ -456,6 +457,7 @@ var rootCmd = &cobra.Command{
 				// The projected index carries no `_ast` table, so callees/
 				// resolve through the ley-line `_ast` db kept open above.
 				sg.SetCallExtractor(newASTCallExtractor(astDB))
+				sg.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
 				g = sg
 			} else {
 				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
@@ -477,6 +479,7 @@ var rootCmd = &cobra.Command{
 					}
 					defer astCleanup()
 					store.SetCallExtractor(newASTCallExtractor(astDB))
+					store.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
 				}
 
 				if filepath.Ext(dataPath) == ".git" {
