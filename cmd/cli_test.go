@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -56,24 +57,43 @@ func TestBuild_ProducesDB(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output DB should be non-empty")
 }
 
-// TestBuild_FCAInferenceCoversMethods guards the multi-file FCA
-// inference. The previous bootstrap parsed the first .go file only
-// and stopped — when that file held only function_declarations the
-// inferred schema was missing the 'methods' grouping, which silently
-// dropped every method_declaration at ingest. As a knock-on, dead_code
-// flagged any function only called by a method (mache-5d1o).
+// inferGoFCASchema runs the SURVIVING source-code FCA inference path
+// (ADR-0012 step 4): leyline-parse the tree into an `_ast` db, run
+// pure-Go lattice.InferFromASTDB via inferLanguages, and unwrap the
+// single-language namespace node exactly like inferDirSchema does.
+// Shared fixture step for the FCA regression tests below.
+func inferGoFCASchema(t *testing.T, srcDir string, goFiles int) *api.Topology {
+	t.Helper()
+	astDB, cleanup, err := autoInvokeLeylineParse(srcDir)
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	nodes, err := inferLanguages(astDB, []string{"go"}, map[string]int{"go": goFiles})
+	require.NoError(t, err)
+	require.Len(t, nodes, 1, "FCA over the go _ast rows must produce a schema")
+	// Single-language unwrap, mirroring inferDirSchema's return shape.
+	return &api.Topology{Version: api.SchemaVersion, Nodes: nodes[0].Children}
+}
+
+// TestBuild_FCAInferenceCoversMethods guards multi-file FCA inference.
+// The pre-leyline bootstrap parsed the first .go file only and stopped
+// — when that file held only function_declarations the inferred schema
+// was missing the 'methods' grouping, which silently dropped every
+// method_declaration at ingest. As a knock-on, dead_code flagged any
+// function only called by a method (mache-5d1o).
 //
 // Layout: two files where the FIRST one walked alphabetically has
-// no methods. Without multi-file accumulation the schema would lack
+// no methods. Without whole-tree accumulation the schema would lack
 // methods/, so the method's call to standaloneFunc would not appear
 // in node_refs.
 //
-// Pinned to --backend=tree-sitter: FCA inference is an in-process
-// feature that doesn't apply to the leyline path. After the
-// ADR-0012 step 3b auto-default flip, "auto" prefers leyline when
-// available; this test explicitly requests the in-process path so
-// the FCA assertions stay valid.
+// Migrated off `mache build` with empty --schema (ADR-0012 step 4:
+// that is now a raw leyline `_ast` passthrough with no projection) to
+// the surviving FCA entrypoint: leyline parse → inferLanguages
+// (lattice.InferFromASTDB) → runBuildViaLeylineSchema projection —
+// the same composition the mount/serve --infer paths use.
 func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
+	requirePinnedLeyline(t)
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
@@ -89,18 +109,10 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 		[]byte("package p\n\ntype T struct{}\n\nfunc (T) MethodCallsStandalone() { standaloneFunc() }\n"),
 		0o644))
 
+	schema := inferGoFCASchema(t, srcDir, 2)
+
 	outDB := filepath.Join(tmpDir, "out.db")
-
-	// Empty schemaPath forces the FCA-inference branch; explicit
-	// --backend=tree-sitter pins the in-process path so leyline
-	// auto-detection (PR #315) doesn't shortcut FCA.
-	oldSchemaPath := schemaPath
-	oldBackend := buildBackend
-	schemaPath = ""
-	buildBackend = "tree-sitter"
-	defer func() { schemaPath = oldSchemaPath; buildBackend = oldBackend }()
-
-	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
+	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema, false, nil))
 
 	db, err := sql.Open("sqlite", outDB)
 	require.NoError(t, err)
@@ -125,7 +137,14 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 // matched the inferred Go pattern and produced orphan construct dirs
 // (no source/ast.json/doc children) since the Go-shaped templates
 // don't render cleanly against the JS match.
+//
+// Migrated to the surviving leyline FCA path (see
+// TestBuild_FCAInferenceCoversMethods). inferLanguages sets
+// Config.Language="go", so InferFromASTDB samples only .go _ast rows
+// and stamps Language="go" on every generated node — the projection
+// must then route b.js to _project_files/ instead of matching it.
 func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
+	requirePinnedLeyline(t)
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
@@ -141,17 +160,14 @@ func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "b.js"),
 		[]byte("function jsFunc(x) { return x; }\n"), 0o644))
 
+	schema := inferGoFCASchema(t, srcDir, 1)
+	for _, n := range schema.Nodes {
+		assert.Equal(t, "go", n.Language,
+			"inferred node %q must carry the Language tag (PR #260)", n.Name)
+	}
+
 	outDB := filepath.Join(tmpDir, "out.db")
-
-	// Pin --backend=tree-sitter: FCA inference is in-process-only;
-	// auto-default-to-leyline (PR #315) would skip it.
-	oldSchemaPath := schemaPath
-	oldBackend := buildBackend
-	schemaPath = ""
-	buildBackend = "tree-sitter"
-	defer func() { schemaPath = oldSchemaPath; buildBackend = oldBackend }()
-
-	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
+	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema, false, nil))
 
 	db, err := sql.Open("sqlite", outDB)
 	require.NoError(t, err)

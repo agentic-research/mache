@@ -28,17 +28,19 @@ func (s buildFlagSnapshot) restore() {
 	schemaPath = s.schema
 }
 
-// TestBuild_BackendFlagDefaultIsAuto pins the cobra wiring: the
-// `--backend` flag exists on buildCmd and defaults to "auto".
-// Important to lock down because `auto` preserves today's
-// behavior; flipping the default to `leyline` is a separate
-// future change that should land deliberately.
+// TestBuild_BackendFlagDefaultIsAuto pins the cobra wiring for the
+// post-ADR-0012-step-4 contract: `--backend` still EXISTS (so existing
+// invocations like `--backend=tree-sitter` don't break) and still
+// defaults to "auto", but it is now a documented no-op — ley-line is
+// the sole parser, and the usage text must say the flag is deprecated
+// and ignored so scripts passing it get an honest signal from --help.
 func TestBuild_BackendFlagDefaultIsAuto(t *testing.T) {
 	flag := buildCmd.Flags().Lookup("backend")
-	require.NotNil(t, flag, "buildCmd must register --backend")
-	assert.Equal(t, "auto", flag.DefValue, "default backend must remain 'auto' until ADR-0012 commits to leyline-default")
-	assert.Contains(t, flag.Usage, "leyline", "help text must mention the leyline option")
-	assert.Contains(t, flag.Usage, "auto", "help text must call out the current default")
+	require.NotNil(t, flag, "buildCmd must keep registering --backend for backward compatibility")
+	assert.Equal(t, "auto", flag.DefValue, "default must stay 'auto' so old invocations parse unchanged")
+	assert.Contains(t, flag.Usage, "Deprecated", "help text must mark the flag deprecated")
+	assert.Contains(t, flag.Usage, "ignored", "help text must say the value is ignored")
+	assert.Contains(t, flag.Usage, "ley-line", "help text must say ley-line is the sole parser now")
 }
 
 // TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing pins
