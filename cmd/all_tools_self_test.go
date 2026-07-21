@@ -153,7 +153,7 @@ func TestE2E_MacheOnMache(t *testing.T) {
 	}
 
 	t.Setenv("MACHE_NO_LEYLINE", "1")
-	testfixtures.RequireTier(t, "medium")
+	testfixtures.RequireTier(t, "large")
 
 	// Resolve fixture path + schema through the registry. The matrix
 	// runner still builds per-backend graphs locally (memory + sqlite)
@@ -272,7 +272,7 @@ func TestE2E_RealCorpora(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e real-corpora; rerun without -short")
 	}
-	testfixtures.RequireTier(t, "medium")
+	testfixtures.RequireTier(t, "large")
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 	opts := readPprofOpts(t)
 
@@ -420,7 +420,7 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	}
 
 	t.Setenv("MACHE_NO_LEYLINE", "1")
-	testfixtures.RequireTier(t, "medium")
+	testfixtures.RequireTier(t, "large")
 
 	// Pull the cached SQLiteGraph from the registry. First call in the
 	// cmd test binary triggers ingest (~5s); subsequent tests reuse
