@@ -63,3 +63,51 @@ ______________________________________________________________________
     `../internal/…`→`../../internal/…`, `../cmd/…`→`../../cmd/…`.
 - `git rm docs/PRIOR_ART.md docs/competitive-landscape-2026.md`.
 - `git mv docs/ARENA.md docs/reference/arena.md`; fixed its 3 internal links (+1 `../` level).
+
+## Phase 3 — ADR normalization (committed 396d781)
+
+- All 24 ADRs now carry `title`/`status`/`date`/`tags` front-matter; redundant H1 removed
+  (front-matter title only, per ADR-0014's shape). Body starts at `## Context`.
+- Non-lossy rules applied: descriptive status prose -> `> **Status note:** …` blockquote;
+  relational metadata (Depends-On/Enables/Bead/Campaign/Relates to/Pairs with/Supersedes/
+  Breaking) preserved as a `**Key:** value` block after front-matter.
+- Dates for 0006/0007/0008 (no `Date:` field) taken from first-commit dates:
+  2026-04-12, 2026-02-14, 2026-02-14.
+- Status changes: 0001 Accepted->Superseded (+`superseded_by: ADR-0006`), 0006
+  Proposed->Implemented, 0012 Accepted->Implemented, 0023 ->Superseded (own body).
+  0014 kept Proposed (untouched — it was already the target shape). 0008 kept Implemented.
+- Added `docs/adr/README.md`: status vocabulary + sorted index of all 24 + notes on the
+  non-obvious statuses.
+
+## Phase 4 — design docs (committed 8e902a4)
+
+- `docs/superpowers/{specs,plans}` -> `docs/design/{specs,plans}`; added `docs/design/archive/`.
+- Archived 10 docs whose subject verified-shipped against the codebase. Beyond the 6 named
+  in the brief, I judged 4 more March-era docs as shipped:
+  - quotient-graph-design -> `internal/graph/quotient.go` + `get_diagram` tool
+  - repo-http-workspace-routing-design -> `cmd/serve_repo.go` + per-session worktrees
+  - hosted-index-pipeline (spec + plan) -> `repoCloneCache`, `extractRepoFromContext`,
+    `WithHTTPContextFunc` in `cmd/serve.go` + `cmd/serve_hosted_test.go`
+- Left active: analysis-substrate-consolidation (per brief), mache-measurement-contracts
+  (explicitly "the contract, not the harness"), art-platform-release-infrastructure
+  (Status: Draft, cross-repo scope).
+- `plans/` ended up empty (every plan shipped) -> added `.gitkeep` + `docs/design/README.md`
+  documenting the specs/plans/archive convention.
+- Removed the now-empty `docs/superpowers/` directory.
+
+## Phase 5 — docs/README.md
+
+- Wrote the start-here map last, after all moves, so every link resolves.
+- Front-matter uses covers-version v0.17.0 (docs:lint checks top-level docs/\*.md).
+
+## Link-fixing
+
+- Repo-wide grep for PRIOR_ART / competitive-landscape-2026 / ARENA.md / docs/superpowers.
+- Real markdown links fixed: README.md (1), GETTING-STARTED.md (2 -> merged + arena),
+  docs/reference/arena.md (3, deeper path).
+- Left alone (correct): historical past-tense filenames inside archived design docs, the
+  `superpowers:` *skill* names, and the `supersedes:` provenance in the merged doc's front-matter.
+- Ran a full relative-link checker over every .md: 216 links checked. The only 23 failures
+  are PRE-EXISTING and untouched by this work (vendored testdata/ + benchmarks/ fixtures,
+  a literal `relative/path` example in ADR-0018, docs/audit links pointing outside the repo).
+  No moved/renamed file produced a broken link.
