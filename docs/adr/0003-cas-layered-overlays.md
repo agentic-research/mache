@@ -1,7 +1,9 @@
-# 3. Content-Addressed Storage & Layered Overlays
-
-Date: 2026-02-12
-Status: Proposed
+---
+title: "ADR-0003: Content-Addressed Storage & Layered Overlays"
+status: Proposed
+date: 2026-02-12
+tags: [architecture, cas, content-addressing, overlays, storage]
+---
 
 ## Context
 
@@ -13,15 +15,17 @@ We will implement a **Content-Addressed Storage (CAS)** backing store with **Lay
 
 ### Core Mechanism
 
-1.  **CAS Blob Store:**
-    *   All file content is hashed (SHA-256).
-    *   Content is stored in a flat address space: `/data/cas/sha256:<hash>`.
-    *   This ensures zero duplication for identical files.
+1. **CAS Blob Store:**
 
-2.  **Topology Layers:**
-    *   The "Directory Tree" presented to the user is a lightweight overlay.
-    *   Files in the tree are effectively "hard links" or pointers to the CAS blobs.
-    *   Reorganizing a directory (e.g., moving a file) is an O(1) metadata operation; the content never moves.
+   - All file content is hashed (SHA-256).
+   - Content is stored in a flat address space: `/data/cas/sha256:<hash>`.
+   - This ensures zero duplication for identical files.
+
+1. **Topology Layers:**
+
+   - The "Directory Tree" presented to the user is a lightweight overlay.
+   - Files in the tree are effectively "hard links" or pointers to the CAS blobs.
+   - Reorganizing a directory (e.g., moving a file) is an O(1) metadata operation; the content never moves.
 
 ### Architecture
 
@@ -43,17 +47,17 @@ Logical Overlay (FUSE View):
 
 ### Positive
 
-1.  **Deduplication:** The same file appearing in multiple views (e.g., sorted by Date AND sorted by Author) takes up no extra storage.
-2.  **Versioning:** Updating a file creates a new blob. Old views can point to the old blob (Snapshotting), new views point to the new blob.
-3.  **Atomic Updates:** Switching a view from "Version A" to "Version B" is an atomic pointer swap.
+1. **Deduplication:** The same file appearing in multiple views (e.g., sorted by Date AND sorted by Author) takes up no extra storage.
+1. **Versioning:** Updating a file creates a new blob. Old views can point to the old blob (Snapshotting), new views point to the new blob.
+1. **Atomic Updates:** Switching a view from "Version A" to "Version B" is an atomic pointer swap.
 
 ### Negative
 
-1.  **GC Complexity:** We need a Garbage Collector to clean up blobs that are no longer referenced by any topology layer.
-2.  **Storage Overhead:** The CAS index requires maintenance.
+1. **GC Complexity:** We need a Garbage Collector to clean up blobs that are no longer referenced by any topology layer.
+1. **Storage Overhead:** The CAS index requires maintenance.
 
 ## Implementation Plan
 
-1.  **BlobStore Interface:** Define a generic interface for `Put(content) -> Hash` and `Get(Hash) -> content`.
-2.  **Graph Update:** Update `internal/graph` to store `ContentHash` instead of raw `[]byte` or `dbID` where appropriate.
-3.  **FUSE Resolve:** Update the FUSE `Read` handler to fetch from BlobStore using the node's hash.
+1. **BlobStore Interface:** Define a generic interface for `Put(content) -> Hash` and `Get(Hash) -> content`.
+1. **Graph Update:** Update `internal/graph` to store `ContentHash` instead of raw `[]byte` or `dbID` where appropriate.
+1. **FUSE Resolve:** Update the FUSE `Read` handler to fetch from BlobStore using the node's hash.

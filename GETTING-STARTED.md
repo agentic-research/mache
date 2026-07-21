@@ -214,5 +214,5 @@ See [ADR-0005](docs/adr/0005-fca-schema-inference.md) and [ADR-0008](docs/adr/00
 - [ROADMAP.md](docs/ROADMAP.md) — what's stable, what's next, what's long-term
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to send a PR
 - [docs/adr/](docs/adr/) — Architectural Decision Records
-- [docs/PRIOR_ART.md](docs/PRIOR_ART.md) — what mache builds on
-- [docs/competitive-landscape-2026.md](docs/competitive-landscape-2026.md) — comparison with other tools in the space
+- [docs/reference/competitive-landscape.md](docs/reference/competitive-landscape.md) — what mache builds on + comparison with other tools in the space
+- [docs/reference/arena.md](docs/reference/arena.md) — the capability-arena harness

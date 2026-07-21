@@ -1,16 +1,20 @@
-# ADR-0023: Unified Code-Fact IR — Property Graph over a Content-Addressed Symbol Set
+---
+title: "ADR-0023: Unified Code-Fact IR — Property Graph over a Content-Addressed Symbol Set"
+status: Superseded
+date: 2026-07-05
+tags: [architecture, ir, property-graph, content-addressing, superseded]
+---
 
-Date: 2026-07-05
-Status: Superseded (2026-07-08) — the `symbol_id` / `symbols` / `fact_edges`
-addressing in this ADR was replaced by the **merkle-AST content address**
-(`node_hash` + deduped `node_content` / `node_child`) in ley-line-open's producer
-rework (LLO ADR-0026) and consumed by mache's v0.15.0 reader. `symbol_id`
-(location-keyed BLAKE3 over span+kind+name) → `node_hash` (structure-keyed BLAKE3
-over the AST subtree — position-free, globally deduped). The
-property-graph-over-a-content-addressed-set thesis holds; only the addressing
-scheme and the `fact_edges` / `symbols` tables changed. See `mache-ff9a9d` /
-`mache-e1fa1f` + the LLO merkle work.
-Relates to:
+> **Status note (Superseded 2026-07-08):** the `symbol_id` / `symbols` / `fact_edges`
+> addressing in this ADR was replaced by the **merkle-AST content address** (`node_hash` +
+> deduped `node_content` / `node_child`) in ley-line-open's producer rework (LLO ADR-0026)
+> and consumed by mache's v0.15.0 reader. `symbol_id` (location-keyed BLAKE3 over
+> span+kind+name) → `node_hash` (structure-keyed BLAKE3 over the AST subtree — position-free,
+> globally deduped). The property-graph-over-a-content-addressed-set thesis holds; only the
+> addressing scheme and the `fact_edges` / `symbols` tables changed. See `mache-ff9a9d` /
+> `mache-e1fa1f` + the LLO merkle work.
+
+**Relates to:**
 
 - ADR-0013 (refs/defs canonical schema, fidelity poset — the pattern this generalizes)
 - ADR-0014 (mache in the constellation, `current_root` as arena clock; capnp typed records over SQL-string protocols)

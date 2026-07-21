@@ -1,9 +1,12 @@
-# ADR-0021: Semantic file-suggester for Claude Code's `fileSuggestion`
+---
+title: "ADR-0021: Semantic file-suggester for Claude Code's `fileSuggestion`"
+status: Proposed
+date: 2026-06-17
+tags: [architecture, file-suggester, claude-code, semantic-search]
+---
 
-Date: 2026-06-17
-Status: Proposed
-Bead: TBD (file when rsry reconnects — sibling beads in mache + cloister)
-Pairs with: ADR-0014 (mache-in-constellation), ADR-0020 (portable cache lockfile)
+**Bead:** TBD (file when rsry reconnects — sibling beads in mache + cloister)
+**Pairs with:** ADR-0014 (mache-in-constellation), ADR-0020 (portable cache lockfile)
 
 ## Context
 

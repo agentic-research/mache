@@ -1,27 +1,30 @@
-# 4. Wait-Free MVCC Memory Ledger for POSIX/SQL Graph Projection
+---
+title: "ADR-0004: Wait-Free MVCC Memory Ledger for POSIX/SQL Graph Projection"
+status: Proposed
+date: 2026-02-11
+tags: [architecture, mvcc, memory-ledger, concurrency, graph]
+---
 
-Date: 2026-02-11
-Status: Proposed
-Depends-On: ADR-0001 (FUSE bridge), ADR-0002 (Declarative Topology)
-Enables: ADR-0003 (CAS & Layered Overlays)
+**Depends-On:** ADR-0001 (FUSE bridge), ADR-0002 (Declarative Topology)
+**Enables:** ADR-0003 (CAS & Layered Overlays)
 
 ## Context
 
 ADR-0002 defines a Declarative Topology Schema that maps data to filesystem hierarchy. That ADR deliberately defers _how_ the data is held in memory -- it only defines the _shape_. We now need a runtime data layer that:
 
 1. **Parses massive, chaotic JSON feeds** (e.g., grype-db vulnerability data) into a semantic graph.
-2. **Serves concurrent FUSE reads and SQLite queries** without blocking.
-3. **Supports bulk-ingest updates** (new feed versions) without stalling readers.
-4. **Scales to 10M+ entities** without GC pauses or pointer-chasing.
+1. **Serves concurrent FUSE reads and SQLite queries** without blocking.
+1. **Supports bulk-ingest updates** (new feed versions) without stalling readers.
+1. **Scales to 10M+ entities** without GC pauses or pointer-chasing.
 
 ### Why not the obvious approaches?
 
-| Alternative | Why Rejected |
-|---|---|
-| **Go `map` + `sync.RWMutex`** | GC pressure at 10M+ heap-allocated nodes. Write-lock blocks all readers during ingest. Acceptable for prototyping (see Phased Approach below), not for production. |
-| **Embedded KV (Badger/Pebble)** | KV stores _can_ do graph traversals (Dgraph proves this on Badger). However, every read requires deserialization from `[]byte`, and every write requires serialization. For our hot path (FUSE `Readdir` iterating thousands of entries), the encode/decode overhead dominates. The real argument is eliminating serialization, not asymptotic complexity. |
-| **Neo4j / JanusGraph** | JVM process, network protocol, serialization. Correct for multi-service architectures, overkill for a single-process FUSE mount. |
-| **Standard FUSE in-process state** | No inherent problem with in-process state. The question is _which_ in-process data structure. |
+| Alternative                        | Why Rejected                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Go `map` + `sync.RWMutex`**      | GC pressure at 10M+ heap-allocated nodes. Write-lock blocks all readers during ingest. Acceptable for prototyping (see Phased Approach below), not for production.                                                                                                                                                                                         |
+| **Embedded KV (Badger/Pebble)**    | KV stores _can_ do graph traversals (Dgraph proves this on Badger). However, every read requires deserialization from `[]byte`, and every write requires serialization. For our hot path (FUSE `Readdir` iterating thousands of entries), the encode/decode overhead dominates. The real argument is eliminating serialization, not asymptotic complexity. |
+| **Neo4j / JanusGraph**             | JVM process, network protocol, serialization. Correct for multi-service architectures, overkill for a single-process FUSE mount.                                                                                                                                                                                                                           |
+| **Standard FUSE in-process state** | No inherent problem with in-process state. The question is _which_ in-process data structure.                                                                                                                                                                                                                                                              |
 
 ## Decision
 
@@ -69,6 +72,7 @@ Iteration: O(n) over dense array — sequential, cache-friendly.
 ```
 
 **Why "pointerless":** Dense arrays contain only fixed-size value types and integer offsets — no Go heap pointers. This means:
+
 - The Go GC does not scan these regions (no GC pressure).
 - No pointer-chasing during traversal (cache-line-friendly sequential access).
 - All "references" between entities are integer IDs resolved through sparse set lookups.
@@ -80,11 +84,13 @@ Iteration: O(n) over dense array — sequential, cache-friendly.
 We use a Read-Copy-Update (RCU) pattern, **not** a general MVCC system.
 
 **Precise guarantees:**
+
 - **Read path: Wait-free.** Readers perform one atomic load to acquire the current epoch pointer, then read exclusively from immutable data. No CAS loops, no retries, no locks. Every reader completes in bounded steps.
 - **Write path: Serialized.** A single writer goroutine builds each new epoch sequentially. Writes are not concurrent. This eliminates write-write contention and cache-line false sharing on the write side.
 - **Epoch swap: Lock-free.** The writer performs a single `atomic.StorePointer` to publish a new epoch. Readers that have already acquired epoch N continue on N; new readers see N+1.
 
 **What this is NOT:**
+
 - It is not "wait-free" in the unqualified sense (writes are serialized).
 - It is not MVCC in the database sense (no transaction IDs, no read-your-writes).
 - It is not a general concurrent data structure (single writer is a hard constraint).
@@ -197,6 +203,7 @@ The mmap'd ECS is the **derived** store, not the source of truth. The source JSO
 - **No WAL, no journaling.** The source feeds are the journal. Adding write-ahead logging for a derived, read-only projection is unjustified complexity.
 
 This means:
+
 - Crash during epoch compilation: epoch N-1 (if snapshotted) or full rebuild.
 - No torn-write concerns for the hot path (anonymous mmap is process-private).
 - Snapshot writes use atomic rename (`write to .tmp`, `fsync`, `rename`) for crash safety.
@@ -258,6 +265,7 @@ A FUSE `Read` on `/vulns/CVE-2024-1234/severity` translates to:
 mmap'd regions can raise `SIGBUS` on access if the backing file is truncated or the mapping becomes invalid. Since we primarily use `MAP_ANONYMOUS`, SIGBUS from backing file issues is not a concern for the hot path.
 
 For file-backed snapshots, SIGBUS is possible if:
+
 - The snapshot file is truncated while mapped.
 - Disk is full during msync.
 
@@ -269,13 +277,13 @@ For file-backed snapshots, SIGBUS is possible if:
 
 At target scale (10M entities, 5 component types, 64 bytes average per component):
 
-| Component | Size |
-|---|---|
-| Dense arrays (10M x 5 x 64B) | 3.2 GB |
-| Sparse arrays (10M x 5 x 4B) | 200 MB |
-| String table (est. 128B avg x 10M) | 1.3 GB |
-| Per-epoch total | ~4.7 GB |
-| Peak (3 concurrent epochs) | ~14.1 GB |
+| Component                          | Size     |
+| ---------------------------------- | -------- |
+| Dense arrays (10M x 5 x 64B)       | 3.2 GB   |
+| Sparse arrays (10M x 5 x 4B)       | 200 MB   |
+| String table (est. 128B avg x 10M) | 1.3 GB   |
+| Per-epoch total                    | ~4.7 GB  |
+| Peak (3 concurrent epochs)         | ~14.1 GB |
 
 **Minimum hardware:** 16 GB unified memory (M1 Pro / M2 Pro or higher). M1 base (8 GB) is insufficient at full scale.
 
@@ -286,10 +294,10 @@ At target scale (10M entities, 5 component types, 64 bytes average per component
 Using Go's `unsafe` package with mmap is the highest-risk aspect of this design. Mandatory rules:
 
 1. **Every function touching mmap'd memory MUST call `runtime.KeepAlive(mmapSlice)` before returning.** Missing one call site is a latent use-after-free.
-2. **`unsafe.Pointer` ↔ `uintptr` conversion MUST happen in a single expression.** Never store a `uintptr` across a potential GC safepoint.
-3. **Zero Go heap pointers in mmap'd regions.** Enforced by code review and a CI check that greps for pointer-typed fields in component structs.
-4. **All unsafe operations wrapped in named functions** (e.g., `readComponent[T](epoch, entityID)`) with bounds checks on the offset before the unsafe cast.
-5. **Fuzz testing** of the unsafe boundary with `go test -fuzz` targeting malformed entity IDs, out-of-bounds offsets, and concurrent access patterns.
+1. **`unsafe.Pointer` ↔ `uintptr` conversion MUST happen in a single expression.** Never store a `uintptr` across a potential GC safepoint.
+1. **Zero Go heap pointers in mmap'd regions.** Enforced by code review and a CI check that greps for pointer-typed fields in component structs.
+1. **All unsafe operations wrapped in named functions** (e.g., `readComponent[T](epoch, entityID)`) with bounds checks on the offset before the unsafe cast.
+1. **Fuzz testing** of the unsafe boundary with `go test -fuzz` targeting malformed entity IDs, out-of-bounds offsets, and concurrent access patterns.
 
 ## Consequences
 
@@ -320,22 +328,26 @@ Using Go's `unsafe` package with mmap is the highest-risk aspect of this design.
 This design is complex. We will build incrementally and let profiling data justify each escalation:
 
 ### Phase 0: Baseline (build first, measure)
+
 - Implement ADR-0002's schema engine with standard Go structs and `sync.RWMutex`.
 - Mount real vulnerability data (grype-db) through FUSE.
 - Profile: GC pauses, lock contention, `Readdir` latency at 100K / 1M / 10M entities.
 - **Gate:** Only proceed to Phase 1 if measured performance is insufficient.
 
 ### Phase 1: ECS without mmap
+
 - Replace Go structs with dense arrays (still heap-allocated, still GC-visible).
 - Measure improvement in iteration speed and GC pause reduction.
 - **Gate:** Only proceed to Phase 2 if GC is still the bottleneck.
 
 ### Phase 2: mmap backing
+
 - Move dense arrays to mmap'd anonymous regions.
 - Implement epoch-based reclamation.
 - Measure: GC eliminated from data path? TLB miss rates acceptable?
 
 ### Phase 3: Full RCU + snapshots
+
 - Add file-backed snapshots for fast restart.
 - Add SQLite virtual table with epoch-aware transactions.
 - Add SIGBUS handling for snapshot mmaps.

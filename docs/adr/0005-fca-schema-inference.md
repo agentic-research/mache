@@ -1,8 +1,11 @@
-# 5. FCA-Based Schema Inference
+---
+title: "ADR-0005: FCA-Based Schema Inference"
+status: Proposed
+date: 2026-02-12
+tags: [architecture, schema-inference, fca, lattice]
+---
 
-Date: 2026-02-12
-Status: Proposed
-Depends-On: ADR-0002 (Declarative Topology Schema)
+**Depends-On:** ADR-0002 (Declarative Topology Schema)
 
 ## Context
 
@@ -32,11 +35,11 @@ Ganter's NextClosure algorithm on a reservoir sample of records.
 
 1. **Reservoir sample** up to 1000 records from the SQLite source (single streaming
    pass, constant memory).
-2. **Conceptual scaling**: convert JSON fields to binary attributes — presence for
+1. **Conceptual scaling**: convert JSON fields to binary attributes — presence for
    paths, date scaling (year/month) for ISO timestamps, enum scaling for
    low-cardinality fields.
-3. **NextClosure**: enumerate all formal concepts with a 10,000 concept safety cap.
-4. **Projection**: walk the lattice to emit an `api.Topology`:
+1. **NextClosure**: enumerate all formal concepts with a 10,000 concept safety cap.
+1. **Projection**: walk the lattice to emit an `api.Topology`:
    - Identifier field = highest-cardinality universal string field
    - Shard levels = date-scaled attributes with 2–100 distinct groups
    - Leaf files = remaining universal scalar fields + `raw.json`
@@ -45,12 +48,12 @@ Ganter's NextClosure algorithm on a reservoir sample of records.
 
 `internal/lattice/` — separate from `graph` (runtime) and `ingest` (schema-driven).
 
-| File | Purpose |
-|------|---------|
+| File         | Purpose                                                       |
+| ------------ | ------------------------------------------------------------- |
 | `context.go` | `FormalContext`, bitmap incidence table, derivation operators |
-| `closure.go` | `NextClosure` algorithm, `Concept` type |
-| `project.go` | Lattice → `api.Topology` projection |
-| `infer.go` | `Inferrer` orchestrator, reservoir sampling |
+| `closure.go` | `NextClosure` algorithm, `Concept` type                       |
+| `project.go` | Lattice → `api.Topology` projection                           |
+| `infer.go`   | `Inferrer` orchestrator, reservoir sampling                   |
 
 ### CLI Integration
 

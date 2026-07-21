@@ -1,8 +1,12 @@
-# ADR-0006: Pure Go, MCP-First — Remove CGO and FUSE
+---
+title: "ADR-0006: Pure Go, MCP-First — Remove CGO and FUSE"
+status: Implemented
+date: 2026-04-12
+tags: [architecture, pure-go, cgo, fuse, mcp, implemented]
+---
 
-## Status
-
-Proposed
+> **Status note:** Implemented — shipped in v0.18.0. CGO tree-sitter and FUSE were removed;
+> see [ADR-0012](0012-cgo-removal-migration.md) for the migration plan.
 
 ## Context
 

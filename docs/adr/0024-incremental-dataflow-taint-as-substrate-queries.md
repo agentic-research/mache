@@ -1,9 +1,11 @@
-# ADR-0024: Incremental Dataflow & Taint as Substrate Queries
+---
+title: "ADR-0024: Incremental Dataflow & Taint as Substrate Queries"
+status: Proposed
+date: 2026-07-09
+tags: [architecture, dataflow, taint, substrate, incremental]
+---
 
-Date: 2026-07-09
-Status: Proposed
-
-Relates to:
+**Relates to:**
 
 - ADR-0023 (Unified Code-Fact IR — property graph over a content-addressed symbol set; the fact substrate this generalizes to dataflow/taint)
 - ADR-0016 (cross-language reference resolver — "separated presheaf on a coverage, not a sheaf")

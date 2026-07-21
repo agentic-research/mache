@@ -1,10 +1,12 @@
-# ADR-0017: Matrix-Coverage Test Harness — Invariants for "What 100% Means"
+---
+title: 'ADR-0017: Matrix-Coverage Test Harness — Invariants for "What 100% Means"'
+status: Proposed
+date: 2026-05-18
+tags: [testing, coverage, harness, invariants]
+---
 
-Date: 2026-05-18
-Status: Proposed
-Bead: `mache-6682ec`
-Campaign: `feat/evolve-coverage-trunk` (PR #385) — drive `internal/*` toward
-100% per-package coverage.
+**Bead:** `mache-6682ec`
+**Campaign:** `feat/evolve-coverage-trunk` (PR #385) — drive `internal/*` toward 100% per-package coverage.
 
 ## Context
 

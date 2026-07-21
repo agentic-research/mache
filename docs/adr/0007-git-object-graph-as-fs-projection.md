@@ -1,7 +1,12 @@
-# ADR 0007: Git Object Graph as Filesystem Projection
+---
+title: "ADR-0007: Git Object Graph as Filesystem Projection"
+status: Proposed
+date: 2026-02-14
+tags: [architecture, git, object-graph, projection, cas]
+---
 
-Status: Proposed
-Context:
+## Context
+
 Mache currently projects three types of structured data into filesystems:
 
 JSON/SQLite records (via JsonWalker, SQLiteGraph)
