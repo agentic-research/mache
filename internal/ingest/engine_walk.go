@@ -325,6 +325,10 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			store.AddRoot(node)
 		} else {
 			parentId := toNodeID(parentPath)
+			// Guard the childSeen + parent.Children read-modify-write against
+			// concurrent ReIngestFile (watcher, two files under this parent) —
+			// same rationale as engine_ingest.go (mache-706757).
+			e.mu.Lock()
 			parent, err := store.GetNode(parentId)
 			if err == nil {
 				if e.childSeen[parentId] == nil {
@@ -339,6 +343,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 					store.AddNode(parent)
 				}
 			}
+			e.mu.Unlock()
 		}
 
 		// Recurse children
