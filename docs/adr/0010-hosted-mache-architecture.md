@@ -1,8 +1,11 @@
-# 10. Hosted Mache Architecture
+---
+title: "ADR-0010: Hosted Mache Architecture"
+status: Proposed
+date: 2026-03-21
+tags: [architecture, hosting, remote, mcp, infrastructure]
+---
 
-Date: 2026-03-21
-Status: Proposed
-Depends-On: ADR-0002 (Declarative Topology), ADR-0009 (AST-Aware Write Pipeline)
+**Depends-On:** ADR-0002 (Declarative Topology), ADR-0009 (AST-Aware Write Pipeline)
 
 ## Context
 

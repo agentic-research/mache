@@ -1,15 +1,21 @@
-# 1. User-Space FUSE Bridge (fuse-t)
+---
+title: "ADR-0001: User-Space FUSE Bridge (fuse-t)"
+status: Superseded
+date: 2026-02-10
+tags: [architecture, fuse, macos, mount, superseded]
+superseded_by: ADR-0006
+---
 
-Date: 2026-02-10
-Status: Accepted
+> **Status note:** Superseded — FUSE was removed in v0.7.0; the pure-Go, NFS-only,
+> MCP-first direction is set by [ADR-0006](0006-pure-go-mcp-first.md).
 
 ## Context
 
 Running FUSE filesystems on macOS Silicon (M1/M2/M3) is difficult because:
 
 1. Apple has deprecated Kernel Extensions (kexts).
-2. `macFUSE` (the standard driver) requires disabling System Integrity Protection (SIP) or lowering security settings in Recovery Mode, which is unacceptable for a developer tool.
-3. We need a solution that runs entirely in userspace without requiring "System Extension" approval.
+1. `macFUSE` (the standard driver) requires disabling System Integrity Protection (SIP) or lowering security settings in Recovery Mode, which is unacceptable for a developer tool.
+1. We need a solution that runs entirely in userspace without requiring "System Extension" approval.
 
 ## Decision
 

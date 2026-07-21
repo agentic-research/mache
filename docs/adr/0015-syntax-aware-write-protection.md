@@ -1,10 +1,16 @@
-# 15. Syntax-Aware Write Protection
+---
+title: "ADR-0015: Syntax-Aware Write Protection"
+status: Accepted
+date: 2026-02-13
+tags: [architecture, write-back, validation, ast, syntax]
+---
 
-Date: 2026-02-13 (proposal) · Updated 2026-05-10 to reflect what shipped (renumbered from ADR-0006 to resolve a numbering collision with `0006-pure-go-mcp-first.md`)
-
-## Status
-
-Accepted and implemented. The validate → format → splice pipeline lives in `internal/writeback/` and is on by default on every write through the mount and the `write_file` MCP tool. See [ADR-0009](0009-ast-aware-write-pipeline.md) for the full write pipeline framing this is a part of.
+> **Status note:** Accepted and implemented (proposal dated 2026-02-13; updated 2026-05-10 to
+> reflect what shipped; renumbered from ADR-0006 to resolve a numbering collision with
+> `0006-pure-go-mcp-first.md`). The validate → format → splice pipeline lives in
+> `internal/writeback/` and is on by default on every write through the mount and the
+> `write_file` MCP tool. See [ADR-0009](0009-ast-aware-write-pipeline.md) for the full write
+> pipeline framing this is a part of.
 
 ## Context
 

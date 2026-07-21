@@ -1,10 +1,13 @@
-# ADR-0022: Streamable HTTP is the canonical MCP transport; stdio is an escape hatch
+---
+title: "ADR-0022: Streamable HTTP is the canonical MCP transport; stdio is an escape hatch"
+status: Accepted
+date: 2026-06-26
+tags: [architecture, mcp, transport, http, stdio]
+---
 
-Date: 2026-06-26
-Status: Accepted
-Bead: `mache-60dc86` (thread `mcp-transport-canonical/onboarding`)
-Relates to: ADR-0006 (pure-go-mcp-first), ADR-0010 (hosted mache architecture)
-Breaking: shipped in **v0.10.0**
+**Bead:** `mache-60dc86` (thread `mcp-transport-canonical/onboarding`)
+**Relates to:** ADR-0006 (pure-go-mcp-first), ADR-0010 (hosted mache architecture)
+**Breaking:** shipped in **v0.10.0**
 
 ## Context
 

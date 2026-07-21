@@ -1,9 +1,14 @@
-# ADR-0018: Doc-Drift Detection as Executable Specs (find_smells First-Class Workflow)
+---
+title: "ADR-0018: Doc-Drift Detection as Executable Specs (find_smells First-Class Workflow)"
+status: Accepted
+date: 2026-05-19
+tags: [smells, doc-drift, executable-specs, find-smells]
+---
 
-Date: 2026-05-19
-Status: Accepted (vocabulary amended post-merge per `mache-ec1a06`)
-Bead: `mache-e1b6c8`
-Pairs with: `mache-96341d` (rule categorization), `mache-966e22` (external rule pack distribution), `mache-9e03df` (viper+TOML config — *bead, not yet shipped*), `mache-ec1a06` (severity+tags vocabulary, prior-art research)
+> **Status note:** Accepted (vocabulary amended post-merge per `mache-ec1a06`).
+
+**Bead:** `mache-e1b6c8`
+**Pairs with:** `mache-96341d` (rule categorization), `mache-966e22` (external rule pack distribution), `mache-9e03df` (viper+TOML config — *bead, not yet shipped*), `mache-ec1a06` (severity+tags vocabulary, prior-art research)
 
 > **Amendment 2026-05-19 (`mache-ec1a06`):** Prior-art research across ruff/pylint/eslint/clippy/semgrep (full report: `/tmp/prior-art-rule-classification.md`) refined the schema before implementation. Two changes from the original draft:
 >

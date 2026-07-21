@@ -1,8 +1,11 @@
-# ADR-0016: Cross-Language Reference Resolver
+---
+title: "ADR-0016: Cross-Language Reference Resolver"
+status: Proposed
+date: 2026-05-10
+tags: [architecture, cross-language, references, resolver, refs]
+---
 
-Date: 2026-05-10
-Status: Proposed
-Relates to:
+**Relates to:**
 
 - ADR-0013 (refs/defs canonical schema, fidelity poset)
 - ADR-0014 (mache in the constellation, `current_root` as arena clock)

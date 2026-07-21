@@ -1,9 +1,11 @@
-# ADR-0013: Refs/Defs Canonical Schema (Fidelity Poset Over Producers)
+---
+title: "ADR-0013: Refs/Defs Canonical Schema (Fidelity Poset Over Producers)"
+status: Proposed
+date: 2026-05-05
+tags: [architecture, refs, defs, canonical-schema, fidelity-poset]
+---
 
-Date: 2026-05-05
-Status: Proposed
-Supersedes: implicit two-table consumer-branching pattern (`node_refs`/`node_defs`
-vs. `_lsp_refs`/`_lsp_defs` queried by separate code paths)
+**Supersedes:** implicit two-table consumer-branching pattern (`node_refs`/`node_defs` vs. `_lsp_refs`/`_lsp_defs` queried by separate code paths)
 
 ## Context
 

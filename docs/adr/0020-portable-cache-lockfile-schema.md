@@ -1,6 +1,10 @@
-# ADR-0020 — Mache adopts LLO's CacheLockfile schema for portable-cache (consumer-side ADR)
+---
+title: "ADR-0020: Mache adopts LLO's CacheLockfile schema for portable-cache (consumer-side)"
+status: Proposed
+date: 2026-05-21
+tags: [architecture, cache, lockfile, capnp, portable, leyline]
+---
 
-- **Status:** Proposed (2026-05-21)
 - **Tracking bead:** `mache-aeb262`
 - **Branch:** `feat/portable-cache-aeb262`
 - **Pairs with:**

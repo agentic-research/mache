@@ -1,10 +1,9 @@
-# 9. AST-Aware Write Pipeline
-
-Date: 2026-02-14
-
-## Status
-
-Accepted
+---
+title: "ADR-0009: AST-Aware Write Pipeline"
+status: Accepted
+date: 2026-02-14
+tags: [architecture, write-back, ast, pipeline]
+---
 
 ## Context
 

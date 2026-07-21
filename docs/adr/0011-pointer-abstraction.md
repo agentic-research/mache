@@ -1,7 +1,9 @@
-# ADR-0011: Pointer Abstraction — Filesystems, Graphs, CAS, Git, Diffs Are All the Same Thing
-
-Date: 2026-04-29
-Status: Proposed
+---
+title: "ADR-0011: Pointer Abstraction — Filesystems, Graphs, CAS, Git, Diffs Are All the Same Thing"
+status: Proposed
+date: 2026-04-29
+tags: [architecture, abstraction, pointer, cas, git]
+---
 
 ## Context
 

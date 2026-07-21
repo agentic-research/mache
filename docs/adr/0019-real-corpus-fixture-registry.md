@@ -1,9 +1,14 @@
-# ADR-0019: Real-Corpus Fixture Registry as First-Class Test Infrastructure
+---
+title: "ADR-0019: Real-Corpus Fixture Registry as First-Class Test Infrastructure"
+status: Proposed
+date: 2026-05-19
+tags: [testing, fixtures, corpus, test-infrastructure]
+---
 
-Date: 2026-05-19
-Status: Proposed (amended same-day per paradigm-assessor audit)
-Bead: `mache-eb9b30`
-Pairs with: `mache-655e98` (rough-edges parity gate that started this), ADR-0017 (matrix test harness — supersedes its SB-05 synthetic-medium), ADR-0018 (doc-drift workflow — depends on this for its perf gates)
+> **Status note:** Proposed (amended same-day per paradigm-assessor audit).
+
+**Bead:** `mache-eb9b30`
+**Pairs with:** `mache-655e98` (rough-edges parity gate that started this), ADR-0017 (matrix test harness — supersedes its SB-05 synthetic-medium), ADR-0018 (doc-drift workflow — depends on this for its perf gates)
 
 > **Amendment 2026-05-19 (paradigm-assessor audit, log: `_agent_log/paradigm-assessor_2026-05-19_audit_log_adr0019.md`):** Three changes from the original draft:
 >
