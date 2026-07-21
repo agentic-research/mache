@@ -422,8 +422,23 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// (pure-Go, _ast-backed) implements ASTScope; sitterMatch (CGO
 		// tree-sitter) needs no such mapping since its extractor re-parses
 		// already-scoped content bytes directly.
+		//
+		// Only persist for a real LEAF construct scope — not for:
+		//   - "$" grouping matches (functions/, types/, imports/ container
+		//     dirs): these have no real @scope node, so hasScope (computed
+		//     above via extractDocComments/DocRange) is false for them.
+		//   - the package-root match itself, whose captured @scope IS the
+		//     entire source_file node — ley-line assigns that root AST node
+		//     the SAME id as the file's _source.id (verified empirically:
+		//     `_ast` row "pkg.go|pkg.go|source_file|0|85"), so scopeID==srcID
+		//     is the whole-file signal.
+		// Without this guard, grouping dirs and the package root inherit
+		// ast_scope_id = the whole file, and find_callees on them queries
+		// the scoped extractor over the ENTIRE file — a whole-file call
+		// union that's nondeterministic (last-file-wins) for multi-file
+		// packages (bead mache-6fbaf1, F3).
 		if as, ok := match.(ASTScope); ok {
-			if srcID, scopeID := as.ASTSourceID(), as.ASTScopeID(); srcID != "" && scopeID != "" {
+			if srcID, scopeID := as.ASTSourceID(), as.ASTScopeID(); srcID != "" && scopeID != "" && scopeID != srcID && hasScope {
 				if node.Properties == nil {
 					node.Properties = make(map[string][]byte)
 				}

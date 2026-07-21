@@ -20,20 +20,31 @@ import (
 //     calls — see bead mache-9ca6af for the receiver-method root cause.
 //  6. Final fallback: name match in the nodes table.
 //
-// Calls are extracted one of two ways:
+// Calls are extracted one of three ways:
 //
 //  1. AST-scoped (preferred): when the construct's node Properties carry
 //     "ast_source_id"/"ast_scope_id" (persisted at projection time — see
-//     ingest.ASTScope), GetCallees queries the pre-parsed `_ast` table
+//     ingest.ASTScope) AND a scoped extractor is wired (requires a LIVE
+//     `_ast` table), GetCallees queries the pre-parsed `_ast` table
 //     directly, scoped to this construct. Fixes bead mache-fd9982: the
 //     legacy path below fed the GRAPH node id (e.g.
 //     "cmd/functions/evalOrAbs") as if it were the `_ast` source_id, which
 //     matched zero rows every time — find_callees silently returned nothing
 //     on every serve/mount .db.
-//  2. Legacy content-based extractor: re-reads the construct's "source" file
+//  2. node_refs fallback: when #1 is unavailable — no `_ast` table (a
+//     `mache build --schema` .db never retains it: keeping `_ast` for a
+//     whole repo costs 228MB+162MB, prohibitive) or the construct lacks the
+//     Properties — but the construct has a "source" file child, resolve its
+//     calls from node_refs(token, node_id) instead. node_refs already holds
+//     every call token ScopeCalls found for this construct at projection
+//     time (engine_walk.go's `store.AddRef(token, sourceFileID)`), keyed by
+//     the construct's "source" file node id. This is bare-token only (no
+//     qualifier fidelity) — cross-package same-name over-match is possible,
+//     but strictly better than returning [] (bead mache-6fbaf1).
+//  3. Legacy content-based extractor: re-reads the construct's "source" file
 //     content and re-parses it. Kept for non-AST backends (or .dbs
 //     projected before this fix that lack the ast_source_id/ast_scope_id
-//     Properties).
+//     Properties AND have no node_refs coverage).
 func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	id = NormalizeID(id)
 
@@ -43,7 +54,9 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	if g.useNodesTable {
 		var recordJSON sql.NullString
 		// kind = 1 → graph.NodeKindDir (constructs are dirs).
-		_ = g.db.QueryRow("SELECT record FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON)
+		if err := g.db.QueryRow("SELECT record FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON); err != nil && err != sql.ErrNoRows {
+			return nil, fmt.Errorf("query node properties for %s: %w", id, err)
+		}
 		if recordJSON.Valid && recordJSON.String != "" {
 			var props map[string][]byte
 			if json.Unmarshal([]byte(recordJSON.String), &props) == nil {
@@ -98,28 +111,49 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 			return nil, nil
 		}
 
-		// 2. Read content
-		segments := strings.Split(sourceID, "/")
-		_, fileLeaf := g.walkSchema(segments)
-
-		if fileLeaf == nil && !g.useNodesTable {
-			return nil, nil
+		// node_refs fallback (bead mache-6fbaf1): a `mache build --schema`
+		// .db has no live `_ast` table (retaining it for a whole repo costs
+		// 228MB+162MB — prohibitive), so pickScopedCallExtractor/
+		// pickCallExtractor above wire up nil/no-op extractors and the
+		// content-based path below would silently return [] every time.
+		// node_refs(token, node_id) already holds every call token
+		// ScopeCalls found for this construct at projection time
+		// (engine_walk.go), keyed by the construct's "source" file node id
+		// — resolve straight from there instead.
+		if g.useNodesTable {
+			tokens, rerr := g.calleeTokensFromRefs(sourceID)
+			if rerr != nil {
+				return nil, rerr
+			}
+			for _, tok := range tokens {
+				qcalls = append(qcalls, QualifiedCall{Token: tok})
+			}
 		}
 
-		content, err := g.resolveContent(sourceID, segments, fileLeaf)
-		if err != nil {
-			return nil, nil
-		}
+		if len(qcalls) == 0 {
+			// 2. Read content
+			segments := strings.Split(sourceID, "/")
+			_, fileLeaf := g.walkSchema(segments)
 
-		// 3. Extract qualified calls
-		if g.extractor == nil {
-			return nil, nil
+			if fileLeaf == nil && !g.useNodesTable {
+				return nil, nil
+			}
+
+			content, err := g.resolveContent(sourceID, segments, fileLeaf)
+			if err != nil {
+				return nil, nil
+			}
+
+			// 3. Extract qualified calls
+			if g.extractor == nil {
+				return nil, nil
+			}
+			calls, err := g.extractor(content, sourceID, langName)
+			if err != nil {
+				return nil, fmt.Errorf("extract calls: %w", err)
+			}
+			qcalls = calls
 		}
-		calls, err := g.extractor(content, sourceID, langName)
-		if err != nil {
-			return nil, fmt.Errorf("extract calls: %w", err)
-		}
-		qcalls = calls
 	}
 	if len(qcalls) == 0 {
 		return nil, nil
@@ -247,4 +281,30 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	}
 
 	return nodes, nil
+}
+
+// calleeTokensFromRefs returns the call tokens node_refs recorded for
+// sourceID (a construct's "source" file node id) at projection time —
+// engine_walk.go's ScopeCalls -> store.AddRef(token, sourceFileID). This is
+// the node_refs fallback GetCallees uses when there is no live `_ast` table
+// to run the scoped extractor against (bead mache-6fbaf1). Returns (nil,
+// nil) when node_refs simply has no rows for sourceID (nothing to fall back
+// to, not an error); a genuine query/scan failure is surfaced so a
+// transient DB error doesn't silently masquerade as "no callees".
+func (g *SQLiteGraph) calleeTokensFromRefs(sourceID string) ([]string, error) {
+	rows, err := g.db.Query("SELECT token FROM node_refs WHERE node_id = ?", sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("query node_refs for %s: %w", sourceID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tokens []string
+	for rows.Next() {
+		var tok string
+		if err := rows.Scan(&tok); err != nil {
+			return nil, fmt.Errorf("scan node_refs token for %s: %w", sourceID, err)
+		}
+		tokens = append(tokens, tok)
+	}
+	return tokens, rows.Err()
 }
