@@ -293,6 +293,11 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/error_surface_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/ingest/leyline_ast_test_helper_test.go",
       "count": 1
     },
@@ -1408,6 +1413,11 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/ast_walker_calls.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine.go",
       "count": 1
     },
@@ -2065,6 +2075,11 @@
       "rule_id": "long_function",
       "source_id": "internal/ingest/ast_walker_test.go",
       "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/callees_noast_e2e_test.go",
+      "count": 1
     },
     {
       "rule_id": "long_function",
