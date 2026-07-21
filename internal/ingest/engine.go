@@ -262,6 +262,18 @@ func (e *Engine) ReIngestFile(path string) error {
 		return err // coverage:ignore
 	} // coverage:ignore
 
+	// Drop the ASTWalker's per-file caches for this source before re-projecting
+	// — otherwise ReIngestFile would rebuild from the walker's immortal
+	// indexCache/sourceCache/etc. and never see even a refreshed _ast row
+	// (mache-018eee). NOTE: this makes the re-projection consistent with the
+	// current _ast, but the served _ast is still frozen at startup for a
+	// leyline-backed serve — reflecting a live SOURCE edit additionally
+	// requires re-parsing the file via leyline into the served db, which is a
+	// disclosed gap (see cmd/serve.go's "frozen .db" log), tracked separately.
+	if e.astWalker != nil {
+		e.astWalker.InvalidateSource(e.sourceIDFor(realPath))
+	}
+
 	// Re-ingest the single file using the existing schema and store
 	if err := e.ingestFile(realPath, info.ModTime()); err != nil { // coverage:ignore
 		return err // coverage:ignore
