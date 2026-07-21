@@ -170,6 +170,35 @@ func TuneReadConnForBuild(db *sql.DB) {
 	_, _ = db.Exec("PRAGMA mmap_size = 2147483648")
 }
 
+// InvalidateSource drops every per-file cache entry for sourceID so a
+// subsequent query re-reads that file from the db. The mount/serve watcher
+// calls this when a source file changes (mache-018eee) — without it,
+// ReIngestFile would re-project from the walker's immortal caches and never see
+// the edit.
+//
+// It also bounds cache growth on long-lived daemons: the per-file caches
+// (indexCache/sourceCache/langCache/pkgCache/addrRefCache/callTokenCache)
+// otherwise accumulate O(repo) node rows + source bytes for the walker's
+// lifetime. That ceiling is bounded by the projected repo's file count; a
+// one-shot `mache build` walker is short-lived so it needs no eviction, and a
+// serve/mount daemon evicts per-file on change here (mache-024e9c).
+func (w *ASTWalker) InvalidateSource(sourceID string) {
+	w.indexCache.Delete(sourceID)
+	w.sourceCache.Delete(sourceID)
+	w.langCache.Delete(sourceID)
+	w.pkgCache.Delete(sourceID)
+	// addrRefCache/callTokenCache are keyed by sourceID+"\x00"+lang.
+	prefix := sourceID + "\x00"
+	for _, m := range []*sync.Map{&w.addrRefCache, &w.callTokenCache} {
+		m.Range(func(k, _ any) bool {
+			if ks, ok := k.(string); ok && strings.HasPrefix(ks, prefix) {
+				m.Delete(ks)
+			}
+			return true
+		})
+	}
+}
+
 // EnsureIndexes creates compound indexes on the _ast table for query
 // performance. Call once after opening the DB, before concurrent queries.
 // Transforms findNodesByKind from O(N) full table scan to O(K) index lookup.
