@@ -80,3 +80,30 @@ func TestCloisterGroupAdvertisedPrefixIsMachePrefix(t *testing.T) {
 			g.Name, g.AdvertisedPrefix)
 	}
 }
+
+// TestToolTiersAreValid guards the tier vocabulary.
+//
+// Tier is a string type, so a typo ("lsp " / "standalone") would compile and
+// then be emitted straight into the published server.json. "standalone" in
+// particular must never come back: it described the pre-v0.18.0 world where
+// mache had an in-process parser, and ADR-0012 step 4 removed that — every
+// source projection now requires ley-line-open.
+func TestToolTiersAreValid(t *testing.T) {
+	valid := map[Tier]bool{
+		TierBase:       true,
+		TierLSP:        true,
+		TierEmbeddings: true,
+		TierAny:        true,
+	}
+	for _, tool := range ToolRegistry() {
+		resolved := tool.Tier.Resolved()
+		if !valid[resolved] {
+			t.Errorf("tool %q has unknown tier %q — valid tiers are base, lsp, embeddings, any",
+				tool.Name, resolved)
+		}
+		if string(resolved) == "standalone" {
+			t.Errorf("tool %q uses the retired %q tier: ley-line-open is required for "+
+				"every source projection since v0.18.0", tool.Name, "standalone")
+		}
+	}
+}

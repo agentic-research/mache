@@ -11,6 +11,13 @@ import (
 	"strings"
 )
 
+// BinaryVersion is the exact ley-line-open release mache pins, downloads and
+// verifies. Exported so artifact generators (tools/server-json-gen) can derive
+// the dependency version mache publishes rather than restating it — server.json
+// previously carried an independently-maintained "0.4.5" that had fallen four
+// minors behind this pin.
+const BinaryVersion = leylineBinaryVersion
+
 // leylinePinnedSHA256 pins the SHA-256 of each ley-line-open release asset for
 // leylineBinaryVersion, keyed "<GOOS>-<GOARCH>". mache verifies every
 // DOWNLOADED leyline against this: the binary it runs must be byte-identical to

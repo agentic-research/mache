@@ -153,7 +153,7 @@ tasks:
       - rm -f melange.rsa melange.rsa.pub
 
   image:
-    desc: Build OCI image (melange + apko) → mache.tar (mache:0.8.0)
+    desc: Build OCI image (melange + apko) → mache.tar, tagged from internal/buildinfo/version.txt
     preconditions:
       - sh: command -v melange
         msg: "melange required — install: https://github.com/chainguard-dev/melange"
@@ -167,7 +167,7 @@ tasks:
       # secret for byte-stable artifacts.
       - test -f melange.rsa -a -f melange.rsa.pub || melange keygen melange.rsa
       - melange build melange.yaml --arch x86_64,aarch64 --signing-key melange.rsa --out-dir ./packages
-      - apko build apko.yaml mache:0.8.0 mache.tar --keyring-append melange.rsa.pub
+      - apko build apko.yaml "mache:$(tr -d '[:space:]' < internal/buildinfo/version.txt)" mache.tar --keyring-append melange.rsa.pub
       - 'echo "Built mache.tar — load with: docker load -i mache.tar"'
 
   image:verify:

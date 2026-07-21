@@ -30,8 +30,10 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/agentic-research/mache/internal/buildinfo"
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/mcpregistry"
 )
 
@@ -85,10 +87,10 @@ const websiteURL = "https://github.com/agentic-research/mache/blob/main/GETTING-
 // drop-in copy.
 const defaultHTTPPort = "7532"
 
-// minLeyLineOpenVersion declares the minimum LLO release whose
-// enrichment tables mache reads. Bumped in lock-step with LLO's
-// substrate / wire-format changes that touch _ast / _lsp_* schemas.
-const minLeyLineOpenVersion = "0.4.5"
+// minLeyLineOpenVersion is the LLO version mache publishes as its dependency
+// floor, derived from the binary pin mache actually verifies at runtime so the
+// two cannot drift.
+var minLeyLineOpenVersion = strings.TrimPrefix(leyline.BinaryVersion, "v")
 
 // serverDoc is the top-level server.json envelope. Field order is
 // load-bearing — encoding/json's struct-field ordering is the contract
@@ -135,12 +137,17 @@ type transportEntry struct {
 	Note    string   `json:"note"`
 }
 
-type toolSplit struct {
-	Standalone          []string `json:"standalone"`
-	RequiresLeyLineOpen []string `json:"requires-ley-line-open"`
+// toolTiers is the `_meta…/tools` block: tool names bucketed by the
+// ley-line-open artifact they need. Emitted in a fixed tier order so the
+// generated file is stable.
+type toolTiers struct {
+	Base       []string `json:"base"`
+	LSP        []string `json:"lsp"`
+	Embeddings []string `json:"embeddings"`
+	Any        []string `json:"any"`
 }
 
-type optionalDep struct {
+type requiredDep struct {
 	Purpose        string `json:"purpose"`
 	MinimumVersion string `json:"minimum-version"`
 }
@@ -262,25 +269,27 @@ func buildDoc() (*serverDoc, error) {
 		})
 	}
 
-	// Standalone vs requires-ley-line-open split mirrors the existing
-	// hand-maintained block. Drive it from the registry's
-	// RequiresLeyLineOpen field so it can't drift from the truth.
-	var standalone, llo []string
+	// Bucket by tier, driven off the registry so it cannot drift. There is
+	// deliberately no "standalone" bucket: since ADR-0012 step 4, leyline
+	// parses every source projection, so no tool runs without ley-line-open.
+	var tiers toolTiers
 	for _, tool := range registry {
-		if tool.RequiresLeyLineOpen {
-			llo = append(llo, tool.Name)
-		} else {
-			standalone = append(standalone, tool.Name)
+		switch tool.Tier.Resolved() {
+		case mcpregistry.TierLSP:
+			tiers.LSP = append(tiers.LSP, tool.Name)
+		case mcpregistry.TierEmbeddings:
+			tiers.Embeddings = append(tiers.Embeddings, tool.Name)
+		case mcpregistry.TierAny:
+			tiers.Any = append(tiers.Any, tool.Name)
+		default:
+			tiers.Base = append(tiers.Base, tool.Name)
 		}
 	}
 
 	meta := newOrderedObject()
 	meta.set("io.github.agentic-research.mache/transports", buildTransports())
-	meta.set("io.github.agentic-research.mache/tools", toolSplit{
-		Standalone:          standalone,
-		RequiresLeyLineOpen: llo,
-	})
-	meta.set("io.github.agentic-research.mache/optional-deps", buildOptionalDeps())
+	meta.set("io.github.agentic-research.mache/tools", tiers)
+	meta.set("io.github.agentic-research.mache/required-deps", buildRequiredDeps())
 	meta.set("io.github.agentic-research.mache/source-acceptance", sourceAcceptance{
 		Directories: "any tree containing source files — auto-detects language preset (Go, Rust, Python, TypeScript, ...)",
 		DBFiles:     ".db files produced by `mache build` or `leyline parse` open instantly via SQLiteGraph (pure-Go path)",
@@ -343,10 +352,13 @@ func buildTransports() *orderedObject {
 	return transports
 }
 
-func buildOptionalDeps() *orderedObject {
+func buildRequiredDeps() *orderedObject {
 	deps := newOrderedObject()
-	deps.set("io.github.agentic-research/ley-line-open", optionalDep{
-		Purpose:        "Provides _ast / _lsp_* / _embeddings tables consumed by semantic_search, get_type_info, get_diagnostics, and the AST-backed find_smells rules.",
+	deps.set("io.github.agentic-research/ley-line-open", requiredDep{
+		Purpose: "Required. `leyline parse` is mache's sole source parser since v0.18.0 " +
+			"(ADR-0012 step 4) — it produces the _ast tables every source projection " +
+			"reads. Also supplies _lsp_* tables (get_type_info, get_diagnostics) and " +
+			"embeddings (semantic_search).",
 		MinimumVersion: minLeyLineOpenVersion,
 	})
 	return deps
