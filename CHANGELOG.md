@@ -4,6 +4,63 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [v0.18.0] — 2026-07-21
+
+The CGO-removal wave, part two — and the end of it: the in-process tree-sitter
+backend is gone, ley-line is the sole source parser, and the released binaries
+are built `CGO_ENABLED=0`. Removing the in-process projector exposed an
+O(nodes²) blowup in the pure-Go `ASTWalker` and a silently-dead `find_callees`
+on the serve path; both are fixed and verified here.
+
+### Changed
+
+- **Pure Go — in-process CGO tree-sitter removed** (ADR-0012 step 4). Every
+  source path (`build` / `serve` / `mount` / `infer` / testfixtures) routes
+  through `leyline parse` → `_ast` → the pure-Go `ASTWalker`. `SitterWalker`,
+  `sitter_flatten`, the 28 vendored grammar bindings and the `go-tree-sitter`
+  dependency are deleted (−428K lines of generated `parser.c` alone), and the
+  release builds `CGO_ENABLED=0`. The pinned leyline parses 27 of 28 registry
+  languages (all but cue, which has no compatible grammar crate); a schema
+  coverage guard reports the gap loudly. The `leyline_fs` FFI stays behind its
+  separate `//go:build leyline` tag. (`mache-37ae8b`, #533)
+
+### Fixed
+
+- **O(nodes²) projection blowup → O(nodes)** — porting SitterWalker's in-memory
+  tree walk to per-node SQL made every child lookup re-scan all same-kind nodes
+  in the file, so a whole-repo projection took >3 min (and hung ~20 min in
+  testfixtures). Fixed with a per-file in-memory node index, once-per-file
+  call/ref extraction, and build-only read tuning (mmap). **cmd/ 4m22s → 3.1s
+  (~78×); whole repo >3 min → ~10s**, with output proven byte-identical to the
+  pre-fix baseline (0 differing rows across `nodes`/`node_refs`/`node_defs`).
+  (`mache-4f3840`)
+- **`find_callees` silently returned nothing on serve/mount** — the call
+  extractor fed the *graph node id* into `_ast` as `source_id`, matching zero
+  rows every time; test coverage hid it behind a regex stand-in. Restored via a
+  scoped+qualified `_ast` query, with the construct's `_ast` scope persisted at
+  projection time, plus a `node_refs` fallback so it also works on a
+  schema-built `.db` served without an `_ast` table. (`mache-fd9982`,
+  `mache-6fbaf1`)
+- **Read-connection tuning no longer mutates served databases** — the
+  single-connection + `locking_mode=EXCLUSIVE` tuning is scoped to the one-shot
+  build that owns its temp db; it previously clobbered the served graph's pool
+  and held a process-lifetime file lock. (`mache-010123`)
+- **Whole-file extraction surfaces DB errors instead of caching partials** — a
+  transient failure could permanently empty a file's callees/refs with no
+  signal. (`mache-015f5c`, `mache-6ff371`)
+- **ASTWalker caches invalidated on re-ingest**, and the unsynchronized
+  `childSeen` map is now mutex-guarded against concurrent `ReIngestFile`.
+  (`mache-018eee`, `mache-024e9c`, `mache-706757`)
+
+### Internal
+
+- CI provisions the pinned leyline before tests, so the sole-parser projection
+  tests run instead of silently skipping. (`mache-01c467`)
+- Whole-repo E2E fixtures retiered out of the `-race` unit run (they blew the
+  20-minute budget under the race detector) and run non-race in the integration
+  workflow. (`mache-4f3840`)
+- `modernc.org/sqlite` 1.53.0 → 1.54.0. (#532)
+
 ## [v0.17.0] — 2026-07-14
 
 The CGO-removal wave, part one: the structural smell gate runs entirely on the

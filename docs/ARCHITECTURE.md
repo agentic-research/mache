@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.17.0
-last-verified: 2026-07-08
+covers-version: v0.18.0
+last-verified: 2026-07-21
 sources-of-truth:
   - internal/lang/lang.go
   - cmd/serve_handlers.go
