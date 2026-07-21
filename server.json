@@ -51,7 +51,7 @@
       }
     },
     "io.github.agentic-research.mache/tools": {
-      "standalone": [
+      "base": [
         "list_directory",
         "read_file",
         "find_callers",
@@ -60,7 +60,6 @@
         "get_communities",
         "find_definition",
         "get_overview",
-        "get_sheaf_status",
         "get_impact",
         "get_architecture",
         "get_diagram",
@@ -68,16 +67,21 @@
         "resolve_ref",
         "find_smells"
       ],
-      "requires-ley-line-open": [
-        "semantic_search",
+      "lsp": [
         "get_type_info",
         "get_diagnostics"
+      ],
+      "embeddings": [
+        "semantic_search"
+      ],
+      "any": [
+        "get_sheaf_status"
       ]
     },
-    "io.github.agentic-research.mache/optional-deps": {
+    "io.github.agentic-research.mache/required-deps": {
       "io.github.agentic-research/ley-line-open": {
-        "purpose": "Provides _ast / _lsp_* / _embeddings tables consumed by semantic_search, get_type_info, get_diagnostics, and the AST-backed find_smells rules.",
-        "minimum-version": "0.4.5"
+        "purpose": "Required. `leyline parse` is mache's sole source parser since v0.18.0 (ADR-0012 step 4) — it produces the _ast tables every source projection reads. Also supplies _lsp_* tables (get_type_info, get_diagnostics) and embeddings (semantic_search).",
+        "minimum-version": "0.8.0"
       }
     },
     "io.github.agentic-research.mache/source-acceptance": {

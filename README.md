@@ -21,7 +21,7 @@ That's the 30-second path for the flagship application — code intelligence on 
 Two things new users hit:
 
 - **HTTP is the canonical transport.** One shared daemon serves every project, routing per session via the MCP roots protocol. `--stdio` exists only as an escape hatch for CI / sandboxes / headless agents and is never registered for editor use (see [ADR-0022](docs/adr/0022-mcp-transport-canonical.md)).
-- For **Rust / Python / TypeScript**, point mache at a [ley-line-open](https://github.com/agentic-research/ley-line-open)-built `.db` instead of a directory (`mache serve ./code.db`) to get accurate `find_callers` + `get_type_info` + `get_diagnostics`. A bare directory uses the built-in tree-sitter tier, which is tuned for Go.
+- **[ley-line-open](https://github.com/agentic-research/ley-line-open) is a hard requirement, not an add-on.** Since v0.18.0 mache has no in-process parser: `leyline parse` produces the `_ast` database that every source projection reads. `task install` provisions the pinned binary. Point mache at a directory *or* a pre-built `.db` — both route through leyline; a pre-built `.db` just skips the parse step and can carry LSP/embedding enrichment.
 
 To project non-code data instead, hand `mache serve` (or `mache mount`) a schema with `--schema` and point it at your JSON or SQLite source — the [example schemas](examples/README.md) cover NVD, KEV, Notion, Trivy, Terraform, and more.
 
@@ -29,13 +29,41 @@ For the full first-run flow — source choice (directory vs `.db` vs live hot-sw
 
 ## Code intelligence: what it gives an agent
 
-The code projection is where the engine is deepest. Eighteen MCP tools wrap the projected graph (seventeen read-surface plus `write_file`). Fourteen work standalone; four (`semantic_search`, `get_type_info`, `get_diagnostics`, `get_sheaf_status`) draw on [ley-line-open](https://github.com/agentic-research/ley-line-open) enrichment. `find_smells` covers fourteen structural code-smell rules (`dead_code`, `cyclomatic_complexity`, `god_file`, `fan_out_skew`, `untested_function`, …); five of those require a `.db` built by ley-line-open.
+The code projection is where the engine is deepest. **18 MCP tools** wrap the projected graph — 17 read-surface plus `write_file`.
 
-**Live LSP enrichment.** `get_type_info` / `get_diagnostics` no longer need a pre-baked `.db` — pass a `file=` and mache auto-spawns the ley-line daemon, which drives the language server (rust-analyzer, gopls, …) on demand and projects real hover / type / diagnostic data into the graph. Verified end-to-end on **Rust and Go** (e.g. `get_type_info(symbol, file)` returns rust-analyzer's signature + doc comment). This is the same primitive [Serena](https://github.com/oraios/serena) is built on, but as one enrichment *tier* over a tree-sitter base that still works without a language server — see [`prior-art/`](prior-art/) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
+| What you get                                | Tools                                                                     | Tier         | Status                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------- | ------------ | ----------------------------------------------------- |
+| **Parse** source into a graph               | —                                                                         | required     | Stable — 27 of 28 languages (all but cue: no grammar) |
+| **Orient** in an unfamiliar repo            | `get_overview`, `get_architecture`, `get_diagram`                         | base         | Stable                                                |
+| **Cluster** related code                    | `get_communities`                                                         | base         | *Beta* — Louvain                                      |
+| **Navigate** by structure, not string match | `find_definition`, `list_directory`, `read_file`, `resolve_ref`, `search` | base         | Stable                                                |
+| **Trace** the call graph, both directions   | `find_callers`, `find_callees`, `get_impact`                              | base         | Stable — `find_callees` on serve fixed in v0.18.0     |
+| **Judge** structural quality                | `find_smells` — 14 rules                                                  | base¹        | Stable — `fan_out_skew` is qualifier-aware            |
+| **Edit** without breaking the file          | `write_file` — validate → format → splice, draft mode on reject           | base         | Stable                                                |
+| **Types + diagnostics** from a real LSP     | `get_type_info`, `get_diagnostics`                                        | + LSP pass   | Stable, optional tier                                 |
+| **Search by meaning**, not tokens           | `semantic_search`                                                         | + embeddings | Stable, optional tier                                 |
+| **Check enrichment freshness**              | `get_sheaf_status`                                                        | any²         | Stable                                                |
+| **Serve across repos**                      | *(`--mount NAME=PATH`)*                                                   | base         | Stable — `find_callers` federates; callees per-mount  |
+| **Mount as a filesystem** + write back      | *(NFS)*                                                                   | base         | Stable                                                |
+| **Move a built graph** between machines/CI  | *(`mache cache` push/pull/verify)*                                        | —            | Stable — content-addressed, local dir or OCI          |
+| **Infer a schema** from data                | *(`--infer`)*                                                             | —            | *Beta* — FCA + greedy entropy                         |
 
-For the full tool inventory and capability matrix (which tools need which tables), see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
+**Tiers.** There is no "works without ley-line-open" tier — `leyline parse` *is* the parser.
+
+- **base** — any source projection. `leyline parse` → `_ast` → pure-Go `ASTWalker`, from a directory or a pre-built `.db`.
+- **+ LSP pass** — leyline's LSP tier, auto-spawned on demand (pass a `file=`) or pre-baked into a `.db`. Drives the real language server (rust-analyzer, gopls, …); verified end-to-end on **Rust and Go**. Same primitive [Serena](https://github.com/oraios/serena) is built on, but as an enrichment *tier* over the `_ast` base rather than the foundation.
+- **+ embeddings** — a ley-line-open-built `.db` carrying embedding vectors.
+
+¹ 5 of the 14 rules need an enriched `.db`.  ² Reports daemon cache state; returns `{available: false}` when unreachable, so it's safe to call anywhere.
+
+Internal machinery — canonical `v_refs`/`v_defs` views (ADR-0013), the capnp event-log readthrough, snapshot memoization, the e2e tool/flamegraph harness — lives in [ARCHITECTURE.md](docs/ARCHITECTURE.md) and [CHANGELOG.md](CHANGELOG.md).
+
+For which tools read which tables, see [ARCHITECTURE.md § MCP Server](docs/ARCHITECTURE.md#core-abstractions) and [§ Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
 ## How it works
+
+<details>
+<summary>Schema → walkers → graph → MCP / filesystem (with diagram)</summary>
 
 Every projection follows the same shape: a schema declares the topology, walkers extract nodes and edges from the source (JSONPath for JSON, direct SQL for SQLite, AST queries for code), and the resulting graph is served over MCP or mounted as a filesystem. The source-code path — the most developed — looks like this:
 
@@ -50,38 +78,21 @@ flowchart LR
     FS -.- Agent
 ```
 
-1. **Parse** — `leyline parse` (from ley-line-open) turns source into an `_ast` database (27 of 28 languages — all but cue, which has no tree-sitter grammar anywhere). mache reads it pure-Go via the `ASTWalker`; in-process CGO tree-sitter was removed in [ADR-0012](docs/adr/0012-cgo-removal-migration.md) step 4.
+1. **Parse** — `leyline parse` (from ley-line-open) turns source into an `_ast` database. mache reads it pure-Go via the `ASTWalker`; in-process CGO tree-sitter was removed in [ADR-0012](docs/adr/0012-cgo-removal-migration.md) step 4.
 1. **Infer** — schema inference (FCA + greedy entropy) discovers the natural groupings (`functions/`, `types/`, `classes/`)
 1. **Link** — cross-reference extraction builds a call graph from identifiers and imports. When the LSP pass from ley-line-open has run, refs flow through a sibling `.bindings.capnp` typed event log (per [ADR-0013](docs/adr/0013-refs-defs-canonical-schema.md)) rather than SQL columns — the wire format is the cross-runtime contract.
 1. **Project** — the graph is exposed as MCP tools (primary) or a mounted filesystem (optional)
 
 The graph is the same on either path; MCP and the filesystem are two ways to talk to it.
 
-## Status
-
-| Capability                              | Status                                                                                           |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Tree-sitter parsing (28 langs)          | Stable                                                                                           |
-| MCP server (17 tools, HTTP canonical)   | Stable                                                                                           |
-| Cross-repo serve (`--mount NAME=PATH`)  | Stable (find_callers federates; find_callees stays per-mount for now)                            |
-| Cross-references (callers/callees)      | Stable                                                                                           |
-| `find_smells` (14 structural rules)     | Stable. `fan_out_skew` is qualifier-aware via ley-line-open `BindingRecord.qualifier`            |
-| Canonical views (ADR-0013)              | Stable. `v_refs`/`v_defs` with fidelity poset (`mention` ⊑ `binding`)                            |
-| Capnp event-log readthrough             | Stable. `${db}.bindings.capnp` is the cross-runtime contract for binding refs                    |
-| E2E tool harness + flamegraphs          | Stable. `task profile-tools-pprof` + `task flamegraphs` produce per-tool pprof + SVG flamegraphs |
-| `MemoryStore.{Defs,Refs}Map` cache      | Stable. Memoized snapshots; invalidated on AddDef / AddRef / DeleteFileNodes                     |
-| NFS mount + write-back                  | Stable                                                                                           |
-| Schema inference (FCA)                  | Beta                                                                                             |
-| Community detection (Louvain)           | Beta                                                                                             |
-| LSP enrichment (type info, diagnostics) | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open)                    |
-| Semantic search (embeddings)            | Optional — [ley-line-open](https://github.com/agentic-research/ley-line-open)                    |
+</details>
 
 <details>
 <summary>Why this exists</summary>
 
 Agents operate without topology. They see flat files, grep for strings, build a mental model, forget it next turn, rebuild it. The structure is *in* the data — functions call other functions, types reference types, configs depend on configs — but nothing exposes it.
 
-Mache does. Point it at data, it figures out the shape. Source code gets parsed by tree-sitter. JSON and YAML get walked. Schema inference discovers the natural groupings without config. The agent can then explore the topology directly: follow call chains, find definitions, read context, write back.
+Mache does. Point it at data, it figures out the shape. Source code gets parsed by `leyline parse`. JSON and YAML get walked. Schema inference discovers the natural groupings without config. The agent can then explore the topology directly: follow call chains, find definitions, read context, write back.
 
 Built for agents first. The design choices — stable node paths across edits, identity-preserving write-back — exist because agents need to reference things reliably across turns. The outputs are human-discernible because the representations are filesystems and SQL, but the topology is the point.
 
@@ -105,6 +116,9 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 </details>
 
 ## Portable cache (mache-aeb262)
+
+<details>
+<summary>Content-addressed <code>.db</code> bundles — push/pull/verify, OCI transport</summary>
 
 `mache cache` push/pulls the projected `.db` as a content-addressed bundle so CI / new dev machines / agents don't re-parse a million lines on every cold start.
 
@@ -132,22 +146,27 @@ When the source db has an `_ast` table, chunks carry the AST node rows too — p
 
 See [`docs/cache/phase-4-chunk-shape.md`](docs/cache/phase-4-chunk-shape.md) for the wire format and [`cloister-spec/build-cache/v1/`](https://github.com/agentic-research/cloister/tree/main/cloister-spec/build-cache/v1) for the OCI transport spec.
 
+</details>
+
 ## Deployment modes
+
+<details>
+<summary>Bundle / OCI image (production) vs local dev</summary>
 
 Mache has two supported deployment shapes:
 
 **Bundle / image (canonical production path).** Mache ships its own
 [apko](https://github.com/chainguard-dev/apko) +
 [melange](https://github.com/chainguard-dev/melange) configs to produce a
-distroless OCI image (`mache:0.11.0`, ~33MB, x86_64 + aarch64). This is the
+distroless OCI image (`mache:0.18.0`, ~33MB, x86_64 + aarch64). This is the
 unit that a cluster orchestrator (e.g. cloister) deploys; inside the
 bundle, mache speaks to a co-located ley-line daemon over a UDS socket
 and is unreachable except via the orchestrator-mediated wire.
 
 ```bash
-task image                          # → mache.tar (mache:0.11.0)
+task image                          # → mache.tar (mache:0.18.0)
 docker load -i mache.tar
-docker run --rm -i mache:0.11.0 serve --stdio /path/to/source
+docker run --rm -i mache:0.18.0 serve --stdio /path/to/source
 ```
 
 Given a fixed `melange.rsa` signing key and pinned toolchain, the build is
@@ -178,6 +197,8 @@ in CI or when leyline-open hasn't published a release for your platform.
 Exposing this mode externally requires a reverse proxy in front for auth;
 mache itself does not implement perimeter auth (the bundle gets it from
 the orchestrator).
+
+</details>
 
 ## Docs
 

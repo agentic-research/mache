@@ -33,12 +33,49 @@ type Tool struct {
 	// cloister/cloister-spec/mcp-tool/v1 contract.
 	Name string
 
-	// RequiresLeyLineOpen marks tools whose backend reads tables only
-	// produced by ley-line-open's enrichment passes (_ast, _lsp_*,
-	// _embeddings). Surfaced in server.json's
-	// `io.github.agentic-research.mache/tools` block; informational
-	// only — the cloister wire ignores it.
-	RequiresLeyLineOpen bool
+	// Tier records which ley-line-open artifacts a tool's backend needs
+	// beyond the base `_ast` projection. Surfaced in server.json's
+	// `io.github.agentic-research.mache/tools` block; informational only —
+	// the cloister wire ignores it.
+	//
+	// The empty value means TierBase, so entries that need nothing beyond
+	// the parse output stay declaration-free.
+	Tier Tier
+}
+
+// Tier names the ley-line-open artifact a tool depends on.
+//
+// Before v0.18.0 this was a bool named RequiresLeyLineOpen, splitting the
+// surface into "standalone" and "requires-ley-line-open". ADR-0012 step 4
+// removed the in-process parser and made `leyline parse` the sole source
+// parser, at which point *every* source projection requires ley-line-open
+// and "standalone" described nothing. The meaningful question became which
+// additional artifact a tool needs, which is what these tiers record.
+type Tier string
+
+const (
+	// TierBase needs only the `_ast` tables that `leyline parse` produces
+	// for any source projection. This is the zero value.
+	TierBase Tier = "base"
+
+	// TierLSP needs the `_lsp_*` tables from leyline's LSP pass, either
+	// pre-baked into a .db or produced on demand by the daemon.
+	TierLSP Tier = "lsp"
+
+	// TierEmbeddings needs embedding vectors in a ley-line-open-built .db.
+	TierEmbeddings Tier = "embeddings"
+
+	// TierAny is for tools that read no projected tables at all and are
+	// therefore safe to call against any source (e.g. daemon status).
+	TierAny Tier = "any"
+)
+
+// Resolved returns the tier, mapping the zero value to TierBase.
+func (t Tier) Resolved() Tier {
+	if t == "" {
+		return TierBase
+	}
+	return t
 }
 
 // ToolRegistry returns the canonical, ordered list of MCP tools mache
@@ -58,13 +95,13 @@ func ToolRegistry() []Tool {
 		{Name: "find_callers"},
 		{Name: "find_callees"},
 		{Name: "search"},
-		{Name: "semantic_search", RequiresLeyLineOpen: true},
+		{Name: "semantic_search", Tier: TierEmbeddings},
 		{Name: "get_communities"},
 		{Name: "find_definition"},
-		{Name: "get_type_info", RequiresLeyLineOpen: true},
-		{Name: "get_diagnostics", RequiresLeyLineOpen: true},
+		{Name: "get_type_info", Tier: TierLSP},
+		{Name: "get_diagnostics", Tier: TierLSP},
 		{Name: "get_overview"},
-		{Name: "get_sheaf_status"},
+		{Name: "get_sheaf_status", Tier: TierAny},
 		{Name: "get_impact"},
 		{Name: "get_architecture"},
 		{Name: "get_diagram"},
