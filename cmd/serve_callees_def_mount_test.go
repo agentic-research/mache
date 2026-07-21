@@ -151,7 +151,7 @@ func TestFindCallees_AnnotatesMountOnComposite(t *testing.T) {
 		Data: []byte("package main\nfunc Validate() { Validate() }\n"),
 	})
 	require.NoError(t, auth.AddDef("Validate", "functions/Validate"))
-	auth.SetCallExtractor(newCallExtractor())
+	auth.SetCallExtractor(testGoCallExtractor())
 
 	billing := graph.NewMemoryStore()
 	billing.AddRoot(&graph.Node{ID: "functions", Mode: fs.ModeDir})
@@ -216,7 +216,7 @@ func TestFindCallees_CrossMountResolvesAndAnnotates(t *testing.T) {
 		Data: []byte("package main\nfunc Caller() { Validate() }\n"),
 	})
 	require.NoError(t, auth.AddDef("Caller", "functions/Caller"))
-	auth.SetCallExtractor(newCallExtractor())
+	auth.SetCallExtractor(testGoCallExtractor())
 
 	// billing: defines Validate, the cross-mount callee target.
 	billing := graph.NewMemoryStore()
@@ -234,7 +234,7 @@ func TestFindCallees_CrossMountResolvesAndAnnotates(t *testing.T) {
 	cg := graph.NewCompositeGraph()
 	require.NoError(t, cg.Mount("auth", auth))
 	require.NoError(t, cg.Mount("billing", billing))
-	cg.SetCallExtractor(newCallExtractor())
+	cg.SetCallExtractor(testGoCallExtractor())
 
 	handler := makeFindCalleesHandler(cg)
 	res, err := handler(context.Background(), makeRequest(map[string]any{"path": "auth/functions/Caller"}))

@@ -464,7 +464,7 @@ func TestSelectWalker_ReturnsASTWalkerWhenASTTableExists(t *testing.T) {
 	assert.True(t, ok, "should return ASTWalker when _ast table exists")
 }
 
-func TestSelectWalker_ReturnsSitterWalkerWhenNoASTTable(t *testing.T) {
+func TestSelectWalker_ErrorsWhenNoASTTable(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
@@ -473,10 +473,12 @@ func TestSelectWalker_ReturnsSitterWalkerWhenNoASTTable(t *testing.T) {
 	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, name TEXT)`)
 	require.NoError(t, err)
 
+	// ADR-0012 step 4 removed in-process CGO tree-sitter, so a db with no
+	// `_ast` table is an error — there is no SitterWalker fallback.
 	w, err := SelectWalker(db)
-	require.NoError(t, err)
-	_, ok := w.(*SitterWalker)
-	assert.True(t, ok, "should return SitterWalker when _ast table missing")
+	require.Error(t, err, "should error when _ast table missing (no CGO fallback)")
+	assert.Nil(t, w)
+	assert.Contains(t, err.Error(), "_ast")
 }
 
 func TestSelectWalker_ReturnsErrorOnBrokenDB(t *testing.T) {

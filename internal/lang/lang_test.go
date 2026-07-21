@@ -19,7 +19,6 @@ func TestRegistry_Has28Languages(t *testing.T) {
 		l := ForName(name)
 		require.NotNil(t, l, "missing language: %s", name)
 		assert.Equal(t, name, l.Name)
-		assert.NotNil(t, l.Grammar(), "nil grammar for %s", name)
 		assert.NotEmpty(t, l.Extensions, "no extensions for %s", name)
 	}
 }
@@ -121,19 +120,5 @@ func TestNoDuplicateExtensions(t *testing.T) {
 			}
 			seen[ext] = l.Name
 		}
-	}
-}
-
-func TestEnrichNode_Terraform(t *testing.T) {
-	l := ForName("terraform")
-	require.NotNil(t, l)
-	assert.NotNil(t, l.EnrichNode, "terraform should have EnrichNode set")
-}
-
-func TestEnrichNode_NilForMost(t *testing.T) {
-	for _, name := range []string{"go", "python", "rust", "java"} {
-		l := ForName(name)
-		require.NotNil(t, l)
-		assert.Nil(t, l.EnrichNode, "%s should not have EnrichNode", name)
 	}
 }

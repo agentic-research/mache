@@ -84,29 +84,75 @@ func (w *ASTWalker) ExtractCalls(sourcePath, langName string) ([]string, error) 
 // the _source key (filepath.Base of the file). Empty scopeID would match the
 // whole file; callers pass a real construct id.
 func (w *ASTWalker) ExtractCallsScoped(sourceID, scopeID, langName string) ([]string, error) {
-	raw, ok := callPatternRegistry.Load(langName)
-	if !ok {
-		return nil, nil
+	toks, err := w.fileCallTokens(sourceID, langName)
+	if err != nil {
+		return nil, err
 	}
-	patterns := raw.([]CallPattern)
-	if len(patterns) == 0 {
-		return nil, nil
-	}
+	prefix := scopeID + "/"
 	seen := make(map[string]bool)
 	var calls []string
-	for _, p := range patterns {
-		rows, err := w.queryCallPattern(sourceID, p, false, scopeID)
-		if err != nil {
+	for _, t := range toks {
+		// Byte-identical to the old per-construct `n_leaf.id LIKE scopeID||'/%'`
+		// scope filter, but over the whole-file token set computed once.
+		if scopeID != "" && !strings.HasPrefix(t.nodeID, prefix) {
 			continue
 		}
-		for _, r := range rows {
-			if r.token != "" && !seen[r.token] {
-				seen[r.token] = true
-				calls = append(calls, r.token)
-			}
+		if !seen[t.token] {
+			seen[t.token] = true
+			calls = append(calls, t.token)
 		}
 	}
 	return calls, nil
+}
+
+// scopedCallToken is one whole-file call token plus the id of its leaf node,
+// so per-construct ExtractCallsScoped can attribute it by node-id prefix.
+type scopedCallToken struct {
+	nodeID string
+	token  string
+}
+
+// fileCallTokens runs every registered call pattern against the WHOLE file
+// ONCE (queryCallPattern is already a batched JOIN, so this is O(nodes) per
+// pattern) and caches the (leaf id, token) pairs keyed by (sourceID, lang).
+// ExtractCallsScoped then filters these by construct prefix in Go instead of
+// re-running queryCallPattern per construct — that per-construct path was 49%
+// of a whole-repo projection after the node-index fix (mache-4f3840). Tokens
+// are kept undeduplicated here (the same token may live under several
+// constructs); the per-construct caller dedups within its scope.
+func (w *ASTWalker) fileCallTokens(sourceID, langName string) ([]scopedCallToken, error) {
+	key := sourceID + "\x00" + langName
+	if v, ok := w.callTokenCache.Load(key); ok {
+		return v.([]scopedCallToken), nil
+	}
+
+	var out []scopedCallToken
+	if raw, ok := callPatternRegistry.Load(langName); ok {
+		if patterns := raw.([]CallPattern); len(patterns) > 0 {
+			for _, p := range patterns {
+				rows, err := w.queryCallPattern(sourceID, p, false, "") // whole file
+				if err != nil {
+					// queryCallPattern builds SQL from a STRUCTURED kind-chain,
+					// so an error is a real/transient DB failure, not an
+					// unsupported selector. Surface it and DON'T cache the
+					// partial set — caching an empty result forever would
+					// silently and permanently empty this file's callees on a
+					// long-lived serve (mache-015f5c).
+					return nil, fmt.Errorf("file call tokens %s/%s (%s/%s): %w",
+						sourceID, langName, p.OuterKind, p.LeafKind, err)
+				}
+				for _, r := range rows {
+					if r.token == "" {
+						continue
+					}
+					out = append(out, scopedCallToken{nodeID: r.leafID, token: r.token})
+				}
+			}
+		}
+	}
+
+	w.callTokenCache.Store(key, out)
+	return out, nil
 }
 
 // fileLevelRefPatternRegistry stores per-language CallPatterns used by
@@ -177,7 +223,12 @@ func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.
 	for _, p := range patterns {
 		rows, err := w.queryCallPattern(sourceID, p, true, "")
 		if err != nil {
-			continue
+			// queryCallPattern builds SQL from a structured kind-chain, so an
+			// error is a real/transient DB failure, not an unsupported
+			// selector. Surface it — a silent short list is indistinguishable
+			// from "calls nothing", the class mache-015f5c closes.
+			return nil, fmt.Errorf("extract qualified calls %s (%s/%s): %w",
+				sourceID, p.OuterKind, p.LeafKind, err)
 		}
 		for _, r := range rows {
 			if r.token == "" {
@@ -194,10 +245,65 @@ func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.
 	return calls, nil
 }
 
+// ExtractQualifiedCallsScoped is the per-construct equivalent of
+// ExtractQualifiedCalls: it returns qualified call tokens whose leaf node
+// lives under scopeID's id-path, instead of the whole file. sourceID is the
+// real `_ast`/`_source` key (e.g. "agent.go"), NOT a graph node id — feeding
+// a graph node id here (e.g. "cmd/functions/evalOrAbs") matches zero `_ast`
+// rows, which was the root cause of find_callees silently returning nothing
+// on the serve/mount path (bead mache-fd9982). Callers recover the correct
+// (sourceID, scopeID) pair from the construct's graph node Properties
+// ("ast_source_id"/"ast_scope_id"), persisted at projection time by
+// engine_walk.go via the ASTScope interface. Empty scopeID matches the
+// whole file, mirroring ExtractQualifiedCalls.
+func (w *ASTWalker) ExtractQualifiedCallsScoped(sourceID, scopeID, langName string) ([]graph.QualifiedCall, error) {
+	raw, ok := callPatternRegistry.Load(langName)
+	if !ok {
+		return nil, nil
+	}
+	patterns := raw.([]CallPattern)
+
+	seen := make(map[string]bool)
+	var calls []graph.QualifiedCall
+	for _, p := range patterns {
+		rows, err := w.queryCallPattern(sourceID, p, true, scopeID)
+		if err != nil {
+			// A DB failure must surface, not silently drop this pattern's
+			// calls (find_callees live path; mache-6ff371, matching
+			// mache-015f5c for fileCallTokens/fileAddrRefs).
+			return nil, fmt.Errorf("extract qualified calls scoped %s/%s (%s/%s): %w",
+				sourceID, scopeID, p.OuterKind, p.LeafKind, err)
+		}
+		for _, r := range rows {
+			if r.token == "" {
+				continue
+			}
+			key := r.qualifier + "." + r.token
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			calls = append(calls, graph.QualifiedCall{Token: r.token, Qualifier: r.qualifier})
+		}
+	}
+	return calls, nil
+}
+
+// escapeLikePrefix escapes SQL LIKE metacharacters (\ % _) in a literal id
+// prefix so node ids containing '_' or '%' match literally, not as wildcards.
+// Use with `LIKE escapeLikePrefix(p)+"/%" ESCAPE '\'`.
+func escapeLikePrefix(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
 // callRow is one extracted call from a single SQL pattern query.
 type callRow struct {
 	token     string
 	qualifier string
+	leafID    string // n_leaf.id — used to attribute the call to a construct
 }
 
 // queryCallPattern runs a single batched SQL query for the given CallPattern
@@ -232,7 +338,7 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 	//
 	// Each level requires: nodes table for parent_id chain, _ast for kind.
 	var sb strings.Builder
-	sb.WriteString(`SELECT n_leaf.record AS call_token`)
+	sb.WriteString(`SELECT n_leaf.record AS call_token, n_leaf.id AS leaf_id`)
 	if wantQualifier && p.QualifierKind != "" {
 		sb.WriteString(`, COALESCE(n_pkg.record, '') AS pkg`)
 	} else {
@@ -274,8 +380,12 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 	// Scope to a single construct subtree (calls whose leaf node lives under the
 	// scope node's id path). Empty scopePrefix = whole file.
 	if scopePrefix != "" {
-		sb.WriteString(` AND n_leaf.id LIKE ?`)
-		args = append(args, scopePrefix+"/%")
+		// Escape LIKE metacharacters in the literal id prefix: leyline node
+		// ids contain '_' (function_declaration_1), which SQL LIKE would treat
+		// as any-char wildcards, over-scoping (mache-702f9b). The trailing "/%"
+		// stays an unescaped wildcard — that's the descendant match we want.
+		sb.WriteString(` AND n_leaf.id LIKE ? ESCAPE '\'`)
+		args = append(args, escapeLikePrefix(scopePrefix)+"/%")
 	}
 	for i, anc := range p.Ancestors {
 		fmt.Fprintf(&sb, ` AND a_anc%d.node_kind = ?`, i)
@@ -312,11 +422,11 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 
 	var out []callRow
 	for rows.Next() {
-		var token, pkg string
-		if err := rows.Scan(&token, &pkg); err != nil {
+		var token, leafID, pkg string
+		if err := rows.Scan(&token, &leafID, &pkg); err != nil {
 			continue
 		}
-		out = append(out, callRow{token: token, qualifier: pkg})
+		out = append(out, callRow{token: token, qualifier: pkg, leafID: leafID})
 	}
 	return out, rows.Err()
 }

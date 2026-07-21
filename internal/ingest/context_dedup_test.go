@@ -49,6 +49,7 @@ func DoExtra() {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Check context of any construct directory — should not have duplicates
@@ -104,6 +105,7 @@ func FuncB() {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// FuncA's context comes from a.go — should have Shared but not Shared2

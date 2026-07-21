@@ -51,5 +51,20 @@ jobs:
           GOTOOLCHAIN: auto
         run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
+      # Provision the pinned leyline BEFORE any test step: `task test` runs the
+      # sole-parser projection tests, which fail-not-skip in CI without leyline
+      # (mache-01c467). ci.yml orders this the same way.
+      - name: Provision leyline
+        run: task leyline:ensure
+
       - name: Run Integration Tests
         run: task test -- -run TestIntegration -v ./tests/
+
+      # Large-tier whole-repo E2E (mache-self, real corpora). These are gated
+      # out of the -race unit run in ci.yml because -race + pure-Go SQLite over
+      # the whole repo blows the 20m budget (mache-4f3840); here they run
+      # WITHOUT -race and with the large-tier opt-in, so coverage is preserved.
+      - name: Large-tier E2E (whole-repo projections, no -race)
+        env:
+          MACHE_E2E_LARGE: '1'
+        run: go test -tags boltdb -timeout 25m -run 'TestE2E_MacheOnMache|TestE2E_RealCorpora' ./cmd/

@@ -41,6 +41,7 @@ func Main() {}
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Verify Go file (Processed)

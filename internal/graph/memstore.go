@@ -67,6 +67,13 @@ type MemoryStore struct {
 
 	extractor CallExtractor
 
+	// scopedExtractor resolves calls for a single construct directly against
+	// a pre-parsed `_ast` table, keyed by the construct's real ast_source_id/
+	// ast_scope_id Properties rather than the graph node id. GetCallees
+	// prefers this when both are available; see ScopedCallExtractor
+	// (bead mache-fd9982).
+	scopedExtractor ScopedCallExtractor
+
 	// Live graph: file mtime tracking and on-demand refresh.
 	fileMtimes map[string]time.Time        // source file → mtime at index time
 	refresher  func(filePath string) error // called when a source file is stale
@@ -89,6 +96,12 @@ func NewMemoryStore() *MemoryStore {
 // SetCallExtractor configures the parser for on-demand callee resolution.
 func (s *MemoryStore) SetCallExtractor(fn CallExtractor) {
 	s.extractor = fn
+}
+
+// SetScopedCallExtractor configures the AST-scoped extractor GetCallees
+// prefers when a construct carries ast_source_id/ast_scope_id Properties.
+func (s *MemoryStore) SetScopedCallExtractor(fn ScopedCallExtractor) {
+	s.scopedExtractor = fn
 }
 
 // SetResolver configures lazy content resolution for nodes with ContentRef.

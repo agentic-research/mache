@@ -1,35 +1,26 @@
-//go:build leyline
-
 package lattice
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"strings"
 	"testing"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
-
-	"github.com/agentic-research/mache/internal/lang"
 )
 
 // resolvePinnedLeylineForLattice mirrors leyline.ResolveBinary(false)
-// without importing internal/leyline — under the `leyline` build tag that
-// package's CGO FFI bindings (client.go, leyline_fs.h) would be compiled,
-// which this tagged test must not require. PATH and ~/.mache/bin candidates
-// are each accepted ONLY if `--version` exactly matches the pin extracted
-// from socket.go; no bare unverified PATH leyline, never a download.
+// without importing internal/leyline. PATH and ~/.mache/bin candidates are
+// each accepted ONLY if `--version` exactly matches the pin extracted from
+// socket.go; no bare unverified PATH leyline, never a download.
 func resolvePinnedLeylineForLattice(t *testing.T) string {
 	t.Helper()
 
-	// Extract the pin from socket.go (the source-grep pattern
-	// version_parity_test.go established for pin invariants).
 	dir, err := os.Getwd()
 	require.NoError(t, err)
 	for {
@@ -67,13 +58,10 @@ func resolvePinnedLeylineForLattice(t *testing.T) string {
 	return ""
 }
 
-// TestInferFromASTDBParity_Go verifies InferFromASTDB (pure Go, leyline
-// _ast) produces the same topology as InferFromTreeSitterRoots (CGO
-// tree-sitter) on the same fixture sources with the same config.
-// parityFixtures covers the construct spread the go-schema projects:
-// functions, methods (pointer + value receivers), a struct, an
-// interface, consts, vars, and imports across two files.
-var parityFixtures = map[string][]byte{
+// astdbFixtures cover the construct spread the go-schema projects: functions,
+// methods (pointer + value receivers), a struct, an interface, consts, vars,
+// and imports across two files.
+var astdbFixtures = map[string][]byte{
 	"main.go": []byte(`package demo
 
 import "fmt"
@@ -110,51 +98,58 @@ func (g Greeter) String() string {
 `),
 }
 
-func TestInferFromASTDBParity_Go(t *testing.T) {
+// TestInferFromASTDB_Go verifies InferFromASTDB (pure Go, over a leyline
+// `_ast` db) produces a non-empty tree-sitter topology for a fixture covering
+// functions, methods, types, consts, vars, and imports. This replaces the
+// former sitter-vs-AST parity gate: in-process CGO tree-sitter (and the
+// InferFromTreeSitterRoots reference path) were removed in ADR-0012 step 4,
+// so there is no CGO topology left to compare against.
+func TestInferFromASTDB_Go(t *testing.T) {
 	leylineBin := resolvePinnedLeylineForLattice(t)
 
-	fixtures := parityFixtures
 	srcDir := t.TempDir()
-	names := make([]string, 0, len(fixtures))
-	for name, content := range fixtures {
+	for name, content := range astdbFixtures {
 		require.NoError(t, os.WriteFile(filepath.Join(srcDir, name), content, 0o644))
-		names = append(names, name)
 	}
-	sort.Strings(names)
 
-	config := InferConfig{Method: "fca", Language: "go"}
-
-	// --- Sitter path (CGO) ---
-	goLang := lang.ForName("go")
-	require.NotNil(t, goLang)
-	roots := make([]*sitter.Node, 0, len(names))
-	for _, name := range names {
-		parser := sitter.NewParser()
-		parser.SetLanguage(goLang.Grammar())
-		tree, err := parser.ParseCtx(context.Background(), nil, fixtures[name])
-		require.NoError(t, err)
-		require.NotNil(t, tree)
-		roots = append(roots, tree.RootNode())
-	}
-	sitterInf := &Inferrer{Config: config}
-	sitterTopo, err := sitterInf.InferFromTreeSitterRoots(roots...)
-	require.NoError(t, err)
-
-	// --- Leyline path (pure Go) ---
-	dbPath := filepath.Join(t.TempDir(), "parity.db")
+	dbPath := filepath.Join(t.TempDir(), "astdb.db")
 	out, err := exec.Command(leylineBin, "parse", srcDir, "-o", dbPath).CombinedOutput()
 	require.NoError(t, err, "leyline parse failed: %s", string(out))
 
-	astInf := &Inferrer{Config: config}
-	astTopo, err := astInf.InferFromASTDB(dbPath)
+	inf := &Inferrer{Config: InferConfig{Method: "fca", Language: "go"}}
+	topo, err := inf.InferFromASTDB(dbPath)
 	require.NoError(t, err)
+	require.NotNil(t, topo)
+	require.NotEmpty(t, topo.Nodes, "FCA over the _ast db must yield at least one root node")
 
-	sitterJSON, err := json.MarshalIndent(sitterTopo, "", "  ")
+	astJSON, err := json.MarshalIndent(topo, "", "  ")
 	require.NoError(t, err)
-	astJSON, err := json.MarshalIndent(astTopo, "", "  ")
-	require.NoError(t, err)
+	t.Logf("astdb topology: %d root nodes, %d bytes", len(topo.Nodes), len(astJSON))
 
-	t.Logf("sitter topology: %d root nodes, %d bytes", len(sitterTopo.Nodes), len(sitterJSON))
-	t.Logf("astdb topology:  %d root nodes, %d bytes", len(astTopo.Nodes), len(astJSON))
-	require.JSONEq(t, string(sitterJSON), string(astJSON), "topologies should be identical")
+	// The projected selectors must be tree-sitter S-expressions (start with
+	// '('), not JSONPath — the FCA path forces ProjectAST for _ast data.
+	var sawSExpr bool
+	var walk func(nodes []nodeView)
+	walk = func(nodes []nodeView) {
+		for _, n := range nodes {
+			if strings.HasPrefix(strings.TrimSpace(n.Selector), "(") {
+				sawSExpr = true
+			}
+			walk(n.Children)
+		}
+	}
+	var tv topoView
+	require.NoError(t, json.Unmarshal(astJSON, &tv))
+	walk(tv.Nodes)
+	assert.True(t, sawSExpr, "inferred topology should contain tree-sitter S-expression selectors")
+}
+
+// minimal views for selector inspection without depending on api internals.
+type topoView struct {
+	Nodes []nodeView `json:"nodes"`
+}
+
+type nodeView struct {
+	Selector string     `json:"selector"`
+	Children []nodeView `json:"children"`
 }

@@ -99,6 +99,13 @@ type SQLiteGraph struct {
 
 	extractor CallExtractor
 	defs      map[string][]string // symbol_name → []construct_dir_id (populated by AddDef)
+
+	// scopedExtractor resolves calls for a single construct directly against
+	// a pre-parsed `_ast` table, keyed by the construct's real ast_source_id/
+	// ast_scope_id Properties rather than the graph node id. GetCallees
+	// prefers this when both are available; see ScopedCallExtractor
+	// (bead mache-fd9982).
+	scopedExtractor ScopedCallExtractor
 }
 
 // EagerScan pre-scans all root nodes so no FUSE callback ever blocks on a scan.
@@ -241,6 +248,12 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 // SetCallExtractor configures the parser for on-demand callee resolution.
 func (g *SQLiteGraph) SetCallExtractor(fn CallExtractor) {
 	g.extractor = fn
+}
+
+// SetScopedCallExtractor configures the AST-scoped extractor GetCallees
+// prefers when a construct carries ast_source_id/ast_scope_id Properties.
+func (g *SQLiteGraph) SetScopedCallExtractor(fn ScopedCallExtractor) {
+	g.scopedExtractor = fn
 }
 
 // DBPath returns the source .db file path. Implements the cmd-side

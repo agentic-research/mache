@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -468,20 +469,44 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 		}
 	}
 
-	// MemoryStore path for JSON/source files
+	// MemoryStore path for JSON/source files. This is also the live-edit
+	// watcher + SheafInvalidator path (preserved by ADR-0012 step 4 / Option A).
 	store := graph.NewMemoryStore()
 	resolver := graph.NewSQLiteResolver(machetmpl.Render)
 	store.SetResolver(resolver.Resolve)
-	store.SetCallExtractor(newCallExtractor())
 
 	engine := ingest.NewEngine(schema, store)
+
+	// Source (tree-sitter S-expression) schemas: ley-line parses source into
+	// an `_ast` db and the engine projects it via ASTWalker — in-process CGO
+	// tree-sitter was removed (ADR-0012 step 4). The `_ast` db stays open for
+	// the store's lifetime so the file-watcher's ReIngestFile can re-project
+	// edited files. KNOWN GAP: re-ingest reads the FROZEN `_ast` until the
+	// next parse — the same freshness limitation documented for the
+	// auto-leyline serve path above; the watcher still fires the sheaf
+	// cascade correctly. ley-line is MANDATORY here (guardrail 2): if it
+	// can't be resolved this is a hard error, not a silent empty graph.
+	astCleanup := noop
+	if ingest.SchemaUsesTreeSitter(schema) {
+		astDB, cleanup, ppErr := attachLeylineASTWalker(dataSource, engine)
+		if ppErr != nil {
+			resolver.Close()
+			return nil, nil, noop, fmt.Errorf("ley-line parse for source projection: %w", ppErr)
+		}
+		astCleanup = cleanup
+		store.SetCallExtractor(newASTCallExtractor(astDB))
+		store.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
+	}
+
 	if err := engine.Ingest(dataSource); err != nil {
 		resolver.Close()
+		astCleanup()
 		return nil, nil, noop, fmt.Errorf("ingestion: %w", err)
 	}
 
 	if err := store.InitRefsDB(); err != nil {
 		resolver.Close()
+		astCleanup()
 		return nil, nil, noop, fmt.Errorf("init refs db: %w", err)
 	}
 	if err := store.FlushRefs(); err != nil {
@@ -554,7 +579,34 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 		}
 		_ = store.Close()
 		resolver.Close()
+		// Close the ley-line _ast db AFTER the watcher/store stop so any
+		// in-flight ReIngestFile finishes against a live handle.
+		astCleanup()
 	}, nil
+}
+
+// attachLeylineASTWalker parses dataSource with ley-line into a temporary
+// `_ast` db, opens it, and wires an ASTWalker onto the engine so a source
+// (tree-sitter S-expression) schema projects with zero in-process CGO
+// (ADR-0012 step 4). Returns the open db (for a call extractor) and a cleanup
+// that closes the db and removes the temp file. ley-line is mandatory: a
+// resolution failure is returned as an error (guardrail 2), never swallowed.
+func attachLeylineASTWalker(dataSource string, engine *ingest.Engine) (*sql.DB, func(), error) {
+	dbPath, parseCleanup, err := autoInvokeLeylineParse(dataSource)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		parseCleanup()
+		return nil, nil, fmt.Errorf("open ley-line parse output %s: %w", dbPath, err)
+	}
+	engine.SetASTWalker(ingest.NewASTWalker(db))
+	cleanup := func() {
+		_ = db.Close()
+		parseCleanup()
+	}
+	return db, cleanup, nil
 }
 
 // unionStringSlices returns the deduped union of a and b. Order
@@ -612,18 +664,17 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 	}
 
 	composite := graph.NewCompositeGraph()
-	// Wire a tree-sitter call extractor onto the composite so cross-mount
-	// callees resolve: when a function in mount A calls one defined in
-	// mount B, find_callees on A's function returns B's def via the
-	// federated DefsMap. Without this, callees only route per-mount.
-	composite.SetCallExtractor(newCallExtractor())
+	// Global cross-mount fallback extractor. Since ADR-0012 step 4 removed
+	// in-process CGO tree-sitter, the fallback is a no-op — cross-mount
+	// callees resolve through the per-mount picker below (which reads each
+	// mount's `_ast`); a mount with no AST simply contributes no calls.
+	composite.SetCallExtractor(noopCallExtractor())
 
-	// And wire the per-mount picker (ADR-0012): for SQLiteGraph mounts
-	// that carry `_ast`, prefer the pure-Go extractor; the picker
-	// returns nil for other backends so cross-mount resolution falls
-	// through to the global CGO extractor above. Each mount picks
-	// independently — heterogeneous fleets (e.g. one ll-open .db and
-	// one mache-built .db) get the right extractor per mount.
+	// Wire the per-mount picker (ADR-0012): for SQLiteGraph mounts that carry
+	// `_ast`, use the pure-Go ASTWalker extractor; the picker returns nil for
+	// other backends so cross-mount resolution falls through to the global
+	// no-op above. Each mount picks independently — heterogeneous fleets
+	// (e.g. one ll-open .db and one mache-built .db) get the right extractor.
 	composite.SetCallExtractorPicker(func(local graph.Graph) graph.CallExtractor {
 		sg, ok := local.(*graph.SQLiteGraph)
 		if !ok {
@@ -683,6 +734,7 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 		return nil, nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)
 	}
 	sg.SetCallExtractor(pickCallExtractor(sg.DB()))
+	sg.SetScopedCallExtractor(pickScopedCallExtractor(sg.DB()))
 	if err := sg.EagerScan(); err != nil {
 		_ = sg.Close()
 		extraCleanup()

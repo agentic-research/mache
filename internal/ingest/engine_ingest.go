@@ -23,8 +23,8 @@ func (e *Engine) ingestFile(path string, modTime time.Time) error {
 	case ".json":
 		return e.ingestJSON(path, modTime)
 	default:
-		if lang, langName := langForExt(ext); lang != nil {
-			return e.ingestTreeSitter(path, lang, langName, modTime)
+		if langName, ok := langForExt(ext); ok {
+			return e.ingestSourceFile(path, langName, modTime)
 		}
 		if isBinaryFile(path) { // coverage:ignore
 			return nil // coverage:ignore
@@ -112,6 +112,12 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 			if parentID == "" { // coverage:ignore
 				e.Store.AddRoot(node) // coverage:ignore
 			} else {
+				// Guard the childSeen + parent.Children read-modify-write: the
+				// live-edit watcher can drive ReIngestFile concurrently for two
+				// files sharing this parent dir, and an unsynchronized map write
+				// here is a data race / lost-child (mache-706757). e.mu already
+				// guards routedFiles the same way; nothing in this block re-locks.
+				e.mu.Lock()
 				parent, err := e.Store.GetNode(parentID)
 				if err == nil {
 					if e.childSeen[parentID] == nil {
@@ -126,6 +132,7 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 						e.Store.AddNode(parent)
 					}
 				}
+				e.mu.Unlock()
 			}
 		}
 		parentID = currentID

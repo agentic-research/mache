@@ -64,10 +64,31 @@ func addGoImport(imports map[string]string, alias, path string) {
 	imports[alias] = path
 }
 
-// GetCallees implements Graph. It parses the node's source to find calls,
-// then looks up those tokens in the defs index to find definitions.
+// GetCallees implements Graph. It extracts calls made by the construct, then
+// looks up those tokens in the defs index to find definitions.
+//
+// Three extraction paths are supported:
+//
+//  1. AST-scoped (preferred): when the construct's Properties carry
+//     "ast_source_id"/"ast_scope_id" (persisted at projection time by
+//     engine_walk.go — see ingest.ASTScope) AND a scoped extractor is
+//     wired (requires a LIVE `_ast` table), GetCallees queries the
+//     pre-parsed `_ast` table directly, scoped to this construct. This is
+//     the fix for bead mache-fd9982: the legacy path below fed the GRAPH
+//     node id (e.g. "cmd/functions/evalOrAbs") as if it were the `_ast`
+//     source_id, which matched zero rows every time.
+//  2. node_refs fallback: when #1 is unavailable but the construct has a
+//     "source" file child, resolve its calls from s.refs (token ->
+//     []nodeID) instead — the same index GetCallers reads, inverted.
+//     s.refs already holds every call token ScopeCalls found for this
+//     construct at projection time (engine_walk.go's
+//     store.AddRef(token, sourceFileID)). Bare-token only (no qualifier
+//     fidelity) — strictly better than returning [] (bead mache-6fbaf1).
+//  3. Legacy content-based extractor: re-parses the construct's "source"
+//     file content. Kept for non-AST backends (or .dbs projected before
+//     this fix that lack the ast_source_id/ast_scope_id Properties AND
+//     have no node_refs coverage).
 func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
-	// 1. Find the "source" file child
 	s.mu.RLock()
 	id = NormalizeID(id)
 	node, ok := s.nodes[id]
@@ -77,29 +98,7 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 		return nil, nil
 	}
 
-	var sourceID string
-	for _, childID := range node.Children {
-		if filepath.Base(childID) == "source" {
-			sourceID = childID
-			break
-		}
-	}
-	if sourceID == "" {
-		return nil, nil
-	}
-
-	// 2. Read content
-	srcNode, err := s.GetNode(sourceID)
-	if err != nil {
-		return nil, err
-	}
-	size := srcNode.ContentSize()
-	buf := make([]byte, size)
-	if _, err := s.ReadContent(sourceID, buf, 0); err != nil {
-		return nil, err
-	}
-
-	// 3. Determine langName from construct directory Properties
+	// Determine langName from construct directory Properties
 	var langName string
 	if node.Properties != nil {
 		if v, ok := node.Properties["lang"]; ok {
@@ -107,13 +106,69 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 		}
 	}
 
-	// 4. Extract qualified calls
-	if s.extractor == nil {
-		return nil, nil
+	var qcalls []QualifiedCall
+	scoped := false
+	if s.scopedExtractor != nil && node.Properties != nil {
+		astSrcID, hasSrc := node.Properties["ast_source_id"]
+		astScopeID, hasScope := node.Properties["ast_scope_id"]
+		if hasSrc && hasScope && len(astSrcID) > 0 && len(astScopeID) > 0 {
+			calls, err := s.scopedExtractor(string(astSrcID), string(astScopeID), langName)
+			if err != nil {
+				return nil, fmt.Errorf("extract calls (ast-scoped): %w", err)
+			}
+			qcalls = calls
+			scoped = true
+		}
 	}
-	qcalls, err := s.extractor(buf, sourceID, langName)
-	if err != nil {
-		return nil, fmt.Errorf("extract calls: %w", err)
+
+	if !scoped {
+		// 1. Find the "source" file child
+		var sourceID string
+		for _, childID := range node.Children {
+			if filepath.Base(childID) == "source" {
+				sourceID = childID
+				break
+			}
+		}
+		if sourceID == "" {
+			return nil, nil
+		}
+
+		// node_refs fallback (bead mache-6fbaf1): mirrors
+		// SQLiteGraph.calleeTokensFromRefs for backend parity. s.refs
+		// (token -> []nodeID) already holds every call token ScopeCalls
+		// found for this construct at projection time, keyed by the
+		// construct's "source" file node id — resolve straight from
+		// there instead of re-reading and re-parsing content that (on a
+		// backend with no live scoped extractor) no extractor can read.
+		if tokens := s.refTokensForNode(sourceID); len(tokens) > 0 {
+			for _, tok := range tokens {
+				qcalls = append(qcalls, QualifiedCall{Token: tok})
+			}
+		}
+
+		if len(qcalls) == 0 {
+			// 2. Read content
+			srcNode, err := s.GetNode(sourceID)
+			if err != nil {
+				return nil, err
+			}
+			size := srcNode.ContentSize()
+			buf := make([]byte, size)
+			if _, err := s.ReadContent(sourceID, buf, 0); err != nil {
+				return nil, err
+			}
+
+			// 3. Extract qualified calls
+			if s.extractor == nil {
+				return nil, nil
+			}
+			calls, err := s.extractor(buf, sourceID, langName)
+			if err != nil {
+				return nil, fmt.Errorf("extract calls: %w", err)
+			}
+			qcalls = calls
+		}
 	}
 
 	// 5. Resolve tokens via defs index (qualified → import fallback → bare)
@@ -187,4 +242,28 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 	}
 
 	return results, nil
+}
+
+// refTokensForNode returns the call tokens s.refs recorded for sourceID (a
+// construct's "source" file node id) — the reverse of s.refs's
+// token->[]nodeID mapping (which GetCallers reads forward: token -> who
+// calls it). This is the MemoryStore counterpart of
+// SQLiteGraph.calleeTokensFromRefs — same node_refs semantics, in-memory
+// index instead of a SQL table (bead mache-6fbaf1). O(total refs): there is
+// no reverse index maintained at write time, so this scans every token's
+// id list. Acceptable here since it only runs as a fallback when the
+// scoped-AST path is unavailable.
+func (s *MemoryStore) refTokensForNode(sourceID string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var tokens []string
+	for token, ids := range s.refs {
+		for _, refID := range ids {
+			if refID == sourceID {
+				tokens = append(tokens, token)
+				break
+			}
+		}
+	}
+	return tokens
 }

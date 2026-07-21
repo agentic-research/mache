@@ -1,9 +1,6 @@
 package ingest
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -16,45 +13,27 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/internal/graph"
-	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// ingestTreeSitterParallel processes a tree-sitter source directory using
-// parallel file parsing. Phase 1 walks the directory and sends file jobs to
-// a worker pool that performs the CPU-heavy tree-sitter parsing in parallel.
-// Phase 2 applies the parsed results sequentially (processNode + store mutations).
-func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
+// ingestSourceParallel projects a source directory using parallel workers.
+// The AST was pre-parsed by ley-line into the engine's `_ast` db; mache runs
+// NO tree-sitter (ADR-0012 step 4). Phase 1 walks the directory and reads file
+// content in parallel; Phase 2 applies results sequentially (processNode + store
+// mutations) with the ASTWalker resolving every construct from SQL.
+func (e *Engine) ingestSourceParallel(rootPath string) error {
 	numWorkers := runtime.NumCPU()
-	jobs := make(chan treeSitterJob, numWorkers*4)
-	parsed := make(chan parsedTreeSitterFile, numWorkers*4)
+	jobs := make(chan sourceFileJob, numWorkers*4)
+	parsed := make(chan parsedSourceFile, numWorkers*4)
 
-	// Phase 1: Workers parse files in parallel (CPU-bound tree-sitter parsing).
+	// Phase 1: Workers read file content in parallel. No CGO, no tree-sitter
+	// parser allocation, and no LockOSThread pin — the AST already lives in
+	// the `_ast` db, so there is no CGO bridge to keep on a stable OS thread
+	// (this is where the historical mache-2y9w SIGSEGV source disappears).
 	var workerWg sync.WaitGroup
 	for range numWorkers {
 		workerWg.Go(func() {
-			// S4: with an ASTWalker backend this worker runs NO
-			// tree-sitter — so skip both the parser allocation
-			// (sitter.NewParser is itself a CGO call) and the
-			// LockOSThread pin. Only the CGO path needs either, so
-			// gating them here is what makes "no CGO runs in ingest"
-			// literally true on the AST path — not just the parse loop.
-			var parser *sitter.Parser
-			if e.astWalker == nil {
-				// Pin to one OS thread for the lifetime of the worker.
-				// tree-sitter's CGO bridge is sensitive to goroutine
-				// migration mid-call: when the Go runtime preempts and
-				// resumes a goroutine on a different OS thread while
-				// CGO is in flight, we've seen sporadic SIGSEGVs in
-				// internal/ingest tests on ubuntu-latest (mache-2y9w).
-				// LockOSThread isolates each parser/cursor pair to a
-				// stable thread; UnlockOSThread on exit lets the runtime
-				// reclaim the thread when the worker goroutine ends.
-				runtime.LockOSThread()
-				defer runtime.UnlockOSThread()
-				parser = sitter.NewParser()
-			}
 			for job := range jobs {
-				result := parsedTreeSitterFile{job: job}
+				result := parsedSourceFile{job: job}
 				absPath, err := filepath.Abs(job.path)
 				if err != nil {
 					result.readErr = err // coverage:ignore
@@ -72,54 +51,8 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 					parsed <- result     // coverage:ignore
 					continue             // coverage:ignore
 				}
-
-				// S4 (mache-33de70): the CGO tree-sitter parse + sitter
-				// file-level extracts run ONLY when there's no ASTWalker
-				// backend. When a pre-parsed _ast db is mounted, astWalker
-				// is set and Phase-2 serves context/imports/file-level-refs
-				// from SQL — so we skip the parse entirely and no CGO runs
-				// in ingest (this is also where the mache-2y9w SIGSEGV
-				// source disappears for the AST path). Parity between the
-				// two paths' context/imports/refs is asserted by
-				// TestASTQueryParity (projection) + the direct extractor
-				// parity tests.
-				if e.astWalker == nil {
-					parser.SetLanguage(job.lang)
-					tree, err := parser.ParseCtx(context.Background(), nil, result.content)
-					switch {
-					case err != nil: // coverage:ignore
-						result.parseErr = err // coverage:ignore
-					case tree == nil: // coverage:ignore
-						// ParseCtx is documented to return (nil, nil) for
-						// non-error empty inputs. Treat as a no-op parse so
-						// downstream tree.RootNode() can't nil-deref under
-						// the parallel worker (which would surface as a
-						// SIGSEGV in CGO via the tree-sitter call stack —
-						// the same class of failure as mache-2y9w).
-						result.parseErr = fmt.Errorf("tree-sitter returned nil tree") // coverage:ignore
-					default:
-						result.tree = tree
-						// Extract context (imports, globals) — CPU-bound query execution.
-						if ctxBytes, err := e.sitterWalker.ExtractContext(
-							tree.RootNode(), result.content, job.lang, job.langName,
-						); err == nil {
-							result.context = ctxBytes
-						}
-						// Extract structured imports (Go) — avoids regex re-parsing at query time.
-						if job.langName == "go" {
-							result.imports = e.sitterWalker.ExtractGoImports(tree.RootNode(), result.content, job.lang)
-						}
-						// Extract file-level refs (identifiers in positions
-						// that per-scope ExtractCalls can't see, e.g. Go
-						// top-level cobra var declarations — mache-02r9).
-						// nil-OK for languages with no registered query.
-						if refs, err := e.sitterWalker.ExtractFileLevelRefs(
-							tree.RootNode(), result.content, job.lang, job.langName,
-						); err == nil {
-							result.fileLevelRefs = refs
-						}
-					}
-				}
+				// context/imports/file-level-refs are resolved from SQL in
+				// Phase 2 (processSourceFileResult) via the ASTWalker.
 				parsed <- result
 			}
 		})
@@ -178,8 +111,8 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 			}
 
 			ext := filepath.Ext(p)
-			lang, langName := langForExt(ext)
-			if lang != nil {
+			langName, ok := langForExt(ext)
+			if ok {
 				// Skip unchanged files when an index is available.
 				// Use resolved (symlink-evaluated) path for consistent cache key,
 				// matching RecordFile which stores result.realPath.
@@ -195,9 +128,8 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 					}
 				}
 				fileCount.Add(1)
-				jobs <- treeSitterJob{
+				jobs <- sourceFileJob{
 					path:     p,
-					lang:     lang,
 					langName: langName,
 					modTime:  info.ModTime(),
 				}
@@ -217,7 +149,7 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 	// processing order. Dedup suffixes (e.g., init.from_b_go) depend on the
 	// order files are processed — alphabetical matches filepath.WalkDir behavior.
 	var firstErr error
-	var results []parsedTreeSitterFile
+	var results []parsedSourceFile
 	// Wait for workers to finish in a separate goroutine so we can collect results.
 	doneCh := make(chan struct{})
 	go func() {
@@ -249,7 +181,7 @@ func (e *Engine) ingestTreeSitterParallel(rootPath string) error {
 			continue // coverage:ignore
 		}
 
-		if err := e.processTreeSitterResult(&results[i]); err != nil {
+		if err := e.processSourceFileResult(&results[i]); err != nil {
 			if firstErr == nil { // coverage:ignore
 				firstErr = err // coverage:ignore
 			} // coverage:ignore
@@ -297,117 +229,64 @@ func (e *Engine) sourceIDFor(realPath string) string {
 	return filepath.ToSlash(rel)
 }
 
-// processTreeSitterResult handles everything AFTER parsing for a single tree-sitter file.
-// Both ingestTreeSitter (sequential) and ingestTreeSitterParallel (phase 2) delegate here
-// to avoid divergent logic. The caller is responsible for populating the parsedTreeSitterFile
-// struct — workers do it in parallel, the sequential path does it inline.
+// processSourceFileResult handles projection for a single source file. Both
+// ingestSourceFile (sequential) and ingestSourceParallel (phase 2) delegate here
+// to avoid divergent logic. The caller populates the parsedSourceFile struct
+// (path/content); construct resolution and every file-level extract come from
+// the ASTWalker querying the ley-line-parsed `_ast` db.
 //
 // Steps:
-//  1. Parse error → BROKEN_ node with SHA256(path) ID (no collision)
-//  2. Filter schema nodes by language
-//  3. No applicable nodes → route to _project_files
-//  4. Extract address refs
-//  5. processNode for each applicable schema node
-//  6. Invalid query error → route to _project_files
-//  7. No buffered nodes → route to _project_files
-//  8. Atomic swap via ReplaceFileNodes
-//  9. RecordFile for incremental re-ingestion
-func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
-	// 1. Handle parse errors — use SHA256(path) for unique BROKEN_ IDs.
-	if result.parseErr != nil {
-		log.Printf("ingest: parse failed for %s (using raw fallback): %v", result.job.path, result.parseErr) // coverage:ignore
-		pathForID := result.realPath                                                                         // coverage:ignore
-		if pathForID == "" {                                                                                 // coverage:ignore
-			pathForID = result.job.path // coverage:ignore
-		} // coverage:ignore
-		sum := sha256.Sum256([]byte(pathForID))               // coverage:ignore
-		fallbackID := "BROKEN_" + hex.EncodeToString(sum[:8]) // coverage:ignore
-		fileNode := &graph.Node{                              // coverage:ignore
-			ID:      fallbackID,         // coverage:ignore
-			Mode:    0o444,              // coverage:ignore
-			ModTime: result.job.modTime, // coverage:ignore
-			Data:    result.content,     // coverage:ignore
-			Origin: &graph.SourceOrigin{ // coverage:ignore
-				FilePath:  result.realPath,             // coverage:ignore
-				StartByte: 0,                           // coverage:ignore
-				EndByte:   uint32(len(result.content)), // coverage:ignore
-			}, // coverage:ignore
-		} // coverage:ignore
-		e.Store.AddNode(fileNode) // coverage:ignore
-		e.Store.AddRoot(fileNode) // coverage:ignore
-		return nil                // coverage:ignore
+//  1. Filter schema nodes by language
+//  2. No applicable nodes → route to _project_files
+//  3. Extract address refs
+//  4. processNode for each applicable schema node
+//  5. Invalid query error → route to _project_files
+//  6. No buffered nodes → route to _project_files
+//  7. Atomic swap via ReplaceFileNodes
+//  8. RecordFile for incremental re-ingestion
+func (e *Engine) processSourceFileResult(result *parsedSourceFile) error {
+	// The ASTWalker is the sole walker (ADR-0012 step 4). Engine.Ingest
+	// guarantees it is set before dispatching source files here.
+	w := e.astWalker
+	// source_id is the path RELATIVE to the ingest root, matching how
+	// ley-line keys _ast/_source (mache-30edfa) — NOT filepath.Base,
+	// which would miss every file below the root.
+	sourceID := e.sourceIDFor(result.realPath)
+	root := ASTRoot{
+		DB:           w.db,
+		SourceID:     sourceID,
+		ParentPrefix: "",
 	}
-
-	// Select walker: ASTWalker (pure Go, SQL) when available, else SitterWalker (CGO).
-	var w Walker
-	var root any
-	if e.astWalker != nil {
-		w = e.astWalker
-		// source_id is the path RELATIVE to the ingest root, matching how
-		// ley-line keys _ast/_source (mache-30edfa) — NOT filepath.Base,
-		// which would miss every file below the root.
-		sourceID := e.sourceIDFor(result.realPath)
-		root = ASTRoot{
-			DB:           e.astWalker.db,
-			SourceID:     sourceID,
-			ParentPrefix: "",
+	// File-level extracts (context/imports/file-level-refs) are served from
+	// SQL — no CGO parse runs. Each mirrors the sitter extract it replaced.
+	if ctxBytes, err := w.ExtractContext(sourceID, result.job.langName); err == nil {
+		result.context = ctxBytes
+	}
+	if result.job.langName == "go" {
+		if imp, err := w.ExtractGoImports(sourceID); err == nil {
+			result.imports = imp
 		}
-		// S4: Phase-1 ran no CGO parse on this path, so the file-level
-		// extracts the sitter worker would have done are served here from
-		// SQL instead. Each mirrors the sitter extract it replaces; the
-		// projection parity gate asserts the results match byte-for-byte.
-		if ctxBytes, err := e.astWalker.ExtractContext(sourceID, result.job.langName); err == nil {
-			result.context = ctxBytes
-		}
-		if result.job.langName == "go" {
-			if imp, err := e.astWalker.ExtractGoImports(sourceID); err == nil {
-				result.imports = imp
-			}
-		}
-		if refs, err := e.astWalker.ExtractFileLevelRefs(sourceID, result.job.langName); err == nil {
-			result.fileLevelRefs = refs
-		}
-	} else {
-		sw := e.sitterWalker
-		if sw == nil {
-			sw = NewSitterWalker() // coverage:ignore
-			defer sw.Close()       // coverage:ignore
-		} // coverage:ignore
-		w = sw
-		root = SitterRoot{
-			Node:     result.tree.RootNode(),
-			FileRoot: result.tree.RootNode(),
-			Source:   result.content,
-			Lang:     result.job.lang,
-			LangName: result.job.langName,
-		}
+	}
+	if refs, err := w.ExtractFileLevelRefs(sourceID, result.job.langName); err == nil {
+		result.fileLevelRefs = refs
 	}
 
 	bt := &bufferingTarget{IngestionTarget: e.Store}
 	sourceFile := filepath.Base(result.job.path)
 
-	// 2. Filter schema nodes by language.
+	// 1. Filter schema nodes by language.
 	applicableNodes := filterNodesByLanguage(e.Schema.Nodes, result.job.langName)
 
-	// 3. No applicable schema nodes → route to _project_files/.
+	// 2. No applicable schema nodes → route to _project_files/.
 	if len(applicableNodes) == 0 {
 		return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime) // coverage:ignore
 	} // coverage:ignore
 
-	// 4. Extract file-level address refs (e.g., HCL variable declarations).
-	// ASTWalker path queries _ast table for the same patterns.
+	// 3. Extract file-level address refs (e.g., HCL variable declarations)
+	// by querying the _ast table for the same patterns.
 	var fileAddrRefs []string
-	switch wt := w.(type) {
-	case *SitterWalker:
-		if result.tree != nil {
-			if addrRefs, err := wt.ExtractAddressRefs(result.tree.RootNode(), result.content, result.job.lang, result.job.langName); err == nil {
-				fileAddrRefs = addrRefs
-			}
-		}
-	case *ASTWalker: // coverage:ignore
-		if addrRefs, err := wt.ExtractAddressRefs(result.job.path, result.job.langName); err == nil { // coverage:ignore
-			fileAddrRefs = addrRefs // coverage:ignore
-		} // coverage:ignore
+	if addrRefs, err := w.ExtractAddressRefs(result.job.path, result.job.langName); err == nil {
+		fileAddrRefs = addrRefs
 	}
 	// File-level refs (mache-02r9: top-level cobra RunE etc.) are
 	// emitted with a SENTINEL caller_id rather than merged into
@@ -474,21 +353,16 @@ func (e *Engine) processTreeSitterResult(result *parsedTreeSitterFile) error {
 	return nil
 }
 
-// ingestTreeSitter parses and processes a single source file. Used by
-// ReIngestFile and the synchronous dispatch in ingestFile.
-func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langName string, modTime time.Time) error {
-	// Pin to one OS thread for the lifetime of this call, mirroring
-	// the parallel worker fix in PR #257. tree-sitter's CGO bridge
-	// is sensitive to goroutine migration mid-call: when the Go
-	// runtime preempts and resumes a goroutine on a different OS
-	// thread while CGO is in flight, sporadic SIGSEGVs appear in
-	// internal/ingest tests (mache-2y9w). The parallel path got
-	// LockOSThread; this synchronous single-file path — used by
-	// ReIngestFile and the dispatch loop's default branch — was
-	// missed and kept producing CGO SIGSEGV reruns on PRs that
-	// touched code unrelated to ingestion (#284, #292, #294, #297).
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+// ingestSourceFile projects a single source file via the ASTWalker. Used by
+// ReIngestFile and the synchronous dispatch in ingestFile. No CGO runs — the
+// AST is read from the ley-line-parsed `_ast` db, so there is no tree-sitter
+// bridge and no need for the historical LockOSThread pin (mache-2y9w).
+func (e *Engine) ingestSourceFile(path, langName string, modTime time.Time) error {
+	if e.astWalker == nil {
+		return fmt.Errorf("engine: source file %s requires an ASTWalker "+
+			"(call SetASTWalker before ingesting source); in-process tree-sitter "+
+			"was removed in ADR-0012 step 4", path)
+	}
 
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -508,10 +382,9 @@ func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langNam
 		return err // coverage:ignore
 	} // coverage:ignore
 
-	result := &parsedTreeSitterFile{
-		job: treeSitterJob{
+	result := &parsedSourceFile{
+		job: sourceFileJob{
 			path:     path,
-			lang:     grammar,
 			langName: langName,
 			modTime:  modTime,
 		},
@@ -519,40 +392,5 @@ func (e *Engine) ingestTreeSitter(path string, grammar *sitter.Language, langNam
 		content:  content,
 	}
 
-	// S4 (mache-33de70): parse + sitter context/imports extraction only
-	// when there's no ASTWalker backend. With astWalker set, no CGO runs
-	// and processTreeSitterResult serves context/imports/file-level-refs
-	// from SQL. Mirrors the parallel-worker gate above.
-	if e.astWalker == nil {
-		parser := sitter.NewParser()
-		parser.SetLanguage(grammar)
-		tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
-		// Mirror the parallel worker's nil-tree guard: ParseCtx is
-		// documented to return (nil, nil) for non-error empty inputs, and
-		// processTreeSitterResult would then deref result.tree.RootNode()
-		// and panic. Convert it to a parse error so it routes to the
-		// BROKEN_ fallback instead.
-		if parseErr == nil && tree == nil {
-			parseErr = fmt.Errorf("tree-sitter returned nil tree") // coverage:ignore
-		}
-		result.tree = tree
-		result.parseErr = parseErr
-
-		// Extract context (imports, globals) when parse succeeded.
-		if parseErr == nil {
-			walker := e.sitterWalker
-			if walker == nil {
-				walker = NewSitterWalker() // coverage:ignore
-				defer walker.Close()       // coverage:ignore
-			} // coverage:ignore
-			if ctxBytes, err := walker.ExtractContext(tree.RootNode(), content, grammar, langName); err == nil {
-				result.context = ctxBytes
-			}
-			if langName == "go" {
-				result.imports = walker.ExtractGoImports(tree.RootNode(), content, grammar)
-			}
-		}
-	}
-
-	return e.processTreeSitterResult(result)
+	return e.processSourceFileResult(result)
 }

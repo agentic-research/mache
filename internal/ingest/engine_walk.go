@@ -190,14 +190,15 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	}
 
 	for _, match := range matches {
-		// Skip self-match if requested (e.g. for recursive schemas to avoid infinite loops)
+		// Skip self-match if requested (e.g. for recursive schemas to avoid
+		// infinite loops). On the AST path a match's scope is identified by
+		// its node id (ASTRoot.ParentPrefix), so parent==child when the
+		// resolved scope node id is identical and non-empty.
 		if schema.SkipSelfMatch {
-			// Check for Tree-sitter node equality using byte ranges
-			if parentRoot, ok := ctx.(SitterRoot); ok { // coverage:ignore
-				if childCtx, ok := match.Context().(SitterRoot); ok { // coverage:ignore
-					if parentRoot.Node.StartByte() == childCtx.Node.StartByte() && // coverage:ignore
-						parentRoot.Node.EndByte() == childCtx.Node.EndByte() && // coverage:ignore
-						parentRoot.Node.Type() == childCtx.Node.Type() { // coverage:ignore
+			if parentRoot, ok := ctx.(ASTRoot); ok { // coverage:ignore
+				if childCtx, ok := match.Context().(ASTRoot); ok { // coverage:ignore
+					if parentRoot.ParentPrefix != "" && // coverage:ignore
+						parentRoot.ParentPrefix == childCtx.ParentPrefix { // coverage:ignore
 						continue // coverage:ignore
 					}
 				}
@@ -324,6 +325,10 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			store.AddRoot(node)
 		} else {
 			parentId := toNodeID(parentPath)
+			// Guard the childSeen + parent.Children read-modify-write against
+			// concurrent ReIngestFile (watcher, two files under this parent) —
+			// same rationale as engine_ingest.go (mache-706757).
+			e.mu.Lock()
 			parent, err := store.GetNode(parentId)
 			if err == nil {
 				if e.childSeen[parentId] == nil {
@@ -338,6 +343,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 					store.AddNode(parent)
 				}
 			}
+			e.mu.Unlock()
 		}
 
 		// Recurse children
@@ -410,6 +416,39 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 					endLine := byteOffsetToLine(src, extEnd)
 					node.Properties["location"] = fmt.Appendf(nil, "%s:%d:%d", relPath, startLine, endLine)
 				}
+			}
+		}
+
+		// Persist the AST scope mapping (real _ast source_id + scope node id)
+		// onto the construct so serve-time find_callees can recover a scoped+
+		// qualified callee query directly from the graph node, instead of
+		// re-deriving it from the graph node id — which is NOT an _ast key and
+		// produced zero rows every time (bead mache-fd9982). Only astMatch
+		// (pure-Go, _ast-backed) implements ASTScope; sitterMatch (CGO
+		// tree-sitter) needs no such mapping since its extractor re-parses
+		// already-scoped content bytes directly.
+		//
+		// Only persist for a real LEAF construct scope — not for:
+		//   - "$" grouping matches (functions/, types/, imports/ container
+		//     dirs): these have no real @scope node, so hasScope (computed
+		//     above via extractDocComments/DocRange) is false for them.
+		//   - the package-root match itself, whose captured @scope IS the
+		//     entire source_file node — ley-line assigns that root AST node
+		//     the SAME id as the file's _source.id (verified empirically:
+		//     `_ast` row "pkg.go|pkg.go|source_file|0|85"), so scopeID==srcID
+		//     is the whole-file signal.
+		// Without this guard, grouping dirs and the package root inherit
+		// ast_scope_id = the whole file, and find_callees on them queries
+		// the scoped extractor over the ENTIRE file — a whole-file call
+		// union that's nondeterministic (last-file-wins) for multi-file
+		// packages (bead mache-6fbaf1, F3).
+		if as, ok := match.(ASTScope); ok {
+			if srcID, scopeID := as.ASTSourceID(), as.ASTScopeID(); srcID != "" && scopeID != "" && scopeID != srcID && hasScope {
+				if node.Properties == nil {
+					node.Properties = make(map[string][]byte)
+				}
+				node.Properties["ast_source_id"] = []byte(srcID)
+				node.Properties["ast_scope_id"] = []byte(scopeID)
 			}
 		}
 		store.AddNode(node)

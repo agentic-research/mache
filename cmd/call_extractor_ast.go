@@ -8,35 +8,63 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 )
 
-// pickCallExtractor returns the pure-Go ASTWalker-backed extractor
-// when `_ast` is present in the active .db, falling back to the
-// CGO SitterWalker-backed extractor otherwise. This is the per-site
-// dispatch point used by mache serve / mache mount when wiring a
+// pickCallExtractor returns the pure-Go ASTWalker-backed extractor when `_ast`
+// is present in the active .db, and a no-op extractor otherwise. This is the
+// per-site dispatch point used by mache serve / mache mount when wiring a
 // CallExtractor onto a SQLiteGraph.
 //
-// Detection is a single SQL query against sqlite_master. Errors
-// during detection log + fall through to the CGO extractor — never
-// take down the wiring on a transient SQL hiccup.
-//
-// ADR-0012 step 3 makes this picker unconditional (always AST) once
-// `mache build` invokes `leyline parse`. Step 4 deletes the CGO
-// branch entirely along with newCallExtractor and SitterWalker.
+// Detection is a single SQL query against sqlite_master. ADR-0012 step 4
+// removed in-process CGO tree-sitter, so there is no CGO fallback: a db with
+// no `_ast` table (or a nil db, or a detection error) yields the no-op
+// extractor rather than crashing the wiring. Every source projection carries
+// `_ast` (ley-line parses it), so the no-op only applies to non-source backends.
 func pickCallExtractor(db *sql.DB) graph.CallExtractor {
 	if db == nil {
-		return newCallExtractor()
+		return noopCallExtractor()
 	}
 	var hasAST int
 	err := db.QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_ast'`,
 	).Scan(&hasAST)
 	if err != nil {
-		log.Printf("call extractor: _ast detection failed (%v); using CGO fallback", err)
-		return newCallExtractor()
+		log.Printf("call extractor: _ast detection failed (%v); using no-op extractor", err)
+		return noopCallExtractor()
 	}
 	if hasAST == 0 {
-		return newCallExtractor()
+		return noopCallExtractor()
 	}
 	return newASTCallExtractor(db)
+}
+
+// pickScopedCallExtractor mirrors pickCallExtractor but returns a
+// graph.ScopedCallExtractor (nil when `_ast` isn't present). This is the
+// extractor GetCallees actually uses once a construct carries
+// ast_source_id/ast_scope_id Properties (bead mache-fd9982) — the legacy
+// graph.CallExtractor returned by pickCallExtractor is kept only as a
+// fallback for constructs/.dbs that predate this fix.
+func pickScopedCallExtractor(db *sql.DB) graph.ScopedCallExtractor {
+	if db == nil {
+		return nil
+	}
+	var hasAST int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_ast'`,
+	).Scan(&hasAST)
+	if err != nil || hasAST == 0 {
+		return nil
+	}
+	return newASTScopedCallExtractor(db)
+}
+
+// noopCallExtractor returns a CallExtractor that resolves no calls. Used for
+// backends with no pre-parsed `_ast` table (e.g. JSON/data-only graphs, or the
+// composite cross-mount fallback when a mount carries no AST). Since ADR-0012
+// step 4 removed in-process CGO tree-sitter, there is no parser to fall back
+// to — the honest answer for a non-source backend is "no calls".
+func noopCallExtractor() graph.CallExtractor {
+	return func(_ []byte, _, _ string) ([]graph.QualifiedCall, error) {
+		return nil, nil
+	}
 }
 
 // newASTCallExtractor returns a graph.CallExtractor backed by SQL queries
@@ -68,5 +96,21 @@ func newASTCallExtractor(db *sql.DB) graph.CallExtractor {
 	walker := ingest.NewASTWalker(db)
 	return func(_ []byte, path, langName string) ([]graph.QualifiedCall, error) {
 		return walker.ExtractQualifiedCalls(path, langName)
+	}
+}
+
+// newASTScopedCallExtractor returns a graph.ScopedCallExtractor backed by SQL
+// queries against the `_ast` table, scoped to a single construct. Unlike
+// newASTCallExtractor, sourceID and scopeID here are the REAL `_ast`/`_source`
+// key and scope node id (recovered from the construct's ast_source_id/
+// ast_scope_id Properties) — not a graph node id — so the query actually
+// matches rows. This is the fix for bead mache-fd9982: find_callees was
+// silently broken on the serve/mount path because the old wiring fed a graph
+// node id (e.g. "cmd/functions/evalOrAbs") into a query keyed on real _ast
+// source ids (e.g. "agent.go"), which matched nothing.
+func newASTScopedCallExtractor(db *sql.DB) graph.ScopedCallExtractor {
+	walker := ingest.NewASTWalker(db)
+	return func(sourceID, scopeID, langName string) ([]graph.QualifiedCall, error) {
+		return walker.ExtractQualifiedCallsScoped(sourceID, scopeID, langName)
 	}
 }

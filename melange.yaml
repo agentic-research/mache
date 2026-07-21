@@ -36,11 +36,11 @@ environment:
       - go-1.25
 
 pipeline:
-  # Raw `go build` (not the `go/build` pipeline) so CGO_ENABLED=1 can be
-  # set inline — the built-in pipeline step doesn't accept arbitrary env
-  # in this melange release.
+  # Pure Go since ADR-0012 step 4 (mache-37ae8b) — in-process tree-sitter was
+  # removed, so the build is CGO-free. Raw `go build` (not the `go/build`
+  # pipeline) is kept for ldflags control.
   - runs: |
-      export CGO_ENABLED=1
+      export CGO_ENABLED=0
       # Version is embedded via internal/buildinfo, not injected here.
       go build \
         -ldflags "-s -w" \

@@ -1,10 +1,16 @@
 # ADR-0012: CGO Removal — Migration Plan
 
 Date: 2026-04-30
-Status: Accepted (steps 1–3 shipped; step-4 engine mechanism shipped &
-parity-proven via S3/S4 — `mache-33cd7e`/`mache-33de70`; commitment point now
-gated on production activation of `SetASTWalker`, the deletion blockers, and
-`mache-33dc5f`)
+Status: Accepted — FULLY SHIPPED. Steps 1–3 + the step-4 commitment point
+completed in `mache-37ae8b` (v0.18.0): in-process CGO tree-sitter removed
+(SitterWalker, sitter_flatten, the 28 grammar bindings, the go-tree-sitter
+dep), leyline is now the universal parser, and the release builds
+`CGO_ENABLED=0`. Every source path — build / serve / mount / infer /
+testfixtures — routes through `leyline parse` → `_ast` → `ASTWalker` (pure
+Go). The only registry language without a grammar is cue (none exists at
+tree-sitter 0.26), which the coverage guard reports loudly. The `leyline_fs`
+FFI (`internal/leyline/client.go`, `//go:build leyline`) is a separate
+dev-only surface, unaffected.
 Supersedes inline mitigation in `mache-2y9w` (PR #257, #299)
 
 ## Context

@@ -92,6 +92,20 @@ type QualifiedCall struct {
 // langName is the tree-sitter language identifier (e.g. "go", "python").
 type CallExtractor func(content []byte, path, langName string) ([]QualifiedCall, error)
 
+// ScopedCallExtractor returns qualified call tokens made BY a single
+// construct, scoped to it. Unlike CallExtractor, it is keyed on the
+// construct's REAL `_ast`/`_source` id and `_ast` scope node id — not a
+// graph node id and not source content — so it works directly against a
+// pre-parsed `_ast` table without re-deriving anything from the graph.
+//
+// GetCallees prefers this over the legacy content-based CallExtractor when
+// the construct's node carries "ast_source_id"/"ast_scope_id" Properties
+// (persisted at projection time; see ingest.ASTScope). Feeding the graph
+// node id as a source_id into the old content-based path matched zero
+// `_ast` rows every time — the root cause of find_callees silently
+// returning nothing on the serve/mount path (bead mache-fd9982).
+type ScopedCallExtractor func(sourceID, scopeID, langName string) ([]QualifiedCall, error)
+
 // Graph is the interface for the FUSE layer.
 // This allows us to swap the backend later (Memory -> SQLite -> Mmap).
 type Graph interface {

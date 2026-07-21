@@ -42,6 +42,7 @@ func Goodbye() {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Check that Hello function has location metadata
@@ -131,6 +132,7 @@ func Hello() {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// The construct directory should have a "location" property

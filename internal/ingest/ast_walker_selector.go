@@ -311,6 +311,24 @@ func ancestryFromKinds(ancestorKinds []string) []string {
 	return out
 }
 
+// ancestryHasPrefix reports whether a capture's ancestry (relative to the outer
+// node) begins with the given @scope prefix (scopeAncestry + scopeKind). When it
+// does, the capture lives under the @scope node, so it can be resolved relative
+// to the inner scope node with the prefix stripped — the mechanism that lets
+// grouped declarations resolve each member's captures against the right inner
+// node instead of the first one under the shared outer node.
+func ancestryHasPrefix(ancestry, prefix []string) bool {
+	if len(ancestry) < len(prefix) {
+		return false
+	}
+	for i, p := range prefix {
+		if ancestry[i] != p {
+			return false
+		}
+	}
+	return true
+}
+
 // matchAncestry checks that the path from the scope node to the leaf node
 // matches the expected ancestor chain EXACTLY. The ancestry slice lists the
 // intermediate node kinds from outermost to innermost (excluding the scope

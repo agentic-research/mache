@@ -168,10 +168,10 @@ func astNodeHasMethodContainerAncestor(qg refsQuerier, nodeID string) bool {
 // graph is a ley-line projection (has an `_ast` table), it resolves each
 // candidate's kind from _ast.node_kind (+ ancestry) — the load-bearing
 // path. Otherwise (construct-dir MemoryStore, no _ast) it falls back to
-// filterDirIDsByKind's path-segment match — the documented TRANSITIONAL
-// fallback that goes away when SitterWalker is deleted and every backend
-// has _ast. A node_id absent from _ast also degrades to path-segment so
-// mixed/partial projections never silently drop hits (bead mache-5bb181).
+// filterDirIDsByKind's path-segment match — retained for backends that carry
+// no _ast table (e.g. JSON/data-only graphs). A node_id absent from _ast also
+// degrades to path-segment so mixed/partial projections never silently drop
+// hits (bead mache-5bb181).
 func filterDirIDsByKindGraph(g graph.Graph, dirIDs []string, kind string) ([]string, bool) {
 	if kind == "" {
 		return dirIDs, true

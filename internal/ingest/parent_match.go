@@ -2,8 +2,6 @@ package ingest
 
 import (
 	"maps"
-
-	sitter "github.com/smacker/go-tree-sitter"
 )
 
 // parentAwareMatch wraps a Match and injects a _parent key into Values()
@@ -14,9 +12,9 @@ import (
 // be shadowed. This is by design — underscore-prefixed keys are reserved for
 // engine-injected metadata (like _parent, _schema.json, _diagnostics).
 //
-// All other interfaces (OriginProvider, GetCaptureNode) are forwarded to the
-// inner match so that tree-sitter features (doc comments, location, write-back)
-// continue to work.
+// All other interfaces (OriginProvider, FileMeta, DocScope, CallExtractor) are
+// forwarded to the inner match so that doc comments, location, write-back, and
+// per-construct call extraction continue to work on nested matches.
 type parentAwareMatch struct {
 	inner        Match
 	parentValues map[string]any
@@ -46,18 +44,6 @@ func (m *parentAwareMatch) CaptureOrigin(name string) (startByte, endByte uint32
 		return op.CaptureOrigin(name)
 	}
 	return 0, 0, false
-}
-
-// GetCaptureNode forwards to the inner match if it supports tree-sitter capture lookup.
-// Required for doc comment extraction and location metadata.
-func (m *parentAwareMatch) GetCaptureNode(name string) *sitter.Node {
-	type captureNodeProvider interface {
-		GetCaptureNode(string) *sitter.Node
-	}
-	if cn, ok := m.inner.(captureNodeProvider); ok {
-		return cn.GetCaptureNode(name)
-	}
-	return nil
 }
 
 // Lang forwards to the inner match if it implements FileMeta. Without this,
@@ -105,4 +91,25 @@ func (m *parentAwareMatch) ScopeCalls() []string {
 		return ce.ScopeCalls()
 	}
 	return nil
+}
+
+// ASTSourceID forwards to the inner match if it implements ASTScope. Nested
+// constructs (e.g. methods under a struct) are always wrapped in
+// parentAwareMatch — without this forward they'd lose the AST scope mapping
+// the engine persists onto their graph node, and find_callees would stay
+// broken for exactly the constructs most likely to need scoped resolution
+// (bead mache-fd9982).
+func (m *parentAwareMatch) ASTSourceID() string {
+	if as, ok := m.inner.(ASTScope); ok {
+		return as.ASTSourceID()
+	}
+	return ""
+}
+
+// ASTScopeID forwards to the inner match if it implements ASTScope.
+func (m *parentAwareMatch) ASTScopeID() string {
+	if as, ok := m.inner.(ASTScope); ok {
+		return as.ASTScopeID()
+	}
+	return ""
 }

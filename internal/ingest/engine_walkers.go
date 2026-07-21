@@ -5,17 +5,16 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/lang"
-	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// langForExt is a thin wrapper over the lang registry.
-// Returns nil, "" for unsupported extensions.
-func langForExt(ext string) (*sitter.Language, string) {
+// langForExt is a thin wrapper over the lang registry. Returns the canonical
+// language name and ok=true for a recognized source extension, or "", false.
+func langForExt(ext string) (string, bool) {
 	l := lang.ForExt(ext)
 	if l == nil {
-		return nil, ""
+		return "", false
 	}
-	return l.Grammar(), l.Name
+	return l.Name, true
 }
 
 // SchemaUsesTreeSitter returns true if the schema's selectors are tree-sitter

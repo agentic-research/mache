@@ -2,9 +2,6 @@ package ingest
 
 import (
 	"strings"
-	"sync"
-
-	sitter "github.com/smacker/go-tree-sitter"
 )
 
 // byteOffsetToLine converts a byte offset to a 1-based line number in content.
@@ -44,38 +41,4 @@ func extractDocComments(match Match) (docText string, startByte, endByte uint32,
 		}
 	}
 	return docText, startByte, endByte, hasScope
-}
-
-// --- Go package name extraction for qualified defs ---
-
-var (
-	goPackageQueryOnce sync.Once
-	goPackageQueryObj  *sitter.Query
-)
-
-// extractGoPackageName uses tree-sitter to find the package name from a Go file root.
-func extractGoPackageName(fileRoot *sitter.Node, source []byte, lang *sitter.Language) string {
-	goPackageQueryOnce.Do(func() {
-		goPackageQueryObj, _ = sitter.NewQuery([]byte(`(package_clause (package_identifier) @pkg)`), lang)
-	})
-	if goPackageQueryObj == nil { // coverage:ignore
-		return "" // coverage:ignore
-	} // coverage:ignore
-
-	qc := sitter.NewQueryCursor()
-	defer qc.Close()
-	qc.Exec(goPackageQueryObj, fileRoot)
-
-	m, ok := qc.NextMatch()
-	if !ok || len(m.Captures) == 0 { // coverage:ignore
-		return "" // coverage:ignore
-	} // coverage:ignore
-
-	c := m.Captures[0]
-	start := c.Node.StartByte()
-	end := c.Node.EndByte()
-	if start < uint32(len(source)) && end <= uint32(len(source)) {
-		return string(source[start:end])
-	}
-	return "" // coverage:ignore
 }

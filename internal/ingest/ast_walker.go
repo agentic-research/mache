@@ -24,6 +24,28 @@ type ASTWalker struct {
 	langCache   sync.Map // sourceID -> string
 	pkgCache    sync.Map // sourceID -> string
 	sourceCache sync.Map // sourceID -> []byte
+	// addrRefCache memoizes the whole-file address-ref extraction keyed by
+	// sourceID+"\x00"+lang. Per-construct ExtractAddressRefsScoped filters these
+	// by node-id prefix instead of re-running the generic Query per construct —
+	// that per-construct storm was 84% of a whole-repo projection (mache-4f3840).
+	addrRefCache sync.Map // sourceID+"\x00"+lang -> []scopedAddrRef
+	// indexCache holds the per-file in-memory node index. Materializing every
+	// file's nodes/_ast rows ONCE and answering navigation from memory restores
+	// the O(nodes) tree walk that per-node SQL had turned into O(nodes²)
+	// (mache-4f3840). Keyed by sourceID.
+	indexCache sync.Map // sourceID -> *fileIndex
+	// callTokenCache memoizes the whole-file call extraction (leaf id + token)
+	// per (sourceID, lang) so ExtractCallsScoped attributes by node-id prefix
+	// instead of re-running queryCallPattern per construct.
+	callTokenCache sync.Map // sourceID+"\x00"+lang -> []scopedCallToken
+}
+
+// scopedAddrRef is one whole-file address-ref match: the token plus the id of
+// the AST node it was captured on, so per-construct callers can attribute it by
+// node-id prefix.
+type scopedAddrRef struct {
+	nodeID string
+	token  string
 }
 
 // fileLang returns the source language for sourceID, computed once and cached.
@@ -110,8 +132,71 @@ func (w *ASTWalker) docExtendStart(sourceID, scopeID string, scopeStart uint32) 
 
 // NewASTWalker creates a walker backed by a SQLite database containing
 // ley-line's _ast, _source, and nodes tables.
+//
+// It does NOT mutate the connection: the walker may run against a shared,
+// long-lived, SERVED database (serve/mount wire it onto a SQLiteGraph via
+// pickCallExtractor), where changing the pool size or holding a file lock for
+// the daemon's lifetime is harmful (mache-010123). Read-perf tuning that is
+// only safe when mache exclusively OWNS the db (a one-shot build's temp _ast
+// db) lives in TuneReadConnForBuild, which the build path opts into. The big
+// projection speedup — the per-file in-memory node index (mache-4f3840) — is
+// connection-count-agnostic and applies here regardless.
 func NewASTWalker(db *sql.DB) *ASTWalker {
 	return &ASTWalker{db: db}
+}
+
+// TuneReadConnForBuild applies aggressive read tuning that is ONLY safe when
+// the caller exclusively owns db — i.e. a one-shot `mache build` over a private
+// temp _ast db that ley-line already closed. It MUST NOT be called on a
+// served/mounted or otherwise shared handle: SetMaxOpenConns(1) clobbers the
+// SQLiteGraph's own pool and locking_mode=EXCLUSIVE holds a POSIX file lock for
+// the connection's life, blocking every other reader/writer of that file
+// (mache-010123).
+//
+// What it buys (mache-4f3840, whole-repo build): EXCLUSIVE eliminates the
+// per-statement fcntl F_SETLK lock/unlock dance (~81% of CPU before the index
+// fix cut query count); mmap turns page reads into memory-mapped accesses
+// instead of pread syscalls; the large cache keeps the working set resident.
+// Best-effort — a failed pragma degrades to slower-but-correct.
+func TuneReadConnForBuild(db *sql.DB) {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	_, _ = db.Exec("PRAGMA locking_mode = EXCLUSIVE")
+	// Negative cache_size is in KiB: -262144 = 256 MiB.
+	_, _ = db.Exec("PRAGMA cache_size = -262144")
+	_, _ = db.Exec("PRAGMA temp_store = MEMORY")
+	// 2 GiB mmap covers a whole-repo _ast db; a no-op where xFetch is unsupported.
+	_, _ = db.Exec("PRAGMA mmap_size = 2147483648")
+}
+
+// InvalidateSource drops every per-file cache entry for sourceID so a
+// subsequent query re-reads that file from the db. The mount/serve watcher
+// calls this when a source file changes (mache-018eee) — without it,
+// ReIngestFile would re-project from the walker's immortal caches and never see
+// the edit.
+//
+// It also bounds cache growth on long-lived daemons: the per-file caches
+// (indexCache/sourceCache/langCache/pkgCache/addrRefCache/callTokenCache)
+// otherwise accumulate O(repo) node rows + source bytes for the walker's
+// lifetime. That ceiling is bounded by the projected repo's file count; a
+// one-shot `mache build` walker is short-lived so it needs no eviction, and a
+// serve/mount daemon evicts per-file on change here (mache-024e9c).
+func (w *ASTWalker) InvalidateSource(sourceID string) {
+	w.indexCache.Delete(sourceID)
+	w.sourceCache.Delete(sourceID)
+	w.langCache.Delete(sourceID)
+	w.pkgCache.Delete(sourceID)
+	// addrRefCache/callTokenCache are keyed by sourceID+"\x00"+lang.
+	prefix := sourceID + "\x00"
+	for _, m := range []*sync.Map{&w.addrRefCache, &w.callTokenCache} {
+		m.Range(func(k, _ any) bool {
+			if ks, ok := k.(string); ok && strings.HasPrefix(ks, prefix) {
+				m.Delete(ks)
+			}
+			return true
+		})
+	}
 }
 
 // EnsureIndexes creates compound indexes on the _ast table for query
@@ -166,10 +251,14 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		return nil, fmt.Errorf("find %s nodes: %w", pattern.outerKind, err)
 	}
 
-	// Read source content for byte-range extraction
+	// Read source content for byte-range extraction — via the per-file
+	// sourceCache (fileSource), NOT a raw readSource. Query runs once per
+	// schema selector per file, so an uncached read re-fetched+decompressed
+	// the full file content ~N-selectors times per file; on a whole-repo
+	// projection that was the dominant cost (mache-4f3840).
 	var source []byte
 	if ar.SourceID != "" {
-		source, _ = w.readSource(ar.DB, ar.SourceID)
+		source = w.fileSource(ar.SourceID)
 	}
 
 	// Identify required captures: any capture whose name doesn't start with "_"
@@ -181,23 +270,50 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		}
 	}
 
-	var matches []Match
+	// Expand each outer node into scope units. When @scope is the outer node
+	// (the common case), there is one unit per outer node. When @scope is an
+	// INNER node kind (e.g. `(type_declaration (type_spec ...) @scope)`), a
+	// single outer node expands to one unit PER inner scope node — so grouped
+	// declarations like `type ( Alpha; Beta )` project each member, matching
+	// tree-sitter's one-match-per-inner-node semantics.
+	innerScope := pattern.scopeKind != "" && pattern.scopeKind != pattern.outerKind
+	var scopePrefix []string
+	if innerScope {
+		scopePrefix = append(append([]string{}, pattern.scopeAncestry...), pattern.scopeKind)
+	}
+
+	type scopeUnit struct {
+		outerID string  // capture base for captures NOT under the @scope
+		scope   astNode // the @scope node: text/range/ParentPrefix + capture base for captures under it
+	}
+	var units []scopeUnit
 	for _, scopeNode := range scopeNodes {
+		if !innerScope {
+			units = append(units, scopeUnit{outerID: scopeNode.id, scope: scopeNode})
+			continue
+		}
+		inners, err := w.findChildrenByKindAST(ar.DB, scopeNode.id, pattern.scopeKind, ar.SourceID, pattern.scopeAncestry)
+		if err != nil {
+			return nil, fmt.Errorf("find inner scope %s: %w", pattern.scopeKind, err)
+		}
+		if len(inners) == 0 {
+			// No inner scope resolved — fall back to the outer node as the scope
+			// (preserves the prior single-node behavior for odd shapes).
+			units = append(units, scopeUnit{outerID: scopeNode.id, scope: scopeNode})
+			continue
+		}
+		for _, in := range inners {
+			units = append(units, scopeUnit{outerID: scopeNode.id, scope: in})
+		}
+	}
+
+	var matches []Match
+	for _, unit := range units {
 		values := make(map[string]any)
 		captureRanges := make(map[string][2]int)
 		missingRequired := false
 
-		// Resolve the @scope node. It may be an inner node, e.g.
-		// `(type_declaration (type_spec ...) @scope)` binds @scope to type_spec,
-		// not the outer match — so the scope text excludes the `type ` keyword.
-		// Use it for the scope source text and the match byte range (write-back
-		// origin), mirroring SitterWalker.
-		scopeForText := scopeNode
-		if pattern.scopeKind != "" && pattern.scopeKind != pattern.outerKind {
-			if sn, err := w.findChildByKindAST(ar.DB, scopeNode.id, pattern.scopeKind, ar.SourceID, pattern.scopeAncestry); err == nil && sn != nil {
-				scopeForText = *sn
-			}
-		}
+		scopeForText := unit.scope
 		// Inject the scope node's source text as "scope", mirroring SitterWalker —
 		// so leaf templates like {{.scope}} (the most common source-leaf template)
 		// render the construct's source instead of "<no value>".
@@ -213,7 +329,16 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 			if cap.name == "scope" { // coverage:ignore — see comment above; unreachable via public API
 				continue // coverage:ignore — same as above
 			}
-			child, err := w.findChildByKindAST(ar.DB, scopeNode.id, cap.kind, ar.SourceID, cap.ancestry)
+			// Captures nested under the @scope node resolve relative to the inner
+			// scope (with the scope prefix stripped from their ancestry); captures
+			// elsewhere resolve relative to the outer node with full ancestry.
+			base := unit.outerID
+			ancestry := cap.ancestry
+			if innerScope && ancestryHasPrefix(cap.ancestry, scopePrefix) {
+				base = unit.scope.id
+				ancestry = cap.ancestry[len(scopePrefix):]
+			}
+			child, err := w.findChildByKindAST(ar.DB, base, cap.kind, ar.SourceID, ancestry)
 			if err != nil || child == nil {
 				if requiredCaptures[cap.name] {
 					missingRequired = true
@@ -301,10 +426,11 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 // Close is a no-op — the ASTWalker doesn't own the database connection.
 func (w *ASTWalker) Close() {}
 
-// SelectWalker inspects a SQLite database and returns the best Walker.
-// If the database has an _ast table (produced by ley-line's ll-open/ts),
-// returns an ASTWalker (pure Go, no CGO). Otherwise returns a SitterWalker
-// (requires CGO tree-sitter bindings).
+// SelectWalker inspects a SQLite database and returns the ASTWalker when the
+// database has an `_ast` table (produced by ley-line's ll-open/ts). Since
+// ADR-0012 step 4 removed in-process CGO tree-sitter, a database WITHOUT an
+// `_ast` table is an error — there is no fallback walker. Callers must parse
+// source through ley-line first (see runBuildViaLeylineSchema / autoInvokeLeylineParse).
 func SelectWalker(db *sql.DB) (Walker, error) {
 	var count int
 	err := db.QueryRow(
@@ -313,10 +439,11 @@ func SelectWalker(db *sql.DB) (Walker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect sqlite_master for _ast table: %w", err)
 	}
-	if count > 0 {
-		return NewASTWalker(db), nil
+	if count == 0 {
+		return nil, fmt.Errorf("no _ast table in database: mache requires a " +
+			"ley-line-parsed source db (in-process tree-sitter was removed in ADR-0012 step 4)")
 	}
-	return NewSitterWalker(), nil
+	return NewASTWalker(db), nil
 }
 
 // --- Internal types ---
@@ -399,6 +526,19 @@ func (m *astMatch) ScopeCalls() []string {
 		calls = append(calls, addr...)
 	}
 	return calls
+}
+
+// ASTSourceID implements ASTScope — the real `_ast`/`_source` key for this
+// match's file (NOT a graph node id; see bead mache-fd9982).
+func (m *astMatch) ASTSourceID() string {
+	return m.ctx.SourceID
+}
+
+// ASTScopeID implements ASTScope — the `_ast` scope node id this match's
+// calls are constrained to (the same value ScopeCalls passes to
+// ExtractCallsScoped as scopeID).
+func (m *astMatch) ASTScopeID() string {
+	return m.ctx.ParentPrefix
 }
 
 type astNode struct {

@@ -174,10 +174,17 @@ func TestListDir_IncludesFiles(t *testing.T) {
 	var entries []nodeEntry
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
 
-	assert.Len(t, entries, 1)
+	// bead mache-6fbaf1: buildTestGraph's fixture records
+	// AddRef("Helper", "pkg/main/source") + AddDef("Helper", "pkg/util/helper"),
+	// so GetCallees("pkg/main") now resolves via the node_refs fallback (no
+	// CallExtractor needed) — the self-gating "callees" virtual dir entry
+	// correctly appears alongside "source".
+	require.Len(t, entries, 2)
 	assert.Equal(t, "source", entries[0].Name)
 	assert.Equal(t, "file", entries[0].Type)
 	assert.Equal(t, int64(14), entries[0].Size) // len("func main() {}")
+	assert.Equal(t, "callees", entries[1].Name)
+	assert.Equal(t, "virtual", entries[1].Type)
 }
 
 func TestListDir_Empty(t *testing.T) {
@@ -436,16 +443,22 @@ func TestFindCallers_RequiredToken(t *testing.T) {
 // find_callees handler tests
 // ---------------------------------------------------------------------------
 
-func TestFindCallees_EmptyWithoutExtractor(t *testing.T) {
+func TestFindCallees_ResolvesViaNodeRefsWithoutExtractor(t *testing.T) {
 	store := buildTestGraph(t)
 	handler := makeFindCalleesHandler(store)
 
-	// Without a CallExtractor set, GetCallees returns nil — handler returns JSON with hint
+	// bead mache-6fbaf1: even with no CallExtractor/ScopedCallExtractor
+	// wired (the exact shape of a schema-built .db with no live `_ast`
+	// table), GetCallees now resolves via the node_refs fallback — the
+	// fixture's AddRef("Helper", "pkg/main/source") + AddDef("Helper",
+	// "pkg/util/helper") already carries everything needed. This used to
+	// silently return [] with a "hint" — that was the bug.
 	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/main"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	assert.Contains(t, resultText(t, result), `"callees"`)
-	assert.Contains(t, resultText(t, result), `"hint"`)
+	assert.Contains(t, resultText(t, result), `"pkg/util/helper"`)
+	assert.NotContains(t, resultText(t, result), `"hint"`)
 }
 
 func TestFindCallees_RequiredPath(t *testing.T) {
@@ -2319,14 +2332,23 @@ func TestArena_AllTools(t *testing.T) {
 	require.NoError(t, err, "resolveSchema(go) failed")
 	require.NotNil(t, schema)
 
-	// Build a real MemoryStore via the engine ingestion pipeline.
+	// Build a real MemoryStore via the engine ingestion pipeline. ADR-0012
+	// step 4 removed in-process CGO tree-sitter, so source projection goes
+	// through ley-line: parse internal/graph into an `_ast` db and wire an
+	// ASTWalker + the pure-Go AST call extractor. Skips when the pinned
+	// leyline isn't available (no download in tests).
 	store := graph.NewMemoryStore()
 	resolver := graph.NewSQLiteResolver(machetmpl.Render)
 	store.SetResolver(resolver.Resolve)
-	store.SetCallExtractor(newCallExtractor())
 	defer resolver.Close()
 
 	engine := ingest.NewEngine(schema, store)
+	astDB, astCleanup, ppErr := attachLeylineASTWalkerForTest(t, graphDir, engine)
+	if ppErr != nil {
+		t.Skipf("pinned leyline unavailable for source projection: %v", ppErr)
+	}
+	defer astCleanup()
+	store.SetCallExtractor(newASTCallExtractor(astDB))
 	require.NoError(t, engine.Ingest(graphDir), "ingestion of internal/graph failed")
 
 	// Initialize the refs database (needed by search, get_type_info, get_diagnostics).

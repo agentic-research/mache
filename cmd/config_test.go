@@ -9,7 +9,6 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/lang"
-	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,6 +97,12 @@ var knownBrokenPresets = map[string]string{}
 // Data-format presets (cli, mcp, mcp-registry) use JSONPath selectors
 // rather than tree-sitter and are skipped. Presets in
 // knownBrokenPresets are skipped pending the linked beads.
+// TestPresetSchemas_SelectorsCompile checks preset S-expression selectors are
+// structurally well-formed. In-process CGO tree-sitter grammar compilation was
+// removed (ADR-0012 step 4), so this can no longer compile each selector
+// against a live grammar — that end-to-end validation now lives in the
+// leyline-gated preset projection tests (preset_fixture_test.go). This remaining
+// check catches gross breakage (empty, non-S-expression, unbalanced parens).
 func TestPresetSchemas_SelectorsCompile(t *testing.T) {
 	dataPresets := map[string]bool{"cli": true, "mcp": true, "mcp-registry": true}
 
@@ -105,8 +110,7 @@ func TestPresetSchemas_SelectorsCompile(t *testing.T) {
 		if dataPresets[name] {
 			continue
 		}
-		l := lang.ForName(name)
-		if l == nil || l.Grammar() == nil {
+		if lang.ForName(name) == nil {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
@@ -117,21 +121,27 @@ func TestPresetSchemas_SelectorsCompile(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, topo)
 
-			grammar := l.Grammar()
 			walkPresetNodes(t, topo.Nodes, name, func(node api.Node, path string) {
-				if node.Selector == "" {
+				sel := node.Selector
+				if sel == "" || sel == "$" {
 					return
 				}
-				if node.Selector == "$" {
-					return
+				assert.Equal(t, byte('('), sel[0],
+					"preset %q selector at %s must be a tree-sitter S-expression (start with '('): %s", name, path, sel)
+				depth := 0
+				for _, r := range sel {
+					switch r {
+					case '(':
+						depth++
+					case ')':
+						depth--
+					}
+					if depth < 0 {
+						break
+					}
 				}
-				q, err := sitter.NewQuery([]byte(node.Selector), grammar)
-				if err != nil {
-					t.Errorf("preset %q selector at %s failed to compile:\n  selector: %s\n  error: %v",
-						name, path, node.Selector, err)
-					return
-				}
-				q.Close()
+				assert.Equal(t, 0, depth,
+					"preset %q selector at %s has unbalanced parentheses: %s", name, path, sel)
 			})
 		})
 	}

@@ -13,16 +13,6 @@
     },
     {
       "rule_id": "dead_code",
-      "source_id": "internal/treesitter/elixir/scanner.c",
-      "count": 7
-    },
-    {
-      "rule_id": "dead_code",
-      "source_id": "internal/treesitter/elixir/tree_sitter/parser.h",
-      "count": 16
-    },
-    {
-      "rule_id": "dead_code",
       "source_id": "mount/mount.go",
       "count": 1
     },
@@ -193,11 +183,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/graph/community_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "internal/graph/composite_defs_test.go",
       "count": 1
     },
@@ -283,16 +268,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/ast_file_level_refs_parity_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/ast_parity_test.go",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "internal/ingest/ast_walker.go",
       "count": 2
     },
@@ -318,23 +293,18 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/parent_match.go",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/sitter_flatten_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/sitter_walker.go",
+      "source_id": "internal/ingest/error_surface_test.go",
       "count": 2
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/sitter_walker_test.go",
-      "count": 14
+      "source_id": "internal/ingest/leyline_ast_test_helper_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/parent_match.go",
+      "count": 6
     },
     {
       "rule_id": "duplicate_code",
@@ -365,6 +335,11 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/lattice/greedy.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lattice/infer_astdb_parity_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
@@ -658,6 +633,11 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/ast_walker_callees_e2e_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/ast_walker_calls_test.go",
       "count": 2
     },
@@ -720,11 +700,6 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/registry.go",
       "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/treesitter/elixir/tree_sitter/parser.h",
-      "count": 4
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1433,7 +1408,12 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/address_refs.go",
+      "source_id": "internal/ingest/ast_walker.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/ast_walker_calls.go",
       "count": 1
     },
     {
@@ -1454,7 +1434,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_treesitter.go",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -1465,11 +1445,6 @@
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/git.go",
       "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/sitter_walker.go",
-      "count": 4
     },
     {
       "rule_id": "fan_out_skew",
@@ -1498,6 +1473,11 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "internal/lltest/project.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/materialize/json.go",
       "count": 1
     },
@@ -1519,7 +1499,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/testfixtures/registry.go",
-      "count": 1
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -1668,7 +1648,7 @@
     },
     {
       "rule_id": "god_file",
-      "source_id": "internal/ingest/sitter_walker.go",
+      "source_id": "internal/ingest/ast_walker.go",
       "count": 1
     },
     {
@@ -2078,11 +2058,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "internal/ingest/ast_query_parity_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "internal/ingest/ast_walker.go",
       "count": 1
     },
@@ -2100,6 +2075,11 @@
       "rule_id": "long_function",
       "source_id": "internal/ingest/ast_walker_test.go",
       "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/callees_noast_e2e_test.go",
+      "count": 1
     },
     {
       "rule_id": "long_function",
@@ -2148,18 +2128,8 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "internal/ingest/sitter_walker.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "internal/ingest/sqlite_writer.go",
       "count": 2
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/lattice/grammar_introspect_test.go",
-      "count": 1
     },
     {
       "rule_id": "long_function",

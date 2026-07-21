@@ -57,6 +57,7 @@ data/
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Go file should be processed
@@ -124,6 +125,7 @@ func TestEngine_GitignoreNestedDirectories(t *testing.T) {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// app.log should be excluded (root .gitignore)
@@ -167,6 +169,7 @@ func TestEngine_GitignoreNestedNegation(t *testing.T) {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// main.go should be processed
@@ -254,6 +257,7 @@ func TestEngine_NoGitignoreOptOut(t *testing.T) {
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
 	engine.RespectGitignore = false // opt-out
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// secret.txt SHOULD be ingested when gitignore is disabled

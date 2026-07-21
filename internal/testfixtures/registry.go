@@ -13,9 +13,11 @@
 package testfixtures
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -26,7 +28,10 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/leyline"
 	machetmpl "github.com/agentic-research/mache/internal/template"
+
+	_ "modernc.org/sqlite"
 )
 
 // Fixture is one manifest entry. See docs/adr/0019-real-corpus-fixture-registry.md
@@ -273,6 +278,15 @@ func Get(t *testing.T, id string) *graph.SQLiteGraph {
 		t.Fatalf("testfixtures.Get(%q): sqlite writer: %v", id, err)
 	}
 	engine := ingest.NewEngine(schema, writer)
+	// Source (tree-sitter) schemas project a ley-line `_ast` db via the
+	// ASTWalker — in-process CGO tree-sitter was removed (ADR-0012 step 4).
+	// ley-line parses the fixture source; the engine projects it. Skips the
+	// test when the pinned leyline is unavailable (never downloads).
+	if ingest.SchemaUsesTreeSitter(schema) {
+		astDB, astCleanup := attachFixtureASTWalker(t, id, srcPath, engine)
+		defer astCleanup()
+		_ = astDB
+	}
 	if err := engine.Ingest(srcPath); err != nil {
 		_ = writer.Close()
 		_ = os.RemoveAll(tempDir)
@@ -300,6 +314,51 @@ func Get(t *testing.T, id string) *graph.SQLiteGraph {
 	cache[id] = &cachedGraph{g: sg, tempDir: tempDir}
 	cacheMu.Unlock()
 	return sg
+}
+
+// attachFixtureASTWalker parses srcPath with the pinned ley-line binary and
+// attaches an ASTWalker to engine, so a tree-sitter (source) fixture projects
+// CGO-free — in-process tree-sitter was removed in ADR-0012 step 4
+// (mache-37ae8b). It mirrors cmd's autoInvokeLeylineParse but resolves the
+// binary with ResolveBinary(false) so the test never triggers a network
+// download; when the pinned ley-line isn't cached it SKIPS (source fixtures
+// can't project without it now). Returns the opened _ast db and a cleanup that
+// closes it and removes the temp file.
+//
+// KNOWN GAP (shared with the serve/mount leyline path): the _ast is a frozen
+// snapshot of srcPath at parse time; there is no in-process re-parse on edit.
+// Fixtures are read-only corpora, so this is a non-issue here.
+func attachFixtureASTWalker(t *testing.T, id, srcPath string, engine *ingest.Engine) (*sql.DB, func()) {
+	t.Helper()
+	bin, err := leyline.ResolveBinary(false) // never download in tests
+	if err != nil {
+		t.Skipf("testfixtures.Get(%q): pinned ley-line unavailable (%v) — "+
+			"source fixtures require it after in-process tree-sitter removal", id, err)
+	}
+
+	tmp, err := os.CreateTemp("", "mache-fixture-*.db")
+	if err != nil {
+		t.Fatalf("testfixtures.Get(%q): temp _ast db: %v", id, err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+
+	cmd := exec.Command(bin, "parse", srcPath, "-o", tmpPath)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		cleanup()
+		t.Fatalf("testfixtures.Get(%q): ley-line parse %s: %v", id, srcPath, err)
+	}
+
+	db, err := sql.Open("sqlite", tmpPath)
+	if err != nil {
+		cleanup()
+		t.Fatalf("testfixtures.Get(%q): open _ast db: %v", id, err)
+	}
+	engine.SetASTWalker(ingest.NewASTWalker(db))
+	return db, func() { _ = db.Close(); cleanup() }
 }
 
 // RequireTier skips the test unless the tier's env-var gate is set.

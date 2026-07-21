@@ -15,8 +15,8 @@ import (
 // leylineSchemaCoverageGaps reports schema languages whose source files
 // exist under source but produced ZERO `_ast` rows in the leyline parse —
 // i.e. the schema will project hollow category dirs because leyline has no
-// grammar for that language yet (leyline v0.7.5 parses ~11 of the 28
-// registry languages). Before schema-on-leyline (mache-73b885) this failure
+// grammar for that language yet (the pinned leyline parses 27 of the 28
+// registry languages — all but cue). Before schema-on-leyline (mache-73b885) this failure
 // was loud: the auto path warned and the explicit path errored. The guard
 // restores that loudness with an accurate diagnosis: warnIfEmptyBuild can't
 // catch it because the empty category dirs still count as nodes.

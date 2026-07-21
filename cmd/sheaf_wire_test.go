@@ -45,20 +45,46 @@ func TestBuildServeGraph_ReturnsInvalidatorForDir(t *testing.T) {
 	assert.False(t, si.HasResult(), "fresh invalidator has no community result until get_communities runs")
 }
 
-// TestBuildServeGraph_NilInvalidatorForNonDir asserts that a
-// file-shaped source (not a directory) returns nil invalidator —
-// there's no watcher to wire so the invalidator is structurally
-// unnecessary. The contract is "you get an invalidator iff there's
-// a watcher that can fire it." Composite mounts and control-only
-// init follow the same rule.
+// TestBuildServeGraph_NilInvalidatorForNonDir asserts the non-dir
+// contract: "you get an invalidator iff there's a watcher that can
+// fire it" — file-shaped sources never construct a watcher, so they
+// never return a non-nil invalidator. Composite mounts and
+// control-only init follow the same rule.
+//
+// Post-ADR-0012-step-4 the contract splits by file kind:
+//
+//   - A single SOURCE file (.go) is now a HARD ERROR: in-process
+//     tree-sitter is gone, the auto-leyline serve path is IsDir-gated,
+//     and `leyline parse` rejects non-directory paths — so no parser
+//     can serve a bare source file and the engine fails loudly rather
+//     than projecting an empty graph. The error path must keep the
+//     consistent shape (nil graph, nil invalidator, non-nil noop
+//     cleanup) so callers ignoring si don't dangle a partial store.
+//   - A single DATA file (.json) still succeeds via the pure-Go JSON
+//     walker, and — being a non-dir — still returns nil invalidator,
+//     preserving the original intent of this test.
 func TestBuildServeGraph_NilInvalidatorForNonDir(t *testing.T) {
 	t.Setenv("MACHE_NO_LEYLINE", "1")
-	// Single .go file (not a dir) — ingest accepts it but no watcher fires.
 	dir := t.TempDir()
-	file := filepath.Join(dir, "main.go")
-	require.NoError(t, os.WriteFile(file, []byte("package main\nfunc Foo() {}\n"), 0o600))
 
-	g, si, cleanup, err := buildServeGraph(file, &api.Topology{Version: api.SchemaVersion})
+	// Source-file shape: hard error, consistent nil/noop shape.
+	goFile := filepath.Join(dir, "main.go")
+	require.NoError(t, os.WriteFile(goFile, []byte("package main\nfunc Foo() {}\n"), 0o600))
+
+	g, si, cleanup, err := buildServeGraph(goFile, &api.Topology{Version: api.SchemaVersion})
+	require.Error(t, err, "single source file has no parser post-CGO-removal — must fail loudly, not project empty")
+	assert.Contains(t, err.Error(), "ASTWalker", "error must explain the missing-parser cause")
+	assert.Nil(t, g, "no graph on error")
+	assert.Nil(t, si, "no invalidator on error")
+	require.NotNil(t, cleanup, "cleanup must be non-nil so deferred callers don't nil-deref")
+	cleanup() // noop, must not panic
+
+	// Data-file shape: still succeeds, and non-dir ⇒ no watcher ⇒ nil
+	// invalidator (the original contract this test pins).
+	jsonFile := filepath.Join(dir, "data.json")
+	require.NoError(t, os.WriteFile(jsonFile, []byte(`{"name":"x"}`), 0o600))
+
+	g, si, cleanup, err = buildServeGraph(jsonFile, &api.Topology{Version: api.SchemaVersion})
 	require.NoError(t, err)
 	defer cleanup()
 	require.NotNil(t, g)

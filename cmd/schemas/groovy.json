@@ -7,7 +7,7 @@
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(groovy_package) @scope",
+          "selector": "(package_declaration) @scope",
           "files": [
             {
               "name": "source",
@@ -23,7 +23,7 @@
       "children": [
         {
           "name": "{{.index}}",
-          "selector": "(groovy_import) @scope",
+          "selector": "(import_declaration) @scope",
           "files": [
             {
               "name": "source",
@@ -39,7 +39,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(class_definition (identifier) @name) @scope",
+          "selector": "(class_declaration (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -54,8 +54,8 @@
       "selector": "$",
       "children": [
         {
-          "name": "{{.index}}",
-          "selector": "(function_definition) @scope",
+          "name": "{{.name}}",
+          "selector": "(function_definition (identifier) @name) @scope",
           "files": [
             {
               "name": "source",
@@ -64,8 +64,8 @@
           ]
         },
         {
-          "name": "{{.index}}",
-          "selector": "(function_declaration) @scope",
+          "name": "{{.name}}",
+          "selector": "(method_declaration (identifier) @name) @scope",
           "files": [
             {
               "name": "source",

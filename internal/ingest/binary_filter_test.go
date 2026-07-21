@@ -152,6 +152,7 @@ func TestEngine_Ingest_SkipsBinaryFiles(t *testing.T) {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Go file was ingested (tree-sitter processed)
@@ -207,6 +208,7 @@ func TestEngine_Ingest_SkipsBinaryInBuildDirs(t *testing.T) {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// Source file ingested
@@ -254,6 +256,7 @@ func TestEngine_Ingest_MixedLanguages_NoError(t *testing.T) {
 	engine := NewEngine(schema, store)
 
 	// This must NOT error — language mismatches should be skipped gracefully
+	attachLeylineAST(t, engine, tmpDir)
 	err := engine.Ingest(tmpDir)
 	require.NoError(t, err, "mixed-language ingestion should not fail")
 
@@ -306,6 +309,7 @@ func TestEngine_Ingest_ProjectFilesHierarchy(t *testing.T) {
 
 	store := graph.NewMemoryStore()
 	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
 	require.NoError(t, engine.Ingest(tmpDir))
 
 	// _project_files root

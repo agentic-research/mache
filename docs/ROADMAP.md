@@ -17,14 +17,14 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 
 **Stable today:**
 
-- 28-language tree-sitter parsing via the standalone CGO path; pure-Go path via [ley-line-open](https://github.com/agentic-research/ley-line-open) `.db` files (see [ARCHITECTURE.md § Interplay with ley-line-open](ARCHITECTURE.md#interplay-with-ley-line-open))
+- 27-of-28-language parsing via `leyline parse` (pure Go — in-process CGO tree-sitter removed in ADR-0012 step 4; only cue lacks a grammar). See [ARCHITECTURE.md § Interplay with ley-line-open](ARCHITECTURE.md#interplay-with-ley-line-open)
 - Two graph backends: `MemoryStore` (in-memory map for source ingestion) and `SQLiteGraph` (zero-copy SQL over ley-line-open `.db`)
 - NFS-only mount via `go-nfs` + `billy` (FUSE was removed in v0.7.0 per ADR-0006; for FUSE today, use `leyline serve` from ley-line-open)
 - MCP server with **18 tools**: 14 work standalone, 3 require ley-line-open enrichment (`semantic_search`, `get_type_info`, `get_diagnostics`), and `get_sheaf_status` reports the ley-line daemon's cache state (returns `{available: false}` when the daemon is unreachable, so it is safe to call anywhere); `find_smells` partially degrades on tree-sitter-only mounts (rules requiring `_ast` need a `.db` built by ley-line-open). The full list: `get_overview`, `find_callers`, `find_callees`, `find_definition`, `search`, `list_directory`, `read_file`, `semantic_search`, `write_file`, `get_type_info`, `get_diagnostics`, `get_sheaf_status`, `get_impact`, `get_communities`, `get_diagram`, `get_architecture`, `find_smells`, `resolve_ref`.
-- Write-back pipeline: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins` (no re-ingest)
+- Write-back pipeline: validate (leyline validate op, pure Go) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins` (no re-ingest)
 - Draft mode: invalid writes save as drafts, node path stays stable, errors surface via `_diagnostics/`
 - Context awareness: virtual `context` files expose imports/globals to agents
-- Cross-reference indexing: `node_refs`/`node_defs` SQLite tables backed by tree-sitter (standalone) or ley-line-open (`.db` path)
+- Cross-reference indexing: `node_refs`/`node_defs` SQLite tables produced by `leyline parse`
 - **Canonical views** (ADR-0013): `v_defs` / `v_refs` with `(mention ⊑ binding ⊑ reachability)` fidelity ordering — consumer rules query producer-agnostically
 - **Capnp event-log readthrough**: `${db}.bindings.capnp` is the cross-runtime contract for binding refs; `find_smells` reads the canonical event log directly
 - `callers/` and `callees/` virtual directories — self-gating, NFS-served as `graphFile`s
@@ -35,13 +35,13 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - **e2e MCP-tool harness** with per-tool latency + alloc profile, CPU + heap pprof capture, and `task profile-tools-pprof` / `task flamegraphs`
 - **Snapshot memoization**: `MemoryStore.{Defs,Refs}Map` cached, invalidated on `AddDef` / `AddRef` / `DeleteFileNodes`
 - **Single leyline smell gate** (v0.17.0): `task smells` builds the tracked tree via the exact-pinned leyline and runs all `gate`-tagged rules against one `docs/smell-baseline.json`; the pure-Go tree-sitter gate is retired. The leyline binary pin is exact `major.minor.patch` — LLO patch releases can change the emitted `_ast` schema
-- **Schema builds + FCA inference without CGO** (v0.17.0): `mache build --schema X` projects via the pure-Go Engine+ASTWalker over the leyline parse (with a coverage guard that errors/warns when a schema language has no leyline grammar — leyline currently parses ~11 of the 28 registry languages); `mache infer` and mount `--infer` infer from `_ast` tables. Remaining in-process tree-sitter: the no-`_ast` SelectWalker fallback, write-back validation, and the linter (CGO-removal PR-B, mache-37ae8b)
+- **Pure Go — in-process CGO tree-sitter fully removed** (v0.18.0, ADR-0012 step 4, mache-37ae8b): every source path (build / serve / mount / infer / testfixtures) routes through `leyline parse` → `_ast` → pure-Go `ASTWalker`; `SitterWalker`, `sitter_flatten`, the 28 grammar bindings, and the `go-tree-sitter` dep are gone, and the release builds `CGO_ENABLED=0`. leyline v0.8.0 parses 27 of 28 registry languages (all but cue, which has no tree-sitter grammar anywhere); a schema coverage guard reports cue loudly. Write-back validation + the nil-slice linter run over the leyline validate op's `emit_ast` payload (v0.7.8). The `leyline_fs` FFI stays as a separate `//go:build leyline` dev-only surface.
 
 **Known limitations:**
 
 - Memory: ~2GB peak for 323K NVD records (1.6M graph nodes with string IDs) — addressable via [GenerationalGraph](https://github.com/agentic-research/mache) (mache-2f1287)
 - Write-back formatting is Go and HCL/Terraform only; other languages validate but don't auto-format
-- Standalone (CGO) path produces `node_defs`/`node_refs` but not `_ast` — 5 of 14 `find_smells` rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`, `duplicate_code`) require a `.db` built by ley-line-open
+- cue is the one registry language `leyline parse` cannot handle (no tree-sitter-0.26 cue grammar exists anywhere); a schema targeting cue projects nothing and the coverage guard errors loudly
 - bbolt-backed `ext/boltdb` projection is opt-in (not in default `go.work`); used by venturi/trivy-db workflows
 
 ## Near-term
@@ -49,7 +49,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - **Bundle leyline binary in mache release** (mache-33dc5f) — gates the CGO-removal cutover; ships a known-compatible `leyline` in the mache tarball so the ley-line-open-paired path works without a separate install. With this, "what version of ley-line-open does mache v0.x.0 want" has a literal answer (whatever's in the tarball).
 - **Startup `leyline --version` check** (mache-8kif) — refuse to start if the on-PATH leyline is older than the minimum baked into this mache release; complements the wire-format VERSION rejection by failing earlier and clearer.
 - **Consent-gated auto-download** (mache-9051f0) — for `go install` / source builds where there's no bundle, fall back to fetching the version-pinned ley-line-open release. Default off; opt in via `--auto-install` flag or interactive prompt. Never silently fetch+exec a remote binary.
-- **Eliminate CGO tree-sitter** (mache-37ae8b, epic mache-36d961) — gated on `mache-33dc5f` (release-bundling, above). Once ley-line-open is the guaranteed path, delete `SitterWalker` + tree-sitter build tags. Ship a pure-Go `mache` binary by default. Inventory shovel-ready: 16 production sources to delete, 10 test files to delete-or-migrate, single `//go:build leyline` tag to invert.
+- ~~**Eliminate CGO tree-sitter**~~ — SHIPPED (mache-37ae8b, v0.18.0; see "Stable today"). leyline is the universal parser; the release binary is `CGO_ENABLED=0`.
 - **Schema-driven read modes** (mache-qzsk) — `read_file` accepts a `mode` arg (`signatures`, `map`, `diff`) for compressed projections instead of full content. The v0.8.0 `current_root` snapshot identity gives `mode=diff` a usable anchor.
 - **`detect_changes` MCP tool** (mache-bsq) — git diff → affected AST nodes → blast radius via callers/callees BFS
 - **`dep_cycles` smell rule** (mache-unm5) — Tarjan SCC over node_refs; motivates extending `SmellRule` beyond pure SQL (Go-callback rules)

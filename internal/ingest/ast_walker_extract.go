@@ -12,57 +12,102 @@ import (
 // scheme-prefixed tokens (e.g., "env:DATABASE_URL"). Mirrors
 // SitterWalker.ExtractAddressRefs but uses SQL instead of CGO tree-sitter.
 func (w *ASTWalker) ExtractAddressRefs(sourcePath, langName string) ([]string, error) {
-	return w.extractAddressRefs(filepath.Base(sourcePath), "", langName)
+	refs, err := w.fileAddrRefs(filepath.Base(sourcePath), langName)
+	if err != nil {
+		return nil, err
+	}
+	return w.dedupAddrTokens(refs, ""), nil
 }
 
 // ExtractAddressRefsScoped is the per-construct equivalent: address refs whose
 // matched node lives under scopeID's id-path. Mirrors SitterWalker's per-scope
 // ExtractAddressRefs(scopeNode, ...). sourceID is the _source key.
+//
+// It filters the whole-file address-ref set (computed once and cached per file)
+// by node-id prefix in Go rather than re-running the generic Query per
+// construct. The old per-construct path re-scanned every call_expression in
+// every function — 84% of a whole-repo projection's CPU (mache-4f3840). The
+// prefix filter (scopeID+"/") is byte-identical to the SQL `n.id LIKE scopeID
+// || '/%'` the per-construct Query used, so the projected refs are unchanged.
 func (w *ASTWalker) ExtractAddressRefsScoped(sourceID, scopeID, langName string) ([]string, error) {
-	return w.extractAddressRefs(sourceID, scopeID, langName)
+	refs, err := w.fileAddrRefs(sourceID, langName)
+	if err != nil {
+		return nil, err
+	}
+	return w.dedupAddrTokens(refs, scopeID), nil
 }
 
-// extractAddressRefs is the shared implementation; parentPrefix "" = whole file,
-// non-empty scopes the underlying Query to that node's subtree.
-func (w *ASTWalker) extractAddressRefs(sourceID, parentPrefix, langName string) ([]string, error) {
-	raw, ok := addressRefRegistry.Load(langName)
-	if !ok {
-		return nil, nil
-	}
-	entries := raw.([]addressRefEntry)
-	if len(entries) == 0 {
-		return nil, nil
-	}
-
-	root := ASTRoot{DB: w.db, SourceID: sourceID, ParentPrefix: parentPrefix}
-
+// dedupAddrTokens returns the deduplicated tokens from refs whose node lives
+// STRICTLY UNDER scopeID (scopeID=="" = whole file). The trailing "/" prefix is
+// byte-identical to the old per-construct SQL `n.id LIKE scopeID||'/%'` (which
+// never self-matches the scope node) and to the ExtractCallsScoped sibling
+// (mache-702f9b — dropped an earlier exact-self-match carve-out that diverged
+// from both). "func_1" does not match a call in "func_12".
+func (w *ASTWalker) dedupAddrTokens(refs []scopedAddrRef, scopeID string) []string {
+	prefix := scopeID + "/"
 	seen := make(map[string]bool)
 	var tokens []string
-
-	for _, entry := range entries {
-		matches, err := w.Query(root, entry.Query)
-		if err != nil {
-			continue // selector may not be supported by ASTWalker
+	for _, r := range refs {
+		if scopeID != "" && !strings.HasPrefix(r.nodeID, prefix) {
+			continue
 		}
-		for _, m := range matches {
-			vals := m.Values()
-			refVal, ok := vals["ref"].(string)
-			if !ok || refVal == "" {
-				continue
-			}
-			value := unquoteCapture(refVal)
-			if value == "" {
-				continue
-			}
-			token := entry.Scheme + ":" + value
-			if !seen[token] {
-				seen[token] = true
-				tokens = append(tokens, token)
+		if !seen[r.token] {
+			seen[r.token] = true
+			tokens = append(tokens, r.token)
+		}
+	}
+	return tokens
+}
+
+// fileAddrRefs computes every address ref in the whole file ONCE (running each
+// registered selector against the full file, not per construct) and caches the
+// result keyed by (sourceID, lang). Each match carries the id of the node it
+// was captured on so per-construct callers can attribute by prefix.
+func (w *ASTWalker) fileAddrRefs(sourceID, langName string) ([]scopedAddrRef, error) {
+	key := sourceID + "\x00" + langName
+	if v, ok := w.addrRefCache.Load(key); ok {
+		return v.([]scopedAddrRef), nil
+	}
+
+	var refs []scopedAddrRef
+	if raw, ok := addressRefRegistry.Load(langName); ok {
+		if entries := raw.([]addressRefEntry); len(entries) > 0 {
+			root := ASTRoot{DB: w.db, SourceID: sourceID, ParentPrefix: ""} // whole file
+			for _, entry := range entries {
+				matches, err := w.Query(root, entry.Query)
+				if err != nil {
+					// The registered address-ref selectors are all ASTWalker-
+					// supported, so an error is a real/transient DB failure, not
+					// an unsupported selector. Surface it and DON'T cache the
+					// partial set (mache-015f5c) — a silently-empty cache would
+					// permanently drop this file's address refs on a serve.
+					return nil, fmt.Errorf("file address refs %s/%s (%s): %w",
+						sourceID, langName, entry.Scheme, err)
+				}
+				for _, m := range matches {
+					refVal, ok := m.Values()["ref"].(string)
+					if !ok || refVal == "" {
+						continue
+					}
+					value := unquoteCapture(refVal)
+					if value == "" {
+						continue
+					}
+					// Query sets ctx.ParentPrefix to the matched @scope node id
+					// (the outer node when no @scope capture is present) — the
+					// id we attribute the ref to.
+					nodeID := ""
+					if ar, ok := m.Context().(ASTRoot); ok {
+						nodeID = ar.ParentPrefix
+					}
+					refs = append(refs, scopedAddrRef{nodeID: nodeID, token: entry.Scheme + ":" + value})
+				}
 			}
 		}
 	}
 
-	return tokens, nil
+	w.addrRefCache.Store(key, refs)
+	return refs, nil
 }
 
 // contextKindRegistry stores per-language top-level node kinds whose source

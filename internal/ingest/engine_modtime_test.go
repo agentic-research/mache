@@ -59,6 +59,7 @@ func FunctionA() {}
 	require.NoError(t, os.Chtimes(goFilePath, initialTime, initialTime))
 
 	// 3. Ingest
+	attachLeylineAST(t, engine, tempDir)
 	require.NoError(t, engine.Ingest(tempDir))
 
 	// 4. Verify Initial State
@@ -82,6 +83,7 @@ func FunctionB() {}
 	require.NoError(t, os.Chtimes(goFilePath, updatedTime, updatedTime))
 
 	// 6. Re-Ingest
+	attachLeylineAST(t, engine, tempDir)
 	require.NoError(t, engine.Ingest(tempDir))
 
 	// 7. Verify Updated State
@@ -125,6 +127,7 @@ func TestEngine_DeleteFileNodes_Explicit(t *testing.T) {
 	engine := NewEngine(&schema, store)
 
 	require.NoError(t, os.WriteFile(goFilePath, []byte("package utils"), 0o644))
+	attachLeylineAST(t, engine, tempDir)
 	require.NoError(t, engine.Ingest(tempDir))
 
 	// Verify existence
