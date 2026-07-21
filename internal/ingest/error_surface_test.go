@@ -30,3 +30,14 @@ func TestExtractAddressRefs_SurfacesDBError(t *testing.T) {
 	_, err := w.ExtractAddressRefs("main.go", "go")
 	require.Error(t, err, "a DB failure must surface, not be cached as an empty ref set")
 }
+
+// The find_callees live extractors must also surface DB errors, not return a
+// short list with nil error (mache-6ff371 — completes mache-015f5c).
+func TestExtractQualifiedCallsScoped_SurfacesDBError(t *testing.T) {
+	db := seedTestAST(t)
+	w := NewASTWalker(db)
+	require.NoError(t, db.Close())
+
+	_, err := w.ExtractQualifiedCallsScoped("main.go", "main.go/scope", "go")
+	require.Error(t, err, "a DB failure in the find_callees path must surface, not silently drop calls")
+}

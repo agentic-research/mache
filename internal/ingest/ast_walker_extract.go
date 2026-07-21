@@ -38,14 +38,17 @@ func (w *ASTWalker) ExtractAddressRefsScoped(sourceID, scopeID, langName string)
 }
 
 // dedupAddrTokens returns the deduplicated tokens from refs whose node lives
-// under scopeID (scopeID=="" = whole file). The trailing "/" guard matches the
-// SQL LIKE semantics exactly — "func_1" does not match a call in "func_12".
+// STRICTLY UNDER scopeID (scopeID=="" = whole file). The trailing "/" prefix is
+// byte-identical to the old per-construct SQL `n.id LIKE scopeID||'/%'` (which
+// never self-matches the scope node) and to the ExtractCallsScoped sibling
+// (mache-702f9b — dropped an earlier exact-self-match carve-out that diverged
+// from both). "func_1" does not match a call in "func_12".
 func (w *ASTWalker) dedupAddrTokens(refs []scopedAddrRef, scopeID string) []string {
 	prefix := scopeID + "/"
 	seen := make(map[string]bool)
 	var tokens []string
 	for _, r := range refs {
-		if scopeID != "" && r.nodeID != scopeID && !strings.HasPrefix(r.nodeID, prefix) {
+		if scopeID != "" && !strings.HasPrefix(r.nodeID, prefix) {
 			continue
 		}
 		if !seen[r.token] {

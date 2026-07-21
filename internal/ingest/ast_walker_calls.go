@@ -223,7 +223,12 @@ func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.
 	for _, p := range patterns {
 		rows, err := w.queryCallPattern(sourceID, p, true, "")
 		if err != nil {
-			continue
+			// queryCallPattern builds SQL from a structured kind-chain, so an
+			// error is a real/transient DB failure, not an unsupported
+			// selector. Surface it — a silent short list is indistinguishable
+			// from "calls nothing", the class mache-015f5c closes.
+			return nil, fmt.Errorf("extract qualified calls %s (%s/%s): %w",
+				sourceID, p.OuterKind, p.LeafKind, err)
 		}
 		for _, r := range rows {
 			if r.token == "" {
@@ -263,7 +268,11 @@ func (w *ASTWalker) ExtractQualifiedCallsScoped(sourceID, scopeID, langName stri
 	for _, p := range patterns {
 		rows, err := w.queryCallPattern(sourceID, p, true, scopeID)
 		if err != nil {
-			continue
+			// A DB failure must surface, not silently drop this pattern's
+			// calls (find_callees live path; mache-6ff371, matching
+			// mache-015f5c for fileCallTokens/fileAddrRefs).
+			return nil, fmt.Errorf("extract qualified calls scoped %s/%s (%s/%s): %w",
+				sourceID, scopeID, p.OuterKind, p.LeafKind, err)
 		}
 		for _, r := range rows {
 			if r.token == "" {
@@ -278,6 +287,16 @@ func (w *ASTWalker) ExtractQualifiedCallsScoped(sourceID, scopeID, langName stri
 		}
 	}
 	return calls, nil
+}
+
+// escapeLikePrefix escapes SQL LIKE metacharacters (\ % _) in a literal id
+// prefix so node ids containing '_' or '%' match literally, not as wildcards.
+// Use with `LIKE escapeLikePrefix(p)+"/%" ESCAPE '\'`.
+func escapeLikePrefix(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 // callRow is one extracted call from a single SQL pattern query.
@@ -361,8 +380,12 @@ func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifi
 	// Scope to a single construct subtree (calls whose leaf node lives under the
 	// scope node's id path). Empty scopePrefix = whole file.
 	if scopePrefix != "" {
-		sb.WriteString(` AND n_leaf.id LIKE ?`)
-		args = append(args, scopePrefix+"/%")
+		// Escape LIKE metacharacters in the literal id prefix: leyline node
+		// ids contain '_' (function_declaration_1), which SQL LIKE would treat
+		// as any-char wildcards, over-scoping (mache-702f9b). The trailing "/%"
+		// stays an unescaped wildcard — that's the descendant match we want.
+		sb.WriteString(` AND n_leaf.id LIKE ? ESCAPE '\'`)
+		args = append(args, escapeLikePrefix(scopePrefix)+"/%")
 	}
 	for i, anc := range p.Ancestors {
 		fmt.Fprintf(&sb, ` AND a_anc%d.node_kind = ?`, i)
