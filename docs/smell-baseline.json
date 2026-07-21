@@ -299,7 +299,7 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/parent_match.go",
-      "count": 4
+      "count": 6
     },
     {
       "rule_id": "duplicate_code",
@@ -625,6 +625,11 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/graph/sqlite_graph_test.go",
       "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/ast_walker_callees_e2e_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1283,22 +1288,12 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_find_callers.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/serve_handler_find_definition.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/serve_handler_get_communities.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_get_overview.go",
       "count": 1
     },
     {
@@ -1413,11 +1408,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/ast_walker_extract.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine.go",
       "count": 1
     },
@@ -1473,7 +1463,7 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/lsp/binding_log.go",
+      "source_id": "internal/lltest/project.go",
       "count": 1
     },
     {
@@ -1549,7 +1539,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/orchestration.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1589,7 +1579,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
-      "count": 3
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1599,11 +1589,6 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/verify.rs",
       "count": 1
     },
     {
@@ -1629,7 +1614,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "tools/fuzz-gen/main.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1649,6 +1634,11 @@
     {
       "rule_id": "god_file",
       "source_id": "cmd/serve_registry.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/ingest/ast_walker.go",
       "count": 1
     },
     {
