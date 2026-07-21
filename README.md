@@ -185,7 +185,7 @@ the orchestrator).
 - [Architecture](docs/ARCHITECTURE.md) — graph backends, write pipeline, virtual directories, ley-line-open interplay
 - [Roadmap](docs/ROADMAP.md) — what's landed, near-term, long-term
 - [ADRs](docs/adr/) — Architectural Decision Records
-- [Prior art & landscape](docs/PRIOR_ART.md) — what mache builds on, how it compares
+- [Competitive landscape & prior art](docs/reference/competitive-landscape.md) — what mache builds on, how it compares
 - [Example schemas](examples/README.md) — NVD, KEV, Notion, Trivy, Terraform, Markdown, LLM conversations, Go/Python/Rust/SQL source, MCP registry
 - [Contributing](CONTRIBUTING.md)
 

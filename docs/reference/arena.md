@@ -12,7 +12,7 @@ supersedes: []
 
 The Arena is a custom benchmark that tests whether an LLM-driven agent can operate on real code **only through mache's filesystem abstraction** — no direct file access. The target code is intentionally bespoke so memorized patterns don't help.
 
-The driver is [`scripts/arena.sh`](../scripts/arena.sh); this doc explains what the levels measure and how to run them. For the agent-facing briefing, see the `PROMPT.txt` that the script writes into the sandbox.
+The driver is [`scripts/arena.sh`](../../scripts/arena.sh); this doc explains what the levels measure and how to run them. For the agent-facing briefing, see the `PROMPT.txt` that the script writes into the sandbox.
 
 ## Running the Arena
 
@@ -53,4 +53,4 @@ After each level the agent appends notes to `/tmp/mache-arena/agent-notes.md`. `
 - Hot-swap behavior (`current_root` substrate identity from v0.8.0).
 - The `--mount` cross-repo serve path.
 
-For end-to-end MCP-tool coverage see [`cmd/all_tools_e2e_test.go`](../cmd/all_tools_e2e_test.go) and the `task profile-tools` / `task flamegraphs` harness described in [ARCHITECTURE.md § E2E Tool Harness](ARCHITECTURE.md#e2e-tool-harness--profiling).
+For end-to-end MCP-tool coverage see [`cmd/all_tools_e2e_test.go`](../../cmd/all_tools_e2e_test.go) and the `task profile-tools` / `task flamegraphs` harness described in [ARCHITECTURE.md § E2E Tool Harness](../ARCHITECTURE.md#e2e-tool-harness--profiling).
