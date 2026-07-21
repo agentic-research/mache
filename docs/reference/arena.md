@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.17.0
+covers-version: v0.18.0
 last-verified: 2026-07-08
 sources-of-truth:
   - scripts/arena.sh
@@ -9,6 +9,11 @@ supersedes: []
 ---
 
 # Mache Arena: 6-Level Agent Benchmark
+
+> **Note:** the recorded results below were last measured on v0.17.0
+> (`last-verified: 2026-07-08`), i.e. **before** the v0.18.0 pure-Go cutover and
+> the O(nodes²)→O(nodes) projection fix. The methodology is current; the numbers
+> are not. A re-run against v0.18.0 is tracked in `mache-b7ec42`.
 
 The Arena is a custom benchmark that tests whether an LLM-driven agent can operate on real code **only through mache's filesystem abstraction** — no direct file access. The target code is intentionally bespoke so memorized patterns don't help.
 

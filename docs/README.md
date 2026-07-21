@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.17.0
+covers-version: v0.18.0
 last-verified: 2026-07-21
 sources-of-truth:
   - CHANGELOG.md
