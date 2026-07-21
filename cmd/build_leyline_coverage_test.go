@@ -120,7 +120,8 @@ func TestRunBuildViaLeylineSchema_UnparseableLanguageErrors(t *testing.T) {
 	err := runBuildViaLeyline(src, output, true /* explicit backend */)
 	require.Error(t, err, "preset-ref hollow projection must not build silently on the explicit backend")
 	assert.Contains(t, err.Error(), "cue", "error must name the unparseable language")
-	assert.Contains(t, err.Error(), "--backend=tree-sitter", "error must point at the working escape hatch")
+	assert.Contains(t, err.Error(), "no fallback parser", "error must explain there is no in-process fallback (tree-sitter removed in ADR-0012 step 4)")
+	assert.NotContains(t, err.Error(), "--backend=tree-sitter", "must not recommend the removed no-op flag")
 
 	// Same via an explicit Language-hinted schema FILE (the hint collector).
 	work := t.TempDir()
