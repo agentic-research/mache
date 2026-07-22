@@ -4,64 +4,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"regexp"
-	"strings"
 )
 
-// --- Import parsing for qualified callees resolution ---
+// --- Import resolution for qualified callees ---
 
-var (
-	singleImportRe = regexp.MustCompile(`import\s+(\w+\s+)?"([^"]+)"`)
-	groupImportRe  = regexp.MustCompile(`(?s)import\s*\(([^)]*)\)`)
-	memberImportRe = regexp.MustCompile(`(\w+)?\s*"([^"]+)"`)
-)
-
-// loadImports returns structured import mappings from a node.
-// Prefers Properties["imports"] (JSON, set by tree-sitter during ingestion).
-// Falls back to regex parsing of Context text for backward compatibility.
+// loadImports returns alias → import-path mappings for a node.
+//
+// Imports are structured data produced at ingest (engine_walk.go marshals them
+// into Properties["imports"]) and persisted into the nodes-table `record`
+// column, which both SQLiteWriter.GetNode and NodesTableReader.GetNode restore.
+// There is deliberately NO text-scraping fallback: a regex import parser used
+// to sit here for "backward compatibility", but it was heuristical matching of
+// Go source text that mis-classified dot-imports, and the paths that reached it
+// are now covered structurally (mache-f930b6):
+//
+//   - MemoryStore (fresh ingest) — the engine sets Properties directly.
+//   - .db built by SQLiteWriter — Properties round-trip via `record`.
+//   - .db built by leyline — carries no `context` column at all, so the old
+//     fallback could never have fired there anyway.
 func loadImports(node *Node) map[string]string {
-	if node.Properties != nil {
-		if raw, ok := node.Properties["imports"]; ok && len(raw) > 0 {
-			var imports map[string]string
-			if err := json.Unmarshal(raw, &imports); err == nil && len(imports) > 0 {
-				return imports
-			}
-		}
+	if node.Properties == nil {
+		return nil
 	}
-	if node.Context != nil {
-		return parseGoImports(node.Context)
+	raw, ok := node.Properties["imports"]
+	if !ok || len(raw) == 0 {
+		return nil
 	}
-	return nil
-}
-
-// parseGoImports extracts alias → import path mappings from Go context text.
-// For unaliased imports, the alias is the last path segment.
-// Deprecated: prefer structured imports from Properties["imports"].
-func parseGoImports(ctx []byte) map[string]string {
-	imports := make(map[string]string)
-	text := string(ctx)
-
-	for _, m := range singleImportRe.FindAllStringSubmatch(text, -1) {
-		addGoImport(imports, strings.TrimSpace(m[1]), m[2])
+	var imports map[string]string
+	if err := json.Unmarshal(raw, &imports); err != nil || len(imports) == 0 {
+		return nil
 	}
-
-	for _, m := range groupImportRe.FindAllStringSubmatch(text, -1) {
-		for _, im := range memberImportRe.FindAllStringSubmatch(m[1], -1) {
-			addGoImport(imports, strings.TrimSpace(im[1]), im[2])
-		}
-	}
-
 	return imports
-}
-
-func addGoImport(imports map[string]string, alias, path string) {
-	if alias == "_" || alias == "." {
-		return
-	}
-	if alias == "" {
-		alias = filepath.Base(path)
-	}
-	imports[alias] = path
 }
 
 // GetCallees implements Graph. It extracts calls made by the construct, then

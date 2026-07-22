@@ -95,10 +95,23 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	// Older / leyline-produced nodes tables predate the context column;
 	// only select it when present so GetNode stays backward-compatible
 	// (mache-b8fe72). node.Context feeds the `context` virtual file.
-	query := "SELECT kind, size, mtime, record_id FROM nodes WHERE id = ?"
-	dest := []any{&kind, &size, &mtimeNano, &recordID}
+	// Directory nodes carry their Properties (lang / pkg / imports) serialized
+	// into `record` by SQLiteWriter. Restore them here so a served .db behaves
+	// like a freshly-ingested MemoryStore — without this, every construct node
+	// read at serve time lost lang/pkg/imports, which is why qualified-callee
+	// resolution had to fall back to regex-scraping the context text
+	// (mache-f930b6).
+	//
+	// The CASE guard is load-bearing for performance: for FILE nodes `record`
+	// holds the rendered content, and this reader is deliberately lazy about
+	// content (see ContentRef below). Filtering server-side means SQLite never
+	// ships a file's body just to answer a GetNode.
+	var props []byte
+	recordExpr := fmt.Sprintf("CASE WHEN kind = %d THEN record ELSE NULL END", NodeKindDir)
+	query := "SELECT kind, size, mtime, record_id, " + recordExpr + " FROM nodes WHERE id = ?"
+	dest := []any{&kind, &size, &mtimeNano, &recordID, &props}
 	if r.hasContext {
-		query = "SELECT kind, size, mtime, record_id, context FROM nodes WHERE id = ?"
+		query = "SELECT kind, size, mtime, record_id, " + recordExpr + ", context FROM nodes WHERE id = ?"
 		dest = append(dest, &context)
 	}
 	err := r.db.QueryRow(query, id).Scan(dest...)
@@ -119,6 +132,16 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		Mode:    mode,
 		ModTime: time.Unix(0, mtimeNano),
 		Context: context,
+	}
+
+	// Mirrors SQLiteWriter.GetNode: a dir node's `record` is its marshaled
+	// Properties. A dir node with inline Data instead won't unmarshal into the
+	// map shape — that's expected, and leaves Properties nil.
+	if kind == NodeKindDir && len(props) > 0 {
+		var p map[string][]byte
+		if json.Unmarshal(props, &p) == nil && len(p) > 0 {
+			node.Properties = p
+		}
 	}
 
 	if kind == NodeKindFile {
