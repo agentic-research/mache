@@ -5,57 +5,31 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/stretchr/testify/require"
 
 	_ "modernc.org/sqlite"
 )
 
-// resolvePinnedLeylineForIngest resolves the pinned leyline binary WITHOUT
-// importing internal/leyline — under the `leyline` build tag that package pulls
-// in CGO FFI (libleyline/FUSE), which these default-tag tests must not require.
-// PATH and ~/.mache/bin candidates are accepted only if `--version` matches the
-// pin in socket.go; never a download. Skips the test when none is available.
-func resolvePinnedLeylineForIngest(t *testing.T) string {
+// pinnedLeylineForIngest resolves the pinned leyline binary via the production
+// resolver (PATH → ~/.mache/bin → verified pin, never a download) — no regex,
+// no hand-rolled candidate loop. Importing internal/leyline is CGO-free now
+// that the //go:build leyline FFI (client.go) is gone, so tests use the real
+// ResolveBinary instead of re-deriving the pin from socket.go source text.
+// Fails in CI (where the binary must be provisioned via `task leyline:ensure`)
+// and skips otherwise.
+func pinnedLeylineForIngest(t *testing.T) string {
 	t.Helper()
-
-	dir, err := os.Getwd()
-	require.NoError(t, err)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			break
+	bin, err := leyline.ResolveBinary(false) // never download in tests
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("pinned leyline unavailable in CI (%v) — provision it (task leyline:ensure) before tests", err)
 		}
-		parent := filepath.Dir(dir)
-		require.NotEqual(t, dir, parent, "module root with go.mod not found")
-		dir = parent
+		t.Skipf("pinned leyline unavailable (%v); source projection requires it", err)
 	}
-	src, err := os.ReadFile(filepath.Join(dir, "internal", "leyline", "socket.go"))
-	require.NoError(t, err)
-	m := regexp.MustCompile(`const leylineBinaryVersion = "(v\d+\.\d+\.\d+)"`).FindSubmatch(src)
-	require.NotNil(t, m, "leylineBinaryVersion const not found in internal/leyline/socket.go")
-	pin := string(m[1])
-
-	var candidates []string
-	if p, err := exec.LookPath("leyline"); err == nil {
-		candidates = append(candidates, p)
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".mache", "bin", "leyline"))
-	}
-	for _, c := range candidates {
-		out, err := exec.Command(c, "--version").Output()
-		if err != nil {
-			continue
-		}
-		got := regexp.MustCompile(`\d+\.\d+\.\d+`).FindString(string(out))
-		if got != "" && "v"+got == pin {
-			return c
-		}
-	}
-	t.Skipf("no leyline matching the pinned %s available (tests never download)", pin)
-	return ""
+	return bin
 }
 
 // attachLeylineAST parses target (a source dir, or the parent dir of a source
@@ -66,7 +40,7 @@ func resolvePinnedLeylineForIngest(t *testing.T) string {
 // leyline-parse step. Skips the test when the pinned leyline isn't available.
 func attachLeylineAST(t *testing.T, engine *Engine, target string) {
 	t.Helper()
-	bin := resolvePinnedLeylineForIngest(t)
+	bin := pinnedLeylineForIngest(t)
 
 	parseDir := target
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
