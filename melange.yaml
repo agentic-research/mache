@@ -4,8 +4,8 @@
 #
 # Builds the mache Go binary against the in-tree source. CGO is required
 # because internal/treesitter/elixir uses cgo bindings to the elixir
-# tree-sitter grammar. No ley-line linkage (see ADR-0006) — the leyline
-# CGO client is gated behind the "leyline" build tag and not enabled here.
+# tree-sitter grammar. No ley-line linkage (see ADR-0006) — mache consumes
+# leyline as a pure-Go UDS daemon client, not via CGO/FFI.
 
 package:
   name: mache

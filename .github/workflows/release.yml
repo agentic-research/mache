@@ -5,10 +5,9 @@ name: Release
 # mache links NO external C libraries. CGO is enabled solely for the
 # tree-sitter grammars, which carry their own #cgo directives over vendored
 # parser.c. The leyline integration in released binaries is the pure-Go UDS
-# daemon client (internal/leyline); the cgo FFI client
-# (internal/leyline/client.go) is `//go:build leyline` and is NOT compiled
-# here, so the released binary pulls zero symbols from libleyline_fs and
-# needs no fuse headers/framework. Net effect: no privileged access (sudo),
+# daemon client (internal/leyline) — a pure-Go UDS client, no FFI. The
+# released binary pulls zero symbols from libleyline_fs and needs no fuse
+# headers/framework. Net effect: no privileged access (sudo),
 # no fuse_t runtime dependency — the binary runs on any host.
 
 on:
@@ -61,9 +60,8 @@ jobs:
       - name: Build mache
         # PURE GO since ADR-0012 step 4 (mache-37ae8b): in-process tree-sitter
         # was removed — leyline is the universal parser — so the release binary
-        # is CGO-free. (The leyline_fs FFI in internal/leyline/client.go is a
-        # separate `//go:build leyline` dev-only surface, never in the release
-        # binary.) The binary's cmd.Version is injected from the release TAG so
+        # is CGO-free. mache consumes leyline as a pure-Go UDS daemon client,
+        # not via FFI. The binary's cmd.Version is injected from the release TAG so
         # it matches the tag exactly; the CLEAN release base in
         # internal/buildinfo (version.txt) is what server.json + melange derive
         # from — gated to agree below.
