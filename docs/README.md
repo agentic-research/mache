@@ -38,6 +38,7 @@ at the repo root.
 
 - [`competitive-landscape.md`](reference/competitive-landscape.md) — head-to-head comparison against AI code-intelligence tools plus the intellectual lineage (Plan 9, FUSE-DB, RAG frameworks). One matrix, per-tool analysis, and the open gaps.
 - [`arena.md`](reference/arena.md) — the capability-arena harness: what each level measures and how to run it.
+- [`projection-performance.md`](reference/projection-performance.md) — the v0.18.0 O(n²)→O(n) ASTWalker fix, measured: growth-class change, why there's no single "N× faster" number, and the measurement traps.
 
 ### design/
 
