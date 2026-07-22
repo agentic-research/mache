@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"text/template"
+	"text/template/parse"
+
+	machetemplate "github.com/agentic-research/mache/internal/template"
 )
 
 // ---------------------------------------------------------------------------
@@ -37,8 +40,59 @@ type leafMapping struct {
 
 // --- Field extraction from name templates ---
 
-// fieldRefRe matches Go template field references like .item.cve.id
-var fieldRefRe = regexp.MustCompile(`\.(\w+(?:\.\w+)*)`)
+// collectTemplateFields walks a parsed template and records every field
+// reference (e.g. `.item.cve.id` → "item.cve.id") into seen.
+//
+// This replaces a `\.(\w+(?:\.\w+)*)` regex over the raw template text. The
+// regex scanned the WHOLE string, so a dot in literal text ("report.txt")
+// became a phantom field path and an always-NULL json_extract column. Parsing
+// sees only genuine field references.
+func collectTemplateFields(n parse.Node, seen map[string]bool) {
+	switch node := n.(type) {
+	case nil:
+		return
+	case *parse.ListNode:
+		if node == nil {
+			return
+		}
+		for _, c := range node.Nodes {
+			collectTemplateFields(c, seen)
+		}
+	case *parse.ActionNode:
+		collectTemplateFields(node.Pipe, seen)
+	case *parse.PipeNode:
+		if node == nil {
+			return
+		}
+		for _, c := range node.Cmds {
+			collectTemplateFields(c, seen)
+		}
+	case *parse.CommandNode:
+		for _, a := range node.Args {
+			collectTemplateFields(a, seen)
+		}
+	case *parse.FieldNode:
+		if len(node.Ident) > 0 {
+			seen[strings.Join(node.Ident, ".")] = true
+		}
+	case *parse.ChainNode:
+		collectTemplateFields(node.Node, seen)
+	case *parse.IfNode:
+		collectBranchFields(node.Pipe, node.List, node.ElseList, seen)
+	case *parse.RangeNode:
+		collectBranchFields(node.Pipe, node.List, node.ElseList, seen)
+	case *parse.WithNode:
+		collectBranchFields(node.Pipe, node.List, node.ElseList, seen)
+	case *parse.TemplateNode:
+		collectTemplateFields(node.Pipe, seen)
+	}
+}
+
+func collectBranchFields(pipe *parse.PipeNode, list, elseList *parse.ListNode, seen map[string]bool) {
+	collectTemplateFields(pipe, seen)
+	collectTemplateFields(list, seen)
+	collectTemplateFields(elseList, seen)
+}
 
 // collectNameTemplates gathers all dynamic name template strings from the schema tree.
 func collectNameTemplates(level *schemaLevel) []string {
@@ -61,9 +115,15 @@ func collectNameTemplates(level *schemaLevel) []string {
 func extractFieldPaths(templates []string) []string {
 	seen := make(map[string]bool)
 	for _, tmpl := range templates {
-		for _, m := range fieldRefRe.FindAllStringSubmatch(tmpl, -1) {
-			seen[m[1]] = true
+		// Parse with mache's func map so schema templates using slice/dig/
+		// lookup/... parse cleanly; text/template supplies the builtins.
+		// An unparseable template contributes nothing — it would fail at
+		// render time anyway, so guessing at its fields is not useful.
+		t, err := template.New("scan").Funcs(machetemplate.Funcs).Parse(tmpl)
+		if err != nil || t.Tree == nil {
+			continue
 		}
+		collectTemplateFields(t.Root, seen)
 	}
 	paths := make([]string, 0, len(seen))
 	for p := range seen {

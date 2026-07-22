@@ -1,7 +1,6 @@
 package lattice
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 
@@ -44,7 +43,25 @@ type FormalContext struct {
 	Stats       map[string]*FieldStats
 }
 
-var dateRe = regexp.MustCompile(`^\d{4}-\d{2}`)
+// looksLikeDatePrefix reports whether s begins with an ISO year-month prefix
+// (YYYY-MM): four digits, '-', two digits. Trailing content is allowed, so full
+// dates and RFC3339 timestamps match.
+//
+// This is a structural digit check rather than a `^\d{4}-\d{2}` regex — same
+// semantics (prefix match, no month-range validation), no regex engine, and it
+// keeps heuristical text-matching out of the projection path. See
+// date_prefix_test.go for the equivalence cases.
+func looksLikeDatePrefix(s string) bool {
+	if len(s) < 7 || s[4] != '-' {
+		return false
+	}
+	for _, i := range [...]int{0, 1, 2, 3, 5, 6} {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 const (
 	enumMaxDistinct      = 20
@@ -93,7 +110,7 @@ func AnalyzeFields(records []any) map[string]*FieldStats {
 			if val, ok := getFieldValue(rec, path); ok {
 				if s, ok := val.(string); ok {
 					fs.Values[s]++
-					if dateRe.MatchString(s) {
+					if looksLikeDatePrefix(s) {
 						fs.IsDate = true
 					}
 				}

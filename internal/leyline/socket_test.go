@@ -1047,7 +1047,14 @@ func TestDiscoverOrStart_DaemonExitsDuringStartup(t *testing.T) {
 	require.Error(t, err, "a daemon that exits during startup must error")
 	assert.Contains(t, err.Error(), "exited during startup",
 		"crash path must surface the 'exited during startup' error, not a timeout")
-	assert.Less(t, elapsed, 5*time.Second,
+	// The error-content assertion above is the real proof that exit-detection
+	// fired: waiting out the timeout would surface a TIMEOUT error, not
+	// "exited during startup". This elapsed check is a secondary guard, so its
+	// budget is set for the 30s timeout it's guarding against — not a tight
+	// wall-clock target. A 5s budget flaked reproducibly under `-race` in the
+	// full suite (observed 7.4-7.6s) while passing standalone, blocking
+	// unrelated pushes (mache-474214).
+	assert.Less(t, elapsed, 15*time.Second,
 		"must return on exit-detection, not wait out the 30s timeout")
 
 	managed.mu.Lock()
