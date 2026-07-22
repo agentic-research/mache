@@ -37,11 +37,20 @@ var regexpAllowlist = map[string]string{
 	"cmd/find_smells_action_test.go":          "asserts on action output text",
 	"cmd/call_extractor_test_helper_test.go":  "test fixture text matching",
 
-	// production code — candidates for structural replacement (follow-up)
-	"internal/ingest/ast_walker_selector.go": "TODO: prefer structural match",
-	"internal/graph/memstore_callees.go":     "TODO: prefer structural match",
-	"internal/graph/sqlite_graph_scan.go":    "TODO: prefer structural match",
-	"internal/lattice/context.go":            "TODO: prefer structural match",
+	// production code — each justified, NOT deferred work (mache-ceb776):
+	//
+	//   ast_walker_selector.go compiles a regex supplied BY THE SCHEMA AUTHOR in
+	//   a tree-sitter `#match?` / `#not-match?` query predicate. The regex is
+	//   the feature contract, not a heuristic — there is nothing to replace.
+	//
+	//   memstore_callees.go leniently extracts Go imports from a possibly-PARTIAL
+	//   context blob on the .db-hydration path (nodes_table_reader sets Context
+	//   but not Properties["imports"], so this is live, not dead). A strict
+	//   go/parser would fail on a fragment with no package clause. Removing it
+	//   means persisting structured imports on the nodes-table path — tracked
+	//   separately. Behavior is pinned by memstore_imports_test.go.
+	"internal/ingest/ast_walker_selector.go": "tree-sitter #match? predicate — user-supplied regex IS the contract",
+	"internal/graph/memstore_callees.go":     "lenient import extraction from partial context text (.db path); structured path preferred",
 }
 
 // dirsToSkip are trees that are not mache's own source (vendored fixtures,
