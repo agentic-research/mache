@@ -119,9 +119,32 @@ tasks:
       - golangci-lint run ./...
 
   fmt:
-    desc: Format code with gofumpt
+    desc: Format code (gofumpt) + changed markdown (mdformat, matching the pre-commit hook)
     cmds:
       - gofumpt -w -extra .
+      - task: fmt:md
+
+  fmt:md:
+    desc: |
+      mdformat the markdown you've changed (modified + new), using the same
+      mdformat + plugins the pre-commit hook pins. Run this (or `task fmt`)
+      before `git add` and the commit-time hook is a no-op instead of
+      reformatting your files out from under you and aborting the commit.
+      Scoped to CHANGED files — not all tracked markdown — so it never
+      rewrites test fixtures (cmd/testdata/**) or vendored docs. Excludes
+      .beads/ and testdata/snapshots/, matching the hook's exclusion.
+    preconditions:
+      - sh: command -v mdformat
+        msg: "mdformat required — pip install mdformat mdformat-gfm mdformat-frontmatter"
+    cmds:
+      - |
+        # Union of working-tree-modified, untracked, and staged markdown —
+        # so it works whether you run it before or after `git add`.
+        { git ls-files -mo --exclude-standard '*.md'; \
+          git diff --cached --name-only -- '*.md'; } \
+          | sort -u \
+          | grep -vE '^(\.beads/|testdata/snapshots/)' \
+          | while IFS= read -r f; do [ -f "$f" ] && mdformat "$f"; done
 
   fmt:check:
     desc: |
