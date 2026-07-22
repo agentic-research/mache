@@ -1,5 +1,5 @@
 ---
-title: "ADR-0012: CGO Removal — Migration Plan"
+title: 'ADR-0012: CGO Removal — Migration Plan'
 status: Implemented
 date: 2026-04-30
 tags: [architecture, cgo, pure-go, tree-sitter, leyline, implemented]
@@ -12,8 +12,10 @@ tags: [architecture, cgo, pure-go, tree-sitter, leyline, implemented]
 > build / serve / mount / infer / testfixtures — routes through `leyline parse` → `_ast` →
 > `ASTWalker` (pure Go). The only registry language without a grammar is cue (none exists at
 > tree-sitter 0.26), which the coverage guard reports loudly. The `leyline_fs` FFI
-> (`internal/leyline/client.go`, `//go:build leyline`) is a separate dev-only surface,
-> unaffected. Supersedes inline mitigation in `mache-2y9w` (PR #257, #299).
+> (`internal/leyline/client.go`, `//go:build leyline`) was a separate dev-only surface,
+> unaffected then and **since removed** (completed ADR-0006 Thread 4 — see the Unreleased
+> CHANGELOG entry; it hardcoded a stale path into the private ley-line repo and was
+> compiled by nothing). Supersedes inline mitigation in `mache-2y9w` (PR #257, #299).
 
 ## Context
 

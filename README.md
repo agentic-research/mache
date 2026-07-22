@@ -175,9 +175,8 @@ auto-generates a dev keypair when one is missing (APK signatures will
 differ across freshly-generated keys), so for byte-stable artifacts in CI
 inject a fixed keypair from a secret. The melange recipe builds with
 `CGO_ENABLED=0` — mache is pure Go since [ADR-0012](docs/adr/0012-cgo-removal-migration.md)
-step 4 removed in-process tree-sitter. (The `leyline_fs` FFI client is gated
-behind the `leyline` build tag and is **not** compiled into the image — see
-[ADR-0006](docs/adr/0006-pure-go-mcp-first.md).)
+step 4 removed in-process tree-sitter. mache links no external C libraries; it
+consumes leyline as a subprocess/daemon over its UDS socket, not via FFI.
 
 On release, mache also self-publishes a separate **leyline-bundled**
 multi-arch image to `ghcr.io/agentic-research/mache` (`debian-slim` +

@@ -4,6 +4,24 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [Unreleased]
+
+### Removed
+
+- **Dead `leyline_fs` CGO FFI surface** (`internal/leyline/client.go`,
+  `internal/leyline/doc.go`). It was gated behind the `//go:build leyline` tag,
+  compiled by no build/CI/task, referenced by nothing, and hardcoded a cgo path
+  into the **private** `ley-line` repo (`../../../ley-line/rs/crates/fs/…`) — a
+  path that no longer exists there (the `fs` crate now lives in public
+  ley-line-open at `rs/ll-open/fs/`, which publishes `libleyline_fs`). This was
+  the last reference to the private ley-line repo in mache and completes
+  ADR-0006 Thread 4 ("delete `internal/leyline/client.go`"). mache consumes
+  leyline purely as a subprocess/daemon over its UDS socket; the release binary
+  was already pure-Go and pulled zero symbols from `libleyline_fs`, so there is
+  no behavior change. Docs (README / ARCHITECTURE / ROADMAP), `release.yml`, and
+  `melange.yaml` comments that described the FFI as a "kept dev-only surface"
+  are updated accordingly.
+
 ## [v0.18.0] — 2026-07-21
 
 The CGO-removal wave, part two — and the end of it: the in-process tree-sitter
