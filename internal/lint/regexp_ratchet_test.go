@@ -43,14 +43,7 @@ var regexpAllowlist = map[string]string{
 	//   a tree-sitter `#match?` / `#not-match?` query predicate. The regex is
 	//   the feature contract, not a heuristic — there is nothing to replace.
 	//
-	//   memstore_callees.go leniently extracts Go imports from a possibly-PARTIAL
-	//   context blob on the .db-hydration path (nodes_table_reader sets Context
-	//   but not Properties["imports"], so this is live, not dead). A strict
-	//   go/parser would fail on a fragment with no package clause. Removing it
-	//   means persisting structured imports on the nodes-table path — tracked
-	//   separately. Behavior is pinned by memstore_imports_test.go.
 	"internal/ingest/ast_walker_selector.go": "tree-sitter #match? predicate — user-supplied regex IS the contract",
-	"internal/graph/memstore_callees.go":     "lenient import extraction from partial context text (.db path); structured path preferred",
 }
 
 // dirsToSkip are trees that are not mache's own source (vendored fixtures,

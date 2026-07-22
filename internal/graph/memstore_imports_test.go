@@ -6,103 +6,68 @@ import (
 	"testing"
 )
 
-// TestParseGoImports pins the behavior of the deprecated regex import parser.
+// TestLoadImports_UsesStructuredProperties covers the only supported import
+// source: structured data set at ingest and round-tripped through the
+// nodes-table `record` column.
+func TestLoadImports_UsesStructuredProperties(t *testing.T) {
+	structured, err := json.Marshal(map[string]string{"alias": "real/path", "http": "net/http"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := &Node{Properties: map[string][]byte{"imports": structured}}
+
+	got := loadImports(node)
+	want := map[string]string{"alias": "real/path", "http": "net/http"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("loadImports = %v, want %v", got, want)
+	}
+}
+
+// TestLoadImports_ContextIsNotParsed pins the deliberate behavior change from
+// mache-f930b6: there is no text-scraping fallback any more.
 //
-// It is NOT dead code: Properties["imports"] is only set when the ingest engine
-// has structured imports (`if fileImports != nil`), and nodes hydrated from a
-// .db via nodes_table_reader carry Context but no imports property — so this is
-// the live path for .db-backed graphs. It parses a possibly-PARTIAL context
-// blob, which is why it stays lenient text matching rather than go/parser
-// (a strict parse of a fragment without a package clause fails outright).
+// A regex import parser used to run over node.Context here "for backward
+// compatibility". It was heuristical matching of Go source text and it
+// mis-classified dot imports — `. "os"` degraded into a normal `os` import,
+// because the alias group `(\w+)?` cannot match ".". Every path that reached it
+// is now covered structurally:
 //
-// These cases exist so the eventual removal — persisting structured imports on
-// the nodes-table path — can prove equivalence before deleting.
-func TestParseGoImports(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		ctx  string
-		want map[string]string
-	}{
-		{
-			"single unaliased import — alias is last path segment",
-			`import "fmt"`,
-			map[string]string{"fmt": "fmt"},
-		},
-		{
-			"single aliased import",
-			`import f "fmt"`,
-			map[string]string{"f": "fmt"},
-		},
-		{
-			"unaliased nested path uses last segment",
-			`import "net/http"`,
-			map[string]string{"http": "net/http"},
-		},
-		{
-			"grouped imports",
-			"import (\n\t\"fmt\"\n\t\"os\"\n)",
-			map[string]string{"fmt": "fmt", "os": "os"},
-		},
-		{
-			"grouped with alias",
-			"import (\n\tf \"fmt\"\n\t\"net/http\"\n)",
-			map[string]string{"f": "fmt", "http": "net/http"},
-		},
-		{
-			// KNOWN QUIRK (characterized, not endorsed): blank imports are
-			// skipped correctly, but a DOT import is not. addGoImport skips
-			// alias "." — however memberImportRe's `(\w+)?` cannot capture
-			// ".", so the alias arrives empty and the import degrades into a
-			// regular one keyed by its last path segment ("os"). A real parser
-			// would classify it. Fixing this is part of removing the regex
-			// entirely (persist structured imports on the .db path).
-			"blank imports skipped; dot import degrades to a normal import",
-			"import (\n\t_ \"embed\"\n\t. \"os\"\n\t\"fmt\"\n)",
-			map[string]string{"fmt": "fmt", "os": "os"},
-		},
-		{"no imports", "package foo\n\nvar x = 1", map[string]string{}},
-		{"empty context", "", map[string]string{}},
+//   - MemoryStore (fresh ingest): the engine sets Properties directly.
+//   - .db built by SQLiteWriter: Properties round-trip via `record`
+//     (NodesTableReader restores them — nodes_table_properties_test.go).
+//   - .db built by leyline: has no `context` column at all, so the fallback
+//     could never have fired there.
+//
+// Context alone must therefore yield no imports rather than a guess.
+func TestLoadImports_ContextIsNotParsed(t *testing.T) {
+	node := &Node{Context: []byte("import (\n\t. \"os\"\n\t\"net/http\"\n)")}
+	if got := loadImports(node); got != nil {
+		t.Errorf("loadImports = %v, want nil — context text must not be scraped for imports", got)
+	}
+}
+
+// TestLoadImports_MalformedPropertiesYieldNil ensures a corrupt or
+// wrong-shaped imports blob degrades to "no imports" instead of panicking or
+// returning half-parsed data.
+func TestLoadImports_MalformedPropertiesYieldNil(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"not json":     []byte("{not json"),
+		"wrong shape":  []byte(`["a","b"]`),
+		"empty object": []byte(`{}`),
+		"empty bytes":  {},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseGoImports([]byte(tc.ctx))
-			if len(got) == 0 && len(tc.want) == 0 {
-				return
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("parseGoImports(%q) = %v, want %v", tc.ctx, got, tc.want)
+		t.Run(name, func(t *testing.T) {
+			node := &Node{Properties: map[string][]byte{"imports": raw}}
+			if got := loadImports(node); got != nil {
+				t.Errorf("loadImports = %v, want nil", got)
 			}
 		})
 	}
 }
 
-// TestLoadImports_PrefersStructuredOverRegex verifies the structured path wins:
-// when Properties["imports"] is present it is used verbatim and the Context
-// text is never consulted. This is the invariant that makes the regex fallback
-// removable once the .db path persists imports.
-func TestLoadImports_PrefersStructuredOverRegex(t *testing.T) {
-	structured, err := json.Marshal(map[string]string{"alias": "real/path"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	node := &Node{
-		Properties: map[string][]byte{"imports": structured},
-		// Deliberately conflicting context — must be ignored.
-		Context: []byte(`import "should/not/be/used"`),
-	}
-	got := loadImports(node)
-	want := map[string]string{"alias": "real/path"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("loadImports = %v, want %v (structured Properties must win over Context)", got, want)
-	}
-}
-
-// TestLoadImports_FallsBackToContext covers the live .db-hydration path:
-// no Properties["imports"], so Context is parsed.
-func TestLoadImports_FallsBackToContext(t *testing.T) {
-	node := &Node{Context: []byte(`import "net/http"`)}
-	got := loadImports(node)
-	want := map[string]string{"http": "net/http"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("loadImports = %v, want %v", got, want)
+// TestLoadImports_NoPropertiesYieldsNil covers the bare node case.
+func TestLoadImports_NoPropertiesYieldsNil(t *testing.T) {
+	if got := loadImports(&Node{}); got != nil {
+		t.Errorf("loadImports = %v, want nil", got)
 	}
 }
