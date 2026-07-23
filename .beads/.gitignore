@@ -1,29 +1,41 @@
-# Dolt database (managed by Dolt, not git)
+# Managed by rosary (rosary-05fbe0). The bead-store binary is local and must
+# not be git-tracked: binary DBs do not have safe git 3-way merge semantics.
+# Bead content is shared via the tracked, mergeable .beads/beads.jsonl.
+
+# SQLite store + sidecars (local only)
+beads.db
+beads.db-shm
+beads.db-wal
+beads.db-journal
+beads.db.migrated
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+db.sqlite
+
+# Dolt store + server runtime (legacy/local only)
 dolt/
-# Migration backup — `rsry bead migrate --commit` renames dolt/ to dolt.bak/
-# and never deletes it. It is a binary Dolt store; committing it is the
-# rosary-05fbe0 footgun.
 dolt.bak/
 dolt.bak.*/
+dolt-server.pid
+dolt-server.log
+dolt-server.lock
+dolt-server.port
 dolt-access.lock
+dolt-server.activity
 
-# Runtime files
-bd.sock
-bd.sock.startlock
-sync-state.json
-last-touched
-
-# Local version tracking (prevents upgrade notification spam after git ops)
+# Host-local runtime
+.beads-credential-key
 .local_version
-
-# Worktree redirect file (contains relative path to main repo's .beads/)
-# Must not be committed as paths would be wrong in other clones
+last-touched
+backup/
+interactions.jsonl
 redirect
-
-# Sync state (local-only, per-machine)
-# These files are machine-specific and should not be shared across clones
 .sync.lock
 export-state/
+export-state.json
+sync-state.json
 
 # Ephemeral store (SQLite - wisps/molecules, intentionally not versioned)
 ephemeral.sqlite3
@@ -31,45 +43,8 @@ ephemeral.sqlite3-journal
 ephemeral.sqlite3-wal
 ephemeral.sqlite3-shm
 
-# Dolt server management (auto-started by bd)
-dolt-server.pid
-dolt-server.log
-dolt-server.lock
-dolt-server.port
-
-# Backup data (auto-exported JSONL, local-only)
-backup/
-
-# Per-bd-command audit log (runtime, not a review artifact). Stays on
-# disk for local inspection; just shouldn't fight git on every bd call.
-interactions.jsonl
-
-# Credentials (per-clone, never committed)
-.beads-credential-key
-
-# Daemon state and activity logs
+# Daemon state, lockfiles, quarantined backups, and local environment
 daemon.*
-dolt-server.activity
-
-# Lockfiles + quarantined backups
 *.lock
 *.corrupt.backup/
-
-# Environment files
 .env
-
-# Sync export state (local-only)
-export-state.json
-
-# Legacy files (from pre-Dolt versions)
-*.db
-*.db?*
-*.db-journal
-*.db-wal
-*.db-shm
-db.sqlite
-bd.db
-# NOTE: Do NOT add negation patterns here.
-# They would override fork protection in .git/info/exclude.
-# Config files (metadata.json, config.yaml) are tracked by git by default
-# since no pattern above ignores them.

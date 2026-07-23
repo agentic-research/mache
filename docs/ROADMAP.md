@@ -74,4 +74,8 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 
 ## Tracking
 
-All work items live as beads in `.beads/` (Dolt-backed). Use `bd list --json` or the `rsry` MCP server to browse open work. Earlier `INVESTIGATION_LOG.md` and `_agent_log/` files are historical journals retained for context but no longer the active source of truth.
+All work items live as rsry beads in `.beads/`. The local SQLite store is
+ignored; bead content is shared through the tracked `.beads/beads.jsonl` export.
+Use `rsry bead --repo . list --status ready` or the `rsry` MCP server to browse
+open work. Earlier `INVESTIGATION_LOG.md` and `_agent_log/` files are historical
+journals retained for context but no longer the active source of truth.

@@ -1,15 +1,15 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+This project uses **rsry** for bead tracking.
 
 ## Quick Reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+rsry bead --repo . list --status ready
+rsry bead --repo . review <id>
+rsry bead --repo . comment add <id> "progress note"
+rsry bead --repo . close <id>
+rsry bead --repo . export --status all --jsonl -o .beads/beads.jsonl
 ```
 
 ## Non-Interactive Shell Commands
@@ -19,6 +19,7 @@ bd dolt push          # Push beads data to remote
 Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
 
 **Use these forms instead:**
+
 ```bash
 # Force overwrite without prompting
 cp -f source dest           # NOT: cp source dest
@@ -31,20 +32,23 @@ cp -rf source dest          # NOT: cp -r source dest
 ```
 
 **Other commands that may prompt:**
+
 - `scp` - use `-o BatchMode=yes` for non-interactive
 - `ssh` - use `-o BatchMode=yes` to fail instead of prompting
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
 <!-- BEGIN BEADS INTEGRATION -->
-## Issue Tracking with bd (beads)
 
-**IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
+## Issue Tracking with rsry Beads
 
-### Why bd?
+**IMPORTANT**: This project uses **rsry beads** for ALL issue tracking. Do NOT
+use markdown TODOs, task lists, or external issue trackers.
+
+### Why rsry?
 
 - Dependency-aware: Track blockers and relationships between issues
-- Version-controlled: Built on Dolt with cell-level merge
+- Version-controlled: bead content is shared through `.beads/beads.jsonl`
 - Agent-optimized: JSON output, ready work detection, discovered-from links
 - Prevents duplicate tracking systems and confusion
 
@@ -53,27 +57,26 @@ cp -rf source dest          # NOT: cp -r source dest
 **Check for ready work:**
 
 ```bash
-bd ready --json
+rsry bead --repo . list --status ready
 ```
 
 **Create new issues:**
 
 ```bash
-bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
+rsry bead --repo . create "Issue title" -d "Detailed context" -t bug|feature|task -p 0
 ```
 
-**Claim and update:**
+**Review and update:**
 
 ```bash
-bd update <id> --claim --json
-bd update bd-42 --priority 1 --json
+rsry bead --repo . review <id>
+rsry bead --repo . comment add <id> "What changed / what remains"
 ```
 
 **Complete work:**
 
 ```bash
-bd close bd-42 --reason "Completed" --json
+rsry bead --repo . close <id>
 ```
 
 ### Issue Types
@@ -94,32 +97,31 @@ bd close bd-42 --reason "Completed" --json
 
 ### Workflow for AI Agents
 
-1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task atomically**: `bd update <id> --claim`
-3. **Work on it**: Implement, test, document
-4. **Discover new work?** Create linked issue:
-   - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bd close <id> --reason "Done"`
+1. **Check ready work**: `rsry bead --repo . list --status ready` shows unblocked issues
+1. **Review your task**: `rsry bead --repo . review <id>` gives bead context
+1. **Work on it**: Implement, test, document
+1. **Discover new work?** Create linked issue:
+   - `rsry bead --repo . create "Found bug" -d "Details about what was found" -p 1`
+1. **Complete**: `rsry bead --repo . close <id>`
 
 ### Auto-Sync
 
-bd automatically syncs with git:
+Bead content is shared through git:
 
-- Exports to `.beads/issues.jsonl` after changes (5s debounce)
-- Imports from JSONL when newer (e.g., after `git pull`)
-- No manual export/import needed!
+- The live local store is SQLite (`.beads/beads.db`) and is ignored.
+- The shared artifact is `.beads/beads.jsonl`.
+- After mutating beads, refresh the export:
+  `rsry bead --repo . export --status all --jsonl -o .beads/beads.jsonl`.
 
 ### Important Rules
 
-- ✅ Use bd for ALL task tracking
-- ✅ Always use `--json` flag for programmatic use
-- ✅ Link discovered work with `discovered-from` dependencies
-- ✅ Check `bd ready` before asking "what should I work on?"
+- ✅ Use `rsry bead` for ALL task tracking
+- ✅ Keep `.beads/beads.jsonl` refreshed after bead mutations
+- ✅ Add progress comments for context that should survive sessions
+- ✅ Check ready beads before asking "what should I work on?"
 - ❌ Do NOT create markdown TODO lists
 - ❌ Do NOT use external issue trackers
 - ❌ Do NOT duplicate tracking systems
-
-For more details, see README.md and docs/QUICKSTART.md.
 
 ## Landing the Plane (Session Completion)
 
@@ -128,20 +130,21 @@ For more details, see README.md and docs/QUICKSTART.md.
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+1. **Run quality gates** (if code changed) - Tests, linters, builds
+1. **Update issue status** - Close finished work, update in-progress items
+1. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd dolt push
+   rsry bead --repo . export --status all --jsonl -o .beads/beads.jsonl
    git push
    git status  # MUST show "up to date with origin"
    ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+1. **Clean up** - Clear stashes, prune remote branches
+1. **Verify** - All changes committed AND pushed
+1. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
+
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push

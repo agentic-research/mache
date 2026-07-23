@@ -64,7 +64,7 @@ cmd/KNOWN_ISSUES.md
 internal/KNOWN_ISSUES.md
 tools/KNOWN_ISSUES.md
 
-# Dolt database files (added by bd init)
+# Legacy/local database files
 .dolt/
 *.db
 
@@ -75,7 +75,7 @@ tools/KNOWN_ISSUES.md
 .beads-credential-key
 .beads/.beads-credential-key
 
-# Root-level dolt server runtime (when bd's dolt server is started here)
+# Root-level Dolt server runtime
 /dolt/
 /dolt-server.lock
 /dolt-server.log
