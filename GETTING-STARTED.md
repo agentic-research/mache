@@ -55,6 +55,40 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 
 > ⚠️ `mache serve` (HTTP) is a **foreground daemon** — it blocks the terminal and must stay alive for the client to connect. If the client reports `localhost:7532/mcp` **connection refused**, the daemon isn't running — that's the #1 first-run gotcha. The fix is a one-time `mache init --global`, which installs a per-user supervisor (**launchd** LaunchAgent on macOS, **systemd `--user`** unit on Linux) that starts the daemon at login and keeps it alive across restarts — no terminal to babysit. For an ad-hoc run instead, background it (`mache serve . &`) in a second terminal.
 
+**Codex** uses the same Streamable HTTP endpoint:
+
+```bash
+codex mcp add mache --url http://localhost:7532/mcp
+```
+
+Or add the URL-only server entry to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.mache]
+url = "http://localhost:7532/mcp"
+```
+
+Do not add `type = "sse"` or use a `/sse` URL. Modern Mache serves MCP
+Streamable HTTP at `/mcp`, and Codex selects that transport from the `url`
+field.
+
+Codex merges user and trusted-project configuration by key. If a project
+defines `mcp_servers.mache.url` while your user config still defines
+`mcp_servers.mache.command` or `args`, the merged entry mixes HTTP and stdio
+and startup fails with `url is not supported for stdio`. Replace the old
+global registration atomically:
+
+```bash
+codex mcp remove mache
+codex mcp add mache --url http://localhost:7532/mcp
+```
+
+Verify the effective configuration from the project that previously failed:
+
+```bash
+codex mcp list
+```
+
 **stdio (subprocess per session — no standing daemon to babysit):**
 
 ```bash
