@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.18.0
+covers-version: v0.19.0
 last-verified: 2026-07-21
 sources-of-truth:
   - internal/ingest/ast_walker_index.go

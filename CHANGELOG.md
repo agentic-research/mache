@@ -4,7 +4,7 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
-## [Unreleased]
+## [v0.19.0] — 2026-07-22
 
 ### Changed
 
