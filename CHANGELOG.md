@@ -4,6 +4,45 @@ All notable changes to mache are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html); pre-1.0 minor
 bumps may include breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+- **Node properties moved to a dedicated `props` column** (`mache-90b89b`).
+  `Node.Properties` was `map[string][]byte`, and `encoding/json` renders
+  `[]byte` as base64 — so a projection stored
+  `{"imports":"eyJmbXQiOiJmbXQifQ==","lang":"Z28="}` where it meant
+  `{"imports":{"fmt":"fmt"},"lang":"go"}`, double-encoding `imports` (already
+  JSON) and inflating the record 2.3x. The costly part was not the size but
+  that `json_extract(record,'$.lang')` returned `Z28=`, putting `lang`/`pkg`/
+  `imports` out of reach of every SQL consumer and smell rule. They are now
+  real nested JSON in their own column: `json_extract(props,'$.lang')` returns
+  `go`, and nested fields like `$.imports.fmt` resolve.
+- **`record` means two things instead of three.** It held a source data record
+  *or* inline rendered content *or* serialized properties; the third is gone.
+  The `CASE WHEN kind = NodeKindDir` guard in `NodesTableReader` is deleted —
+  it existed only to stop a `GetNode` shipping a file's whole body, and `props`
+  never holds content, so the separation is structural now.
+- **`Node.Properties` is `map[string]json.RawMessage`.** Access it through
+  `PropString`/`PropRaw` and their setters, re-exported from the public `graph`
+  package for external consumers.
+
+### Fixed
+
+- **`mache serve`'s auto-leyline log described a path that no longer exists**
+  (`mache-6dda39`). It claimed the fallback used `SitterWalker`, removed in
+  v0.18.0, and pointed at `MACHE_NO_LEYLINE=1` as "the in-process watcher path"
+  without saying that path now needs `leyline` to pre-parse — while the same
+  flag disables downloading it. The message states the precondition and names
+  the pinned version.
+
+### Removed
+
+- **Reading node properties out of `record`.** A `.db` written by mache before
+  this change is refused on open with an error naming `mache build` as the fix.
+  Files produced by `leyline parse` are unaffected: they never carried
+  properties, and refusing them would break mache's primary input.
+
 ## [v0.19.0] — 2026-07-22
 
 ### Changed

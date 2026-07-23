@@ -66,7 +66,12 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		-- served by the context virtual file (vfs.ContextHandler). Set at
 		-- ingest (engine_walk.go) and must survive the SQLite round-trip so
 		-- cat-context works on a mounted .db (mache-b8fe72).
-		context BLOB
+		context BLOB,
+		-- props holds the node's Properties (lang/pkg/imports/location/ast_*)
+		-- as real nested JSON, so json_extract(props,'$.lang') is queryable.
+		-- These were previously base64'd into the record column, which also
+		-- made that column mean three different things (mache-90b89b).
+		props JSON
 	);
 	CREATE INDEX IF NOT EXISTS idx_parent_name ON nodes(parent_id, name);
 	CREATE INDEX IF NOT EXISTS idx_source_file ON nodes(source_file);
@@ -146,6 +151,12 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 			return nil, fmt.Errorf("add nodes.context column: %w", err)
 		}
 	}
+	if !graph.ColumnExists(db, "nodes", "props") {
+		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN props JSON`); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("add nodes.props column: %w", err)
+		}
+	}
 
 	w := &SQLiteWriter{
 		db:        db,
@@ -168,8 +179,8 @@ func (w *SQLiteWriter) beginTx() error {
 	}
 	// Prepare statement for fast inserts
 	w.stmtNode, err = w.tx.Prepare(`
-		INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file, context)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file, context, props)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -442,13 +453,18 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		recordID = &r
 	}
 
-	// 4. Record content: prefer inline Data (rendered file content),
-	// fall back to serialized Properties for metadata nodes.
+	// 4. Record content: inline rendered file content only. Properties have
+	// their own column now, so `record` means one of two things (a source data
+	// record, or inline content) instead of three (mache-90b89b).
 	var record []byte
 	if n.Data != nil {
 		record = n.Data
-	} else if len(n.Properties) > 0 {
-		record, _ = json.Marshal(n.Properties)
+	}
+
+	// 4b. Properties → props, as real nested JSON.
+	var props []byte
+	if len(n.Properties) > 0 {
+		props, _ = json.Marshal(n.Properties)
 	}
 
 	// 5. Source file (for DeleteFileNodes support in incremental mode)
@@ -471,6 +487,7 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 		record,
 		sourceFile,
 		n.Context,
+		props,
 	)
 	if err != nil {
 		log.Printf("SQLiteWriter: insert failed for %s: %v", n.ID, err)
@@ -580,7 +597,7 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 	// MCP find_callees handler reads `lang` to pick an extractor, so
 	// it returned [] for every construct on a pre-built .db.
 	//
-	// Fix: also SELECT record column and unmarshal it back into
+	// Fix: also SELECT the props column and unmarshal it back into
 	// Properties so the engine's "preserve currentProps" logic
 	// actually preserves something.
 
@@ -588,10 +605,11 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 	var mtimeNano int64
 	var record sql.NullString
 	var context []byte
+	var props []byte
 	err := w.tx.QueryRow(
-		"SELECT kind, mtime, record, context FROM nodes WHERE id = ?",
+		"SELECT kind, mtime, record, context, props FROM nodes WHERE id = ?",
 		id,
-	).Scan(&kind, &mtimeNano, &record, &context)
+	).Scan(&kind, &mtimeNano, &record, &context, &props)
 	if err == sql.ErrNoRows {
 		return nil, graph.ErrNotFound
 	}
@@ -616,12 +634,7 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 	// Round-trip record JSON → Properties. Only meaningful for dir
 	// nodes (kind=1); file nodes (kind=0) carry rendered template
 	// content in `record` and don't go through this path.
-	if kind == graph.NodeKindDir && record.Valid && record.String != "" {
-		var props map[string][]byte
-		if json.Unmarshal([]byte(record.String), &props) == nil && len(props) > 0 {
-			n.Properties = props
-		}
-	}
+	n.Properties = graph.DecodeProps(props)
 	return n, nil
 }
 

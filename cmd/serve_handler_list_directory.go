@@ -89,8 +89,8 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 
 			// Location: source file coordinates for orientation
 			if !seen["location"] {
-				if node, err := g.GetNode(path); err == nil && node.Properties != nil {
-					if loc, ok := node.Properties["location"]; ok && len(loc) > 0 {
+				if node, err := g.GetNode(path); err == nil {
+					if loc := graph.PropString(node, "location"); loc != "" {
 						entries = append(entries, nodeEntry{
 							Name: "location",
 							Path: path + "/location",

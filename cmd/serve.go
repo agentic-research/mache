@@ -435,8 +435,11 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 
 	// Auto-invoke leyline: when the source is a directory and `leyline` is
 	// available, run `leyline parse <dir> -o <tmp.db>` and open the result.
-	// This eliminates CGO tree-sitter at mount time. Falls back silently to
-	// the in-process Engine + SitterWalker path on any failure.
+	// This eliminates a second leyline invocation at mount time. Falls back
+	// silently to the in-process Engine + ASTWalker path on any failure.
+	// (That fallback was Engine + SitterWalker until v0.18.0 removed
+	// in-process tree-sitter; ASTWalker is the sole walker now, so the
+	// fallback still needs leyline to pre-parse — see the log message below.)
 	// Disable via MACHE_NO_LEYLINE=1.
 	//
 	// KNOWN GAP (PR #383 Copilot #4 → bead mache-6c9e1d): this path returns
@@ -459,7 +462,13 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 		if dbPath, dbCleanup, err := autoInvokeLeylineParse(dataSource); err == nil {
 			g, si, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
 			if gerr == nil {
-				log.Printf("auto-leyline: serving from %s (frozen .db — sheaf cascade NOT engaged for live edits; set MACHE_NO_LEYLINE=1 for the in-process watcher path)", filepath.Base(dbPath))
+				// The MACHE_NO_LEYLINE hint carries a precondition worth
+				// stating: that path's walker is ASTWalker, which needs
+				// leyline to pre-parse, and the same flag stops mache
+				// downloading one (internal/leyline/socket.go). So it only
+				// works with a pinned leyline already installed.
+				log.Printf("auto-leyline: serving from %s (frozen .db — live source edits are NOT reparsed and the sheaf cascade is not engaged; tracked as mache-6c9e1d). MACHE_NO_LEYLINE=1 selects the in-process watcher path instead, which requires leyline %s already on PATH — that flag also disables auto-download.",
+					filepath.Base(dbPath), leyline.BinaryVersion)
 				return g, si, gCleanup, nil
 			}
 			log.Printf("auto-leyline: opened .db failed (%v); falling back to in-process ingest", gerr)

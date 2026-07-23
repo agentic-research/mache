@@ -148,6 +148,10 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 	// When the main DB has a nodes table (built by mache build), node_refs
 	// is already present with (token, node_id) pairs. No sidecar needed.
 	if useNodesTable {
+		if err := RequireProps(db); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("open %s: %w", dbPath, err)
+		}
 		levels := compileLevels(schema)
 		ntr := NewNodesTableReader(db, tableName, render, levels, 0o444, 0o555, 2048)
 		return &SQLiteGraph{

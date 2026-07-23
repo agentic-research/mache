@@ -348,11 +348,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/leyline/client.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "internal/leyline/sheaf.go",
       "count": 1
     },
@@ -1653,6 +1648,11 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "internal/nfsmount/graphfs.go",
       "count": 1
     },
@@ -1744,6 +1744,11 @@
     {
       "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/sprites.rs",
       "count": 1
     },
     {
@@ -1979,11 +1984,6 @@
     {
       "rule_id": "long_function",
       "source_id": "ext/boltdb/boltdb.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "graph/sqlite.go",
       "count": 1
     },
     {

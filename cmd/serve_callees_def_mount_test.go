@@ -144,7 +144,7 @@ func TestFindCallees_AnnotatesMountOnComposite(t *testing.T) {
 	auth.AddNode(&graph.Node{
 		ID: "functions/Validate", Mode: fs.ModeDir,
 		Children:   []string{"functions/Validate/source"},
-		Properties: map[string][]byte{"lang": []byte("go")},
+		Properties: map[string]json.RawMessage{"lang": []byte(`"go"`)},
 	})
 	auth.AddNode(&graph.Node{
 		ID: "functions/Validate/source", Mode: 0,
@@ -209,7 +209,7 @@ func TestFindCallees_CrossMountResolvesAndAnnotates(t *testing.T) {
 	auth.AddNode(&graph.Node{
 		ID: "functions/Caller", Mode: fs.ModeDir,
 		Children:   []string{"functions/Caller/source"},
-		Properties: map[string][]byte{"lang": []byte("go")},
+		Properties: map[string]json.RawMessage{"lang": []byte(`"go"`)},
 	})
 	auth.AddNode(&graph.Node{
 		ID: "functions/Caller/source", Mode: 0,

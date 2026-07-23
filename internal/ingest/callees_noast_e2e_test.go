@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,14 +95,13 @@ func TestSQLiteGraph_GetCallees_NodeRefsFallback_RealSchemaBuild(t *testing.T) {
 		assertNoWholeFileScope := func(t *testing.T, id string) {
 			t.Helper()
 			var recordJSON string
-			err := sg.DB().QueryRow("SELECT record FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON)
+			err := sg.DB().QueryRow("SELECT props FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON)
 			require.NoError(t, err, "node %s must exist", id)
-			var props map[string][]byte
-			require.NoError(t, json.Unmarshal([]byte(recordJSON), &props))
-			srcID, hasSrc := props["ast_source_id"]
-			scopeID, hasScope := props["ast_scope_id"]
-			if hasSrc && hasScope {
-				require.NotEqual(t, string(srcID), string(scopeID),
+			n := &graph.Node{Properties: graph.DecodeProps([]byte(recordJSON))}
+			srcID := graph.PropString(n, "ast_source_id")
+			scopeID := graph.PropString(n, "ast_scope_id")
+			if srcID != "" && scopeID != "" {
+				require.NotEqual(t, srcID, scopeID,
 					"%s must not carry a whole-file ast_scope_id (F3, bead mache-6fbaf1)", id)
 			}
 		}
@@ -114,13 +112,13 @@ func TestSQLiteGraph_GetCallees_NodeRefsFallback_RealSchemaBuild(t *testing.T) {
 	t.Run("regression: real leaf constructs still carry their own AST scope", func(t *testing.T) {
 		var recordJSON string
 		require.NoError(t, sg.DB().QueryRow(
-			"SELECT record FROM nodes WHERE id = ? AND kind = 1", "pkg/functions/Caller",
+			"SELECT props FROM nodes WHERE id = ? AND kind = 1", "pkg/functions/Caller",
 		).Scan(&recordJSON))
-		var props map[string][]byte
-		require.NoError(t, json.Unmarshal([]byte(recordJSON), &props))
-		srcID, hasSrc := props["ast_source_id"]
-		scopeID, hasScope := props["ast_scope_id"]
-		require.True(t, hasSrc && hasScope, "a real leaf construct must still get its ast_source_id/ast_scope_id Properties")
-		require.NotEqual(t, string(srcID), string(scopeID))
+		n := &graph.Node{Properties: graph.DecodeProps([]byte(recordJSON))}
+		srcID := graph.PropString(n, "ast_source_id")
+		scopeID := graph.PropString(n, "ast_scope_id")
+		require.NotEmpty(t, srcID, "a real leaf construct must still get its ast_source_id Property")
+		require.NotEmpty(t, scopeID, "a real leaf construct must still get its ast_scope_id Property")
+		require.NotEqual(t, srcID, scopeID)
 	})
 }

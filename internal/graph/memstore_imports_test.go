@@ -14,7 +14,7 @@ func TestLoadImports_UsesStructuredProperties(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	node := &Node{Properties: map[string][]byte{"imports": structured}}
+	node := &Node{Properties: map[string]json.RawMessage{"imports": structured}}
 
 	got := loadImports(node)
 	want := map[string]string{"alias": "real/path", "http": "net/http"}
@@ -57,7 +57,7 @@ func TestLoadImports_MalformedPropertiesYieldNil(t *testing.T) {
 		"empty bytes":  {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			node := &Node{Properties: map[string][]byte{"imports": raw}}
+			node := &Node{Properties: map[string]json.RawMessage{"imports": raw}}
 			if got := loadImports(node); got != nil {
 				t.Errorf("loadImports = %v, want nil", got)
 			}

@@ -23,11 +23,8 @@ import (
 //   - .db built by leyline — carries no `context` column at all, so the old
 //     fallback could never have fired there anyway.
 func loadImports(node *Node) map[string]string {
-	if node.Properties == nil {
-		return nil
-	}
-	raw, ok := node.Properties["imports"]
-	if !ok || len(raw) == 0 {
+	raw := PropRaw(node, "imports")
+	if len(raw) == 0 {
 		return nil
 	}
 	var imports map[string]string
@@ -72,20 +69,15 @@ func (s *MemoryStore) GetCallees(id string) ([]*Node, error) {
 	}
 
 	// Determine langName from construct directory Properties
-	var langName string
-	if node.Properties != nil {
-		if v, ok := node.Properties["lang"]; ok {
-			langName = string(v)
-		}
-	}
+	langName := PropString(node, "lang")
 
 	var qcalls []QualifiedCall
 	scoped := false
-	if s.scopedExtractor != nil && node.Properties != nil {
-		astSrcID, hasSrc := node.Properties["ast_source_id"]
-		astScopeID, hasScope := node.Properties["ast_scope_id"]
-		if hasSrc && hasScope && len(astSrcID) > 0 && len(astScopeID) > 0 {
-			calls, err := s.scopedExtractor(string(astSrcID), string(astScopeID), langName)
+	if s.scopedExtractor != nil {
+		astSrcID := PropString(node, "ast_source_id")
+		astScopeID := PropString(node, "ast_scope_id")
+		if astSrcID != "" && astScopeID != "" {
+			calls, err := s.scopedExtractor(astSrcID, astScopeID, langName)
 			if err != nil {
 				return nil, fmt.Errorf("extract calls (ast-scoped): %w", err)
 			}

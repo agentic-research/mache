@@ -43,10 +43,8 @@ func makeFindCalleesHandler(g graph.Graph) server.ToolHandlerFunc {
 				return mcp.NewToolResultText(`{"callees":[],"hint":"path is a file, not a construct directory — use the parent directory path"}`), nil
 			}
 			hint := "no resolved callees"
-			if node.Properties != nil {
-				if _, hasLang := node.Properties["lang"]; hasLang {
-					hint = "no resolved callees — the construct may call unexported methods or use dynamic dispatch that the static extractor cannot resolve. Try find_callers with the method name instead."
-				}
+			if graph.PropString(node, "lang") != "" {
+				hint = "no resolved callees — the construct may call unexported methods or use dynamic dispatch that the static extractor cannot resolve. Try find_callers with the method name instead."
 			}
 			type emptyResult struct {
 				Callees []string `json:"callees"`

@@ -72,3 +72,13 @@ type SQLiteResolver = ig.SQLiteResolver
 // NewSQLiteResolver creates a resolver that uses the given template renderer
 // to render content from SQLite records.
 var NewSQLiteResolver = ig.NewSQLiteResolver
+
+// Node property accessors. Properties values are JSON (mache-90b89b), so
+// external consumers must go through these rather than indexing the map —
+// a string property is stored as `"go"`, not `go`.
+var (
+	PropString    = ig.PropString
+	SetPropString = ig.SetPropString
+	PropRaw       = ig.PropRaw
+	SetPropRaw    = ig.SetPropRaw
+)

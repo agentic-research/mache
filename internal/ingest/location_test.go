@@ -139,11 +139,12 @@ func Hello() {
 	helloDir, err := store.GetNode("main/functions/Hello")
 	require.NoError(t, err)
 
-	// Check for location in Properties
-	locData, ok := helloDir.Properties["location"]
-	require.True(t, ok, "Hello directory should have 'location' property")
+	// Check for location in Properties. Read through the accessor: property
+	// values are JSON, so the raw map holds `"main.go:3:5"` with quotes
+	// (mache-90b89b).
+	loc := graph.PropString(helloDir, "location")
+	require.NotEmpty(t, loc, "Hello directory should have 'location' property")
 
 	// Location should be in format "relative/path.go:startline:endline"
-	expected := "main.go:3:5"
-	assert.Equal(t, expected, string(locData))
+	assert.Equal(t, "main.go:3:5", loc)
 }

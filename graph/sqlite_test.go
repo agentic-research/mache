@@ -1,6 +1,7 @@
 package graph_test
 
 import (
+	"encoding/json"
 	"io/fs"
 	"path/filepath"
 	"testing"
@@ -23,7 +24,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 		ID:         "main/feed",
 		Mode:       fs.ModeDir,
 		Children:   []string{"main/feed/description", "main/feed/mache_id"},
-		Properties: map[string][]byte{"mache_id": []byte("mache-42")},
+		Properties: map[string]json.RawMessage{"mache_id": []byte(`"mache-42"`)},
 	}
 	store.AddNode(feed)
 
@@ -71,8 +72,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNode(main/feed): %v", err)
 	}
-	if string(feedNode.Properties["mache_id"]) != "mache-42" {
-		t.Errorf("feed.Properties[mache_id] = %q, want mache-42", feedNode.Properties["mache_id"])
+	if got := graph.PropString(feedNode, "mache_id"); got != "mache-42" {
+		t.Errorf("feed.Properties[mache_id] = %q, want mache-42", got)
 	}
 	if len(feedNode.Children) != 2 {
 		t.Errorf("feed.Children = %v, want 2 children", feedNode.Children)

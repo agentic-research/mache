@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"time"
@@ -51,16 +52,20 @@ type NodeStat struct {
 // Node is the universal primitive.
 // The Mode field explicitly declares whether this is a file or directory.
 type Node struct {
-	ID         string
-	Mode       fs.FileMode       // fs.ModeDir for directories, 0 for regular files
-	ModTime    time.Time         // Modification time
-	Data       []byte            // Inline content (small files, nil for lazy nodes)
-	Context    []byte            // Context content (imports/globals, for virtual 'context' file)
-	DraftData  []byte            // Draft content (uncommitted/invalid edits)
-	Ref        *ContentRef       // Lazy content reference (large files, nil for inline nodes)
-	Properties map[string][]byte // Metadata / extended attributes
-	Children   []string          // Child node IDs (directories only)
-	Origin     *SourceOrigin     // Source byte range (nil for dirs, JSON, SQLite nodes)
+	ID        string
+	Mode      fs.FileMode // fs.ModeDir for directories, 0 for regular files
+	ModTime   time.Time   // Modification time
+	Data      []byte      // Inline content (small files, nil for lazy nodes)
+	Context   []byte      // Context content (imports/globals, for virtual 'context' file)
+	DraftData []byte      // Draft content (uncommitted/invalid edits)
+	Ref       *ContentRef // Lazy content reference (large files, nil for inline nodes)
+	// Properties holds node metadata as JSON values (lang/pkg/imports/location/
+	// ast_*). Access it only via PropString/PropRaw and their setters — the
+	// encoding is their business (mache-90b89b).
+	Properties map[string]json.RawMessage
+
+	Children []string      // Child node IDs (directories only)
+	Origin   *SourceOrigin // Source byte range (nil for dirs, JSON, SQLite nodes)
 }
 
 // ContentSize returns the byte length of this node's content,

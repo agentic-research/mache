@@ -86,11 +86,10 @@ func exportNode(store *MemoryStore, stmt *sql.Stmt, nodeID, parentID string) err
 			r["data"] = string(node.Data)
 		}
 		if len(node.Properties) > 0 {
-			props := make(map[string]string, len(node.Properties))
-			for k, v := range node.Properties {
-				props[k] = string(v)
-			}
-			r["properties"] = props
+			// Properties values are already JSON (mache-90b89b); nest them
+			// directly. Stringifying them here and re-encoding on import
+			// double-quoted every value.
+			r["properties"] = node.Properties
 		}
 		b, _ := json.Marshal(r)
 		s := string(b)
@@ -162,18 +161,16 @@ func ImportSQLite(dbPath string) (*MemoryStore, error) {
 
 		// Parse record JSON for inline data and properties.
 		if r.record.Valid && r.record.String != "" {
-			var rec map[string]any
+			var rec struct {
+				Data       string                     `json:"data"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			}
 			if err := json.Unmarshal([]byte(r.record.String), &rec); err == nil {
-				if data, ok := rec["data"].(string); ok {
-					node.Data = []byte(data)
+				if rec.Data != "" {
+					node.Data = []byte(rec.Data)
 				}
-				if props, ok := rec["properties"].(map[string]any); ok {
-					node.Properties = make(map[string][]byte, len(props))
-					for k, v := range props {
-						if vs, ok := v.(string); ok {
-							node.Properties[k] = []byte(vs)
-						}
-					}
+				if len(rec.Properties) > 0 {
+					node.Properties = rec.Properties
 				}
 			}
 		}
