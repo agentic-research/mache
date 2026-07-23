@@ -132,13 +132,16 @@ A full edit-to-fresh-result bench against a real source repo lives in `mache-907
 
 ## Comparative bench (planned)
 
-Tracked under bead `mache-7937c5`. Three peer MCPs in scope:
+Tracked under bead `mache-7937c5`. Three peer MCPs plus one non-MCP prior-art harness are in scope:
 
 - **codebase-memory-mcp** (DeusData) — tree-sitter + Cypher; published a 12-question × 64-repo PASS/PARTIAL/FAIL grid we can adopt as the navigation-axis methodology.
 - **Serena** (Oraios) — live LSP, no published bench; serves as the "live-data" comparator. Initial install / single-repo run sketched in this PR (see "Serena comparison sketch" below).
 - **agent-lsp** (Blackwell Systems) — LSP + workflow-enforcing skills; published per-codebase ratio benchmarks (rename, FP rate, speculative-edit) we can adopt as the edit-axis methodology.
+- **entire-graph** (Entire) — not an MCP peer, but a close code-graph prior art. Its `graph-bench` harness is directly useful for scale gates: 24 languages × 10 public repos in `bench/repos.json`, 24 × 3 in `bench/repos.fast.json`, and 240 pinned SHAs in `bench/repos.lock.json`. Its README-level 265/283 accuracy board was not found in the public clone, so borrow the pinned corpus / guardrail shape, not the unpublished score.
 
 The 2-axis question is the meaningful one: how does mache's projected-FS structural view compare on **navigation** (codebase-memory-mcp's strength) AND on **edit-prep** (agent-lsp's strength), measured on the same repo corpus, against all three peers?
+
+entire-graph adds a third, narrower measurement lesson: scale gates should report files, LOC, symbols, relations, wall time, output bytes, allocation bytes, peak RSS, relation distribution, confidence/resolution distribution, and parse failures over pinned real repos. For mache, the gate should fail on growth-class regression rather than a fixed "Nx faster/slower" ratio; fixed ratios lie when the old failure mode is nonlinear.
 
 ### Serena head-to-head harness
 

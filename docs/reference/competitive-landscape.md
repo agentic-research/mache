@@ -55,6 +55,7 @@ AI code-intelligence tools and the lineage/adjacent tools are grouped by a divid
 | **CodeRabbit**                            |         --          |            --            |      ast-grep      |               --               |         LanceDB         |           GraphRAG           |      Code only       |     --     |     No      |
 | **Greptile**                              |         --          |            --            |         --         |               --               |           --            |          Code graph          |      Code only       |     --     |     No      |
 | **codebase-memory-mcp**                   |         --          |            --            |   Yes (64 langs)   |               --               |           --            |        25 edge types         |      Code only       |    Yes     |     Yes     |
+| **entire-graph**                          |         --          |            --            |   Yes (24 langs)   |               --               |   Yes (hybrid source)   |        30 edge types         |      Code only       |     --     |     Yes     |
 | **stack-graphs** (GitHub)                 |         --          |            --            | Yes (scope graphs) |               --               |           --            |   Name resolution (poset)    |      Code only       |     --     |     Yes     |
 | *— lineage & adjacent traditions —*       |                     |                          |                    |                                |                         |                              |                      |            |             |
 | **lean-ctx**                              |         --          |    No (4 fixed modes)    |  Yes (signatures)  |               --               |     Yes (BM25+emb.)     |    Yes (multi-edge graph)    |      Code only       |    Yes     |     Yes     |
@@ -414,7 +415,50 @@ Note on tool parity: mache has `get_architecture` (first-contact orientation), `
 
 ______________________________________________________________________
 
-### 10. stack-graphs (GitHub)
+### 10. entire-graph (Entire)
+
+**What it is.** An open-source semantic code graph and search tool from Entire. It indexes real repositories into a streamed graph with stable symbol IDs, relation records, evidence, confidence, resolution labels, and a benchmark harness aimed at both performance and quality tracking.
+
+**How it works.** The provider walks local checkouts, emits NDJSON snapshots, and supports three profiles: `full`, `fast`, and `syntax-only`. The published `graph-bench` harness separates cloning from measurement, pins repositories in `bench/repos.lock.json`, runs measurement with network disabled, and reports per-repo files, LOC, symbols, relations, wall time, output bytes, allocations, peak RSS, relation distribution, confidence bands, parse failures, and unresolved imports.
+
+**Language support.** The published benchmark manifest covers 24 languages with 10 public repositories per language (240 pinned SHAs), plus a 24-language fast tier with 3 repositories per language.
+
+**Published claims.** The README claims 265/283 (94%) on a 21-repo fixed-answer board of definition lookup, call graph, imports, and change-impact tasks, versus 191/283 (68%) for codebase-memory-mcp. In the scratchpad clone inspected on 2026-07-23, that task board, answer key, and scoring harness were not present; the claim should be treated as README-level unless upstream publishes the corpus. Its performance harness, by contrast, is present and directly reusable as methodology.
+
+**Relationship to Mache.** entire-graph is the closest recent comparison for the "typed code graph for agents" slice. It is code-only and hardcoded around a semantic-provider schema; mache is a schema-driven projection engine over code, JSON, SQLite, and other structured data, exposed as MCP tools and a real NFS filesystem. The useful prior art is not its headline score, but its measurement discipline and relation vocabulary.
+
+**What entire-graph does that mache doesn't:**
+
+- Multi-edge relation vocabulary: `CALLS`, `IMPORTS`, `HANDLES_ROUTE`, `HANDLES_TOOL`, `HTTP_CALLS`, `READS_FIELD`, `WRITES_FIELD`, `TESTS`, `RESOURCE_DEPENDS_ON`, and more. Mache's `node_refs` table is still largely single-edge/token-shaped.
+- Published scale harness with a 240-repo pinned corpus, fast/full tiers, and performance guardrails.
+- Per-relation confidence, resolution, evidence, target kind, and warning codes in the emitted graph.
+- Profiled extraction modes (`full`, `fast`, `syntax-only`) that declare skipped relation families.
+- README-level token-efficiency methodology: compare structural graph answers against file-by-file reads for high-connectivity symbols.
+
+**What mache does that entire-graph doesn't:**
+
+- Real filesystem mount (NFS), not just CLI/provider output.
+- Schema-driven projection over arbitrary structured data, not a fixed code-symbol graph.
+- Identity-preserving write-back.
+- Data-format agnosticism (JSON, SQLite, source, registry schemas, audit records).
+- FCA/entropy schema inference.
+- LSP-grade defs/refs/hover/diagnostics via ley-line-open tables, rather than only provider-local heuristics.
+- Fidelity stratification via ADR-0013: mention subset-of binding subset-of reachability, rather than one flat confidence value.
+
+**Important caveat on relations.** entire-graph itself marks `HANDLES_ROUTE`, `HANDLES_TOOL`, `HTTP_CALLS`, `EMITS`, `LISTENS_ON`, `SIMILAR_TO`, and `TESTS` as heuristic. Inspection of `internal/sem/provider.go` shows service-boundary extraction is largely regex/context scanning: route-literal regexes, routing-call regexes, Go `HandleFunc` / router regexes, Python decorator regexes, and framework-specific Laravel/Rails/NestJS/Spring/C# route scanners. That is still useful, but it strengthens mache's differentiated path: adopt typed service-boundary relations while carrying explicit fidelity/provenance so consumers can decide which edges are gate-worthy.
+
+**Gaps worth closing:**
+
+- Typed relation kinds on `node_refs` (tracked by `mache-69162a`), starting with `HANDLES_TOOL` and `HANDLES_ROUTE`.
+- A scale benchmark that borrows entire-graph's pinned repo corpus and guardrails, but gates on growth class rather than fixed wall-time ratios (`mache-543943`).
+- A fixed-answer accuracy harness, clearly labeled as mache-authored unless the entire-graph 283-task board becomes public (`mache-2acd4f`).
+- Token-efficiency measurement using their structural-query-vs-file-by-file shape, but with pinned symbols and distributional reporting (`mache-544659`).
+
+**Sources:** [GitHub](https://github.com/entireio/entire-graph), local scratchpad clone inspected 2026-07-23 (`bench/README.md`, `docs/benchmarks.md`, `internal/bench/bench.go`, `cmd/graph-bench/main.go`, `internal/sem/provider.go`).
+
+______________________________________________________________________
+
+### 11. stack-graphs (GitHub)
 
 **What it is.** GitHub's framework for declaratively building "stack graphs" — a tree-sitter-based name resolution model that composes across files (and in principle across languages). Powers GitHub's code-navigation precision tier for the languages they ship support for.
 
@@ -607,6 +651,7 @@ The underlying reason: the doc was written before ley-line-open was fully paired
 - CodeRabbit: https://www.coderabbit.ai/
 - Greptile: https://www.greptile.com/
 - codebase-memory-mcp (DeusData): https://github.com/DeusData/codebase-memory-mcp
+- entire-graph (Entire): https://github.com/entireio/entire-graph
 - stack-graphs (GitHub): https://github.com/github/stack-graphs
 - lean-ctx: https://github.com/yvgude/lean-ctx
 - AgentFS (Turso): https://github.com/tursodatabase/agentfs
