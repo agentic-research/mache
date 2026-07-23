@@ -919,7 +919,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_flat.rs",
-      "count": 1
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1410,6 +1410,16 @@
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/ast_walker_calls.go",
       "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/ast_walker_extract.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/ast_walker_nodes.go",
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
