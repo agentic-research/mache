@@ -1,5 +1,10 @@
 # Dolt database (managed by Dolt, not git)
 dolt/
+# Migration backup — `rsry bead migrate --commit` renames dolt/ to dolt.bak/
+# and never deletes it. It is a binary Dolt store; committing it is the
+# rosary-05fbe0 footgun.
+dolt.bak/
+dolt.bak.*/
 dolt-access.lock
 
 # Runtime files
