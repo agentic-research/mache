@@ -7,12 +7,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/agentic-research/mache/internal/gitutil"
 )
 
 // repoClone tracks a shared base clone for a repo URL in hosted mode.
@@ -124,7 +125,7 @@ func (r *graphRegistry) getOrCreateRepoClone(repoURL string) (string, error) {
 	baseDir := filepath.Join(parentDir, "base")
 
 	log.Printf("cloning %s for hosted mode...", redactURL(repoURL))
-	cmd := exec.Command("git", "clone", "--depth=1", "--single-branch", repoURL, baseDir)
+	cmd := gitutil.HermeticGitCommand("clone", "--depth=1", "--single-branch", repoURL, baseDir)
 	cmd.Dir = parentDir
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/agentic-research/mache/internal/gitutil"
 )
 
 // sanitizeSessionID ensures a session ID is safe for use as a filesystem path.
@@ -42,7 +43,7 @@ func createWorktree(cloneDir, sessionID string) (string, error) {
 	}
 
 	wtDir := filepath.Join(sessionsDir, safe)
-	cmd := exec.Command("git", "worktree", "add", wtDir, "HEAD")
+	cmd := gitutil.HermeticGitCommand("worktree", "add", wtDir, "HEAD")
 	cmd.Dir = cloneDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git worktree add: %s: %w", string(out), err)
@@ -53,7 +54,7 @@ func createWorktree(cloneDir, sessionID string) (string, error) {
 // removeWorktree removes a git worktree and its directory.
 // Falls back to rm -rf if git worktree remove fails.
 func removeWorktree(cloneDir, worktreeDir string) error {
-	cmd := exec.Command("git", "worktree", "remove", "--force", worktreeDir)
+	cmd := gitutil.HermeticGitCommand("worktree", "remove", "--force", worktreeDir)
 	cmd.Dir = cloneDir
 	if err := cmd.Run(); err != nil {
 		log.Printf("git worktree remove failed, falling back to rm: %v", err)

@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/gitutil"
 )
 
 // initTestGitRepo creates a temp git repo with one commit for worktree tests.
@@ -19,7 +20,7 @@ func initTestGitRepo(t *testing.T) string {
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
 	} {
-		c := exec.Command(cmd[0], cmd[1:]...)
+		c := gitutil.HermeticGitCommand(cmd[1:]...)
 		c.Dir = dir
 		require.NoError(t, c.Run(), "git init failed")
 	}
@@ -28,7 +29,7 @@ func initTestGitRepo(t *testing.T) string {
 		{"git", "add", "."},
 		{"git", "commit", "-m", "init"},
 	} {
-		c := exec.Command(cmd[0], cmd[1:]...)
+		c := gitutil.HermeticGitCommand(cmd[1:]...)
 		c.Dir = dir
 		require.NoError(t, c.Run())
 	}

@@ -1,11 +1,12 @@
 package ingest
 
 import (
-	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/gitutil"
 )
 
 func TestLoadGitCommits(t *testing.T) {
@@ -43,7 +44,7 @@ With body`)
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
-	cmd := exec.Command("git", args...)
+	cmd := gitutil.HermeticGitCommand(args...)
 	cmd.Dir = dir
 	err := cmd.Run()
 	require.NoError(t, err, "git %v failed", args)
