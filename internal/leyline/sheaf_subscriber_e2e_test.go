@@ -44,7 +44,7 @@ import (
 // side of its conn after activation, so sharing with SheafClient
 // would race per SocketClient.Subscribe's docstring.
 //
-// Skipped when `leyline` is not on PATH (same gate as
+// Skipped when the pinned `leyline` cannot be resolved (same gate as
 // TestE2E_SheafCascade_AgainstLiveDaemon + the cascade benches).
 //
 // REGRESSION GUARD for ley-line-open-5caa59: pre-LLO-v0.4.3 daemons
@@ -55,11 +55,13 @@ import (
 // refactor regresses this path, this test catches it before the bug
 // reaches live runtime.
 func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate ~/.mache/ from sibling tests
-	leylineBin, err := exec.LookPath("leyline")
+	// Resolve before HOME isolation so ~/.mache/bin remains a valid fallback.
+	// ResolveBinary rejects incompatible PATH binaries just like production.
+	leylineBin, err := ResolveBinary(false)
 	if err != nil {
-		t.Skip("leyline binary not on PATH — skipping cross-runtime subscriber e2e")
+		t.Skipf("pinned leyline unavailable — skipping cross-runtime subscriber e2e: %v", err)
 	}
+	t.Setenv("HOME", t.TempDir()) // isolate ~/.mache/ from sibling tests
 
 	// Mache pins to LLO v0.6+ (PR #147 unified emit under
 	// `daemon.sheaf.invalidate`; the pre-v0.6 `sheaf.invalidate` topic

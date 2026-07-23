@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/agentic-research/mache/internal/gitutil"
 )
 
 // GetGitHints returns the default inference hints for Git repositories.
@@ -33,7 +34,7 @@ func LoadGitCommits(repoPath string) ([]any, error) {
 	// %B: Raw body (subject + body)
 	format := "%H%n%T%n%P%n%an%n%aI%n%B" + sep
 
-	cmd := exec.Command("git", "log", "--all", "--date=iso", fmt.Sprintf("--pretty=format:%s", format))
+	cmd := gitutil.HermeticGitCommand("log", "--all", "--date=iso", fmt.Sprintf("--pretty=format:%s", format))
 	cmd.Dir = repoPath
 
 	// Increase buffer size for large logs

@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/agentic-research/mache/internal/gitutil"
 	"github.com/spf13/cobra"
 )
 
@@ -191,7 +191,7 @@ func generateMountName(sourcePath, gitRepo string) string {
 // Returns (org/repo, branch, remoteURL, error).
 func detectGitInfo(path string) (string, string, string, error) {
 	// Check if path is in a git repo
-	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	cmd := gitutil.HermeticGitCommand("-C", path, "rev-parse", "--show-toplevel")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", "", nil // Not a git repo, not an error
@@ -200,7 +200,7 @@ func detectGitInfo(path string) (string, string, string, error) {
 	repoRoot := strings.TrimSpace(string(output))
 
 	// Get current branch
-	cmd = exec.Command("git", "-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd = gitutil.HermeticGitCommand("-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
 	branchOutput, err := cmd.Output()
 	branch := "unknown"
 	if err == nil {
@@ -208,7 +208,7 @@ func detectGitInfo(path string) (string, string, string, error) {
 	}
 
 	// Get remote URL
-	cmd = exec.Command("git", "-C", repoRoot, "remote", "get-url", "origin")
+	cmd = gitutil.HermeticGitCommand("-C", repoRoot, "remote", "get-url", "origin")
 	remoteOutput, err := cmd.Output()
 	remoteURL := ""
 	if err == nil {

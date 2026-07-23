@@ -30,12 +30,12 @@ import (
 // marshal/unmarshal + UDS write/read, neither of which scales with
 // CPU count.
 //
-// Skipped automatically when `leyline` is not on PATH (same gate as
-// TestE2E_SheafCascade_AgainstLiveDaemon).
+// Skipped automatically when the pinned `leyline` cannot be resolved (same
+// gate as TestE2E_SheafCascade_AgainstLiveDaemon).
 func BenchmarkCascade_InvalidateWithStalk(b *testing.B) {
-	leylineBin, err := exec.LookPath("leyline")
+	leylineBin, err := ResolveBinary(false)
 	if err != nil {
-		b.Skip("leyline binary not on PATH — skipping live-daemon bench")
+		b.Skipf("pinned leyline unavailable — skipping live-daemon bench: %v", err)
 	}
 
 	sock, cleanup := startDaemonForBench(b, leylineBin)
@@ -90,9 +90,9 @@ func BenchmarkCascade_InvalidateWithStalk(b *testing.B) {
 // Worth measuring so any future regression that bloats the wire format
 // is caught.
 func BenchmarkCascade_InvalidateHeuristicMode(b *testing.B) {
-	leylineBin, err := exec.LookPath("leyline")
+	leylineBin, err := ResolveBinary(false)
 	if err != nil {
-		b.Skip("leyline binary not on PATH — skipping live-daemon bench")
+		b.Skipf("pinned leyline unavailable — skipping live-daemon bench: %v", err)
 	}
 
 	sock, cleanup := startDaemonForBench(b, leylineBin)

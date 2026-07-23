@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/gitutil"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
@@ -102,7 +103,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			}()
 			baseDir := filepath.Join(parentDir, "base")
 			log.Printf("cloning %s for HTTP mode...", serveRepo)
-			cmd := exec.Command("git", "clone", "--depth=1", "--single-branch", serveRepo, baseDir)
+			cmd := gitutil.HermeticGitCommand("clone", "--depth=1", "--single-branch", serveRepo, baseDir)
 			cmd.Stdout = os.Stderr
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
@@ -393,7 +394,7 @@ func cloneRepo(repoURL string) (string, func(), error) {
 	}
 
 	log.Printf("cloning %s (shallow)...", repoURL)
-	cmd := exec.Command("git", "clone", "--depth=1", "--single-branch", repoURL, tmpDir)
+	cmd := gitutil.HermeticGitCommand("clone", "--depth=1", "--single-branch", repoURL, tmpDir)
 	cmd.Stdout = os.Stderr // show progress on stderr (not MCP stdout)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

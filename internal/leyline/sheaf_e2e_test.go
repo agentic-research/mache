@@ -33,17 +33,20 @@ import (
 // continuity contract: mache pushes topology + post-change stalks,
 // daemon returns reachable regions via the agreement-plane δ⁰ check.
 //
-// Skipped automatically when `leyline` is not on PATH so CI without
-// the daemon binary (and developer machines without it) stays green.
+// Skipped automatically when the pinned `leyline` cannot be resolved so CI
+// without the daemon binary (and developer machines without it) stays green.
 // Test files are sized so the daemon's auto-spawn-and-bind path
 // completes inside the timeout — extend the deadline if the bench
 // repo grows beyond a few KB of fixtures.
 func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // isolate ~/.mache/ from sibling tests
-	leylineBin, err := exec.LookPath("leyline")
+	// Resolve before HOME isolation so the resolver can find the pinned binary
+	// under the developer's ~/.mache/bin. A raw LookPath here would bypass the
+	// production version gate and may launch an incompatible local CLI.
+	leylineBin, err := ResolveBinary(false)
 	if err != nil {
-		t.Skip("leyline binary not on PATH — skipping cross-runtime e2e")
+		t.Skipf("pinned leyline unavailable — skipping cross-runtime e2e: %v", err)
 	}
+	t.Setenv("HOME", t.TempDir()) // isolate ~/.mache/ from sibling tests
 
 	// Each subtest gets its own isolated daemon. The daemon derives the
 	// UDS socket path from --control (replaces .ctrl with .sock), and
