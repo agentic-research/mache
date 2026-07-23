@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.18.0
+covers-version: v0.19.0
 last-verified: 2026-07-21
 sources-of-truth:
   - CHANGELOG.md
@@ -11,7 +11,7 @@ supersedes: []
 
 # Roadmap
 
-## Current state (as of 2026-07, through v0.18.0)
+## Current state (as of 2026-07, through v0.19.0)
 
 v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0**. The wire format between them is now content-addressable: substrate identity is the BLAKE3 `current_root` of the arena payload, not a monotonic generation counter. Old mache reading new arenas (or vice versa) fails loudly with a clear version-mismatch error rather than corrupting reads. See [CHANGELOG.md § v0.8.0](../CHANGELOG.md) for the full break, [ADR-0014](adr/0014-mache-in-constellation.md) for the architectural framing.
 
@@ -20,7 +20,7 @@ v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0
 - 27-of-28-language parsing via `leyline parse` (pure Go — in-process CGO tree-sitter removed in ADR-0012 step 4; only cue lacks a grammar). See [ARCHITECTURE.md § Interplay with ley-line-open](ARCHITECTURE.md#interplay-with-ley-line-open)
 - Two graph backends: `MemoryStore` (in-memory map for source ingestion) and `SQLiteGraph` (zero-copy SQL over ley-line-open `.db`)
 - NFS-only mount via `go-nfs` + `billy` (FUSE was removed in v0.7.0 per ADR-0006; for FUSE today, use `leyline serve` from ley-line-open)
-- MCP server with **18 tools**: 14 work standalone, 3 require ley-line-open enrichment (`semantic_search`, `get_type_info`, `get_diagnostics`), and `get_sheaf_status` reports the ley-line daemon's cache state (returns `{available: false}` when the daemon is unreachable, so it is safe to call anywhere); `find_smells` partially degrades on tree-sitter-only mounts (rules requiring `_ast` need a `.db` built by ley-line-open). The full list: `get_overview`, `find_callers`, `find_callees`, `find_definition`, `search`, `list_directory`, `read_file`, `semantic_search`, `write_file`, `get_type_info`, `get_diagnostics`, `get_sheaf_status`, `get_impact`, `get_communities`, `get_diagram`, `get_architecture`, `find_smells`, `resolve_ref`.
+- MCP server with **18 tools**, grouped by the ley-line-open artifact each needs (the `server.json` `_meta` tiers): **base** (14) needs only the `_ast` projection `leyline parse` produces; **lsp** (2 — `get_type_info`, `get_diagnostics`) needs the LSP pass; **embeddings** (1 — `semantic_search`) needs an embedding-carrying `.db`. There is no "standalone" tier — since v0.18.0 `leyline parse` is the sole source parser. `get_sheaf_status` reports the ley-line daemon's cache state (returns `{available: false}` when the daemon is unreachable, so it is safe to call anywhere); `find_smells` partially degrades on tree-sitter-only mounts (rules requiring `_ast` need a `.db` built by ley-line-open). The full list: `get_overview`, `find_callers`, `find_callees`, `find_definition`, `search`, `list_directory`, `read_file`, `semantic_search`, `write_file`, `get_type_info`, `get_diagnostics`, `get_sheaf_status`, `get_impact`, `get_communities`, `get_diagram`, `get_architecture`, `find_smells`, `resolve_ref`.
 - Write-back pipeline: validate (leyline validate op, pure Go) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins` (no re-ingest)
 - Draft mode: invalid writes save as drafts, node path stays stable, errors surface via `_diagnostics/`
 - Context awareness: virtual `context` files expose imports/globals to agents
