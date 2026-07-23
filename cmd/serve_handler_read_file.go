@@ -41,9 +41,9 @@ func readOneFileWithOrigin(g graph.Graph, path string) (*fileReadResult, error) 
 	// Handle virtual location file
 	if filepath.Base(path) == graph.LocationFile {
 		parentDir := filepath.Dir(path)
-		if parent, err := g.GetNode(parentDir); err == nil && parent.Properties != nil {
-			if loc, ok := parent.Properties["location"]; ok && len(loc) > 0 {
-				return &fileReadResult{Content: string(loc)}, nil
+		if parent, err := g.GetNode(parentDir); err == nil {
+			if loc := graph.PropString(parent, "location"); loc != "" {
+				return &fileReadResult{Content: loc}, nil
 			}
 		}
 		return nil, fmt.Errorf("not found: %s", path)

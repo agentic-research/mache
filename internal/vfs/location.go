@@ -25,15 +25,15 @@ func (h *LocationHandler) Stat(path string) *VEntry {
 	if err != nil {
 		return nil
 	}
-	loc, ok := node.Properties["location"]
-	if !ok || len(loc) == 0 {
+	loc := graph.PropString(node, "location")
+	if loc == "" {
 		return nil
 	}
 	return &VEntry{
 		Kind:    KindFile,
 		Size:    int64(len(loc)),
 		Perm:    0o444,
-		Content: loc,
+		Content: []byte(loc),
 	}
 }
 
@@ -43,11 +43,11 @@ func (h *LocationHandler) ReadContent(path string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	loc, ok := node.Properties["location"]
-	if !ok || len(loc) == 0 {
+	loc := graph.PropString(node, "location")
+	if loc == "" {
 		return nil, false
 	}
-	return loc, true
+	return []byte(loc), true
 }
 
 func (h *LocationHandler) ListDir(_ string) ([]DirExtra, bool) {
@@ -55,8 +55,8 @@ func (h *LocationHandler) ListDir(_ string) ([]DirExtra, bool) {
 }
 
 func (h *LocationHandler) DirExtras(parentPath string, node *graph.Node) []DirExtra {
-	if node != nil && node.Properties != nil {
-		if loc, ok := node.Properties["location"]; ok && len(loc) > 0 {
+	if node != nil {
+		if loc := graph.PropString(node, "location"); loc != "" {
 			return []DirExtra{{
 				Name: graph.LocationFile,
 				Kind: KindFile,

@@ -498,10 +498,7 @@ func (c *CompositeGraph) crossMountCallees(local Graph, fullID, subPath string, 
 		return nil
 	}
 
-	var langName string
-	if v, ok := node.Properties["lang"]; ok {
-		langName = string(v)
-	}
+	langName := PropString(node, "lang")
 	if langName == "" {
 		return nil
 	}

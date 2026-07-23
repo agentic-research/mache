@@ -137,11 +137,8 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	// Mirrors SQLiteWriter.GetNode: a dir node's `record` is its marshaled
 	// Properties. A dir node with inline Data instead won't unmarshal into the
 	// map shape — that's expected, and leaves Properties nil.
-	if kind == NodeKindDir && len(props) > 0 {
-		var p map[string][]byte
-		if json.Unmarshal(props, &p) == nil && len(p) > 0 {
-			node.Properties = p
-		}
+	if kind == NodeKindDir {
+		node.Properties = DecodeProps(props)
 	}
 
 	if kind == NodeKindFile {

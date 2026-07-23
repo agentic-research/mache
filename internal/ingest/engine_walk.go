@@ -251,14 +251,11 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// TestEngine_MethodReceiverShape_RegistersBareLeafDef.
 		if fm, ok := match.(FileMeta); ok {
 			if l := fm.Lang(); l != "" {
-				if node.Properties == nil {
-					node.Properties = make(map[string][]byte)
-				}
-				node.Properties["lang"] = []byte(l)
+				graph.SetPropString(node, "lang", l)
 
 				// Go package name, for qualified def resolution.
 				if pkg := fm.PackageName(); pkg != "" {
-					node.Properties["pkg"] = []byte(pkg)
+					graph.SetPropString(node, "pkg", pkg)
 				}
 			}
 		}
@@ -266,11 +263,8 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// Store structured imports (avoids regex re-parsing at query time).
 		// Independent of walker type — persist whenever fileImports is non-nil.
 		if fileImports != nil {
-			if node.Properties == nil {
-				node.Properties = make(map[string][]byte) // coverage:ignore
-			} // coverage:ignore
 			if importJSON, err := json.Marshal(fileImports); err == nil {
-				node.Properties["imports"] = importJSON
+				graph.SetPropRaw(node, "imports", importJSON)
 			}
 		}
 		store.AddNode(node)
@@ -281,9 +275,9 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				return fmt.Errorf("add def %s -> %s: %w", name, id, err) // coverage:ignore
 			} // coverage:ignore
 			// Register qualified definition (package.name → directory ID)
-			if node.Properties != nil {
-				if pkg, ok := node.Properties["pkg"]; ok && len(pkg) > 0 {
-					qualKey := string(pkg) + "." + name
+			{
+				if pkg := graph.PropString(node, "pkg"); pkg != "" {
+					qualKey := pkg + "." + name
 					if err := store.AddDef(qualKey, id); err != nil {
 						return fmt.Errorf("add qualified def %s -> %s: %w", qualKey, id, err) // coverage:ignore
 					} // coverage:ignore
@@ -407,14 +401,12 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		if hasScope && absSourceFile != "" {
 			if ds, ok := match.(DocScope); ok {
 				src := ds.ScopeSource()
-				if node.Properties == nil {
-					node.Properties = make(map[string][]byte)
-				}
 				relPath, err := filepath.Rel(e.RootPath, absSourceFile)
 				if err == nil {
 					startLine := byteOffsetToLine(src, extStart)
 					endLine := byteOffsetToLine(src, extEnd)
-					node.Properties["location"] = fmt.Appendf(nil, "%s:%d:%d", relPath, startLine, endLine)
+					graph.SetPropString(node, "location",
+						fmt.Sprintf("%s:%d:%d", relPath, startLine, endLine))
 				}
 			}
 		}
@@ -444,11 +436,8 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// packages (bead mache-6fbaf1, F3).
 		if as, ok := match.(ASTScope); ok {
 			if srcID, scopeID := as.ASTSourceID(), as.ASTScopeID(); srcID != "" && scopeID != "" && scopeID != srcID && hasScope {
-				if node.Properties == nil {
-					node.Properties = make(map[string][]byte)
-				}
-				node.Properties["ast_source_id"] = []byte(srcID)
-				node.Properties["ast_scope_id"] = []byte(scopeID)
+				graph.SetPropString(node, "ast_source_id", srcID)
+				graph.SetPropString(node, "ast_scope_id", scopeID)
 			}
 		}
 		store.AddNode(node)

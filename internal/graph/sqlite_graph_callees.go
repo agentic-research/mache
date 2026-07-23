@@ -2,7 +2,6 @@ package graph
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,17 +57,11 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 			return nil, fmt.Errorf("query node properties for %s: %w", id, err)
 		}
 		if recordJSON.Valid && recordJSON.String != "" {
-			var props map[string][]byte
-			if json.Unmarshal([]byte(recordJSON.String), &props) == nil {
-				if lang, ok := props["lang"]; ok {
-					langName = string(lang)
-				}
-				if v, ok := props["ast_source_id"]; ok {
-					astSourceID = string(v)
-				}
-				if v, ok := props["ast_scope_id"]; ok {
-					astScopeID = string(v)
-				}
+			if props := DecodeProps([]byte(recordJSON.String)); props != nil {
+				scratch := &Node{Properties: props}
+				langName = PropString(scratch, "lang")
+				astSourceID = PropString(scratch, "ast_source_id")
+				astScopeID = PropString(scratch, "ast_scope_id")
 			}
 		}
 	}

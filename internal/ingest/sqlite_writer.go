@@ -617,10 +617,7 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 	// nodes (kind=1); file nodes (kind=0) carry rendered template
 	// content in `record` and don't go through this path.
 	if kind == graph.NodeKindDir && record.Valid && record.String != "" {
-		var props map[string][]byte
-		if json.Unmarshal([]byte(record.String), &props) == nil && len(props) > 0 {
-			n.Properties = props
-		}
+		n.Properties = graph.DecodeProps([]byte(record.String))
 	}
 	return n, nil
 }
