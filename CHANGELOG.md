@@ -6,6 +6,61 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **`server.json` now describes tiers, not an optional dependency.** The
+  `_meta…/tools` block split tools into `standalone` (15) vs
+  `requires-ley-line-open` (3) — but nothing has been standalone since v0.18.0
+  made `leyline parse` the sole source parser. Tools are now grouped by the
+  ley-line-open artifact they need: `base` (14), `lsp` (2), `embeddings` (1),
+  `any` (1). `optional-deps` becomes `required-deps`, and its version floor is
+  now **derived** from the pin mache actually verifies (`leyline.BinaryVersion`)
+  instead of a separately-maintained string that had drifted to `0.4.5` against
+  a `v0.8.0` pin. Consumers reading the `_meta` block should expect the new keys.
+- **`task image` tags from `internal/buildinfo/version.txt`.** It hardcoded
+  `mache:0.8.0` — ten releases stale — so `task image` produced a
+  wrongly-tagged artifact and the documented `docker run` line referenced an
+  image that was never published.
+
+### Fixed
+
+- **Node `Properties` survive to serve time.** `SQLiteWriter` persists a dir
+  node's `Properties` (`lang` / `pkg` / `imports`) into the nodes-table
+  `record` column, and the build-time reader restored them — but
+  `NodesTableReader.GetNode` (the **serve** path) never selected `record`, so
+  every construct read from a `.db` silently lost them. Qualified-callee
+  resolution had been papering over this with a regex that scraped Go `import`
+  statements out of context text. The `record` fetch is guarded SQL-side
+  (`CASE WHEN kind = dir`) so file-node content is never shipped just to answer
+  a `GetNode`.
+- **Phantom `json_extract` columns in the scan query.** Field paths were pulled
+  from name templates with a regex over the raw string, so a literal dot in
+  surrounding text (`report.txt {{.id}}`) produced a bogus `$.txt` column that
+  always resolved NULL. Templates are now parsed and only genuine field
+  references are collected.
+- **Dot imports are no longer mis-resolved.** The deleted import regex could not
+  capture `.` in its alias group, so `. "os"` silently degraded into a normal
+  `os` import.
+
+### Internal
+
+- Regex removed from every place it was doing heuristical matching: the two
+  leyline test helpers now call the production `leyline.ResolveBinary`, and two
+  production regexes were replaced with structural matching (a digit check for
+  ISO date prefixes; `text/template` parsing for field references). The two that
+  remain are justified in place — one compiles a regex supplied by the schema
+  author in a tree-sitter `#match?` predicate (the regex *is* the contract).
+  A `go/ast`-based ratchet fails any new `regexp` import that lacks a reason.
+- New repo invariants, all auto-running under `task test` → `task ci` →
+  pre-push: dependency usage-surface analysis (fails on a new minimal-surface
+  dependency without a justification; `task deps:surface` prints the report),
+  README-vs-registry tool-matrix pinning, and image-tag-vs-buildinfo pinning.
+- **`.golangci.yml` is now committed.** `task lint` previously ran on whatever
+  the installed golangci-lint defaulted to. The set is pinned explicitly and
+  gains `bodyclose`, `misspell`, `unconvert`, `wastedassign`, `copyloopvar`.
+- `task fmt` now also formats changed markdown, so the pre-commit `mdformat`
+  hook stops rewriting files out from under a commit.
+
 ### Removed
 
 - **Dead `leyline_fs` CGO FFI surface** (`internal/leyline/client.go`,
