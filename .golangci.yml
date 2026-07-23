@@ -1,0 +1,40 @@
+# Self-contained lint config so `task lint` is deterministic in-repo rather
+# than inheriting whatever golangci-lint's defaults happen to be in the
+# installed version. CI and pre-push both reach this file via `task lint`.
+#
+# Policy: start from the standard set, add only linters that are CLEAN on the
+# tree (or whose findings were fixed in the same change). Ratchet up
+# deliberately — a config that lands 50 pre-existing findings gets disabled by
+# the next person instead of fixed.
+version: "2"
+
+linters:
+  # `none` + an explicit list: pinning the set means a golangci-lint upgrade
+  # can't silently add or drop a linter under us.
+  default: none
+  enable:
+    # --- the standard set, made explicit ---
+    - errcheck     # unchecked errors
+    - govet        # the vet suite
+    - ineffassign  # assignments never used
+    - staticcheck  # the staticcheck/gosimple/stylecheck suite
+    - unused       # unused code
+
+    # --- added 2026-07-22 (mache-ced7e5); all clean on the tree at adoption ---
+    - bodyclose     # unclosed HTTP response bodies (leak)
+    - misspell      # misspellings in comments/strings
+    - unconvert     # redundant type conversions
+    - wastedassign  # a value assigned then overwritten unread
+    - copyloopvar   # `x := x` loop copies, dead since Go 1.22
+
+  # Deliberately NOT enabled yet — real findings, but each needs its own pass
+  # rather than being smuggled in with the config (counts measured 2026-07-22):
+  #   errorlint (9)  — %w vs %v wrapping, errors.As/Is correctness
+  #   nilerr    (14) — returning nil where a non-nil err was just checked
+  # Both are worth doing; see mache-ced7e5 for the follow-up note.
+
+# NOTE: no `formatters:` section on purpose. Formatting has exactly one owner —
+# `task fmt` / `task fmt:check` (gofumpt -extra) plus the pre-commit hook.
+# golangci-lint's gofumpt formatter defaults to extra-rules:false, so enabling
+# it here would create a SECOND, differently-configured formatting gate that
+# can disagree with the first.

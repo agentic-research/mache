@@ -523,7 +523,6 @@ func (c *OCIClient) PullBundle(ctx context.Context, ref string, parallelism int)
 	sem := make(chan struct{}, parallelism)
 	var wg sync.WaitGroup
 	for _, layer := range manifest.Layers {
-		layer := layer
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
