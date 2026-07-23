@@ -495,7 +495,7 @@ func printProfileSummary(t *testing.T, profiles []toolProfile) {
 	t.Logf("  %-20s %8s %12s %10s  %-7s  %s",
 		"tool", "ms", "alloc bytes", "allocs", "status", "notes")
 	for _, p := range sorted {
-		notes := ""
+		var notes string
 		switch p.Status {
 		case "ok":
 			notes = fmt.Sprintf("body=%d B", p.BodySize)
