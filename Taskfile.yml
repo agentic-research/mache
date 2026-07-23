@@ -124,6 +124,16 @@ tasks:
       - gofumpt -w -extra .
       - task: fmt:md
 
+  deps:surface:
+    desc: |
+      Report each external dependency's USAGE SURFACE — how many distinct
+      symbols mache actually uses from it, thinnest first. Deps at or below the
+      thin threshold are inline/remove candidates and must carry a justification
+      in internal/lint/dep_surface_test.go (the gate runs automatically under
+      `task test`; this target is just the human-readable view).
+    cmds:
+      - go test ./internal/lint/ -run TestDependencySurface -count=1 -v
+
   fmt:md:
     desc: |
       mdformat the markdown you've changed (modified + new), using the same
