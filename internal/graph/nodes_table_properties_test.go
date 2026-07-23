@@ -13,11 +13,13 @@ import (
 
 // TestNodesTableReader_RestoresProperties covers the serve-time half of the
 // Properties round-trip. SQLiteWriter marshals a dir node's Properties into the
-// `record` column, and the build-time SQLiteWriter.GetNode restores them — but
-// the serve-time reader used to ignore `record` entirely, so every construct
-// read from a .db silently lost lang/pkg/imports. That loss is why qualified
-// callee resolution had to fall back to regex-scraping context text
-// (mache-f930b6).
+// props column and the build-time SQLiteWriter.GetNode restores them — but the
+// serve-time reader used to ignore them entirely, so every construct read from
+// a .db silently lost lang/pkg/imports. That loss is why qualified callee
+// resolution had to fall back to regex-scraping context text (mache-f930b6).
+//
+// Properties lived in `record` until mache-90b89b moved them to their own
+// column; this fixture writes the current format.
 func TestNodesTableReader_RestoresProperties(t *testing.T) {
 	db := newPropsTestDB(t)
 
@@ -30,7 +32,7 @@ func TestNodesTableReader_RestoresProperties(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = db.Exec(
-		`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?,?,?,?,?,?,?)`,
+		`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, props) VALUES (?,?,?,?,?,?,?)`,
 		"pkg/Hello", "pkg", "Hello", NodeKindDir, 0, 0, string(props))
 	require.NoError(t, err)
 
@@ -46,11 +48,15 @@ func TestNodesTableReader_RestoresProperties(t *testing.T) {
 	require.Equal(t, map[string]string{"http": "net/http"}, got)
 }
 
-// TestNodesTableReader_FileRecordIsNotLoadedAsProperties pins the performance
-// guard. For FILE nodes `record` holds rendered content, and this reader is
-// deliberately lazy about content (ContentRef). The SQL-side CASE must keep
-// SQLite from shipping a file's body just to answer GetNode — and that content
-// must never be mistaken for Properties.
+// TestNodesTableReader_FileRecordIsNotLoadedAsProperties pins the separation
+// between content and Properties. For FILE nodes `record` holds rendered
+// content, and this reader is deliberately lazy about it (ContentRef).
+//
+// This used to need a SQL-side CASE WHEN kind guard, because Properties shared
+// `record` with content and GetNode would otherwise ship a file's whole body.
+// Since mache-90b89b the separation is structural — Properties are in props,
+// which never holds content — so the guard is gone and this test now pins that
+// the two columns stay unconfused.
 func TestNodesTableReader_FileRecordIsNotLoadedAsProperties(t *testing.T) {
 	db := newPropsTestDB(t)
 
@@ -99,7 +105,8 @@ func newPropsTestDB(t *testing.T) *sql.DB {
 	_, err = db.Exec(`CREATE TABLE nodes (
 		id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 		kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL,
-		record_id TEXT, record JSON, source_file TEXT
+		record_id TEXT, record JSON, source_file TEXT,
+		context BLOB, props JSON
 	)`)
 	require.NoError(t, err)
 	return db

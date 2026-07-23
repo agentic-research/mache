@@ -48,21 +48,19 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	id = NormalizeID(id)
 
 	// Determine langName + AST scope mapping from construct node Properties
-	// (stored in the record column) in a single query.
+	// (the props column since mache-90b89b) in a single query.
 	var langName, astSourceID, astScopeID string
-	if g.useNodesTable {
-		var recordJSON sql.NullString
+	if g.useNodesTable && ColumnExists(g.db, "nodes", "props") {
+		var propsJSON sql.NullString
 		// kind = 1 → graph.NodeKindDir (constructs are dirs).
-		if err := g.db.QueryRow("SELECT record FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON); err != nil && err != sql.ErrNoRows {
+		if err := g.db.QueryRow("SELECT props FROM nodes WHERE id = ? AND kind = 1", id).Scan(&propsJSON); err != nil && err != sql.ErrNoRows {
 			return nil, fmt.Errorf("query node properties for %s: %w", id, err)
 		}
-		if recordJSON.Valid && recordJSON.String != "" {
-			if props := DecodeProps([]byte(recordJSON.String)); props != nil {
-				scratch := &Node{Properties: props}
-				langName = PropString(scratch, "lang")
-				astSourceID = PropString(scratch, "ast_source_id")
-				astScopeID = PropString(scratch, "ast_scope_id")
-			}
+		if propsJSON.Valid && propsJSON.String != "" {
+			scratch := &Node{Properties: DecodeProps([]byte(propsJSON.String))}
+			langName = PropString(scratch, "lang")
+			astSourceID = PropString(scratch, "ast_source_id")
+			astScopeID = PropString(scratch, "ast_scope_id")
 		}
 	}
 

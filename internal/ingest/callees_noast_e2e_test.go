@@ -95,7 +95,7 @@ func TestSQLiteGraph_GetCallees_NodeRefsFallback_RealSchemaBuild(t *testing.T) {
 		assertNoWholeFileScope := func(t *testing.T, id string) {
 			t.Helper()
 			var recordJSON string
-			err := sg.DB().QueryRow("SELECT record FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON)
+			err := sg.DB().QueryRow("SELECT props FROM nodes WHERE id = ? AND kind = 1", id).Scan(&recordJSON)
 			require.NoError(t, err, "node %s must exist", id)
 			n := &graph.Node{Properties: graph.DecodeProps([]byte(recordJSON))}
 			srcID := graph.PropString(n, "ast_source_id")
@@ -112,7 +112,7 @@ func TestSQLiteGraph_GetCallees_NodeRefsFallback_RealSchemaBuild(t *testing.T) {
 	t.Run("regression: real leaf constructs still carry their own AST scope", func(t *testing.T) {
 		var recordJSON string
 		require.NoError(t, sg.DB().QueryRow(
-			"SELECT record FROM nodes WHERE id = ? AND kind = 1", "pkg/functions/Caller",
+			"SELECT props FROM nodes WHERE id = ? AND kind = 1", "pkg/functions/Caller",
 		).Scan(&recordJSON))
 		n := &graph.Node{Properties: graph.DecodeProps([]byte(recordJSON))}
 		srcID := graph.PropString(n, "ast_source_id")

@@ -46,6 +46,7 @@ type NodesTableReader struct {
 	sizeCache  sync.Map         // file path → int64
 	cache      *ContentCache    // FIFO-bounded rendered content
 	hasContext bool             // nodes table carries the context column (mache-b8fe72)
+	hasProps   bool             // nodes table carries the props column (mache-90b89b)
 }
 
 // ColumnExists reports whether table has a column named col. Readers use it
@@ -78,6 +79,7 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 		dirMode:    dirMode,
 		cache:      NewContentCache(cacheSize),
 		hasContext: ColumnExists(db, "nodes", "context"),
+		hasProps:   ColumnExists(db, "nodes", "props"),
 	}
 }
 
@@ -92,29 +94,34 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	var mtimeNano int64
 	var recordID sql.NullString
 	var context []byte
-	// Older / leyline-produced nodes tables predate the context column;
-	// only select it when present so GetNode stays backward-compatible
-	// (mache-b8fe72). node.Context feeds the `context` virtual file.
-	// Directory nodes carry their Properties (lang / pkg / imports) serialized
-	// into `record` by SQLiteWriter. Restore them here so a served .db behaves
-	// like a freshly-ingested MemoryStore — without this, every construct node
-	// read at serve time lost lang/pkg/imports, which is why qualified-callee
-	// resolution had to fall back to regex-scraping the context text
-	// (mache-f930b6).
+	// Older / leyline-produced nodes tables predate the context and props
+	// columns; only select each when present so GetNode stays backward-
+	// compatible (mache-b8fe72, mache-90b89b). node.Context feeds the
+	// `context` virtual file; props carries lang/pkg/imports, without which
+	// every construct read at serve time lost them and qualified-callee
+	// resolution fell back to scraping context text (mache-f930b6).
 	//
-	// The CASE guard is load-bearing for performance: for FILE nodes `record`
-	// holds the rendered content, and this reader is deliberately lazy about
-	// content (see ContentRef below). Filtering server-side means SQLite never
-	// ships a file's body just to answer a GetNode.
+	// props is read unconditionally by kind. The CASE WHEN kind guard this
+	// replaces existed only because Properties shared `record` with rendered
+	// file content, and shipping a file body just to answer a GetNode would
+	// defeat this reader's laziness. props never holds content, so there is
+	// nothing left to filter.
 	var props []byte
-	recordExpr := fmt.Sprintf("CASE WHEN kind = %d THEN record ELSE NULL END", NodeKindDir)
-	query := "SELECT kind, size, mtime, record_id, " + recordExpr + " FROM nodes WHERE id = ?"
-	dest := []any{&kind, &size, &mtimeNano, &recordID, &props}
+	cols := "kind, size, mtime, record_id"
+	if r.hasProps {
+		cols += ", props"
+	}
 	if r.hasContext {
-		query = "SELECT kind, size, mtime, record_id, " + recordExpr + ", context FROM nodes WHERE id = ?"
+		cols += ", context"
+	}
+	dest := []any{&kind, &size, &mtimeNano, &recordID}
+	if r.hasProps {
+		dest = append(dest, &props)
+	}
+	if r.hasContext {
 		dest = append(dest, &context)
 	}
-	err := r.db.QueryRow(query, id).Scan(dest...)
+	err := r.db.QueryRow("SELECT "+cols+" FROM nodes WHERE id = ?", id).Scan(dest...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -137,9 +144,7 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	// Mirrors SQLiteWriter.GetNode: a dir node's `record` is its marshaled
 	// Properties. A dir node with inline Data instead won't unmarshal into the
 	// map shape — that's expected, and leaves Properties nil.
-	if kind == NodeKindDir {
-		node.Properties = DecodeProps(props)
-	}
+	node.Properties = DecodeProps(props)
 
 	if kind == NodeKindFile {
 		if cachedSize, ok := r.sizeCache.Load(id); ok {

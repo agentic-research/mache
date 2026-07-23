@@ -235,15 +235,19 @@ func TestSQLiteGraph_GetCallees_RequiresLangProperty(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record JSON,
+			context BLOB,
+			props JSON
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
-		-- Construct dir with lang property base64-encoded ("go" → "Z28=")
-		INSERT INTO nodes VALUES ('caller', '', 'caller', 1, 0, 1, NULL, '{"lang":"Z28="}');
-		INSERT INTO nodes VALUES ('caller/source', 'caller', 'source', 0, 30, 1, NULL, 'func f() { target() }');
-		INSERT INTO nodes VALUES ('target', '', 'target', 1, 0, 1, NULL, '{"lang":"Z28="}');
+		-- Construct dir with a lang property. Before mache-90b89b this fixture
+		-- had to write '{"lang":"Z28="}' into record, base64 and all; the props
+		-- column stores the value as itself.
+		INSERT INTO nodes VALUES ('caller', '', 'caller', 1, 0, 1, NULL, NULL, NULL, '{"lang":"go"}');
+		INSERT INTO nodes VALUES ('caller/source', 'caller', 'source', 0, 30, 1, NULL, 'func f() { target() }', NULL, NULL);
+		INSERT INTO nodes VALUES ('target', '', 'target', 1, 0, 1, NULL, NULL, NULL, '{"lang":"go"}');
 		INSERT INTO node_defs VALUES ('target', 'target');
 	`)
 	require.NoError(t, err)
