@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,9 +41,9 @@ func TestSQLiteWriter_GetNode_RoundTripsProperties(t *testing.T) {
 		ID:      "pkg/methods/Foo.Bar",
 		Mode:    os.ModeDir | 0o555,
 		ModTime: time.Unix(1700000000, 0),
-		Properties: map[string][]byte{
-			"lang": []byte("go"),
-			"pkg":  []byte("foo"),
+		Properties: map[string]json.RawMessage{
+			"lang": []byte(`"go"`),
+			"pkg":  []byte(`"foo"`),
 		},
 	})
 
@@ -52,9 +53,9 @@ func TestSQLiteWriter_GetNode_RoundTripsProperties(t *testing.T) {
 	require.NotNil(t, got.Properties,
 		"GetNode must round-trip Properties — the engine's two-pass write "+
 			"pattern relies on this to preserve lang/pkg across the location/doc overwrite")
-	require.Equal(t, []byte("go"), got.Properties["lang"],
+	require.Equal(t, "go", graph.PropString(got, "lang"),
 		"lang Property must survive the AddNode → GetNode round-trip")
-	require.Equal(t, []byte("foo"), got.Properties["pkg"],
+	require.Equal(t, "foo", graph.PropString(got, "pkg"),
 		"pkg Property must survive the round-trip too")
 }
 

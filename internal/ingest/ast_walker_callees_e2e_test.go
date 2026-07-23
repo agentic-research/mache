@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,20 +117,20 @@ func TestMemoryStore_GetCallees_ASTScoped(t *testing.T) {
 	// Construct A carries the AST scope mapping for scope A.
 	store.AddNode(&graph.Node{
 		ID: "pkg/A", Mode: os.ModeDir | 0o555,
-		Properties: map[string][]byte{
-			"lang":          []byte("go"),
-			"ast_source_id": []byte("pkg.go"),
-			"ast_scope_id":  []byte("pkg.go/function_declaration"),
+		Properties: map[string]json.RawMessage{
+			"lang":          []byte(`"go"`),
+			"ast_source_id": []byte(`"pkg.go"`),
+			"ast_scope_id":  []byte(`"pkg.go/function_declaration"`),
 		},
 	})
 	// Construct B carries the mapping for scope B — a different construct in
 	// the same file. Its call must not leak into A's callees.
 	store.AddNode(&graph.Node{
 		ID: "pkg/B", Mode: os.ModeDir | 0o555,
-		Properties: map[string][]byte{
-			"lang":          []byte("go"),
-			"ast_source_id": []byte("pkg.go"),
-			"ast_scope_id":  []byte("pkg.go/function_declaration_1"),
+		Properties: map[string]json.RawMessage{
+			"lang":          []byte(`"go"`),
+			"ast_source_id": []byte(`"pkg.go"`),
+			"ast_scope_id":  []byte(`"pkg.go/function_declaration_1"`),
 		},
 	})
 
@@ -184,18 +185,18 @@ func TestSQLiteGraph_GetCallees_ASTScoped(t *testing.T) {
 	w.AddRoot(&graph.Node{ID: "pkg", Mode: os.ModeDir | 0o555})
 	w.AddNode(&graph.Node{
 		ID: "pkg/A", Mode: os.ModeDir | 0o555,
-		Properties: map[string][]byte{
-			"lang":          []byte("go"),
-			"ast_source_id": []byte("pkg.go"),
-			"ast_scope_id":  []byte("pkg.go/function_declaration"),
+		Properties: map[string]json.RawMessage{
+			"lang":          []byte(`"go"`),
+			"ast_source_id": []byte(`"pkg.go"`),
+			"ast_scope_id":  []byte(`"pkg.go/function_declaration"`),
 		},
 	})
 	w.AddNode(&graph.Node{
 		ID: "pkg/B", Mode: os.ModeDir | 0o555,
-		Properties: map[string][]byte{
-			"lang":          []byte("go"),
-			"ast_source_id": []byte("pkg.go"),
-			"ast_scope_id":  []byte("pkg.go/function_declaration_1"),
+		Properties: map[string]json.RawMessage{
+			"lang":          []byte(`"go"`),
+			"ast_source_id": []byte(`"pkg.go"`),
+			"ast_scope_id":  []byte(`"pkg.go/function_declaration_1"`),
 		},
 	})
 	w.AddNode(&graph.Node{ID: "helper/Do", Mode: os.ModeDir | 0o555})

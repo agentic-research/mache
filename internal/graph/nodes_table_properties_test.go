@@ -23,8 +23,8 @@ func TestNodesTableReader_RestoresProperties(t *testing.T) {
 
 	imports, err := json.Marshal(map[string]string{"http": "net/http"})
 	require.NoError(t, err)
-	props, err := json.Marshal(map[string][]byte{
-		"lang":    []byte("go"),
+	props, err := json.Marshal(map[string]json.RawMessage{
+		"lang":    json.RawMessage(`"go"`),
 		"imports": imports,
 	})
 	require.NoError(t, err)
@@ -38,7 +38,7 @@ func TestNodesTableReader_RestoresProperties(t *testing.T) {
 	node, err := r.GetNode("pkg/Hello")
 	require.NoError(t, err)
 	require.NotNil(t, node.Properties, "dir node Properties must survive the .db round-trip")
-	require.Equal(t, []byte("go"), node.Properties["lang"])
+	require.Equal(t, "go", PropString(node, "lang"))
 
 	// The structured import path loadImports() prefers must be reachable now.
 	var got map[string]string

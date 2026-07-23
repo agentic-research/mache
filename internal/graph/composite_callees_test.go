@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"io/fs"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestCompositeGraph_CrossMountCallees(t *testing.T) {
 		ID:         "functions/Charge",
 		Mode:       fs.ModeDir,
 		Children:   []string{"functions/Charge/source"},
-		Properties: map[string][]byte{"lang": []byte("go")},
+		Properties: map[string]json.RawMessage{"lang": []byte(`"go"`)},
 	})
 	auth.AddNode(&Node{
 		ID:   "functions/Charge/source",
@@ -82,7 +83,7 @@ func TestCompositeGraph_CrossMountCalleesDedupes(t *testing.T) {
 		ID:         "functions/Charge",
 		Mode:       fs.ModeDir,
 		Children:   []string{"functions/Charge/source"},
-		Properties: map[string][]byte{"lang": []byte("go")},
+		Properties: map[string]json.RawMessage{"lang": []byte(`"go"`)},
 	})
 	auth.AddNode(&Node{
 		ID:   "functions/Charge/source",
@@ -138,7 +139,7 @@ func TestCompositeGraph_CallExtractorPickerWinsOverGlobal(t *testing.T) {
 		ID:         "functions/Charge",
 		Mode:       fs.ModeDir,
 		Children:   []string{"functions/Charge/source"},
-		Properties: map[string][]byte{"lang": []byte("go")},
+		Properties: map[string]json.RawMessage{"lang": []byte(`"go"`)},
 	})
 	auth.AddNode(&Node{
 		ID:   "functions/Charge/source",
@@ -196,7 +197,7 @@ func TestCompositeGraph_CallExtractorPickerNilFallsThrough(t *testing.T) {
 		ID:         "functions/Charge",
 		Mode:       fs.ModeDir,
 		Children:   []string{"functions/Charge/source"},
-		Properties: map[string][]byte{"lang": []byte("go")},
+		Properties: map[string]json.RawMessage{"lang": []byte(`"go"`)},
 	})
 	auth.AddNode(&Node{
 		ID:   "functions/Charge/source",
@@ -246,7 +247,7 @@ func TestCompositeGraph_CrossMountCalleesNoExtractor(t *testing.T) {
 		ID:         "functions/Charge",
 		Mode:       fs.ModeDir,
 		Children:   []string{"functions/Charge/source"},
-		Properties: map[string][]byte{"lang": []byte("go")},
+		Properties: map[string]json.RawMessage{"lang": []byte(`"go"`)},
 	})
 	auth.AddNode(&Node{
 		ID:   "functions/Charge/source",

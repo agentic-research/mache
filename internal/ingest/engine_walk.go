@@ -377,7 +377,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Re-fetch current node (updated by recursion) — preserve Children + Properties
 		var currentChildren []string
-		var currentProps map[string][]byte
+		var currentProps map[string]json.RawMessage
 		if current, err := store.GetNode(id); err == nil {
 			currentChildren = current.Children
 			currentProps = current.Properties

@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -162,8 +163,8 @@ func TestLocationHandler(t *testing.T) {
 	store.AddNode(&graph.Node{
 		ID:   "pkg/Foo",
 		Mode: 0o40000,
-		Properties: map[string][]byte{
-			"location": []byte("internal/pkg/foo.go:10:25"),
+		Properties: map[string]json.RawMessage{
+			"location": []byte(`"internal/pkg/foo.go:10:25"`),
 		},
 	})
 
@@ -192,7 +193,7 @@ func TestLocationHandler(t *testing.T) {
 func TestLocationHandler_DirExtras(t *testing.T) {
 	h := &LocationHandler{Graph: graph.NewMemoryStore()}
 
-	node := &graph.Node{Properties: map[string][]byte{"location": []byte("foo.go:1:5")}}
+	node := &graph.Node{Properties: map[string]json.RawMessage{"location": []byte(`"foo.go:1:5"`)}}
 	extras := h.DirExtras("/pkg/Foo", node)
 	require.Len(t, extras, 1)
 	assert.Equal(t, "location", extras[0].Name)

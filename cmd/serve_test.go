@@ -2179,8 +2179,8 @@ func TestFindCallees_GenericNameWarning(t *testing.T) {
 		ID:       "pkg/svc",
 		Mode:     fs.ModeDir,
 		Children: []string{"pkg/svc/source"},
-		Properties: map[string][]byte{
-			"lang": []byte("go"),
+		Properties: map[string]json.RawMessage{
+			"lang": []byte(`"go"`),
 		},
 	})
 	store.AddNode(&graph.Node{
