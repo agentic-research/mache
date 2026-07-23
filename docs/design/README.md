@@ -21,7 +21,6 @@ and archive the spec.
 
 ## Active
 
-- [`specs/2026-07-22-node-properties-props-column-design.md`](specs/2026-07-22-node-properties-props-column-design.md) — de-overload the `record` column: node Properties move to a queryable `props` column (bead `mache-90b89b`). On-disk format change with a hard cutover.
 - [`specs/2026-07-02-analysis-substrate-consolidation-design.md`](specs/2026-07-02-analysis-substrate-consolidation-design.md) — the analysis-substrate consolidation thread.
 - [`specs/2026-06-24-mache-measurement-contracts.md`](specs/2026-06-24-mache-measurement-contracts.md) — what mache's four public claims mean as measurements. Contract, not harness; implementation is phased.
 - [`specs/2026-03-24-art-platform-release-infrastructure-design.md`](specs/2026-03-24-art-platform-release-infrastructure-design.md) — cross-repo ART release infrastructure. Still a draft, and mostly scoped to sibling repos.
