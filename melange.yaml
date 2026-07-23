@@ -2,10 +2,11 @@
 #
 #   melange build melange.yaml --signing-key melange.rsa --out-dir ./packages
 #
-# Builds the mache Go binary against the in-tree source. CGO is required
-# because internal/treesitter/elixir uses cgo bindings to the elixir
-# tree-sitter grammar. No ley-line linkage (see ADR-0006) — mache consumes
-# leyline as a pure-Go UDS daemon client, not via CGO/FFI.
+# Builds the mache Go binary against the in-tree source. The build is
+# CGO-free: in-process tree-sitter was removed in v0.18.0 (ADR-0012 step 4),
+# so there are no grammar bindings to link. No ley-line linkage either (see
+# ADR-0006) — mache consumes leyline as a pure-Go UDS daemon client, not via
+# CGO/FFI.
 
 package:
   name: mache

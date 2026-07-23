@@ -1,9 +1,10 @@
 ---
 status: current
-covers-version: v0.8.0
-last-verified: 2026-05-10
+covers-version: v0.19.0
+last-verified: 2026-07-22
 sources-of-truth:
   - examples/go-schema.json
+  - internal/ingest/engine_walk.go
   - internal/writeback/splice.go
 audience: [agents, contributors]
 supersedes: [docs/go-parsing-status.md]
@@ -43,35 +44,52 @@ in Go with no grouped form.
 
 ## Construct Status
 
-| Construct           | Status         | Isolated | Keyword in source   | Refactoring ready | Notes                                                                                                                                                               |
-| ------------------- | -------------- | -------- | ------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Functions           | complete       | yes      | yes (`func`)        | yes               | Atomic, standalone                                                                                                                                                  |
-| Methods (pointer)   | complete       | yes      | yes (`func (r *T)`) | yes               | Receiver captured without `*`                                                                                                                                       |
-| Methods (value)     | complete       | yes      | yes (`func (r T)`)  | yes               | Receiver captured as type name                                                                                                                                      |
-| Types (single)      | complete       | yes      | no (normalized)     | yes               | `type` stripped                                                                                                                                                     |
-| Types (grouped)     | complete       | yes      | no (normalized)     | yes               | Each type_spec isolated                                                                                                                                             |
-| Constants (single)  | complete       | yes      | no (normalized)     | yes               | `const` stripped                                                                                                                                                    |
-| Constants (grouped) | complete       | yes      | no (normalized)     | yes               | Each const_spec isolated                                                                                                                                            |
-| Variables (single)  | complete       | yes      | no (normalized)     | yes               | `var` stripped                                                                                                                                                      |
-| Variables (grouped) | complete       | yes      | no (normalized)     | yes               | Each var_spec isolated                                                                                                                                              |
-| `init()` functions  | complete       | yes      | yes                 | yes               | Engine dedups colliding names by appending `.from_<sourcefile>` (`engine.go::dedupSuffix`). Multiple `init()` in the same package each get a stable, isolated path. |
-| Generic functions   | complete       | yes      | yes                 | partial           | Source includes type params. Directory name lacks them (`Foo` not `Foo[T any]`). Acceptable for navigation.                                                         |
-| Generic types       | complete       | yes      | no (normalized)     | partial           | Same as generic functions.                                                                                                                                          |
-| Imports             | complete       | yes      | n/a                 | yes               | Captured under `{package}/imports/` per the Go schema; agents can list, read, add, and remove import entries.                                                       |
-| Struct fields       | not decomposed | n/a      | n/a                 | n/a               | Fields live in the type source but aren't individually addressable. By design — coarse granularity is sufficient for current refactoring use cases.                 |
-| Interface methods   | not decomposed | n/a      | n/a                 | n/a               | Method signatures live in the type source but aren't individually addressable. Same rationale as struct fields.                                                     |
+| Construct           | Status         | Isolated | Keyword in source   | Refactoring ready | Notes                                                                                                                                                                    |
+| ------------------- | -------------- | -------- | ------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Functions           | complete       | yes      | yes (`func`)        | yes               | Atomic, standalone                                                                                                                                                       |
+| Methods (pointer)   | complete       | yes      | yes (`func (r *T)`) | yes               | Receiver captured without `*`                                                                                                                                            |
+| Methods (value)     | complete       | yes      | yes (`func (r T)`)  | yes               | Receiver captured as type name                                                                                                                                           |
+| Types (single)      | complete       | yes      | no (normalized)     | yes               | `type` stripped                                                                                                                                                          |
+| Types (grouped)     | complete       | yes      | no (normalized)     | yes               | Each type_spec isolated                                                                                                                                                  |
+| Constants (single)  | complete       | yes      | no (normalized)     | yes               | `const` stripped                                                                                                                                                         |
+| Constants (grouped) | complete       | yes      | no (normalized)     | yes               | Each const_spec isolated                                                                                                                                                 |
+| Variables (single)  | complete       | yes      | no (normalized)     | yes               | `var` stripped                                                                                                                                                           |
+| Variables (grouped) | complete       | yes      | no (normalized)     | yes               | Each var_spec isolated                                                                                                                                                   |
+| `init()` functions  | complete       | yes      | yes                 | yes               | Engine dedups colliding names by appending `.from_<sourcefile>` (`engine_walk.go::dedupSuffix`). Multiple `init()` in the same package each get a stable, isolated path. |
+| Generic functions   | complete       | yes      | yes                 | partial           | Source includes type params. Directory name lacks them (`Foo` not `Foo[T any]`). Acceptable for navigation.                                                              |
+| Generic types       | complete       | yes      | no (normalized)     | partial           | Same as generic functions.                                                                                                                                               |
+| Imports             | complete       | yes      | n/a                 | yes               | Captured under `{package}/imports/` per the Go schema; agents can list, read, add, and remove import entries.                                                            |
+| Struct fields       | not decomposed | n/a      | n/a                 | n/a               | Fields live in the type source but aren't individually addressable. By design — coarse granularity is sufficient for current refactoring use cases.                      |
+| Interface methods   | not decomposed | n/a      | n/a                 | n/a               | Method signatures live in the type source but aren't individually addressable. Same rationale as struct fields.                                                          |
 
 ## Filesystem Layout
 
 ```
 {package}/
-  functions/{name}/source
-  methods/{Receiver}.{Name}/source
-  types/{Name}/source
-  constants/{name}/source
-  variables/{name}/source
-  imports/{path}/source
+  functions/{name}/           source  hover  diagnostics  definitions  references
+  methods/{Receiver}.{Name}/  source  hover  diagnostics  definitions  references
+  types/{Name}/               source  hover  diagnostics  definitions  references
+  constants/{name}/           source
+  variables/{name}/           source
+  imports/{path}/             source
 ```
+
+The names after each directory are the files inside it, all siblings.
+
+`source` is the only leaf declared inline. The four sibling files on
+`functions/`, `methods/`, and `types/` come from the schema's `lsp` **file set** —
+declared once under `file_sets` and pulled in per-node via `"include": ["lsp"]`,
+which `Topology.ResolveIncludes` ([`api/schema.go`](../../api/schema.go)) expands
+into each node's `Files` at parse time.
+
+These four are only populated when the `.db` carries the `_lsp*` tables that
+ley-line-open's LSP pass produces. On a plain `leyline parse` projection they
+resolve empty — the paths exist, the content doesn't.
+
+Constants, variables, and imports do **not** include the set, so they expose
+`source` alone. That asymmetry is a property of the schema as written, not a
+documented limitation of the LSP pass — gopls reports hover for constants and
+variables too, so the set could likely be extended to them.
 
 ## Not Blocking
 
