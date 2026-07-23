@@ -1,12 +1,19 @@
 ---
-title: "ADR-0006: Pure Go, MCP-First — Remove CGO and FUSE"
+title: 'ADR-0006: Pure Go, MCP-First — Remove CGO and FUSE'
 status: Implemented
 date: 2026-04-12
 tags: [architecture, pure-go, cgo, fuse, mcp, implemented]
 ---
 
-> **Status note:** Implemented — shipped in v0.18.0. CGO tree-sitter and FUSE were removed;
-> see [ADR-0012](0012-cgo-removal-migration.md) for the migration plan.
+> **Status note:** Implemented, but **in two stages** — not the single release this ADR
+> proposed below. FUSE was removed in **v0.7.0**, leaving NFS (`go-nfs` + `billy`) as the
+> only mount backend; for FUSE today, use `leyline serve` from ley-line-open. In-process
+> CGO tree-sitter outlived this ADR by eleven minors and was not removed until **v0.18.0**
+> (`mache-37ae8b`), via the [ADR-0012](0012-cgo-removal-migration.md) migration plan —
+> step 4 of which is what actually made the release binary `CGO_ENABLED=0`.
+>
+> The plan below still reads "a single versioned release (v0.7.0)". That is the proposal
+> as written in 2026-04, kept for provenance; it is not what happened.
 
 ## Context
 
