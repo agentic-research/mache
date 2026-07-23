@@ -71,6 +71,10 @@ func TestExtractSemver(t *testing.T) {
 	}
 }
 
+func TestPinnedBinaryReleaseIsV0102(t *testing.T) {
+	assert.Equal(t, "v0.10.2", leylineBinaryVersion)
+}
+
 func TestLeylineVersionMatchesPin(t *testing.T) {
 	pin := strings.TrimPrefix(leylineBinaryVersion, "v") // e.g. "0.7.0"
 	dir := t.TempDir()
