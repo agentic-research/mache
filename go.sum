@@ -6,8 +6,8 @@ github.com/Masterminds/semver/v3 v3.5.0 h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAw
 github.com/Masterminds/semver/v3 v3.5.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
 github.com/RoaringBitmap/roaring v1.9.4 h1:yhEIoH4YezLYT04s1nHehNO64EKFTop/wBhxv2QzDdQ=
 github.com/RoaringBitmap/roaring v1.9.4/go.mod h1:6AXUsoIEzDTFFQCe1RbGA6uFONMhvejWj5rqITANK90=
-github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.10.2 h1:KxsTqEVAHDixK9dANe4CpT0j48h+rXlim+TnesMTekI=
-github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.10.2/go.mod h1:/oPn4aVm3BOQiWPflmduFOKGjwHxBsGbzbuGqpxV28g=
+github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.10.3 h1:/17z76gs1TtsRjyX+KyAxwlmQaJEMARj0yjUXrmUI6M=
+github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.10.3/go.mod h1:/oPn4aVm3BOQiWPflmduFOKGjwHxBsGbzbuGqpxV28g=
 github.com/agext/levenshtein v1.2.1 h1:QmvMAjj2aEICytGiWzmxoE0x2KZvE0fvmqMOfy2tjT8=
 github.com/agext/levenshtein v1.2.1/go.mod h1:JEDfjyjHDjOF/1e4FlBE/PkbqA9OfWu2ki2W0IB5558=
 github.com/apparentlymart/go-textseg/v15 v15.0.0 h1:uYvfpb3DyLSCGWnctWKGj857c6ew1u1fNQOlOtuGxQY=

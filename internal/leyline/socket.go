@@ -882,6 +882,29 @@ func ResolveBinary(allowDownload bool) (string, error) {
 	return downloadLeyline(bundled)
 }
 
+// EnsureCachedBinary returns the exact pinned Leyline release from
+// ~/.mache/bin, downloading and SHA-verifying it when the cache is absent or
+// stale. Unlike ResolveBinary, this deliberately does not consult PATH:
+// conformance tests need to exercise the published artifact rather than a
+// same-version developer build.
+func EnsureCachedBinary() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	cached := filepath.Join(home, ".mache", "bin", "leyline")
+	if _, err := os.Stat(cached); err == nil {
+		if leylineVersionMatchesPin(cached) {
+			return cached, nil
+		}
+		log.Printf("cached leyline (%s) is not the pinned %s — refreshing published artifact", cached, leylineBinaryVersion)
+	}
+	if os.Getenv("MACHE_NO_LEYLINE") != "" {
+		return "", fmt.Errorf("no cached leyline matching the pinned %s available and MACHE_NO_LEYLINE is set", leylineBinaryVersion)
+	}
+	return downloadLeyline(cached)
+}
+
 func downloadLeyline(destPath string) (string, error) {
 	osName := runtime.GOOS // "darwin" or "linux"
 	arch := runtime.GOARCH // "arm64" or "amd64"

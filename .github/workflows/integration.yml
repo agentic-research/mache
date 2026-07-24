@@ -51,13 +51,9 @@ jobs:
           GOTOOLCHAIN: auto
         run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
 
-      # Provision the pinned leyline BEFORE any test step: `task test` runs the
-      # sole-parser projection tests, which fail-not-skip in CI without leyline
-      # (mache-01c467). ci.yml orders this the same way.
-      - name: Provision leyline
-        run: task leyline:ensure
-
       - name: Run Integration Tests
+        # `task test` owns required-backend provisioning and refreshes the
+        # exact SHA-pinned published Leyline artifact before Go tests run.
         run: task test -- -run TestIntegration -v ./tests/
 
       # Large-tier whole-repo E2E (mache-self, real corpora). These are gated

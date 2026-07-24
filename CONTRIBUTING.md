@@ -7,24 +7,38 @@ Mache is an early-stage research project. Contributions are welcome, but please 
 ```bash
 git clone https://github.com/agentic-research/mache.git
 cd mache
-task build
 task test
 ```
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.26+
 - [Task](https://taskfile.dev) (build runner)
+- Network access to download Mache's exact SHA-pinned
+  [ley-line-open](https://github.com/agentic-research/ley-line-open) release.
+  Leyline is Mache's source parser, not an optional test integration.
+
+`task test` provisions the published Leyline artifact into
+`~/.mache/bin/leyline` before running. The cache is refreshed when its version
+does not match Mache's pin, even if a same-version developer build exists on
+`PATH`.
 
 ## Development Workflow
 
 ```bash
 task fmt       # Format code (gofumpt)
 task vet       # Static analysis
-task lint      # golangci-lint
-task test      # Run tests
-task check     # All of the above
+task lint      # All linters: Go, docs, Actions, YAML, and structural smells
+task test      # Provision the pinned Leyline release, then run all tests
+task check     # Mutating development gate (formats, lints, and tests)
+task ci        # Non-mutating CI-equivalent gate used by the pre-push hook
 ```
+
+When adopting a new Leyline release, run `task leyline:adoption`. It downloads
+the pinned platform asset, verifies its published SHA-256 and `--version`, then
+runs the Leyline-facing consumer suites uncached. The network-dependent release
+check is deliberately explicit; routine `task ci` blocks on the deterministic
+consumer smoke without depending on GitHub release uptime.
 
 ## Submitting Changes
 
@@ -45,6 +59,8 @@ For large features or architectural changes, **please open an issue first** to d
 - Go standard conventions apply.
 - Code is formatted with [gofumpt](https://github.com/mvdan/gofumpt).
 - Pre-commit hooks enforce formatting and linting — install them with `pre-commit install`.
+- Pre-push runs `task ci`; unchanged Go package results remain eligible for
+  Go's test cache even with `-v`.
 
 ## Reporting Issues
 

@@ -71,8 +71,32 @@ func TestExtractSemver(t *testing.T) {
 	}
 }
 
-func TestPinnedBinaryReleaseIsV0102(t *testing.T) {
+func TestPinnedBinaryReleaseMatchesAdoptedContract(t *testing.T) {
 	assert.Equal(t, "v0.10.3", leylineBinaryVersion)
+}
+
+func TestPinnedBinarySHA256CoversSupportedPlatforms(t *testing.T) {
+	platforms := []string{"darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64"}
+	require.Len(t, leylinePinnedSHA256, len(platforms))
+	for _, platform := range platforms {
+		digest, ok := leylinePinnedSHA256[platform]
+		require.Truef(t, ok, "missing SHA-256 pin for %s", platform)
+		raw, err := hex.DecodeString(digest)
+		require.NoErrorf(t, err, "invalid SHA-256 pin for %s", platform)
+		require.Lenf(t, raw, sha256.Size, "wrong SHA-256 length for %s", platform)
+	}
+}
+
+func TestLivePinnedReleaseDownload(t *testing.T) {
+	if os.Getenv("MACHE_LIVE_LEYLINE_RELEASE") != "1" {
+		t.Skip("set MACHE_LIVE_LEYLINE_RELEASE=1 or run task leyline:verify-release")
+	}
+
+	dest := filepath.Join(t.TempDir(), "leyline")
+	got, err := downloadLeyline(dest)
+	require.NoError(t, err)
+	assert.Equal(t, dest, got)
+	assert.True(t, leylineVersionMatchesPin(got), "downloaded release must report the pinned version")
 }
 
 func TestLeylineVersionMatchesPin(t *testing.T) {
