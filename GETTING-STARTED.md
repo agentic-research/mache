@@ -6,13 +6,13 @@ For the architectural picture, see [ARCHITECTURE.md](docs/ARCHITECTURE.md). For 
 
 ## Install
 
-Build from source. Requires [Go 1.23+](https://go.dev/dl/) and [Task](https://taskfile.dev/installation/):
+Build from source. Requires [Go 1.26+](https://go.dev/dl/), [Task](https://taskfile.dev/installation/), and network access for the exact SHA-pinned [ley-line-open](https://github.com/agentic-research/ley-line-open) backend:
 
 ```bash
 git clone https://github.com/agentic-research/mache.git
 cd mache
 task build
-task install   # copies the binary to ~/.local/bin
+task install   # installs mache and provisions the pinned Leyline release
 ```
 
 **Platform notes:**
@@ -34,13 +34,13 @@ Running mache as an MCP server is **two decisions**: *what to point it at* (the 
 
 `mache serve <source>` accepts either a **directory** or a **`.db` file**, and the choice is a real quality tradeoff:
 
-| Source                        | Command                                                          | Parsing tier                                                                                                                                                | Freshness                                                                                                  | Best for                                                      |
-| ----------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| **Directory**                 | `mache serve .`                                                  | tree-sitter (built-in). `find_callers`/`find_callees` are accurate on Go; weaker on Rust/Python/TS. No `get_type_info`/`get_diagnostics`/`semantic_search`. | Live — re-reads as files change.                                                                           | Go, or a zero-dependency quick start.                         |
-| **ley-line `.db` (snapshot)** | `leyline parse .` → `mache serve ./that.db`                      | semantic. `_ast` + `_lsp` tables make `find_callers`, `get_type_info`, `get_diagnostics` accurate **across all languages**.                                 | Static — reflects the code as of the last `leyline parse`. Re-run to refresh.                              | Rust/Python/TS, or any time you want compiler-grade accuracy. |
-| **ley-line live (hot-swap)**  | `mache serve --control <block>` with the ley-line daemon running | semantic (same as above).                                                                                                                                   | Live — the daemon re-parses on edit and mache **hot-swaps** the graph on each generation bump (zero-copy). | The best of both: semantic accuracy *and* live updates.       |
+| Source                        | Command                                                          | Parsing tier                                                                                                                                                   | Freshness                                                                                                  | Best for                                                      |
+| ----------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Directory**                 | `mache serve .`                                                  | `leyline parse` → `_ast` → Mache's pure-Go `ASTWalker`. The exact pinned Leyline release is resolved from `PATH`, the local cache, or a SHA-verified download. | Live — re-parses as files change.                                                                          | The simplest source-code path.                                |
+| **ley-line `.db` (snapshot)** | `leyline parse .` → `mache serve ./that.db`                      | semantic. `_ast` + `_lsp` tables make `find_callers`, `get_type_info`, `get_diagnostics` accurate **across all languages**.                                    | Static — reflects the code as of the last `leyline parse`. Re-run to refresh.                              | Rust/Python/TS, or any time you want compiler-grade accuracy. |
+| **ley-line live (hot-swap)**  | `mache serve --control <block>` with the ley-line daemon running | semantic (same as above).                                                                                                                                      | Live — the daemon re-parses on edit and mache **hot-swaps** the graph on each generation bump (zero-copy). | The best of both: semantic accuracy *and* live updates.       |
 
-Rule of thumb: **Go → a directory is fine. Everything else → point at a ley-line `.db`** (or run the live daemon). Pointing stdio at a leyline-parsed `.db` (e.g. `mache serve --stdio ./code.db`) is **correct and recommended**, not a mistake — it's how you get the accurate tier. See [ley-line-open](https://github.com/agentic-research/ley-line-open) to build the `.db`, and [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) for which tools need which tables.
+Rule of thumb: **use a directory for the automatic base projection; use a pre-built Leyline `.db` when you want reproducible snapshot, LSP, or embedding enrichment; use the live daemon for hot-swap.** Pointing stdio at a Leyline-produced `.db` (for example, `mache serve --stdio ./code.db`) is correct and recommended. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) for which tools need which tables.
 
 > `--control` is **optional** — you only need it for the live hot-swap tier above. Basic config never requires it.
 
@@ -232,15 +232,15 @@ See [ADR-0005](docs/adr/0005-fca-schema-inference.md) and [ADR-0008](docs/adr/00
 
 ## Troubleshooting
 
-**`get_diagnostics` returns "no \_lsp table in database"** — the LSP-enrichment tools require a `.db` built by [ley-line-open](https://github.com/agentic-research/ley-line-open). Either pre-enrich with `ll-open enrich-lsp`, pass a `file` param to trigger live enrichment (requires the ley-line daemon), or skip those three tools — the other 14 work without ley-line-open. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
+**`get_diagnostics` returns "no \_lsp table in database"** — the LSP-enrichment tools require the optional Leyline LSP pass. Either pre-enrich the `.db`, pass a `file` parameter to trigger live enrichment, or use the base tools over the `_ast` projection. The parser itself is still Leyline in every source-code mode. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
-**`find_smells` rule "requires SQL tables [\_ast]" error** — same root cause. The five `_ast`-based smell rules (`magic_int_in_comparison`, `cyclomatic_complexity`, `long_function`, `long_file`, `duplicate_code`) need a `.db` built by ley-line-open. The other nine rules (`dead_code`, `untested_function`, `duplicate_definitions`, `god_file`, `fan_out_skew`, `sleep_in_test`, `drift_doc_broken_internal_link`, `drift_doc_dead_symbol_reference`, `drift_doc_outdated_count`) run on standalone mache.
+**`find_smells` reports a missing `_ast` table** — the input is not a complete Leyline source projection. Rebuild from the source directory or point Mache at a Leyline-produced `.db`. Mache no longer has a standalone in-process parser fallback.
 
 **Mount stuck or `umount` complains "device busy"** — see `mache unmount <mountpoint>` and the open-bead ergonomics in `mache-fsi`. macOS sometimes needs `diskutil unmount force`.
 
 **NFS mount fails on Linux with "no such device"** — install `nfs-common` (`apt-get install nfs-common`).
 
-**Build error about CGO** — mache's standalone path uses CGO tree-sitter; either install `gcc` / `clang` or use the ley-line-open-paired path (no CGO required for that).
+**No pinned Leyline binary is available** — run `task leyline:ensure`. It refreshes `~/.mache/bin/leyline` from the exact published release after verifying the platform SHA-256. `MACHE_NO_LEYLINE=1` intentionally disables that download and therefore cannot be used for source projection.
 
 ## Where to next
 

@@ -56,15 +56,9 @@ jobs:
       - name: Build
         run: task build
 
-      # Provision the pinned ley-line binary BEFORE tests. Without this the
-      # sole-parser projection tests (internal/ingest, lltest, examples,
-      # preset fixtures) skip on a cold cache and green CI would falsely imply
-      # they ran (mache-01c467). With CI set, lltest fails-not-skips if leyline
-      # is still missing, so a provisioning failure surfaces as red.
-      - name: Provision leyline
-        run: task leyline:ensure
-
       - name: Test
+        # `task test` owns required-backend provisioning and refreshes the
+        # exact SHA-pinned published Leyline artifact before Go tests run.
         run: task test
 
   lint:

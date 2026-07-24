@@ -1,9 +1,11 @@
 ---
 status: current
 covers-version: v0.19.0
-last-verified: 2026-07-21
+last-verified: 2026-07-24
 sources-of-truth:
   - internal/lang/lang.go
+  - internal/leyline/socket.go
+  - Taskfile.yml
   - cmd/serve_handlers.go
   - CHANGELOG.md
 audience: [contributors, maintainers]
@@ -17,7 +19,7 @@ This document is the architectural reference. If you're getting started for the 
 If you're looking for:
 
 - **Where things go** — see [Core Abstractions](#core-abstractions) and [Key File Reference](#key-file-reference)
-- **Why mache works without ley-line-open and what changes when you have it** — see [Interplay with ley-line-open](#interplay-with-ley-line-open)
+- **Why source projection requires ley-line-open and which enrichment tiers are optional** — see [Interplay with ley-line-open](#interplay-with-ley-line-open)
 - **The write pipeline** — see [Write Pipeline](#write-pipeline)
 - **Virtual directories (`callers/`, `callees/`, `_diagnostics/`)** — see [Virtual Directories](#virtual-directories)
 - **Past decisions** — see [Architectural Decision Records (ADRs)](#architectural-decision-records-adrs)

@@ -101,6 +101,38 @@ func TestResolveBinary_DownloadsWhenMissing(t *testing.T) {
 	assert.NotZero(t, fi.Mode()&0o111, "downloaded leyline must be executable")
 }
 
+func TestEnsureCachedBinary_ReplacesStaleCacheEvenWhenPathMatches(t *testing.T) {
+	content := []byte("#!/bin/sh\necho '" + pinnedVersionLine() + "'\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(content)
+	}))
+	defer srv.Close()
+
+	orig := leylineReleaseURLTemplate
+	leylineReleaseURLTemplate = srv.URL + "/%s/%s"
+	defer func() { leylineReleaseURLTemplate = orig }()
+	pinLeylineSHA(t, content)
+
+	pathDir := t.TempDir()
+	pathBinary := filepath.Join(pathDir, "leyline")
+	require.NoError(t, os.WriteFile(pathBinary, content, 0o755))
+	t.Setenv("PATH", pathDir)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("MACHE_NO_LEYLINE", "")
+	cached := filepath.Join(home, ".mache", "bin", "leyline")
+	require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0o755))
+	require.NoError(t, os.WriteFile(cached, []byte("#!/bin/sh\necho 'leyline 0.10.2 (open)'\n"), 0o755))
+
+	got, err := EnsureCachedBinary()
+	require.NoError(t, err)
+	assert.Equal(t, cached, got, "cache provisioning must not be short-circuited by PATH")
+	installed, err := os.ReadFile(cached)
+	require.NoError(t, err)
+	assert.Equal(t, content, installed)
+}
+
 // TestResolveBinary_RejectsTamperedDownload proves the SHA-pin blocks a download
 // whose bytes don't match the pinned release (supply-chain).
 func TestResolveBinary_RejectsTamperedDownload(t *testing.T) {

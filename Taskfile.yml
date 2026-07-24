@@ -13,8 +13,8 @@ tasks:
       - task --list
 
   install:
-    desc: Build, codesign, and install mache to ~/.local/bin
-    deps: [build]
+    desc: Build and install mache plus its exact published Leyline backend
+    deps: [build, leyline:ensure]
     cmds:
       - mkdir -p ~/.local/bin
       - cp {{.BINARY_NAME}} ~/.local/bin/mache
@@ -95,6 +95,7 @@ tasks:
 
   test:
     desc: Run all tests
+    deps: [leyline:ensure]
     cmds:
       # -timeout 20m (go test defaults to 10m/package): the cmd integration
       # suite runs right at the 10m boundary on the slower macOS CI runner and
@@ -111,6 +112,15 @@ tasks:
       - echo "Coverage report generated at coverage.html"
 
   lint:
+    desc: Run all linters (golangci-lint, docs:lint, lint:actions, lint:yaml, smells)
+    deps:
+      - lint:go
+      - docs:lint
+      - lint:actions
+      - lint:yaml
+      - smells
+
+  lint:go:
     desc: Run golangci-lint
     preconditions:
       - sh: command -v golangci-lint
@@ -241,18 +251,49 @@ tasks:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
 
   leyline:ensure:
-    desc: "Provision the pinned ley-line binary into the local cache (~/.mache/bin) so the sole-parser projection tests RUN deterministically instead of skipping. CI runs this before `task test` — otherwise projection tests skip on a cold cache and green CI falsely implies they ran (mache-01c467). Idempotent: a no-op when the pinned binary is already cached."
-    deps: [build]
+    desc: "Provision the exact published ley-line pin into ~/.mache/bin so backend and daemon-conformance tests cannot skip or substitute an unverified PATH build. Idempotent when the exact cached release is already available."
+    cmds:
+      - go run ./tools/leyline-ensure
+
+  leyline:verify-release:
+    desc: "Live adoption gate: download the pinned platform asset to a temporary path, verify its published SHA-256, and require its --version output to match the exact pin"
+    cmds:
+      - MACHE_LIVE_LEYLINE_RELEASE=1 go test -count=1 -run '^TestLivePinnedReleaseDownload$' ./internal/leyline
+
+  leyline:consumer-smoke:
+    desc: "Provision the exact pin, then run Leyline-facing consumer suites uncached so a stale local binary cannot turn live coverage into cached skips"
+    deps: [leyline:ensure]
+    cmds:
+      - go test -tags boltdb -race -count=1 ./internal/leyline ./internal/lltest ./internal/writeback ./tests
+
+  leyline:adoption:
+    desc: "Release-adoption gate: verify the published asset, then exercise Mache's consumers against the exact pin"
+    cmds:
+      # Keep the network-dependent release check explicit rather than making
+      # every ordinary CI run depend on GitHub release uptime. The deterministic
+      # consumer half is blocking in both check and ci below.
+      - task: leyline:verify-release
+      - task: leyline:consumer-smoke
+
+  leyline:install:
+    desc: "Build and install the pinned leyline binary from ../ley-line-open or provision into local cache"
+    preconditions:
+      - sh: command -v task
+        msg: "task required — https://taskfile.dev"
     cmds:
       - |
         set -euo pipefail
-        SRC="$(mktemp -d)"; DB="$(mktemp -t mache-llwarm.XXXXXX.db)"
-        printf 'package p\nfunc warm() {}\n' > "$SRC/warm.go"
-        # `mache build` → autoInvokeLeylineParse → ResolveBinary(true), which
-        # downloads the pinned leyline into ~/.mache/bin if absent (SHA-verified).
-        ./{{.BINARY_NAME}} build "$SRC" "$DB" >/dev/null
-        rm -rf "$SRC" "$DB"
-        echo "leyline provisioned into local cache"
+        LL=$(grep -oE 'leylineBinaryVersion = "v[0-9.]+"' internal/leyline/socket.go | grep -oE 'v[0-9.]+')
+        if [ -d "../ley-line-open" ]; then
+          echo "Building and installing leyline $LL from ../ley-line-open..."
+          task --dir ../ley-line-open install:full
+        else
+          echo "ley-line-open directory not found at ../ley-line-open; running leyline:ensure..."
+          task leyline:ensure
+        fi
+        if command -v leyline >/dev/null 2>&1; then
+          echo "Installed leyline: $(leyline --version 2>/dev/null || true)"
+        fi
 
   test:ast:
     desc: "ASTWalker correctness over real leyline _ast — fast named signal (skips if the pinned leyline isn't cached; never downloads). Replaces the retired sitter↔AST parity gate — in-process tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so there is no second projector to be parity WITH."
@@ -605,13 +646,10 @@ tasks:
       - task: fmt
       - task: vet
       - task: lint
+      - task: leyline:consumer-smoke
       - task: test:ast
       - task: test
       - task: validate
-      - task: docs:lint
-      - task: lint:actions
-      - task: lint:yaml
-      - task: smells
       - task: gates:preflight
       - task: gen:server-json:check
 
@@ -628,16 +666,13 @@ tasks:
     # real leyline `_ast` (the sitter parity gate was retired with CGO removal).
     desc: Non-mutating CI-equivalent gate — run this (or let the pre-push hook) to be 1:1 with CI before pushing
     cmds:
-      - task: test:ast
       - task: fmt:check
       - task: vet
       - task: lint
+      - task: leyline:consumer-smoke
+      - task: test:ast
       - task: test
       - task: validate
-      - task: docs:lint
-      - task: lint:actions
-      - task: lint:yaml
-      - task: smells
       - task: gates:preflight
       - task: gen:server-json:check
 
