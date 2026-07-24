@@ -3,29 +3,42 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'examples/**'
-      - 'LICENSE'
-      - '.gitignore'
   pull_request:
     branches: [main]
-    # Mirror push's paths-ignore so doc-only PRs don't run full CI
-    # (test + integration ≈ 5 min per matrix entry + exposure to
-    # known CGO flakes on changes that don't touch code).
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'examples/**'
-      - 'LICENSE'
-      - '.gitignore'
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      heavy: ${{ steps.classify.outputs.heavy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Classify change
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "heavy=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" HEAD -- . \
+            ':(glob,exclude)**/*.md' \
+            ':(glob,exclude)docs/**' \
+            ':(glob,exclude)examples/**' \
+            ':(exclude)LICENSE' \
+            ':(exclude).gitignore'; then
+            echo "heavy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "heavy=true" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -62,6 +75,8 @@ jobs:
         run: task test
 
   lint:
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,6 +145,8 @@ jobs:
           version: latest
 
   server-json-drift:
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
     # Self-maintaining MCP Registry surface — fails the build if the
     # committed server.json drifts from what tools/server-json-gen
     # would emit today. Mirrors the discipline ley-line-open ships
@@ -151,3 +168,27 @@ jobs:
 
       - name: server.json drift check
         run: task gen:server-json:check
+
+  required:
+    name: CI required
+    if: always()
+    needs: [changes, test, lint, server-json-drift]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every applicable CI job
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          HEAVY: ${{ needs.changes.outputs.heavy }}
+          TEST_RESULT: ${{ needs.test.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          SERVER_JSON_RESULT: ${{ needs.server-json-drift.result }}
+        run: |
+          test "$CHANGES_RESULT" = "success"
+          case "$HEAVY" in
+            false) exit 0 ;;
+            true) ;;
+            *) echo "change classifier produced invalid value: $HEAVY" >&2; exit 1 ;;
+          esac
+          test "$TEST_RESULT" = "success"
+          test "$LINT_RESULT" = "success"
+          test "$SERVER_JSON_RESULT" = "success"
