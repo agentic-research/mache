@@ -48,6 +48,11 @@ consumer smoke without depending on GitHub release uptime.
 1. **Commit your changes**. We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) messages (e.g., `fix: ...`, `feat: ...`, `docs: ...`).
 1. **Open a pull request** with a clear description of the change.
 
+Merges require the stable `CI required` and `Integration required` checks.
+Those aggregate checks wait for every applicable matrix job. Documentation-only
+changes still emit both checks, but skip the expensive Go and integration
+matrices.
+
 ## Scope of Contributions
 
 We welcome bug fixes, documentation improvements, and small feature additions.
