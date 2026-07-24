@@ -111,6 +111,15 @@ tasks:
       - echo "Coverage report generated at coverage.html"
 
   lint:
+    desc: Run all linters (golangci-lint, docs:lint, lint:actions, lint:yaml, smells)
+    deps:
+      - lint:go
+      - docs:lint
+      - lint:actions
+      - lint:yaml
+      - smells
+
+  lint:go:
     desc: Run golangci-lint
     preconditions:
       - sh: command -v golangci-lint
@@ -628,10 +637,6 @@ tasks:
       - task: test:ast
       - task: test
       - task: validate
-      - task: docs:lint
-      - task: lint:actions
-      - task: lint:yaml
-      - task: smells
       - task: gates:preflight
       - task: gen:server-json:check
 
@@ -654,10 +659,6 @@ tasks:
       - task: lint
       - task: test
       - task: validate
-      - task: docs:lint
-      - task: lint:actions
-      - task: lint:yaml
-      - task: smells
       - task: gates:preflight
       - task: gen:server-json:check
 
