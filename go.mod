@@ -8,7 +8,7 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.10.2
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/go-git/go-billy/v5 v5.9.0
+	github.com/go-git/go-billy/v5 v5.9.1
 	github.com/go-task/task/v3 v3.52.0
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/mark3labs/mcp-go v0.57.0
