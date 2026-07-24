@@ -254,6 +254,26 @@ tasks:
         rm -rf "$SRC" "$DB"
         echo "leyline provisioned into local cache"
 
+  leyline:install:
+    desc: "Build and install the pinned leyline binary from ../ley-line-open or provision into local cache"
+    preconditions:
+      - sh: command -v task
+        msg: "task required — https://taskfile.dev"
+    cmds:
+      - |
+        set -euo pipefail
+        LL=$(grep -oE 'leylineBinaryVersion = "v[0-9.]+"' internal/leyline/socket.go | grep -oE 'v[0-9.]+')
+        if [ -d "../ley-line-open" ]; then
+          echo "Building and installing leyline $LL from ../ley-line-open..."
+          task --dir ../ley-line-open install:full
+        else
+          echo "ley-line-open directory not found at ../ley-line-open; running leyline:ensure..."
+          task leyline:ensure
+        fi
+        if command -v leyline >/dev/null 2>&1; then
+          echo "Installed leyline: $(leyline --version 2>/dev/null || true)"
+        fi
+
   test:ast:
     desc: "ASTWalker correctness over real leyline _ast — fast named signal (skips if the pinned leyline isn't cached; never downloads). Replaces the retired sitter↔AST parity gate — in-process tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so there is no second projector to be parity WITH."
     cmds:

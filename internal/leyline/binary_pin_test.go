@@ -72,7 +72,7 @@ func TestExtractSemver(t *testing.T) {
 }
 
 func TestPinnedBinaryReleaseIsV0102(t *testing.T) {
-	assert.Equal(t, "v0.10.2", leylineBinaryVersion)
+	assert.Equal(t, "v0.10.3", leylineBinaryVersion)
 }
 
 func TestLeylineVersionMatchesPin(t *testing.T) {

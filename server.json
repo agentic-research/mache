@@ -81,7 +81,7 @@
     "io.github.agentic-research.mache/required-deps": {
       "io.github.agentic-research/ley-line-open": {
         "purpose": "Required. `leyline parse` is mache's sole source parser since v0.18.0 (ADR-0012 step 4) — it produces the _ast tables every source projection reads. Also supplies _lsp_* tables (get_type_info, get_diagnostics) and embeddings (semantic_search).",
-        "minimum-version": "0.10.2"
+        "minimum-version": "0.10.3"
       }
     },
     "io.github.agentic-research.mache/source-acceptance": {

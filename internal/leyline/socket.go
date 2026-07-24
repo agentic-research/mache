@@ -780,49 +780,43 @@ func (c *SocketClient) Prioritize(files []string) error {
 // tagged releases have downloadable leyline-<os>-<arch> assets — the go.mod
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
-// As of this pin, the daemon binary is v0.10.2 while go.mod's leyline-schema
-// stays v0.7.1 — deliberately. The release's generated compatibility document
-// reports wire_format_major=1 and compat_min_schema_version=0.6.0, so the
-// v0.7.1 client remains inside the daemon's supported [floor, binary] range.
-// The version-parity gate (mache-b8af69) enforces that range rather than
-// requiring the schema tag to equal the binary minor.
+// As of this pin, both the daemon binary and go.mod's leyline-schema module are
+// v0.10.3. The release's generated compatibility document reports
+// wire_format_major=1 and compat_min_schema_version=0.6.0, so older compatible
+// clients remain inside the daemon's supported [floor, binary] range. The
+// version-parity gate (mache-b8af69) enforces that range.
 //
 // Earlier context: v0.7.0 raised the compatibility floor to 0.6.0 and added
 // source_blobs / capnp_blobs / _ast_pointer plus the unified
 // daemon.sheaf.invalidate topic. v0.7.4 and v0.7.5 added AST columns without
 // changing the wire major; v0.8.0 added validate coverage, node_refs.qualifier,
 // and extraction epochs. The wire major and compatibility floor remain
-// unchanged in v0.10.2.
+// unchanged in v0.10.3.
 //
 // The version-check (leylineVersionMatchesPin) is EXACT major.minor.patch —
 // LLO patch releases have changed the emitted _ast schema (0.7.4 added
 // container_node_id, 0.7.5 added canonical_kind), so the patch does NOT
-// float (mache-608a3c). v0.10.2 ships all four leyline-<os>-<arch> daemon
+// float (mache-608a3c). v0.10.3 ships all four leyline-<os>-<arch> daemon
 // binaries (darwin/linux × amd64/arm64).
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets.
-// The go.mod leyline-schema pin only needs bumping when the WIRE format
-// changes (a new schema module tag is published) — a binary-version bump with
-// unchanged wire (like v0.10.2) does NOT require a schema bump; the parity gate
-// enforces the [floor, binary] range that makes this safe.
+// The go.mod leyline-schema pin only needs bumping when a schema module tag is
+// published. The parity gate enforces the [floor, binary] compatibility range.
 //
 // Doubles as this build's leyline schema-client version for the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch.
-const leylineBinaryVersion = "v0.10.2"
+const leylineBinaryVersion = "v0.10.3"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
 // compat_min_schema_version). The schema Go module
 // (clients/go/leyline-schema, go.mod pinned) is tagged SEPARATELY from the
-// binary and only re-cut when the capnp wire types change — so it lags the
-// binary version legitimately (v0.10.2 binary, but the wire has been
-// wire_format_major=1 / floor 0.6.0 since well before, so the newest schema
-// tag is still v0.7.1). The parity gate asserts the go.mod schema pin sits in
-// [floor, binary], NOT that it equals the binary's minor (which only held by
-// coincidence while everything was in the 0.7.x line). BUMP this when
-// ley-line-open raises compat_min_schema_version. (mache-b8af69 / mache-dcb808)
+// binary. The parity gate asserts the go.mod schema pin sits in [floor, binary]
+// rather than requiring equality, since compatible binary-only releases may
+// legitimately advance without a new schema tag. BUMP this when ley-line-open
+// raises compat_min_schema_version. (mache-b8af69 / mache-dcb808)
 const leylineSchemaCompatFloor = "v0.6.0"
 
 // leylineReleaseURLTemplate is the GitHub releases URL for the public
