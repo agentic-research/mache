@@ -1772,6 +1772,44 @@ func TestGraphRegistry_FallbackToBasePath(t *testing.T) {
 	assert.Equal(t, "/default/path", g.basePath)
 }
 
+type failingRootsSession struct {
+	id    string
+	calls int
+}
+
+func (*failingRootsSession) Initialize() {}
+
+func (*failingRootsSession) Initialized() bool { return true }
+
+func (*failingRootsSession) NotificationChannel() chan<- mcp.JSONRPCNotification {
+	return make(chan mcp.JSONRPCNotification)
+}
+
+func (s *failingRootsSession) SessionID() string { return s.id }
+
+func (s *failingRootsSession) ListRoots(context.Context, mcp.ListRootsRequest) (*mcp.ListRootsResult, error) {
+	s.calls++
+	return nil, fmt.Errorf("roots timeout")
+}
+
+func TestGraphRegistry_RootDiscoveryFailureWithoutBasePathDoesNotScanCWD(t *testing.T) {
+	registry := newGraphRegistry("", nil)
+	session := &failingRootsSession{id: "rootless-session"}
+
+	g := registry.resolveSession(context.Background(), session)
+	_, err := g.ListChildren("")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace root")
+	assert.Contains(t, err.Error(), "--path")
+	assert.NotEqual(t, ".", g.basePath)
+
+	// Cache the diagnostic graph so subsequent tool calls do not repeat the
+	// client's ListRoots timeout.
+	assert.Same(t, g, registry.resolveSession(context.Background(), session))
+	assert.Equal(t, 1, session.calls)
+}
+
 func TestGraphRegistry_SessionRouting(t *testing.T) {
 	registry := newGraphRegistry("/default", nil)
 

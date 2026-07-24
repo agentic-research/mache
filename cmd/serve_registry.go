@@ -26,12 +26,14 @@ import (
 
 // graphRegistry maps MCP sessions to per-workspace graphs.
 // Each session's workspace root (from ListRoots) gets its own lazily-built
-// graph. Sessions without roots fall back to basePath (--path flag or CWD).
+// graph. Sessions without roots use an explicit basePath (--path); a shared
+// daemon with no base path returns a diagnostic rather than inheriting its CWD.
 type graphRegistry struct {
 	basePath        string   // --path flag default
 	args            []string // positional args from command line
 	graphs          sync.Map // rootPath -> *lazyGraph
 	sessions        sync.Map // sessionID -> rootPath
+	sessionErrors   sync.Map // sessionID -> *lazyGraph when workspace root discovery failed
 	repoCloneDir    string   // base clone dir for --repo mode (empty otherwise)
 	smellRulesDir   string   // external smell-rules dir resolved once at startup (env/.mache.json); find_smells rescans it per request
 	worktrees       sync.Map // sessionID -> worktree path (for cleanup)
@@ -99,6 +101,7 @@ func (r *graphRegistry) registerSession(sessionID, rootPath string) {
 
 func (r *graphRegistry) unregisterSession(sessionID string) {
 	r.sessions.Delete(sessionID)
+	r.sessionErrors.Delete(sessionID)
 	// Release hosted-mode repo clone ref if this session used one.
 	if repoURL, ok := r.sessionRepos.LoadAndDelete(sessionID); ok {
 		r.releaseRepoClone(repoURL.(string))
@@ -161,7 +164,32 @@ func (r *graphRegistry) graphForSession(sessionID string) *lazyGraph {
 	if rootPath, ok := r.sessions.Load(sessionID); ok {
 		return r.getOrCreateGraph(rootPath.(string))
 	}
-	return r.getOrCreateGraph(r.resolvedBasePath())
+	return r.fallbackGraphForSession(sessionID, nil)
+}
+
+// fallbackGraphForSession uses an explicitly configured base path when one is
+// available. A shared HTTP daemon has no safe implicit working directory:
+// launchd commonly starts it at filesystem root, so treating "." as a project
+// after ListRoots fails can recursively scan the entire machine.
+func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error) *lazyGraph {
+	if r.basePath != "" {
+		r.registerSession(sessionID, r.basePath)
+		return r.getOrCreateGraph(r.basePath)
+	}
+	if cached, ok := r.sessionErrors.Load(sessionID); ok {
+		return cached.(*lazyGraph)
+	}
+
+	detail := "the MCP client returned no roots"
+	if rootsErr != nil {
+		detail = rootsErr.Error()
+	}
+	errGraph := newErrorLazyGraph(fmt.Errorf(
+		"workspace root unavailable (%s); configure MCP roots or start mache with an explicit --path",
+		detail,
+	))
+	actual, _ := r.sessionErrors.LoadOrStore(sessionID, errGraph)
+	return actual.(*lazyGraph)
 }
 
 // wrapHandler turns a handler factory (graph → handler) into a session-aware
@@ -205,6 +233,9 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 	if rootPath, ok := r.sessions.Load(sid); ok {
 		return r.getOrCreateGraph(rootPath.(string))
 	}
+	if errGraph, ok := r.sessionErrors.Load(sid); ok {
+		return errGraph.(*lazyGraph)
+	}
 
 	// Hosted mode: ?repo= URL from HTTP context.
 	// This runs BEFORE CLI repo mode check because hosted mode has per-repo
@@ -214,7 +245,7 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		if err != nil {
 			log.Printf("clone %s for session %s: %v", repoURL, sid, err)
 			// Return an error-producing graph — don't silently serve wrong repo.
-			errLg := &lazyGraph{err: fmt.Errorf("clone %s: %w", repoURL, err)}
+			errLg := newErrorLazyGraph(fmt.Errorf("clone %s: %w", repoURL, err))
 			return errLg
 		}
 		r.sessionRepos.Store(sid, repoURL)
@@ -253,28 +284,41 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		return r.getOrCreateGraph(wtDir)
 	}
 
-	// Slow path: ask the client for its workspace roots.
-	// Use a short timeout — if the client doesn't support roots or can't
-	// respond, fall back immediately rather than blocking the tool call.
-	if rootsSession, ok := session.(server.SessionWithRoots); ok {
-		rootsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		result, err := rootsSession.ListRoots(rootsCtx, mcp.ListRootsRequest{})
-		if err == nil && len(result.Roots) > 0 {
-			if rootPath := rootURIToPath(result.Roots[0].URI); rootPath != "" {
-				r.registerSession(sid, rootPath)
-				log.Printf("session %s → %s", sid, rootPath)
-				return r.getOrCreateGraph(rootPath)
-			}
-		} else if err != nil {
-			log.Printf("ListRoots for session %s: %v (using default path)", sid, err)
-		}
+	rootPath, rootsErr := discoverSessionRoot(ctx, session)
+	if rootPath != "" {
+		r.registerSession(sid, rootPath)
+		log.Printf("session %s → %s", sid, rootPath)
+		return r.getOrCreateGraph(rootPath)
 	}
 
-	// Fallback: use --path or CWD, and cache so we don't retry ListRoots
-	fallback := r.resolvedBasePath()
-	r.registerSession(sid, fallback)
-	return r.getOrCreateGraph(fallback)
+	// Fall back only to an explicit --path. In shared-daemon mode, an empty
+	// base path must not inherit the supervisor's CWD (often filesystem root).
+	return r.fallbackGraphForSession(sid, rootsErr)
+}
+
+// discoverSessionRoot asks the client for its first workspace root. The short
+// timeout keeps unsupported or non-responsive clients from blocking a tool
+// call indefinitely.
+func discoverSessionRoot(ctx context.Context, session server.ClientSession) (string, error) {
+	rootsSession, ok := session.(server.SessionWithRoots)
+	if !ok {
+		return "", fmt.Errorf("client does not support MCP roots")
+	}
+
+	rootsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result, err := rootsSession.ListRoots(rootsCtx, mcp.ListRootsRequest{})
+	if err != nil {
+		return "", err
+	}
+	if len(result.Roots) == 0 {
+		return "", fmt.Errorf("client returned no workspace roots")
+	}
+	rootPath := rootURIToPath(result.Roots[0].URI)
+	if rootPath == "" {
+		return "", fmt.Errorf("client returned an invalid workspace root")
+	}
+	return rootPath, nil
 }
 
 // getGitHead returns the current git commit hash (first 12 chars) for the
@@ -403,6 +447,14 @@ type lazyGraph struct {
 	// invalidator. The router is the seam for daemon-pushed events,
 	// not a hard requirement for serving the graph.
 	sheafRouter *sheafEventRouter
+}
+
+func newErrorLazyGraph(err error) *lazyGraph {
+	lg := &lazyGraph{err: err}
+	// Mark initialization complete so a handler cannot replace the diagnostic
+	// by auto-detecting a schema from the process working directory.
+	lg.once.Do(func() {})
+	return lg
 }
 
 // SheafInvalidator exposes the cascade-invalidator the file watcher
