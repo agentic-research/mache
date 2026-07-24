@@ -4,29 +4,43 @@ on:
   pull_request:
     branches:
       - main
-    # Mirror push's paths-ignore so doc-only PRs don't pay
-    # the integration suite cost (~3 min per OS).
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'examples/**'
-      - 'LICENSE'
-      - '.gitignore'
   push:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'examples/**'
-      - 'LICENSE'
-      - '.gitignore'
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      heavy: ${{ steps.classify.outputs.heavy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Classify change
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "heavy=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" HEAD -- . \
+            ':(glob,exclude)**/*.md' \
+            ':(glob,exclude)docs/**' \
+            ':(glob,exclude)examples/**' \
+            ':(exclude)LICENSE' \
+            ':(exclude).gitignore'; then
+            echo "heavy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "heavy=true" >> "$GITHUB_OUTPUT"
+          fi
+
   integration:
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -64,3 +78,23 @@ jobs:
         env:
           MACHE_E2E_LARGE: '1'
         run: go test -tags boltdb -timeout 25m -run 'TestE2E_MacheOnMache|TestE2E_RealCorpora' ./cmd/
+
+  required:
+    name: Integration required
+    if: always()
+    needs: [changes, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every applicable integration job
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          HEAVY: ${{ needs.changes.outputs.heavy }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+        run: |
+          test "$CHANGES_RESULT" = "success"
+          case "$HEAVY" in
+            false) exit 0 ;;
+            true) ;;
+            *) echo "change classifier produced invalid value: $HEAVY" >&2; exit 1 ;;
+          esac
+          test "$INTEGRATION_RESULT" = "success"
