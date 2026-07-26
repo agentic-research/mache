@@ -106,6 +106,25 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 	assert.Equal(t, uint64(7), status.LastGeneration)
 }
 
+func TestSheafSubscriber_RejectsMalformedGeneration(t *testing.T) {
+	var handled atomic.Int32
+	sub := NewSheafSubscriber("", func(SheafInvalidateEvent) { handled.Add(1) })
+
+	err := sub.dispatch(map[string]any{
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"generation":       "not-a-number",
+			"prior_generation": "6",
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "generation")
+	assert.Zero(t, handled.Load(), "malformed events must not reach the cache invalidator")
+	assert.Zero(t, sub.Status().LastGeneration, "malformed events must not update subscriber state")
+}
+
 // TestSheafSubscriber_ReconnectsAfterDisconnect pins the reconnect-
 // with-backoff contract (option 2b from the c14c43 design call). When
 // the conn closes mid-stream, the subscriber loops with exponential

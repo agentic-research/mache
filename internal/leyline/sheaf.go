@@ -10,7 +10,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 
 	graph "github.com/agentic-research/mache/internal/graph"
 )
@@ -171,7 +173,11 @@ func (sc *SheafClient) InvalidateWithStalk(regionID int, newHash string, newData
 		return nil, fmt.Errorf("sheaf_invalidate: %v", errMsg)
 	}
 
-	return parseIntSlice(resp["invalidated"]), nil
+	invalidated, err := parseIntSlice(resp["invalidated"])
+	if err != nil {
+		return nil, fmt.Errorf("sheaf_invalidate: invalidated: %w", err)
+	}
+	return invalidated, nil
 }
 
 // Defect queries the global consistency defect score.
@@ -213,7 +219,11 @@ func (sc *SheafClient) Status() (SheafStatus, error) {
 	// microbench commit (cc30abe). Accept both shapes so the mock
 	// tests (which pass float64) and the live daemon (which passes a
 	// quoted string) both round-trip correctly.
-	s.Generation = parseUint64(resp["generation"])
+	generation, err := parseUint64(resp["generation"])
+	if err != nil {
+		return SheafStatus{}, fmt.Errorf("sheaf_status: generation: %w", err)
+	}
+	s.Generation = generation
 	if v, ok := resp["valid"].(float64); ok {
 		s.Valid = int(v)
 	}
@@ -416,34 +426,48 @@ func hashMembers(members []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// parseIntSlice extracts []int from a JSON-decoded []any (float64 values).
-func parseIntSlice(v any) []int {
+// parseIntSlice extracts []int from a JSON-decoded []any. It rejects every
+// malformed member so a daemon wire mismatch cannot silently become an empty
+// or partial invalidation set.
+func parseIntSlice(v any) ([]int, error) {
 	arr, ok := v.([]any)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("expected array, got %T", v)
 	}
 	result := make([]int, 0, len(arr))
-	for _, item := range arr {
-		if f, ok := item.(float64); ok {
-			result = append(result, int(f))
+	maxInt := uint64(^uint(0) >> 1)
+	for i, item := range arr {
+		n, err := parseUint64(item)
+		if err != nil {
+			return nil, fmt.Errorf("item %d: %w", i, err)
 		}
+		if n > maxInt {
+			return nil, fmt.Errorf("item %d: %d overflows int", i, n)
+		}
+		result = append(result, int(n))
 	}
-	return result
+	return result, nil
 }
 
 // parseUint64 accepts either a float64 (Go-stdlib JSON default for any
 // JSON number, including small Int64) or a string (capnp-json's
 // rendering of Int64 to avoid float64 precision loss past 2^53) and
-// returns the corresponding uint64. Returns 0 on any other shape.
-func parseUint64(v any) uint64 {
+// returns the corresponding uint64. Unexpected, fractional, negative, and
+// out-of-range values return an error rather than silently becoming zero.
+func parseUint64(v any) (uint64, error) {
 	switch x := v.(type) {
+	case uint64:
+		return x, nil
 	case float64:
-		return uint64(x)
+		if math.IsNaN(x) || math.IsInf(x, 0) || x < 0 || math.Trunc(x) != x {
+			return 0, fmt.Errorf("expected non-negative integer, got %v", x)
+		}
+		// Formatting then parsing prevents Go's float64→uint64 conversion
+		// from wrapping an out-of-range value at 2^64.
+		return strconv.ParseUint(strconv.FormatFloat(x, 'f', 0, 64), 10, 64)
 	case string:
-		var n uint64
-		_, _ = fmt.Sscanf(x, "%d", &n)
-		return n
+		return strconv.ParseUint(x, 10, 64)
 	default:
-		return 0
+		return 0, fmt.Errorf("expected number or decimal string, got %T", v)
 	}
 }

@@ -181,13 +181,43 @@ func TestBuildRestrictions_ThreeCommunities(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseIntSlice(t *testing.T) {
-	result := parseIntSlice([]any{0.0, 1.0, 5.0})
+	result, err := parseIntSlice([]any{0.0, 1.0, 5.0})
+	require.NoError(t, err)
 	assert.Equal(t, []int{0, 1, 5}, result)
 }
 
-func TestParseIntSlice_Nil(t *testing.T) {
-	assert.Nil(t, parseIntSlice(nil))
-	assert.Nil(t, parseIntSlice("not an array"))
+func TestParseIntSlice_RejectsMalformedWire(t *testing.T) {
+	for _, input := range []any{
+		nil,
+		"not an array",
+		[]any{1.0, "two"},
+		[]any{1.5},
+	} {
+		_, err := parseIntSlice(input)
+		assert.Error(t, err, "input %#v must not silently become an empty or partial slice", input)
+	}
+}
+
+func TestParseUint64_RejectsMalformedWire(t *testing.T) {
+	for _, input := range []any{
+		nil,
+		"abc",
+		"0x1f",
+		[]any{1.0},
+		-1.0,
+		1.5,
+	} {
+		_, err := parseUint64(input)
+		assert.Error(t, err, "input %#v must not silently become generation zero", input)
+	}
+}
+
+func TestParseUint64_AcceptsWireNumericForms(t *testing.T) {
+	for _, input := range []any{uint64(7), float64(7), "7"} {
+		got, err := parseUint64(input)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(7), got)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +389,39 @@ func TestStatus_ParsesQuotedGeneration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(7), s.Generation,
 		"quoted-string generation must be parsed as uint64 — see capnp-json Int64 encoding")
+}
+
+func TestStatus_RejectsMalformedGeneration(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"generation": "not-a-number",
+			"valid":      3.0,
+			"total":      4.0,
+			"defect":     0.1,
+		}
+	})
+
+	sock, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer sock.Close() //nolint:errcheck
+
+	_, err = NewSheafClient(sock).Status()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "generation")
+}
+
+func TestInvalidate_RejectsMalformedInvalidatedRegions(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{"invalidated": "not-an-array"}
+	})
+
+	sock, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer sock.Close() //nolint:errcheck
+
+	_, err = NewSheafClient(sock).Invalidate(1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalidated")
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ package leyline
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -411,7 +412,9 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 			if !ok {
 				return
 			}
-			s.dispatch(ev)
+			if err := s.dispatch(ev); err != nil {
+				log.Printf("sheaf subscriber: rejecting malformed invalidate event: %v", err)
+			}
 		}
 	}
 }
@@ -448,33 +451,56 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 // Pre-v0.4.3 the daemon never delivered the event at all
 // (ley-line-open-5caa59), so the envelope wasn't observable from
 // mache's side until the fix shipped.
-func (s *SheafSubscriber) dispatch(ev map[string]any) {
+func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 	topic, _ := ev["topic"].(string)
 	if topic != "daemon.sheaf.invalidate" { // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 		// Only `daemon.sheaf.invalidate` is subscribed; silently
 		// ignore any other topic rather than emit log noise per event.
-		return // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
+		return nil // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 	} // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 
 	// Payload lives under `data`. A missing or wrong-typed `data`
-	// field means the daemon emitted a malformed event; treat as an
-	// empty payload rather than panic — the handler still observes
-	// the topic-was-delivered signal and can decide what to do.
-	data, _ := ev["data"].(map[string]any)
+	// field is a version-skew boundary failure: reject it before it can
+	// become a zero-value invalidation event.
+	data, ok := ev["data"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("data: expected object, got %T", ev["data"])
+	}
 
 	// Region IDs live in either `region_ids` or `invalidated`. Read
-	// both — the one that's present wins; if both are somehow present
-	// `region_ids` takes precedence. LLO PR #147 unified emit to
-	// `invalidated`, but the dual-name read is forward-compat cheap.
-	regions := parseIntSlice(data["region_ids"])
-	if len(regions) == 0 {
-		regions = parseIntSlice(data["invalidated"])
+	// both — a non-empty `region_ids` takes precedence, while an empty
+	// legacy field falls back to `invalidated`. A malformed present field is
+	// rejected rather than hidden by the fallback.
+	var regions []int
+	var err error
+	if raw, hasRegionIDs := data["region_ids"]; hasRegionIDs {
+		regions, err = parseIntSlice(raw)
+		if err != nil {
+			return fmt.Errorf("region_ids: %w", err)
+		}
+		if len(regions) == 0 {
+			regions, err = parseIntSlice(data["invalidated"])
+		}
+	} else {
+		regions, err = parseIntSlice(data["invalidated"])
+	}
+	if err != nil {
+		return fmt.Errorf("invalidated: %w", err)
+	}
+
+	generation, err := parseUint64(data["generation"])
+	if err != nil {
+		return fmt.Errorf("generation: %w", err)
+	}
+	priorGeneration, err := parseUint64(data["prior_generation"])
+	if err != nil {
+		return fmt.Errorf("prior_generation: %w", err)
 	}
 
 	parsed := SheafInvalidateEvent{
 		Invalidated:     regions,
-		Generation:      parseUint64(data["generation"]),
-		PriorGeneration: parseUint64(data["prior_generation"]),
+		Generation:      generation,
+		PriorGeneration: priorGeneration,
 	}
 	if v, ok := data["count"].(float64); ok {
 		parsed.Count = int(v)
@@ -500,6 +526,7 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) {
 	s.mu.Unlock()
 
 	s.handler(parsed)
+	return nil
 }
 
 // parseStringSlice extracts []string from a JSON-decoded []any.
