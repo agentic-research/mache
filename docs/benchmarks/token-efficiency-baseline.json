@@ -2,19 +2,24 @@
   "db": "<mache repo, examples/go-schema.json>",
   "constructs": 3502,
   "files": 402,
-  "arm_a_bytes": 3399122,
+  "arm_a_bytes": 3762675,
   "arm_b_bytes": 2620065,
-  "arm_a_avg": 8455,
+  "arm_a_avg": 9359,
   "arm_b_avg": 748,
-  "ratio": 11.303475935828876,
+  "ratio": 12.512032085561497,
+  "ratio_median": 26.08765560165975,
+  "ratio_mean": 69.4214487184733,
+  "ratio_p25": 11.330584192439863,
+  "ratio_p75": 68.83208020050125,
   "breakeven": 8.711442786069652,
+  "max_constructs_per_file": 156,
   "per_ext": {
     ".go": {
       "constructs": 3502,
       "files": 402,
-      "arm_a_avg": 8455,
+      "arm_a_avg": 9359,
       "arm_b_avg": 748,
-      "ratio": 11.303475935828876
+      "ratio": 12.512032085561497
     }
   },
   "caveats": [

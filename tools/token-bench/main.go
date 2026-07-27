@@ -27,6 +27,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -34,6 +35,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -44,14 +47,48 @@ type Result struct {
 	DB         string            `json:"db"`
 	Constructs int               `json:"constructs"`
 	Files      int               `json:"files"`
-	ArmABytes  int64             `json:"arm_a_bytes"` // whole-file retrieval
-	ArmBBytes  int64             `json:"arm_b_bytes"` // construct-granular retrieval
-	ArmAAvg    int64             `json:"arm_a_avg"`   // bytes per file
-	ArmBAvg    int64             `json:"arm_b_avg"`   // bytes per construct
-	Ratio      float64           `json:"ratio"`       // arm_a_avg / arm_b_avg
-	Breakeven  float64           `json:"breakeven"`   // constructs/file — above this, arm A wins
-	PerExt     map[string]ExtRow `json:"per_ext"`     // F4
+	ArmABytes  int64             `json:"arm_a_bytes"`  // whole-file retrieval, incl. cat -n prefixes
+	ArmBBytes  int64             `json:"arm_b_bytes"`  // construct-granular retrieval
+	ArmAAvg    int64             `json:"arm_a_avg"`    // bytes per file
+	ArmBAvg    int64             `json:"arm_b_avg"`    // bytes per construct
+	Ratio      float64           `json:"ratio"`        // ratio-of-means: arm_a_avg / arm_b_avg
+	RatioMed   float64           `json:"ratio_median"` // median PAIRED ratio — the headline statistic
+	RatioMean  float64           `json:"ratio_mean"`   // mean paired ratio (outlier-sensitive)
+	RatioP25   float64           `json:"ratio_p25"`
+	RatioP75   float64           `json:"ratio_p75"`
+	Breakeven  float64           `json:"breakeven"` // constructs/file — above this, arm A wins
+	MaxPerFile int               `json:"max_constructs_per_file"`
+	PerExt     map[string]ExtRow `json:"per_ext"` // F4
 	Caveats    []string          `json:"caveats"`
+	Warnings   []string          `json:"warnings,omitempty"`
+}
+
+// armACost is what the built-in Read tool actually puts in context: the file
+// bytes PLUS cat -n line-number prefixes ("%d\t" per line). Charging raw file
+// size understates arm A by ~18% on typical source, which understates the
+// win — measured, not assumed.
+func armACost(path string) (int64, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	lines := bytes.Count(b, []byte{'\n'})
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		lines++ // trailing line without a newline still gets numbered
+	}
+	overhead := 0
+	for i := 1; i <= lines; i++ {
+		overhead += len(strconv.Itoa(i)) + 1 // number + tab
+	}
+	return int64(len(b) + overhead), nil
+}
+
+func percentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	i := int(p * float64(len(sorted)-1))
+	return sorted[i]
 }
 
 // ExtRow is the per-extension breakout that answers F4 (does the win
@@ -99,6 +136,7 @@ func main() {
 type perFile struct {
 	constructs int
 	armB       int64
+	sizes      []int64 // per-construct bytes, for paired ratios
 }
 
 func run(dbPath string) (*Result, error) {
@@ -111,7 +149,7 @@ func run(dbPath string) (*Result, error) {
 	// Construct-granular rows: a function/method's own `source` leaf is exactly
 	// what find_definition returns. `record` holds the rendered content.
 	rows, err := db.Query(`
-		SELECT source_file, LENGTH(record)
+		SELECT source_file, LENGTH(record), SUBSTR(record, 1, 200)
 		  FROM nodes
 		 WHERE name = 'source'
 		   AND record IS NOT NULL
@@ -124,11 +162,21 @@ func run(dbPath string) (*Result, error) {
 
 	files := map[string]*perFile{}
 	total := 0
+	jsonRecords := 0
 	for rows.Next() {
 		var src string
 		var n int64
-		if err := rows.Scan(&src, &n); err != nil {
+		var head string
+		if err := rows.Scan(&src, &n, &head); err != nil {
 			return nil, err
+		}
+		// `record` is only the rendered content when the schema's
+		// content_template is a bare capture (go-schema uses "{{.scope}}").
+		// A JSON-object record means the template renders something else and
+		// LENGTH(record) is measuring the wrong thing — detect rather than
+		// silently mismeasure. Tracked at mache-fc737b.
+		if strings.HasPrefix(strings.TrimSpace(head), "{") && json.Valid([]byte(head)) {
+			jsonRecords++
 		}
 		f := files[src]
 		if f == nil {
@@ -137,6 +185,7 @@ func run(dbPath string) (*Result, error) {
 		}
 		f.constructs++
 		f.armB += n
+		f.sizes = append(f.sizes, n)
 		total++
 	}
 	if err := rows.Err(); err != nil {
@@ -164,15 +213,23 @@ func run(dbPath string) (*Result, error) {
 	}
 	byExt := map[string]*acc{}
 
+	var paired []float64
 	for src, f := range files {
-		st, err := os.Stat(src)
+		size, err := armACost(src)
 		if err != nil {
 			// File moved or deleted since the db was built — skip rather than
 			// guess a size, and keep it out of both arms so the ratio stays honest.
 			res.Constructs -= f.constructs
 			continue
 		}
-		size := st.Size()
+		if f.constructs > res.MaxPerFile {
+			res.MaxPerFile = f.constructs
+		}
+		for _, n := range f.sizes {
+			if n > 0 {
+				paired = append(paired, float64(size)/float64(n))
+			}
+		}
 		res.Files++
 		res.ArmABytes += size
 		res.ArmBBytes += f.armB
@@ -198,6 +255,27 @@ func run(dbPath string) (*Result, error) {
 		res.Ratio = float64(res.ArmAAvg) / float64(res.ArmBAvg)
 	}
 	res.Breakeven = float64(res.Constructs) / float64(res.Files)
+
+	// Paired ratios: each construct against ITS OWN file. With constructs/file
+	// spanning 1..156, ratio-of-means and mean-of-ratios diverge sharply
+	// (Jensen). Median is the headline because it is robust to the files that
+	// hold a hundred-plus tiny constructs.
+	if len(paired) > 0 {
+		sort.Float64s(paired)
+		res.RatioMed = percentile(paired, 0.5)
+		res.RatioP25 = percentile(paired, 0.25)
+		res.RatioP75 = percentile(paired, 0.75)
+		var sum float64
+		for _, r := range paired {
+			sum += r
+		}
+		res.RatioMean = sum / float64(len(paired))
+	}
+	if jsonRecords > 0 {
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"%d/%d records look like JSON objects — this schema's content_template likely renders something other than the raw record, so arm B is NOT the rendered size. See mache-fc737b.",
+			jsonRecords, total))
+	}
 
 	for ext, a := range byExt {
 		row := ExtRow{Constructs: a.constructs, Files: a.files}
