@@ -181,6 +181,42 @@ func TestSheafSubscriber_RejectsConflictingRegionAliases(t *testing.T) {
 	assert.Zero(t, handled.Load(), "conflicting aliases must not invalidate caches")
 }
 
+// TestResolveInvalidatedRegions covers the alias-resolution unit directly,
+// rather than only through dispatch. The precedence rule is load-bearing for
+// version skew: `invalidated` (LLO PR #147) and legacy `region_ids` may both
+// appear, and the legacy name wins only when the two agree. Driving the helper
+// in isolation pins the empty-list and legacy-precedence cases that the
+// dispatch-level tests (which need a well-formed generation) don't reach.
+func TestResolveInvalidatedRegions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		data    string
+		want    []int
+		wantErr string
+	}{
+		{name: "canonical alias only", data: `{"invalidated":[1,2]}`, want: []int{1, 2}},
+		{name: "legacy alias only", data: `{"region_ids":[3]}`, want: []int{3}},
+		{name: "agreeing aliases take legacy", data: `{"invalidated":[4],"region_ids":[4]}`, want: []int{4}},
+		{name: "empty list is a valid invalidation", data: `{"invalidated":[]}`, want: []int{}},
+		{name: "no alias at all", data: `{}`, wantErr: "missing region IDs"},
+		{name: "conflicting aliases", data: `{"invalidated":[1],"region_ids":[2]}`, wantErr: "conflicting"},
+		{name: "malformed canonical", data: `{"invalidated":["nope"]}`, wantErr: "invalidated"},
+		{name: "not an object", data: `["nope"]`, wantErr: "decode invalidate region aliases"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveInvalidatedRegions(json.RawMessage(tc.data))
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Nil(t, got, "no regions may escape a rejected payload")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestSheafSubscriber_ReconnectsAfterDisconnect pins the reconnect-
 // with-backoff contract (option 2b from the c14c43 design call). When
 // the conn closes mid-stream, the subscriber loops with exponential

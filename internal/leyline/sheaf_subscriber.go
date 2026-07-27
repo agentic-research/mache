@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -485,41 +486,12 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 		return fmt.Errorf("decode invalidate payload: %w", err)
 	}
 
-	// Region IDs live in either `region_ids` or `invalidated`. Decode every
-	// present alias strictly: accepting one valid field must never hide a
-	// malformed or contradictory second field. The legacy name retains
-	// precedence only when both aliases agree.
 	if payload.Generation == nil || payload.PriorGeneration == nil {
 		return fmt.Errorf("invalidate payload missing generation")
 	}
-	var aliases struct {
-		Invalidated json.RawMessage `json:"invalidated"`
-		RegionIDs   json.RawMessage `json:"region_ids"`
-	}
-	if err := json.Unmarshal(envelope.Data, &aliases); err != nil {
-		return fmt.Errorf("decode invalidate region aliases: %w", err)
-	}
-	invalidated, hasInvalidated, err := decodeRegionAlias("invalidated", aliases.Invalidated)
+	regions, err := resolveInvalidatedRegions(envelope.Data)
 	if err != nil {
 		return err
-	}
-	legacy, hasLegacy, err := decodeRegionAlias("region_ids", aliases.RegionIDs)
-	if err != nil {
-		return err
-	}
-	if !hasInvalidated && !hasLegacy {
-		return fmt.Errorf("invalidate payload missing region IDs")
-	}
-	if hasInvalidated && hasLegacy && !equalRegionIDs(invalidated, legacy) {
-		return fmt.Errorf("invalidate payload has conflicting invalidated and region_ids aliases")
-	}
-	regionIDs := invalidated
-	if hasLegacy {
-		regionIDs = legacy
-	}
-	regions := make([]int, len(regionIDs))
-	for i, regionID := range regionIDs {
-		regions[i] = int(regionID)
 	}
 
 	parsed := SheafInvalidateEvent{
@@ -559,6 +531,44 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 	return nil
 }
 
+// resolveInvalidatedRegions reads the region-ID list out of an invalidate
+// payload. The list arrives under either `invalidated` (LLO PR #147 unified
+// emit) or the legacy `region_ids`. Every present alias is decoded strictly:
+// accepting one valid field must never hide a malformed or contradictory
+// second field. The legacy name retains precedence only when both agree.
+func resolveInvalidatedRegions(data json.RawMessage) ([]int, error) {
+	var aliases struct {
+		Invalidated json.RawMessage `json:"invalidated"`
+		RegionIDs   json.RawMessage `json:"region_ids"`
+	}
+	if err := json.Unmarshal(data, &aliases); err != nil {
+		return nil, fmt.Errorf("decode invalidate region aliases: %w", err)
+	}
+	invalidated, hasInvalidated, err := decodeRegionAlias("invalidated", aliases.Invalidated)
+	if err != nil {
+		return nil, err
+	}
+	legacy, hasLegacy, err := decodeRegionAlias("region_ids", aliases.RegionIDs)
+	if err != nil {
+		return nil, err
+	}
+	if !hasInvalidated && !hasLegacy {
+		return nil, fmt.Errorf("invalidate payload missing region IDs")
+	}
+	if hasInvalidated && hasLegacy && !slices.Equal(invalidated, legacy) {
+		return nil, fmt.Errorf("invalidate payload has conflicting invalidated and region_ids aliases")
+	}
+	regionIDs := invalidated
+	if hasLegacy {
+		regionIDs = legacy
+	}
+	regions := make([]int, len(regionIDs))
+	for i, regionID := range regionIDs {
+		regions[i] = int(regionID)
+	}
+	return regions, nil
+}
+
 func decodeRegionAlias(name string, raw json.RawMessage) ([]uint32, bool, error) {
 	if raw == nil {
 		return nil, false, nil
@@ -571,18 +581,6 @@ func decodeRegionAlias(name string, raw json.RawMessage) ([]uint32, bool, error)
 		return nil, true, fmt.Errorf("decode invalidate %s: expected array, got null", name)
 	}
 	return ids, true, nil
-}
-
-func equalRegionIDs(a, b []uint32) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // setState updates the connection state under the write lock. Reason
