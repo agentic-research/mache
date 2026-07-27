@@ -873,6 +873,15 @@ var leylineReleaseURLTemplate = "https://github.com/agentic-research/ley-line-op
 // allowDownload is false, or when MACHE_NO_LEYLINE is set (the CI/offline
 // opt-out). A downloaded binary is cached at ~/.mache/bin/leyline for reuse.
 func ResolveBinary(allowDownload bool) (string, error) {
+	// Explicit developer override first (MACHE_LEYLINE_BINARY). Checked before
+	// every pinned tier so it is a decision, not a fallback: if it is set and
+	// broken we fail rather than quietly resolving something else.
+	if p, set, err := overrideBinary(); set {
+		if err != nil {
+			return "", err
+		}
+		return p, nil
+	}
 	// A leyline on PATH is used ONLY if it is the pinned version. A stale local
 	// install (the recurring "0.5.7 shadows the pin" trap) or a raw-main build
 	// reports a different version and produces different _ast output than the
