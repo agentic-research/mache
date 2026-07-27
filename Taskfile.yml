@@ -276,7 +276,7 @@ tasks:
       - task: leyline:consumer-smoke
 
   leyline:install:
-    desc: "Build and install the pinned leyline binary from ../ley-line-open or provision into local cache"
+    desc: "Install the PINNED leyline release into the local cache. Set MACHE_LEYLINE_DEV=1 to build from ../ley-line-open instead (dev only — the result is version-checked against the pin and fails loudly on drift)."
     preconditions:
       - sh: command -v task
         msg: "task required — https://taskfile.dev"
@@ -284,16 +284,50 @@ tasks:
       - |
         set -euo pipefail
         LL=$(grep -oE 'leylineBinaryVersion = "v[0-9.]+"' internal/leyline/socket.go | grep -oE 'v[0-9.]+')
-        if [ -d "../ley-line-open" ]; then
-          echo "Building and installing leyline $LL from ../ley-line-open..."
+        # The pinned RELEASE is the default. Previously this preferred a local
+        # ../ley-line-open build whenever that directory existed, installed it
+        # over the pin, and printed "installing leyline $LL" regardless of what
+        # it actually built — $LL was read and never used. A working tree is
+        # routinely ahead of (or behind) the pin: ours sits at v0.10.4-11-g1470030
+        # today. LLO ships _ast schema changes in PATCH releases, so silently
+        # preferring a dev build is the same divergence class the pin exists to
+        # prevent (mache-608a3c, mache-0acdf6).
+        if [ "${MACHE_LEYLINE_DEV:-}" = "1" ]; then
+          if [ ! -d "../ley-line-open" ]; then
+            echo "MACHE_LEYLINE_DEV=1 but ../ley-line-open is not present" >&2
+            exit 1
+          fi
+          echo "MACHE_LEYLINE_DEV=1 — building leyline from ../ley-line-open (pin is $LL)"
           task --dir ../ley-line-open install:full
+          BUILT=$(command -v leyline >/dev/null 2>&1 && leyline --version 2>/dev/null || echo "")
+          echo "built: ${BUILT:-unknown}"
+          # $LL is now USED, not just printed. A dev build that does not report
+          # the pin is legitimate (that is the point of the flag) but must be
+          # stated, because every _ast-derived number downstream inherits it.
+          case "$BUILT" in
+            *"${LL#v}"*) echo "matches pin $LL" ;;
+            *) echo "WARNING: built leyline does not report $LL — projections and smell baselines produced with it will diverge from CI. Set MACHE_LEYLINE_BINARY to make this explicit at run time." >&2 ;;
+          esac
         else
-          echo "ley-line-open directory not found at ../ley-line-open; running leyline:ensure..."
           task leyline:ensure
         fi
-        if command -v leyline >/dev/null 2>&1; then
-          echo "Installed leyline: $(leyline --version 2>/dev/null || true)"
-        fi
+
+  leyline:doctor:
+    desc: "Report every leyline mache can see and whether it matches the pin — diagnoses the version skew that silently changes _ast output."
+    cmds:
+      - |
+        set -uo pipefail
+        LL=$(grep -oE 'leylineBinaryVersion = "v[0-9.]+"' internal/leyline/socket.go | grep -oE 'v[0-9.]+')
+        echo "pin: $LL"
+        for p in "$(command -v leyline 2>/dev/null || true)" "$HOME/.mache/bin/leyline" "${MACHE_LEYLINE_BINARY:-}"; do
+          [ -n "$p" ] && [ -x "$p" ] || continue
+          V=$("$p" --version 2>/dev/null || echo unknown)
+          case "$V" in
+            *"${LL#v}"*) echo "  OK    $p -> $V" ;;
+            *)           echo "  DRIFT $p -> $V" ;;
+          esac
+        done
+        echo "note: a RUNNING daemon is used regardless of these; stop it to force re-resolution."
 
   test:ast:
     desc: "ASTWalker correctness over real leyline _ast — fast named signal (skips if the pinned leyline isn't cached; never downloads). Replaces the retired sitter↔AST parity gate — in-process tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so there is no second projector to be parity WITH."
