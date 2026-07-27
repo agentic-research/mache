@@ -463,9 +463,18 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 	// 4. Record content: inline rendered file content only. Properties have
 	// their own column now, so `record` means one of two things (a source data
 	// record, or inline content) instead of three (mache-90b89b).
-	var record []byte
+	//
+	// Bound as a STRING, not []byte. A []byte bind stores a BLOB, and SQLite
+	// never considers a BLOB equal to a TEXT value — so `WHERE record = ?`
+	// matched nodes written by WritableGraph.UpdateRecord (which binds a
+	// string) and silently missed every node written here. One column, two
+	// storage classes, results that depended on which writer touched a node
+	// last. LIKE and length() coerce and were unaffected, which is how it went
+	// unnoticed. Both writers now produce TEXT (mache-6bed54).
+	var record *string
 	if n.Data != nil {
-		record = n.Data
+		s := string(n.Data)
+		record = &s
 	}
 
 	// 4b. Properties → props, as real nested JSON.
