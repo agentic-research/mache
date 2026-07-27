@@ -125,6 +125,62 @@ func TestSheafSubscriber_RejectsMalformedGeneration(t *testing.T) {
 	assert.Zero(t, sub.Status().LastGeneration, "malformed events must not update subscriber state")
 }
 
+func TestSheafSubscriber_AcceptsNumericEventSequence(t *testing.T) {
+	var got SheafInvalidateEvent
+	sub := NewSheafSubscriber("", func(event SheafInvalidateEvent) { got = event })
+
+	err := sub.dispatch(map[string]any{
+		"seq":   1.0,
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"generation":       "7",
+			"prior_generation": "6",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, got.Invalidated)
+}
+
+func TestSheafSubscriber_RejectsMalformedLegacyAliasWhenCanonicalPresent(t *testing.T) {
+	var handled atomic.Int32
+	sub := NewSheafSubscriber("", func(SheafInvalidateEvent) { handled.Add(1) })
+
+	err := sub.dispatch(map[string]any{
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"region_ids":       []any{1.0, "malformed"},
+			"generation":       "7",
+			"prior_generation": "6",
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode invalidate region_ids")
+	assert.Zero(t, handled.Load(), "a malformed alias must not be ignored")
+}
+
+func TestSheafSubscriber_RejectsConflictingRegionAliases(t *testing.T) {
+	var handled atomic.Int32
+	sub := NewSheafSubscriber("", func(SheafInvalidateEvent) { handled.Add(1) })
+
+	err := sub.dispatch(map[string]any{
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"region_ids":       []any{2.0},
+			"generation":       "7",
+			"prior_generation": "6",
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting")
+	assert.Zero(t, handled.Load(), "conflicting aliases must not invalidate caches")
+}
+
 // TestSheafSubscriber_ReconnectsAfterDisconnect pins the reconnect-
 // with-backoff contract (option 2b from the c14c43 design call). When
 // the conn closes mid-stream, the subscriber loops with exponential

@@ -459,7 +459,15 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	var envelope daemonwire.Event
+	// Decode only the event-routing fields we consume. LLO v0.10.4 emits
+	// `seq` as a JSON number while its exported Event mirror currently marks
+	// that unrelated field `,string` (ley-line-open-3e2492). A narrow envelope
+	// keeps an unrelated producer/schema skew from dropping cache invalidation;
+	// the semantic payload itself remains decoded through the published type.
+	var envelope struct {
+		Topic *string         `json:"topic"`
+		Data  json.RawMessage `json:"data"`
+	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("decode event envelope: %w", err)
 	}
@@ -477,22 +485,37 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 		return fmt.Errorf("decode invalidate payload: %w", err)
 	}
 
-	// Region IDs live in either `region_ids` or `invalidated`. Read
-	// both — a non-empty `region_ids` takes precedence, while an empty
-	// legacy field falls back to `invalidated`. A malformed present field is
-	// rejected rather than hidden by the fallback.
+	// Region IDs live in either `region_ids` or `invalidated`. Decode every
+	// present alias strictly: accepting one valid field must never hide a
+	// malformed or contradictory second field. The legacy name retains
+	// precedence only when both aliases agree.
 	if payload.Generation == nil || payload.PriorGeneration == nil {
 		return fmt.Errorf("invalidate payload missing generation")
 	}
-	regionIDs := payload.Invalidated
-	var legacy struct {
-		RegionIDs []uint32 `json:"region_ids"`
+	var aliases struct {
+		Invalidated json.RawMessage `json:"invalidated"`
+		RegionIDs   json.RawMessage `json:"region_ids"`
 	}
-	if len(regionIDs) == 0 {
-		if err := json.Unmarshal(envelope.Data, &legacy); err != nil {
-			return fmt.Errorf("decode legacy region_ids: %w", err)
-		}
-		regionIDs = legacy.RegionIDs
+	if err := json.Unmarshal(envelope.Data, &aliases); err != nil {
+		return fmt.Errorf("decode invalidate region aliases: %w", err)
+	}
+	invalidated, hasInvalidated, err := decodeRegionAlias("invalidated", aliases.Invalidated)
+	if err != nil {
+		return err
+	}
+	legacy, hasLegacy, err := decodeRegionAlias("region_ids", aliases.RegionIDs)
+	if err != nil {
+		return err
+	}
+	if !hasInvalidated && !hasLegacy {
+		return fmt.Errorf("invalidate payload missing region IDs")
+	}
+	if hasInvalidated && hasLegacy && !equalRegionIDs(invalidated, legacy) {
+		return fmt.Errorf("invalidate payload has conflicting invalidated and region_ids aliases")
+	}
+	regionIDs := invalidated
+	if hasLegacy {
+		regionIDs = legacy
 	}
 	regions := make([]int, len(regionIDs))
 	for i, regionID := range regionIDs {
@@ -534,6 +557,32 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 
 	s.handler(parsed)
 	return nil
+}
+
+func decodeRegionAlias(name string, raw json.RawMessage) ([]uint32, bool, error) {
+	if raw == nil {
+		return nil, false, nil
+	}
+	var ids []uint32
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, true, fmt.Errorf("decode invalidate %s: %w", name, err)
+	}
+	if ids == nil {
+		return nil, true, fmt.Errorf("decode invalidate %s: expected array, got null", name)
+	}
+	return ids, true, nil
+}
+
+func equalRegionIDs(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // setState updates the connection state under the write lock. Reason

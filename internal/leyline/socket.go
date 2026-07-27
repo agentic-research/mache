@@ -79,6 +79,19 @@ type SocketClient struct {
 	closeErr  error
 }
 
+// DaemonResponseError is an error envelope returned by the ley-line daemon.
+//
+// Its message is kept separately so graph adapters can retain their public
+// error contracts (for example, mapping a missing node to graph.ErrNotFound)
+// while SendOpInto still rejects an unsuccessful typed response loudly.
+type DaemonResponseError struct {
+	Message string
+}
+
+func (e *DaemonResponseError) Error() string {
+	return fmt.Sprintf("daemon response: %s", e.Message)
+}
+
 // SubscribeDropped returns the cumulative number of events the Subscribe
 // goroutine has dropped because the consumer's channel buffer was full.
 // Non-zero values mean the consumer is falling behind the daemon's event
@@ -529,7 +542,7 @@ func (c *SocketClient) SendOpInto(req map[string]any, dest any) error {
 		return fmt.Errorf("unmarshal response envelope: %w", err)
 	}
 	if envelope.Error != nil {
-		return fmt.Errorf("daemon response: %s", *envelope.Error)
+		return &DaemonResponseError{Message: *envelope.Error}
 	}
 	if err := json.Unmarshal(line, dest); err != nil {
 		return fmt.Errorf("unmarshal response: %w", err)
