@@ -132,6 +132,32 @@
       "max_construct_lines": 384
     }
   ],
+  "per_answer": [
+    {
+      "arm": "A_whole_file",
+      "byte_ratio": 1,
+      "reads_per_answer": 1,
+      "effective_ratio": 1,
+      "reduction_pct": 0,
+      "pct_of_ceiling": 0
+    },
+    {
+      "arm": "W_line_cap",
+      "byte_ratio": 2.0130475302889095,
+      "reads_per_answer": 2.045117075956596,
+      "effective_ratio": 0.9843189683149626,
+      "reduction_pct": 0,
+      "pct_of_ceiling": 0
+    },
+    {
+      "arm": "B_construct",
+      "byte_ratio": 26.08765560165975,
+      "reads_per_answer": 1.0451170759565962,
+      "effective_ratio": 24.961467190440562,
+      "reduction_pct": 55.100455683871715,
+      "pct_of_ceiling": 95.99382523322598
+    }
+  ],
   "median_file_lines": 162,
   "caveats": [
     "Arm A charges the whole file once per file. An agent that reads the same file repeatedly pays it again; transcript analysis put 44.1% of Read bytes in multi-read files, so this understates arm A's real cost.",

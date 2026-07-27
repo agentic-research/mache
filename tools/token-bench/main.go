@@ -66,6 +66,7 @@ type BenchResult struct {
 	PerExt          map[string]ExtRow `json:"per_ext"` // F4
 	Ceiling         *Ceiling          `json:"ceiling,omitempty"`
 	Containment     []Containment     `json:"containment"`
+	PerAnswer       []PerAnswer       `json:"per_answer"`
 	MedianFileLines int               `json:"median_file_lines"`
 	Caveats         []string          `json:"caveats"`
 	Warnings        []string          `json:"warnings,omitempty"`
@@ -147,6 +148,20 @@ func main() {
 		os.Exit(1)
 	}
 	if *readShare > 0 {
+		// Per-ANSWER accounting. Arm A is the unit (1 read, whole file). Arm W
+		// uses grep-then-read (its best realistic policy); arm B uses aligned
+		// reads, because for a construct-granular index the search IS the read.
+		wReads, bReads := 2.05, 1.05
+		for _, c := range res.Containment {
+			if c.WindowLines == res.WindowLines {
+				wReads, bReads = c.GrepThenReadReads, c.AlignedReads
+			}
+		}
+		res.PerAnswer = []PerAnswer{
+			perAnswer("A_whole_file", 1, 1, *readShare),
+			perAnswer("W_line_cap", res.RatioWMed, wReads, *readShare),
+			perAnswer("B_construct", res.RatioMed, bReads, *readShare),
+		}
 		// Include this corpus's own measured ratio among the sample points so
 		// the artifact shows where this repo actually sits on the curve.
 		c := computeCeiling(*readShare, []float64{2, 5, 10, res.RatioMed, 50, 100})

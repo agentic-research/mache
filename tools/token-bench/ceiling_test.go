@@ -115,3 +115,30 @@ func TestComputeContainment_CapNeverBeatsTwoRoundTripsWhileSaving(t *testing.T) 
 	big := computeContainment(320, lines, 162)
 	assert.InDelta(t, 1.0, big.UnalignedReads, 0.001)
 }
+
+// Per-ANSWER is the unit a reader acts on, and it inverts the per-read story.
+// A policy that halves bytes but doubles round trips has saved nothing; the
+// earlier "a line cap captures 28.9 of 57.4 points" was true per read and is
+// ~0 per answer. Same error class as ratio-of-means: right arithmetic, wrong
+// unit.
+func TestPerAnswer_HalfBytesTwiceTheReadsSavesNothing(t *testing.T) {
+	p := perAnswer("W_line_cap", 2.01, 2.05, 0.574)
+	assert.InDelta(t, 0.98, p.EffectiveRatio, 0.01)
+	assert.Zero(t, p.ReductionPct, "effective ratio below 1 is no saving at all")
+	assert.Zero(t, p.PctOfCeiling)
+}
+
+// Construct-granular retrieval keeps almost all of its per-read advantage,
+// because it does not pay a positioning round trip — the search IS the read.
+func TestPerAnswer_ConstructKeepsItsAdvantage(t *testing.T) {
+	p := perAnswer("B_construct", 26.09, 1.05, 0.574)
+	assert.InDelta(t, 24.85, p.EffectiveRatio, 0.05) // 26.09/1.05
+	assert.Greater(t, p.PctOfCeiling, 95.0)
+}
+
+// Arm A is the unit: one read, whole file, zero reduction by definition.
+func TestPerAnswer_WholeFileIsTheUnit(t *testing.T) {
+	p := perAnswer("A_whole_file", 1, 1, 0.574)
+	assert.InDelta(t, 1.0, p.EffectiveRatio, 1e-9)
+	assert.Zero(t, p.ReductionPct)
+}

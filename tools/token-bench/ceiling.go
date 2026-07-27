@@ -81,3 +81,37 @@ func computeCeiling(readShare float64, ratios []float64) Ceiling {
 	}
 	return c
 }
+
+// PerAnswer converts a per-READ byte ratio into the per-ANSWER ratio a reader
+// should actually act on, by charging the round trips each policy needs.
+//
+// This corrects an error of the same class as reporting ratio-of-means instead
+// of the paired median: the arithmetic was right for a unit nobody cares about.
+// "A line cap captures 28.9 of 57.4 available points" is true per read and
+// close to false per answer, because the cap buys its byte saving by covering
+// less of the file and pays it straight back locating the construct.
+//
+//	effective_ratio = byte_ratio / reads_per_answer
+//
+// Arm A is the unit: one read, full file. A policy needing 2 reads at half the
+// bytes has an effective ratio of ~1.0 and has saved nothing.
+type PerAnswer struct {
+	Arm            string  `json:"arm"`
+	ByteRatio      float64 `json:"byte_ratio"`       // vs whole-file read
+	ReadsPerAnswer float64 `json:"reads_per_answer"` // round trips to a complete construct
+	EffectiveRatio float64 `json:"effective_ratio"`  // byte_ratio / reads
+	ReductionPct   float64 `json:"reduction_pct"`    // session-level, at this read_share
+	PctOfCeiling   float64 `json:"pct_of_ceiling"`
+}
+
+func perAnswer(arm string, byteRatio, reads, readShare float64) PerAnswer {
+	p := PerAnswer{Arm: arm, ByteRatio: byteRatio, ReadsPerAnswer: reads}
+	if reads > 0 {
+		p.EffectiveRatio = byteRatio / reads
+	}
+	p.ReductionPct = reductionAt(readShare, p.EffectiveRatio)
+	if readShare > 0 {
+		p.PctOfCeiling = p.ReductionPct / (readShare * 100) * 100
+	}
+	return p
+}
