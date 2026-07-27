@@ -191,3 +191,58 @@ func TestRun_WarnsWhenRecordLooksLikeJSON(t *testing.T) {
 	require.NotEmpty(t, res.Warnings, "must warn rather than silently mismeasure")
 	assert.Contains(t, res.Warnings[0], "mache-fc737b")
 }
+
+// The bounded-window arm is the honest null hypothesis: a line cap is free,
+// needs no ingestion, is language-agnostic, and works on Rust today. If it
+// captured most of the ceiling, mache's token argument would be worth only the
+// remainder. Measured on this repo it takes ~half — so the third arm must be
+// computed, never assumed.
+func TestArmWCost_CapsLongFilesButNotShortOnes(t *testing.T) {
+	dir := t.TempDir()
+	short := filepath.Join(dir, "short.go")
+	require.NoError(t, os.WriteFile(short, []byte("a\nb\nc\n"), 0o644))
+	full, err := armACost(short)
+	require.NoError(t, err)
+	win, err := armWCost(short, 80)
+	require.NoError(t, err)
+	assert.Equal(t, full, win, "a file shorter than the window costs the same as a full read")
+
+	long := filepath.Join(dir, "long.go")
+	body := make([]byte, 0, 320)
+	for i := 0; i < 160; i++ {
+		body = append(body, 'x', '\n')
+	}
+	require.NoError(t, os.WriteFile(long, body, 0o644))
+	fullL, err := armACost(long)
+	require.NoError(t, err)
+	winL, err := armWCost(long, 80)
+	require.NoError(t, err)
+	assert.Less(t, winL, fullL, "a 160-line file is capped by an 80-line window")
+	assert.InDelta(t, float64(fullL)/2, float64(winL), float64(fullL)*0.05,
+		"80 of 160 lines is about half the cost")
+}
+
+// All three arms must be ordered A >= W >= B. An inversion means an arm is
+// mismeasured, and the whole comparison is void.
+func TestRun_ThreeArmsAreOrdered(t *testing.T) {
+	files := map[string]string{}
+	cons := [][2]any{}
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("f%d.go", i)
+		b := ""
+		for j := 0; j < 200; j++ {
+			b += "line\n"
+		}
+		files[name] = b
+		cons = append(cons, [2]any{name, "func f(){}"})
+	}
+	dbPath := fixture(t, files, cons)
+	res, err := run(dbPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, 80, res.WindowLines)
+	assert.GreaterOrEqual(t, res.ArmABytes, res.ArmWBytes, "whole file >= window")
+	assert.GreaterOrEqual(t, res.ArmWBytes, res.ArmBBytes, "window >= construct")
+	assert.Greater(t, res.RatioWMed, 1.0, "a 200-line file is genuinely capped by an 80-line window")
+	assert.Greater(t, res.RatioBWMed, 1.0, "construct is smaller than the window")
+}

@@ -44,24 +44,29 @@ import (
 // Result is the emitted baseline record. Stable field names — a later run
 // diffs against a committed copy of this struct.
 type Result struct {
-	DB         string            `json:"db"`
-	Constructs int               `json:"constructs"`
-	Files      int               `json:"files"`
-	ArmABytes  int64             `json:"arm_a_bytes"`  // whole-file retrieval, incl. cat -n prefixes
-	ArmBBytes  int64             `json:"arm_b_bytes"`  // construct-granular retrieval
-	ArmAAvg    int64             `json:"arm_a_avg"`    // bytes per file
-	ArmBAvg    int64             `json:"arm_b_avg"`    // bytes per construct
-	Ratio      float64           `json:"ratio"`        // ratio-of-means: arm_a_avg / arm_b_avg
-	RatioMed   float64           `json:"ratio_median"` // median PAIRED ratio — the headline statistic
-	RatioMean  float64           `json:"ratio_mean"`   // mean paired ratio (outlier-sensitive)
-	RatioP25   float64           `json:"ratio_p25"`
-	RatioP75   float64           `json:"ratio_p75"`
-	Breakeven  float64           `json:"breakeven"` // constructs/file — above this, arm A wins
-	MaxPerFile int               `json:"max_constructs_per_file"`
-	PerExt     map[string]ExtRow `json:"per_ext"` // F4
-	Ceiling    *Ceiling          `json:"ceiling,omitempty"`
-	Caveats    []string          `json:"caveats"`
-	Warnings   []string          `json:"warnings,omitempty"`
+	DB          string            `json:"db"`
+	Constructs  int               `json:"constructs"`
+	Files       int               `json:"files"`
+	ArmABytes   int64             `json:"arm_a_bytes"` // whole-file retrieval, incl. cat -n prefixes
+	ArmWBytes   int64             `json:"arm_w_bytes"` // bounded N-line window (pgr baseline's control)
+	ArmWAvg     int64             `json:"arm_w_avg"`
+	WindowLines int               `json:"window_lines"`
+	RatioWMed   float64           `json:"ratio_w_median"`  // whole-file / window — how much a line cap alone buys
+	RatioBWMed  float64           `json:"ratio_bw_median"` // window / construct — mache's marginal win over a line cap
+	ArmBBytes   int64             `json:"arm_b_bytes"`     // construct-granular retrieval
+	ArmAAvg     int64             `json:"arm_a_avg"`       // bytes per file
+	ArmBAvg     int64             `json:"arm_b_avg"`       // bytes per construct
+	Ratio       float64           `json:"ratio"`           // ratio-of-means: arm_a_avg / arm_b_avg
+	RatioMed    float64           `json:"ratio_median"`    // median PAIRED ratio — the headline statistic
+	RatioMean   float64           `json:"ratio_mean"`      // mean paired ratio (outlier-sensitive)
+	RatioP25    float64           `json:"ratio_p25"`
+	RatioP75    float64           `json:"ratio_p75"`
+	Breakeven   float64           `json:"breakeven"` // constructs/file — above this, arm A wins
+	MaxPerFile  int               `json:"max_constructs_per_file"`
+	PerExt      map[string]ExtRow `json:"per_ext"` // F4
+	Ceiling     *Ceiling          `json:"ceiling,omitempty"`
+	Caveats     []string          `json:"caveats"`
+	Warnings    []string          `json:"warnings,omitempty"`
 }
 
 // armACost is what the built-in Read tool actually puts in context: the file
@@ -69,9 +74,16 @@ type Result struct {
 // size understates arm A by ~18% on typical source, which understates the
 // win — measured, not assumed.
 func armACost(path string) (int64, error) {
+	n, _, err := fileCost(path)
+	return n, err
+}
+
+// fileCost returns (whole-file cost, line count). Cost is file bytes plus the
+// cat -n prefixes Read emits.
+func fileCost(path string) (int64, int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	lines := bytes.Count(b, []byte{'\n'})
 	if len(b) > 0 && b[len(b)-1] != '\n' {
@@ -81,7 +93,23 @@ func armACost(path string) (int64, error) {
 	for i := 1; i <= lines; i++ {
 		overhead += len(strconv.Itoa(i)) + 1 // number + tab
 	}
-	return int64(len(b) + overhead), nil
+	return int64(len(b) + overhead), lines, nil
+}
+
+// armWCost models a BOUNDED window read — pgr's baseline control, which caps
+// at max_lines=80 by default. This is the honest null hypothesis for mache on
+// the token axis: a line cap is free, needs no ingestion, is language-agnostic,
+// and works on Rust today. If it captures most of the ceiling, mache's token
+// argument is worth only the remainder.
+func armWCost(path string, window int) (int64, error) {
+	total, lines, err := fileCost(path)
+	if err != nil {
+		return 0, err
+	}
+	if lines <= window || lines == 0 {
+		return total, nil // file is shorter than the window: same as a full read
+	}
+	return int64(float64(total) * float64(window) / float64(lines)), nil
 }
 
 func percentile(sorted []float64, p float64) float64 {
@@ -146,6 +174,9 @@ type perFile struct {
 	armB       int64
 	sizes      []int64 // per-construct bytes, for paired ratios
 }
+
+// windowLines matches pgr's baseline read_code default (max_lines=80).
+const windowLines = 80
 
 func run(dbPath string) (*Result, error) {
 	db, err := sql.Open("sqlite", dbPath)
@@ -221,7 +252,7 @@ func run(dbPath string) (*Result, error) {
 	}
 	byExt := map[string]*acc{}
 
-	var paired []float64
+	var paired, pairedW, pairedBW []float64
 	for src, f := range files {
 		size, err := armACost(src)
 		if err != nil {
@@ -233,10 +264,19 @@ func run(dbPath string) (*Result, error) {
 		if f.constructs > res.MaxPerFile {
 			res.MaxPerFile = f.constructs
 		}
+		wsize, werr := armWCost(src, windowLines)
+		if werr != nil {
+			wsize = size
+		}
+		res.ArmWBytes += wsize
 		for _, n := range f.sizes {
 			if n > 0 {
 				paired = append(paired, float64(size)/float64(n))
+				pairedBW = append(pairedBW, float64(wsize)/float64(n))
 			}
+		}
+		if wsize > 0 {
+			pairedW = append(pairedW, float64(size)/float64(wsize))
 		}
 		res.Files++
 		res.ArmABytes += size
@@ -268,6 +308,18 @@ func run(dbPath string) (*Result, error) {
 	// spanning 1..156, ratio-of-means and mean-of-ratios diverge sharply
 	// (Jensen). Median is the headline because it is robust to the files that
 	// hold a hundred-plus tiny constructs.
+	res.WindowLines = windowLines
+	if res.Files > 0 {
+		res.ArmWAvg = res.ArmWBytes / int64(res.Files)
+	}
+	if len(pairedW) > 0 {
+		sort.Float64s(pairedW)
+		res.RatioWMed = percentile(pairedW, 0.5)
+	}
+	if len(pairedBW) > 0 {
+		sort.Float64s(pairedBW)
+		res.RatioBWMed = percentile(pairedBW, 0.5)
+	}
 	if len(paired) > 0 {
 		sort.Float64s(paired)
 		res.RatioMed = percentile(paired, 0.5)
