@@ -29,6 +29,78 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
+// idToPath is the inverse of toNodeID for rebuilding a filesystem path from a
+// claimed node ID.
+func idToPath(id string) string {
+	return filepath.FromSlash(id)
+}
+
+// claimConstructID reserves a node ID for a content-bearing construct and
+// returns the ID to actually use, disambiguating when the name is taken.
+//
+// Guarantee: this never returns an ID already handed out during this Ingest, so
+// a construct can never be overwritten by a later one. That is the invariant —
+// the specific suffix is not.
+//
+// Disambiguation prefers the existing ".from_<file>" shape, which is meaningful
+// when two files contribute the same name (multiple Go init()s in one package).
+// It falls back to a numeric suffix only when that is ALSO taken, which is the
+// same-file case the old code could not express at all: dedupSuffix is a
+// function of the source file alone, so N>2 constructs sharing a name within one
+// file all rendered the identical suffixed ID and collided again.
+//
+// PROVISIONAL. A numeric suffix is not a good identity — it is positional, so
+// inserting a construct above renumbers the ones below. It exists to stop data
+// loss now, not to settle addressing. The real fix is for the name to be unique
+// in the first place: receiver- and module-qualified construct names
+// (mache-c777ef), sourced from ley-line's node_defs rather than re-derived per
+// language, moving toward the (semantic address, node_hash) identity in
+// mache-e64f36. Collisions are logged at WARN precisely so that work stays
+// visible rather than being papered over here.
+//
+// Only content-bearing nodes are claimed. A schema node with a static name and
+// no files — a package or category directory matched once per record — is
+// SUPPOSED to collapse so its children merge under one parent; suffixing those
+// would shatter every directory in the projection.
+func (e *Engine) claimConstructID(id, parentPath, name, sourceFile string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.claimedIDs == nil {
+		e.claimedIDs = make(map[string]int)
+	}
+	if _, taken := e.claimedIDs[id]; !taken {
+		e.claimedIDs[id] = 1
+		return id
+	}
+
+	candidate := id
+	if sourceFile != "" {
+		suffixed := toNodeID(filepath.Join(parentPath, name+dedupSuffix(sourceFile)))
+		if _, taken := e.claimedIDs[suffixed]; !taken {
+			e.claimedIDs[suffixed] = 1
+			log.Printf("[WARN] duplicate construct name %q under %q — emitting %q; "+
+				"the schema's name template is not unique for this language (mache-c777ef)",
+				name, parentPath, suffixed)
+			return suffixed
+		}
+		candidate = suffixed
+	}
+
+	// Same name, same file: neither the bare name nor the file-suffixed form is
+	// free. Walk a counter until one is.
+	for n := 2; ; n++ {
+		numbered := fmt.Sprintf("%s.%d", candidate, n)
+		if _, taken := e.claimedIDs[numbered]; !taken {
+			e.claimedIDs[numbered] = 1
+			log.Printf("[WARN] duplicate construct name %q under %q in %s — emitting %q; "+
+				"same-file collision, so the name carries no distinguishing information "+
+				"(mache-c777ef)", name, parentPath, sourceFile, numbered)
+			return numbered
+		}
+	}
+}
+
 // processRecord is a pure function — parses one SQLite record through the schema
 // and returns all nodes to create, without touching the store.
 //
@@ -215,16 +287,27 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		currentPath := filepath.Join(parentPath, name)
 		id := toNodeID(currentPath)
 
-		// Dedup: when this node has files and a node with the same ID
-		// already exists with file children (i.e., from a different source file),
-		// append a source-file suffix to disambiguate.
-		// This handles cases like multiple init() functions across Go files.
-		if len(schema.Files) > 0 && sourceFile != "" {
-			if existing, err := store.GetNode(id); err == nil && len(existing.Children) > 0 {
-				suffix := dedupSuffix(sourceFile)
-				name = name + suffix
-				currentPath = filepath.Join(parentPath, name)
-				id = toNodeID(currentPath)
+		// Dedup: two constructs whose schema name template renders the same
+		// string want the same node ID, and whoever writes last wins — the
+		// earlier ones vanish with no error and no diagnostic.
+		//
+		// This used to gate on `store.GetNode(id).Children`, which is
+		// unreachable on the build path: SQLiteWriter.GetNode never populates
+		// Children (it selects kind/mtime/record/context/props and nothing
+		// else), so the condition was always false and the branch was dead.
+		// MemoryStore returns the live node, so it DID fire there — one engine,
+		// two backends, two different graphs (mache-e3d9bb). Measured cost of
+		// the dead branch: 733 unaddressable Rust constructs (16.9%), and 9 of
+		// mache's own cmd/ init() functions absent from its own graph
+		// (mache-c725e9).
+		//
+		// Claimed IDs are tracked in the engine, not read back from the store,
+		// following the e.childSeen precedent below — collision detection must
+		// not depend on which backend is being written to.
+		if len(schema.Files) > 0 {
+			if claimed := e.claimConstructID(id, parentPath, name, sourceFile); claimed != id {
+				id = claimed
+				currentPath = idToPath(claimed)
 			}
 		}
 
