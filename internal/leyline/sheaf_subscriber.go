@@ -2,9 +2,14 @@ package leyline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"slices"
 	"sync"
 	"time"
+
+	daemonwire "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/daemon/wire"
 )
 
 // SheafSubscriber owns a long-lived `subscribe` connection to the
@@ -411,7 +416,9 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 			if !ok {
 				return
 			}
-			s.dispatch(ev)
+			if err := s.dispatch(ev); err != nil {
+				log.Printf("sheaf subscriber: rejecting malformed invalidate event: %v", err)
+			}
 		}
 	}
 }
@@ -448,36 +455,52 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 // Pre-v0.4.3 the daemon never delivered the event at all
 // (ley-line-open-5caa59), so the envelope wasn't observable from
 // mache's side until the fix shipped.
-func (s *SheafSubscriber) dispatch(ev map[string]any) {
-	topic, _ := ev["topic"].(string)
-	if topic != "daemon.sheaf.invalidate" { // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
+func (s *SheafSubscriber) dispatch(ev map[string]any) error {
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+	// Decode only the event-routing fields we consume. LLO v0.10.4 emits
+	// `seq` as a JSON number while its exported Event mirror currently marks
+	// that unrelated field `,string` (ley-line-open-3e2492). A narrow envelope
+	// keeps an unrelated producer/schema skew from dropping cache invalidation;
+	// the semantic payload itself remains decoded through the published type.
+	var envelope struct {
+		Topic *string         `json:"topic"`
+		Data  json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode event envelope: %w", err)
+	}
+	if envelope.Topic == nil || *envelope.Topic != "daemon.sheaf.invalidate" { // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 		// Only `daemon.sheaf.invalidate` is subscribed; silently
 		// ignore any other topic rather than emit log noise per event.
-		return // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
+		return nil // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 	} // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 
 	// Payload lives under `data`. A missing or wrong-typed `data`
-	// field means the daemon emitted a malformed event; treat as an
-	// empty payload rather than panic — the handler still observes
-	// the topic-was-delivered signal and can decide what to do.
-	data, _ := ev["data"].(map[string]any)
+	// field is a version-skew boundary failure: reject it before it can
+	// become a zero-value invalidation event.
+	var payload daemonwire.SheafInvalidatePayload
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		return fmt.Errorf("decode invalidate payload: %w", err)
+	}
 
-	// Region IDs live in either `region_ids` or `invalidated`. Read
-	// both — the one that's present wins; if both are somehow present
-	// `region_ids` takes precedence. LLO PR #147 unified emit to
-	// `invalidated`, but the dual-name read is forward-compat cheap.
-	regions := parseIntSlice(data["region_ids"])
-	if len(regions) == 0 {
-		regions = parseIntSlice(data["invalidated"])
+	if payload.Generation == nil || payload.PriorGeneration == nil {
+		return fmt.Errorf("invalidate payload missing generation")
+	}
+	regions, err := resolveInvalidatedRegions(envelope.Data)
+	if err != nil {
+		return err
 	}
 
 	parsed := SheafInvalidateEvent{
 		Invalidated:     regions,
-		Generation:      parseUint64(data["generation"]),
-		PriorGeneration: parseUint64(data["prior_generation"]),
+		Generation:      *payload.Generation,
+		PriorGeneration: *payload.PriorGeneration,
 	}
-	if v, ok := data["count"].(float64); ok {
-		parsed.Count = int(v)
+	if payload.Count != nil {
+		parsed.Count = int(*payload.Count)
 	} else { // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
 		parsed.Count = len(parsed.Invalidated) // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
 	} // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
@@ -485,14 +508,19 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) {
 	// Coarse-v1 fields (watcher-driven emit). Absent on
 	// consumer-driven emits; the zero values are the correct default
 	// for the routing layer to infer ScopeChangedOnly.
-	if scope, ok := data["scope"].(string); ok {
-		parsed.Scope = scope
+	var routing struct {
+		Scope        string   `json:"scope"`
+		ChangedFiles []string `json:"changed_files"`
+		CurrentRoot  string   `json:"current_root"`
+		TimestampMs  int64    `json:"timestamp_ms,string"`
 	}
-	parsed.ChangedFiles = parseStringSlice(data["changed_files"])
-	if root, ok := data["current_root"].(string); ok {
-		parsed.CurrentRoot = root
+	if err := json.Unmarshal(envelope.Data, &routing); err != nil {
+		return fmt.Errorf("decode invalidate routing fields: %w", err)
 	}
-	parsed.TimestampMs = parseInt64(data["timestamp_ms"])
+	parsed.Scope = routing.Scope
+	parsed.ChangedFiles = routing.ChangedFiles
+	parsed.CurrentRoot = routing.CurrentRoot
+	parsed.TimestampMs = routing.TimestampMs
 
 	s.mu.Lock()
 	s.lastEvent = time.Now()
@@ -500,44 +528,59 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) {
 	s.mu.Unlock()
 
 	s.handler(parsed)
+	return nil
 }
 
-// parseStringSlice extracts []string from a JSON-decoded []any.
-// Returns nil for a nil / non-slice input, and skips non-string
-// entries within the slice (rather than aborting) so a malformed
-// entry doesn't drop otherwise-valid file paths.
-func parseStringSlice(v any) []string {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
+// resolveInvalidatedRegions reads the region-ID list out of an invalidate
+// payload. The list arrives under either `invalidated` (LLO PR #147 unified
+// emit) or the legacy `region_ids`. Every present alias is decoded strictly:
+// accepting one valid field must never hide a malformed or contradictory
+// second field. The legacy name retains precedence only when both agree.
+func resolveInvalidatedRegions(data json.RawMessage) ([]int, error) {
+	var aliases struct {
+		Invalidated json.RawMessage `json:"invalidated"`
+		RegionIDs   json.RawMessage `json:"region_ids"`
 	}
-	out := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
+	if err := json.Unmarshal(data, &aliases); err != nil {
+		return nil, fmt.Errorf("decode invalidate region aliases: %w", err)
 	}
-	return out
+	invalidated, hasInvalidated, err := decodeRegionAlias("invalidated", aliases.Invalidated)
+	if err != nil {
+		return nil, err
+	}
+	legacy, hasLegacy, err := decodeRegionAlias("region_ids", aliases.RegionIDs)
+	if err != nil {
+		return nil, err
+	}
+	if !hasInvalidated && !hasLegacy {
+		return nil, fmt.Errorf("invalidate payload missing region IDs")
+	}
+	if hasInvalidated && hasLegacy && !slices.Equal(invalidated, legacy) {
+		return nil, fmt.Errorf("invalidate payload has conflicting invalidated and region_ids aliases")
+	}
+	regionIDs := invalidated
+	if hasLegacy {
+		regionIDs = legacy
+	}
+	regions := make([]int, len(regionIDs))
+	for i, regionID := range regionIDs {
+		regions[i] = int(regionID)
+	}
+	return regions, nil
 }
 
-// parseInt64 accepts a float64 (raw JSON number) or a string (capnp-
-// json's quoted-Int64 rendering) and returns the corresponding int64.
-// Returns 0 for any other shape. Timestamp fields cross the 2^53
-// safe-integer ceiling around year 2255, so the quoted-string form
-// isn't strictly needed today, but LLO emits timestamps as strings
-// (see PR #140's `now_ms().to_string()`) for consistency with the
-// generation counters, and this helper matches that shape.
-func parseInt64(v any) int64 {
-	switch x := v.(type) {
-	case float64:
-		return int64(x)
-	case string:
-		var n int64
-		_, _ = fmt.Sscanf(x, "%d", &n)
-		return n
-	default:
-		return 0
+func decodeRegionAlias(name string, raw json.RawMessage) ([]uint32, bool, error) {
+	if raw == nil {
+		return nil, false, nil
 	}
+	var ids []uint32
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, true, fmt.Errorf("decode invalidate %s: %w", name, err)
+	}
+	if ids == nil {
+		return nil, true, fmt.Errorf("decode invalidate %s: expected array, got null", name)
+	}
+	return ids, true, nil
 }
 
 // setState updates the connection state under the write lock. Reason

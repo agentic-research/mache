@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,6 +36,9 @@ func (g *udsGraph) GetNode(id string) (*graph.Node, error) {
 		"op": "get_node",
 		"id": id,
 	}, &resp); err != nil {
+		if daemonNotFound(err) {
+			return nil, graph.ErrNotFound
+		}
 		return nil, err
 	}
 	if !boolVal(resp.OK) || resp.Node == nil {
@@ -75,6 +79,9 @@ func (g *udsGraph) listChildren(id string) ([]leyline.Node, error) {
 		"op": "list_children",
 		"id": id,
 	}, &resp); err != nil {
+		if daemonNotFound(err) {
+			return nil, graph.ErrNotFound
+		}
 		return nil, err
 	}
 	// Daemon signals failure via {"ok": false, "error": "..."}. Match the
@@ -82,13 +89,6 @@ func (g *udsGraph) listChildren(id string) ([]leyline.Node, error) {
 	// readdir on a stale ID surfaces cleanly instead of looking like a
 	// successful read of an empty dir.
 	if !boolVal(resp.OK) {
-		msg := strVal(resp.Error)
-		if msg != "" {
-			if strings.Contains(strings.ToLower(msg), "not found") {
-				return nil, graph.ErrNotFound
-			}
-			return nil, fmt.Errorf("list_children %q: %s", id, msg)
-		}
 		return nil, fmt.Errorf("list_children %q: daemon returned ok=false", id)
 	}
 	return resp.Children, nil
@@ -138,6 +138,9 @@ func (g *udsGraph) ReadContent(id string, buf []byte, offset int64) (int, error)
 		"op": "read_content",
 		"id": id,
 	}, &resp); err != nil {
+		if daemonNotFound(err) {
+			return 0, graph.ErrNotFound
+		}
 		return 0, err
 	}
 	if !boolVal(resp.OK) {
@@ -191,6 +194,9 @@ func (g *udsGraph) GetCallees(id string) ([]*graph.Node, error) {
 		"op": "find_callees",
 		"id": id,
 	}, &resp); err != nil {
+		if daemonNotFound(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if !boolVal(resp.OK) {
@@ -268,4 +274,11 @@ func int64Val(p *int64) int64 {
 		return 0
 	}
 	return *p
+}
+
+// daemonNotFound recognizes an explicit ley-line error envelope without
+// conflating transport or typed-decode failures with a missing graph node.
+func daemonNotFound(err error) bool {
+	var daemonErr *leyline.DaemonResponseError
+	return errors.As(err, &daemonErr) && strings.Contains(strings.ToLower(daemonErr.Message), "not found")
 }

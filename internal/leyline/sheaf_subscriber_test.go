@@ -55,14 +55,14 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 			// regressions before they reach live runtime.
 			{
 				"event":  true,
-				"seq":    1.0,
+				"seq":    "1",
 				"source": "leyline",
 				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
 					"invalidated":      []any{1.0, 2.0, 3.0},
 					"count":            3.0,
-					"generation":       7.0,
-					"prior_generation": 6.0,
+					"generation":       "7",
+					"prior_generation": "6",
 				},
 			},
 		},
@@ -106,6 +106,117 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 	assert.Equal(t, uint64(7), status.LastGeneration)
 }
 
+func TestSheafSubscriber_RejectsMalformedGeneration(t *testing.T) {
+	var handled atomic.Int32
+	sub := NewSheafSubscriber("", func(SheafInvalidateEvent) { handled.Add(1) })
+
+	err := sub.dispatch(map[string]any{
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"generation":       "not-a-number",
+			"prior_generation": "6",
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode invalidate payload")
+	assert.Zero(t, handled.Load(), "malformed events must not reach the cache invalidator")
+	assert.Zero(t, sub.Status().LastGeneration, "malformed events must not update subscriber state")
+}
+
+func TestSheafSubscriber_AcceptsNumericEventSequence(t *testing.T) {
+	var got SheafInvalidateEvent
+	sub := NewSheafSubscriber("", func(event SheafInvalidateEvent) { got = event })
+
+	err := sub.dispatch(map[string]any{
+		"seq":   1.0,
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"generation":       "7",
+			"prior_generation": "6",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, got.Invalidated)
+}
+
+func TestSheafSubscriber_RejectsMalformedLegacyAliasWhenCanonicalPresent(t *testing.T) {
+	var handled atomic.Int32
+	sub := NewSheafSubscriber("", func(SheafInvalidateEvent) { handled.Add(1) })
+
+	err := sub.dispatch(map[string]any{
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"region_ids":       []any{1.0, "malformed"},
+			"generation":       "7",
+			"prior_generation": "6",
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode invalidate region_ids")
+	assert.Zero(t, handled.Load(), "a malformed alias must not be ignored")
+}
+
+func TestSheafSubscriber_RejectsConflictingRegionAliases(t *testing.T) {
+	var handled atomic.Int32
+	sub := NewSheafSubscriber("", func(SheafInvalidateEvent) { handled.Add(1) })
+
+	err := sub.dispatch(map[string]any{
+		"topic": "daemon.sheaf.invalidate",
+		"data": map[string]any{
+			"invalidated":      []any{1.0},
+			"region_ids":       []any{2.0},
+			"generation":       "7",
+			"prior_generation": "6",
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting")
+	assert.Zero(t, handled.Load(), "conflicting aliases must not invalidate caches")
+}
+
+// TestResolveInvalidatedRegions covers the alias-resolution unit directly,
+// rather than only through dispatch. The precedence rule is load-bearing for
+// version skew: `invalidated` (LLO PR #147) and legacy `region_ids` may both
+// appear, and the legacy name wins only when the two agree. Driving the helper
+// in isolation pins the empty-list and legacy-precedence cases that the
+// dispatch-level tests (which need a well-formed generation) don't reach.
+func TestResolveInvalidatedRegions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		data    string
+		want    []int
+		wantErr string
+	}{
+		{name: "canonical alias only", data: `{"invalidated":[1,2]}`, want: []int{1, 2}},
+		{name: "legacy alias only", data: `{"region_ids":[3]}`, want: []int{3}},
+		{name: "agreeing aliases take legacy", data: `{"invalidated":[4],"region_ids":[4]}`, want: []int{4}},
+		{name: "empty list is a valid invalidation", data: `{"invalidated":[]}`, want: []int{}},
+		{name: "no alias at all", data: `{}`, wantErr: "missing region IDs"},
+		{name: "conflicting aliases", data: `{"invalidated":[1],"region_ids":[2]}`, wantErr: "conflicting"},
+		{name: "malformed canonical", data: `{"invalidated":["nope"]}`, wantErr: "invalidated"},
+		{name: "not an object", data: `["nope"]`, wantErr: "decode invalidate region aliases"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveInvalidatedRegions(json.RawMessage(tc.data))
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Nil(t, got, "no regions may escape a rejected payload")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestSheafSubscriber_ReconnectsAfterDisconnect pins the reconnect-
 // with-backoff contract (option 2b from the c14c43 design call). When
 // the conn closes mid-stream, the subscriber loops with exponential
@@ -128,14 +239,14 @@ func TestSheafSubscriber_ReconnectsAfterDisconnect(t *testing.T) {
 			case 1:
 				pushEvent(map[string]any{
 					"event":  true,
-					"seq":    1.0,
+					"seq":    "1",
 					"source": "leyline",
 					"topic":  "daemon.sheaf.invalidate",
 					"data": map[string]any{
 						"invalidated":      []any{10.0},
 						"count":            1.0,
-						"generation":       1.0,
-						"prior_generation": 0.0,
+						"generation":       "1",
+						"prior_generation": "0",
 					},
 				})
 				time.Sleep(50 * time.Millisecond)
@@ -143,14 +254,14 @@ func TestSheafSubscriber_ReconnectsAfterDisconnect(t *testing.T) {
 			case 2:
 				pushEvent(map[string]any{
 					"event":  true,
-					"seq":    2.0,
+					"seq":    "2",
 					"source": "leyline",
 					"topic":  "daemon.sheaf.invalidate",
 					"data": map[string]any{
 						"invalidated":      []any{20.0},
 						"count":            1.0,
-						"generation":       2.0,
-						"prior_generation": 1.0,
+						"generation":       "2",
+						"prior_generation": "1",
 					},
 				})
 			}
@@ -301,7 +412,7 @@ func TestSheafSubscriber_DispatchesWatcherDrivenEvent(t *testing.T) {
 		pushEvents: []map[string]any{
 			{
 				"event":  true,
-				"seq":    1.0,
+				"seq":    "1",
 				"source": "leyline",
 				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
@@ -380,14 +491,14 @@ func TestSheafSubscriber_ConsumerDrivenPayloadShape(t *testing.T) {
 		pushEvents: []map[string]any{
 			{
 				"event":  true,
-				"seq":    1.0,
+				"seq":    "1",
 				"source": "leyline",
 				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
 					"invalidated":      []any{9.0},
 					"count":            1.0,
-					"generation":       42.0, // consumer-driven emit uses raw numbers
-					"prior_generation": 41.0,
+					"generation":       "42",
+					"prior_generation": "41",
 				},
 			},
 		},
