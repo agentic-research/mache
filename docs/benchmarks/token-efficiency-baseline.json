@@ -1,0 +1,25 @@
+{
+  "db": "<mache repo, examples/go-schema.json>",
+  "constructs": 3502,
+  "files": 402,
+  "arm_a_bytes": 3399122,
+  "arm_b_bytes": 2620065,
+  "arm_a_avg": 8455,
+  "arm_b_avg": 748,
+  "ratio": 11.303475935828876,
+  "breakeven": 8.711442786069652,
+  "per_ext": {
+    ".go": {
+      "constructs": 3502,
+      "files": 402,
+      "arm_a_avg": 8455,
+      "arm_b_avg": 748,
+      "ratio": 11.303475935828876
+    }
+  },
+  "caveats": [
+    "Arm A charges the whole file once per file. An agent that reads the same file repeatedly pays it again; transcript analysis put 44.1% of Read bytes in multi-read files, so this understates arm A's real cost.",
+    "Breakeven is constructs-per-file: a question needing more than that many constructs from one file is cheaper as a whole-file read.",
+    "F1 (escalation) and F2 (completion rate) are NOT measured here \u2014 both need a live agent loop. A ratio without them is not evidence of a win."
+  ]
+}
