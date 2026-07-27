@@ -92,3 +92,26 @@ func TestComputeContainment_OverflowCostsCeilReads(t *testing.T) {
 	assert.Equal(t, 0, c.Contained)
 	assert.InDelta(t, 5.0, c.AlignedReads, 0.001, "ceil(384/80) = 5")
 }
+
+// The closed form of the argument: a line cap can have the byte saving OR one
+// round trip, never both. grep-then-read is the cap's BEST realistic policy and
+// it is structurally >= 2 calls at every window, because locating and reading
+// are separate steps. Construct-granular retrieval collapses them: the search
+// IS the retrieval.
+func TestComputeContainment_CapNeverBeatsTwoRoundTripsWhileSaving(t *testing.T) {
+	lines := make([]int, 100)
+	for i := range lines {
+		lines[i] = 16
+	}
+	for _, w := range []int{20, 40, 80, 160} {
+		c := computeContainment(w, lines, 162)
+		assert.GreaterOrEqual(t, c.GrepThenReadReads, 2.0,
+			"grep-then-read is always a locate plus a read")
+		assert.Less(t, c.AlignedReads, c.GrepThenReadReads,
+			"knowing where the construct is always beats having to find it")
+	}
+	// Only a window that swallows the file reaches one unaligned read — and at
+	// that point the byte saving is gone.
+	big := computeContainment(320, lines, 162)
+	assert.InDelta(t, 1.0, big.UnalignedReads, 0.001)
+}

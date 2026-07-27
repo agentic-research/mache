@@ -45,7 +45,19 @@ type Containment struct {
 	AlignedReads float64 `json:"aligned_reads_per_construct"`
 	// UnalignedReads is the mean windows to reach an arbitrary construct with
 	// a content-blind cap: median_file_lines/window, floored at 1.
+	//
+	// POLICY: this models sequential paging from line 1 with no search — the
+	// worst case, and the most attackable number in the bench. A real agent
+	// greps first and reads near the hit, which lands between aligned and
+	// unaligned. GrepThenReadReads models that middle policy explicitly so the
+	// two bounds are visible rather than one being quoted as if it were the
+	// only option.
 	UnalignedReads float64 `json:"unaligned_reads_per_construct"`
+	// GrepThenReadReads is the realistic middle: one search to locate the
+	// construct, then one window read positioned at the hit. Costs a search
+	// call (grep is ~2.1% of tool-result bytes — cheap, not free) plus the
+	// windows the construct actually spans.
+	GrepThenReadReads float64 `json:"grep_then_read_reads_per_construct"`
 	// P50Lines / P95Lines describe the construct-size distribution the window
 	// is being asked to contain.
 	P50Lines int `json:"p50_construct_lines"`
@@ -83,6 +95,11 @@ func computeContainment(window int, constructLines []int, medianFileLines int) C
 	if medianFileLines > window {
 		c.UnalignedReads = float64(medianFileLines) / float64(window)
 	}
+	// Grep-then-read: one search call to position, then the aligned cost. This
+	// is what a competent agent actually does with a line cap, so it is the
+	// fair comparison — and it still costs a round trip that construct-granular
+	// retrieval does not, because the search IS the retrieval there.
+	c.GrepThenReadReads = 1 + c.AlignedReads
 	return c
 }
 

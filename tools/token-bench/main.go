@@ -244,6 +244,98 @@ func collectConstructs(dbPath string) (map[string]*perFile, int, int, error) {
 	return files, total, jsonRecords, nil
 }
 
+// armSamples carries the per-construct ratio samples the three arms produce.
+type armSamples struct {
+	paired, pairedW, pairedBW []float64
+	constructLines, fileLines []int
+	byExt                     map[string]*extAcc
+}
+
+type extAcc struct {
+	constructs int
+	files      int
+	armA, armB int64
+}
+
+// measureArms walks each source file once, charging arm A (whole file), arm W
+// (bounded window) and arm B (constructs), and collecting the paired ratio
+// samples. Split out of measureCorpus to keep both under the gate's
+// long_function and fan_out_skew thresholds.
+func measureArms(files map[string]*perFile, res *BenchResult) *armSamples {
+	s := &armSamples{byExt: map[string]*extAcc{}}
+	for src, f := range files {
+		size, err := armACost(src)
+		if err != nil {
+			// File moved or deleted since the db was built — skip rather than
+			// guess a size, and keep it out of both arms so the ratio stays honest.
+			res.Constructs -= f.constructs
+			continue
+		}
+		if f.constructs > res.MaxPerFile {
+			res.MaxPerFile = f.constructs
+		}
+		if _, flines, ferr := fileCost(src); ferr == nil {
+			s.fileLines = append(s.fileLines, flines)
+		}
+		s.constructLines = append(s.constructLines, f.lines...)
+
+		wsize, werr := armWCost(src, windowLines)
+		if werr != nil {
+			wsize = size
+		}
+		res.ArmWBytes += wsize
+		for _, n := range f.sizes {
+			if n > 0 {
+				s.paired = append(s.paired, float64(size)/float64(n))
+				s.pairedBW = append(s.pairedBW, float64(wsize)/float64(n))
+			}
+		}
+		if wsize > 0 {
+			s.pairedW = append(s.pairedW, float64(size)/float64(wsize))
+		}
+		res.Files++
+		res.ArmABytes += size
+		res.ArmBBytes += f.armB
+
+		ext := filepath.Ext(src)
+		a := s.byExt[ext]
+		if a == nil {
+			a = &extAcc{}
+			s.byExt[ext] = a
+		}
+		a.constructs += f.constructs
+		a.files++
+		a.armA += size
+		a.armB += f.armB
+	}
+	return s
+}
+
+// applyRatios reduces the paired ratio samples to the reported statistics.
+// Separated from measureCorpus purely to keep it under the gate's
+// long_function threshold — the bench must pass the ratchet it ships with.
+func applyRatios(res *BenchResult, samples *armSamples) {
+	if len(samples.pairedW) > 0 {
+		sort.Float64s(samples.pairedW)
+		res.RatioWMed = percentile(samples.pairedW, 0.5)
+	}
+	if len(samples.pairedBW) > 0 {
+		sort.Float64s(samples.pairedBW)
+		res.RatioBWMed = percentile(samples.pairedBW, 0.5)
+	}
+	if len(samples.paired) > 0 {
+		sort.Float64s(samples.paired)
+		res.RatioMed = percentile(samples.paired, 0.5)
+		res.RatioP25 = percentile(samples.paired, 0.25)
+		res.RatioP75 = percentile(samples.paired, 0.75)
+		var sum float64
+		for _, r := range samples.paired {
+			sum += r
+		}
+		res.RatioMean = sum / float64(len(samples.paired))
+	}
+}
+
 func measureCorpus(dbPath string) (*BenchResult, error) {
 	files, total, jsonRecords, err := collectConstructs(dbPath)
 	if err != nil {
@@ -261,64 +353,25 @@ func measureCorpus(dbPath string) (*BenchResult, error) {
 		},
 	}
 
-	type acc struct {
-		constructs int
-		files      int
-		armA, armB int64
-	}
-	byExt := map[string]*acc{}
-
-	var paired, pairedW, pairedBW []float64
-	var constructLines, fileLineCounts []int
-	for src, f := range files {
-		size, err := armACost(src)
-		if err != nil {
-			// File moved or deleted since the db was built — skip rather than
-			// guess a size, and keep it out of both arms so the ratio stays honest.
-			res.Constructs -= f.constructs
-			continue
-		}
-		if f.constructs > res.MaxPerFile {
-			res.MaxPerFile = f.constructs
-		}
-		_, flines, ferr := fileCost(src)
-		if ferr == nil {
-			fileLineCounts = append(fileLineCounts, flines)
-		}
-		constructLines = append(constructLines, f.lines...)
-		wsize, werr := armWCost(src, windowLines)
-		if werr != nil {
-			wsize = size
-		}
-		res.ArmWBytes += wsize
-		for _, n := range f.sizes {
-			if n > 0 {
-				paired = append(paired, float64(size)/float64(n))
-				pairedBW = append(pairedBW, float64(wsize)/float64(n))
-			}
-		}
-		if wsize > 0 {
-			pairedW = append(pairedW, float64(size)/float64(wsize))
-		}
-		res.Files++
-		res.ArmABytes += size
-		res.ArmBBytes += f.armB
-
-		ext := filepath.Ext(src)
-		a := byExt[ext]
-		if a == nil {
-			a = &acc{}
-			byExt[ext] = a
-		}
-		a.constructs += f.constructs
-		a.files++
-		a.armA += size
-		a.armB += f.armB
-	}
+	samples := measureArms(files, res)
 	if res.Files == 0 || res.Constructs == 0 {
 		return nil, fmt.Errorf("no readable source files behind the constructs in %s", dbPath)
 	}
-
+	if len(samples.fileLines) > 0 {
+		sort.Ints(samples.fileLines)
+		res.MedianFileLines = samples.fileLines[len(samples.fileLines)/2]
+	}
+	res.Containment = sweepContainment([]int{20, 40, 80, 160, 320}, samples.constructLines, res.MedianFileLines)
+	res.WindowLines = windowLines
+	if res.Files > 0 {
+		res.ArmWAvg = res.ArmWBytes / int64(res.Files)
+	}
+	applyRatios(res, samples)
+	if jsonRecords > 0 {
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"%d/%d records look like JSON objects — this schema's content_template likely renders something other than the raw record, so arm B is NOT the rendered size. See mache-fc737b.",
+			jsonRecords, total))
+	}
 	res.ArmAAvg = res.ArmABytes / int64(res.Files)
 	res.ArmBAvg = res.ArmBBytes / int64(res.Constructs)
 	if res.ArmBAvg > 0 {
@@ -326,45 +379,13 @@ func measureCorpus(dbPath string) (*BenchResult, error) {
 	}
 	res.Breakeven = float64(res.Constructs) / float64(res.Files)
 
-	// Paired ratios: each construct against ITS OWN file. With constructs/file
-	// spanning 1..156, ratio-of-means and mean-of-ratios diverge sharply
-	// (Jensen). Median is the headline because it is robust to the files that
-	// hold a hundred-plus tiny constructs.
-	if len(fileLineCounts) > 0 {
-		sort.Ints(fileLineCounts)
-		res.MedianFileLines = fileLineCounts[len(fileLineCounts)/2]
-	}
-	res.Containment = sweepContainment([]int{20, 40, 80, 160, 320}, constructLines, res.MedianFileLines)
-	res.WindowLines = windowLines
-	if res.Files > 0 {
-		res.ArmWAvg = res.ArmWBytes / int64(res.Files)
-	}
-	if len(pairedW) > 0 {
-		sort.Float64s(pairedW)
-		res.RatioWMed = percentile(pairedW, 0.5)
-	}
-	if len(pairedBW) > 0 {
-		sort.Float64s(pairedBW)
-		res.RatioBWMed = percentile(pairedBW, 0.5)
-	}
-	if len(paired) > 0 {
-		sort.Float64s(paired)
-		res.RatioMed = percentile(paired, 0.5)
-		res.RatioP25 = percentile(paired, 0.25)
-		res.RatioP75 = percentile(paired, 0.75)
-		var sum float64
-		for _, r := range paired {
-			sum += r
-		}
-		res.RatioMean = sum / float64(len(paired))
-	}
 	if jsonRecords > 0 {
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
 			"%d/%d records look like JSON objects — this schema's content_template likely renders something other than the raw record, so arm B is NOT the rendered size. See mache-fc737b.",
 			jsonRecords, total))
 	}
 
-	for ext, a := range byExt {
+	for ext, a := range samples.byExt {
 		row := ExtRow{Constructs: a.constructs, Files: a.files}
 		if a.files > 0 {
 			row.ArmAAvg = a.armA / int64(a.files)

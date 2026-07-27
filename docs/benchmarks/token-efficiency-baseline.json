@@ -74,6 +74,7 @@
       "overflows": 1355,
       "aligned_reads_per_construct": 1.723015419760137,
       "unaligned_reads_per_construct": 8.1,
+      "grep_then_read_reads_per_construct": 2.723015419760137,
       "p50_construct_lines": 16,
       "p95_construct_lines": 69,
       "max_construct_lines": 384
@@ -86,6 +87,7 @@
       "overflows": 555,
       "aligned_reads_per_construct": 1.2252998286693317,
       "unaligned_reads_per_construct": 4.05,
+      "grep_then_read_reads_per_construct": 2.225299828669332,
       "p50_construct_lines": 16,
       "p95_construct_lines": 69,
       "max_construct_lines": 384
@@ -98,6 +100,7 @@
       "overflows": 121,
       "aligned_reads_per_construct": 1.0451170759565962,
       "unaligned_reads_per_construct": 2.025,
+      "grep_then_read_reads_per_construct": 2.045117075956596,
       "p50_construct_lines": 16,
       "p95_construct_lines": 69,
       "max_construct_lines": 384
@@ -110,6 +113,7 @@
       "overflows": 27,
       "aligned_reads_per_construct": 1.0085665334094802,
       "unaligned_reads_per_construct": 1.0125,
+      "grep_then_read_reads_per_construct": 2.00856653340948,
       "p50_construct_lines": 16,
       "p95_construct_lines": 69,
       "max_construct_lines": 384
@@ -122,6 +126,7 @@
       "overflows": 3,
       "aligned_reads_per_construct": 1.000856653340948,
       "unaligned_reads_per_construct": 1,
+      "grep_then_read_reads_per_construct": 2.000856653340948,
       "p50_construct_lines": 16,
       "p95_construct_lines": 69,
       "max_construct_lines": 384
