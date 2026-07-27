@@ -2,10 +2,13 @@ package leyline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
 	"time"
+
+	daemonwire "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/daemon/wire"
 )
 
 // SheafSubscriber owns a long-lived `subscribe` connection to the
@@ -452,8 +455,15 @@ func (s *SheafSubscriber) consume(ctx context.Context, evCh <-chan map[string]an
 // (ley-line-open-5caa59), so the envelope wasn't observable from
 // mache's side until the fix shipped.
 func (s *SheafSubscriber) dispatch(ev map[string]any) error {
-	topic, _ := ev["topic"].(string)
-	if topic != "daemon.sheaf.invalidate" { // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+	var envelope daemonwire.Event
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode event envelope: %w", err)
+	}
+	if envelope.Topic == nil || *envelope.Topic != "daemon.sheaf.invalidate" { // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
 		// Only `daemon.sheaf.invalidate` is subscribed; silently
 		// ignore any other topic rather than emit log noise per event.
 		return nil // coverage:ignore — defensive guard for structurally-impossible topic; reduction tracked in mache-89b5dd.
@@ -462,48 +472,40 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 	// Payload lives under `data`. A missing or wrong-typed `data`
 	// field is a version-skew boundary failure: reject it before it can
 	// become a zero-value invalidation event.
-	data, ok := ev["data"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("data: expected object, got %T", ev["data"])
+	var payload daemonwire.SheafInvalidatePayload
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		return fmt.Errorf("decode invalidate payload: %w", err)
 	}
 
 	// Region IDs live in either `region_ids` or `invalidated`. Read
 	// both — a non-empty `region_ids` takes precedence, while an empty
 	// legacy field falls back to `invalidated`. A malformed present field is
 	// rejected rather than hidden by the fallback.
-	var regions []int
-	var err error
-	if raw, hasRegionIDs := data["region_ids"]; hasRegionIDs {
-		regions, err = parseIntSlice(raw)
-		if err != nil {
-			return fmt.Errorf("region_ids: %w", err)
+	if payload.Generation == nil || payload.PriorGeneration == nil {
+		return fmt.Errorf("invalidate payload missing generation")
+	}
+	regionIDs := payload.Invalidated
+	var legacy struct {
+		RegionIDs []uint32 `json:"region_ids"`
+	}
+	if len(regionIDs) == 0 {
+		if err := json.Unmarshal(envelope.Data, &legacy); err != nil {
+			return fmt.Errorf("decode legacy region_ids: %w", err)
 		}
-		if len(regions) == 0 {
-			regions, err = parseIntSlice(data["invalidated"])
-		}
-	} else {
-		regions, err = parseIntSlice(data["invalidated"])
+		regionIDs = legacy.RegionIDs
 	}
-	if err != nil {
-		return fmt.Errorf("invalidated: %w", err)
-	}
-
-	generation, err := parseUint64(data["generation"])
-	if err != nil {
-		return fmt.Errorf("generation: %w", err)
-	}
-	priorGeneration, err := parseUint64(data["prior_generation"])
-	if err != nil {
-		return fmt.Errorf("prior_generation: %w", err)
+	regions := make([]int, len(regionIDs))
+	for i, regionID := range regionIDs {
+		regions[i] = int(regionID)
 	}
 
 	parsed := SheafInvalidateEvent{
 		Invalidated:     regions,
-		Generation:      generation,
-		PriorGeneration: priorGeneration,
+		Generation:      *payload.Generation,
+		PriorGeneration: *payload.PriorGeneration,
 	}
-	if v, ok := data["count"].(float64); ok {
-		parsed.Count = int(v)
+	if payload.Count != nil {
+		parsed.Count = int(*payload.Count)
 	} else { // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
 		parsed.Count = len(parsed.Invalidated) // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
 	} // coverage:ignore — defensive fallback when daemon omits count; reduction tracked in mache-89b5dd.
@@ -511,14 +513,19 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 	// Coarse-v1 fields (watcher-driven emit). Absent on
 	// consumer-driven emits; the zero values are the correct default
 	// for the routing layer to infer ScopeChangedOnly.
-	if scope, ok := data["scope"].(string); ok {
-		parsed.Scope = scope
+	var routing struct {
+		Scope        string   `json:"scope"`
+		ChangedFiles []string `json:"changed_files"`
+		CurrentRoot  string   `json:"current_root"`
+		TimestampMs  int64    `json:"timestamp_ms,string"`
 	}
-	parsed.ChangedFiles = parseStringSlice(data["changed_files"])
-	if root, ok := data["current_root"].(string); ok {
-		parsed.CurrentRoot = root
+	if err := json.Unmarshal(envelope.Data, &routing); err != nil {
+		return fmt.Errorf("decode invalidate routing fields: %w", err)
 	}
-	parsed.TimestampMs = parseInt64(data["timestamp_ms"])
+	parsed.Scope = routing.Scope
+	parsed.ChangedFiles = routing.ChangedFiles
+	parsed.CurrentRoot = routing.CurrentRoot
+	parsed.TimestampMs = routing.TimestampMs
 
 	s.mu.Lock()
 	s.lastEvent = time.Now()
@@ -527,44 +534,6 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 
 	s.handler(parsed)
 	return nil
-}
-
-// parseStringSlice extracts []string from a JSON-decoded []any.
-// Returns nil for a nil / non-slice input, and skips non-string
-// entries within the slice (rather than aborting) so a malformed
-// entry doesn't drop otherwise-valid file paths.
-func parseStringSlice(v any) []string {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// parseInt64 accepts a float64 (raw JSON number) or a string (capnp-
-// json's quoted-Int64 rendering) and returns the corresponding int64.
-// Returns 0 for any other shape. Timestamp fields cross the 2^53
-// safe-integer ceiling around year 2255, so the quoted-string form
-// isn't strictly needed today, but LLO emits timestamps as strings
-// (see PR #140's `now_ms().to_string()`) for consistency with the
-// generation counters, and this helper matches that shape.
-func parseInt64(v any) int64 {
-	switch x := v.(type) {
-	case float64:
-		return int64(x)
-	case string:
-		var n int64
-		_, _ = fmt.Sscanf(x, "%d", &n)
-		return n
-	default:
-		return 0
-	}
 }
 
 // setState updates the connection state under the write lock. Reason

@@ -10,10 +10,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"sort"
-	"strconv"
 
+	daemonwire "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/daemon/wire"
 	graph "github.com/agentic-research/mache/internal/graph"
 )
 
@@ -165,17 +164,17 @@ func (sc *SheafClient) InvalidateWithStalk(regionID int, newHash string, newData
 		"regions": []int{regionID},
 		"stalks":  []stalk{s},
 	}
-	resp, err := sc.sock.SendOp(req)
+	var resp daemonwire.SheafInvalidateResponse
+	err := sc.sock.SendOpInto(req, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("sheaf_invalidate: %w", err)
 	}
-	if errMsg, ok := resp["error"]; ok {
-		return nil, fmt.Errorf("sheaf_invalidate: %v", errMsg)
+	if resp.Invalidated == nil {
+		return nil, fmt.Errorf("sheaf_invalidate: response missing invalidated")
 	}
-
-	invalidated, err := parseIntSlice(resp["invalidated"])
-	if err != nil {
-		return nil, fmt.Errorf("sheaf_invalidate: invalidated: %w", err)
+	invalidated := make([]int, len(resp.Invalidated))
+	for i, regionID := range resp.Invalidated {
+		invalidated[i] = int(regionID)
 	}
 	return invalidated, nil
 }
@@ -205,33 +204,24 @@ func (sc *SheafClient) Status() (SheafStatus, error) {
 		return SheafStatus{}, nil
 	}
 
-	resp, err := sc.sock.SendOp(map[string]any{"op": "sheaf_status"})
+	var resp daemonwire.SheafStatusResponse
+	err := sc.sock.SendOpInto(map[string]any{"op": "sheaf_status"}, &resp)
 	if err != nil {
 		return SheafStatus{}, fmt.Errorf("sheaf_status: %w", err)
 	}
-	if errMsg, ok := resp["error"]; ok {
-		return SheafStatus{}, fmt.Errorf("sheaf_status: %v", errMsg)
+	if resp.Generation == nil {
+		return SheafStatus{}, fmt.Errorf("sheaf_status: response missing generation")
 	}
 
-	s := SheafStatus{}
-	// generation is an Int64 on the wire and capnp-json encodes Int64
-	// as a quoted string ("0", "1", ...) — see the wire-decode
-	// microbench commit (cc30abe). Accept both shapes so the mock
-	// tests (which pass float64) and the live daemon (which passes a
-	// quoted string) both round-trip correctly.
-	generation, err := parseUint64(resp["generation"])
-	if err != nil {
-		return SheafStatus{}, fmt.Errorf("sheaf_status: generation: %w", err)
+	s := SheafStatus{Generation: *resp.Generation}
+	if resp.Valid != nil {
+		s.Valid = int(*resp.Valid)
 	}
-	s.Generation = generation
-	if v, ok := resp["valid"].(float64); ok {
-		s.Valid = int(v)
+	if resp.Total != nil {
+		s.Total = int(*resp.Total)
 	}
-	if v, ok := resp["total"].(float64); ok {
-		s.Total = int(v)
-	}
-	if v, ok := resp["defect"].(float64); ok {
-		s.Defect = v
+	if resp.Defect != nil {
+		s.Defect = *resp.Defect
 	}
 	return s, nil
 }
@@ -424,50 +414,4 @@ func hashMembers(members []string) string {
 		h.Write([]byte(m))
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// parseIntSlice extracts []int from a JSON-decoded []any. It rejects every
-// malformed member so a daemon wire mismatch cannot silently become an empty
-// or partial invalidation set.
-func parseIntSlice(v any) ([]int, error) {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil, fmt.Errorf("expected array, got %T", v)
-	}
-	result := make([]int, 0, len(arr))
-	maxInt := uint64(^uint(0) >> 1)
-	for i, item := range arr {
-		n, err := parseUint64(item)
-		if err != nil {
-			return nil, fmt.Errorf("item %d: %w", i, err)
-		}
-		if n > maxInt {
-			return nil, fmt.Errorf("item %d: %d overflows int", i, n)
-		}
-		result = append(result, int(n))
-	}
-	return result, nil
-}
-
-// parseUint64 accepts either a float64 (Go-stdlib JSON default for any
-// JSON number, including small Int64) or a string (capnp-json's
-// rendering of Int64 to avoid float64 precision loss past 2^53) and
-// returns the corresponding uint64. Unexpected, fractional, negative, and
-// out-of-range values return an error rather than silently becoming zero.
-func parseUint64(v any) (uint64, error) {
-	switch x := v.(type) {
-	case uint64:
-		return x, nil
-	case float64:
-		if math.IsNaN(x) || math.IsInf(x, 0) || x < 0 || math.Trunc(x) != x {
-			return 0, fmt.Errorf("expected non-negative integer, got %v", x)
-		}
-		// Formatting then parsing prevents Go's float64→uint64 conversion
-		// from wrapping an out-of-range value at 2^64.
-		return strconv.ParseUint(strconv.FormatFloat(x, 'f', 0, 64), 10, 64)
-	case string:
-		return strconv.ParseUint(x, 10, 64)
-	default:
-		return 0, fmt.Errorf("expected number or decimal string, got %T", v)
-	}
 }

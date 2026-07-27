@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/leyline"
@@ -82,13 +81,6 @@ func (g *udsGraph) listChildren(id string) ([]leyline.Node, error) {
 	// readdir on a stale ID surfaces cleanly instead of looking like a
 	// successful read of an empty dir.
 	if !boolVal(resp.OK) {
-		msg := strVal(resp.Error)
-		if msg != "" {
-			if strings.Contains(strings.ToLower(msg), "not found") {
-				return nil, graph.ErrNotFound
-			}
-			return nil, fmt.Errorf("list_children %q: %s", id, msg)
-		}
 		return nil, fmt.Errorf("list_children %q: daemon returned ok=false", id)
 	}
 	return resp.Children, nil

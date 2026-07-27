@@ -55,14 +55,14 @@ func TestSheafSubscriber_DispatchesEvent(t *testing.T) {
 			// regressions before they reach live runtime.
 			{
 				"event":  true,
-				"seq":    1.0,
+				"seq":    "1",
 				"source": "leyline",
 				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
 					"invalidated":      []any{1.0, 2.0, 3.0},
 					"count":            3.0,
-					"generation":       7.0,
-					"prior_generation": 6.0,
+					"generation":       "7",
+					"prior_generation": "6",
 				},
 			},
 		},
@@ -120,7 +120,7 @@ func TestSheafSubscriber_RejectsMalformedGeneration(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "generation")
+	assert.Contains(t, err.Error(), "decode invalidate payload")
 	assert.Zero(t, handled.Load(), "malformed events must not reach the cache invalidator")
 	assert.Zero(t, sub.Status().LastGeneration, "malformed events must not update subscriber state")
 }
@@ -147,14 +147,14 @@ func TestSheafSubscriber_ReconnectsAfterDisconnect(t *testing.T) {
 			case 1:
 				pushEvent(map[string]any{
 					"event":  true,
-					"seq":    1.0,
+					"seq":    "1",
 					"source": "leyline",
 					"topic":  "daemon.sheaf.invalidate",
 					"data": map[string]any{
 						"invalidated":      []any{10.0},
 						"count":            1.0,
-						"generation":       1.0,
-						"prior_generation": 0.0,
+						"generation":       "1",
+						"prior_generation": "0",
 					},
 				})
 				time.Sleep(50 * time.Millisecond)
@@ -162,14 +162,14 @@ func TestSheafSubscriber_ReconnectsAfterDisconnect(t *testing.T) {
 			case 2:
 				pushEvent(map[string]any{
 					"event":  true,
-					"seq":    2.0,
+					"seq":    "2",
 					"source": "leyline",
 					"topic":  "daemon.sheaf.invalidate",
 					"data": map[string]any{
 						"invalidated":      []any{20.0},
 						"count":            1.0,
-						"generation":       2.0,
-						"prior_generation": 1.0,
+						"generation":       "2",
+						"prior_generation": "1",
 					},
 				})
 			}
@@ -320,7 +320,7 @@ func TestSheafSubscriber_DispatchesWatcherDrivenEvent(t *testing.T) {
 		pushEvents: []map[string]any{
 			{
 				"event":  true,
-				"seq":    1.0,
+				"seq":    "1",
 				"source": "leyline",
 				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
@@ -399,14 +399,14 @@ func TestSheafSubscriber_ConsumerDrivenPayloadShape(t *testing.T) {
 		pushEvents: []map[string]any{
 			{
 				"event":  true,
-				"seq":    1.0,
+				"seq":    "1",
 				"source": "leyline",
 				"topic":  "daemon.sheaf.invalidate",
 				"data": map[string]any{
 					"invalidated":      []any{9.0},
 					"count":            1.0,
-					"generation":       42.0, // consumer-driven emit uses raw numbers
-					"prior_generation": 41.0,
+					"generation":       "42",
+					"prior_generation": "41",
 				},
 			},
 		},

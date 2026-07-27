@@ -177,50 +177,6 @@ func TestBuildRestrictions_ThreeCommunities(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parseIntSlice
-// ---------------------------------------------------------------------------
-
-func TestParseIntSlice(t *testing.T) {
-	result, err := parseIntSlice([]any{0.0, 1.0, 5.0})
-	require.NoError(t, err)
-	assert.Equal(t, []int{0, 1, 5}, result)
-}
-
-func TestParseIntSlice_RejectsMalformedWire(t *testing.T) {
-	for _, input := range []any{
-		nil,
-		"not an array",
-		[]any{1.0, "two"},
-		[]any{1.5},
-	} {
-		_, err := parseIntSlice(input)
-		assert.Error(t, err, "input %#v must not silently become an empty or partial slice", input)
-	}
-}
-
-func TestParseUint64_RejectsMalformedWire(t *testing.T) {
-	for _, input := range []any{
-		nil,
-		"abc",
-		"0x1f",
-		[]any{1.0},
-		-1.0,
-		1.5,
-	} {
-		_, err := parseUint64(input)
-		assert.Error(t, err, "input %#v must not silently become generation zero", input)
-	}
-}
-
-func TestParseUint64_AcceptsWireNumericForms(t *testing.T) {
-	for _, input := range []any{uint64(7), float64(7), "7"} {
-		got, err := parseUint64(input)
-		require.NoError(t, err)
-		assert.Equal(t, uint64(7), got)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Integration: PushTopology via mock server
 // ---------------------------------------------------------------------------
 
@@ -279,7 +235,7 @@ func TestInvalidate_ReturnsAffectedRegions(t *testing.T) {
 		return map[string]any{
 			"invalidated": []any{0.0, 1.0, 3.0},
 			"count":       3.0,
-			"generation":  2.0,
+			"generation":  "2",
 		}
 	})
 
@@ -317,7 +273,7 @@ func TestDefect_ReturnsScore(t *testing.T) {
 		assert.Equal(t, "sheaf_defect", req["op"])
 		return map[string]any{
 			"defect":     0.42,
-			"generation": 5.0,
+			"generation": "5",
 			"valid":      10.0,
 			"total":      15.0,
 		}
@@ -341,7 +297,7 @@ func TestStatus_ParsesFullResponse(t *testing.T) {
 	sockPath := mockServer(t, func(req map[string]any) map[string]any {
 		assert.Equal(t, "sheaf_status", req["op"])
 		return map[string]any{
-			"generation": 7.0,
+			"generation": "7",
 			"valid":      20.0,
 			"total":      25.0,
 			"defect":     0.2,
@@ -407,7 +363,7 @@ func TestStatus_RejectsMalformedGeneration(t *testing.T) {
 
 	_, err = NewSheafClient(sock).Status()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "generation")
+	assert.Contains(t, err.Error(), "sheaf_status")
 }
 
 func TestInvalidate_RejectsMalformedInvalidatedRegions(t *testing.T) {
@@ -594,7 +550,7 @@ func TestSheafClient_EndToEnd_WithCommunities(t *testing.T) {
 			return map[string]any{
 				"invalidated": []any{0.0, 1.0},
 				"count":       2.0,
-				"generation":  1.0,
+				"generation":  "1",
 			}
 		default:
 			return map[string]any{"error": "unexpected op"}
@@ -781,7 +737,7 @@ func TestInvalidateWithStalk_SendsData(t *testing.T) {
 	var captured map[string]any
 	sockPath := mockServer(t, func(req map[string]any) map[string]any {
 		captured = req
-		return map[string]any{"invalidated": []any{1.0}, "count": 1.0, "generation": 1.0}
+		return map[string]any{"invalidated": []any{1.0}, "count": 1.0, "generation": "1"}
 	})
 
 	sock, err := DialSocket(sockPath)
@@ -812,7 +768,7 @@ func TestInvalidate_NoStalkDataOmitted(t *testing.T) {
 	var captured map[string]any
 	sockPath := mockServer(t, func(req map[string]any) map[string]any {
 		captured = req
-		return map[string]any{"invalidated": []any{}, "count": 0.0, "generation": 1.0}
+		return map[string]any{"invalidated": []any{}, "count": 0.0, "generation": "1"}
 	})
 
 	sock, err := DialSocket(sockPath)
@@ -865,7 +821,7 @@ func TestInvalidateWithStalk_RejectsWrongDim(t *testing.T) {
 	// Empty is still allowed (the heuristic-only fallback path) — guard
 	// that we didn't accidentally over-restrict.
 	mockServer(t, func(req map[string]any) map[string]any {
-		return map[string]any{"invalidated": []any{}, "count": 0.0, "generation": 1.0}
+		return map[string]any{"invalidated": []any{}, "count": 0.0, "generation": "1"}
 	})
 	// (the inner mockServer call above is a no-op for this assertion;
 	// the real check is that no error is returned for the empty-slice
