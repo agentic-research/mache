@@ -319,7 +319,7 @@ tasks:
         set -uo pipefail
         LL=$(grep -oE 'leylineBinaryVersion = "v[0-9.]+"' internal/leyline/socket.go | grep -oE 'v[0-9.]+')
         echo "pin: $LL"
-        for p in "$(command -v leyline 2>/dev/null || true)" "$HOME/.mache/bin/leyline" "${MACHE_LEYLINE_BINARY:-}"; do
+        for p in "$(command -v leyline 2>/dev/null || true)" "$HOME/.mache/bin/leyline-$LL" "$HOME/.mache/bin/leyline" "${MACHE_LEYLINE_BINARY:-}"; do
           [ -n "$p" ] && [ -x "$p" ] || continue
           V=$("$p" --version 2>/dev/null || echo unknown)
           case "$V" in
@@ -328,6 +328,8 @@ tasks:
           esac
         done
         echo "note: a RUNNING daemon is used regardless of these; stop it to force re-resolution."
+        echo "cache is namespaced by pin — other versions here belong to other mache builds and are left alone:"
+        ls -1 "$HOME/.mache/bin"/leyline* 2>/dev/null | sed 's/^/  /' || true
 
   test:ast:
     desc: "ASTWalker correctness over real leyline _ast — fast named signal (skips if the pinned leyline isn't cached; never downloads). Replaces the retired sitter↔AST parity gate — in-process tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so there is no second projector to be parity WITH."

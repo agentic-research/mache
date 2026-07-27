@@ -893,16 +893,15 @@ func ResolveBinary(allowDownload bool) (string, error) {
 		}
 		log.Printf("leyline on PATH (%s) is not the pinned %s — ignoring it; resolving the pinned binary", p, leylineBinaryVersion)
 	}
-	home, err := os.UserHomeDir()
+	// Version-namespaced cache: a build pinning a different version keeps its
+	// own file, so concurrent pins cannot overwrite each other (see
+	// binary_cache_path.go).
+	bundled, err := pinnedCachePath()
 	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
+		return "", err
 	}
-	bundled := filepath.Join(home, ".mache", "bin", "leyline")
-	if _, err := os.Stat(bundled); err == nil {
-		if leylineVersionMatchesPin(bundled) {
-			return bundled, nil
-		}
-		log.Printf("cached leyline (%s) is not the pinned %s — re-resolving", bundled, leylineBinaryVersion)
+	if cached := resolveCachedPinned(); cached != "" {
+		return cached, nil
 	}
 	if !allowDownload {
 		return "", fmt.Errorf("no leyline matching the pinned %s found on PATH or at %s (auto-download disabled)", leylineBinaryVersion, bundled)
@@ -919,17 +918,14 @@ func ResolveBinary(allowDownload bool) (string, error) {
 // conformance tests need to exercise the published artifact rather than a
 // same-version developer build.
 func EnsureCachedBinary() (string, error) {
-	home, err := os.UserHomeDir()
+	cached, err := pinnedCachePath()
 	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
+		return "", err
 	}
-	cached := filepath.Join(home, ".mache", "bin", "leyline")
-	if _, err := os.Stat(cached); err == nil {
-		if leylineVersionMatchesPin(cached) {
-			return cached, nil
-		}
-		log.Printf("cached leyline (%s) is not the pinned %s — refreshing published artifact", cached, leylineBinaryVersion)
+	if hit := resolveCachedPinned(); hit != "" {
+		return hit, nil
 	}
+	log.Printf("no cached leyline matching the pinned %s — fetching published artifact to %s", leylineBinaryVersion, cached)
 	if os.Getenv("MACHE_NO_LEYLINE") != "" {
 		return "", fmt.Errorf("no cached leyline matching the pinned %s available and MACHE_NO_LEYLINE is set", leylineBinaryVersion)
 	}

@@ -94,14 +94,16 @@ func TestResolveBinary_DownloadsWhenMissing(t *testing.T) {
 
 	got, err := ResolveBinary(true)
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, ".mache", "bin", "leyline"), got)
+	// Namespaced by pin (mache-0acdf6): concurrent mache builds with different
+	// pins must not share one cache file.
+	assert.Equal(t, filepath.Join(home, ".mache", "bin", "leyline-"+leylineBinaryVersion), got)
 
 	fi, err := os.Stat(got)
 	require.NoError(t, err, "downloaded leyline must exist")
 	assert.NotZero(t, fi.Mode()&0o111, "downloaded leyline must be executable")
 }
 
-func TestEnsureCachedBinary_ReplacesStaleCacheEvenWhenPathMatches(t *testing.T) {
+func TestEnsureCachedBinary_IgnoresStaleLegacyAndProvisionsNamespaced(t *testing.T) {
 	content := []byte("#!/bin/sh\necho '" + pinnedVersionLine() + "'\n")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(content)
@@ -121,16 +123,28 @@ func TestEnsureCachedBinary_ReplacesStaleCacheEvenWhenPathMatches(t *testing.T) 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("MACHE_NO_LEYLINE", "")
-	cached := filepath.Join(home, ".mache", "bin", "leyline")
-	require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0o755))
-	require.NoError(t, os.WriteFile(cached, []byte("#!/bin/sh\necho 'leyline 0.10.2 (open)'\n"), 0o755))
+	// A stale binary at the LEGACY unversioned path — written by a mache build
+	// with a different pin. Post-namespacing it must be neither used nor
+	// overwritten: it belongs to that build. We provision our own file instead.
+	legacy := filepath.Join(home, ".mache", "bin", "leyline")
+	staleBody := []byte("#!/bin/sh\necho 'leyline 0.10.2 (open)'\n")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacy), 0o755))
+	require.NoError(t, os.WriteFile(legacy, staleBody, 0o755))
+
+	namespaced := filepath.Join(home, ".mache", "bin", "leyline-"+leylineBinaryVersion)
 
 	got, err := EnsureCachedBinary()
 	require.NoError(t, err)
-	assert.Equal(t, cached, got, "cache provisioning must not be short-circuited by PATH")
-	installed, err := os.ReadFile(cached)
+	assert.Equal(t, namespaced, got, "cache provisioning must not be short-circuited by PATH, and must use the pin-namespaced path")
+	installed, err := os.ReadFile(namespaced)
 	require.NoError(t, err)
 	assert.Equal(t, content, installed)
+
+	// The other build's file is untouched — this is what ends the thrash where
+	// two differently-pinned maches overwrote one path on every invocation.
+	left, err := os.ReadFile(legacy)
+	require.NoError(t, err)
+	assert.Equal(t, staleBody, left, "another build's cached binary must be left alone")
 }
 
 // TestResolveBinary_RejectsTamperedDownload proves the SHA-pin blocks a download
