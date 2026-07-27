@@ -22,6 +22,44 @@
       "ratio": 12.512032085561497
     }
   },
+  "ceiling": {
+    "read_share": 0.574,
+    "ceiling_pct": 57.4,
+    "curve": [
+      {
+        "ratio": 2,
+        "reduction_pct": 28.7,
+        "pct_of_ceiling": 50
+      },
+      {
+        "ratio": 5,
+        "reduction_pct": 45.92,
+        "pct_of_ceiling": 80
+      },
+      {
+        "ratio": 10,
+        "reduction_pct": 51.66,
+        "pct_of_ceiling": 89.99999999999999
+      },
+      {
+        "ratio": 26.08765560165975,
+        "reduction_pct": 55.199725629759236,
+        "pct_of_ceiling": 96.16676938982445
+      },
+      {
+        "ratio": 50,
+        "reduction_pct": 56.25199999999999,
+        "pct_of_ceiling": 97.99999999999999
+      },
+      {
+        "ratio": 100,
+        "reduction_pct": 56.826,
+        "pct_of_ceiling": 99
+      }
+    ],
+    "r90": 10,
+    "note": "Session-level reduction is bounded by read_share and asymptotic in the retrieval ratio: reduction(R) = read_share * (1 - 1/R). At R=10 you are already at 90% of the ceiling, so a large spread in retrieval quality collapses to a few points of session cost. Token reduction is therefore a commoditized claim \u2014 evaluate on correctness-of-write and cross-format reach instead."
+  },
   "caveats": [
     "Arm A charges the whole file once per file. An agent that reads the same file repeatedly pays it again; transcript analysis put 44.1% of Read bytes in multi-read files, so this understates arm A's real cost.",
     "Breakeven is constructs-per-file: a question needing more than that many constructs from one file is cheaper as a whole-file read.",

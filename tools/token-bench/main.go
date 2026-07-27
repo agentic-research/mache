@@ -59,6 +59,7 @@ type Result struct {
 	Breakeven  float64           `json:"breakeven"` // constructs/file — above this, arm A wins
 	MaxPerFile int               `json:"max_constructs_per_file"`
 	PerExt     map[string]ExtRow `json:"per_ext"` // F4
+	Ceiling    *Ceiling          `json:"ceiling,omitempty"`
 	Caveats    []string          `json:"caveats"`
 	Warnings   []string          `json:"warnings,omitempty"`
 }
@@ -104,6 +105,7 @@ type ExtRow struct {
 func main() {
 	dbPath := flag.String("db", "", "path to a mache-built .db (required)")
 	out := flag.String("out", "", "write JSON here instead of stdout")
+	readShare := flag.Float64("read-share", 0, "retrieval share of carry-weighted context cost (0..1), measured from this corpus's transcripts; enables the ceiling derivation")
 	flag.Parse()
 	if *dbPath == "" {
 		fmt.Fprintln(os.Stderr, "token-bench: -db is required")
@@ -113,6 +115,12 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "token-bench: %v\n", err)
 		os.Exit(1)
+	}
+	if *readShare > 0 {
+		// Include this corpus's own measured ratio among the sample points so
+		// the artifact shows where this repo actually sits on the curve.
+		c := computeCeiling(*readShare, []float64{2, 5, 10, res.RatioMed, 50, 100})
+		res.Ceiling = &c
 	}
 	b, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
