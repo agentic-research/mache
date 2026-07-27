@@ -60,7 +60,14 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		size INTEGER DEFAULT 0,
 		mtime INTEGER NOT NULL,
 		record_id TEXT,
-		record JSON,
+		-- TEXT, not JSON. SQLite has no JSON storage class, and "JSON" contains
+		-- none of the substrings that select an affinity, so it falls through to
+		-- NUMERIC — which silently rewrites any TEXT value that parses as a
+		-- number ('007' -> 7, '1.10' -> 1.1). Ingest binds n.Data as []byte and
+		-- BLOBs bypass the conversion, which is why this stayed latent;
+		-- WritableGraph.UpdateRecord binds string(content) and does not
+		-- (mache-4b8a42).
+		record TEXT,
 		source_file TEXT,
 		-- context holds the imports/types visible to a construct scope,
 		-- served by the context virtual file (vfs.ContextHandler). Set at

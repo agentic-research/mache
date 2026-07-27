@@ -18,7 +18,7 @@ func newNodesDB(t *testing.T, withContext, withProps bool) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 
 	cols := "id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, kind INTEGER, " +
-		"size INTEGER, mtime INTEGER, record_id TEXT, record JSON, source_file TEXT"
+		"size INTEGER, mtime INTEGER, record_id TEXT, record TEXT, source_file TEXT"
 	if withContext {
 		cols += ", context BLOB"
 	}

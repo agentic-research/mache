@@ -25,7 +25,7 @@ func machePropsDB(t *testing.T) string {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON, source_file TEXT, context BLOB, props JSON
+			record_id TEXT, record TEXT, source_file TEXT, context BLOB, props JSON
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -83,7 +83,7 @@ func TestStaleMacheDBIsRefusedOnOpen(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`CREATE TABLE nodes (
 		id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, kind INTEGER,
-		size INTEGER, mtime INTEGER, record_id TEXT, record JSON,
+		size INTEGER, mtime INTEGER, record_id TEXT, record TEXT,
 		source_file TEXT, context BLOB
 	)`)
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestLeylineShapedDBOpensFine(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`CREATE TABLE nodes (
 		id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, kind INTEGER,
-		size INTEGER, mtime INTEGER, record_id TEXT, record JSON, source_file TEXT
+		size INTEGER, mtime INTEGER, record_id TEXT, record TEXT, source_file TEXT
 	)`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())

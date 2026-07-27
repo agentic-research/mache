@@ -45,7 +45,7 @@ func TestSQLiteGraph_LookupDef_NodeHashFanOut(t *testing.T) {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON
+			record_id TEXT, record TEXT
 		);
 		CREATE TABLE node_refs (
 			token TEXT NOT NULL, node_id TEXT NOT NULL, node_hash BLOB
@@ -95,7 +95,7 @@ func TestSQLiteGraph_GetCallers_NodeHashFanOut(t *testing.T) {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON
+			record_id TEXT, record TEXT
 		);
 		CREATE TABLE node_refs (
 			token TEXT NOT NULL, node_id TEXT NOT NULL, node_hash BLOB

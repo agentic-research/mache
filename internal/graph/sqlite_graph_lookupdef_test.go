@@ -39,7 +39,7 @@ func TestSQLiteGraph_LookupDef_SQLFallback(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
 
@@ -106,7 +106,7 @@ func TestSQLiteGraph_SearchDefs_SQLFallback(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -165,7 +165,7 @@ func TestSQLiteGraph_GetCallees_ReceiverSuffixMatch(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -215,7 +215,7 @@ func TestSQLiteGraph_GetCallees_ReceiverSuffixMatch(t *testing.T) {
 // .GetNode returned no Properties, so the second pass overwrote them
 // with nil).
 //
-// This test uses the construct node's record JSON directly to assert
+// This test uses the construct node's record TEXT directly to assert
 // the resolver path reads `lang` and only resolves callees when it's
 // present.
 func TestSQLiteGraph_GetCallees_RequiresLangProperty(t *testing.T) {
@@ -235,7 +235,7 @@ func TestSQLiteGraph_GetCallees_RequiresLangProperty(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON,
+			record TEXT,
 			context BLOB,
 			props JSON
 		);
@@ -295,7 +295,7 @@ func TestSQLiteGraph_GetCallees_AmbiguousSuffixSkipped(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -359,7 +359,7 @@ func TestSQLiteGraph_DefsMap_SQLFallback(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -413,7 +413,7 @@ func TestSQLiteGraph_DefsMap_MultipleSQLNodesForOneToken(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -457,7 +457,7 @@ func TestSQLiteGraph_DefsMap_MergesInMemoryAndSQL(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -505,7 +505,7 @@ func TestSQLiteGraph_LookupDef_InMemoryWinsOverSQL(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;

@@ -26,7 +26,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON
+			record TEXT
 		);
 		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
 
@@ -178,7 +178,7 @@ func TestMaterializeCallersNoRefs(t *testing.T) {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL, record JSON
+			mtime INTEGER NOT NULL, record TEXT
 		);
 	`)
 	if err != nil {

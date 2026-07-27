@@ -44,7 +44,7 @@ func seedTestAST(t *testing.T) *sql.DB {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON,
+			record TEXT,
 			source_file TEXT
 		);
 		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
@@ -167,7 +167,7 @@ func seedTestASTFile(t *testing.T) *sql.DB {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON,
+			record TEXT,
 			source_file TEXT
 		);
 		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
@@ -345,7 +345,7 @@ func TestASTWalker_PredicateEqFilter(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT);
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
 		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
 		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
 		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
@@ -396,7 +396,7 @@ func TestASTWalker_MatchPredicate(t *testing.T) {
 	// Same HCL-like fixture as TestASTWalker_PredicateEqFilter, two blocks:
 	// "resource" and "variable".
 	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT);
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
 		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
 		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
 		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
@@ -639,7 +639,7 @@ func TestASTWalker_NotEqPredicateSilentlyIgnored(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT);
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
 		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
 		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
 
@@ -707,7 +707,7 @@ func TestASTWalker_MultipleChildrenSameKind(t *testing.T) {
 	// Simulate: resource "aws_instance" "my_server" { ... }
 	// Two string_lit children under the same block.
 	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT);
+		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
 		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
 		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
 

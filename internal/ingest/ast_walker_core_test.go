@@ -185,7 +185,7 @@ func TestASTWalker_Query_ByteRangeFallback(t *testing.T) {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON,
+			record TEXT,
 			source_file TEXT
 		);
 		CREATE TABLE _ast (

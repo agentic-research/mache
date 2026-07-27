@@ -37,7 +37,12 @@ func ExportSQLite(store *MemoryStore, dbPath string) error {
 		kind INTEGER NOT NULL,
 		size INTEGER DEFAULT 0,
 		mtime INTEGER NOT NULL,
-		record JSON
+		-- TEXT, not JSON: "JSON" selects no SQLite affinity and falls through to
+		-- NUMERIC, which rewrites numeric-looking TEXT ('007' -> 7). This writer
+		-- binds a marshalled object, so it always starts with '{' and is immune
+		-- in practice — immune by payload shape, not by declaration, which is
+		-- exactly the accident that hid the same bug elsewhere (mache-4b8a42).
+		record TEXT
 	)`); err != nil {
 		return err
 	}

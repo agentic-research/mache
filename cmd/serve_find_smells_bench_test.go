@@ -29,7 +29,7 @@ func seedSmellBench(b *testing.B, nDefs int) *smellTestGraph {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL, record_id TEXT, record JSON,
+			mtime INTEGER NOT NULL, record_id TEXT, record TEXT,
 			source_file TEXT
 		);
 		CREATE TABLE _ast (
