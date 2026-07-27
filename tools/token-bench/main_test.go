@@ -50,7 +50,7 @@ func TestRun_ArmAChargedPerFileNotPerConstruct(t *testing.T) {
 		map[string]string{"a.go": "0123456789012345678901234567890123456789"}, // 40 bytes
 		[][2]any{{"a.go", body}, {"a.go", body}, {"a.go", body}, {"a.go", body}},
 	)
-	res, err := run(dbPath)
+	res, err := measureCorpus(dbPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, 4, res.Constructs)
@@ -73,7 +73,7 @@ func TestRun_PerExtensionSeparatesLanguages(t *testing.T) {
 		},
 		[][2]any{{"a.go", "aa"}, {"b.rs", "bbbbb"}},
 	)
-	res, err := run(dbPath)
+	res, err := measureCorpus(dbPath)
 	require.NoError(t, err)
 
 	require.Contains(t, res.PerExt, ".go")
@@ -97,7 +97,7 @@ func TestRun_MissingSourceFileDroppedFromBothArms(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	res, err := run(dbPath)
+	res, err := measureCorpus(dbPath)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Constructs, "the vanished construct is not counted")
 	assert.Equal(t, 1, res.Files)
@@ -108,7 +108,7 @@ func TestRun_MissingSourceFileDroppedFromBothArms(t *testing.T) {
 // that a reader would mistake for "no benefit".
 func TestRun_NoConstructsIsAnError(t *testing.T) {
 	dbPath := fixture(t, map[string]string{"a.go": "a"}, nil)
-	_, err := run(dbPath)
+	_, err := measureCorpus(dbPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no function/method constructs")
 }
@@ -117,7 +117,7 @@ func TestRun_NoConstructsIsAnError(t *testing.T) {
 // proven win. Assert they ship and name the unmeasured falsifiers.
 func TestRun_CaveatsNameUnmeasuredFalsifiers(t *testing.T) {
 	dbPath := fixture(t, map[string]string{"a.go": "aaaa"}, [][2]any{{"a.go", "a"}})
-	res, err := run(dbPath)
+	res, err := measureCorpus(dbPath)
 	require.NoError(t, err)
 	joined := ""
 	for _, c := range res.Caveats {
@@ -169,7 +169,7 @@ func TestRun_PairedRatioMedianIsRobustToOutlierFile(t *testing.T) {
 		cons = append(cons, [2]any{"huge.go", "x"}) // 2002/1 -> ratio ~2002
 	}
 	dbPath := fixture(t, files, cons)
-	res, err := run(dbPath)
+	res, err := measureCorpus(dbPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, res.MaxPerFile, "the crammed file is identified")
@@ -186,7 +186,7 @@ func TestRun_WarnsWhenRecordLooksLikeJSON(t *testing.T) {
 		map[string]string{"a.go": "aaaaaaaaaa"},
 		[][2]any{{"a.go", `{"scope":"func f(){}","extra":1}`}},
 	)
-	res, err := run(dbPath)
+	res, err := measureCorpus(dbPath)
 	require.NoError(t, err)
 	require.NotEmpty(t, res.Warnings, "must warn rather than silently mismeasure")
 	assert.Contains(t, res.Warnings[0], "mache-fc737b")
@@ -237,7 +237,7 @@ func TestRun_ThreeArmsAreOrdered(t *testing.T) {
 		cons = append(cons, [2]any{name, "func f(){}"})
 	}
 	dbPath := fixture(t, files, cons)
-	res, err := run(dbPath)
+	res, err := measureCorpus(dbPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, 80, res.WindowLines)

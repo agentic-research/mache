@@ -53,3 +53,42 @@ func TestComputeCeiling_NoteWarnsAgainstCompetingOnTokens(t *testing.T) {
 	assert.Contains(t, c.Note, "commoditized")
 	assert.Contains(t, c.Note, "correctness-of-write")
 }
+
+// Validates the containment computation against the independently-derived
+// SQL figure: at an 80-line window over this repo, 96.5% of constructs fit.
+// A construct exactly at the window size fits; one line over does not.
+func TestComputeContainment_BoundaryIsInclusive(t *testing.T) {
+	c := computeContainment(80, []int{79, 80, 81}, 0)
+	assert.Equal(t, 2, c.Contained, "79 and 80 fit; 81 does not")
+	assert.Equal(t, 1, c.Overflows)
+	assert.InDelta(t, 66.67, c.ContainedPct, 0.01)
+}
+
+// Aligned vs unaligned is the whole argument: a cap that knows where the
+// construct starts needs ~1 read; a content-blind cap needs
+// median_file_lines/window. The GAP between them is the value of the index.
+func TestComputeContainment_AlignedAndUnalignedDiverge(t *testing.T) {
+	lines := make([]int, 100)
+	for i := range lines {
+		lines[i] = 16 // p50 construct size measured on this repo
+	}
+	c := computeContainment(80, lines, 162) // median file measured on this repo
+	assert.InDelta(t, 100.0, c.ContainedPct, 0.01, "16-line constructs all fit an 80-line window")
+	assert.InDelta(t, 1.0, c.AlignedReads, 0.01, "aligned: one read each")
+	assert.InDelta(t, 2.02, c.UnalignedReads, 0.02, "content-blind: ~2 reads, 162/80")
+	assert.Greater(t, c.UnalignedReads, c.AlignedReads*1.9,
+		"the alignment gap is the measurable value of knowing where the construct is")
+}
+
+// A window at least as large as the median file needs no second read.
+func TestComputeContainment_WindowCoveringFileNeedsOneRead(t *testing.T) {
+	c := computeContainment(320, []int{16, 20}, 162)
+	assert.InDelta(t, 1.0, c.UnalignedReads, 0.001)
+}
+
+// An oversized construct costs ceil(lines/window) reads even when aligned.
+func TestComputeContainment_OverflowCostsCeilReads(t *testing.T) {
+	c := computeContainment(80, []int{384}, 0) // the longest construct in this repo
+	assert.Equal(t, 0, c.Contained)
+	assert.InDelta(t, 5.0, c.AlignedReads, 0.001, "ceil(384/80) = 5")
+}

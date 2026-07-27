@@ -65,6 +65,69 @@
     "r90": 10,
     "note": "Session-level reduction is bounded by read_share and asymptotic in the retrieval ratio: reduction(R) = read_share * (1 - 1/R). At R=10 you are already at 90% of the ceiling, so a large spread in retrieval quality collapses to a few points of session cost. Token reduction is therefore a commoditized claim \u2014 evaluate on correctness-of-write and cross-format reach instead."
   },
+  "containment": [
+    {
+      "window_lines": 20,
+      "constructs": 3502,
+      "contained": 2147,
+      "contained_pct": 61.307824100514,
+      "overflows": 1355,
+      "aligned_reads_per_construct": 1.723015419760137,
+      "unaligned_reads_per_construct": 8.1,
+      "p50_construct_lines": 16,
+      "p95_construct_lines": 69,
+      "max_construct_lines": 384
+    },
+    {
+      "window_lines": 40,
+      "constructs": 3502,
+      "contained": 2947,
+      "contained_pct": 84.15191319246145,
+      "overflows": 555,
+      "aligned_reads_per_construct": 1.2252998286693317,
+      "unaligned_reads_per_construct": 4.05,
+      "p50_construct_lines": 16,
+      "p95_construct_lines": 69,
+      "max_construct_lines": 384
+    },
+    {
+      "window_lines": 80,
+      "constructs": 3502,
+      "contained": 3381,
+      "contained_pct": 96.54483152484295,
+      "overflows": 121,
+      "aligned_reads_per_construct": 1.0451170759565962,
+      "unaligned_reads_per_construct": 2.025,
+      "p50_construct_lines": 16,
+      "p95_construct_lines": 69,
+      "max_construct_lines": 384
+    },
+    {
+      "window_lines": 160,
+      "constructs": 3502,
+      "contained": 3475,
+      "contained_pct": 99.22901199314677,
+      "overflows": 27,
+      "aligned_reads_per_construct": 1.0085665334094802,
+      "unaligned_reads_per_construct": 1.0125,
+      "p50_construct_lines": 16,
+      "p95_construct_lines": 69,
+      "max_construct_lines": 384
+    },
+    {
+      "window_lines": 320,
+      "constructs": 3502,
+      "contained": 3499,
+      "contained_pct": 99.9143346659052,
+      "overflows": 3,
+      "aligned_reads_per_construct": 1.000856653340948,
+      "unaligned_reads_per_construct": 1,
+      "p50_construct_lines": 16,
+      "p95_construct_lines": 69,
+      "max_construct_lines": 384
+    }
+  ],
+  "median_file_lines": 162,
   "caveats": [
     "Arm A charges the whole file once per file. An agent that reads the same file repeatedly pays it again; transcript analysis put 44.1% of Read bytes in multi-read files, so this understates arm A's real cost.",
     "Breakeven is constructs-per-file: a question needing more than that many constructs from one file is cheaper as a whole-file read.",

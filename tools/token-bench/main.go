@@ -43,30 +43,32 @@ import (
 
 // Result is the emitted baseline record. Stable field names — a later run
 // diffs against a committed copy of this struct.
-type Result struct {
-	DB          string            `json:"db"`
-	Constructs  int               `json:"constructs"`
-	Files       int               `json:"files"`
-	ArmABytes   int64             `json:"arm_a_bytes"` // whole-file retrieval, incl. cat -n prefixes
-	ArmWBytes   int64             `json:"arm_w_bytes"` // bounded N-line window (pgr baseline's control)
-	ArmWAvg     int64             `json:"arm_w_avg"`
-	WindowLines int               `json:"window_lines"`
-	RatioWMed   float64           `json:"ratio_w_median"`  // whole-file / window — how much a line cap alone buys
-	RatioBWMed  float64           `json:"ratio_bw_median"` // window / construct — mache's marginal win over a line cap
-	ArmBBytes   int64             `json:"arm_b_bytes"`     // construct-granular retrieval
-	ArmAAvg     int64             `json:"arm_a_avg"`       // bytes per file
-	ArmBAvg     int64             `json:"arm_b_avg"`       // bytes per construct
-	Ratio       float64           `json:"ratio"`           // ratio-of-means: arm_a_avg / arm_b_avg
-	RatioMed    float64           `json:"ratio_median"`    // median PAIRED ratio — the headline statistic
-	RatioMean   float64           `json:"ratio_mean"`      // mean paired ratio (outlier-sensitive)
-	RatioP25    float64           `json:"ratio_p25"`
-	RatioP75    float64           `json:"ratio_p75"`
-	Breakeven   float64           `json:"breakeven"` // constructs/file — above this, arm A wins
-	MaxPerFile  int               `json:"max_constructs_per_file"`
-	PerExt      map[string]ExtRow `json:"per_ext"` // F4
-	Ceiling     *Ceiling          `json:"ceiling,omitempty"`
-	Caveats     []string          `json:"caveats"`
-	Warnings    []string          `json:"warnings,omitempty"`
+type BenchResult struct {
+	DB              string            `json:"db"`
+	Constructs      int               `json:"constructs"`
+	Files           int               `json:"files"`
+	ArmABytes       int64             `json:"arm_a_bytes"` // whole-file retrieval, incl. cat -n prefixes
+	ArmWBytes       int64             `json:"arm_w_bytes"` // bounded N-line window (pgr baseline's control)
+	ArmWAvg         int64             `json:"arm_w_avg"`
+	WindowLines     int               `json:"window_lines"`
+	RatioWMed       float64           `json:"ratio_w_median"`  // whole-file / window — how much a line cap alone buys
+	RatioBWMed      float64           `json:"ratio_bw_median"` // window / construct — mache's marginal win over a line cap
+	ArmBBytes       int64             `json:"arm_b_bytes"`     // construct-granular retrieval
+	ArmAAvg         int64             `json:"arm_a_avg"`       // bytes per file
+	ArmBAvg         int64             `json:"arm_b_avg"`       // bytes per construct
+	Ratio           float64           `json:"ratio"`           // ratio-of-means: arm_a_avg / arm_b_avg
+	RatioMed        float64           `json:"ratio_median"`    // median PAIRED ratio — the headline statistic
+	RatioMean       float64           `json:"ratio_mean"`      // mean paired ratio (outlier-sensitive)
+	RatioP25        float64           `json:"ratio_p25"`
+	RatioP75        float64           `json:"ratio_p75"`
+	Breakeven       float64           `json:"breakeven"` // constructs/file — above this, arm A wins
+	MaxPerFile      int               `json:"max_constructs_per_file"`
+	PerExt          map[string]ExtRow `json:"per_ext"` // F4
+	Ceiling         *Ceiling          `json:"ceiling,omitempty"`
+	Containment     []Containment     `json:"containment"`
+	MedianFileLines int               `json:"median_file_lines"`
+	Caveats         []string          `json:"caveats"`
+	Warnings        []string          `json:"warnings,omitempty"`
 }
 
 // armACost is what the built-in Read tool actually puts in context: the file
@@ -139,7 +141,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "token-bench: -db is required")
 		os.Exit(2)
 	}
-	res, err := run(*dbPath)
+	res, err := measureCorpus(*dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "token-bench: %v\n", err)
 		os.Exit(1)
@@ -173,29 +175,33 @@ type perFile struct {
 	constructs int
 	armB       int64
 	sizes      []int64 // per-construct bytes, for paired ratios
+	lines      []int   // per-construct line spans, for containment
 }
 
 // windowLines matches pgr's baseline read_code default (max_lines=80).
 const windowLines = 80
 
-func run(dbPath string) (*Result, error) {
+// collectConstructs reads construct-granular rows and groups them by source
+// file. Split out of measureCorpus so neither half is a god function.
+func collectConstructs(dbPath string) (map[string]*perFile, int, int, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	defer func() { _ = db.Close() }()
 
 	// Construct-granular rows: a function/method's own `source` leaf is exactly
 	// what find_definition returns. `record` holds the rendered content.
 	rows, err := db.Query(`
-		SELECT source_file, LENGTH(record), SUBSTR(record, 1, 200)
+		SELECT source_file, LENGTH(record), SUBSTR(record, 1, 200),
+		       LENGTH(record) - LENGTH(REPLACE(record, CHAR(10), '')) + 1
 		  FROM nodes
 		 WHERE name = 'source'
 		   AND record IS NOT NULL
 		   AND source_file IS NOT NULL
 		   AND (id LIKE '%/functions/%' OR id LIKE '%/methods/%')`)
 	if err != nil {
-		return nil, fmt.Errorf("query constructs: %w", err)
+		return nil, 0, 0, fmt.Errorf("query constructs: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -206,8 +212,9 @@ func run(dbPath string) (*Result, error) {
 		var src string
 		var n int64
 		var head string
-		if err := rows.Scan(&src, &n, &head); err != nil {
-			return nil, err
+		var nlines int
+		if err := rows.Scan(&src, &n, &head, &nlines); err != nil {
+			return nil, 0, 0, err
 		}
 		// `record` is only the rendered content when the schema's
 		// content_template is a bare capture (go-schema uses "{{.scope}}").
@@ -225,16 +232,25 @@ func run(dbPath string) (*Result, error) {
 		f.constructs++
 		f.armB += n
 		f.sizes = append(f.sizes, n)
+		f.lines = append(f.lines, nlines)
 		total++
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	if total == 0 {
-		return nil, fmt.Errorf("no function/method constructs found in %s — was it built with a source schema?", dbPath)
+		return nil, 0, 0, fmt.Errorf("no function/method constructs found in %s — was it built with a source schema?", dbPath)
+	}
+	return files, total, jsonRecords, nil
+}
+
+func measureCorpus(dbPath string) (*BenchResult, error) {
+	files, total, jsonRecords, err := collectConstructs(dbPath)
+	if err != nil {
+		return nil, err
 	}
 
-	res := &Result{
+	res := &BenchResult{
 		DB:         dbPath,
 		Constructs: total,
 		PerExt:     map[string]ExtRow{},
@@ -253,6 +269,7 @@ func run(dbPath string) (*Result, error) {
 	byExt := map[string]*acc{}
 
 	var paired, pairedW, pairedBW []float64
+	var constructLines, fileLineCounts []int
 	for src, f := range files {
 		size, err := armACost(src)
 		if err != nil {
@@ -264,6 +281,11 @@ func run(dbPath string) (*Result, error) {
 		if f.constructs > res.MaxPerFile {
 			res.MaxPerFile = f.constructs
 		}
+		_, flines, ferr := fileCost(src)
+		if ferr == nil {
+			fileLineCounts = append(fileLineCounts, flines)
+		}
+		constructLines = append(constructLines, f.lines...)
 		wsize, werr := armWCost(src, windowLines)
 		if werr != nil {
 			wsize = size
@@ -308,6 +330,11 @@ func run(dbPath string) (*Result, error) {
 	// spanning 1..156, ratio-of-means and mean-of-ratios diverge sharply
 	// (Jensen). Median is the headline because it is robust to the files that
 	// hold a hundred-plus tiny constructs.
+	if len(fileLineCounts) > 0 {
+		sort.Ints(fileLineCounts)
+		res.MedianFileLines = fileLineCounts[len(fileLineCounts)/2]
+	}
+	res.Containment = sweepContainment([]int{20, 40, 80, 160, 320}, constructLines, res.MedianFileLines)
 	res.WindowLines = windowLines
 	if res.Files > 0 {
 		res.ArmWAvg = res.ArmWBytes / int64(res.Files)
