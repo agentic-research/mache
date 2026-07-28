@@ -109,3 +109,68 @@ func TestQueryBinaryVersion_HonorsProbeTimeout(t *testing.T) {
 		t.Error("generous deadline should resolve the version, got empty")
 	}
 }
+
+// RecordResolved is the public entry point for non-daemon callers (mache
+// build's autoInvokeLeylineParse). Before it existed, Provenance() was
+// populated only by DiscoverOrStart, so `mache build` resolved a binary, ran
+// it, and still reported "no binary resolved this process" — leaving
+// _mache_meta with nothing to stamp and .db artifacts whose producing leyline
+// was unknowable (mache-438104).
+//
+// Declared in this file, after TestProvenance, deliberately: that test asserts
+// the PRE-resolution state (ok=false), so it must run before anything records.
+// Go runs a package's tests in declaration order across filename-sorted files,
+// and a separate provenance_record_test.go would sort ahead of provenance_test.go
+// and break it.
+func TestRecordResolved_PublishesPathSourceAndVersion(t *testing.T) {
+	origTimeout := probeTimeout
+	probeTimeout = 30 * time.Second
+	t.Cleanup(func() { probeTimeout = origTimeout })
+
+	bin := writeFakeLeyline(t, "leyline "+leylineBinaryVersion+" (open)")
+	RecordResolved(bin, "resolved")
+
+	p, ok := Provenance()
+	if !ok {
+		t.Fatal("after RecordResolved, Provenance must report a resolved binary")
+	}
+	if p.Path != bin {
+		t.Errorf("path: got %q want %q", p.Path, bin)
+	}
+	if p.Source != "resolved" {
+		t.Errorf("source: got %q want %q", p.Source, "resolved")
+	}
+	if p.Version == "" {
+		t.Error("version must be queried from the binary, not left empty — " +
+			"an empty version is what writeBuildMetadata records as 'unresolved'")
+	}
+	if !p.VersionMatches {
+		t.Errorf("fake reports the pin %q but VersionMatches is false (got %q)",
+			leylineBinaryVersion, p.Version)
+	}
+}
+
+// An empty path must not clobber an existing record. The guard matters because
+// callers pass the result of a resolution that may have failed; overwriting a
+// good record with nothing would make the artifact stamp WORSE than not calling
+// it at all.
+func TestRecordResolved_EmptyPathIsANoOp(t *testing.T) {
+	origTimeout := probeTimeout
+	probeTimeout = 30 * time.Second
+	t.Cleanup(func() { probeTimeout = origTimeout })
+
+	bin := writeFakeLeyline(t, "leyline "+leylineBinaryVersion+" (open)")
+	RecordResolved(bin, "resolved")
+	before, _ := Provenance()
+
+	RecordResolved("", "should-be-ignored")
+
+	after, ok := Provenance()
+	if !ok {
+		t.Fatal("an empty-path call must not un-resolve the record")
+	}
+	if after.Path != before.Path || after.Source != before.Source {
+		t.Errorf("empty path overwrote the record: %q/%q -> %q/%q",
+			before.Path, before.Source, after.Path, after.Source)
+	}
+}

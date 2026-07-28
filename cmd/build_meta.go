@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
+	"github.com/agentic-research/mache/internal/leyline"
 	_ "modernc.org/sqlite"
 )
 
@@ -22,7 +23,9 @@ import (
 //
 // The table is `(key TEXT PRIMARY KEY, value TEXT NOT NULL)`. Keys
 // today: `backend`, `mache_version`, `mache_commit`, `built_at` (RFC
-// 3339). Best-effort: any failure logs and returns nil — the build
+// 3339), plus the leyline provenance keys from leylineMetaRows —
+// `leyline_pin`, `leyline_version`, and `leyline_source` when a binary was
+// resolved. Best-effort: any failure logs and returns nil — the build
 // shouldn't fail because the marker couldn't be written.
 func writeBuildMetadata(dbPath, backend string) error {
 	db, err := sql.Open("sqlite", dbPath)
@@ -46,6 +49,7 @@ func writeBuildMetadata(dbPath, backend string) error {
 		{"mache_commit", Commit},
 		{"built_at", time.Now().UTC().Format(time.RFC3339)},
 	}
+	rows = append(rows, leylineMetaRows()...)
 	for _, kv := range rows {
 		if _, err := db.Exec(
 			`INSERT OR REPLACE INTO _mache_meta (key, value) VALUES (?, ?)`,
@@ -56,6 +60,60 @@ func writeBuildMetadata(dbPath, backend string) error {
 		}
 	}
 	return nil
+}
+
+// leylineMetaRows returns the leyline provenance rows for _mache_meta.
+//
+// Recorded because the producing leyline determines how merkle-AST node
+// addresses are DERIVED, and mache has no other way to observe that. LLO
+// v0.11.0 bumped IR_SCHEMA_VERSION from merkle-ast-v1 to merkle-ast-v2,
+// rewriting every Rust trait signature's node_hash from BYTE-IDENTICAL sources
+// (ley-line-open #282). Every staleness mechanism mache has is content- or
+// time-based — cache lockfiles hash raw source bytes, the parse skip is
+// mtime+size — so none of them can see it. Before this, a .db built under
+// merkle-ast-v1 and served after the upgrade was indistinguishable from a fresh
+// one, and would serve stale addresses indefinitely (mache-438104).
+//
+// Two values, because they answer different questions and can disagree:
+//
+//	leyline_version — what actually ran. MACHE_LEYLINE_BINARY can point at a
+//	                  local build, so this is the only honest answer to "what
+//	                  produced this .db".
+//	leyline_pin     — what this mache build requires. Always present, even when
+//	                  no binary was resolved (a pure-.db path), so the pin a
+//	                  given mache expects is always recoverable from the
+//	                  artifact.
+//
+// A mismatch between them is the diagnostic: it means an override was in play
+// and the .db may not match what CI would produce.
+//
+// This is the half mache can fix alone. Consuming a lineage tag published by
+// LLO is the durable fix and is separate (mache-43d63d, blocked on
+// ley-line-open-348de6) — a version string is a proxy for lineage, not lineage
+// itself: two releases can share an IR schema, and one release can change it.
+func leylineMetaRows() [][2]string {
+	prov, ok := leyline.Provenance()
+	return leylineMetaRowsFrom(prov, ok, leyline.PinnedBinaryVersion())
+}
+
+// leylineMetaRowsFrom is the pure form, taking the provenance rather than
+// reading the process-global record. Split out so tests can exercise every
+// branch — resolved, unresolved, override-in-play — without mutating a
+// package-level singleton that has no reset and would leak into every
+// subsequent test in the package.
+func leylineMetaRowsFrom(prov leyline.LeylineProvenance, ok bool, pin string) [][2]string {
+	rows := [][2]string{{"leyline_pin", pin}}
+	if !ok || prov.Version == "" {
+		// No binary resolved this process (pure-.db build, or resolution
+		// failed). Record the absence rather than omitting the key, so a
+		// consumer can tell "built without leyline" from "built by an older
+		// mache that didn't stamp this".
+		return append(rows, [2]string{"leyline_version", "unresolved"})
+	}
+	return append(rows,
+		[2]string{"leyline_version", prov.Version},
+		[2]string{"leyline_source", prov.Source},
+	)
 }
 
 // countNodes returns the number of rows in `nodes`, or -1 if the table

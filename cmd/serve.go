@@ -793,6 +793,11 @@ func autoInvokeLeylineParse(sourceDir string) (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
+	// Publish which binary this is. Without it Provenance() reports "no binary
+	// resolved" even though we are about to run one, and writeBuildMetadata has
+	// nothing to stamp into the .db — leaving artifacts whose producing leyline
+	// is unknowable (mache-438104).
+	leyline.RecordResolved(leylineBin, "resolved")
 
 	tmpFile, err := os.CreateTemp("", "mache-leyline-*.db")
 	if err != nil {
