@@ -226,7 +226,27 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		}
 		_ = rows.Close()
 	}
-	return nil
+
+	// v_test_nodes is installed HERE rather than at the rule-run site so that
+	// every caller gets it — production and the 26 tests that build fixtures by
+	// hand and call this function. Rules reference it unconditionally, so a
+	// caller that installed v_defs/v_refs but not this one produces "no such
+	// table" at query time; making them one install point removes that class.
+	hasAST, err := tableHasColumn(qg, "_ast", "node_id")
+	if err != nil {
+		return fmt.Errorf("probe _ast: %w", err)
+	}
+	if hasAST {
+		// Both tables are required: _ast supplies positions and kinds,
+		// node_content the attribute's token. Fixtures carry one without the
+		// other, and a half-present schema must degrade to "no test nodes".
+		hasContent, cerr := tableHasColumn(qg, "node_content", "token")
+		if cerr != nil {
+			return fmt.Errorf("probe node_content: %w", cerr)
+		}
+		hasAST = hasContent
+	}
+	return ensureTestNodesView(qg, hasAST)
 }
 
 // LoadCapnpBindings populates the per-connection _capnp_binding_refs
