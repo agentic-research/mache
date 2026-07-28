@@ -60,7 +60,14 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		size INTEGER DEFAULT 0,
 		mtime INTEGER NOT NULL,
 		record_id TEXT,
-		record JSON,
+		-- TEXT, not JSON. SQLite has no JSON storage class, and "JSON" contains
+		-- none of the substrings that select an affinity, so it falls through to
+		-- NUMERIC — which silently rewrites any TEXT value that parses as a
+		-- number ('007' -> 7, '1.10' -> 1.1). Ingest binds n.Data as []byte and
+		-- BLOBs bypass the conversion, which is why this stayed latent;
+		-- WritableGraph.UpdateRecord binds string(content) and does not
+		-- (mache-4b8a42).
+		record TEXT,
 		source_file TEXT,
 		-- context holds the imports/types visible to a construct scope,
 		-- served by the context virtual file (vfs.ContextHandler). Set at
@@ -456,9 +463,18 @@ func (w *SQLiteWriter) AddNode(n *graph.Node) {
 	// 4. Record content: inline rendered file content only. Properties have
 	// their own column now, so `record` means one of two things (a source data
 	// record, or inline content) instead of three (mache-90b89b).
-	var record []byte
+	//
+	// Bound as a STRING, not []byte. A []byte bind stores a BLOB, and SQLite
+	// never considers a BLOB equal to a TEXT value — so `WHERE record = ?`
+	// matched nodes written by WritableGraph.UpdateRecord (which binds a
+	// string) and silently missed every node written here. One column, two
+	// storage classes, results that depended on which writer touched a node
+	// last. LIKE and length() coerce and were unaffected, which is how it went
+	// unnoticed. Both writers now produce TEXT (mache-6bed54).
+	var record *string
 	if n.Data != nil {
-		record = n.Data
+		s := string(n.Data)
+		record = &s
 	}
 
 	// 4b. Properties → props, as real nested JSON.

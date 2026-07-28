@@ -118,7 +118,7 @@ func TestDeadCode_InterfaceMethodSkippedWithoutLSP(t *testing.T) {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON, source_file TEXT
+			record_id TEXT, record TEXT, source_file TEXT
 		);
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -169,7 +169,7 @@ func TestDeadCode_InterfaceMethodFlaggedWhenLSPSeesNoRefs(t *testing.T) {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON, source_file TEXT
+			record_id TEXT, record TEXT, source_file TEXT
 		);
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -248,7 +248,7 @@ func TestDeadCode_InterfaceMethodAliveWhenLSPSeesRefs(t *testing.T) {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON, source_file TEXT
+			record_id TEXT, record TEXT, source_file TEXT
 		);
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
@@ -317,7 +317,7 @@ func TestDeadCode_TestPrefixAlwaysSkipped(t *testing.T) {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON, source_file TEXT
+			record_id TEXT, record TEXT, source_file TEXT
 		);
 		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;

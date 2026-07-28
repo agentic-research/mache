@@ -44,7 +44,7 @@ func buildLeylineGoProjectionFixture(t *testing.T) *smellTestGraph {
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL DEFAULT 0, record_id TEXT, record JSON,
+			mtime INTEGER NOT NULL DEFAULT 0, record_id TEXT, record TEXT,
 			source_file TEXT
 		);
 		CREATE TABLE node_defs (

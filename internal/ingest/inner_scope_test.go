@@ -23,7 +23,7 @@ func seedGroupedTypeAST(t *testing.T) *sql.DB {
 	_, err = db.Exec(`
 		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL,
-			record_id TEXT, record JSON, source_file TEXT);
+			record_id TEXT, record TEXT, source_file TEXT);
 		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
 			node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
 			start_row INTEGER NOT NULL, start_col INTEGER NOT NULL,

@@ -25,7 +25,7 @@ func TestNodesTableReader_GetNode_CarriesContext(t *testing.T) {
 
 	_, err = db.Exec(`CREATE TABLE nodes (
 		id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, kind INTEGER,
-		size INTEGER, mtime INTEGER, record_id TEXT, record JSON,
+		size INTEGER, mtime INTEGER, record_id TEXT, record TEXT,
 		source_file TEXT, context BLOB)`)
 	require.NoError(t, err)
 
@@ -52,7 +52,7 @@ func TestNodesTableReader_GetNode_MissingContextColumn(t *testing.T) {
 
 	_, err = db.Exec(`CREATE TABLE nodes (
 		id TEXT PRIMARY KEY, parent_id TEXT, name TEXT, kind INTEGER,
-		size INTEGER, mtime INTEGER, record_id TEXT, record JSON,
+		size INTEGER, mtime INTEGER, record_id TEXT, record TEXT,
 		source_file TEXT)`)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO nodes (id, name, kind, size, mtime) VALUES (?, ?, ?, ?, ?)`,

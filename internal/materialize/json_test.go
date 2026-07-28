@@ -183,7 +183,7 @@ func TestJSONMaterializer_EmptyDB(t *testing.T) {
 	srcDB := filepath.Join(t.TempDir(), "empty.db")
 	db, err := sql.Open("sqlite", srcDB)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT)`)
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT)`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -203,7 +203,7 @@ func TestJSONMaterializer_EmptyStringContent(t *testing.T) {
 	srcDB := filepath.Join(t.TempDir(), "test.db")
 	db, err := sql.Open("sqlite", srcDB)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT)`)
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT)`)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO nodes VALUES ('root', '', 'root', 1, 0, 0, NULL, NULL, NULL)`)
 	require.NoError(t, err)
@@ -236,7 +236,7 @@ func TestJSONMaterializer_CycleProtection(t *testing.T) {
 	srcDB := filepath.Join(t.TempDir(), "cycle.db")
 	db, err := sql.Open("sqlite", srcDB)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record JSON, source_file TEXT)`)
+	_, err = db.Exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT)`)
 	require.NoError(t, err)
 	// A → B → A cycle
 	_, err = db.Exec(`INSERT INTO nodes VALUES ('a', 'b', 'a', 1, 0, 0, NULL, NULL, NULL)`)

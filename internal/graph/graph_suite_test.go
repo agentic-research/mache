@@ -351,7 +351,7 @@ func createNodesTableDB(t *testing.T) string {
 			size INTEGER DEFAULT 0,
 			mtime INTEGER NOT NULL,
 			record_id TEXT,
-			record JSON,
+			record TEXT,
 			source_file TEXT
 		);
 		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
