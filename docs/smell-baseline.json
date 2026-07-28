@@ -714,46 +714,21 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/accrete.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/atom.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/channels.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/decompose.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/harmony.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/lib.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/parse.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/provenance.rs",
       "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/thread.rs",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/lib.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/provenance.rs",
       "count": 1
     },
     {
@@ -768,28 +743,18 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/backend.rs",
-      "count": 6
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/bdr_enrich.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/bead.rs",
-      "count": 5
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_sqlite.rs",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
@@ -798,167 +763,77 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/cli.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
-      "count": 6
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/prompt.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/providers.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/session.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/sweep.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/tests.rs",
-      "count": 3
+      "count": 5
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/mod.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/observations.rs",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/dsse.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
-      "count": 3
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/github.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/github_mirror.rs",
-      "count": 3
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/handoff.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/linear.rs",
-      "count": 5
+      "count": 4
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/linear_tracker.rs",
-      "count": 4
+      "count": 3
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
-      "count": 10
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/manifest.rs",
-      "count": 1
+      "count": 6
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/migrate.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_chain.rs",
-      "count": 6
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_flat.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_lww.rs",
-      "count": 5
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_orset.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/fold.rs",
-      "count": 11
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/integration_tests.rs",
-      "count": 15
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/log.rs",
-      "count": 6
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/log_sqlite.rs",
-      "count": 9
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/mod.rs",
-      "count": 5
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/quarantine.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/registry.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/tree_fold.rs",
-      "count": 5
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/fold.rs",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/orchestrate/mod.rs",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/mod.rs",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/tree_fold.rs",
       "count": 1
     },
     {
@@ -968,43 +843,13 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/pipeline.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/plugin.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/pool.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/queue.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/helpers.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/mod.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/tests.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/vcs.rs",
-      "count": 1
+      "count": 3
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1013,128 +858,63 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/repo_cache.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/scanner.rs",
-      "count": 6
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/scope.rs",
-      "count": 5
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/secrets.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/github_webhook.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
       "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/scope_args.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ticket_load.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/tools.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/session.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/sprites.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/sprites_provider.rs",
-      "count": 5
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/store.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
-      "count": 4
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/store_sqlite.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
       "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/testutil.rs",
-      "count": 3
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/vcs.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/verify.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/workspace/mod.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/workspace/sweep.rs",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/xref.rs",
-      "count": 3
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/verify.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/workspace/mod.rs",
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1518,11 +1298,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/github_mirror.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/linear.rs",
       "count": 1
     },
@@ -1569,22 +1344,17 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
-      "count": 4
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/webhook.rs",
-      "count": 1
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
