@@ -2,6 +2,7 @@ package leyline
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 )
@@ -45,7 +46,48 @@ func (c *SocketClient) VerifyVersion(clientVersion string) error {
 	if err != nil {
 		return nil
 	}
+	warnOnPinDrift(resp)
 	return checkLeylineVersionCompat(resp, clientVersion)
+}
+
+// warnOnPinDrift surfaces a daemon whose version differs from the pin.
+//
+// This closes the hole that produced mache-608a3c a second time. ResolveBinary
+// enforces the exact pin at every tier, but DiscoverOrStart's fast path returns
+// an ALREADY-RUNNING daemon's socket without ever calling it — so a daemon left
+// over from another branch or an earlier session serves _ast at whatever version
+// it happens to be, and the wire-compat handshake passes it because
+// wire_format_major and compat_min are both satisfied.
+//
+// That is the correct outcome for the handshake, which guards whether the wire
+// DECODES. It is the wrong outcome for _ast schema identity, which is what the
+// pin exists for: LLO ships _ast changes in patch releases, so a 0.10.2 daemon
+// answering a v0.10.3 pin produces a structurally different graph while every
+// compatibility check reports green.
+//
+// Deliberately a WARNING rather than a refusal. A running daemon may be someone
+// else's (LEYLINE_SOCKET), killing the process's ability to proceed on a version
+// nit would be worse than the drift, and the handshake's own contract is that a
+// probe must never be stricter than the decode. What was missing was not
+// strictness — it was VISIBILITY. Silent drift is the failure; a loud line next
+// to the output that inherits it is the fix.
+func warnOnPinDrift(resp map[string]any) {
+	got, _ := resp["version"].(string)
+	if got == "" {
+		if s, ok := resp["schema_version"].(string); ok {
+			got = s
+		}
+	}
+	if got == "" {
+		return // nothing to compare — an older daemon that omits it
+	}
+	if parseSemverParts(got) == parseSemverParts(leylineBinaryVersion) {
+		return
+	}
+	log.Printf("WARNING: reachable leyline daemon reports %s but mache pins %s — "+
+		"_ast output may differ from CI (LLO ships schema changes in patch releases). "+
+		"Stop the stale daemon, or set %s to make the override explicit.",
+		got, leylineBinaryVersion, BinaryOverrideEnv)
 }
 
 // checkLeylineVersionCompat compares a leyline_version response against this
