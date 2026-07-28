@@ -331,6 +331,59 @@ tasks:
         echo "cache is namespaced by pin — other versions here belong to other mache builds and are left alone:"
         ls -1 "$HOME/.mache/bin"/leyline* 2>/dev/null | sed 's/^/  /' || true
 
+  leyline:pin-bump:
+    desc: "Bump the pinned leyline release: TAG=v0.11.1 task leyline:pin-bump. Rewrites leylineBinaryVersion, the four SHA-256 asset digests, the pin test, and server.json's minimum-version in one step, then prints what still needs a HUMAN decision."
+    preconditions:
+      - sh: command -v gh
+        msg: "gh required to read release asset digests — https://cli.github.com"
+      - sh: command -v perl
+        msg: "perl required for the in-place pin rewrites"
+    cmds:
+      - |
+        set -euo pipefail
+        : "${TAG:?set TAG, e.g. TAG=v0.11.1 task leyline:pin-bump}"
+        BARE="${TAG#v}"
+        echo "==> fetching release assets for $TAG"
+        # The digest field is "sha256:<hex>"; the pin map stores bare hex.
+        ASSETS=$(gh release view "$TAG" --repo agentic-research/ley-line-open --json assets \
+          --jq '.assets[]|select(.name|startswith("leyline-"))|"\(.name) \(.digest)"')
+        if [ -z "$ASSETS" ]; then
+          echo "no leyline-<os>-<arch> assets on $TAG — a release without binaries cannot be pinned" >&2
+          exit 1
+        fi
+        COUNT=$(printf '%s\n' "$ASSETS" | wc -l | tr -d ' ')
+        if [ "$COUNT" -ne 4 ]; then
+          echo "expected 4 platform assets, got $COUNT:" >&2
+          printf '%s\n' "$ASSETS" >&2
+          echo "refusing to write a partial pin map — a missing platform fails closed at download time" >&2
+          exit 1
+        fi
+        printf '%s\n' "$ASSETS" | while read -r name digest; do
+          plat="${name#leyline-}"
+          hex="${digest#sha256:}"
+          echo "    $plat  $hex"
+          # Replace the hex for this platform key, leaving the map shape alone.
+          perl -pi -e "s|(\"$plat\":\s*\")[0-9a-f]{64}(\")|\${1}$hex\${2}|" internal/leyline/binary_pin.go
+        done
+        echo "==> rewriting version pins"
+        perl -pi -e "s|(leylineBinaryVersion = \")v[0-9.]+(\")|\${1}$TAG\${2}|" internal/leyline/socket.go
+        perl -pi -e "s|(assert\.Equal\(t, \")v[0-9.]+(\", leylineBinaryVersion\))|\${1}$TAG\${2}|" internal/leyline/binary_pin_test.go
+        perl -pi -e "s|(\"minimum-version\":\s*\")[0-9.]+(\")|\${1}$BARE\${2}|" server.json
+        echo
+        echo "==> mechanical bump done. STILL NEEDS A HUMAN:"
+        echo "  1. go.mod leyline-schema — bump ONLY if a schema module tag was published for $TAG."
+        echo "     Check: go list -m -versions github.com/agentic-research/ley-line-open/clients/go/leyline-schema"
+        echo "  2. The doc block above leylineBinaryVersion in internal/leyline/socket.go records"
+        echo "     the wire major, the compat floor, and WHAT CHANGED. It is prose and this task"
+        echo "     will not invent it. Read the release notes and write it."
+        echo "  3. LINEAGE. If the release changes how node addresses are DERIVED (LLO v0.11.0"
+        echo "     bumped IR_SCHEMA_VERSION merkle-ast-v1 -> v2), then persisted .db artifacts"
+        echo "     built by the previous leyline MUST BE REBUILT, not reused — sources are"
+        echo "     byte-identical so no content- or time-based check can see it (mache-438104)."
+        echo "     Say so in the PR body and the changelog, not just here."
+        echo
+        echo "==> then: task check  &&  MACHE_LIVE_LEYLINE_RELEASE=1 go test -count=1 -run '^TestLivePinnedReleaseDownload$' ./internal/leyline"
+
   test:ast:
     desc: "ASTWalker correctness over real leyline _ast — fast named signal (skips if the pinned leyline isn't cached; never downloads). Replaces the retired sitter↔AST parity gate — in-process tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so there is no second projector to be parity WITH."
     cmds:
