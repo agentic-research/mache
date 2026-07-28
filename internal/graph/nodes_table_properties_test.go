@@ -105,7 +105,7 @@ func newPropsTestDB(t *testing.T) *sql.DB {
 	_, err = db.Exec(`CREATE TABLE nodes (
 		id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 		kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL,
-		record_id TEXT, record JSON, source_file TEXT,
+		record_id TEXT, record TEXT, source_file TEXT,
 		context BLOB, props JSON
 	)`)
 	require.NoError(t, err)
