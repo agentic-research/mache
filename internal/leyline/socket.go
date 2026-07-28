@@ -79,6 +79,19 @@ type SocketClient struct {
 	closeErr  error
 }
 
+// DaemonResponseError is an error envelope returned by the ley-line daemon.
+//
+// Its message is kept separately so graph adapters can retain their public
+// error contracts (for example, mapping a missing node to graph.ErrNotFound)
+// while SendOpInto still rejects an unsuccessful typed response loudly.
+type DaemonResponseError struct {
+	Message string
+}
+
+func (e *DaemonResponseError) Error() string {
+	return fmt.Sprintf("daemon response: %s", e.Message)
+}
+
 // SubscribeDropped returns the cumulative number of events the Subscribe
 // goroutine has dropped because the consumer's channel buffer was full.
 // Non-zero values mean the consumer is falling behind the daemon's event
@@ -522,6 +535,15 @@ func (c *SocketClient) SendOpInto(req map[string]any, dest any) error {
 	if err != nil {
 		return err
 	}
+	var envelope struct {
+		Error *string `json:"error"`
+	}
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		return fmt.Errorf("unmarshal response envelope: %w", err)
+	}
+	if envelope.Error != nil {
+		return &DaemonResponseError{Message: *envelope.Error}
+	}
 	if err := json.Unmarshal(line, dest); err != nil {
 		return fmt.Errorf("unmarshal response: %w", err)
 	}
@@ -781,7 +803,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
 // As of this pin, both the daemon binary and go.mod's leyline-schema module are
-// v0.10.3. The release's generated compatibility document reports
+// v0.10.4. The release's generated compatibility document reports
 // wire_format_major=1 and compat_min_schema_version=0.6.0, so older compatible
 // clients remain inside the daemon's supported [floor, binary] range. The
 // version-parity gate (mache-b8af69) enforces that range.
@@ -791,12 +813,12 @@ func (c *SocketClient) Prioritize(files []string) error {
 // daemon.sheaf.invalidate topic. v0.7.4 and v0.7.5 added AST columns without
 // changing the wire major; v0.8.0 added validate coverage, node_refs.qualifier,
 // and extraction epochs. The wire major and compatibility floor remain
-// unchanged in v0.10.3.
+// unchanged in v0.10.4.
 //
 // The version-check (leylineVersionMatchesPin) is EXACT major.minor.patch —
 // LLO patch releases have changed the emitted _ast schema (0.7.4 added
 // container_node_id, 0.7.5 added canonical_kind), so the patch does NOT
-// float (mache-608a3c). v0.10.3 ships all four leyline-<os>-<arch> daemon
+// float (mache-608a3c). v0.10.4 ships all four leyline-<os>-<arch> daemon
 // binaries (darwin/linux × amd64/arm64).
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets.
@@ -807,7 +829,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch.
-const leylineBinaryVersion = "v0.10.3"
+const leylineBinaryVersion = "v0.10.4"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

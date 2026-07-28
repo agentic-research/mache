@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"sort"
 
+	daemonwire "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/daemon/wire"
 	graph "github.com/agentic-research/mache/internal/graph"
 )
 
@@ -163,15 +164,19 @@ func (sc *SheafClient) InvalidateWithStalk(regionID int, newHash string, newData
 		"regions": []int{regionID},
 		"stalks":  []stalk{s},
 	}
-	resp, err := sc.sock.SendOp(req)
+	var resp daemonwire.SheafInvalidateResponse
+	err := sc.sock.SendOpInto(req, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("sheaf_invalidate: %w", err)
 	}
-	if errMsg, ok := resp["error"]; ok {
-		return nil, fmt.Errorf("sheaf_invalidate: %v", errMsg)
+	if resp.Invalidated == nil {
+		return nil, fmt.Errorf("sheaf_invalidate: response missing invalidated")
 	}
-
-	return parseIntSlice(resp["invalidated"]), nil
+	invalidated := make([]int, len(resp.Invalidated))
+	for i, regionID := range resp.Invalidated {
+		invalidated[i] = int(regionID)
+	}
+	return invalidated, nil
 }
 
 // Defect queries the global consistency defect score.
@@ -199,29 +204,24 @@ func (sc *SheafClient) Status() (SheafStatus, error) {
 		return SheafStatus{}, nil
 	}
 
-	resp, err := sc.sock.SendOp(map[string]any{"op": "sheaf_status"})
+	var resp daemonwire.SheafStatusResponse
+	err := sc.sock.SendOpInto(map[string]any{"op": "sheaf_status"}, &resp)
 	if err != nil {
 		return SheafStatus{}, fmt.Errorf("sheaf_status: %w", err)
 	}
-	if errMsg, ok := resp["error"]; ok {
-		return SheafStatus{}, fmt.Errorf("sheaf_status: %v", errMsg)
+	if resp.Generation == nil {
+		return SheafStatus{}, fmt.Errorf("sheaf_status: response missing generation")
 	}
 
-	s := SheafStatus{}
-	// generation is an Int64 on the wire and capnp-json encodes Int64
-	// as a quoted string ("0", "1", ...) — see the wire-decode
-	// microbench commit (cc30abe). Accept both shapes so the mock
-	// tests (which pass float64) and the live daemon (which passes a
-	// quoted string) both round-trip correctly.
-	s.Generation = parseUint64(resp["generation"])
-	if v, ok := resp["valid"].(float64); ok {
-		s.Valid = int(v)
+	s := SheafStatus{Generation: *resp.Generation}
+	if resp.Valid != nil {
+		s.Valid = int(*resp.Valid)
 	}
-	if v, ok := resp["total"].(float64); ok {
-		s.Total = int(v)
+	if resp.Total != nil {
+		s.Total = int(*resp.Total)
 	}
-	if v, ok := resp["defect"].(float64); ok {
-		s.Defect = v
+	if resp.Defect != nil {
+		s.Defect = *resp.Defect
 	}
 	return s, nil
 }
@@ -414,36 +414,4 @@ func hashMembers(members []string) string {
 		h.Write([]byte(m))
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// parseIntSlice extracts []int from a JSON-decoded []any (float64 values).
-func parseIntSlice(v any) []int {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	result := make([]int, 0, len(arr))
-	for _, item := range arr {
-		if f, ok := item.(float64); ok {
-			result = append(result, int(f))
-		}
-	}
-	return result
-}
-
-// parseUint64 accepts either a float64 (Go-stdlib JSON default for any
-// JSON number, including small Int64) or a string (capnp-json's
-// rendering of Int64 to avoid float64 precision loss past 2^53) and
-// returns the corresponding uint64. Returns 0 on any other shape.
-func parseUint64(v any) uint64 {
-	switch x := v.(type) {
-	case float64:
-		return uint64(x)
-	case string:
-		var n uint64
-		_, _ = fmt.Sscanf(x, "%d", &n)
-		return n
-	default:
-		return 0
-	}
 }
