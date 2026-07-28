@@ -63,16 +63,34 @@ type SuiteOpts struct {
 	// WritableGraph, HotSwapGraph) set this true; MemoryStore does
 	// not — it returns ErrNotFound for the empty key.
 	RootEmptyReturnsDir bool
+
+	// GetNodePopulatesChildren pins whether this backend fills
+	// GetNode().Children for directories, or leaves it empty and expects
+	// callers to use ListChildren.
+	//
+	// The backends genuinely disagree today, and the split is not random:
+	// MemoryStore (and HotSwapGraph, which wraps it) returns the live node so
+	// Children is present, while EVERY SQLite-backed reader — SQLiteGraph,
+	// NodesTableReader/WritableGraph, and SQLiteWriter — rebuilds a node from
+	// a single row and leaves Children nil. Populating it would cost an extra
+	// child query on what is the hottest read path in the system.
+	//
+	// This flag does NOT bless the divergence; it makes it explicit so it
+	// cannot drift further while the contract is decided (mache-e3d9bb). Until
+	// then, engine code must not branch on GetNode().Children — a guard that
+	// did exactly that was live on memory and dead on the build path, dropping
+	// 540 constructs from one Rust corpus (mache-c725e9).
+	GetNodePopulatesChildren bool
 }
 
-// RunGraphSuite runs the full Graph interface contract suite against any
-// implementation. Each test is independent — failures are isolated.
-func RunGraphSuite(t *testing.T, factory GraphFactory) {
-	RunGraphSuiteWithOpts(t, factory, SuiteOpts{})
-}
-
-// RunGraphSuiteWithOpts is the explicit form. Prefer this for new
-// implementations so the contract assertion is precise.
+// RunGraphSuiteWithOpts runs the full Graph interface contract suite against
+// any implementation. Each test is independent — failures are isolated.
+//
+// Every backend passes its opts explicitly: a bare RunGraphSuite convenience
+// wrapper existed and took SuiteOpts{}, which meant a new backend silently
+// accepted the permissive defaults instead of stating its answer. Opts are
+// where the contract's known variation lives, so making them mandatory is the
+// point.
 func RunGraphSuiteWithOpts(t *testing.T, factory GraphFactory, opts SuiteOpts) {
 	t.Helper()
 
@@ -94,6 +112,42 @@ func RunGraphSuiteWithOpts(t *testing.T, factory GraphFactory, opts SuiteOpts) {
 			} else {
 				assert.ErrorIs(t, err, ErrNotFound)
 			}
+		}
+	})
+
+	// The Graph contract exposes a node's children TWICE — as GetNode().Children
+	// and via ListChildren() — and nothing made the two agree. SQLiteWriter's
+	// GetNode never populated Children at all (it selects kind/mtime/record/
+	// context/props and stops), which silently disabled a dedup guard in the
+	// ingest engine that gated on `len(existing.Children) > 0`. That guard was
+	// live on MemoryStore and dead on the build path: one engine, one input,
+	// two backends, two different graphs, and 540 constructs dropped from a
+	// single Rust corpus (mache-c725e9, mache-e3d9bb).
+	//
+	// A wide struct whose fields each backend populates at its own discretion
+	// is not an interface — it is a suggestion. This asserts the two views
+	// agree, so a backend cannot answer "no children" through one accessor and
+	// "three children" through the other.
+	t.Run("GetNode/children_agree_with_ListChildren", func(t *testing.T) {
+		g := factory(t)
+		for _, dir := range []string{"pkg", "pkg/auth", "pkg/main", "pkg/empty"} {
+			listed, err := g.ListChildren(dir)
+			require.NoError(t, err, "ListChildren(%s)", dir)
+
+			n, err := g.GetNode(dir)
+			require.NoError(t, err, "GetNode(%s)", dir)
+
+			if opts.GetNodePopulatesChildren {
+				assert.ElementsMatch(t, listed, n.Children,
+					"this backend populates GetNode().Children, so it MUST agree with "+
+						"ListChildren(%q)", dir)
+				continue
+			}
+			assert.Empty(t, n.Children,
+				"this backend is pinned as NOT populating GetNode().Children — if it "+
+					"started, callers would silently change behaviour depending on "+
+					"backend. Flip GetNodePopulatesChildren deliberately, don't drift "+
+					"into it (mache-e3d9bb)")
 		}
 	})
 
@@ -400,23 +454,52 @@ func writableGraphFactory(t *testing.T) Graph {
 // Suite runners — one per implementation
 // ---------------------------------------------------------------------------
 
-func TestMemoryStore_GraphSuite(t *testing.T) {
-	// MemoryStore returns ErrNotFound for GetNode("") — no synthetic root.
-	RunGraphSuite(t, memoryStoreFactory)
-}
+// TestGraphBackends_Suite runs the contract suite against every Graph
+// implementation. Adding a backend is one table row plus a factory — which is
+// also why the entries live in a table rather than four near-identical
+// functions: the previous shape duplicated the same call line per backend, so
+// each new implementation added another copy.
+//
+// Each row states its answers explicitly. There is no permissive default to
+// fall into: a backend whose behaviour is not yet pinned should be added with
+// the answer it actually gives, and changed deliberately when the contract is.
+func TestGraphBackends_Suite(t *testing.T) {
+	backends := []struct {
+		name    string
+		factory GraphFactory
+		opts    SuiteOpts
+		why     string
+	}{
+		{
+			name:    "MemoryStore",
+			factory: memoryStoreFactory,
+			opts:    SuiteOpts{GetNodePopulatesChildren: true},
+			why:     "returns the live node pointer, so Children is present; ErrNotFound for GetNode(\"\")",
+		},
+		{
+			name:    "HotSwapGraph",
+			factory: hotSwapFactory,
+			opts:    SuiteOpts{GetNodePopulatesChildren: true},
+			why:     "wraps MemoryStore in this fixture and inherits both answers; swapping in an SQLiteGraph flips them, which is the point of HotSwap",
+		},
+		{
+			name:    "SQLiteGraph",
+			factory: sqliteGraphFactory,
+			opts:    SuiteOpts{RootEmptyReturnsDir: true},
+			why:     "rebuilds a node from one row, so Children is left to ListChildren",
+		},
+		{
+			name:    "WritableGraph",
+			factory: writableGraphFactory,
+			opts:    SuiteOpts{RootEmptyReturnsDir: true},
+			why:     "backed by NodesTableReader — same single-row rebuild, same answers",
+		},
+	}
 
-func TestHotSwapGraph_GraphSuite(t *testing.T) {
-	// HotSwapGraph wraps MemoryStore in this fixture, so it inherits
-	// MemoryStore's ErrNotFound behaviour for empty id. If a future
-	// caller swaps in an SQLiteGraph the contract flips — that's
-	// the point of HotSwap.
-	RunGraphSuite(t, hotSwapFactory)
-}
-
-func TestSQLiteGraph_GraphSuite(t *testing.T) {
-	RunGraphSuiteWithOpts(t, sqliteGraphFactory, SuiteOpts{RootEmptyReturnsDir: true})
-}
-
-func TestWritableGraph_GraphSuite(t *testing.T) {
-	RunGraphSuiteWithOpts(t, writableGraphFactory, SuiteOpts{RootEmptyReturnsDir: true})
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			t.Logf("%s: %s", b.name, b.why)
+			RunGraphSuiteWithOpts(t, b.factory, b.opts)
+		})
+	}
 }

@@ -35,6 +35,7 @@ type Engine struct {
 	RespectGitignore bool   // when true, skip files matching .gitignore patterns (default: true)
 	routedFiles      map[string]int
 	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
+	claimedIDs       map[string]int             // construct node ID → times claimed (collision dedup, mache-c725e9)
 	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
 	astWalker        *ASTWalker                 // SQL-backed walker for ley-line pre-parsed .db files (sole walker post-CGO-removal)
 	fileIndex        map[string]FileIndexEntry  // cached file metadata for incremental re-ingestion
@@ -80,6 +81,7 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 		RespectGitignore: true,
 		routedFiles:      make(map[string]int),
 		childSeen:        make(map[string]map[string]bool),
+		claimedIDs:       make(map[string]int),
 	}
 }
 
@@ -120,6 +122,7 @@ func (e *Engine) SetFileIndex(index map[string]FileIndexEntry) { // coverage:ign
 func (e *Engine) Ingest(path string) error {
 	// Reset dedup state so stale entries from a prior Ingest don't persist.
 	e.childSeen = make(map[string]map[string]bool)
+	e.claimedIDs = make(map[string]int)
 
 	absPath, err := filepath.Abs(path)
 	if err != nil { // coverage:ignore
