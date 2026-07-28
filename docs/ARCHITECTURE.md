@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.19.0
-last-verified: 2026-07-24
+covers-version: v0.20.0
+last-verified: 2026-07-28
 sources-of-truth:
   - internal/lang/lang.go
   - internal/leyline/socket.go
@@ -176,7 +176,7 @@ source dir → leyline parse (pure-Go daemon, Rust tree-sitter) → .db with
 mache (Engine + ASTWalker, or SQLiteGraph — both pure Go) → MemoryStore/SQLiteGraph → MCP / NFS
 ```
 
-ley-line-open's `leyline parse` produces a `.db` containing the full AST (plus optional LSP enrichment). Every mache entry point — `build`, `serve`, `mount`, `infer`, and the test-fixture registry — invokes `leyline parse` on a source directory and then projects the `_ast` via the pure-Go `ASTWalker` (`SetASTWalker`); `SQLiteGraph` reads a pre-baked `.db` directly via `json_extract()` and lazy content resolution. No CGO, no in-memory tree-sitter AST. leyline is provisioned automatically (`ResolveBinary` — PATH → `~/.mache/bin/leyline` → SHA-verified download of the exact pin); when it is genuinely unavailable, source projection is a hard error rather than a silent degradation.
+ley-line-open's `leyline parse` produces a `.db` containing the full AST (plus optional LSP enrichment). Every mache entry point — `build`, `serve`, `mount`, `infer`, and the test-fixture registry — invokes `leyline parse` on a source directory and then projects the `_ast` via the pure-Go `ASTWalker` (`SetASTWalker`); `SQLiteGraph` reads a pre-baked `.db` directly via `json_extract()` and lazy content resolution. No CGO, no in-memory tree-sitter AST. leyline is provisioned automatically (`ResolveBinary` — PATH → `~/.mache/bin/leyline-<pinned-version>` → SHA-verified download of the exact pin); when it is genuinely unavailable, source projection is a hard error rather than a silent degradation. The cache is namespaced BY PIN: it was one unversioned path, so every mache build on a machine treated that file as its own and they overwrote each other — and because LLO ships `_ast` schema changes in patch releases, the graph shape silently depended on which mache last touched it. Concurrent pins now coexist. Each `.db` also records the leyline that produced it in `_mache_meta` (`leyline_pin`, `leyline_version`, `leyline_source`), so "which producer built this artifact" is answerable from the artifact rather than inferred.
 
 The only registry language leyline can't parse is **cue** (no tree-sitter-0.26 cue grammar exists anywhere — so no path could parse it), which the schema coverage guard reports loudly. This is the [ADR-0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md) end state; ley-line-open is required for source projection. mache consumes leyline purely as a subprocess/daemon over its UDS socket — there is no CGO/FFI linkage into mache (the dev-only `leyline_fs` FFI binding, `internal/leyline/client.go`, was removed; libleyline_fs lives in and is published by ley-line-open).
 
