@@ -6,7 +6,90 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [v0.20.0] — 2026-07-28
+
+### ⚠️ Action required before upgrading
+
+- **Rebuild any persisted `.db` built before ley-line-open v0.11.0.** Do not
+  reuse it. mache now pins leyline v0.11.3, and v0.11.0 raised
+  `IR_SCHEMA_VERSION` from `merkle-ast-v1` to `merkle-ast-v2` — giving
+  `function_signature_item` the `canonical_kind` it lacked rewrote every Rust
+  trait signature's `node_hash`, because the preimage hashes
+  `canonical_kind(raw).unwrap_or(raw)`.
+
+  **Sources are byte-identical across that change**, so nothing mache has can
+  detect it: cache lockfiles hash raw source bytes and the parse skip is
+  mtime+size. A `.db` built by a pre-0.11 leyline and served afterwards carries
+  v1 addresses while the binary computes v2, silently. Most paths write a fresh
+  temp `.db` per parse, so the exposed case is specifically
+  `mache build -o x.db` followed later by `mache serve x.db`
+  (`mache-438104`).
+
+  `.db` files now record which leyline produced them — `_mache_meta` carries
+  `leyline_pin`, `leyline_version`, and `leyline_source` — so this is
+  answerable from the artifact rather than by inference.
+
+### Fixed
+
+- **Constructs were silently dropped on name collision** (`mache-c725e9`, P0).
+  Two constructs whose schema name rendered the same string took the same node
+  ID, and the last write won; the earlier ones vanished with no error and no
+  diagnostic. On ley-line-open's Rust workspace **3,597 of 4,137 functions
+  reached the projection — 540 lost**. On mache's own source, 1 of 10
+  `func init()` in `cmd/` survived, and `cmd/mount.go`'s init — the one
+  registering `--schema`/`--data`/`--control` — was absent from mache's own
+  graph entirely.
+
+  The dedup guard existed but was unreachable: it gated on
+  `store.GetNode(id).Children`, and `SQLiteWriter.GetNode` never populates
+  `Children`. It was live on `MemoryStore` and dead on the build path. Claimed
+  IDs are now tracked in the engine rather than read back from a store, so
+  collision detection no longer depends on which backend is written to.
+  Post-fix the projection returns **4,137 — exactly the `_ast` ground truth**.
+
+- **`nodes.record` was declared `JSON`, which gives it NUMERIC affinity**
+  (`mache-4b8a42`). SQLite picks affinity by substring-matching the declared
+  type; `JSON` matches none, so it fell through to NUMERIC and rewrote any
+  text that parses as a number (`'007'` → `7`, `'1.10'` → `1.1`). Ingest was
+  immune by accident — it binds `[]byte`, and BLOBs bypass the conversion —
+  but write-back through the mount binds a string and did not.
+
+- **Rust test code was judged as production API** (`mache-c7d56d`). Go states
+  test-ness in the file name; Rust states it in an attribute and colocates it
+  in the production file, so no path predicate can see it. On ley-line-open/rs,
+  46% of files carry `#[cfg(test)]`. `fan_out_skew` dropped 176 → 86 findings
+  (51% were test helpers, which legitimately call many things to build
+  fixtures) and `duplicate_definitions` 654 → 414.
+
+- **Rust dead-code findings from Cargo layout** (`mache-8ecfd7`). `tests/`,
+  `benches/`, and `examples/` are separate crates whose entry points the
+  harness invokes; every function in them read as dead. 2,524 → 1,986.
+
+- **`mache serve`'s auto-leyline log described a path that no longer exists**
+  (`mache-6dda39`). It claimed the fallback used `SitterWalker`, removed in
+  v0.18.0, and pointed at `MACHE_NO_LEYLINE=1` as "the in-process watcher path"
+  without saying that path now needs `leyline` to pre-parse — while the same
+  flag disables downloading it. The message states the precondition and names
+  the pinned version.
+
 ### Changed
+
+- **`nodes.record` is now TEXT in every writer, and holds TEXT.** Both the
+  declared type and the bound value changed. Ingest previously bound `[]byte`
+  (stored BLOB) while write-back bound a string (stored TEXT), and SQLite never
+  considers a BLOB equal to a TEXT value — so `WHERE record = ?` matched only
+  nodes that had been written back and silently missed every ingested one
+  (`mache-6bed54`). **`typeof(record)` flips `blob` → `text` for existing
+  ingested rows**; content bytes are unchanged, and anything diffing `.db`
+  files bytewise or asserting on `typeof` will see it.
+
+- **The leyline binary cache is namespaced by pinned version**
+  (`mache-0acdf6`). It was one unversioned path, so every mache build on a
+  machine treated that file as its own and they overwrote each other — observed
+  going v0.10.4 → v0.10.2 → v0.10.4 within a single session while different
+  builds ran. Since LLO ships `_ast` schema changes in patch releases, the
+  graph shape silently depended on which mache last touched the cache.
+  `~/.mache/bin/leyline-v0.11.3` and `-v0.10.3` now coexist.
 
 - **Node properties moved to a dedicated `props` column** (`mache-90b89b`).
   `Node.Properties` was `map[string][]byte`, and `encoding/json` renders
@@ -18,23 +101,52 @@ bumps may include breaking changes.
   `imports` out of reach of every SQL consumer and smell rule. They are now
   real nested JSON in their own column: `json_extract(props,'$.lang')` returns
   `go`, and nested fields like `$.imports.fmt` resolve.
+
 - **`record` means two things instead of three.** It held a source data record
   *or* inline rendered content *or* serialized properties; the third is gone.
   The `CASE WHEN kind = NodeKindDir` guard in `NodesTableReader` is deleted —
   it existed only to stop a `GetNode` shipping a file's whole body, and `props`
   never holds content, so the separation is structural now.
+
 - **`Node.Properties` is `map[string]json.RawMessage`.** Access it through
   `PropString`/`PropRaw` and their setters, re-exported from the public `graph`
   package for external consumers.
 
-### Fixed
+- **Node properties moved to a dedicated `props` column** (`mache-90b89b`).
+  `Node.Properties` was `map[string][]byte`, and `encoding/json` renders
+  `[]byte` as base64 — so a projection stored
+  `{"imports":"eyJmbXQiOiJmbXQifQ==","lang":"Z28="}` where it meant
+  `{"imports":{"fmt":"fmt"},"lang":"go"}`, double-encoding `imports` (already
+  JSON) and inflating the record 2.3x. The costly part was not the size but
+  that `json_extract(record,'$.lang')` returned `Z28=`, putting `lang`/`pkg`/
+  `imports` out of reach of every SQL consumer and smell rule. They are now
+  real nested JSON in their own column: `json_extract(props,'$.lang')` returns
+  `go`, and nested fields like `$.imports.fmt` resolve.
 
-- **`mache serve`'s auto-leyline log described a path that no longer exists**
-  (`mache-6dda39`). It claimed the fallback used `SitterWalker`, removed in
-  v0.18.0, and pointed at `MACHE_NO_LEYLINE=1` as "the in-process watcher path"
-  without saying that path now needs `leyline` to pre-parse — while the same
-  flag disables downloading it. The message states the precondition and names
-  the pinned version.
+- **`record` means two things instead of three.** It held a source data record
+  *or* inline rendered content *or* serialized properties; the third is gone.
+  The `CASE WHEN kind = NodeKindDir` guard in `NodesTableReader` is deleted —
+  it existed only to stop a `GetNode` shipping a file's whole body, and `props`
+  never holds content, so the separation is structural now.
+
+- **`Node.Properties` is `map[string]json.RawMessage`.** Access it through
+  `PropString`/`PropRaw` and their setters, re-exported from the public `graph`
+  package for external consumers.
+
+### Added
+
+- **The LLO data-plane boundary is enforced** (`mache-e64f36`). mache is the
+  control plane — smell rules, queries, code intelligence, the MCP surface —
+  and ley-line-open is the data plane. A ratchet test fails when a file outside
+  a written allowlist writes an LLO-owned table, so "mache does not do
+  data-plane work" is checkable rather than folklore. Three files are
+  allowlisted with reasons; the set may only shrink.
+
+- **`TAG=vX.Y.Z task leyline:pin-bump`** rewrites the four platform SHA-256
+  digests, the pinned version, the pin test, and `server.json`'s
+  `minimum-version` in one step, and fails closed if a release does not carry
+  all four platform assets. It deliberately refuses to write the doc block or
+  decide the lineage question.
 
 ### Removed
 
