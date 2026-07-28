@@ -72,7 +72,7 @@ func TestExtractSemver(t *testing.T) {
 }
 
 func TestPinnedBinaryReleaseMatchesAdoptedContract(t *testing.T) {
-	assert.Equal(t, "v0.10.4", leylineBinaryVersion)
+	assert.Equal(t, "v0.11.3", leylineBinaryVersion)
 }
 
 func TestPinnedBinarySHA256CoversSupportedPlatforms(t *testing.T) {

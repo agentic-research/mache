@@ -198,11 +198,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/graph/graph_suite_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "internal/graph/graph_test.go",
       "count": 2
     },
@@ -348,18 +343,13 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/leyline/sheaf.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "internal/leyline/sheaf_cascade_bench_test.go",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/sheaf_subscriber.go",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "duplicate_code",
@@ -673,11 +663,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/leyline/wire.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "internal/materialize/materialize_test.go",
       "count": 1
     },
@@ -789,7 +774,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/backend.rs",
-      "count": 4
+      "count": 6
     },
     {
       "rule_id": "duplicate_definitions",
@@ -869,7 +854,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "duplicate_definitions",
@@ -909,12 +894,12 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/migrate.rs",
-      "count": 3
+      "count": 4
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_chain.rs",
-      "count": 5
+      "count": 6
     },
     {
       "rule_id": "duplicate_definitions",
@@ -924,7 +909,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/algebra_lww.rs",
-      "count": 4
+      "count": 5
     },
     {
       "rule_id": "duplicate_definitions",
@@ -934,7 +919,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/fold.rs",
-      "count": 8
+      "count": 11
     },
     {
       "rule_id": "duplicate_definitions",
@@ -944,12 +929,12 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/log.rs",
-      "count": 4
+      "count": 6
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/log_sqlite.rs",
-      "count": 5
+      "count": 9
     },
     {
       "rule_id": "duplicate_definitions",
@@ -959,7 +944,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/quarantine.rs",
-      "count": 3
+      "count": 4
     },
     {
       "rule_id": "duplicate_definitions",
@@ -999,7 +984,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/queue.rs",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1034,12 +1019,12 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/scanner.rs",
-      "count": 4
+      "count": 6
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/scope.rs",
-      "count": 3
+      "count": 5
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1099,7 +1084,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/sprites_provider.rs",
-      "count": 3
+      "count": 5
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1109,12 +1094,12 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
-      "count": 3
+      "count": 4
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/store_sqlite.rs",
-      "count": 3
+      "count": 4
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1149,7 +1134,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/xref.rs",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1653,22 +1638,32 @@
     },
     {
       "rule_id": "god_file",
-      "source_id": "internal/ingest/ast_walker.go",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "internal/ingest/sqlite_writer.go",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
       "source_id": "internal/nfsmount/graphfs.go",
       "count": 1
     },
     {
       "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/decompose.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/harmony.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/parse.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/provenance.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
       "count": 1
     },
     {
@@ -1708,7 +1703,22 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dsse.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/github.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/handoff.rs",
       "count": 1
     },
     {
@@ -1774,6 +1784,11 @@
     {
       "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/store_sqlite.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/vcs.rs",
       "count": 1
     },
     {

@@ -803,23 +803,47 @@ func (c *SocketClient) Prioritize(files []string) error {
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
 // As of this pin, both the daemon binary and go.mod's leyline-schema module are
-// v0.10.4. The release's generated compatibility document reports
-// wire_format_major=1 and compat_min_schema_version=0.6.0, so older compatible
-// clients remain inside the daemon's supported [floor, binary] range. The
-// version-parity gate (mache-b8af69) enforces that range.
+// v0.11.3. The wire major and compatibility floor are unchanged from the 0.10
+// line; the version-parity gate (mache-b8af69) enforces the [floor, binary]
+// range.
+//
+// THE 0.10 -> 0.11 BUMP CROSSES AN IR LINEAGE BOUNDARY. v0.11.0 raised
+// IR_SCHEMA_VERSION from "merkle-ast-v1" to "merkle-ast-v2": giving
+// function_signature_item the canonical_kind `function` it lacked rewrote every
+// Rust trait signature's node_hash, because the preimage hashes
+// canonical_kind(raw).unwrap_or(raw). SOURCES ARE BYTE-IDENTICAL, so no
+// content- or time-based check can see it — mache's cache lockfiles hash raw
+// source bytes and the parse skip is mtime+size. Any persisted .db built by a
+// pre-0.11 leyline must be REBUILT, not reused; a stale one serves v1 addresses
+// while this binary computes v2 (mache-438104). _mache_meta now records
+// leyline_pin / leyline_version so which-leyline-built-this is answerable from
+// the artifact.
+//
+// v0.11.x also changed what the projection CONTAINS, which is why the smell
+// baseline was regenerated in the same commit rather than separately:
+//   - module qualification (ley-line-open-23377a) emits a qualified alias
+//     alongside each bare token, doubling def rows under mod_item (966 -> 1932
+//     on the Rust snapshot). The definitions are unchanged — distinct node_id
+//     is 7251 before and after — but the token vocabulary is not, so
+//     duplicate_definitions legitimately reports different groups.
+//   - overloaded symbols survive (ley-line-open-5d3cb6): _lsp previously kept
+//     one row per {parent}/{name} and silently replaced the rest. Now
+//     discernible overloads carry a signature discriminator and indistinct ones
+//     an ordinal. NOTE the ordinal branch is positional — verified that
+//     inserting a TypeScript overload renumbers the ones below it — so #~N is
+//     not a stable address.
 //
 // Earlier context: v0.7.0 raised the compatibility floor to 0.6.0 and added
 // source_blobs / capnp_blobs / _ast_pointer plus the unified
 // daemon.sheaf.invalidate topic. v0.7.4 and v0.7.5 added AST columns without
 // changing the wire major; v0.8.0 added validate coverage, node_refs.qualifier,
-// and extraction epochs. The wire major and compatibility floor remain
-// unchanged in v0.10.4.
+// and extraction epochs.
 //
 // The version-check (leylineVersionMatchesPin) is EXACT major.minor.patch —
 // LLO patch releases have changed the emitted _ast schema (0.7.4 added
 // container_node_id, 0.7.5 added canonical_kind), so the patch does NOT
-// float (mache-608a3c). v0.10.4 ships all four leyline-<os>-<arch> daemon
-// binaries (darwin/linux × amd64/arm64).
+// float (mache-608a3c). v0.11.3 ships all four leyline-<os>-<arch> daemon
+// binaries (darwin/linux x amd64/arm64).
 //
 // BUMP THIS to the latest published ley-line-open release with binary assets.
 // The go.mod leyline-schema pin only needs bumping when a schema module tag is
@@ -829,7 +853,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch.
-const leylineBinaryVersion = "v0.10.4"
+const leylineBinaryVersion = "v0.11.3"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
