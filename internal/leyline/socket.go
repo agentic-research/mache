@@ -803,9 +803,26 @@ func (c *SocketClient) Prioritize(files []string) error {
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
 // As of this pin, both the daemon binary and go.mod's leyline-schema module are
-// v0.11.3. The wire major and compatibility floor are unchanged from the 0.10
+// v0.12.1. The wire major and compatibility floor are unchanged from the 0.10
 // line; the version-parity gate (mache-b8af69) enforces the [floor, binary]
 // range.
+//
+// v0.11.3 -> v0.12.1 DOES NOT CROSS AN IR LINEAGE BOUNDARY — checked by
+// measurement, not inferred from release notes: _meta.ir_schema_version reads
+// "merkle-ast-v2" on both, extraction_epoch is unchanged (4 -> 4), and a
+// re-parse of the same fixture produces an identical _ast row count
+// (250369 -> 250369). No .db rebuild is required crossing this bump.
+// ley-line-open-348de6 shipped the ir_schema_version field in v0.11.1 — this is
+// the first mache bump able to answer the lineage question this way instead of
+// reading changelog prose; see mache-43d63d for consuming it as a first-class
+// signal rather than reading it ad hoc as done here.
+//
+// v0.12.x adds leyline-mcp-descriptor, a shared server.json emitter
+// (ley-line-open-4ec276) that mache's own server.json work fed into
+// (mache-e28a9f): multiple packages / per-package transport landed
+// (ley-line-open-44cc45), but there is still no session field on
+// TransportMeta, so cloister cannot yet derive mache's per-transport session
+// requirement (http is stateful, stdio is not) from the generated descriptor.
 //
 // THE 0.10 -> 0.11 BUMP CROSSES AN IR LINEAGE BOUNDARY. v0.11.0 raised
 // IR_SCHEMA_VERSION from "merkle-ast-v1" to "merkle-ast-v2": giving
@@ -853,7 +870,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch.
-const leylineBinaryVersion = "v0.11.3"
+const leylineBinaryVersion = "v0.12.1"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
