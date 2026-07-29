@@ -345,8 +345,13 @@ tasks:
         BARE="${TAG#v}"
         echo "==> fetching release assets for $TAG"
         # The digest field is "sha256:<hex>"; the pin map stores bare hex.
+        # Match the DAEMON binaries exactly — leyline-<os>-<arch> — not every
+        # asset whose name starts with "leyline-". v0.12.1 began shipping
+        # leyline-mcp-descriptor-<os>-<arch> alongside them, which a prefix
+        # match swept in and turned the 4-asset guard into a spurious failure.
+        # The guard was right to refuse; the filter was wrong.
         ASSETS=$(gh release view "$TAG" --repo agentic-research/ley-line-open --json assets \
-          --jq '.assets[]|select(.name|startswith("leyline-"))|"\(.name) \(.digest)"')
+          --jq '.assets[]|select(.name|test("^leyline-(darwin|linux)-(amd64|arm64)$"))|"\(.name) \(.digest)"')
         if [ -z "$ASSETS" ]; then
           echo "no leyline-<os>-<arch> assets on $TAG — a release without binaries cannot be pinned" >&2
           exit 1
