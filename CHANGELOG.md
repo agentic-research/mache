@@ -65,6 +65,26 @@ bumps may include breaking changes.
   `benches/`, and `examples/` are separate crates whose entry points the
   harness invokes; every function in them read as dead. 2,524 → 1,986.
 
+- **Children were discarded on the build path when re-fetching a node**
+  (`mache-e3d9bb`). `processNode` re-read a node to "preserve Children +
+  Properties", but those have different contracts: `Properties` round-trips
+  through the `props` column on every store, `Children` does not round-trip
+  through `GetNode` on any SQLite-backed one. The line dropped children the
+  recursion had just added — on the build path only, since `MemoryStore`
+  returns the live node and answers correctly.
+
+  Children now have **one accessor**. `ListChildren` is correct on every
+  backend: `SQLiteWriter` implements it against `parent_id` (its previous
+  `return nil, nil // Not used during ingest` read like a constraint and was
+  not one — rows are readable inside their own open transaction), and
+  `bufferingTarget` unions the file nodes it defers for the later swap. No
+  production code reads `GetNode().Children` any more.
+
+  This also normalised the **error contract**, which the field disagreement was
+  masking: `MemoryStore.ListChildren` returns `ErrNotFound` for a missing node
+  while `SQLiteWriter` returns an empty set, so the backends disagreed about
+  whether *asking* is an error, not just about the answer.
+
 - **`mache serve`'s auto-leyline log described a path that no longer exists**
   (`mache-6dda39`). It claimed the fallback used `SitterWalker`, removed in
   v0.18.0, and pointed at `MACHE_NO_LEYLINE=1` as "the in-process watcher path"
