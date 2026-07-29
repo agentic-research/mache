@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -245,6 +246,27 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 	}
 }
 
+// listChildrenTolerant returns a node's children, treating "node not found" as
+// "no children" rather than an error.
+//
+// The call sites replaced GetNode()+read-the-field, which ignored a lookup
+// failure entirely (`if existing, err := store.GetNode(id); err == nil`). A
+// node that has not been created yet legitimately has no children, and the
+// backends disagree about whether asking is an error: MemoryStore returns
+// ErrNotFound, SQLiteWriter returns an empty set. Normalising the accessor
+// means normalising that too, otherwise the fix trades a silent wrong answer
+// for a spurious hard failure (mache-e3d9bb).
+func listChildrenTolerant(store IngestionTarget, id string) ([]string, error) {
+	kids, err := store.ListChildren(id)
+	if err != nil {
+		if errors.Is(err, graph.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return kids, nil
+}
+
 // processNode is the schema-driven recursion that walks a single Match through
 // the topology, mutating the store as it goes. Counterpart to collectNodes,
 // which is the pure (store-free) variant for parallel SQLite ingest.
@@ -313,9 +335,15 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 
 		// Create/Update Node — preserve existing children when merging
 		// multiple files into the same node (e.g. multiple .go files in one package).
-		var existingChildren []string
-		if existing, err := store.GetNode(id); err == nil {
-			existingChildren = existing.Children
+		//
+		// Via ListChildren, NOT GetNode().Children. Children have one accessor
+		// because the stores disagree on the other: MemoryStore returns the live
+		// node so Children is populated, every SQLite-backed store rebuilds from
+		// one row and leaves it nil. Reading the field made this merge inert on
+		// the build path while working in memory (mache-e3d9bb).
+		existingChildren, err := listChildrenTolerant(store, id)
+		if err != nil {
+			return fmt.Errorf("list children of %s: %w", id, err)
 		}
 
 		node := &graph.Node{
@@ -409,8 +437,16 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			parent, err := store.GetNode(parentId)
 			if err == nil {
 				if e.childSeen[parentId] == nil {
-					e.childSeen[parentId] = make(map[string]bool, len(parent.Children))
-					for _, c := range parent.Children {
+					// Seed from ListChildren rather than parent.Children: the
+					// field is nil on every SQLite-backed store, so seeding from
+					// it silently started this set empty on the build path.
+					existing, lerr := listChildrenTolerant(store, parentId)
+					if lerr != nil {
+						e.mu.Unlock()
+						return fmt.Errorf("list children of %s: %w", parentId, lerr)
+					}
+					e.childSeen[parentId] = make(map[string]bool, len(existing))
+					for _, c := range existing {
 						e.childSeen[parentId][c] = true
 					}
 				}
@@ -458,11 +494,19 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			}
 		}
 
-		// Re-fetch current node (updated by recursion) — preserve Children + Properties
-		var currentChildren []string
+		// Re-fetch current node (updated by recursion) — preserve Children +
+		// Properties. Children come from ListChildren, Properties from GetNode:
+		// they have different contracts. Properties round-trips through the
+		// props column on every store; Children does NOT round-trip through
+		// GetNode on any SQLite-backed one, so reading it here silently
+		// discarded the children the recursion had just added on the build path
+		// (mache-e3d9bb).
+		currentChildren, err := listChildrenTolerant(store, id)
+		if err != nil {
+			return fmt.Errorf("list children of %s: %w", id, err)
+		}
 		var currentProps map[string]json.RawMessage
-		if current, err := store.GetNode(id); err == nil {
-			currentChildren = current.Children
+		if current, gerr := store.GetNode(id); gerr == nil {
 			currentProps = current.Properties
 		}
 
