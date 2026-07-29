@@ -654,8 +654,47 @@ func (w *SQLiteWriter) GetNode(id string) (*graph.Node, error) {
 	return n, nil
 }
 
+// ListChildren answers from the parent_id column, the same way
+// NodesTableReader does at read time.
+//
+// This returned `nil, nil // Not used during ingest` for a long time, and that
+// stub read like a CONSTRAINT — you cannot ask for children while still
+// writing them. It is not one. Rows INSERTed in an open transaction are
+// readable inside that same transaction (probed: 3 inserted, 2 children
+// visible before commit), and this writer already holds the tx and already
+// writes parent_id on every node.
+//
+// The stub had a cost. Because neither accessor answered, engine code that
+// needed a node's children read GetNode().Children instead — which MemoryStore
+// populates and every SQLite-backed store leaves nil. A dedup guard branched on
+// exactly that, was live on one backend and dead on the other, and silently
+// dropped 540 constructs (mache-c725e9). Making this method honest is what lets
+// children have ONE accessor that is correct everywhere (mache-e3d9bb).
+//
+// Note the tx caveat: file nodes are buffered by bufferingTarget for a later
+// ReplaceFileNodes swap, so they are not in the table yet. bufferingTarget
+// overrides this method to union its buffer in; callers that go through it get
+// the complete answer.
 func (w *SQLiteWriter) ListChildren(id string) ([]string, error) {
-	return nil, nil // Not used during ingest
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.tx == nil {
+		return nil, nil
+	}
+	rows, err := w.tx.Query(`SELECT id FROM nodes WHERE parent_id = ? ORDER BY name`, id)
+	if err != nil {
+		return nil, fmt.Errorf("list children of %s: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var childID string
+		if err := rows.Scan(&childID); err != nil {
+			return nil, err
+		}
+		out = append(out, childID)
+	}
+	return out, rows.Err()
 }
 
 func (w *SQLiteWriter) ListChildStats(id string) ([]graph.NodeStat, error) {

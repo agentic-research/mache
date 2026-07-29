@@ -1,6 +1,10 @@
 package ingest
 
-import "github.com/agentic-research/mache/internal/graph"
+import (
+	"strings"
+
+	"github.com/agentic-research/mache/internal/graph"
+)
 
 // --- Parallel ingestion types ---
 
@@ -33,14 +37,66 @@ type refLink struct {
 type bufferingTarget struct {
 	IngestionTarget
 	bufferedNodes []*graph.Node
+	// bufferedChildren maps a parent ID to the buffered file children not yet
+	// written to the table, so ListChildren can answer completely. Without it
+	// a construct dir reports zero children until ReplaceFileNodes runs, which
+	// is the whole window ingest operates in.
+	bufferedChildren map[string][]string
+}
+
+// ListChildren unions the underlying store's answer with the file nodes this
+// target is still holding.
+//
+// Necessary because AddNode defers file nodes for a later ReplaceFileNodes
+// swap while passing directory nodes straight through. Asking the underlying
+// SQLiteWriter alone would report a construct directory as childless for the
+// entire duration of ingest — technically true of the table, and useless as an
+// answer. Children have one accessor; it has to be right (mache-e3d9bb).
+func (b *bufferingTarget) ListChildren(id string) ([]string, error) {
+	base, err := b.IngestionTarget.ListChildren(id)
+	if err != nil {
+		return nil, err
+	}
+	pending := b.bufferedChildren[id]
+	if len(pending) == 0 {
+		return base, nil
+	}
+	seen := make(map[string]bool, len(base))
+	for _, c := range base {
+		seen[c] = true
+	}
+	out := append([]string(nil), base...)
+	for _, c := range pending {
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// noteBuffered records a buffered node's parent so ListChildren can find it.
+func (b *bufferingTarget) noteBuffered(parentID, childID string) {
+	if parentID == "" {
+		return
+	}
+	if b.bufferedChildren == nil {
+		b.bufferedChildren = make(map[string][]string)
+	}
+	b.bufferedChildren[parentID] = append(b.bufferedChildren[parentID], childID)
 }
 
 func (b *bufferingTarget) AddNode(n *graph.Node) {
 	if n.Mode.IsDir() {
 		b.IngestionTarget.AddNode(n)
-	} else { // coverage:ignore
-		b.bufferedNodes = append(b.bufferedNodes, n) // coverage:ignore
-	} // coverage:ignore
+		return
+	}
+	b.bufferedNodes = append(b.bufferedNodes, n)
+	// Derive the parent from the ID — a buffered file's parent is its path
+	// prefix — so ListChildren sees it before the swap.
+	if i := strings.LastIndex(n.ID, "/"); i > 0 {
+		b.noteBuffered(n.ID[:i], n.ID)
+	}
 }
 
 func (b *bufferingTarget) AddDef(token, dirID string) error {
@@ -64,6 +120,7 @@ func (b *bufferingTarget) AddFileChildren(parent *graph.Node, files []*graph.Nod
 	b.bufferedNodes = append(b.bufferedNodes, files...)
 	for _, f := range files {
 		parent.Children = append(parent.Children, f.ID)
+		b.noteBuffered(parent.ID, f.ID)
 	}
 	b.IngestionTarget.AddNode(parent)
 }

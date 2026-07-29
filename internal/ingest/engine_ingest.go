@@ -121,8 +121,16 @@ func (e *Engine) ingestRawFileUnder(path, prefix string, modTime time.Time) erro
 				parent, err := e.Store.GetNode(parentID)
 				if err == nil {
 					if e.childSeen[parentID] == nil {
-						e.childSeen[parentID] = make(map[string]bool, len(parent.Children))
-						for _, c := range parent.Children {
+						// ListChildren, not parent.Children — the field is nil on
+						// every SQLite-backed store, so seeding from it started
+						// this set empty on the build path (mache-e3d9bb).
+						existing, lerr := listChildrenTolerant(e.Store, parentID)
+						if lerr != nil {
+							e.mu.Unlock()
+							return fmt.Errorf("list children of %s: %w", parentID, lerr)
+						}
+						e.childSeen[parentID] = make(map[string]bool, len(existing))
+						for _, c := range existing {
 							e.childSeen[parentID][c] = true
 						}
 					}
