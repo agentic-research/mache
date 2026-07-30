@@ -125,6 +125,24 @@ tasks:
       - "internal/buildinfo/version.txt"
     generates:
       - "{{.BINARY_NAME}}"
+    # The ldflags above inject GIT_COMMIT / GIT_VERSION — real build INPUTS
+    # that appear in no `sources:` entry, because a rebase or `commit --amend`
+    # changes the embedded stamp while every listed file stays byte-identical.
+    # Task then reports "up to date" and leaves a binary stamped with a commit
+    # this tree can no longer reach. install:verify catches that and says
+    # "Run `task build`" — which, before this check, was a NO-OP in exactly the
+    # situation it diagnosed.
+    #
+    # Same class as mache-46af85 (go:embed assets missing from `sources:` left
+    # a stale binary the smell gate then ran against), one input further out:
+    # there the input was a file, here it is the git position itself.
+    #
+    # A failing status command means "not up to date", so a missing or
+    # unrunnable binary correctly forces a rebuild rather than erroring.
+    status:
+      - |
+        test "$(git rev-parse --short HEAD 2>/dev/null)" = \
+             "$({{.BINARY_NAME}} version 2>/dev/null | sed -n 's/.*commit \([0-9a-f][0-9a-f]*\).*/\1/p')"
 
   version:
     desc: Print the canonical mache version (internal/buildinfo/version.txt)
