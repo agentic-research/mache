@@ -8,6 +8,26 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`mache install` / `mache uninstall` — provisioning that ships inside the
+  binary.** Until now provisioning lived only in the Taskfile, so it required a
+  repo checkout: a user who installed from a release asset or a package manager
+  had a binary that could not provision its own REQUIRED backend. leyline has
+  been mache's sole parser since ADR-0012 step 4, so that gap is the difference
+  between an installed mache and a working one. `mache install` copies the
+  running binary into a bin directory (default `~/.local/bin`, the same place
+  `task install` uses) and provisions the exact pinned ley-line-open release
+  through `leyline.EnsureCachedBinary`, which SHA-verifies the download and
+  writes only the version-namespaced cache path — the unversioned
+  `~/.mache/bin/leyline` stays never-written (`mache-0acdf6`), and leyline is
+  never placed on PATH by copy, symlink or shim, since that recreates the
+  "which version does bare `leyline` mean" question the pin exists to answer.
+  Your shell rc is not touched: the `export PATH=…` line is printed, and
+  `--update-rc` is an explicit opt-in that writes one idempotent marked block
+  `uninstall --update-rc` can remove again. Both commands refuse a
+  Homebrew-managed mache rather than fighting brew's manifest — the exact
+  shadowing that cost an afternoon in `mache-6ec106`. `--dry-run` reports every
+  change without making one. (`mache-19326d`)
+
 - **`task install:verify` — an install gate that verifies a real installation
   instead of assuming one.** Every other gate in this repo exercises the source
   tree; nothing checked an artifact a user could actually have (`mache-4d7f2c`).

@@ -21,7 +21,7 @@ That's the 30-second path for the flagship application — code intelligence on 
 Two things new users hit:
 
 - **HTTP is the canonical transport.** One shared daemon serves every project, routing per session via the MCP roots protocol. `--stdio` exists only as an escape hatch for CI / sandboxes / headless agents and is never registered for editor use (see [ADR-0022](docs/adr/0022-mcp-transport-canonical.md)).
-- **[ley-line-open](https://github.com/agentic-research/ley-line-open) is a hard requirement, not an add-on.** Since v0.18.0 mache has no in-process parser: `leyline parse` produces the `_ast` database that every source projection reads. `task install` provisions the pinned binary. Point mache at a directory *or* a pre-built `.db` — both route through leyline; a pre-built `.db` just skips the parse step and can carry LSP/embedding enrichment.
+- **[ley-line-open](https://github.com/agentic-research/ley-line-open) is a hard requirement, not an add-on.** Since v0.18.0 mache has no in-process parser: `leyline parse` produces the `_ast` database that every source projection reads. `task install` provisions the pinned binary from a checkout; `mache install` does the same from a release asset or package-manager install, where there is no Taskfile. Point mache at a directory *or* a pre-built `.db` — both route through leyline; a pre-built `.db` just skips the parse step and can carry LSP/embedding enrichment.
 
 To project non-code data instead, hand `mache serve` (or the root mount form, `mache <mountpoint>`) a schema with `--schema` and point it at your JSON or SQLite source — the [example schemas](examples/README.md) cover NVD, KEV, Notion, Trivy, Terraform, and more.
 
