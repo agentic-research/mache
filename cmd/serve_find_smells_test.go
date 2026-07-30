@@ -3526,28 +3526,83 @@ func runPlaceholderRule(t *testing.T, id string) (int, []smellFinding) {
 
 // --- drift_doc_dead_symbol_reference -------------------------------
 
-func TestFindSmells_DriftDocDeadSymbolReference_Registered(t *testing.T) {
-	r := findRegisteredRule(t, "drift_doc_dead_symbol_reference")
-	assert.Equal(t, []string{"markdown"}, r.Languages)
-	assert.Equal(t, SeverityWarn, r.Effective(),
-		"advisory tier — not tagged 'gate', two known false-positive classes documented on the rule")
-	assert.Equal(t, []string{"docs", "drift"}, r.Tags)
-	assert.ElementsMatch(t, []string{"node_defs"}, r.Requires,
-		"the rule's own Requires only needs node_defs — v_doc_refs is installed "+
-			"unconditionally by ensureCanonicalViews and degrades to empty on its own "+
-			"when node_refs lacks source_id, so node_refs/_ast don't need to gate here")
-	assert.Equal(t, "v.source_id", r.ScopeColumn)
-	assert.NotEmpty(t, r.Description)
+// TestFindSmells_DriftDocRules_Registered and _ListingExposesIt (below)
+// cover drift_doc_broken_internal_link, drift_doc_outdated_count, and
+// drift_doc_dead_symbol_reference in one table-driven test each, rather
+// than the three-near-identical-functions-per-check shape the sibling
+// placeholder rules previously used. duplicate_code (this repo's own
+// clone detector) is explicit that this exact pattern is its intended
+// fix: "duplicated test setup is a legitimate refactor target — extract
+// a helper / table-driven test." Adding dead_symbol_reference's own
+// Registered/ListingExposesIt in the old flat-function shape pushed the
+// per-file clone count past baseline (mache-eb2bf3); this consolidates
+// all three rather than adding a fourth near-duplicate pair.
+func TestFindSmells_DriftDocRules_Registered(t *testing.T) {
+	cases := []struct {
+		id          string
+		tags        []string
+		requires    []string
+		scopeColumn string
+		requiresMsg string
+	}{
+		{
+			id:          "drift_doc_broken_internal_link",
+			tags:        []string{"docs", "drift", "links"},
+			requires:    []string{"nodes"},
+			scopeColumn: "COALESCE(md.source_file, '')",
+			requiresMsg: "link-target validation needs the markdown content (nodes); filesystem stat happens host-side",
+		},
+		{
+			id:          "drift_doc_outdated_count",
+			tags:        []string{"docs", "drift", "counts"},
+			requires:    []string{"nodes"},
+			scopeColumn: "COALESCE(md.source_file, '')",
+			requiresMsg: "ground-truth queries from .mache/drift-counts.toml execute against the wider DB; this rule needs only the markdown content (nodes)",
+		},
+		{
+			id:          "drift_doc_dead_symbol_reference",
+			tags:        []string{"docs", "drift"},
+			requires:    []string{"node_defs"},
+			scopeColumn: "v.source_id",
+			requiresMsg: "the rule's own Requires only needs node_defs — v_doc_refs is installed " +
+				"unconditionally by ensureCanonicalViews and degrades to empty on its own " +
+				"when node_refs lacks source_id, so node_refs/_ast don't need to gate here",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			r := findRegisteredRule(t, tc.id)
+			assert.Equal(t, []string{"markdown"}, r.Languages)
+			assert.Equal(t, SeverityWarn, r.Effective())
+			assert.Equal(t, tc.tags, r.Tags)
+			assert.ElementsMatch(t, tc.requires, r.Requires, tc.requiresMsg)
+			assert.Equal(t, tc.scopeColumn, r.ScopeColumn)
+			assert.NotEmpty(t, r.Description)
+		})
+	}
 }
 
-func TestFindSmells_DriftDocDeadSymbolReference_ListingExposesIt(t *testing.T) {
-	entry := listingFor(t, "drift_doc_dead_symbol_reference")
-	assert.Equal(t, []string{"markdown"}, entry.Languages)
-	assert.Equal(t, string(SeverityWarn), entry.Severity,
-		"listing must emit severity so PR 2's --fail-on flag can reason about gating")
-	assert.Equal(t, []string{"docs", "drift"}, entry.Tags,
-		"listing must emit tags so PR 2's --rule glob (drift_doc_*) and future --tags filter work")
-	assert.ElementsMatch(t, []string{"node_defs"}, entry.Requires)
+func TestFindSmells_DriftDocRules_ListingExposesIt(t *testing.T) {
+	cases := []struct {
+		id       string
+		tags     []string
+		requires []string
+	}{
+		{id: "drift_doc_broken_internal_link", tags: []string{"docs", "drift", "links"}, requires: []string{"nodes"}},
+		{id: "drift_doc_outdated_count", tags: []string{"docs", "drift", "counts"}, requires: []string{"nodes"}},
+		{id: "drift_doc_dead_symbol_reference", tags: []string{"docs", "drift"}, requires: []string{"node_defs"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			entry := listingFor(t, tc.id)
+			assert.Equal(t, []string{"markdown"}, entry.Languages)
+			assert.Equal(t, string(SeverityWarn), entry.Severity,
+				"listing must emit severity so PR 2's --fail-on flag can reason about gating")
+			assert.Equal(t, tc.tags, entry.Tags,
+				"listing must emit tags so PR 2's --rule glob (drift_doc_*) and future --tags filter work")
+			assert.ElementsMatch(t, tc.requires, entry.Requires)
+		})
+	}
 }
 
 // TestFindSmells_DriftDocDeadSymbolReference_SkipsGracefullyWithoutSourceID
@@ -3710,25 +3765,8 @@ func runDriftDocRule(t *testing.T, tg *smellTestGraph) (int, []smellFinding) {
 }
 
 // --- drift_doc_broken_internal_link --------------------------------
-
-func TestFindSmells_DriftDocBrokenInternalLink_Registered(t *testing.T) {
-	r := findRegisteredRule(t, "drift_doc_broken_internal_link")
-	assert.Equal(t, []string{"markdown"}, r.Languages)
-	assert.Equal(t, SeverityWarn, r.Effective())
-	assert.Equal(t, []string{"docs", "drift", "links"}, r.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, r.Requires,
-		"link-target validation needs the markdown content (nodes); filesystem stat happens host-side")
-	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn)
-	assert.NotEmpty(t, r.Description)
-}
-
-func TestFindSmells_DriftDocBrokenInternalLink_ListingExposesIt(t *testing.T) {
-	entry := listingFor(t, "drift_doc_broken_internal_link")
-	assert.Equal(t, []string{"markdown"}, entry.Languages)
-	assert.Equal(t, string(SeverityWarn), entry.Severity)
-	assert.Equal(t, []string{"docs", "drift", "links"}, entry.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, entry.Requires)
-}
+// Registered/ListingExposesIt coverage lives in the table-driven
+// TestFindSmells_DriftDocRules_Registered / _ListingExposesIt above.
 
 func TestFindSmells_DriftDocBrokenInternalLink_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
 	total, findings := runPlaceholderRule(t, "drift_doc_broken_internal_link")
@@ -3738,25 +3776,8 @@ func TestFindSmells_DriftDocBrokenInternalLink_PlaceholderQueryReturnsZeroFindin
 }
 
 // --- drift_doc_outdated_count --------------------------------------
-
-func TestFindSmells_DriftDocOutdatedCount_Registered(t *testing.T) {
-	r := findRegisteredRule(t, "drift_doc_outdated_count")
-	assert.Equal(t, []string{"markdown"}, r.Languages)
-	assert.Equal(t, SeverityWarn, r.Effective())
-	assert.Equal(t, []string{"docs", "drift", "counts"}, r.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, r.Requires,
-		"ground-truth queries from .mache/drift-counts.toml execute against the wider DB; this rule needs only the markdown content (nodes)")
-	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn)
-	assert.NotEmpty(t, r.Description)
-}
-
-func TestFindSmells_DriftDocOutdatedCount_ListingExposesIt(t *testing.T) {
-	entry := listingFor(t, "drift_doc_outdated_count")
-	assert.Equal(t, []string{"markdown"}, entry.Languages)
-	assert.Equal(t, string(SeverityWarn), entry.Severity)
-	assert.Equal(t, []string{"docs", "drift", "counts"}, entry.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, entry.Requires)
-}
+// Registered/ListingExposesIt coverage lives in the table-driven
+// TestFindSmells_DriftDocRules_Registered / _ListingExposesIt above.
 
 func TestFindSmells_DriftDocOutdatedCount_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
 	total, findings := runPlaceholderRule(t, "drift_doc_outdated_count")

@@ -42,10 +42,10 @@ func TestDocRefsView_ScopesToRustAndStripsCallSyntax(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 
-	type row struct{ token, nodeID, sourceID, bare string }
-	var got []row
+	type docRefRow struct{ token, nodeID, sourceID, bare string }
+	var got []docRefRow
 	for rows.Next() {
-		var r row
+		var r docRefRow
 		require.NoError(t, rows.Scan(&r.token, &r.nodeID, &r.sourceID, &r.bare))
 		got = append(got, r)
 	}
