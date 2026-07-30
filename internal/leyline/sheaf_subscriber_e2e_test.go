@@ -187,6 +187,8 @@ func startDaemonForE2E(t *testing.T, leylineBin string) (string, func()) {
 	t.Helper()
 	tdir, err := os.MkdirTemp("/tmp", "sheaf-sub-e2e-")
 	require.NoError(t, err)
+	// Runs after the cleanup func returned below has signalled the daemon.
+	t.Cleanup(func() { assertNoSurvivorsFor(t, tdir) })
 
 	arena := filepath.Join(tdir, "arena.bin")
 	ctrl := filepath.Join(tdir, "test.ctrl")
@@ -201,6 +203,7 @@ func startDaemonForE2E(t *testing.T, leylineBin string) (string, func()) {
 	require.NoError(t, err)
 	daemon.Stdout = logFile
 	daemon.Stderr = logFile
+	setProcessGroup(daemon) // daemon spawns `mache serve --control` as a child; group it so cleanup reaps both
 	require.NoError(t, daemon.Start(), "spawn leyline daemon")
 
 	// Poll for socket. The daemon binds asynchronously after arena
@@ -215,7 +218,7 @@ func startDaemonForE2E(t *testing.T, leylineBin string) (string, func()) {
 
 	cleanup := func() {
 		if daemon.Process != nil {
-			_ = daemon.Process.Signal(syscall.SIGTERM)
+			_ = signalProcessGroup(daemon.Process, syscall.SIGTERM)
 			done := make(chan struct{})
 			go func() {
 				_, _ = daemon.Process.Wait()
@@ -224,7 +227,7 @@ func startDaemonForE2E(t *testing.T, leylineBin string) (string, func()) {
 			select {
 			case <-done:
 			case <-time.After(3 * time.Second):
-				_ = daemon.Process.Kill()
+				_ = signalProcessGroup(daemon.Process, syscall.SIGKILL)
 				<-done
 			}
 		}
