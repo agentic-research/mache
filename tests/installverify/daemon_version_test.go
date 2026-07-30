@@ -20,6 +20,10 @@ import (
 // well-known address a real editor connects to, not one this test chose.
 const supervisedDaemonURL = "http://localhost:7532/mcp"
 
+// daemonVerifyEnv opts in to the live-daemon check. See the skip in
+// TestSupervisedDaemonServesTheInstalledBinary for why this is not default-on.
+const daemonVerifyEnv = "MACHE_VERIFY_DAEMON"
+
 // TestSupervisedDaemonServesTheInstalledBinary closes the gap that made a
 // v0.20.0 release land without taking effect.
 //
@@ -45,6 +49,21 @@ const supervisedDaemonURL = "http://localhost:7532/mcp"
 // manufacture one, since starting a daemon is a decision this test does not
 // get to make.
 func TestSupervisedDaemonServesTheInstalledBinary(t *testing.T) {
+	// OPT-IN ONLY. This is the one test in this package that inspects MACHINE
+	// STATE rather than the binary under test, so without a gate it runs on a
+	// plain `go test ./...` — which `task test` performs — and reports a
+	// stale-daemon problem as a source-tree test failure. Someone whose daemon
+	// went stale then cannot get `task check` green, and the fix is not in the
+	// diff they are working on.
+	//
+	// It also contributes nothing in CI: no runner has a supervised daemon, and
+	// restartDaemonAgent correctly refuses to conjure one, so it would skip at
+	// the listen probe anyway. Gating it costs no coverage where coverage was
+	// possible, and stops it breaking a developer's unrelated run. Reached via
+	// `task daemon:verify` (found by an external review of PR #589).
+	if os.Getenv(daemonVerifyEnv) == "" {
+		t.Skipf("%s unset — run `task daemon:verify` (this inspects the live daemon, not the build)", daemonVerifyEnv)
+	}
 	if !daemonListening(supervisedDaemonURL) {
 		t.Skip("no supervised daemon on localhost:7532 — nothing to compare (run `mache init --global` to have one)")
 	}

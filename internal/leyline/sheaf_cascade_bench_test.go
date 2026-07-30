@@ -150,6 +150,7 @@ func startDaemonForBench(b *testing.B, leylineBin string) (*SocketClient, func()
 	logFile, _ := os.Create(filepath.Join(tdir, "daemon.log"))
 	daemon.Stdout = logFile
 	daemon.Stderr = logFile
+	setProcessGroup(daemon) // daemon spawns `mache serve --control` as a child; group it so cleanup reaps both
 	require.NoError(b, daemon.Start())
 
 	// Wait for socket to appear.
@@ -163,7 +164,7 @@ func startDaemonForBench(b *testing.B, leylineBin string) (*SocketClient, func()
 
 	sock, err := DialSocket(sockPath)
 	if err != nil {
-		_ = daemon.Process.Kill()
+		_ = signalProcessGroup(daemon.Process, syscall.SIGKILL)
 		_ = os.RemoveAll(tdir)
 		b.Fatalf("dial bench daemon: %v", err)
 	}
@@ -171,7 +172,7 @@ func startDaemonForBench(b *testing.B, leylineBin string) (*SocketClient, func()
 	return sock, func() {
 		_ = sock.Close()
 		if daemon.Process != nil {
-			_ = daemon.Process.Signal(syscall.SIGTERM)
+			_ = signalProcessGroup(daemon.Process, syscall.SIGTERM)
 			done := make(chan struct{})
 			go func() {
 				_, _ = daemon.Process.Wait()
@@ -180,7 +181,7 @@ func startDaemonForBench(b *testing.B, leylineBin string) (*SocketClient, func()
 			select {
 			case <-done:
 			case <-time.After(2 * time.Second):
-				_ = daemon.Process.Kill()
+				_ = signalProcessGroup(daemon.Process, syscall.SIGKILL)
 				<-done
 			}
 		}

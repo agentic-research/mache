@@ -35,15 +35,19 @@ func assertNoSurvivorsFor(t *testing.T, tdir string) {
 	// holds tdir) rather than sleeping a fixed wall-clock guess — the pattern
 	// the sleep_in_test rule asks for, and it also reports promptly when the
 	// tree is correctly reaped instead of always paying the full budget.
-	var last string
+	// The closure must not write a variable this function later reads:
+	// assert.Eventually runs the condition in a GOROUTINE, so on the timeout
+	// return path a spawned check can still be inside survivorsFor while we
+	// read. Re-query in the failure branch instead — it costs one extra `ps`
+	// only when already failing, and a DATA RACE abort here would bury the
+	// argv message that is the entire point of the assertion.
 	ok := assert.Eventually(t, func() bool {
-		last = survivorsFor(t, tdir)
-		return last == ""
+		return survivorsFor(t, tdir) == ""
 	}, 3*time.Second, 100*time.Millisecond)
 	if !ok {
 		t.Errorf("processes survived cleanup holding %s — the daemon's child was orphaned, "+
 			"not reaped with it (use setProcessGroup at spawn + signalProcessGroup at cleanup):\n%s",
-			tdir, last)
+			tdir, survivorsFor(t, tdir))
 	}
 }
 
@@ -53,8 +57,12 @@ func survivorsFor(t *testing.T, tdir string) string {
 	t.Helper()
 	out, err := exec.Command("ps", "-eo", "pid,args").Output()
 	if err != nil {
-		t.Logf("ps unavailable (%v) — cannot check for orphans", err)
-		return ""
+		// Returning "" here would report "no survivors" — a SILENT PASS for an
+		// assertion that never ran. By this repo's own standard a check that
+		// cannot fire is worse than none, and on every platform mache supports
+		// a missing or erroring `ps` means something is badly wrong rather than
+		// that the orphan question is moot.
+		t.Fatalf("cannot check for orphaned daemons: ps failed: %v", err)
 	}
 	var hits []string
 	for _, line := range strings.Split(string(out), "\n") {
