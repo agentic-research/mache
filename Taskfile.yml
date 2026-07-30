@@ -21,6 +21,57 @@ tasks:
       - cmd: codesign -s - --force --deep --entitlements entitlements.plist ~/.local/bin/mache
         platforms: [darwin]
 
+  install:verify:
+    desc: |
+      Install gate — verify a REAL mache installation instead of assuming one.
+      Asserts, with content assertions rather than exit codes: the leyline the
+      binary RESOLVES is the pin (proven against a deliberately stale leyline
+      planted first on PATH — bead mache-19326d); the binary's reported version
+      is what this tree says it should be; and the core MCP tools return the
+      EXPECTED VALUES for a fixture the binary itself projects.
+
+      Verifies the freshly-built bin/mache by default. Point it at any other
+      installed artifact with BIN, and at a published release with
+      MACHE_VERIFY_EXPECT_VERSION / MACHE_VERIFY_EXPECT_LEYLINE:
+
+        task install:verify
+        task install:verify BIN=~/.local/bin/mache
+        MACHE_VERIFY_EXPECT_VERSION=0.20.0 task install:verify BIN=/tmp/mache-v0.20.0
+
+      The clean-HOME (no ~/.mache, no checkout, no Taskfile) leg lives in
+      `task install:verify:docker`; a dev box cannot honestly simulate it.
+    deps: [build, leyline:ensure]
+    vars:
+      BIN: '{{.BIN | default .BINARY_NAME}}'
+    cmds:
+      # `go` needs no preflight guard (toolchain-safe), and the binary under
+      # test is asserted to exist by the suite itself rather than by a
+      # precondition — a MISSING install is the failure this gate reports, not
+      # a reason to decline to run.
+      - |
+        set -euo pipefail
+        BIN_ABS="$(cd "$(dirname "{{.BIN}}")" && pwd)/$(basename "{{.BIN}}")"
+        MACHE_VERIFY_BINARY="$BIN_ABS" go test -count=1 -v \
+          -skip 'TestPublishedImage|TestDockerCleanHome' ./tests/installverify/
+
+  install:verify:docker:
+    desc: |
+      Clean-HOME half of the install gate — bead mache-19326d's acceptance
+      criterion, run against the PUBLISHED image in a container with no
+      ~/.mache, no repo checkout and no Taskfile. Also verifies the image
+      reports its own tag's version (bead mache-4d7f2c) and pins the
+      `serve`-baked ENTRYPOINT that makes `docker run IMAGE version` silently
+      boot a server (bead mache-504adc).
+
+      Skips when no docker daemon is reachable or the image is not fetchable,
+      so it never reddens CI on a box without docker. Set
+      MACHE_VERIFY_REQUIRE_DOCKER=1 to turn those skips into failures, and
+      MACHE_VERIFY_IMAGE=<ref> to check an image other than this tree's.
+    cmds:
+      # No `command -v docker` guard here on purpose: the suite probes for the
+      # daemon itself so it can SKIP, where a precondition would fail the task.
+      - go test -count=1 -v -run 'TestPublishedImage|TestDockerCleanHome' ./tests/installverify/
+
   build:
     desc: Build and codesign mache
     vars:
@@ -744,6 +795,7 @@ tasks:
       - task: test:ast
       - task: test
       - task: validate
+      - task: install:verify
       - task: gates:preflight
       - task: gen:server-json:check
 
@@ -767,6 +819,7 @@ tasks:
       - task: test:ast
       - task: test
       - task: validate
+      - task: install:verify
       - task: gates:preflight
       - task: gen:server-json:check
 
