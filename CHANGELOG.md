@@ -8,6 +8,27 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`task install:verify` — an install gate that verifies a real installation
+  instead of assuming one.** Every other gate in this repo exercises the source
+  tree; nothing checked an artifact a user could actually have (`mache-4d7f2c`).
+  The new target drives an *installed binary* by fork/exec and MCP-over-the-wire
+  and asserts on content, not exit codes: the leyline the binary resolves is the
+  pin — proven against a deliberately stale leyline planted first on PATH, the
+  measured `mache-19326d` skew; the version it reports is one this tree could
+  have produced, down to the built commit being an ancestor of HEAD; and
+  `find_definition` / `get_overview` / `list_directory` / `find_smells` return
+  the *expected values* for a fixture the binary projects itself. Runnable
+  locally, wired into `task check`, `task ci` and a CI job that invokes the same
+  target. `task install:verify:docker` adds the clean-HOME leg — no `~/.mache`,
+  no checkout, no Taskfile — against the published image, which is
+  `mache-19326d`'s acceptance criterion and the one condition a dev box cannot
+  honestly simulate; it also pins the image's `serve`-baked `ENTRYPOINT`, so
+  `docker run IMAGE version` silently booting a server (`mache-504adc`) is a
+  stated expectation rather than a surprise. The docker leg skips when no daemon
+  or image is reachable, so it never reddens CI on a box without docker; set
+  `MACHE_VERIFY_REQUIRE_DOCKER=1` to make those skips failures.
+  (`mache-19326d`, `mache-4d7f2c`, `mache-504adc`)
+
 - **`mache leyline path` and `mache leyline exec` — invoke the pinned leyline
   without depending on PATH.** mache resolves leyline through one pin-checked
   chokepoint and caches it version-namespaced under `~/.mache/bin`, which is not

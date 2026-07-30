@@ -169,10 +169,54 @@ jobs:
       - name: server.json drift check
         run: task gen:server-json:check
 
+  install-verify:
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
+    # The INSTALL gate (bead mache-19326d). Every other CI job exercises the
+    # source tree; this one exercises an artifact a user could actually have.
+    # It installs mache the way `task install` does and then verifies the
+    # INSTALLED binary: the leyline it resolves is the pin (with a deliberately
+    # stale leyline planted first on PATH), the version it reports is one this
+    # tree could have produced, and the core MCP tools return the expected
+    # values for a fixture it projects itself.
+    #
+    # CI invokes the Taskfile target, never the commands — a developer running
+    # `task install:verify` runs byte-identical checks.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+          # merge-base --is-ancestor needs real history to answer "was this
+          # binary built from this tree"; a depth-1 checkout has none.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install Task
+        env:
+          GOTOOLCHAIN: auto
+        run: go install github.com/go-task/task/v3/cmd/task@v3.50.0
+
+      - name: Install mache
+        run: task install
+
+      - name: Verify the installed binary
+        run: task install:verify BIN="$HOME/.local/bin/mache"
+
+      - name: Verify the published image (clean HOME)
+        # Deliberately NOT MACHE_VERIFY_REQUIRE_DOCKER: on a commit that has
+        # bumped version.txt ahead of the last release, the image for that
+        # version does not exist yet and the leg skips, which is honest. The
+        # release workflow is where that skip should become a failure.
+        run: task install:verify:docker
+
   required:
     name: CI required
     if: always()
-    needs: [changes, test, lint, server-json-drift]
+    needs: [changes, test, lint, server-json-drift, install-verify]
     runs-on: ubuntu-latest
     steps:
       - name: Require every applicable CI job
@@ -182,6 +226,7 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           LINT_RESULT: ${{ needs.lint.result }}
           SERVER_JSON_RESULT: ${{ needs.server-json-drift.result }}
+          INSTALL_VERIFY_RESULT: ${{ needs.install-verify.result }}
         run: |
           test "$CHANGES_RESULT" = "success"
           case "$HEAVY" in
@@ -192,3 +237,4 @@ jobs:
           test "$TEST_RESULT" = "success"
           test "$LINT_RESULT" = "success"
           test "$SERVER_JSON_RESULT" = "success"
+          test "$INSTALL_VERIFY_RESULT" = "success"
