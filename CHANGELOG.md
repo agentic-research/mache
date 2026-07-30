@@ -6,49 +6,12 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
-### Fixed
-
-- **`fan_out_skew`'s corpus-wide mean was diluted by markdown refs**
-  (`mache-50e939`). ley-line-open v0.13.0's markdown backtick fix
-  (`ley-line-open-ea1e42`) gives code spans real `node_refs` rows, but a
-  doc citation has no enclosing function — `container_node_id` is NULL,
-  so `referrer_node_id` falls back to the span's own unique node_id and
-  each becomes a singleton fan-out-1 referrer group. Measured on mache's
-  own repo: the mean dropped 9.79 → 5.08 once markdown refs existed,
-  lowering the 3× threshold for every real function and producing ~300
-  false positives that reflected a diluted mean, not a complexity change.
-  Fixed by scoping the mean to referrer_node_ids that resolve to a real
-  `nodes` row (markdown code spans never get one) rather than every raw
-  `v_refs` referrer.
-
-### Added
-
-- **`drift_doc_dead_symbol_reference` is real** (`mache-eb2bf3`), replacing
-  the `WHERE 1=0` placeholder now that ley-line-open v0.13.0 gives
-  markdown backtick spans `node_refs` rows. Scoped to Rust paths
-  (`token LIKE '%::%'`) for v1 — Go has no `::` syntax, sidestepping the
-  open `ley-line-open-651909` (Go package-level consts emit no defs)
-  entirely rather than false-positiving on it. Two known false-positive
-  classes are documented on the rule rather than filtered with a fragile
-  allowlist: external-library citations, and Rust enum-variant/struct-field
-  access (extraction doesn't index those as defs). Not tagged `gate`:
-  advisory only.
-
-### Changed
-
-- **leyline pin: v0.12.1 → v0.13.0** (`mache-438104`). Verified by
-  measurement, not release notes: `_meta.ir_schema_version` and
-  `extraction_epoch` unchanged (`merkle-ast-v2`, `4`); only
-  `injection_epoch` shifted, correctly scoped to markdown's inline grammar
-  now running where it didn't before. **No `.db` rebuild required for this
-  bump.**
-
-## [v0.20.0] — 2026-07-28
+## [v0.20.0] — 2026-07-30
 
 ### ⚠️ Action required before upgrading
 
 - **Rebuild any persisted `.db` built before ley-line-open v0.11.0.** Do not
-  reuse it. mache now pins leyline v0.11.3, and v0.11.0 raised
+  reuse it. mache now pins leyline v0.13.0, and v0.11.0 raised
   `IR_SCHEMA_VERSION` from `merkle-ast-v1` to `merkle-ast-v2` — giving
   `function_signature_item` the `canonical_kind` it lacked rewrote every Rust
   trait signature's `node_hash`, because the preimage hashes
@@ -65,6 +28,13 @@ bumps may include breaking changes.
   `.db` files now record which leyline produced them — `_mache_meta` carries
   `leyline_pin`, `leyline_version`, and `leyline_source` — so this is
   answerable from the artifact rather than by inference.
+
+  The later bumps in this release do **not** add a second rebuild trigger:
+  v0.11.3 → v0.12.1 → v0.13.0 were each verified by measurement to hold
+  `ir_schema_version` at `merkle-ast-v2` and `extraction_epoch` at `4`. Only
+  `injection_epoch` moves (v0.13.0's markdown inline grammar), which is
+  correctly scoped and forces no re-parse. The v0.11.0 boundary above is the
+  only one in this release that invalidates a persisted `.db`.
 
 ### Fixed
 
@@ -129,6 +99,19 @@ bumps may include breaking changes.
   flag disables downloading it. The message states the precondition and names
   the pinned version.
 
+- **`fan_out_skew`'s corpus-wide mean was diluted by markdown refs**
+  (`mache-50e939`). ley-line-open v0.13.0's markdown backtick fix
+  (`ley-line-open-ea1e42`) gives code spans real `node_refs` rows, but a
+  doc citation has no enclosing function — `container_node_id` is NULL,
+  so `referrer_node_id` falls back to the span's own unique node_id and
+  each becomes a singleton fan-out-1 referrer group. Measured on mache's
+  own repo: the mean dropped 9.79 → 5.08 once markdown refs existed,
+  lowering the 3× threshold for every real function and producing ~300
+  false positives that reflected a diluted mean, not a complexity change.
+  Fixed by scoping the mean to referrer_node_ids that resolve to a real
+  `nodes` row (markdown code spans never get one) rather than every raw
+  `v_refs` referrer.
+
 ### Changed
 
 - **`nodes.record` is now TEXT in every writer, and holds TEXT.** Both the
@@ -190,6 +173,13 @@ bumps may include breaking changes.
   `PropString`/`PropRaw` and their setters, re-exported from the public `graph`
   package for external consumers.
 
+- **leyline pin: v0.12.1 → v0.13.0** (`mache-438104`). Verified by
+  measurement, not release notes: `_meta.ir_schema_version` and
+  `extraction_epoch` unchanged (`merkle-ast-v2`, `4`); only
+  `injection_epoch` shifted, correctly scoped to markdown's inline grammar
+  now running where it didn't before. **No `.db` rebuild required for this
+  bump.**
+
 ### Added
 
 - **The LLO data-plane boundary is enforced** (`mache-e64f36`). mache is the
@@ -204,6 +194,17 @@ bumps may include breaking changes.
   `minimum-version` in one step, and fails closed if a release does not carry
   all four platform assets. It deliberately refuses to write the doc block or
   decide the lineage question.
+
+- **`drift_doc_dead_symbol_reference` is real** (`mache-eb2bf3`), replacing
+  the `WHERE 1=0` placeholder now that ley-line-open v0.13.0 gives
+  markdown backtick spans `node_refs` rows. Scoped to Rust paths
+  (`token LIKE '%::%'`) for v1 — Go has no `::` syntax, sidestepping the
+  open `ley-line-open-651909` (Go package-level consts emit no defs)
+  entirely rather than false-positiving on it. Two known false-positive
+  classes are documented on the rule rather than filtered with a fragile
+  allowlist: external-library citations, and Rust enum-variant/struct-field
+  access (extraction doesn't index those as defs). Not tagged `gate`:
+  advisory only.
 
 ### Removed
 
