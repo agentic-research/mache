@@ -26,6 +26,32 @@ To check the install:
 mache version
 ```
 
+### Installing without a checkout
+
+`task install` needs this repository. If you got mache from a release asset or a
+package manager, you have a binary and no Taskfile — so the binary provisions
+itself:
+
+```bash
+mache install              # copy this binary to ~/.local/bin and fetch the pinned leyline
+mache install --update-rc  # ...and add the PATH line to your shell rc (opt-in)
+mache uninstall            # remove both again, reporting each path
+```
+
+`mache install` prints the `export PATH=...` line rather than editing your shell
+rc unless you pass `--update-rc`, and it refuses to install over — or uninstall —
+a Homebrew-managed mache, since brew's manifest would still claim the file.
+
+The pinned leyline is cached **version-namespaced** under `~/.mache/bin`, which is
+deliberately not put on PATH: a bare `leyline` in your shell would then mean
+whatever PATH order decided, which is the exact skew this pin exists to prevent.
+Reach the right one explicitly:
+
+```bash
+mache leyline path                          # absolute path, nothing else
+mache leyline exec -- cdc enable --db x.db  # run it, version-correct by construction
+```
+
 ## First run — MCP server
 
 Running mache as an MCP server is **two decisions**: *what to point it at* (the source) and *how the client connects* (the transport). Get these right once and it just works.
