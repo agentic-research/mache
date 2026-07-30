@@ -246,7 +246,15 @@ func ensureCanonicalViews(qg refsQuerier) error {
 		}
 		hasAST = hasContent
 	}
-	return ensureTestNodesView(qg, hasAST)
+	if err := ensureTestNodesView(qg, hasAST); err != nil {
+		return err
+	}
+
+	hasRefsSourceID, err := tableHasColumn(qg, "node_refs", "source_id")
+	if err != nil {
+		return fmt.Errorf("probe node_refs.source_id: %w", err)
+	}
+	return ensureDocRefsView(qg, hasRefsSourceID)
 }
 
 // LoadCapnpBindings populates the per-connection _capnp_binding_refs
