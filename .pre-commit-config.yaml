@@ -1,4 +1,15 @@
 repos:
+  # >>> rsry-managed (do not edit between these markers; `rsry hooks install` regenerates) >>>
+  - repo: local
+    hooks:
+      - id: rsry-bead-sync
+        name: rsry bead export sync (rosary-00f2b5)
+        entry: rsry hooks run pre-commit
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+  # <<< rsry-managed <<<
   # Markdown formatting
   - repo: https://github.com/hukkin/mdformat
     rev: 82912cdaea4fb830f751504486a7879c70526547 # 1.0.0

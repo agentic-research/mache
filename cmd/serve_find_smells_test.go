@@ -2005,8 +2005,18 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 		  ('J','pkg/god/Dispatcher'),('K','pkg/god/Dispatcher'),('L','pkg/god/Dispatcher');
 
 		-- Six normal callers, 1 callee each — dilutes the project mean
-		-- so the god's fan-out exceeds 3× mean. Nodes rows aren't
-		-- required since they fail the threshold and never hit the JOIN.
+		-- so the god's fan-out exceeds 3× mean. The mean is now scoped
+		-- to real constructs (mache-50e939 — a markdown code-span ref
+		-- has no nodes row and must not count toward mu), so these
+		-- diluting callers need nodes rows too, matching every real
+		-- construct in production data.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/ok/N1', 'pkg/ok', 'N1', 1, 0, 'n1.go', ''),
+		  ('pkg/ok/N2', 'pkg/ok', 'N2', 1, 0, 'n2.go', ''),
+		  ('pkg/ok/N3', 'pkg/ok', 'N3', 1, 0, 'n3.go', ''),
+		  ('pkg/ok/N4', 'pkg/ok', 'N4', 1, 0, 'n4.go', ''),
+		  ('pkg/ok/N5', 'pkg/ok', 'N5', 1, 0, 'n5.go', ''),
+		  ('pkg/ok/N6', 'pkg/ok', 'N6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('Z1','pkg/ok/N1'),('Z2','pkg/ok/N2'),('Z3','pkg/ok/N3'),
 		  ('Z4','pkg/ok/N4'),('Z5','pkg/ok/N5'),('Z6','pkg/ok/N6');
@@ -2085,6 +2095,15 @@ func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
 		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
 
 		-- Six tiny callers to dilute the project mean below 3× threshold.
+		-- Real nodes rows (mache-50e939): the mean is scoped to actual
+		-- constructs, and every real construct has a nodes row.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
+		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
+		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
+		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
+		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
+		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
 		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
@@ -2143,7 +2162,16 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
 		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
 
-		-- Tiny callers to bring project mean down so 12 trips the threshold.
+		-- Tiny callers to bring project mean down so 12 trips the
+		-- threshold. Real nodes rows (mache-50e939): the mean is scoped
+		-- to actual constructs, and every real construct has a nodes row.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
+		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
+		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
+		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
+		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
+		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
 		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
@@ -2207,7 +2235,16 @@ func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
 		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
 		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
 
-		-- Tiny callers to bring project mean down so 12 trips the threshold.
+		-- Tiny callers to bring project mean down so 12 trips the
+		-- threshold. Real nodes rows (mache-50e939): the mean is scoped
+		-- to actual constructs, and every real construct has a nodes row.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
+		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
+		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
+		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
+		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
+		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
 		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
@@ -2286,11 +2323,19 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 
 	// Tiny callers via node_refs so the project mean stays low.
 	// These rows have empty qualifier (mention arm of v_refs), so
-	// they exercise the COALESCE fallback to token.
+	// they exercise the COALESCE fallback to token. Real nodes rows
+	// (mache-50e939): the mean is scoped to actual constructs, and
+	// every real construct has a nodes row.
 	for i := 1; i <= 15; i++ {
+		callerID := fmt.Sprintf("functions/n%02d", i)
 		_, err := db.Exec(
+			`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES (?, 'functions', ?, 1, 0, ?, '')`,
+			callerID, fmt.Sprintf("n%02d", i), fmt.Sprintf("n%02d.go", i),
+		)
+		require.NoError(t, err)
+		_, err = db.Exec(
 			`INSERT INTO node_refs VALUES (?, ?)`,
-			fmt.Sprintf("z%02d", i), fmt.Sprintf("functions/n%02d", i),
+			fmt.Sprintf("z%02d", i), callerID,
 		)
 		require.NoError(t, err)
 	}
@@ -2343,6 +2388,93 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	}
 	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
 		"Only Dispatcher (12 distinct qualifiers) is flagged; bindingFromRecord (1 qualifier 'rec') is structurally exempt by the qualifier-aware metric")
+}
+
+// TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean pins mache-50e939:
+// markdown backtick spans (ley-line-open-ea1e42) land as node_refs rows
+// with container_node_id = NULL and no corresponding nodes row — a doc
+// citation has no enclosing "function". referrer_node_id then falls back
+// to the span's own unique node_id, so each becomes a singleton n=1
+// referrer group.
+//
+// Left unscoped, thousands of those drag the corpus mean down (measured
+// on mache's own repo: 9.79 -> 5.08), which lowers the 3x threshold for
+// every real function and floods the gate with findings that reflect a
+// diluted mean, not an actual complexity change.
+//
+// Fixture: 6 real callers with n=10 each (mean=10, threshold=30) plus 50
+// markdown-shaped singleton refs. Normal (n=10) must stay unflagged —
+// under the bug, the diluted mean (~1.96) drops the threshold (~5.89)
+// below Normal's fan-out and wrongly flags it.
+func TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "mdpollution.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
+			record_id TEXT, record TEXT, source_file TEXT
+		);
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, container_node_id TEXT, qualifier TEXT);
+
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions',                '',          '',      1, 0, '',           ''),
+		  ('functions/Normal',         'functions', 'Normal',1, 0, 'normal.go',  ''),
+		  ('functions/Normal/source',  'functions/Normal', 'source', 0, 0, 'normal.go', '');
+	`)
+	require.NoError(t, err)
+
+	// Normal: 10 distinct callees. Six other real callers, 10 each — real
+	// mean is 10, so Normal (n=10) never crosses 3×mean and must not fire.
+	for i := range 6 {
+		callerID := fmt.Sprintf("functions/Real%02d/source", i)
+		_, err := db.Exec(
+			`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES (?, 'functions', ?, 0, 0, ?, '')`,
+			callerID, fmt.Sprintf("Real%02d", i), fmt.Sprintf("real%02d.go", i),
+		)
+		require.NoError(t, err)
+		for j := range 10 {
+			_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, ?, '')`,
+				fmt.Sprintf("callee%02d", j), callerID, callerID)
+			require.NoError(t, err)
+		}
+	}
+	for j := range 10 {
+		_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, ?, '')`,
+			fmt.Sprintf("callee%02d", j), "functions/Normal/source", "functions/Normal/source")
+		require.NoError(t, err)
+	}
+
+	// 50 markdown-shaped refs: unique node_id per span, empty
+	// container_node_id, no nodes row — exactly LLO's ea1e42 shape.
+	for i := range 50 {
+		spanID := fmt.Sprintf("doc.md/section/paragraph_%d/inline#inj0/code_span_0", i)
+		_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, '', '')`,
+			fmt.Sprintf("Symbol%d", i), spanID)
+		require.NoError(t, err)
+	}
+
+	tg := &smellTestGraph{db: db, path: dbPath}
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Empty(t, gotIDs,
+		"50 markdown singleton refs must not dilute the mean and wrongly flag Normal (n=10, real mean=10, threshold=30)")
 }
 
 // TestFindSmells_UntestedFunctionAcceptsTestCallCoverage asserts
@@ -3394,56 +3526,247 @@ func runPlaceholderRule(t *testing.T, id string) (int, []smellFinding) {
 
 // --- drift_doc_dead_symbol_reference -------------------------------
 
-func TestFindSmells_DriftDocDeadSymbolReference_Registered(t *testing.T) {
-	r := findRegisteredRule(t, "drift_doc_dead_symbol_reference")
-	assert.Equal(t, []string{"markdown"}, r.Languages)
-	assert.Equal(t, SeverityWarn, r.Effective(),
-		"placeholder rules default to warn — observability tier per ADR-0018")
-	assert.Equal(t, []string{"docs", "drift"}, r.Tags)
-	assert.ElementsMatch(t, []string{"nodes", "node_defs"}, r.Requires,
-		"rule reads nodes (markdown content) + node_defs (symbol ground truth)")
-	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn,
-		"scope column matches the alias the real query will use once the preprocessor lands")
-	assert.NotEmpty(t, r.Description)
+// TestFindSmells_DriftDocRules_Registered and _ListingExposesIt (below)
+// cover drift_doc_broken_internal_link, drift_doc_outdated_count, and
+// drift_doc_dead_symbol_reference in one table-driven test each, rather
+// than the three-near-identical-functions-per-check shape the sibling
+// placeholder rules previously used. duplicate_code (this repo's own
+// clone detector) is explicit that this exact pattern is its intended
+// fix: "duplicated test setup is a legitimate refactor target — extract
+// a helper / table-driven test." Adding dead_symbol_reference's own
+// Registered/ListingExposesIt in the old flat-function shape pushed the
+// per-file clone count past baseline (mache-eb2bf3); this consolidates
+// all three rather than adding a fourth near-duplicate pair.
+func TestFindSmells_DriftDocRules_Registered(t *testing.T) {
+	cases := []struct {
+		id          string
+		tags        []string
+		requires    []string
+		scopeColumn string
+		requiresMsg string
+	}{
+		{
+			id:          "drift_doc_broken_internal_link",
+			tags:        []string{"docs", "drift", "links"},
+			requires:    []string{"nodes"},
+			scopeColumn: "COALESCE(md.source_file, '')",
+			requiresMsg: "link-target validation needs the markdown content (nodes); filesystem stat happens host-side",
+		},
+		{
+			id:          "drift_doc_outdated_count",
+			tags:        []string{"docs", "drift", "counts"},
+			requires:    []string{"nodes"},
+			scopeColumn: "COALESCE(md.source_file, '')",
+			requiresMsg: "ground-truth queries from .mache/drift-counts.toml execute against the wider DB; this rule needs only the markdown content (nodes)",
+		},
+		{
+			id:          "drift_doc_dead_symbol_reference",
+			tags:        []string{"docs", "drift"},
+			requires:    []string{"node_defs"},
+			scopeColumn: "v.source_id",
+			requiresMsg: "the rule's own Requires only needs node_defs — v_doc_refs is installed " +
+				"unconditionally by ensureCanonicalViews and degrades to empty on its own " +
+				"when node_refs lacks source_id, so node_refs/_ast don't need to gate here",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			r := findRegisteredRule(t, tc.id)
+			assert.Equal(t, []string{"markdown"}, r.Languages)
+			assert.Equal(t, SeverityWarn, r.Effective())
+			assert.Equal(t, tc.tags, r.Tags)
+			assert.ElementsMatch(t, tc.requires, r.Requires, tc.requiresMsg)
+			assert.Equal(t, tc.scopeColumn, r.ScopeColumn)
+			assert.NotEmpty(t, r.Description)
+		})
+	}
 }
 
-func TestFindSmells_DriftDocDeadSymbolReference_ListingExposesIt(t *testing.T) {
-	entry := listingFor(t, "drift_doc_dead_symbol_reference")
-	assert.Equal(t, []string{"markdown"}, entry.Languages)
-	assert.Equal(t, string(SeverityWarn), entry.Severity,
-		"listing must emit severity so PR 2's --fail-on flag can reason about gating")
-	assert.Equal(t, []string{"docs", "drift"}, entry.Tags,
-		"listing must emit tags so PR 2's --rule glob (drift_doc_*) and future --tags filter work")
-	assert.ElementsMatch(t, []string{"nodes", "node_defs"}, entry.Requires)
+func TestFindSmells_DriftDocRules_ListingExposesIt(t *testing.T) {
+	cases := []struct {
+		id       string
+		tags     []string
+		requires []string
+	}{
+		{id: "drift_doc_broken_internal_link", tags: []string{"docs", "drift", "links"}, requires: []string{"nodes"}},
+		{id: "drift_doc_outdated_count", tags: []string{"docs", "drift", "counts"}, requires: []string{"nodes"}},
+		{id: "drift_doc_dead_symbol_reference", tags: []string{"docs", "drift"}, requires: []string{"node_defs"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			entry := listingFor(t, tc.id)
+			assert.Equal(t, []string{"markdown"}, entry.Languages)
+			assert.Equal(t, string(SeverityWarn), entry.Severity,
+				"listing must emit severity so PR 2's --fail-on flag can reason about gating")
+			assert.Equal(t, tc.tags, entry.Tags,
+				"listing must emit tags so PR 2's --rule glob (drift_doc_*) and future --tags filter work")
+			assert.ElementsMatch(t, tc.requires, entry.Requires)
+		})
+	}
 }
 
-func TestFindSmells_DriftDocDeadSymbolReference_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
-	total, findings := runPlaceholderRule(t, "drift_doc_dead_symbol_reference")
-	assert.Zero(t, total,
-		"v1 placeholder returns zero findings; follow-up bead under mache-e1b6c8 will replace this once the preprocessor lands")
+// TestFindSmells_DriftDocDeadSymbolReference_SkipsGracefullyWithoutSourceID
+// pins that the rule degrades to zero findings, not a SQL error, on a
+// node_refs table lacking a source_id column (mache's own schema-projection
+// output, and many hand-authored test fixtures, both build node_refs this
+// way). v_doc_refs (cmd/smell_doc_refs.go) probes the column in Go before
+// building any SQL — that's what makes this safe: seedSmellAST's node_refs
+// is exactly this shape, and the same handler that would runtime-error on a
+// raw "SELECT nr.source_id" must not error here.
+func TestFindSmells_DriftDocDeadSymbolReference_SkipsGracefullyWithoutSourceID(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "drift_doc_dead_symbol_reference",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "must degrade to zero findings, not error: %s", resultText(t, res))
+
+	var resp struct {
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	assert.Zero(t, resp.Total)
+}
+
+// buildDriftDocFixture creates a minimal leyline-native-shaped db: node_refs
+// WITH a source_id column (real production shape, unlike the generic
+// seedSmellAST fixture) plus node_defs. v_doc_refs only reads
+// token/node_id/source_id from node_refs; container_node_id/qualifier are
+// included for schema realism, not because this rule uses them.
+func buildDriftDocFixture(t *testing.T) *smellTestGraph {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "driftdoc.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
+			record_id TEXT, record TEXT, source_file TEXT
+		);
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, source_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, source_id TEXT, container_node_id TEXT, qualifier TEXT);
+
+		-- Real Rust defs: a free function (bare token) and a method
+		-- (Type::method, some Rust extraction indexes methods qualified).
+		INSERT INTO node_defs VALUES ('is_dominated_by', 'f.rs/is_dominated_by', 'f.rs');
+		INSERT INTO node_defs VALUES ('Handoff::chain_hash', 'f.rs/Handoff/chain_hash', 'f.rs');
+	`)
+	require.NoError(t, err)
+	return &smellTestGraph{db: db, path: dbPath}
+}
+
+// TestFindSmells_DriftDocDeadSymbolReference_MatchesAliveBareAndQualified
+// asserts the two real matching shapes: a qualified doc citation resolving
+// against a BARE def token (Rust commonly indexes free functions/types
+// unqualified — epic::is_dominated_by must resolve against a def token of
+// just is_dominated_by), and a qualified citation matching a def that is
+// ITSELF stored qualified (some Rust method defs are Type::method
+// directly). Neither must be flagged as dead.
+func TestFindSmells_DriftDocDeadSymbolReference_MatchesAliveBareAndQualified(t *testing.T) {
+	tg := buildDriftDocFixture(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO node_refs VALUES ('epic::is_dominated_by', 'doc.md/code_span_0', 'doc.md', NULL, '');
+		INSERT INTO node_refs VALUES ('Handoff::chain_hash', 'doc.md/code_span_1', 'doc.md', NULL, '');
+		INSERT INTO node_refs VALUES ('Handoff::chain_hash()', 'doc.md/code_span_2', 'doc.md', NULL, '');
+	`)
+	require.NoError(t, err)
+
+	total, findings := runDriftDocRule(t, tg)
+	assert.Zero(t, total, "all three citations resolve to real defs")
 	assert.Empty(t, findings)
 }
 
+// TestFindSmells_DriftDocDeadSymbolReference_FlagsGenuinelyDead is the
+// falsifying positive case: a citation whose token matches no def at all,
+// bare or qualified, must fire.
+func TestFindSmells_DriftDocDeadSymbolReference_FlagsGenuinelyDead(t *testing.T) {
+	tg := buildDriftDocFixture(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO node_refs VALUES ('epic::renamed_away', 'doc.md/code_span_0', 'doc.md', NULL, '');
+	`)
+	require.NoError(t, err)
+
+	total, findings := runDriftDocRule(t, tg)
+	require.Equal(t, 1, total)
+	assert.Equal(t, "doc.md/code_span_0", findings[0].NodeID)
+}
+
+// TestFindSmells_DriftDocDeadSymbolReference_ScopesToRustPaths asserts the
+// v1 scoping: only tokens containing '::' are considered at all. Go has no
+// '::' syntax, so a bare Go-shaped citation is silently out of scope rather
+// than risking a false positive from ley-line-open-651909 (Go package-level
+// consts emit no defs).
+func TestFindSmells_DriftDocDeadSymbolReference_ScopesToRustPaths(t *testing.T) {
+	tg := buildDriftDocFixture(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		-- Bare Go-shaped identifier, no def anywhere — would be a false
+		-- positive under 651909 if this rule considered non-Rust tokens.
+		INSERT INTO node_refs VALUES ('MaxRetries', 'doc.md/code_span_0', 'doc.md', NULL, '');
+	`)
+	require.NoError(t, err)
+
+	total, findings := runDriftDocRule(t, tg)
+	assert.Zero(t, total, "no '::' means out of scope, not flagged")
+	assert.Empty(t, findings)
+}
+
+// TestFindSmells_DriftDocDeadSymbolReference_ExcludesPathAndMalformedShapes
+// asserts the noise filters: mache's own doc convention cites Go symbols as
+// 'file.go::Symbol' (contains '::' but is a path, not a Rust module path),
+// and a backtick span can accidentally wrap whitespace/braces from a
+// malformed multi-line citation. Both must be excluded from candidates
+// entirely, not just fail to resolve.
+func TestFindSmells_DriftDocDeadSymbolReference_ExcludesPathAndMalformedShapes(t *testing.T) {
+	tg := buildDriftDocFixture(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		INSERT INTO node_refs VALUES ('cmd/serve.go::registerMCPTools', 'doc.md/code_span_0', 'doc.md', NULL, '');
+		INSERT INTO node_refs VALUES ('Foo:: bar', 'doc.md/code_span_1', 'doc.md', NULL, '');
+		INSERT INTO node_refs VALUES ('ProvenanceRef::Code{repo, path}', 'doc.md/code_span_2', 'doc.md', NULL, '');
+	`)
+	require.NoError(t, err)
+
+	total, findings := runDriftDocRule(t, tg)
+	assert.Zero(t, total, "path-shaped and malformed tokens are excluded as candidates, not evaluated as dead")
+	assert.Empty(t, findings)
+}
+
+// runDriftDocRule executes the rule against a fixture built by
+// buildDriftDocFixture and returns (total, findings) restricted to markdown
+// source rows (buildDriftDocFixture's own _ast row is a .rs file, present
+// only to satisfy the Requires gate).
+func runDriftDocRule(t *testing.T, tg *smellTestGraph) (int, []smellFinding) {
+	t.Helper()
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{
+		"rule": "drift_doc_dead_symbol_reference",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "rule must execute cleanly: %s", resultText(t, res))
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	return resp.Total, resp.Findings
+}
+
 // --- drift_doc_broken_internal_link --------------------------------
-
-func TestFindSmells_DriftDocBrokenInternalLink_Registered(t *testing.T) {
-	r := findRegisteredRule(t, "drift_doc_broken_internal_link")
-	assert.Equal(t, []string{"markdown"}, r.Languages)
-	assert.Equal(t, SeverityWarn, r.Effective())
-	assert.Equal(t, []string{"docs", "drift", "links"}, r.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, r.Requires,
-		"link-target validation needs the markdown content (nodes); filesystem stat happens host-side")
-	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn)
-	assert.NotEmpty(t, r.Description)
-}
-
-func TestFindSmells_DriftDocBrokenInternalLink_ListingExposesIt(t *testing.T) {
-	entry := listingFor(t, "drift_doc_broken_internal_link")
-	assert.Equal(t, []string{"markdown"}, entry.Languages)
-	assert.Equal(t, string(SeverityWarn), entry.Severity)
-	assert.Equal(t, []string{"docs", "drift", "links"}, entry.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, entry.Requires)
-}
+// Registered/ListingExposesIt coverage lives in the table-driven
+// TestFindSmells_DriftDocRules_Registered / _ListingExposesIt above.
 
 func TestFindSmells_DriftDocBrokenInternalLink_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
 	total, findings := runPlaceholderRule(t, "drift_doc_broken_internal_link")
@@ -3453,25 +3776,8 @@ func TestFindSmells_DriftDocBrokenInternalLink_PlaceholderQueryReturnsZeroFindin
 }
 
 // --- drift_doc_outdated_count --------------------------------------
-
-func TestFindSmells_DriftDocOutdatedCount_Registered(t *testing.T) {
-	r := findRegisteredRule(t, "drift_doc_outdated_count")
-	assert.Equal(t, []string{"markdown"}, r.Languages)
-	assert.Equal(t, SeverityWarn, r.Effective())
-	assert.Equal(t, []string{"docs", "drift", "counts"}, r.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, r.Requires,
-		"ground-truth queries from .mache/drift-counts.toml execute against the wider DB; this rule needs only the markdown content (nodes)")
-	assert.Equal(t, "COALESCE(md.source_file, '')", r.ScopeColumn)
-	assert.NotEmpty(t, r.Description)
-}
-
-func TestFindSmells_DriftDocOutdatedCount_ListingExposesIt(t *testing.T) {
-	entry := listingFor(t, "drift_doc_outdated_count")
-	assert.Equal(t, []string{"markdown"}, entry.Languages)
-	assert.Equal(t, string(SeverityWarn), entry.Severity)
-	assert.Equal(t, []string{"docs", "drift", "counts"}, entry.Tags)
-	assert.ElementsMatch(t, []string{"nodes"}, entry.Requires)
-}
+// Registered/ListingExposesIt coverage lives in the table-driven
+// TestFindSmells_DriftDocRules_Registered / _ListingExposesIt above.
 
 func TestFindSmells_DriftDocOutdatedCount_PlaceholderQueryReturnsZeroFindings(t *testing.T) {
 	total, findings := runPlaceholderRule(t, "drift_doc_outdated_count")

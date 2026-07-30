@@ -803,21 +803,48 @@ func (c *SocketClient) Prioritize(files []string) error {
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
 // As of this pin, both the daemon binary and go.mod's leyline-schema module are
-// v0.12.1. The wire major and compatibility floor are unchanged from the 0.10
-// line; the version-parity gate (mache-b8af69) enforces the [floor, binary]
-// range.
+// v0.13.0. The wire major (1) and compatibility floor (0.6.0) are unchanged
+// from the 0.10 line; the version-parity gate (mache-b8af69) enforces the
+// [floor, binary] range.
 //
-// v0.11.3 -> v0.12.1 DOES NOT CROSS AN IR LINEAGE BOUNDARY — checked by
-// measurement, not inferred from release notes: _meta.ir_schema_version reads
-// "merkle-ast-v2" on both, extraction_epoch is unchanged (4 -> 4), and a
-// re-parse of the same fixture produces an identical _ast row count
-// (250369 -> 250369). No .db rebuild is required crossing this bump.
-// ley-line-open-348de6 shipped the ir_schema_version field in v0.11.1 — this is
-// the first mache bump able to answer the lineage question this way instead of
-// reading changelog prose; see mache-43d63d for consuming it as a first-class
-// signal rather than reading it ad hoc as done here.
+// v0.12.1 -> v0.13.0 DOES NOT CROSS AN IR LINEAGE BOUNDARY — checked by
+// measurement: _meta.ir_schema_version reads "merkle-ast-v2" on both,
+// extraction_epoch is unchanged (4 -> 4). injection_epoch DOES change
+// (markdown's inline grammar now runs where it previously didn't — see
+// below), which is the correctly-scoped signal: a narrower epoch moved
+// because the injection mechanism changed, not the whole IR. No .db rebuild
+// is required crossing this bump.
 //
-// v0.12.x adds leyline-mcp-descriptor, a shared server.json emitter
+// MARKDOWN BACKTICK SPANS BECOME node_refs (ley-line-open-ea1e42, mache
+// bead mache-eb2bf3). Every markdown `inline` node now reparses under
+// tree-sitter-md's INLINE_LANGUAGE via the existing injection mechanism;
+// each code_span emits a node_refs row on the HOST .md file (delimiters
+// stripped, CommonMark padding trimmed, verbatim otherwise) — join
+// node_refs, not _ast, per LLO's own correction on mache-eb2bf3 (their first
+// answer said _ast-only; the injection fold deliberately emits no _ast rows
+// for injected subtrees, so the real channel is node_refs facts on the host
+// file). container_node_id is NULL for these rows — a doc citation has no
+// enclosing function — so any rule that aggregates v_refs by referrer must
+// account for that (mache-50e939 found and fixed fan_out_skew's corpus mean
+// being diluted by the resulting singleton referrer groups; audit any other
+// AVG-over-v_refs rule before relying on it here). Host _ast/node_hash are
+// byte-identical with the pass on or off (pinned by LLO's own test).
+// drift_doc_dead_symbol_reference (mache's 0.20 placeholder) is now
+// writable: node_refs rows from *.md sources whose token joins no living
+// def. Caveat carried from LLO: ley-line-open-651909 (Go package-level
+// consts emit no defs, qualified selector args emit no refs) is still open
+// and will false-positive a Go-scoped doc-drift join — scope to Rust
+// symbols first.
+//
+// v0.11.3 -> v0.12.1 DID NOT CROSS AN IR LINEAGE BOUNDARY either — same
+// measurement, same fixture, ir_schema_version and extraction_epoch both
+// held (250369 -> 250369 _ast rows on re-parse). ley-line-open-348de6
+// shipped the ir_schema_version field in v0.11.1 — the first mache bump able
+// to answer the lineage question this way instead of reading changelog
+// prose; see mache-43d63d for consuming it as a first-class signal rather
+// than reading it ad hoc as done here.
+//
+// v0.12.x added leyline-mcp-descriptor, a shared server.json emitter
 // (ley-line-open-4ec276) that mache's own server.json work fed into
 // (mache-e28a9f): multiple packages / per-package transport landed
 // (ley-line-open-44cc45), but there is still no session field on
@@ -870,7 +897,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch.
-const leylineBinaryVersion = "v0.12.1"
+const leylineBinaryVersion = "v0.13.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
