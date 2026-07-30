@@ -6,6 +6,7 @@ this map:
 | You want to...                                                     | Go to                                                                  |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | Project a data source or codebase as a filesystem (write a schema) | [Topology schemas](#topology-schemas) below                            |
+| Look up what `{{...}}` can do in a schema                          | [Template functions](#template-functions) below                        |
 | Adopt the structural smell gate / write custom smell rules         | [`smell-rules/`](smell-rules/README.md) — a self-contained starter kit |
 | See the agent-audit projection pattern (markdown → JSON → mount)   | [Audit tooling](#audit-tooling)                                        |
 | Find the sample inputs the schemas are tested against              | [Test fixtures](#test-fixtures)                                        |
@@ -159,6 +160,70 @@ code ASTs into logical views.
 - [`rust-schema.json`](rust-schema.json) — Rust functions/types with LSP-backed leaves (`hover`, `diagnostics`, `definitions`, `references` from the `_lsp*` tables a ley-line build produces).
 - [`terraform-schema.json`](terraform-schema.json) — Terraform/HCL resources with the same LSP file set.
 - [`markdown-schema.json`](markdown-schema.json) — Markdown sections by heading (tree-sitter `markdown` grammar).
+
+## Template functions
+
+`name` and `content_template` are Go templates. Alongside the Go builtins
+(`printf`, `index`, `range`, …), mache registers these — the set is
+`Funcs` in [`internal/template/render.go`](../internal/template/render.go),
+which is the source of truth if this table ever falls behind it.
+
+| Function  | Signature                   | Example                                                                             |
+| --------- | --------------------------- | ----------------------------------------------------------------------------------- |
+| `default` | `default val fallback`      | `{{default .name "unknown"}}`                                                       |
+| `dict`    | `dict k v …`                | `{{dict "PkgName" .name "Severity" 4 \| json}}` → `{"PkgName":"curl","Severity":4}` |
+| `dig`     | `dig path obj`              | `{{dig "item.affected.0.package.ecosystem" .}}`                                     |
+| `first`   | `first slice`               | `{{first .parts}}` — nil when empty                                                 |
+| `join`    | `join sep parts`            | `{{split .s ":" \| join ", "}}`                                                     |
+| `json`    | `json val`                  | `{{. \| json}}`                                                                     |
+| `lookup`  | `lookup val k v … fallback` | `{{lookup .Severity "Critical" 4 "High" 3 0}}`                                      |
+| `lower`   | `lower s`                   | `{{lower .name}}` → `rhel`                                                          |
+| `replace` | `replace s old new`         | `{{replace .name ":" " "}}` → `alpine 3.18`                                         |
+| `slice`   | `slice s start end`         | `{{slice .item.cve.id 4 8}}` → `2024`                                               |
+| `split`   | `split s sep`               | `{{index (split .id ":") 0}}` → `alpine`                                            |
+| `title`   | `title s`                   | `{{title .name}}` → `Amazon Linux`                                                  |
+| `unquote` | `unquote s`                 | `{{unquote .path}}` → `cobra` from `"cobra"`                                        |
+| `upper`   | `upper s`                   | `{{upper .name}}` → `DEBIAN`                                                        |
+
+### Two that are silently wrong when misused
+
+Neither errors — both return something plausible — so a schema written on
+the wrong assumption renders empty or unchanged files rather than failing.
+
+**`default` takes the value FIRST.** `{{default .name "unknown"}}`.
+Reversed, as `{{default "" .name}}`, the first argument is always empty, so
+it always returns the second and the guard does nothing — a nil still
+renders as Go's literal `<no value>`, which is the case it was added for.
+
+The order is invisible in an example where both arguments are meaningful,
+such as `{{default (dig "a.b" .) (dig "c.d" .)}}` for a source with two
+possible shapes. That form is idiomatic; it just does not teach the order.
+
+**`lookup` is a value-mapping switch, not a lookup into a collection.** It
+compares `val` against literal key/value pairs and returns the match, or the
+trailing odd argument as a default. It cannot find a record in a slice by
+id. There is no function that can — `dig` reaches into maps and indexes
+slices by position, so a schema that needs to resolve an id to its record
+has to be shaped so the record is already an ancestor.
+
+`dig` returns `""` when any part of the path is missing, so wrapping it in
+`default` is redundant.
+
+## Reaching a parent: `_parent`
+
+A child node's templates can read the parent match's values through
+`_parent`, and it nests: `{{._parent._parent.item.id}}` reaches two levels
+up. `dig` works through it too, which is usually more readable for deep
+paths: `{{dig "_parent._parent.item.id" .}}`.
+
+`_parent` is a reserved key. A data field of that name is shadowed —
+underscore-prefixed keys belong to the engine
+([`internal/ingest/parent_match.go`](../internal/ingest/parent_match.go)).
+
+This is what lets a leaf carry context it does not itself contain. In the
+trivy-db projection the FILE NAME comes from a grandparent, because the
+layout that consumer expects keys entries by a vulnerability id that lives
+two levels above the version rows being written.
 
 ## Smell rules
 
