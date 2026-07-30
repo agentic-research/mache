@@ -234,10 +234,25 @@ func TestInstalledMacheReportsExpectedVersion(t *testing.T) {
 	if sha == "" {
 		return // a bare `go build` stamps no commit; nothing further to check
 	}
-	_, isAncestor := git(t, root, "merge-base", "--is-ancestor", sha, "HEAD")
-	assert.Truef(t, isAncestor,
-		"installed mache at %s was built from commit %s, which is not an ancestor of HEAD — "+
-			"that binary did not come from this tree", bin, sha)
+	if _, isAncestor := git(t, root, "merge-base", "--is-ancestor", sha, "HEAD"); isAncestor {
+		return
+	}
+	// Not an ancestor. Two very different causes, and the remedy differs, so
+	// say which: a commit git has never heard of means a FOREIGN binary (the
+	// Homebrew-tap mache in mache-6ec106 is the live example), while a commit
+	// this repo knows but cannot reach means your own binary predates an
+	// amend or rebase. The second is routine — `task build` skips a rebuild
+	// when no .go file changed, so rewriting history alone leaves bin/mache
+	// stamped with a commit that is no longer on any branch — and a gate that
+	// reported it as "foreign" would be disbelieved and then ignored.
+	_, known := git(t, root, "cat-file", "-e", sha+"^{commit}")
+	remedy := "that binary did not come from this tree"
+	if known {
+		remedy = "this tree knows that commit but cannot reach it — you amended or rebased after " +
+			"building, and `task build` skips a rebuild when no .go file changed. Run `task build`."
+	}
+	assert.Failf(t, "installed mache does not match this tree",
+		"%s was built from commit %s, which is not an ancestor of HEAD — %s", bin, sha, remedy)
 }
 
 // firstOK collapses git's (value, ok) to just the value; callers that treat ""
