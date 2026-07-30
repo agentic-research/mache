@@ -115,6 +115,33 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
+## Running the pinned leyline (mache-19326d)
+
+<details>
+<summary><code>mache leyline path</code> / <code>mache leyline exec</code> — reach the exact pinned binary without touching PATH</summary>
+
+mache pins an exact ley-line-open release and caches it version-namespaced under `~/.mache/bin`, which is **not** on PATH. So a bare `leyline` in your shell runs whatever copy PATH happens to hold — often an older one — against `.db` files mache parsed with the pin. Both are named `leyline`; neither warns. Since leyline v0.13.0 shipped `leyline cdc enable` / `leyline cdc gc`, invoking leyline directly is a real workflow, so this is a real skew.
+
+Two subcommands make the version question unaskable instead of answered-by-PATH-convention:
+
+```bash
+# Absolute path of the pinned binary, and nothing else on stdout.
+mache leyline path
+
+# Compose it — version-correct by construction.
+$(mache leyline path) cdc enable --db ./mache.db
+
+# Or proxy straight through: args, stdin/stdout/stderr and exit status forwarded.
+mache leyline exec -- cdc enable --db ./mache.db
+mache leyline exec cdc gc --db ./mache.db
+```
+
+Both resolve through mache's pin-checked chokepoint, so a non-pinned `leyline` earlier on PATH is reported on stderr and ignored rather than silently used. Neither mutates PATH, your shell rc, or the unversioned `~/.mache/bin/leyline` path (which stays never-written — see [`internal/leyline/binary_cache_path.go`](internal/leyline/binary_cache_path.go)).
+
+`MACHE_NO_LEYLINE=1` still disables provisioning; `MACHE_LEYLINE_BINARY` still overrides the pin for LLO development.
+
+</details>
+
 ## Portable cache (mache-aeb262)
 
 <details>
