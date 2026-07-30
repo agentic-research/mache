@@ -40,9 +40,20 @@ func TestRestartDaemonAgent_RespectsAutoloadGate(t *testing.T) {
 // running it would both hide the distinction and restart the developer's own
 // daemon.
 func TestRestartDaemonAgent_UsesRestartNotStart(t *testing.T) {
-	prev, prevAuto := runSupervisorCmd, daemonAgentAutoload
-	t.Cleanup(func() { runSupervisorCmd, daemonAgentAutoload = prev, prevAuto })
+	prev, prevQuery, prevAuto := runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload
+	t.Cleanup(func() {
+		runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload = prev, prevQuery, prevAuto
+	})
 	daemonAgentAutoload = true
+
+	// Stub the STATE query too. Without this the darwin path asks the real
+	// launchctl, finds no loaded job on a CI runner, and returns before ever
+	// reaching runSupervisorCmd — so this test passed only on a machine that
+	// happened to have a daemon running. That is exactly the environment
+	// dependence these stubs exist to remove.
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return "mache = {\n\tstate = running\n\tprogram = /x/mache\n}\n", nil
+	}
 
 	var got []string
 	runSupervisorCmd = func(name string, args ...string) error {
@@ -80,9 +91,17 @@ func TestRestartDaemonAgent_UsesRestartNotStart(t *testing.T) {
 // something is wrong when nothing is — and claiming a restart that did not
 // happen is worse, since it implies the daemon is current.
 func TestRestartDaemonAgent_SupervisorFailureIsSilent(t *testing.T) {
-	prev, prevAuto := runSupervisorCmd, daemonAgentAutoload
-	t.Cleanup(func() { runSupervisorCmd, daemonAgentAutoload = prev, prevAuto })
+	prev, prevQuery, prevAuto := runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload
+	t.Cleanup(func() {
+		runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload = prev, prevQuery, prevAuto
+	})
 	daemonAgentAutoload = true
+	// Report a RUNNING job so the restart is actually attempted — otherwise on
+	// a machine with no daemon this passes without reaching the failure path
+	// it exists to exercise, which is a vacuous green.
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return "mache = {\n\tstate = running\n\tprogram = /x/mache\n}\n", nil
+	}
 	runSupervisorCmd = func(string, ...string) error { return errors.New("Could not find service") }
 
 	var buf bytes.Buffer
