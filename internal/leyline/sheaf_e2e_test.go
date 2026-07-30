@@ -57,6 +57,9 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 	// it lives outside t.TempDir's reach.
 	tdir, err := os.MkdirTemp("/tmp", "sheaf-e2e-")
 	require.NoError(t, err)
+	// Registered FIRST so it runs LAST (t.Cleanup is LIFO) — after the daemon
+	// cleanup below has signalled, so it observes the post-reap state.
+	t.Cleanup(func() { assertNoSurvivorsFor(t, tdir) })
 	t.Cleanup(func() { _ = os.RemoveAll(tdir) })
 	arena := filepath.Join(tdir, "arena.bin")
 	ctrl := filepath.Join(tdir, "test.ctrl")
@@ -79,6 +82,7 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 	daemon.Stdout = logFile
 	daemon.Stderr = logFile
 
+	setProcessGroup(daemon) // daemon spawns `mache serve --control` as a child; group it so cleanup reaps both
 	require.NoError(t, daemon.Start(), "leyline daemon failed to start")
 	t.Cleanup(func() {
 		if daemon.Process == nil {
@@ -86,7 +90,7 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 		}
 		// SIGTERM first so the daemon unmounts/cleans up; SIGKILL after
 		// a grace period so a wedged daemon never blocks test teardown.
-		_ = daemon.Process.Signal(syscall.SIGTERM)
+		_ = signalProcessGroup(daemon.Process, syscall.SIGTERM)
 		done := make(chan struct{})
 		go func() {
 			_, _ = daemon.Process.Wait()
@@ -95,7 +99,7 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(3 * time.Second):
-			_ = daemon.Process.Kill()
+			_ = signalProcessGroup(daemon.Process, syscall.SIGKILL)
 			<-done
 		}
 		// On any failure, dump the daemon log so the failure mode
