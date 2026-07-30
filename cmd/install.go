@@ -240,6 +240,7 @@ func runInstall(out io.Writer, opts installOpts) error {
 				"elsewhere with --bin-dir", dst, cellar)
 	}
 
+	replaced := false
 	switch {
 	case sameFile(self, dst):
 		logf(out, "mache is already installed at %s (this is the running binary)\n", dst)
@@ -250,10 +251,19 @@ func runInstall(out io.Writer, opts installOpts) error {
 			return err
 		}
 		logf(out, "installed %s -> %s\n", self, dst)
+		replaced = true
 	}
 
 	if err := provisionLeyline(out, opts); err != nil {
 		return err
+	}
+
+	// A supervisor already running holds the OLD process — replacing the file
+	// does not re-exec it. Without this, `mache install` succeeds and every MCP
+	// session keeps getting the previous build. Only when the binary actually
+	// changed: sameFile and --dry-run must not disturb a running daemon.
+	if replaced {
+		restartDaemonAgent(out)
 	}
 	return reportPATH(out, binDir, opts)
 }
