@@ -20,6 +20,16 @@ tasks:
       - cp {{.BINARY_NAME}} ~/.local/bin/mache
       - cmd: codesign -s - --force --deep --entitlements entitlements.plist ~/.local/bin/mache
         platforms: [darwin]
+      # Replacing the file does NOT re-exec a supervisor that is already
+      # running — it holds the old process. Observed: installed binary at
+      # v0.20.0 while the daemon on :7532 still answered as 0.19.0-10, so
+      # every MCP session got pre-release code silently. `mache daemon
+      # restart` is restart-if-running (launchctl kickstart -k / systemctl
+      # try-restart), so this never starts a daemon on a machine whose owner
+      # did not run `mache init --global`. Uses the binary we just installed,
+      # so the restart logic is the installed version's, not the source
+      # tree's.
+      - ~/.local/bin/mache daemon restart
 
   install:verify:
     desc: |

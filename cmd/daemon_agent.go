@@ -25,6 +25,17 @@ const (
 // false to exercise plist/unit writing without a real supervisor side effect.
 var daemonAgentAutoload = true
 
+// runSupervisorCmd is the single seam through which restartDaemonAgent reaches
+// launchctl/systemctl. It is a var so tests can assert WHICH command would run
+// without running it — the load-bearing property is that the command is a
+// restart-if-running form (`kickstart -k`, `try-restart`) and never a start
+// form (`bootstrap`, `enable --now`), and that claim is only checkable by
+// inspecting the argv. Executing the real command in a test would also restart
+// the developer's own daemon as a side effect, which a test must never do.
+var runSupervisorCmd = func(name string, args ...string) error {
+	return exec.Command(name, args...).Run()
+}
+
 // logf writes a progress line, discarding the write error (best-effort output).
 func logf(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 
@@ -188,4 +199,62 @@ func installSystemdUnit(w io.Writer, binPath string) {
 		return
 	}
 	logf(w, "  [daemon] unit installed; systemctl not found — enable it manually.\n")
+}
+
+// restartDaemonAgent restarts an ALREADY-RUNNING supervised mache daemon so it
+// re-execs the binary just installed.
+//
+// WHY THIS EXISTS. `mache install` (and `task install`) replace the file at
+// ~/.local/bin/mache, but a supervisor that is already running holds the OLD
+// process — the inode it exec'd does not change under it. Observed on a real
+// machine: the installed binary reported 0.20.0 while the daemon on
+// localhost:7532 answered `initialize` as 0.19.0-10-g1c3d812, so every MCP
+// session got pre-v0.20.0 code (including the P0 construct-loss bug that
+// release fixed) with nothing anywhere reporting a mismatch. Same shape as the
+// stale-leyline-on-PATH defect (mache-0acdf6): the install succeeded and the
+// thing actually serving you was older.
+//
+// RESTART ONLY, NEVER START. Both commands below are deliberately the
+// restart-if-running variants, not `bootstrap`/`enable --now`:
+//
+//   - launchctl kickstart -k  — the -k kills the running job first; the call
+//     FAILS when the label is not loaded, which is exactly the signal we want.
+//   - systemctl --user try-restart — documented as "restart if running, else do
+//     nothing"; `restart` would START a service the user had stopped.
+//
+// Installing a binary must not conjure a background daemon on a machine whose
+// owner never ran `mache init --global`. Deciding to run one is that command's
+// job; this only keeps an existing decision honest.
+//
+// Best-effort by construction: it reports and returns rather than erroring. A
+// failure here leaves a correctly installed binary and a stale daemon, which is
+// strictly better than failing the install — but it is reported rather than
+// swallowed, because a silent stale daemon is the defect this closes.
+func restartDaemonAgent(w io.Writer) {
+	if !daemonAgentAutoload {
+		return
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		launchctl, err := exec.LookPath("launchctl")
+		if err != nil {
+			return // no supervisor tooling; nothing was running under it
+		}
+		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
+		if err := runSupervisorCmd(launchctl, "kickstart", "-k", target); err != nil {
+			// Not loaded is the common, benign case: the user never ran
+			// `mache init --global`. Do not present that as a problem.
+			return
+		}
+		logf(w, "restarted the supervised daemon (%s) so it serves the new binary\n", launchAgentLabel)
+	case "linux":
+		systemctl, err := exec.LookPath("systemctl")
+		if err != nil {
+			return
+		}
+		if err := runSupervisorCmd(systemctl, "--user", "try-restart", "mache.service"); err != nil {
+			return
+		}
+		logf(w, "restarted the supervised daemon (mache.service) so it serves the new binary\n")
+	}
 }
