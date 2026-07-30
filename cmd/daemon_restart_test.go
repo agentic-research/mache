@@ -106,3 +106,101 @@ func TestDaemonRestartCmd_Wired(t *testing.T) {
 	assert.Error(t, c.Args(c, []string{"unexpected"}),
 		"an unknown arg must fail loudly, not be silently ignored")
 }
+
+// TestRestartDaemonAgent_DoesNotStartAnIdleJob pins the property the argv
+// assertion above CANNOT reach.
+//
+// TestRestartDaemonAgent_UsesRestartNotStart checks that the command is
+// `kickstart -k` and not `bootstrap`. That distinction turns out not to carry
+// the guarantee: per man launchctl, kickstart runs a service "regardless of
+// its configured launch conditions", and -k only adds kill-first WHEN ALREADY
+// RUNNING. So kickstart on a loaded-but-idle job STARTS it.
+//
+// That state is reachable for mache — the plist sets
+// KeepAlive{SuccessfulExit:false} and `mache serve` exits 0 on SIGTERM, so
+// `launchctl stop` leaves the job loaded and idle. Before the state guard, the
+// next `task install` resurrected a daemon the user had deliberately stopped
+// and reported it as a restart.
+//
+// Found by an external review of PR #589; the defect was in already-merged
+// #588 and no argv-shaped test could have caught it.
+func TestRestartDaemonAgent_DoesNotStartAnIdleJob(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchctl kickstart semantics are darwin-specific; systemctl try-restart is restart-only by contract")
+	}
+	prevRun, prevQuery, prevAuto := runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload
+	t.Cleanup(func() {
+		runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload = prevRun, prevQuery, prevAuto
+	})
+	daemonAgentAutoload = true
+
+	// A real `launchctl print` for a job that is loaded but NOT running.
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return "com.agentic-research.mache = {\n\tstate = not running\n\tprogram = /Users/x/.local/bin/mache\n}\n", nil
+	}
+	var ran [][]string
+	runSupervisorCmd = func(name string, args ...string) error {
+		ran = append(ran, append([]string{name}, args...))
+		return nil
+	}
+
+	var buf bytes.Buffer
+	restartDaemonAgent(&buf)
+
+	assert.Empty(t, ran,
+		"a loaded-but-IDLE job must not be kickstarted — that STARTS a daemon the user stopped")
+	assert.Empty(t, buf.String(),
+		"must not report a restart that did not happen")
+}
+
+// TestRestartDaemonAgent_RestartsARunningJob is the positive control: the
+// guard must not be so strict it never fires.
+func TestRestartDaemonAgent_RestartsARunningJob(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-specific path")
+	}
+	prevRun, prevQuery, prevAuto := runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload
+	t.Cleanup(func() {
+		runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload = prevRun, prevQuery, prevAuto
+	})
+	daemonAgentAutoload = true
+
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return "com.agentic-research.mache = {\n\tstate = running\n\tprogram = /Users/x/.local/bin/mache\n\tpid = 123\n}\n", nil
+	}
+	var ran [][]string
+	runSupervisorCmd = func(name string, args ...string) error {
+		ran = append(ran, append([]string{name}, args...))
+		return nil
+	}
+
+	var buf bytes.Buffer
+	restartDaemonAgent(&buf)
+
+	require.Len(t, ran, 1, "a RUNNING job must be kickstarted")
+	assert.Contains(t, ran[0], "kickstart")
+	assert.Contains(t, ran[0], "-k")
+	assert.Contains(t, buf.String(), "restarted the supervised daemon")
+}
+
+// TestParseLaunchctlPrint_DecodesPathsThePlistWriterEscapes closes the reader/
+// writer asymmetry an external review found: supervisorBinary (PR #589) read
+// the plist directly and never reversed xmlText's escaping, so a path with a
+// space, `&` or a quote produced a wrong answer and a hard test failure for
+// exactly the user xmlText was written for. launchctl reports `program =`
+// already decoded, so no unescaping is needed — pinned here so nobody
+// "simplifies" this back to parsing the plist.
+func TestParseLaunchctlPrint_DecodesPathsThePlistWriterEscapes(t *testing.T) {
+	for _, path := range []string{
+		"/Applications/Mache Tools/mache", // the case xmlText's doc comment names
+		"/opt/AT&T/mache",
+		"/home/u/it's mine/mache",
+		`/home/u/we"ird/mache`,
+	} {
+		t.Run(path, func(t *testing.T) {
+			job := parseLaunchctlPrint("mache = {\n\tstate = running\n\tprogram = " + path + "\n}\n")
+			assert.Equal(t, path, job.Program, "launchctl reports the raw path; no unescaping should be applied")
+			assert.True(t, job.Running)
+		})
+	}
+}
