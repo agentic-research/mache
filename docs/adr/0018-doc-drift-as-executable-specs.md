@@ -18,6 +18,8 @@ tags: [smells, doc-drift, executable-specs, find-smells]
 >
 > The rest of the ADR (PR roadmap, scope, deferred federation, SDD framing) stands as-is. The implementation PRs ship the amended vocabulary.
 
+> **Amendment 2026-07-29 (`mache-eb2bf3`):** `drift_doc_dead_symbol_reference` ships for real, unblocked by ley-line-open v0.13.0 (`ley-line-open-ea1e42`) giving markdown backtick spans `node_refs` rows instead of leaving them unindexed inside an opaque `inline` node. The ground-truth join is `node_refs` (not `node_defs`'s original framing of "which table has the token") joined against `node_defs`, scoped to Rust paths (`token LIKE '%::%'`) for v1 rather than every backtick span — the open `ley-line-open-651909` (Go package-level consts emit no defs) would otherwise false-positive on Go citations, and Go has no `::` syntax, so the scoping sidesteps the gap entirely. Two false-positive classes remain and are documented on the rule rather than filtered: external-library references, and Rust enum-variant/struct-field access (not indexed as defs). `drift_doc_broken_internal_link` and `drift_doc_outdated_count` remain v1 placeholders.
+
 ## Context
 
 13 repos in the ART ecosystem, all maintained with AI assistance. Documentation drift from code reality is endemic. Reactive "HEY UPDATE DOCS" patterns are at their scaling ceiling. The pattern the user is naming — and that exists in production in cloister's narrow lint scripts — is **spec-driven development applied to maintenance**.
