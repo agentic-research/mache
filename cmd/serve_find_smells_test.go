@@ -2005,8 +2005,18 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 		  ('J','pkg/god/Dispatcher'),('K','pkg/god/Dispatcher'),('L','pkg/god/Dispatcher');
 
 		-- Six normal callers, 1 callee each — dilutes the project mean
-		-- so the god's fan-out exceeds 3× mean. Nodes rows aren't
-		-- required since they fail the threshold and never hit the JOIN.
+		-- so the god's fan-out exceeds 3× mean. The mean is now scoped
+		-- to real constructs (mache-50e939 — a markdown code-span ref
+		-- has no nodes row and must not count toward mu), so these
+		-- diluting callers need nodes rows too, matching every real
+		-- construct in production data.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/ok/N1', 'pkg/ok', 'N1', 1, 0, 'n1.go', ''),
+		  ('pkg/ok/N2', 'pkg/ok', 'N2', 1, 0, 'n2.go', ''),
+		  ('pkg/ok/N3', 'pkg/ok', 'N3', 1, 0, 'n3.go', ''),
+		  ('pkg/ok/N4', 'pkg/ok', 'N4', 1, 0, 'n4.go', ''),
+		  ('pkg/ok/N5', 'pkg/ok', 'N5', 1, 0, 'n5.go', ''),
+		  ('pkg/ok/N6', 'pkg/ok', 'N6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('Z1','pkg/ok/N1'),('Z2','pkg/ok/N2'),('Z3','pkg/ok/N3'),
 		  ('Z4','pkg/ok/N4'),('Z5','pkg/ok/N5'),('Z6','pkg/ok/N6');
@@ -2085,6 +2095,15 @@ func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
 		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
 
 		-- Six tiny callers to dilute the project mean below 3× threshold.
+		-- Real nodes rows (mache-50e939): the mean is scoped to actual
+		-- constructs, and every real construct has a nodes row.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
+		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
+		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
+		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
+		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
+		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
 		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
@@ -2143,7 +2162,16 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
 		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
 
-		-- Tiny callers to bring project mean down so 12 trips the threshold.
+		-- Tiny callers to bring project mean down so 12 trips the
+		-- threshold. Real nodes rows (mache-50e939): the mean is scoped
+		-- to actual constructs, and every real construct has a nodes row.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
+		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
+		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
+		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
+		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
+		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
 		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
@@ -2207,7 +2235,16 @@ func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
 		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
 		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
 
-		-- Tiny callers to bring project mean down so 12 trips the threshold.
+		-- Tiny callers to bring project mean down so 12 trips the
+		-- threshold. Real nodes rows (mache-50e939): the mean is scoped
+		-- to actual constructs, and every real construct has a nodes row.
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
+		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
+		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
+		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
+		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
+		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
 		INSERT INTO node_refs VALUES
 		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
 		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
@@ -2286,11 +2323,19 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 
 	// Tiny callers via node_refs so the project mean stays low.
 	// These rows have empty qualifier (mention arm of v_refs), so
-	// they exercise the COALESCE fallback to token.
+	// they exercise the COALESCE fallback to token. Real nodes rows
+	// (mache-50e939): the mean is scoped to actual constructs, and
+	// every real construct has a nodes row.
 	for i := 1; i <= 15; i++ {
+		callerID := fmt.Sprintf("functions/n%02d", i)
 		_, err := db.Exec(
+			`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES (?, 'functions', ?, 1, 0, ?, '')`,
+			callerID, fmt.Sprintf("n%02d", i), fmt.Sprintf("n%02d.go", i),
+		)
+		require.NoError(t, err)
+		_, err = db.Exec(
 			`INSERT INTO node_refs VALUES (?, ?)`,
-			fmt.Sprintf("z%02d", i), fmt.Sprintf("functions/n%02d", i),
+			fmt.Sprintf("z%02d", i), callerID,
 		)
 		require.NoError(t, err)
 	}
@@ -2343,6 +2388,93 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	}
 	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
 		"Only Dispatcher (12 distinct qualifiers) is flagged; bindingFromRecord (1 qualifier 'rec') is structurally exempt by the qualifier-aware metric")
+}
+
+// TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean pins mache-50e939:
+// markdown backtick spans (ley-line-open-ea1e42) land as node_refs rows
+// with container_node_id = NULL and no corresponding nodes row — a doc
+// citation has no enclosing "function". referrer_node_id then falls back
+// to the span's own unique node_id, so each becomes a singleton n=1
+// referrer group.
+//
+// Left unscoped, thousands of those drag the corpus mean down (measured
+// on mache's own repo: 9.79 -> 5.08), which lowers the 3x threshold for
+// every real function and floods the gate with findings that reflect a
+// diluted mean, not an actual complexity change.
+//
+// Fixture: 6 real callers with n=10 each (mean=10, threshold=30) plus 50
+// markdown-shaped singleton refs. Normal (n=10) must stay unflagged —
+// under the bug, the diluted mean (~1.96) drops the threshold (~5.89)
+// below Normal's fan-out and wrongly flags it.
+func TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "mdpollution.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
+			record_id TEXT, record TEXT, source_file TEXT
+		);
+		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+		CREATE TABLE node_refs (token TEXT, node_id TEXT, container_node_id TEXT, qualifier TEXT);
+
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('functions',                '',          '',      1, 0, '',           ''),
+		  ('functions/Normal',         'functions', 'Normal',1, 0, 'normal.go',  ''),
+		  ('functions/Normal/source',  'functions/Normal', 'source', 0, 0, 'normal.go', '');
+	`)
+	require.NoError(t, err)
+
+	// Normal: 10 distinct callees. Six other real callers, 10 each — real
+	// mean is 10, so Normal (n=10) never crosses 3×mean and must not fire.
+	for i := range 6 {
+		callerID := fmt.Sprintf("functions/Real%02d/source", i)
+		_, err := db.Exec(
+			`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES (?, 'functions', ?, 0, 0, ?, '')`,
+			callerID, fmt.Sprintf("Real%02d", i), fmt.Sprintf("real%02d.go", i),
+		)
+		require.NoError(t, err)
+		for j := range 10 {
+			_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, ?, '')`,
+				fmt.Sprintf("callee%02d", j), callerID, callerID)
+			require.NoError(t, err)
+		}
+	}
+	for j := range 10 {
+		_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, ?, '')`,
+			fmt.Sprintf("callee%02d", j), "functions/Normal/source", "functions/Normal/source")
+		require.NoError(t, err)
+	}
+
+	// 50 markdown-shaped refs: unique node_id per span, empty
+	// container_node_id, no nodes row — exactly LLO's ea1e42 shape.
+	for i := range 50 {
+		spanID := fmt.Sprintf("doc.md/section/paragraph_%d/inline#inj0/code_span_0", i)
+		_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, '', '')`,
+			fmt.Sprintf("Symbol%d", i), spanID)
+		require.NoError(t, err)
+	}
+
+	tg := &smellTestGraph{db: db, path: dbPath}
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+
+	gotIDs := make([]string, len(resp.Findings))
+	for i, f := range resp.Findings {
+		gotIDs[i] = f.NodeID
+	}
+	assert.Empty(t, gotIDs,
+		"50 markdown singleton refs must not dilute the mean and wrongly flag Normal (n=10, real mean=10, threshold=30)")
 }
 
 // TestFindSmells_UntestedFunctionAcceptsTestCallCoverage asserts
