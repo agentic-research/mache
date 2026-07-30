@@ -1,0 +1,167 @@
+{
+  "db": "/tmp/mache-bench.db",
+  "constructs": 3819,
+  "files": 425,
+  "arm_a_bytes": 3919010,
+  "arm_w_bytes": 1165262,
+  "arm_w_avg": 2741,
+  "window_lines": 80,
+  "ratio_w_median": 2,
+  "ratio_bw_median": 6.2898550724637685,
+  "arm_b_bytes": 2793181,
+  "arm_a_avg": 9221,
+  "arm_b_avg": 731,
+  "ratio": 12.61422708618331,
+  "ratio_median": 26.05019305019305,
+  "ratio_mean": 71.17324370576148,
+  "ratio_p25": 11.48031496062992,
+  "ratio_p75": 69.04776119402985,
+  "breakeven": 8.985882352941177,
+  "max_constructs_per_file": 164,
+  "per_ext": {
+    ".go": {
+      "constructs": 3819,
+      "files": 425,
+      "arm_a_avg": 9221,
+      "arm_b_avg": 731,
+      "ratio": 12.61422708618331
+    }
+  },
+  "ceiling": {
+    "read_share": 0.574,
+    "ceiling_pct": 57.4,
+    "curve": [
+      {
+        "ratio": 2,
+        "reduction_pct": 28.7,
+        "pct_of_ceiling": 50
+      },
+      {
+        "ratio": 5,
+        "reduction_pct": 45.92,
+        "pct_of_ceiling": 80
+      },
+      {
+        "ratio": 10,
+        "reduction_pct": 51.66,
+        "pct_of_ceiling": 89.99999999999999
+      },
+      {
+        "ratio": 26.05019305019305,
+        "reduction_pct": 55.196561434711725,
+        "pct_of_ceiling": 96.16125685489848
+      },
+      {
+        "ratio": 50,
+        "reduction_pct": 56.25199999999999,
+        "pct_of_ceiling": 97.99999999999999
+      },
+      {
+        "ratio": 100,
+        "reduction_pct": 56.826,
+        "pct_of_ceiling": 99
+      }
+    ],
+    "r90": 10,
+    "note": "Session-level reduction is bounded by read_share and asymptotic in the retrieval ratio: reduction(R) = read_share * (1 - 1/R). At R=10 you are already at 90% of the ceiling, so a large spread in retrieval quality collapses to a few points of session cost. Token reduction is therefore a commoditized claim — evaluate on correctness-of-write and cross-format reach instead."
+  },
+  "containment": [
+    {
+      "window_lines": 20,
+      "constructs": 3819,
+      "contained": 2442,
+      "contained_pct": 63.94344069128044,
+      "overflows": 1377,
+      "aligned_reads_per_construct": 1.6538360827441738,
+      "unaligned_reads_per_construct": 8,
+      "grep_then_read_reads_per_construct": 2.653836082744174,
+      "p50_construct_lines": 15,
+      "p95_construct_lines": 65,
+      "max_construct_lines": 387
+    },
+    {
+      "window_lines": 40,
+      "constructs": 3819,
+      "contained": 3281,
+      "contained_pct": 85.91254255040587,
+      "overflows": 538,
+      "aligned_reads_per_construct": 1.196648337261063,
+      "unaligned_reads_per_construct": 4,
+      "grep_then_read_reads_per_construct": 2.1966483372610632,
+      "p50_construct_lines": 15,
+      "p95_construct_lines": 65,
+      "max_construct_lines": 387
+    },
+    {
+      "window_lines": 80,
+      "constructs": 3819,
+      "contained": 3705,
+      "contained_pct": 97.01492537313433,
+      "overflows": 114,
+      "aligned_reads_per_construct": 1.0392772977219167,
+      "unaligned_reads_per_construct": 2,
+      "grep_then_read_reads_per_construct": 2.0392772977219167,
+      "p50_construct_lines": 15,
+      "p95_construct_lines": 65,
+      "max_construct_lines": 387
+    },
+    {
+      "window_lines": 160,
+      "constructs": 3819,
+      "contained": 3792,
+      "contained_pct": 99.2930086410055,
+      "overflows": 27,
+      "aligned_reads_per_construct": 1.0078554595443834,
+      "unaligned_reads_per_construct": 1,
+      "grep_then_read_reads_per_construct": 2.007855459544383,
+      "p50_construct_lines": 15,
+      "p95_construct_lines": 65,
+      "max_construct_lines": 387
+    },
+    {
+      "window_lines": 320,
+      "constructs": 3819,
+      "contained": 3816,
+      "contained_pct": 99.92144540455617,
+      "overflows": 3,
+      "aligned_reads_per_construct": 1.0007855459544384,
+      "unaligned_reads_per_construct": 1,
+      "grep_then_read_reads_per_construct": 2.0007855459544386,
+      "p50_construct_lines": 15,
+      "p95_construct_lines": 65,
+      "max_construct_lines": 387
+    }
+  ],
+  "per_answer": [
+    {
+      "arm": "A_whole_file",
+      "byte_ratio": 1,
+      "reads_per_answer": 1,
+      "effective_ratio": 1,
+      "reduction_pct": 0,
+      "pct_of_ceiling": 0
+    },
+    {
+      "arm": "W_line_cap",
+      "byte_ratio": 2,
+      "reads_per_answer": 2.0392772977219167,
+      "effective_ratio": 0.9807395993836672,
+      "reduction_pct": 0,
+      "pct_of_ceiling": 0
+    },
+    {
+      "arm": "B_construct",
+      "byte_ratio": 26.05019305019305,
+      "reads_per_answer": 1.0392772977219167,
+      "effective_ratio": 25.065680841191046,
+      "reduction_pct": 55.11001632217094,
+      "pct_of_ceiling": 96.01048139751035
+    }
+  ],
+  "median_file_lines": 160,
+  "caveats": [
+    "Arm A charges the whole file once per file. An agent that reads the same file repeatedly pays it again; transcript analysis put 44.1% of Read bytes in multi-read files, so this understates arm A's real cost.",
+    "Breakeven is constructs-per-file: a question needing more than that many constructs from one file is cheaper as a whole-file read.",
+    "F1 (escalation) and F2 (completion rate) are NOT measured here — both need a live agent loop. A ratio without them is not evidence of a win."
+  ]
+}

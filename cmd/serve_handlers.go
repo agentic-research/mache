@@ -63,6 +63,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithDescription("Read the text content of one or more file nodes. Pass a single path or a JSON array of paths for batch reads."),
 			mcp.WithString("path", mcp.Description("Single file node path")),
 			mcp.WithString("paths", mcp.Description("JSON array of file node paths for batch read, e.g. [\"path/a\", \"path/b\"]")),
+			mcp.WithString("mode", mcp.Description("Projection: 'full' (default, whole content), 'signatures' (declaration line of every construct under a directory node — ~18x smaller than reading the file and needs no line offsets, best for orienting in unfamiliar code), or 'map' (names only).")),
 		),
 		r.wrapHandler(makeReadFileHandler),
 	)

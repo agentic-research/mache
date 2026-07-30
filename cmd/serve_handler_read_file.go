@@ -75,6 +75,7 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		path := request.GetString("path", "")
 		pathsRaw := request.GetString("paths", "")
+		mode := request.GetString("mode", readModeFull)
 
 		// Batch mode
 		if pathsRaw != "" {
@@ -122,6 +123,14 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		// Single mode
 		if path == "" {
 			return mcp.NewToolResultError("path or paths is required"), nil
+		}
+		// Projected read modes (mache-qzsk): signatures/map answer orientation
+		// questions in ONE round trip with no positioning, which is the whole
+		// point — see cmd/serve_read_modes.go for the measured rationale.
+		if out, ok, perr := readProjected(g, path, mode); perr != nil {
+			return mcp.NewToolResultError(perr.Error()), nil
+		} else if ok {
+			return mcp.NewToolResultText(out), nil
 		}
 		r, err := readOneFileWithOrigin(g, path)
 		if err != nil {

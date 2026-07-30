@@ -24,7 +24,14 @@ repos:
       - id: trailing-whitespace
         exclude: '^testdata/snapshots/'
       - id: end-of-file-fixer
-        exclude: '^testdata/snapshots/'
+        # .beads/beads.jsonl is regenerated fresh from Dolt by the rsry
+        # pre-commit hook on every run, without a trailing newline. Without
+        # this exclude, end-of-file-fixer "fixes" it, the next commit
+        # invocation re-exports it (dropping the newline again), and every
+        # commit in the repo fails end-of-file-fixer forever. check-added-large-files
+        # and mdformat already exclude .beads/ for the same reason (vendored
+        # content owned by another process) — this hook was just missed.
+        exclude: '^(\.beads/|testdata/snapshots/)'
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
