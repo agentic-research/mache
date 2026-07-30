@@ -23,8 +23,9 @@ lands where. Smell rules are a separate mechanism (SQL over the built
 
 ## Topology schemas
 
-Declarative JSON schemas that drive `mache mount` / `mache build` /
-`mache serve`, projecting a data source into a navigable tree.
+Declarative JSON schemas that drive `mache build` / `mache serve` / the
+root mount form (`mache <mountpoint>`), projecting a data source into a
+navigable tree.
 
 ### Data sources (JSON / SQLite)
 
@@ -255,7 +256,13 @@ queryable filesystem:
 
 ```bash
 python examples/audit-indexer.py examples/test-audit/
-mache mount examples/test-audit/.index.json --schema examples/audit-schema.json /tmp/audit
+
+# Serve it as MCP tools…
+mache serve --schema examples/audit-schema.json examples/test-audit/.index.json
+
+# …or mount it. Mounting is the ROOT command (`mache [mountpoint]`), so the
+# source goes in --data and the mountpoint is the single positional.
+mache --schema examples/audit-schema.json --data examples/test-audit/.index.json /tmp/audit
 ```
 
 ## Test fixtures

@@ -23,7 +23,7 @@ Two things new users hit:
 - **HTTP is the canonical transport.** One shared daemon serves every project, routing per session via the MCP roots protocol. `--stdio` exists only as an escape hatch for CI / sandboxes / headless agents and is never registered for editor use (see [ADR-0022](docs/adr/0022-mcp-transport-canonical.md)).
 - **[ley-line-open](https://github.com/agentic-research/ley-line-open) is a hard requirement, not an add-on.** Since v0.18.0 mache has no in-process parser: `leyline parse` produces the `_ast` database that every source projection reads. `task install` provisions the pinned binary. Point mache at a directory *or* a pre-built `.db` — both route through leyline; a pre-built `.db` just skips the parse step and can carry LSP/embedding enrichment.
 
-To project non-code data instead, hand `mache serve` (or `mache mount`) a schema with `--schema` and point it at your JSON or SQLite source — the [example schemas](examples/README.md) cover NVD, KEV, Notion, Trivy, Terraform, and more.
+To project non-code data instead, hand `mache serve` (or the root mount form, `mache <mountpoint>`) a schema with `--schema` and point it at your JSON or SQLite source — the [example schemas](examples/README.md) cover NVD, KEV, Notion, Trivy, Terraform, and more.
 
 For the full first-run flow — source choice (directory vs `.db` vs live hot-swap), the `--stdio` escape hatch, `--scope`, Claude Desktop, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
 
@@ -209,12 +209,22 @@ On release, mache also self-publishes a separate **leyline-bundled**
 multi-arch image to `ghcr.io/agentic-research/mache` (`debian-slim` +
 `libsqlite3`, since leyline links sqlite; the distroless apko image above
 stays the local-dev build). This image gets the ley-line-open-paired path
-with no runtime fetch. Mache declares its own source via `server.json`'s
+with no runtime fetch.
+
+Its `ENTRYPOINT` is `["mache", "serve"]`, so `docker run` args append to
+`mache serve` — do **not** repeat `serve`, or you get `mache serve serve`:
+
+```bash
+docker run --rm -i ghcr.io/agentic-research/mache:v0.20.0 --stdio /source
+```
+
+Mache declares its own source via `server.json`'s
 `packages[].oci` entry, tag-pinned — see
 [ARCHITECTURE.md § OCI distribution](docs/ARCHITECTURE.md#oci-distribution)
 for the full framing.
 
-**Local / dev path** — running `mache serve` or `mache mount` directly on
+**Local / dev path** — running `mache serve` or the root mount form
+(`mache <mountpoint>`) directly on
 your machine. Useful for laptop work, debugging, and writing schemas. In
 this mode mache may auto-discover or auto-download a `leyline` binary
 (legacy code path; the bundle ships everything, so this only kicks in for
