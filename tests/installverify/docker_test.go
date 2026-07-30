@@ -157,14 +157,14 @@ func TestPublishedImageReportsItsTagVersion(t *testing.T) {
 	require.NoError(t, res.err)
 	require.Zerof(t, res.code, "`mache version` in %s exited %d: %s", d.image, res.code, res.combined())
 
-	m := versionLineRe.FindStringSubmatch(res.stdout)
-	require.Lenf(t, m, 2, "image mache printed no version line:\n%s", res.combined())
+	token, ok := parseVersionLine(res.stdout)
+	require.Truef(t, ok, "image mache printed no version line:\n%s", res.combined())
 
-	_, tag, ok := strings.Cut(d.image, ":")
-	if !ok {
+	_, tag, hasTag := strings.Cut(d.image, ":")
+	if !hasTag {
 		t.Skipf("image reference %q carries no tag to compare against", d.image)
 	}
-	assert.Equal(t, strings.TrimPrefix(tag, "v"), m[1],
+	assert.Equal(t, strings.TrimPrefix(tag, "v"), token,
 		"the mache inside %s reports a version its tag does not claim", d.image)
 }
 
@@ -182,16 +182,16 @@ func TestPublishedImageBundlesThePinnedLeyline(t *testing.T) {
 	res := d.runIn(imageLeylinePath, nil, "--version")
 	require.NoError(t, res.err)
 	require.Zerof(t, res.code, "bundled leyline --version exited %d: %s", res.code, res.combined())
-	m := semverRe.FindStringSubmatch(res.combined())
-	require.Lenf(t, m, 2, "bundled leyline printed no version:\n%s", res.combined())
+	got := firstSemver(res.combined())
+	require.NotEmptyf(t, got, "bundled leyline printed no version:\n%s", res.combined())
 
 	want := expectedLeylinePin(t)
 	if img, expected := d.image, "ghcr.io/agentic-research/mache:v"+versionTxt(t, macheTreeRoot(t)); img != expected {
 		t.Logf("image %s is not this tree's release image (%s); bundled leyline is %s, this tree pins %s",
-			img, expected, m[1], want)
+			img, expected, got, want)
 		return
 	}
-	assert.Equal(t, want, m[1], "the image bundles a leyline that is not this tree's pin")
+	assert.Equal(t, want, got, "the image bundles a leyline that is not this tree's pin")
 }
 
 // TestDockerCleanHomeProjectsAndQueries is the acceptance criterion itself:

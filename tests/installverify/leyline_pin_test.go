@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -25,9 +24,22 @@ const expectLeylineEnv = "MACHE_VERIFY_EXPECT_LEYLINE"
 // `leyline`; neither warns.
 const shadowVersion = "0.10.3"
 
-// semverRe pulls the first MAJOR.MINOR[.PATCH] token out of a version line
-// such as "leyline 0.13.0 (open)".
-var semverRe = regexp.MustCompile(`\bv?(\d+\.\d+(?:\.\d+)?)\b`)
+// firstSemver returns the first MAJOR.MINOR.PATCH field of a version line such
+// as "leyline 0.13.0 (open)", or "" when there is none.
+//
+// A field scan with a shape check, not a pattern: this mirrors
+// internal/leyline's own extractSemver, which is unexported, and keeps the gate
+// on the repo's structural-over-regex side (bead-documented preference, and the
+// regexp ratchet in internal/lint enforces it).
+func firstSemver(s string) string {
+	for _, field := range strings.Fields(s) {
+		candidate := strings.TrimPrefix(strings.Trim(field, "(),"), "v")
+		if isSemverBase(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
 
 // expectedLeylinePin is the leyline version the installed mache must resolve.
 func expectedLeylinePin(t *testing.T) string {
@@ -47,11 +59,7 @@ func leylineSemver(t *testing.T, env []string, path string) string {
 	if res.err != nil || res.code != 0 {
 		return ""
 	}
-	m := semverRe.FindStringSubmatch(res.combined())
-	if len(m) != 2 {
-		return ""
-	}
-	return m[1]
+	return firstSemver(res.combined())
 }
 
 // checkLeylinePin is the gate's actual comparator, factored out so its ability
@@ -167,9 +175,9 @@ func TestStaleLeylineOnPathDoesNotShadowThePin(t *testing.T) {
 	execd := runner{env: env}.mustRun(t, bin, "leyline", "exec", "--", "--version")
 	assert.NotContains(t, execd.combined(), "SHADOW-RAN",
 		"`mache leyline exec` must not proxy to the stale PATH copy")
-	m := semverRe.FindStringSubmatch(execd.stdout)
-	require.Len(t, m, 2, "`mache leyline exec -- --version` printed no version:\n%s", execd.combined())
-	assert.Equal(t, want, m[1], "the leyline mache RUNS must report the pin")
+	ran := firstSemver(execd.stdout)
+	require.NotEmpty(t, ran, "`mache leyline exec -- --version` printed no version:\n%s", execd.combined())
+	assert.Equal(t, want, ran, "the leyline mache RUNS must report the pin")
 }
 
 // TestLeylinePinComparatorRejectsAStaleBinary proves the comparator above can

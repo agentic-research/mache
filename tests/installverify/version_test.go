@@ -3,7 +3,6 @@ package installverify
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -18,25 +17,116 @@ import (
 // against the working tree.
 const expectEnv = "MACHE_VERIFY_EXPECT_VERSION"
 
-// versionLineRe parses `mache version 0.20.0-2-g56c54b3 (commit …, built …)`.
-// Anchored on the "mache version " prefix so a binary that prints something
-// else entirely fails loudly instead of matching a stray semver elsewhere in
-// its output.
-var versionLineRe = regexp.MustCompile(`(?m)^mache version ([^\s]+) `)
+// versionLinePrefix is what `mache version` prints before the version token.
+// Matching on the prefix and then taking the next FIELD is a structural read of
+// a known output shape — no pattern language involved, and a binary that prints
+// something else entirely fails loudly instead of matching a stray semver
+// elsewhere in its output.
+const versionLinePrefix = "mache version "
 
-// describeRe decomposes a `git describe`-shaped version into its parts:
-// <base>[-<distance>-g<sha>][-dirty]. `task build` stamps exactly this, and
-// cmd.Version strips only the leading "v".
-var describeRe = regexp.MustCompile(`^(\d+\.\d+\.\d+)(?:-(\d+)-g([0-9a-f]+))?(-dirty)?$`)
+// parseVersionLine returns the version token from `mache version <ver> (…)`.
+func parseVersionLine(stdout string) (string, bool) {
+	for _, line := range strings.Split(stdout, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), versionLinePrefix)
+		if !ok {
+			continue
+		}
+		token, _, _ := strings.Cut(rest, " ")
+		if token != "" {
+			return token, true
+		}
+	}
+	return "", false
+}
+
+// describedVersion is a `git describe`-shaped version decomposed into its
+// parts: <base>[-<distance>-g<sha>][-dirty]. `task build` stamps exactly this,
+// and cmd.Version strips only the leading "v".
+type describedVersion struct {
+	base  string // MAJOR.MINOR.PATCH
+	sha   string // the g-prefixed commit, "" on a clean tag or a bare build
+	dirty bool
+}
+
+// parseDescribed decomposes a stamped version by splitting on its separators
+// and checking each field's shape, rather than by pattern-matching the whole
+// string. Reports false when the input is not a shape this tree's build could
+// have produced.
+func parseDescribed(v string) (describedVersion, bool) {
+	out := describedVersion{}
+	if trimmed, ok := strings.CutSuffix(v, "-dirty"); ok {
+		out.dirty, v = true, trimmed
+	}
+	parts := strings.Split(v, "-")
+	switch len(parts) {
+	case 1: // a clean tag, or a bare `go build` fallback
+	case 3: // <base>-<distance>-g<sha>
+		if !allDigits(parts[1]) {
+			return describedVersion{}, false
+		}
+		sha, ok := strings.CutPrefix(parts[2], "g")
+		if !ok || !allHex(sha) {
+			return describedVersion{}, false
+		}
+		out.sha = sha
+	default:
+		return describedVersion{}, false
+	}
+	if !isSemverBase(parts[0]) {
+		return describedVersion{}, false
+	}
+	out.base = parts[0]
+	return out, true
+}
+
+// isSemverBase reports whether s is exactly MAJOR.MINOR.PATCH, all numeric.
+func isSemverBase(s string) bool {
+	seg := strings.Split(s, ".")
+	if len(seg) != 3 {
+		return false
+	}
+	for _, part := range seg {
+		if !allDigits(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func allHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // reportedVersion runs `<mache> version` and returns the version token.
 func reportedVersion(t *testing.T, bin string) string {
 	t.Helper()
 	res := runner{}.mustRun(t, bin, "version")
-	m := versionLineRe.FindStringSubmatch(res.stdout)
-	require.Lenf(t, m, 2,
-		"`%s version` must print `mache version <ver> (commit …, built …)`; got:\n%s", bin, res.combined())
-	return m[1]
+	token, ok := parseVersionLine(res.stdout)
+	require.Truef(t, ok,
+		"`%s version` must print `%s<ver> (commit …, built …)`; got:\n%s", bin, versionLinePrefix, res.combined())
+	return token
 }
 
 // git runs a git command in root, returning trimmed stdout and whether it
@@ -125,11 +215,11 @@ func TestInstalledMacheReportsExpectedVersion(t *testing.T) {
 		return
 	}
 
-	parts := describeRe.FindStringSubmatch(got)
-	require.Lenf(t, parts, 5,
+	parsed, ok := parseDescribed(got)
+	require.Truef(t, ok,
 		"installed mache at %s reports %q, which is not a version this tree's build could produce "+
 			"(expected <base>[-<distance>-g<sha>][-dirty])", bin, got)
-	base, sha := parts[1], parts[3]
+	base, sha := parsed.base, parsed.sha
 
 	// The base tracks the most recent REACHABLE tag, which legitimately trails
 	// version.txt inside the release window (version.txt is bumped in the
@@ -144,8 +234,8 @@ func TestInstalledMacheReportsExpectedVersion(t *testing.T) {
 	if sha == "" {
 		return // a bare `go build` stamps no commit; nothing further to check
 	}
-	_, ok := git(t, root, "merge-base", "--is-ancestor", sha, "HEAD")
-	assert.Truef(t, ok,
+	_, isAncestor := git(t, root, "merge-base", "--is-ancestor", sha, "HEAD")
+	assert.Truef(t, isAncestor,
 		"installed mache at %s was built from commit %s, which is not an ancestor of HEAD — "+
 			"that binary did not come from this tree", bin, sha)
 }
