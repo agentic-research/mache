@@ -18,7 +18,7 @@ import (
 // leyline prints in `leyline <ver> (open)`.
 func pinnedLeylineSemver() string { return strings.TrimPrefix(leyline.BinaryVersion, "v") }
 
-// writeLeylineStub plants an executable fake leyline at path. It answers
+// plantLeylineStub plants an executable fake leyline at path. It answers
 // `--version` with "leyline <version> (open)" (the shape internal/leyline's
 // version gate parses) and runs body for every other argv.
 //
@@ -26,7 +26,7 @@ func pinnedLeylineSemver() string { return strings.TrimPrefix(leyline.BinaryVers
 // that resolution is decided solely by planted binaries, which also means the
 // stub inherits a PATH with no /bin on it (an earlier draft used `cat` and got
 // "command not found").
-func writeLeylineStub(t *testing.T, path, version, body string) string {
+func plantLeylineStub(t *testing.T, path, version, body string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	script := "#!/bin/sh\n" +
@@ -85,8 +85,8 @@ func runLeylinePath(t *testing.T) (string, error) {
 func TestLeylinePath_ResolvesPinnedDespiteStalePATHShadow(t *testing.T) {
 	home, pathDir := isolateLeylineResolution(t)
 
-	shadow := writeLeylineStub(t, filepath.Join(pathDir, "leyline"), "0.10.3", "echo SHADOW-RAN")
-	pinned := writeLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "echo PINNED-RAN")
+	shadow := plantLeylineStub(t, filepath.Join(pathDir, "leyline"), "0.10.3", "echo SHADOW-RAN")
+	pinned := plantLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "echo PINNED-RAN")
 
 	viaPATH, err := exec.LookPath("leyline")
 	require.NoError(t, err)
@@ -106,8 +106,8 @@ func TestLeylinePath_ResolvesPinnedDespiteStalePATHShadow(t *testing.T) {
 func TestLeylineExec_RunsPinnedDespiteStalePATHShadow(t *testing.T) {
 	home, pathDir := isolateLeylineResolution(t)
 
-	writeLeylineStub(t, filepath.Join(pathDir, "leyline"), "0.10.3", "echo SHADOW-RAN")
-	writeLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "echo PINNED-RAN")
+	plantLeylineStub(t, filepath.Join(pathDir, "leyline"), "0.10.3", "echo SHADOW-RAN")
+	plantLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "echo PINNED-RAN")
 
 	var stdout, stderr bytes.Buffer
 	code, err := runLeylineExec([]string{"--", "cdc", "enable"}, strings.NewReader(""), &stdout, &stderr)
@@ -174,11 +174,11 @@ func TestLeylinePath_ResolutionTiers(t *testing.T) {
 
 			var onPath string
 			if tt.pathVersion != "" {
-				onPath = writeLeylineStub(t, filepath.Join(pathDir, "leyline"), tt.pathVersion, "exit 0")
+				onPath = plantLeylineStub(t, filepath.Join(pathDir, "leyline"), tt.pathVersion, "exit 0")
 			}
 			var inCache string
 			if tt.cached {
-				inCache = writeLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 0")
+				inCache = plantLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 0")
 			}
 
 			got, err := runLeylinePath(t)
@@ -207,7 +207,7 @@ func TestLeylinePath_ResolutionTiers(t *testing.T) {
 // through this command must not change that.
 func TestLeylinePath_NeverWritesUnversionedCachePath(t *testing.T) {
 	home, _ := isolateLeylineResolution(t)
-	writeLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 0")
+	plantLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 0")
 
 	got, err := runLeylinePath(t)
 	require.NoError(t, err)
@@ -223,11 +223,10 @@ func TestLeylinePath_NeverWritesUnversionedCachePath(t *testing.T) {
 // exec proxy fidelity
 // ---------------------------------------------------------------------------
 
-func TestLeylineExec_ProxyFidelity(t *testing.T) {
-	// The stub reports what it received so the proxy contract is observable:
-	// argv on stdout, a marker on stderr, stdin echoed back, exit status taken
-	// from the first argument when it is a bare number.
-	const stubBody = `echo "argv:$*"
+// leylineEchoStubBody makes the proxy contract observable: it reports the argv
+// it received on stdout, writes a marker to stderr, echoes one line of stdin
+// back, and exits with the status named by an `exit-N` first argument.
+const leylineEchoStubBody = `echo "argv:$*"
 echo "stub-stderr" >&2
 IFS= read -r line
 echo "stdin:$line"
@@ -236,79 +235,103 @@ case "$1" in
 esac
 exit 0`
 
+// runProxiedStub plants leylineEchoStubBody as the pinned binary and proxies
+// args to it, returning leyline's exit status and captured streams. It fails
+// the test on a resolve/launch error, since every caller here expects the stub
+// to have actually run.
+func runProxiedStub(t *testing.T, args []string, stdin string) (int, string, string) {
+	t.Helper()
+	home, _ := isolateLeylineResolution(t)
+	plantLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), leylineEchoStubBody)
+
+	var stdout, stderr bytes.Buffer
+	code, err := runLeylineExec(args, strings.NewReader(stdin), &stdout, &stderr)
+	require.NoError(t, err, "leyline ran, so err is reserved for resolve/launch failures")
+
+	assert.Contains(t, stderr.String(), "stub-stderr", "leyline's stderr must stay on stderr")
+	assert.NotContains(t, stdout.String(), "stub-stderr", "stderr must not be folded into stdout")
+	return code, stdout.String(), stderr.String()
+}
+
+// TestLeylineExec_ForwardsArgs — every argument reaches leyline verbatim, and
+// mache claims none of them.
+func TestLeylineExec_ForwardsArgs(t *testing.T) {
 	tests := []struct {
-		name       string
-		args       []string
-		stdin      string
-		wantArgv   string
-		wantCode   int
-		wantStdout []string
+		name     string
+		args     []string
+		wantArgv string
 	}{
 		{
-			name:       "double dash separator is stripped before leyline sees it",
-			args:       []string{"--", "cdc", "enable", "--db", "x.db"},
-			wantArgv:   "argv:cdc enable --db x.db",
-			wantStdout: []string{"argv:cdc enable --db x.db"},
+			name:     "double dash separator is stripped before leyline sees it",
+			args:     []string{"--", "cdc", "enable", "--db", "x.db"},
+			wantArgv: "argv:cdc enable --db x.db",
 		},
 		{
-			name:       "args pass through without a separator",
-			args:       []string{"cdc", "gc", "--db", "x.db"},
-			wantArgv:   "argv:cdc gc --db x.db",
-			wantStdout: []string{"argv:cdc gc --db x.db"},
+			name:     "args pass through without a separator",
+			args:     []string{"cdc", "gc", "--db", "x.db"},
+			wantArgv: "argv:cdc gc --db x.db",
 		},
 		{
-			name:       "leyline flags are not claimed by mache",
-			args:       []string{"--help"},
-			wantArgv:   "argv:--help",
-			wantStdout: []string{"argv:--help"},
+			name:     "leyline flags are not claimed by mache",
+			args:     []string{"--help"},
+			wantArgv: "argv:--help",
 		},
 		{
-			name:       "a later double dash belongs to leyline",
-			args:       []string{"--", "parse", "--", "extra"},
-			wantArgv:   "argv:parse -- extra",
-			wantStdout: []string{"argv:parse -- extra"},
+			name:     "a later double dash belongs to leyline",
+			args:     []string{"--", "parse", "--", "extra"},
+			wantArgv: "argv:parse -- extra",
 		},
 		{
-			name:       "no args runs leyline bare",
-			args:       nil,
-			wantArgv:   "argv:",
-			wantStdout: []string{"argv:"},
-		},
-		{
-			name:       "stdin is forwarded",
-			args:       []string{"parse"},
-			stdin:      "from-caller\n",
-			wantStdout: []string{"stdin:from-caller"},
-		},
-		{
-			name:       "non-zero exit status is reported, not flattened",
-			args:       []string{"exit-7"},
-			wantCode:   7,
-			wantStdout: []string{"argv:exit-7"},
-		},
-		{
-			name:       "exit status 1 is still distinguishable from a launch failure",
-			args:       []string{"exit-1"},
-			wantCode:   1,
-			wantStdout: []string{"argv:exit-1"},
+			name:     "no args runs leyline bare",
+			args:     nil,
+			wantArgv: "argv:",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			home, _ := isolateLeylineResolution(t)
-			writeLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), stubBody)
+			code, stdout, _ := runProxiedStub(t, tt.args, "")
+			assert.Zero(t, code)
+			assert.Contains(t, stdout, tt.wantArgv)
+		})
+	}
+}
 
-			var stdout, stderr bytes.Buffer
-			code, err := runLeylineExec(tt.args, strings.NewReader(tt.stdin), &stdout, &stderr)
+// TestLeylineExec_ForwardsStdinAndExitStatus — stdin reaches leyline, and
+// leyline's exit status reaches the caller instead of being flattened.
+func TestLeylineExec_ForwardsStdinAndExitStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		stdin      string
+		wantCode   int
+		wantStdout string
+	}{
+		{
+			name:       "stdin is forwarded",
+			args:       []string{"parse"},
+			stdin:      "from-caller\n",
+			wantStdout: "stdin:from-caller",
+		},
+		{
+			name:       "non-zero exit status is reported, not flattened",
+			args:       []string{"exit-7"},
+			wantCode:   7,
+			wantStdout: "argv:exit-7",
+		},
+		{
+			name:       "exit status 1 is still distinguishable from a launch failure",
+			args:       []string{"exit-1"},
+			wantCode:   1,
+			wantStdout: "argv:exit-1",
+		},
+	}
 
-			require.NoError(t, err, "leyline ran, so err is reserved for resolve/launch failures")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, stdout, _ := runProxiedStub(t, tt.args, tt.stdin)
 			assert.Equal(t, tt.wantCode, code)
-			for _, want := range tt.wantStdout {
-				assert.Contains(t, stdout.String(), want)
-			}
-			assert.Contains(t, stderr.String(), "stub-stderr", "leyline's stderr must stay on stderr")
-			assert.NotContains(t, stdout.String(), "stub-stderr", "stderr must not be folded into stdout")
+			assert.Contains(t, stdout, tt.wantStdout)
 		})
 	}
 }
@@ -333,7 +356,7 @@ func TestLeylineExec_ResolutionFailureIsAnError(t *testing.T) {
 // which Execute() would flatten to 1.
 func TestLeylineExecCmd_PropagatesExitStatus(t *testing.T) {
 	home, _ := isolateLeylineResolution(t)
-	writeLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 42")
+	plantLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 42")
 
 	var gotCode int
 	exited := false
@@ -354,7 +377,7 @@ func TestLeylineExecCmd_PropagatesExitStatus(t *testing.T) {
 // normally so deferred cleanup elsewhere in mache still runs.
 func TestLeylineExecCmd_ZeroStatusDoesNotExit(t *testing.T) {
 	home, _ := isolateLeylineResolution(t)
-	writeLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 0")
+	plantLeylineStub(t, pinnedCacheStubPath(home), pinnedLeylineSemver(), "exit 0")
 
 	orig := leylineExecExit
 	called := false
