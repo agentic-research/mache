@@ -6,6 +6,21 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`mache leyline path` and `mache leyline exec` — invoke the pinned leyline
+  without depending on PATH.** mache resolves leyline through one pin-checked
+  chokepoint and caches it version-namespaced under `~/.mache/bin`, which is not
+  on PATH. A human or agent typing bare `leyline` got none of that. Measured on
+  a machine that had run `task install`: `~/.local/bin/leyline` reported 0.10.3
+  while the pin was v0.13.0, so `leyline cdc enable --db x.db` ran a 0.10.3
+  parser against a `.db` mache built with 0.13.0 — invisible, since both
+  binaries are named `leyline` and neither announces the mismatch. `mache leyline path` prints the resolved absolute path and nothing else
+  (`$(mache leyline path) cdc enable --db x.db`); `mache leyline exec -- <args>`
+  proxies straight through, forwarding args, stdio and exit status. Neither
+  mutates PATH, shell rc, or the unversioned `~/.mache/bin/leyline` path, which
+  stays never-written (`mache-0acdf6`). (`mache-19326d`)
+
 ## [v0.20.0] — 2026-07-30
 
 ### ⚠️ Action required before upgrading
