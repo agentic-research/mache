@@ -42,6 +42,37 @@ bumps may include breaking changes.
   mutates PATH, shell rc, or the unversioned `~/.mache/bin/leyline` path, which
   stays never-written (`mache-0acdf6`). (`mache-19326d`)
 
+- **Doc-vs-CLI drift gate.** Every `mache …` invocation in a shell block of
+  `README.md`, `GETTING-STARTED.md`, `examples/README.md` and `docs/*.md` is now
+  resolved against the live cobra command tree: the subcommand must exist, its
+  flags must exist on the command they are attached to, and the positional count
+  must satisfy that command's `cobra.Args`. Documented `docker run` lines are
+  checked against the real `ENTRYPOINT`/`CMD` of the image they name, since args
+  append to ENTRYPOINT and replace CMD. Ground truth is `rootCmd.Commands()`,
+  pflag's registry, `apko.yaml` and `Dockerfile.release` — no hardcoded command
+  list and no scrape of `--help`. Same shape as the existing README-vs-registry
+  and image-tag-vs-buildinfo pins. It proves a documented command parses, not
+  that it succeeds. (`mache-d55457`, `mache-504adc`)
+
+### Fixed
+
+- **Four documented invocations that do not exist.** `examples/README.md`
+  documented `mache mount <source> --schema <s> <mnt>`; there is no `mount`
+  subcommand — mounting is the root command, so the source belongs in `--data`
+  and the mountpoint is the single positional (`mache-d55457`).
+  `GETTING-STARTED.md` documented `mache serve --schema … -d ./src`, but `serve`
+  has no `-d`; the source is its positional. `docs/README.md` referred to
+  `mache push` / `mache pull` rather than `mache cache push` / `mache cache pull`. `README.md` referred to a `mache mount` subcommand in prose twice.
+  All four were found by the new gate.
+
+- **The published image had no documented invocation.** `ghcr.io/agentic-research/mache`
+  bakes `serve` into its `ENTRYPOINT`, so `docker run IMAGE serve --stdio …`
+  expands to `mache serve serve …` and fails with `accepts at most 1 arg(s), received 2`. The README now shows the correct form for it, verified by running
+  it against the real published image. The nearby distroless `mache:<version>`
+  line was already correct — that image (built by `task image` from `apko.yaml`)
+  has a bare `mache` entrypoint, and the two must not be conflated.
+  (`mache-504adc`)
+
 ## [v0.20.0] — 2026-07-30
 
 ### ⚠️ Action required before upgrading

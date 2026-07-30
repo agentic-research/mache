@@ -225,7 +225,7 @@ cat /tmp/mache-src/_schema.json
 Or pass an explicit schema if the inferred one isn't right:
 
 ```bash
-mache serve --schema examples/go-schema.json -d ./src
+mache serve --schema examples/go-schema.json ./src
 ```
 
 See [ADR-0005](docs/adr/0005-fca-schema-inference.md) and [ADR-0008](docs/adr/0008-greedy-entropy-schema-inference.md) for the inference design.

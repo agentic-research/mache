@@ -31,7 +31,7 @@ at the repo root.
 | [`reference/`](reference/)    | Durable external-facing reference material.                                                                                         |
 | [`design/`](design/README.md) | Working design material: active `specs/` and `plans/`, plus `archive/` for shipped work.                                            |
 | [`schemas/`](schemas/)        | Per-language schema notes for the projection topologies.                                                                            |
-| [`cache/`](cache/)            | Portable-cache (`mache push` / `mache pull`) status and wire-shape notes.                                                           |
+| [`cache/`](cache/)            | Portable-cache (`mache cache push` / `mache cache pull`) status and wire-shape notes.                                               |
 | [`audit/`](audit/)            | Point-in-time audits — findings as of a date, not current-state docs.                                                               |
 
 ### reference/
