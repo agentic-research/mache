@@ -148,9 +148,16 @@ compare the complete `get_dataflow` response for the same symbol, direction,
 and depth:
 
 ```bash
-mache serve --stdio --path .
-mache serve --stdio --cdc --path .
+cdc_off_home=$(mktemp -d)
+HOME="$cdc_off_home" mache serve --stdio --path .
+
+cdc_on_home=$(mktemp -d)
+HOME="$cdc_on_home" mache serve --stdio --cdc --path .
 ```
+
+Each assignment gives that invocation its own Mache runtime under
+`$HOME/.mache`; do not reuse either directory for the other run. Run the
+commands sequentially (each stdio session ends before starting the next one).
 
 Initialize each stdio session and call `get_overview` before the flow query to
 confirm that rootless `--path .` selected the intended project. `get_dataflow`
