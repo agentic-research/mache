@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,8 +13,11 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// maxDataflowNodes bounds reference-flow responses on dense repositories.
-const maxDataflowNodes = 500
+// maxDataflowItems is one shared response budget across nodes and edges.
+// Roots are metadata, but every root also appears in nodes and therefore costs
+// one item. Discovering a new neighbor normally costs two items atomically:
+// one node plus its connecting edge. We never emit an edge to an omitted node.
+const maxDataflowItems = 500
 
 type dataflowNode struct {
 	Path  string `json:"path"`
@@ -25,6 +29,15 @@ type dataflowEdge struct {
 	To        string `json:"to"`
 	Direction string `json:"direction"`
 	Evidence  string `json:"evidence"`
+}
+
+// dataflowEdgeIdentity is the underlying node_ref identity. Direction records
+// how traversal discovered an edge, not distinct evidence, so it is excluded
+// from deduplication: callers and callees may expose the same from/to relation.
+type dataflowEdgeIdentity struct {
+	From     string
+	To       string
+	Evidence string
 }
 
 type dataflowResult struct {
@@ -54,7 +67,10 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 		if errResult != nil {
 			return errResult, nil
 		}
-		maxDepth := min(max(request.GetInt("depth", 2), 1), 5)
+		maxDepth := request.GetInt("depth", 2)
+		if maxDepth < 1 || maxDepth > 5 {
+			return mcp.NewToolResultError("depth must be between 1 and 5"), nil
+		}
 
 		dp, ok := g.(defsMapProvider)
 		if !ok {
@@ -78,12 +94,13 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 			id    string
 			depth int
 		}
-		seen := make(map[string]bool, min(len(roots), maxDataflowNodes))
-		nodeDepth := make(map[string]int, min(len(roots), maxDataflowNodes))
-		queue := make([]queueEntry, 0, min(len(roots), maxDataflowNodes))
+		seen := make(map[string]bool, min(len(roots), maxDataflowItems))
+		nodeDepth := make(map[string]int, min(len(roots), maxDataflowItems))
+		queue := make([]queueEntry, 0, min(len(roots), maxDataflowItems))
 		truncated := false
+		responseItems := 0
 		for _, root := range roots {
-			if len(seen) == maxDataflowNodes {
+			if responseItems == maxDataflowItems {
 				truncated = true
 				break
 			}
@@ -91,12 +108,13 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 				seen[root] = true
 				nodeDepth[root] = 0
 				queue = append(queue, queueEntry{id: root})
+				responseItems++
 			}
 		}
 		roots = roots[:len(queue)]
 
 		edges := make([]dataflowEdge, 0)
-		edgeSeen := make(map[dataflowEdge]bool)
+		edgeSeen := make(map[dataflowEdgeIdentity]bool)
 		for len(queue) > 0 && !truncated {
 			entry := queue[0]
 			queue = queue[1:]
@@ -106,27 +124,36 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 
 			if direction == "callers" || direction == "both" {
 				callers, err := g.GetCallers(filepath.Base(entry.id))
-				if err == nil {
-					ids := sortedDataflowNodeIDs(callers)
-					for _, id := range ids {
-						edge := dataflowEdge{From: id, To: entry.id, Direction: "caller", Evidence: "node_ref"}
-						if !edgeSeen[edge] && len(edges) == maxDataflowNodes {
-							truncated = true
-							break
-						}
-						if !seen[id] && len(seen) == maxDataflowNodes {
-							truncated = true
-							break
-						}
-						if !seen[id] {
-							seen[id] = true
-							nodeDepth[id] = entry.depth + 1
-							queue = append(queue, queueEntry{id: id, depth: entry.depth + 1})
-						}
-						if !edgeSeen[edge] {
-							edgeSeen[edge] = true
-							edges = append(edges, edge)
-						}
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("get callers for %q: %v", entry.id, err)), nil
+				}
+				ids := sortedDataflowNodeIDs(callers)
+				for _, id := range ids {
+					edge := dataflowEdge{From: id, To: entry.id, Direction: "caller", Evidence: "node_ref"}
+					identity := dataflowEdgeIdentity{From: edge.From, To: edge.To, Evidence: edge.Evidence}
+					newNode := !seen[id]
+					newEdge := !edgeSeen[identity]
+					additionalItems := 0
+					if newNode {
+						additionalItems++
+					}
+					if newEdge {
+						additionalItems++
+					}
+					if responseItems+additionalItems > maxDataflowItems {
+						truncated = true
+						break
+					}
+					if newNode {
+						seen[id] = true
+						nodeDepth[id] = entry.depth + 1
+						queue = append(queue, queueEntry{id: id, depth: entry.depth + 1})
+						responseItems++
+					}
+					if newEdge {
+						edgeSeen[identity] = true
+						edges = append(edges, edge)
+						responseItems++
 					}
 				}
 			}
@@ -136,27 +163,36 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 
 			if direction == "callees" || direction == "both" {
 				callees, err := g.GetCallees(entry.id)
-				if err == nil {
-					ids := sortedDataflowNodeIDs(callees)
-					for _, id := range ids {
-						edge := dataflowEdge{From: entry.id, To: id, Direction: "callee", Evidence: "node_ref"}
-						if !edgeSeen[edge] && len(edges) == maxDataflowNodes {
-							truncated = true
-							break
-						}
-						if !seen[id] && len(seen) == maxDataflowNodes {
-							truncated = true
-							break
-						}
-						if !seen[id] {
-							seen[id] = true
-							nodeDepth[id] = entry.depth + 1
-							queue = append(queue, queueEntry{id: id, depth: entry.depth + 1})
-						}
-						if !edgeSeen[edge] {
-							edgeSeen[edge] = true
-							edges = append(edges, edge)
-						}
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("get callees for %q: %v", entry.id, err)), nil
+				}
+				ids := sortedDataflowNodeIDs(callees)
+				for _, id := range ids {
+					edge := dataflowEdge{From: entry.id, To: id, Direction: "callee", Evidence: "node_ref"}
+					identity := dataflowEdgeIdentity{From: edge.From, To: edge.To, Evidence: edge.Evidence}
+					newNode := !seen[id]
+					newEdge := !edgeSeen[identity]
+					additionalItems := 0
+					if newNode {
+						additionalItems++
+					}
+					if newEdge {
+						additionalItems++
+					}
+					if responseItems+additionalItems > maxDataflowItems {
+						truncated = true
+						break
+					}
+					if newNode {
+						seen[id] = true
+						nodeDepth[id] = entry.depth + 1
+						queue = append(queue, queueEntry{id: id, depth: entry.depth + 1})
+						responseItems++
+					}
+					if newEdge {
+						edgeSeen[identity] = true
+						edges = append(edges, edge)
+						responseItems++
 					}
 				}
 			}
