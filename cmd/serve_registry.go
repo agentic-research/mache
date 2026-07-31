@@ -176,6 +176,13 @@ func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error
 		r.registerSession(sessionID, r.basePath)
 		return r.getOrCreateGraph(r.basePath)
 	}
+	if serveStdio && len(r.args) == 1 {
+		source, err := filepath.Abs(r.args[0])
+		if err == nil {
+			r.registerSession(sessionID, source)
+			return r.getOrCreateGraph(source)
+		}
+	}
 	if cached, ok := r.sessionErrors.Load(sessionID); ok {
 		return cached.(*lazyGraph)
 	}

@@ -338,6 +338,12 @@ func DiscoverOrStart() (string, error) {
 	if src := DaemonSource(); src != "" {
 		daemonArgs = append(daemonArgs, "--source", src)
 	}
+	// CDC is opt-in for Mache-managed daemons only. Existing sockets and
+	// external --control daemons retain the configuration chosen by their
+	// operator; a live daemon cannot change startup arguments.
+	if DaemonCDC() {
+		daemonArgs = append(daemonArgs, "--cdc")
+	}
 	cmd := exec.Command(leylineBin, daemonArgs...)
 	// Detach from our stdio so it doesn't interfere with MCP transport
 	cmd.Stdout = nil
