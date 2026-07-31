@@ -1,14 +1,11 @@
 package cmd
 
 import (
-	"database/sql"
-	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	_ "modernc.org/sqlite"
 )
 
 // TestDocRefsView_ScopesToRustAndStripsCallSyntax pins the view's shape
@@ -17,26 +14,27 @@ import (
 // filtered before any consumer sees them, and a trailing '()' is stripped
 // into a separate bare column without mutating the original token.
 func TestDocRefsView_ScopesToRustAndStripsCallSyntax(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "docrefs.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-
-	_, err = db.Exec(`
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, source_id TEXT, container_node_id TEXT, qualifier TEXT);
-		INSERT INTO node_refs (token, node_id, source_id) VALUES
-		  ('epic::is_dominated_by', 'doc.md/span0', 'doc.md'),
-		  ('Stdio::null()', 'doc.md/span1', 'doc.md'),
-		  ('MaxRetries', 'doc.md/span2', 'doc.md'),
-		  ('cmd/serve.go::registerMCPTools', 'doc.md/span3', 'doc.md'),
-		  ('Foo:: bar', 'doc.md/span4', 'doc.md'),
-		  ('epic::is_dominated_by', 'main.go/call0', 'main.go');
-	`)
-	require.NoError(t, err)
-
-	_, err = db.Exec("CREATE TEMP TABLE v_doc_refs AS " + docRefsViewSQL(true))
-	require.NoError(t, err)
+	// v_doc_refs is only reachable when node_refs carries source_id — which is
+	// the ley-line shape, and only that. Naming the producer is what makes
+	// "with source_id" a fact about a real .db rather than a column a fixture
+	// chose to type.
+	b := fixturedb.New(t, fixturedb.Leyline)
+	for _, r := range []struct {
+		token string
+		site  fixturedb.SiteID
+		in    fixturedb.ConstructID
+	}{
+		{"epic::is_dominated_by", "doc.md/span0", "doc.md"},
+		{"Stdio::null()", "doc.md/span1", "doc.md"},
+		{"MaxRetries", "doc.md/span2", "doc.md"},
+		{"cmd/serve.go::registerMCPTools", "doc.md/span3", "doc.md"},
+		{"Foo:: bar", "doc.md/span4", "doc.md"},
+		{"epic::is_dominated_by", "main.go/call0", "main.go"},
+	} {
+		b.Ref(r.token, r.in, r.site, "")
+	}
+	_, f := b.Build()
+	db := f.DB()
 
 	rows, err := db.Query(`SELECT token, node_id, source_id, bare FROM v_doc_refs ORDER BY node_id`)
 	require.NoError(t, err)
@@ -66,17 +64,11 @@ func TestDocRefsView_ScopesToRustAndStripsCallSyntax(t *testing.T) {
 // — that's the entire reason this is a Go-probed view and not an inline
 // query in the consuming rule.
 func TestDocRefsView_DegradesToEmptyWithoutSourceID(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "nosourceid.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	db.SetMaxOpenConns(1)
-	defer func() { _ = db.Close() }()
-
-	_, err = db.Exec(`CREATE TABLE node_refs (token TEXT, node_id TEXT)`)
-	require.NoError(t, err)
-
-	_, err = db.Exec("CREATE TEMP TABLE v_doc_refs AS " + docRefsViewSQL(false))
-	require.NoError(t, err, "the no-source_id form must be valid SQL against a node_refs missing that column")
+	// "node_refs without a source_id column" is exactly the mache projection.
+	_, f := fixturedb.New(t, fixturedb.Standalone).
+		Ref("epic::is_dominated_by", "doc.md/span0", "", "").
+		Build()
+	db := f.DB()
 
 	var n int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_doc_refs`).Scan(&n))

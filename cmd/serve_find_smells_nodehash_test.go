@@ -2,12 +2,11 @@ package cmd
 
 import (
 	"database/sql"
-	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
 // Additive node_hash passthrough (B4, mache-ff9a9d).
@@ -26,29 +25,18 @@ import (
 // v_refs expose it, and the existing token/node_id/fidelity columns
 // stay byte-identical.
 func TestEnsureCanonicalViews_NodeHashPassthrough(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "nodehash.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	// The merkle producer IS ley-line: node_hash is its additive column, so
+	// this arm is only reachable on that producer. Saying so names the arm
+	// instead of implying it through a hand-written column list.
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Def("Foo", "pkg.go/functions/Foo", fixturedb.Function, fixturedb.Detail{Subtree: "foo-def"})
+	b.Ref("Foo", "pkg.go/functions/Bar", "", "", fixturedb.Detail{Subtree: "foo-ref"})
+	_, f := b.Build()
+	db := f.DB()
 
-	// Mirror the merkle-producer schema: node_defs / node_refs with the
-	// additive node_hash BLOB column referencing node_content.
-	_, err = db.Exec(`
-		CREATE TABLE node_defs (
-			token TEXT NOT NULL, node_id TEXT NOT NULL,
-			source_id TEXT NOT NULL, node_hash BLOB
-		);
-		CREATE TABLE node_refs (
-			token TEXT NOT NULL, node_id TEXT NOT NULL,
-			source_id TEXT NOT NULL, node_hash BLOB
-		);
-		INSERT INTO node_defs VALUES ('Foo', 'pkg/Foo', 'pkg.go', X'AABB');
-		INSERT INTO node_refs VALUES ('Foo', 'pkg/Bar', 'pkg.go', X'CCDD');
-	`)
-	require.NoError(t, err)
-
-	qg := &sqlDBQuerier{db: db}
-	require.NoError(t, ensureCanonicalViews(qg))
+	defHashWant := fixtureSubtreeHash(t, db, "node_defs", "Foo")
+	refHashWant := fixtureSubtreeHash(t, db, "node_refs", "Foo")
+	require.NotEqual(t, defHashWant, refHashWant, "distinct subtrees must not collide")
 
 	// v_defs: existing columns unchanged, node_hash exposed.
 	var (
@@ -59,9 +47,9 @@ func TestEnsureCanonicalViews_NodeHashPassthrough(t *testing.T) {
 		`SELECT token, node_id, fidelity, node_hash FROM v_defs WHERE fidelity='mention'`,
 	).Scan(&token, &nodeID, &fidelity, &nodeHash))
 	assert.Equal(t, "Foo", token)
-	assert.Equal(t, "pkg/Foo", nodeID)
+	assert.Equal(t, "pkg.go/functions/Foo", nodeID)
 	assert.Equal(t, "mention", fidelity)
-	assert.Equal(t, []byte{0xAA, 0xBB}, nodeHash, "v_defs must passthrough node_defs.node_hash")
+	assert.Equal(t, defHashWant, nodeHash, "v_defs must passthrough node_defs.node_hash")
 
 	// v_refs: existing columns unchanged, node_hash exposed.
 	var (
@@ -71,10 +59,12 @@ func TestEnsureCanonicalViews_NodeHashPassthrough(t *testing.T) {
 	require.NoError(t, db.QueryRow(
 		`SELECT referrer_node_id, token, qualifier, node_hash FROM v_refs WHERE fidelity='mention'`,
 	).Scan(&refReferrer, &refToken, &refQualifier, &refHash))
-	assert.Equal(t, "pkg/Bar", refReferrer)
+	assert.Equal(t, "pkg.go/functions/Bar", refReferrer,
+		"the referrer is the ENCLOSING construct — on ley-line that is container_node_id, "+
+			"not the call-site leaf in node_id")
 	assert.Equal(t, "Foo", refToken)
 	assert.Equal(t, "", refQualifier)
-	assert.Equal(t, []byte{0xCC, 0xDD}, refHash, "v_refs must passthrough node_refs.node_hash")
+	assert.Equal(t, refHashWant, refHash, "v_refs must passthrough node_refs.node_hash")
 }
 
 // TestEnsureCanonicalViews_NodeHashAbsentBackCompat (B4b) is the
@@ -83,22 +73,13 @@ func TestEnsureCanonicalViews_NodeHashPassthrough(t *testing.T) {
 // identical to today, and node_hash must read as NULL (stable trailing
 // column shape) rather than erroring with "no such column".
 func TestEnsureCanonicalViews_NodeHashAbsentBackCompat(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "no_nodehash.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// Legacy standalone shape: no node_hash column at all.
-	_, err = db.Exec(`
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		INSERT INTO node_defs VALUES ('Foo', 'pkg/Foo');
-		INSERT INTO node_refs VALUES ('Foo', 'pkg/Bar');
-	`)
-	require.NoError(t, err)
-
-	qg := &sqlDBQuerier{db: db}
-	require.NoError(t, ensureCanonicalViews(qg))
+	// "A standalone-mache db has no node_hash column" is not a legacy quirk to
+	// be re-typed per fixture — it is what fixturedb.Standalone IS.
+	b := fixturedb.New(t, fixturedb.Standalone)
+	b.Def("Foo", "pkg/functions/Foo", fixturedb.Function)
+	b.Ref("Foo", "pkg/functions/Bar", "", "")
+	_, f := b.Build()
+	db := f.DB()
 
 	// Existing rows byte-identical to today.
 	var token, nodeID string
@@ -106,7 +87,7 @@ func TestEnsureCanonicalViews_NodeHashAbsentBackCompat(t *testing.T) {
 		`SELECT token, node_id FROM v_defs WHERE fidelity='mention'`,
 	).Scan(&token, &nodeID))
 	assert.Equal(t, "Foo", token)
-	assert.Equal(t, "pkg/Foo", nodeID)
+	assert.Equal(t, "pkg/functions/Foo", nodeID)
 
 	// node_hash column present in shape, resolves to NULL (not an error).
 	var defHash, refHash []byte
@@ -121,4 +102,23 @@ func TestEnsureCanonicalViews_NodeHashAbsentBackCompat(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs`).Scan(&refCount))
 	assert.Equal(t, 1, defCount)
 	assert.Equal(t, 1, refCount)
+}
+
+// fixtureSubtreeHash reads back the node_hash a fixture assigned to a token's
+// occurrence. Tests assert against THIS rather than a literal, because a
+// fixture states which occurrences share a subtree — never the bytes that
+// identify one.
+func fixtureSubtreeHash(t *testing.T, db *sql.DB, table, token string) []byte {
+	t.Helper()
+	var h []byte
+	switch table {
+	case "node_defs":
+		require.NoError(t, db.QueryRow(
+			`SELECT node_hash FROM node_defs WHERE token = ?`, token).Scan(&h))
+	default:
+		require.NoError(t, db.QueryRow(
+			`SELECT node_hash FROM node_refs WHERE token = ?`, token).Scan(&h))
+	}
+	require.NotEmpty(t, h, "the fixture must have stamped a node_hash")
+	return h
 }

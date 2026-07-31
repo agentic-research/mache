@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"database/sql"
-	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -47,36 +47,27 @@ var b6RealTopASTHash = []byte{
 // ALL its occurrences. A consumer that (wrongly) grouped by node_hash
 // would collapse them to one — this test would catch that.
 func TestEnsureCanonicalViews_NodeHashFanOut(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "fanout.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	// Three occurrences of `dup` are ONE deduped subtree living at three
+	// distinct node_ids. One unrelated def `solo` is its own subtree.
+	//
+	// The fixture states the SHARING, not the bytes: node_hash is the
+	// producer's content identity, and a test that types a hash literal is
+	// asserting on something it does not own.
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Def("dup", "a.go/dup", fixturedb.Function, fixturedb.Detail{Subtree: "dup"})
+	b.Def("dup", "b.go/dup", fixturedb.Function, fixturedb.Detail{Subtree: "dup"})
+	b.Def("dup", "c.go/dup", fixturedb.Function, fixturedb.Detail{Subtree: "dup"})
+	b.Def("solo", "d.go/solo", fixturedb.Function)
+	_, f := b.Build()
+	db := f.DB()
 
-	// Three occurrences of `dup` share ONE node_hash (a deduped
-	// subtree) but live at three distinct node_ids. One unrelated def
-	// `solo` carries its own hash.
-	_, err = db.Exec(`
-		CREATE TABLE node_defs (
-			token TEXT NOT NULL, node_id TEXT NOT NULL,
-			source_id TEXT NOT NULL, node_hash BLOB
-		);
-		CREATE TABLE node_refs (
-			token TEXT NOT NULL, node_id TEXT NOT NULL,
-			source_id TEXT NOT NULL, node_hash BLOB
-		);
-		INSERT INTO node_defs VALUES ('dup', 'a/dup', 'a.go', X'DEAD');
-		INSERT INTO node_defs VALUES ('dup', 'b/dup', 'b.go', X'DEAD');
-		INSERT INTO node_defs VALUES ('dup', 'c/dup', 'c.go', X'DEAD');
-		INSERT INTO node_defs VALUES ('solo', 'd/solo', 'd.go', X'BEEF');
-	`)
-	require.NoError(t, err)
-
-	qg := &sqlDBQuerier{db: db}
-	require.NoError(t, ensureCanonicalViews(qg))
+	dupHash := fixtureSubtreeHash(t, db, "node_defs", "dup")
+	soloHash := fixtureSubtreeHash(t, db, "node_defs", "solo")
+	require.NotEqual(t, dupHash, soloHash, "unrelated subtrees must not collide")
 
 	// The duplicated node_hash must map to THREE distinct occurrences.
 	rows, err := db.Query(
-		`SELECT node_id FROM v_defs WHERE token='dup' AND node_hash=X'DEAD' ORDER BY node_id`)
+		`SELECT node_id FROM v_defs WHERE token='dup' AND node_hash=? ORDER BY node_id`, dupHash)
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 	var got []string
@@ -86,14 +77,14 @@ func TestEnsureCanonicalViews_NodeHashFanOut(t *testing.T) {
 		got = append(got, id)
 	}
 	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"a/dup", "b/dup", "c/dup"}, got,
+	assert.Equal(t, []string{"a.go/dup", "b.go/dup", "c.go/dup"}, got,
 		"one node_hash → many occurrences; v_defs must not collapse the fan-out")
 
 	// Sanity: grouping BY node_hash would wrongly report 1 row for the
 	// duplicated subtree — pin that the raw occurrence count is 3.
 	var occurrences int
 	require.NoError(t, db.QueryRow(
-		`SELECT COUNT(*) FROM v_defs WHERE node_hash=X'DEAD'`).Scan(&occurrences))
+		`SELECT COUNT(*) FROM v_defs WHERE node_hash=?`, dupHash).Scan(&occurrences))
 	assert.Equal(t, 3, occurrences, "node_hash is one-to-many, not one-to-one")
 }
 

@@ -98,3 +98,40 @@ func TestResolveCachedPinned_NamespacedTakesPrecedence(t *testing.T) {
 	stubLeyline(t, legacy, v)
 	assert.Equal(t, p, resolveCachedPinned())
 }
+
+// CachedPinnedBinary is the exported entry gated tests resolve the pin through.
+// It exists because internal/lltest hardcoded the LEGACY unversioned path, so
+// every pinned-daemon gate skipped unconditionally once the cache became
+// namespaced and nothing wrote that path any more (mache-7555da).
+func TestCachedPinnedBinary(t *testing.T) {
+	pinned := strings.TrimPrefix(leylineBinaryVersion, "v")
+	for _, tc := range []struct {
+		name      string
+		namespace bool // stub at the version-namespaced path rather than the legacy one
+		version   string
+		wantHit   bool
+	}{
+		{"resolves the namespaced pin", true, pinned, true},
+		{"resolves a legacy copy that IS the pin", false, pinned, true},
+		{"reports nothing for a foreign build's binary", false, "0.0.3", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			at := pinnedCachePath
+			if !tc.namespace {
+				at = legacyCachePath
+			}
+			p, err := at()
+			require.NoError(t, err)
+			stubLeyline(t, p, tc.version)
+
+			got := CachedPinnedBinary()
+			if !tc.wantHit {
+				assert.Empty(t, got, "a gate must SKIP rather than run against a foreign binary")
+				return
+			}
+			assert.Equal(t, p, got)
+		})
+	}
+}

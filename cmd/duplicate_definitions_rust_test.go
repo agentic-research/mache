@@ -2,14 +2,12 @@ package cmd
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
 // mache-22fecf — duplicate_definitions false-positives on leyline-parsed Rust
@@ -28,54 +26,37 @@ import (
 // Ground truth captured from `leyline parse` of a two-struct/one-trait Rust
 // file; this fixture reproduces the exact node_id shapes it emits.
 
-// rustDupFixture builds a nodes + node_defs db mirroring leyline's Rust output.
+// rustDupFixture mirrors leyline's Rust output. fixturedb.Leyline is what makes
+// "mirrors leyline" a fact rather than a claim — the DDL it produces is derived
+// from the pinned binary's own sqlite_master (mache-7555da).
 func rustDupFixture(t *testing.T) *smellTestGraph {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "rustdup.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	db.SetMaxOpenConns(1)
-
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
-			record_id TEXT, record TEXT, source_file TEXT
-		);
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		-- Rust impl/trait methods: bare tokens, impl_item / trait_item paths.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
-			('src/lib.rs/impl_item_0/declaration_list/function_item_0', NULL, 'new',     1, 0, 'src/lib.rs'),
-			('src/lib.rs/impl_item_1/declaration_list/function_item_0', NULL, 'new',     1, 0, 'src/lib.rs'),
-			('src/lib.rs/impl_item_0/declaration_list/function_item_1', NULL, 'compute', 1, 0, 'src/lib.rs'),
-			('src/lib.rs/impl_item_1/declaration_list/function_item_1', NULL, 'compute', 1, 0, 'src/lib.rs'),
-			('src/lib.rs/impl_item_2/declaration_list/function_item',   NULL, 'run',     1, 0, 'src/lib.rs'),
-			('src/lib.rs/impl_item_3/declaration_list/function_item',   NULL, 'run',     1, 0, 'src/lib.rs'),
-			('src/lib.rs/trait_item/declaration_list/function_signature_item', NULL, 'run', 1, 0, 'src/lib.rs'),
-			-- A genuine free-function duplicate (top-level function_item in two
-			-- files): this SHOULD still be flagged — the fix must be targeted,
-			-- not a blanket disable of duplicate detection.
-			('a.rs/function_item_0', NULL, 'dup_free', 1, 0, 'a.rs'),
-			('b.rs/function_item_0', NULL, 'dup_free', 1, 0, 'b.rs'),
-			-- A unique free function: never flagged (copies == 1).
-			('src/lib.rs/function_item_9', NULL, 'solo', 1, 0, 'src/lib.rs');
-
-		INSERT INTO node_defs (token, node_id) VALUES
-			('new',      'src/lib.rs/impl_item_0/declaration_list/function_item_0'),
-			('new',      'src/lib.rs/impl_item_1/declaration_list/function_item_0'),
-			('compute',  'src/lib.rs/impl_item_0/declaration_list/function_item_1'),
-			('compute',  'src/lib.rs/impl_item_1/declaration_list/function_item_1'),
-			('run',      'src/lib.rs/impl_item_2/declaration_list/function_item'),
-			('run',      'src/lib.rs/impl_item_3/declaration_list/function_item'),
-			('run',      'src/lib.rs/trait_item/declaration_list/function_signature_item'),
-			('dup_free', 'a.rs/function_item_0'),
-			('dup_free', 'b.rs/function_item_0'),
-			('solo',     'src/lib.rs/function_item_9');
-	`)
-	require.NoError(t, err)
-	return &smellTestGraph{db: db}
+	return newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
+		for _, d := range []struct {
+			token string
+			in    fixturedb.ConstructID
+			kind  fixturedb.CanonicalKind
+		}{
+			// Rust impl/trait methods: bare tokens, impl_item / trait_item paths.
+			{"new", "src/lib.rs/impl_item_0/declaration_list/function_item_0", fixturedb.Method},
+			{"new", "src/lib.rs/impl_item_1/declaration_list/function_item_0", fixturedb.Method},
+			{"compute", "src/lib.rs/impl_item_0/declaration_list/function_item_1", fixturedb.Method},
+			{"compute", "src/lib.rs/impl_item_1/declaration_list/function_item_1", fixturedb.Method},
+			{"run", "src/lib.rs/impl_item_2/declaration_list/function_item", fixturedb.Method},
+			{"run", "src/lib.rs/impl_item_3/declaration_list/function_item", fixturedb.Method},
+			{"run", "src/lib.rs/trait_item/declaration_list/function_signature_item", fixturedb.Method},
+			// A genuine free-function duplicate (top-level function_item in two
+			// files): this SHOULD still be flagged — the fix must be targeted,
+			// not a blanket disable of duplicate detection.
+			{"dup_free", "a.rs/function_item_0", fixturedb.Function},
+			{"dup_free", "b.rs/function_item_0", fixturedb.Function},
+			// A unique free function: never flagged (copies == 1).
+			{"solo", "src/lib.rs/function_item_9", fixturedb.Function},
+		} {
+			b.Construct(d.in, fixturedb.Where{Name: d.token})
+			b.Def(d.token, d.in, d.kind)
+		}
+	})
 }
 
 func runDuplicateDefinitions(t *testing.T, tg *smellTestGraph) []smellFinding {
@@ -155,42 +136,28 @@ func tokenFromNodeID(nodeID string) string {
 // token exactly like Rust. (The mache Go-SCHEMA's `methods/` path is a
 // tree-sitter+go-schema artifact, absent from every leyline projection.)
 func TestDuplicateDefinitions_LeylineGoMethods_NotFlagged(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "llogo.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	db.SetMaxOpenConns(1)
+	tg := newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
+		for _, d := range []struct {
+			token string
+			in    fixturedb.ConstructID
+			kind  fixturedb.CanonicalKind
+		}{
+			// LLO-Go methods: bare token under method_declaration_N.
+			{"New", "main.go/method_declaration_0", fixturedb.Method},
+			{"New", "main.go/method_declaration_2", fixturedb.Method},
+			{"Compute", "main.go/method_declaration_1", fixturedb.Method},
+			{"Compute", "main.go/method_declaration_3", fixturedb.Method},
+			// Genuine free-function duplicate (top-level function_declaration in
+			// two files) — must still be flagged.
+			{"DupFree", "a.go/function_declaration_0", fixturedb.Function},
+			{"DupFree", "b.go/function_declaration_0", fixturedb.Function},
+		} {
+			b.Construct(d.in, fixturedb.Where{Name: d.token})
+			b.Def(d.token, d.in, d.kind)
+		}
+	})
 
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
-			record_id TEXT, record TEXT, source_file TEXT
-		);
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		-- LLO-Go methods: bare token under method_declaration_N (Foo.New, Bar.New, ...).
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
-			('main.go/method_declaration_0', NULL, 'New',     1, 0, 'main.go'),
-			('main.go/method_declaration_2', NULL, 'New',     1, 0, 'main.go'),
-			('main.go/method_declaration_1', NULL, 'Compute', 1, 0, 'main.go'),
-			('main.go/method_declaration_3', NULL, 'Compute', 1, 0, 'main.go'),
-			-- Genuine free-function duplicate (top-level function_declaration in
-			-- two files) — must still be flagged.
-			('a.go/function_declaration_0', NULL, 'DupFree', 1, 0, 'a.go'),
-			('b.go/function_declaration_0', NULL, 'DupFree', 1, 0, 'b.go');
-
-		INSERT INTO node_defs (token, node_id) VALUES
-			('New',     'main.go/method_declaration_0'),
-			('New',     'main.go/method_declaration_2'),
-			('Compute', 'main.go/method_declaration_1'),
-			('Compute', 'main.go/method_declaration_3'),
-			('DupFree', 'a.go/function_declaration_0'),
-			('DupFree', 'b.go/function_declaration_0');
-	`)
-	require.NoError(t, err)
-
-	findings := runDuplicateDefinitions(t, &smellTestGraph{db: db})
+	findings := runDuplicateDefinitions(t, tg)
 
 	var sawDupFree bool
 	for _, f := range findings {
