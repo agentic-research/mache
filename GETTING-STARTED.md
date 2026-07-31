@@ -118,10 +118,67 @@ codex mcp list
 **stdio (subprocess per session — no standing daemon to babysit):**
 
 ```bash
-claude mcp add mache -- mache serve --stdio .
+claude mcp add mache -- mache serve --stdio --path .
 # or point at a leyline .db for the accurate tier:
-claude mcp add mache -- mache serve --stdio ./code.db
+claude mcp add mache -- mache serve --stdio --path . ./code.db
 ```
+
+### Optional: CDC for a Mache-managed Leyline daemon
+
+CDC is **off by default**. To enable it when Mache starts its own Leyline daemon,
+add `--cdc` to the Mache command:
+
+```bash
+claude mcp add mache -- mache serve --stdio --cdc --path .
+# equivalent direct command:
+mache serve --stdio --cdc --path .
+```
+
+The flag is forwarded only for a source-backed runtime when Mache starts the
+Leyline daemon. A pre-built `.db` can still reach or start a daemon for an
+on-demand operation such as embedding, but its daemon launch never receives
+`--cdc`. An externally managed daemon selected with `--control` likewise keeps
+its operator-provided startup arguments. Start that daemon with Leyline's own
+`--cdc` flag if CDC is required; a daemon already running cannot be
+reconfigured by Mache.
+
+### Validate the CDC launch boundary
+
+The current Mache integration can validate CDC-off/on daemon startup, but it
+does **not** provide a semantic CDC ablation. From the source tree, use two
+fresh Mache runtime directories so neither run can reuse a daemon:
+
+```bash
+cdc_off_home=$(mktemp -d)
+HOME="$cdc_off_home" mache serve --stdio --path .
+
+cdc_on_home=$(mktemp -d)
+HOME="$cdc_on_home" mache serve --stdio --cdc --path .
+```
+
+Each assignment gives that invocation its own Mache runtime under
+`$HOME/.mache`; do not reuse either directory for the other run. `--path .`
+both selects the rootless graph fallback and associates that directory with
+the managed daemon as its `--source`. Initialize each stdio session and call a
+graph tool such as `get_overview` to trigger lazy graph access. The managed
+spawn log must contain the same `--source` in both runs and `--cdc` only in the
+second run. The daemon-argv lifecycle tests pin the same boundary.
+
+Do not compare `get_dataflow` and call that a CDC ablation. For a directory
+source, Mache auto-parses a frozen temporary SQLite graph; `get_dataflow` reads
+that graph's `node_refs` reference projection, not the managed daemon arena.
+Equal responses therefore say nothing about CDC behavior. Likewise,
+`get_sheaf_status` reports the reachable daemon's current cache state, not a
+controlled CDC-off/on semantic difference.
+
+For Leyline's database-level CDC workflow, invoke the pinned binary directly,
+for example `mache leyline exec -- cdc enable --db ./code.db`, and use the
+Leyline command/API for the CDC output being evaluated. Mache currently has no
+CDC-derived result endpoint to compare.
+
+Mache asks the MCP client for its workspace roots before it starts scanning. `--path`
+provides a safe fallback when a client cannot supply roots; pass one positional source
+only for a snapshot such as `./code.db`.
 
 Add `--scope user|project|local` to either `claude mcp add` to control where the registration is written (`local` = this project only, `user` = all your projects). Or write `.mcp.json` by hand:
 
@@ -130,7 +187,7 @@ Add `--scope user|project|local` to either `claude mcp add` to control where the
   "mcpServers": {
     "mache": {
       "command": "mache",
-      "args": ["serve", "--stdio", "."]
+      "args": ["serve", "--stdio", "--path", "."]
     }
   }
 }
@@ -143,7 +200,7 @@ Add `--scope user|project|local` to either `claude mcp add` to control where the
   "mcpServers": {
     "mache": {
       "command": "/path/to/mache",
-      "args": ["serve", "--stdio", "/path/to/code"]
+      "args": ["serve", "--stdio", "--path", "/path/to/code"]
     }
   }
 }

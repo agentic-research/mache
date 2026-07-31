@@ -61,6 +61,7 @@
         "find_definition",
         "get_overview",
         "get_impact",
+        "get_dataflow",
         "get_architecture",
         "get_diagram",
         "write_file",
@@ -112,6 +113,7 @@
             "find_callees",
             "find_definition",
             "get_impact",
+            "get_dataflow",
             "search",
             "resolve_ref"
           ]

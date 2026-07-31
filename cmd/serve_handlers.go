@@ -190,6 +190,18 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	)
 
 	s.AddTool(
+		mcp.NewTool("get_dataflow",
+			readTool(),
+			mcp.WithDescription("Bounded interprocedural reference flow for a symbol through the existing node_refs caller/callee projection. Every edge is labeled node_ref; this is not LSP-confirmed binding, SSA, taint, or data-dependence analysis."),
+			mcp.WithString("symbol", mcp.Required(), mcp.Description("Function or symbol name to resolve through node_defs")),
+			mcp.WithString("kind", mcp.Description("Optional construct-kind filter applied to the starting symbol roots. Accepted values: function, method, type, constant, variable, import.")),
+			mcp.WithString("direction", mcp.Description("Traversal direction: 'callers', 'callees', or 'both' (default 'both')")),
+			mcp.WithNumber("depth", mcp.Description("Max traversal depth from 1 to 5 (default 2)")),
+		),
+		r.wrapHandler(makeGetDataflowHandler),
+	)
+
+	s.AddTool(
 		mcp.NewTool("get_architecture",
 			readTool(),
 			mcp.WithDescription("Structured architectural analysis of the codebase. Returns entry points (high fan-in), key abstractions (most defs), dependency layers (community-based), test files, API surface (exported symbols), file count, and language breakdown. Use after get_overview for deeper orientation."),

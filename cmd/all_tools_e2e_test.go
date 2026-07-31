@@ -278,6 +278,7 @@ func runToolMatrix(t *testing.T, g graph.Graph, fixtureDir, backend string, opts
 		{"get_diagnostics", makeGetDiagnosticsHandler, map[string]any{"limit": float64(10)}},
 		{"get_overview", makeGetOverviewHandler, map[string]any{}},
 		{"get_impact", makeGetImpactHandler, map[string]any{"symbol": "Validate", "depth": float64(2)}},
+		{"get_dataflow", makeGetDataflowHandler, map[string]any{"symbol": "Validate", "direction": "both", "depth": float64(2)}},
 		{"get_architecture", makeGetArchitectureHandler, map[string]any{}},
 		{"get_diagram", makeGetDiagramHandler, map[string]any{"layout": "TD"}},
 		{"resolve_ref", makeResolveRefHandler, map[string]any{"token": "mod:./billing", "base_path": fixtureDir}},
