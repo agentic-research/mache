@@ -203,7 +203,7 @@ git commit -m "[mache-76c919] feat(mcp): expose bounded reference flow"
 
 - [ ] **Step 1: Document the ablation**
 
-Run the same `get_dataflow` query with `mache serve --stdio --path .` and `mache serve --stdio --path . --cdc`. Compare result digest/snapshot metadata before comparing latency; a changed graph result is a correctness regression.
+Run the same `get_dataflow` query with `mache serve --stdio --path .` and `mache serve --stdio --path . --cdc`. Compare the deterministic `get_dataflow` result before comparing latency; inspect snapshot generation/root separately through the existing `get_sheaf_status` tool. A changed graph result is a correctness regression.
 
 - [ ] **Step 2: Verify, commit, and publish**
 
