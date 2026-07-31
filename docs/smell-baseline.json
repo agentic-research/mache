@@ -1468,6 +1468,11 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/session.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/tests.rs",
       "count": 1
     },
