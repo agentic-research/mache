@@ -140,6 +140,34 @@ The flag is applied only when Mache starts a managed Leyline daemon. A pre-built
 daemons with Leyline's own `--cdc` flag if CDC is required; a daemon already
 running cannot be reconfigured by Mache.
 
+### CDC ablation
+
+For a semantic CDC ablation, use the same source tree with two **fresh
+Mache-managed** runtime directories (so neither run can reuse a daemon), then
+compare the complete `get_dataflow` response for the same symbol, direction,
+and depth:
+
+```bash
+mache serve --stdio --path .
+mache serve --stdio --cdc --path .
+```
+
+Initialize each stdio session and call `get_overview` before the flow query to
+confirm that rootless `--path .` selected the intended project. `get_dataflow`
+is deterministic: compare its sorted `roots`, `nodes`, `edges`, and
+`truncated` fields, including the `node_ref` evidence label. A graph difference
+is a correctness regression; latency is only a separate measurement. The tool
+does not currently report a timing value or result digest, so a validation
+client may hash the canonical JSON response as an external comparison aid.
+
+Call `get_sheaf_status` separately when a daemon is reachable to inspect its
+generation and cache state. It may honestly return `available: false` for a
+frozen source snapshot or while its short-lived stdio session has no reachable
+managed socket; that result is not evidence of a CDC-on/off graph difference.
+The managed spawn log (or the daemon-argv lifecycle test) is the proof that
+Mache passed `--cdc`; an externally managed or already-running daemon cannot
+be reconfigured or retrospectively classified by this flag.
+
 Mache asks the MCP client for its workspace roots before it starts scanning. `--path`
 provides a safe fallback when a client cannot supply roots; pass one positional source
 only for a snapshot such as `./code.db`.

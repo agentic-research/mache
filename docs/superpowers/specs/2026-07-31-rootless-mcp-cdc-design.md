@@ -32,11 +32,16 @@ LSP-confirmed edge provenance requires a separate Leyline UDS operation; it
 is deliberately outside this Mache-only PR rather than being inferred from
 unavailable data.
 
-The response carries elapsed time and a stable result digest so CDC-off and
-CDC-on runs can be compared without treating a faster query as semantically
-correct by assertion alone. Snapshot generation/root remains available through
-`get_sheaf_status`; adding it to the flow response needs a distinct daemon
-metadata operation.
+The response is deterministic because its roots, nodes, and edges are sorted;
+compare the complete canonical `get_dataflow` JSON for CDC-off and CDC-on runs
+before treating any latency measurement as meaningful. The MCP response does
+not carry elapsed time or a result digest. A validation client may hash the
+canonical response externally, but that hash is test evidence rather than a
+wire contract. Snapshot generation/root remains separate through
+`get_sheaf_status` when a daemon is reachable; adding it to the flow response
+needs a distinct daemon metadata operation. A frozen source snapshot or a
+short-lived stdio session may truthfully report the daemon unavailable, so this
+status must not be mistaken for a CDC behavioral comparison.
 
 ## Tests
 
@@ -47,7 +52,11 @@ metadata operation.
 - Documentation command tests accept the corrected stdio examples.
 - A fixture with a caller and callee proves that `get_dataflow` returns
   bounded `node_ref`-typed edges for a symbol root.
-- CDC-on and CDC-off runs over the same fixture have equal flow digests.
+- CDC-on and CDC-off runs over the same fixture have equal canonical flow
+  responses (or equal externally calculated hashes of those responses).
+- A fresh managed-daemon run logs its argv (or uses the lifecycle argv test)
+  to prove that only the CDC-on invocation receives `--cdc`; existing or
+  external daemons are deliberately outside that proof.
 
 ## Non-goals
 
