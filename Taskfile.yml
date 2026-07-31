@@ -64,6 +64,21 @@ tasks:
         MACHE_VERIFY_BINARY="$BIN_ABS" go test -count=1 -v \
           -skip 'TestPublishedImage|TestDockerCleanHome' ./tests/installverify/
 
+  daemon:verify:
+    desc: |
+      Assert the RUNNING supervised daemon serves the same build as the binary
+      its own supervisor is configured to launch. Diagnostic, not a unit test:
+      it inspects machine state, so it is opt-in rather than part of `task
+      test` — a stale daemon is a machine problem and must not surface as a
+      failure in whatever diff you happen to be working on.
+
+      Skips cleanly when no supervised daemon is listening (any CI runner, and
+      anyone who never ran `mache init --global`). Fix a reported mismatch with
+      `mache daemon restart`.
+    deps: [build]
+    cmds:
+      - MACHE_VERIFY_DAEMON=1 MACHE_VERIFY_BINARY="$PWD/{{.BINARY_NAME}}" go test -count=1 -v -run TestSupervisedDaemonServesTheInstalledBinary ./tests/installverify/
+
   install:verify:docker:
     desc: |
       Clean-HOME half of the install gate — bead mache-19326d's acceptance
