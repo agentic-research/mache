@@ -20,16 +20,23 @@ snapshot. Do not activate CDC for a pre-built database or an external
 
 Leyline already supplies symbol-resolution evidence through `node_refs`,
 `node_defs`, `_lsp_refs`, `_lsp_defs`, and the append-only binding log.
-Mache will expose the missing consumer operation as a function/symbol-centric
-`get_dataflow` MCP tool. It resolves a supplied function, symbol, or
-file-and-line location to an enclosing construct, then returns a bounded
-interprocedural reference/call graph. Every edge records whether it came from
-an AST reference, an LSP binding, or is unresolved. This is inspectable flow
-provenance for an LLM, not a claim of SSA or taint analysis.
+Mache currently consumes only the `node_refs` call/reference projection through
+the daemon's `find_callers` and `find_callees` operations. It will expose that
+missing consumer operation as a function/symbol-centric `get_dataflow` MCP
+tool. It resolves a supplied function or symbol, then returns a bounded
+interprocedural reference/call graph whose edges are explicitly labeled
+`node_ref`. This is inspectable reference-flow evidence for an LLM, not a
+claim of LSP-confirmed binding, SSA, taint analysis, or full data dependence.
 
-The response carries the snapshot generation/root, elapsed time, and a stable
-result digest so CDC-off and CDC-on runs can be compared without treating a
-faster query as semantically correct by assertion alone.
+LSP-confirmed edge provenance requires a separate Leyline UDS operation; it
+is deliberately outside this Mache-only PR rather than being inferred from
+unavailable data.
+
+The response carries elapsed time and a stable result digest so CDC-off and
+CDC-on runs can be compared without treating a faster query as semantically
+correct by assertion alone. Snapshot generation/root remains available through
+`get_sheaf_status`; adding it to the flow response needs a distinct daemon
+metadata operation.
 
 ## Tests
 
@@ -38,10 +45,9 @@ faster query as semantically correct by assertion alone.
 - Serve wiring includes `--cdc` only when requested, and the existing daemon
   lifecycle test exercises the managed child path.
 - Documentation command tests accept the corrected stdio examples.
-- A fixture with a caller, callee, and one resolved binding proves that
-  `get_dataflow` returns bounded, provenance-typed edges for a symbol root.
-- CDC-on and CDC-off runs over the same fixture have equal flow digests; the
-  response reports which snapshot produced each result.
+- A fixture with a caller and callee proves that `get_dataflow` returns
+  bounded `node_ref`-typed edges for a symbol root.
+- CDC-on and CDC-off runs over the same fixture have equal flow digests.
 
 ## Non-goals
 
