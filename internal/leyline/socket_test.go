@@ -951,6 +951,60 @@ func e2eHome(t *testing.T) string {
 	return dir
 }
 
+func TestDiscoverOrStart_CDCAddsDaemonFlag(t *testing.T) {
+	resetManaged(t)
+	t.Cleanup(func() { resetManaged(t) })
+
+	SetDaemonCDC(true)
+	t.Cleanup(func() { SetDaemonCDC(false) })
+
+	home := e2eHome(t)
+	binDir := filepath.Join(home, ".mache", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	argvPath := filepath.Join(home, "daemon.argv")
+	pin := strings.TrimPrefix(leylineBinaryVersion, "v")
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'leyline " + pin + " (open)'; exit 0;; esac\nprintf '%s\\n' \"$@\" > \"$MACHE_TEST_DAEMON_ARGV\"\nPATH=/bin:/usr/bin exec sleep 30\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "leyline"), []byte(fake), 0o755))
+
+	t.Setenv("HOME", home)
+	t.Setenv("LEYLINE_SOCKET", "")
+	t.Setenv("PATH", "/nonexistent-path-for-test")
+	t.Setenv("MACHE_NO_LEYLINE", "1")
+	t.Setenv("MACHE_TEST_DAEMON_ARGV", argvPath)
+
+	// The fake daemon records argv then sleeps. Once its record appears,
+	// provide the socket that DiscoverOrStart waits for.
+	sockPath := filepath.Join(home, ".mache", "default.sock")
+	listenerReady := make(chan error, 1)
+	var ln net.Listener
+	go func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(argvPath); err == nil {
+				var err error
+				ln, err = net.Listen("unix", sockPath)
+				listenerReady <- err
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		listenerReady <- fmt.Errorf("fake daemon did not record argv")
+	}()
+	t.Cleanup(func() {
+		if ln != nil {
+			_ = ln.Close()
+		}
+	})
+
+	_, err := DiscoverOrStart()
+	require.NoError(t, err)
+	require.NoError(t, <-listenerReady)
+
+	argv, err := os.ReadFile(argvPath)
+	require.NoError(t, err)
+	assert.Contains(t, strings.Fields(string(argv)), "--cdc")
+}
+
 // TestDiscoverOrStart_LocalBinFallback_SocketTimeout covers two production
 // branches that the on-PATH happy path skips:
 //

@@ -123,6 +123,23 @@ claude mcp add mache -- mache serve --stdio --path .
 claude mcp add mache -- mache serve --stdio --path . ./code.db
 ```
 
+### Optional: CDC for a Mache-managed Leyline daemon
+
+CDC is **off by default**. To enable it when Mache starts its own Leyline daemon,
+add `--cdc` to the Mache command:
+
+```bash
+claude mcp add mache -- mache serve --stdio --cdc --path .
+# equivalent direct command:
+mache serve --stdio --cdc --path .
+```
+
+The flag is applied only when Mache starts a managed Leyline daemon. A pre-built
+`.db` does not start one, and an externally managed daemon selected with
+`--control` keeps its existing startup arguments. Start those external Leyline
+daemons with Leyline's own `--cdc` flag if CDC is required; a daemon already
+running cannot be reconfigured by Mache.
+
 Mache asks the MCP client for its workspace roots before it starts scanning. `--path`
 provides a safe fallback when a client cannot supply roots; pass one positional source
 only for a snapshot such as `./code.db`.

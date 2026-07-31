@@ -55,6 +55,7 @@ var (
 	servePath    string
 	serveRepo    string
 	serveControl string
+	serveCDC     bool
 	serveMounts  []string
 )
 
@@ -65,12 +66,17 @@ func init() {
 	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
 	serveCmd.Flags().StringVar(&serveRepo, "repo", "", "Git repo URL to clone and serve (ephemeral: cleaned up on exit)")
 	serveCmd.Flags().StringVar(&serveControl, "control", "", "Path to ley-line control block (reads from arena, enables hot-swap)")
+	serveCmd.Flags().BoolVar(&serveCDC, "cdc", false, "Enable CDC in Mache's managed Leyline daemon")
 	serveCmd.Flags().StringArrayVar(&serveMounts, "mount", nil,
 		"Mount a graph at NAME=PATH; repeatable. Each PATH is loaded via the same path-or-.db resolution as the positional source. NAME becomes a top-level virtual directory. Cross-repo find_callers federates across all mounts. Composes with --schema (applied to every mount).")
 	rootCmd.AddCommand(serveCmd)
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	// This affects only a leyline daemon that Mache starts later via
+	// DiscoverOrStart. An existing daemon cannot change its startup args.
+	leyline.SetDaemonCDC(serveCDC)
+
 	// When spawned by the daemon (--control), auto-assign port if --http wasn't
 	// explicitly set. Avoids "address already in use" when port 7532 is taken.
 	if serveControl != "" && !cmd.Flags().Changed("http") {
