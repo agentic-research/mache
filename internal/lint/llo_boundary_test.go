@@ -167,7 +167,6 @@ var lloTestFixtureAllowlist = []string{
 	"cmd/cache_test.go",
 	"cmd/call_extractor_ast_test.go",
 	"cmd/dead_code_skip_list_retreat_test.go",
-	"cmd/duplicate_definitions_rust_test.go",
 	"cmd/falsifiability_lsp_projection_test.go",
 	"cmd/falsifiability_skip_list_ablation_test.go",
 	"cmd/find_smells_cli_test.go",
