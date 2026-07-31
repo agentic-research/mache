@@ -64,15 +64,22 @@ func StartPinnedDaemon(t *testing.T) string {
 	return awaitSocket(t, filepath.Join(dir, "d.sock"))
 }
 
-// pinnedBinaryOrSkip resolves ~/.mache/bin/leyline and verifies it reports
-// the pinned version, skipping the test otherwise.
-func pinnedBinaryOrSkip(t *testing.T) string {
+// PinnedBinaryOrSkip resolves the SHA-pinned leyline binary the same way
+// production does — version-namespaced ~/.mache/bin/leyline-<pin> first, legacy
+// unversioned path only when it happens to hold the pin — and SKIPS the test
+// when none is cached. It never downloads.
+//
+// Resolving the legacy path DIRECTLY (as this did until mache-7555da) made every
+// pinned gate skip unconditionally once the cache became version-namespaced:
+// nothing writes ~/.mache/bin/leyline any more, so on a machine whose legacy
+// file was left behind by an older pin the gate could never fire.
+func PinnedBinaryOrSkip(t *testing.T) string {
 	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("lltest: no home dir, cannot locate pinned leyline: %v", err)
+	bin := leyline.CachedPinnedBinary()
+	if bin == "" {
+		t.Skipf("lltest: no cached leyline matching pin %s (never downloading in tests)",
+			leyline.PinnedBinaryVersion())
 	}
-	bin := filepath.Join(home, ".mache", "bin", "leyline")
 	out, err := exec.Command(bin, "--version").Output()
 	if err != nil {
 		t.Skipf("lltest: pinned leyline not runnable at %s (never downloading in tests): %v", bin, err)
@@ -82,6 +89,12 @@ func pinnedBinaryOrSkip(t *testing.T) string {
 		t.Skipf("lltest: leyline at %s reports %q, want pinned %s — skipping (never downloading in tests)", bin, strings.TrimSpace(string(out)), want)
 	}
 	return bin
+}
+
+// pinnedBinaryOrSkip is the in-package alias kept for the existing call sites.
+func pinnedBinaryOrSkip(t *testing.T) string {
+	t.Helper()
+	return PinnedBinaryOrSkip(t)
 }
 
 // awaitSocket polls until a UDS listener answers at sock or the deadline

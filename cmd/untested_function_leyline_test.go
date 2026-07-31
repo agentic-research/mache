@@ -2,15 +2,12 @@ package cmd
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
 // buildLeylineGoProjectionFixture seeds a leyline-_ast-SHAPED db for the
@@ -32,80 +29,42 @@ import (
 func buildLeylineGoProjectionFixture(t *testing.T) *smellTestGraph {
 	t.Helper()
 
-	dbPath := filepath.Join(t.TempDir(), "leyline_go.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	// Leyline column shape: node_defs carries canonical_kind, node_refs
-	// carries container_node_id — the probes in ensureCanonicalViews
-	// activate the leyline arms only when these columns exist.
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL DEFAULT 0, record_id TEXT, record TEXT,
-			source_file TEXT
-		);
-		CREATE TABLE node_defs (
-			token TEXT, node_id TEXT, source_id TEXT,
-			node_hash BLOB, canonical_kind TEXT,
-			PRIMARY KEY (token, node_id)
-		) WITHOUT ROWID;
-		CREATE TABLE node_refs (
-			token TEXT, node_id TEXT, source_id TEXT,
-			node_hash BLOB, container_node_id TEXT,
-			PRIMARY KEY (token, node_id)
-		) WITHOUT ROWID;
-	`)
-	require.NoError(t, err)
-
-	type def struct{ token, nodeID, sourceFile, kind string }
-	defs := []def{
+	// fixturedb.Leyline is what makes the comment above TRUE rather than
+	// aspirational. The hand-written DDL this replaced described itself as "the
+	// Leyline column shape" while omitting node_refs.qualifier, omitting
+	// node_defs.container_node_id, and ADDING a PRIMARY KEY ... WITHOUT ROWID
+	// that ley-line does not have — so ensureCanonicalViews ran a different
+	// v_refs body here than in production (mache-e3f3bf, mache-7555da).
+	return newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
 		// Uncovered exported Go function — the one expected finding.
-		{"Orphan", "pkg/orphan.go/function_declaration_0", "pkg/orphan.go", "function"},
+		b.Def("Orphan", "pkg/orphan.go/function_declaration_0", fixturedb.Function)
 		// Covered ONLY by a test caller: no TestServed def exists, so
 		// coverage must come from the container_node_id join arm.
-		{"Served", "pkg/served.go/function_declaration_0", "pkg/served.go", "function"},
+		b.Def("Served", "pkg/served.go/function_declaration_0", fixturedb.Function)
 		// The test function that calls Served.
-		{"TestServedEndToEnd", "pkg/served_test.go/function_declaration_0", "pkg/served_test.go", "function"},
+		b.Def("TestServedEndToEnd", "pkg/served_test.go/function_declaration_0", fixturedb.Function)
 		// The non-test caller that refs Orphan (must NOT grant coverage).
-		{"runAll", "pkg/run.go/function_declaration_0", "pkg/run.go", "function"},
+		b.Def("runAll", "pkg/run.go/function_declaration_0", fixturedb.Function)
 		// Rust function: canonical_kind='function' too, but the TestFoo
 		// convention is Go-only — the .go scope must exclude it.
-		{"RustHelper", "src/lib.rs/function_item_0", "src/lib.rs", "function"},
+		b.Def("RustHelper", "src/lib.rs/function_item_0", fixturedb.Function)
 		// testdata corpus: Go by extension, excluded by directory.
-		{"FixtureFn", "testdata/sample.go/function_declaration_0", "testdata/sample.go", "function"},
-		{"NestedFixtureFn", "internal/x/testdata/deep.go/function_declaration_0", "internal/x/testdata/deep.go", "function"},
+		b.Def("FixtureFn", "testdata/sample.go/function_declaration_0", fixturedb.Function)
+		b.Def("NestedFixtureFn", "internal/x/testdata/deep.go/function_declaration_0", fixturedb.Function)
 		// Method: uppercase, uncovered, but canonical_kind='method'.
-		{"Handle", "pkg/recv.go/method_declaration_0", "pkg/recv.go", "method"},
-	}
-	for _, d := range defs {
-		_, err = db.Exec("INSERT INTO node_defs (token, node_id, source_id, canonical_kind) VALUES (?, ?, ?, ?)",
-			d.token, d.nodeID, d.sourceFile, d.kind)
-		require.NoError(t, err)
-		_, err = db.Exec("INSERT INTO nodes (id, parent_id, name, kind, mtime, record, source_file) VALUES (?, '', ?, 1, 0, '', ?)",
-			d.nodeID, d.token, d.sourceFile)
-		require.NoError(t, err)
-	}
+		b.Def("Handle", "pkg/recv.go/method_declaration_0", fixturedb.Method)
 
-	type ref struct{ token, nodeID, container string }
-	refs := []ref{
-		// Served is called from inside TestServedEndToEnd: the ref's own
-		// node_id is the call-site LEAF (never a def node_id, and never
-		// matching the tree-sitter '%/Test%/source' path shapes) — the
-		// caller identity is ONLY recoverable via container_node_id.
-		{"Served", "pkg/served_test.go/function_declaration_0/block/statement_list/expression_statement/call_expression", "pkg/served_test.go/function_declaration_0"},
+		// Served is called from INSIDE TestServedEndToEnd. `from` is the
+		// enclosing test function; `at` is the call-site leaf. On ley-line
+		// those are different columns, and the caller identity is only
+		// recoverable from the first — which is exactly why they are two
+		// parameters now instead of one implicit convention.
+		b.Ref("Served", "pkg/served_test.go/function_declaration_0",
+			"pkg/served_test.go/function_declaration_0/block/statement_list/expression_statement/call_expression", "")
 		// Orphan is called — but from a NON-test function. Must not count.
-		{"Orphan", "pkg/run.go/function_declaration_0/block/statement_list/expression_statement/call_expression", "pkg/run.go/function_declaration_0"},
-	}
-	for _, r := range refs {
-		_, err = db.Exec("INSERT INTO node_refs (token, node_id, source_id, container_node_id) VALUES (?, ?, '', ?)",
-			r.token, r.nodeID, r.container)
-		require.NoError(t, err)
-	}
-
-	return &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
+		b.Ref("Orphan", "pkg/run.go/function_declaration_0",
+			"pkg/run.go/function_declaration_0/block/statement_list/expression_statement/call_expression", "")
+	})
 }
 
 // TestFindSmells_UntestedFunctionLeylineProjection is the leyline parity

@@ -83,3 +83,13 @@ func resolveCachedPinned() string {
 	}
 	return ""
 }
+
+// CachedPinnedBinary returns a cached leyline binary matching this build's pin,
+// or "" when none is cached. It NEVER downloads.
+//
+// Exported for gated tests (internal/lltest, internal/fixturedb), which must
+// resolve the pin the same way production does. Resolving it by hand meant
+// hardcoding the LEGACY unversioned ~/.mache/bin/leyline path — which
+// pinnedCachePath deliberately stopped writing, so those gates skipped
+// unconditionally on any machine that had moved past the legacy file.
+func CachedPinnedBinary() string { return resolveCachedPinned() }
