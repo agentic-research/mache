@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.20.0
-last-verified: 2026-07-28
+covers-version: v0.21.0
+last-verified: 2026-07-31
 sources-of-truth:
   - CHANGELOG.md
   - .beads/
@@ -11,7 +11,7 @@ supersedes: []
 
 # Roadmap
 
-## Current state (as of 2026-07, through v0.20.0)
+## Current state (as of 2026-07, through v0.21.0)
 
 v0.8.0 — the "constellation wave" — ships paired with **ley-line-open v0.2.0**. The wire format between them is now content-addressable: substrate identity is the BLAKE3 `current_root` of the arena payload, not a monotonic generation counter. Old mache reading new arenas (or vice versa) fails loudly with a clear version-mismatch error rather than corrupting reads. See [CHANGELOG.md § v0.8.0](../CHANGELOG.md) for the full break, [ADR-0014](adr/0014-mache-in-constellation.md) for the architectural framing.
 

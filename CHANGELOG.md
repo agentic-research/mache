@@ -6,6 +6,8 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [v0.21.0] — 2026-07-31
+
 ### Added
 
 - **`mache install` / `mache uninstall` — provisioning that ships inside the
@@ -74,6 +76,25 @@ bumps may include breaking changes.
   and image-tag-vs-buildinfo pins. It proves a documented command parses, not
   that it succeeds. (`mache-d55457`, `mache-504adc`)
 
+- **`mache daemon restart` — re-exec the supervised daemon so a new binary is
+  actually served.** Replacing the binary on disk does not restart a supervisor
+  that is already running: it keeps serving the inode it exec'd. Measured right
+  after the v0.20.0 release — the installed binary reported `0.20.0` while the
+  daemon on `localhost:7532` answered `initialize` as `0.19.0-10-g1c3d812`, so
+  every MCP session was served pre-release code (including the P0 construct
+  loss that release fixed) with nothing reporting the skew. Now invoked
+  automatically by both install paths (`mache install` and `task install`), and
+  available on its own for anyone who replaced the binary another way.
+
+  It is **restart-if-running, never start**. `launchctl kickstart` is a start
+  verb — `man launchctl`: "run the specified service immediately, regardless of
+  its configured launch conditions" — and `-k` only adds kill-first when an
+  instance is already up, so the darwin path is gated on the job actually
+  reporting `state = running`. Installing a binary must not conjure a daemon on
+  a machine whose owner never ran `mache init --global`; that decision belongs
+  to `init`. Linux needs no equivalent guard: `systemctl try-restart` is
+  restart-only by contract. (`mache-e418ce`)
+
 ### Fixed
 
 - **Four documented invocations that do not exist.** `examples/README.md`
@@ -92,6 +113,40 @@ bumps may include breaking changes.
   line was already correct — that image (built by `task image` from `apko.yaml`)
   has a bare `mache` entrypoint, and the two must not be conflated.
   (`mache-504adc`)
+
+- **`.mcp.json` registered the transport the README says never to register.**
+  The checked-in Claude Code template at the repo root declared
+  `"type": "stdio"` with `args: ["serve", "--stdio", "."]`, while README.md
+  states — citing ADR-0022 — that HTTP is canonical and `--stdio` "is never
+  registered for editor use". `.mcp.json` **is** an editor registration, so the
+  one artifact a new user consumes contradicted the guidance three lines into
+  the README. It predates the transport canonicalization (`mache-60dc86`) and
+  was never updated. The replacement is not hand-authored: it is byte-identical
+  to what `mache init` itself writes via `httpServerEntry()`, so the template
+  and the generated registration now agree by construction. `mache serve --stdio` remains supported for CI and sandbox use.
+
+- **`task build` skipped rebuilds after a rebase, then told you to run it.**
+  The build injects `GIT_COMMIT`/`GIT_VERSION` through ldflags — real build
+  inputs that no `sources:` pattern can express, since a rebase or
+  `commit --amend` changes the embedded stamp while every listed file stays
+  byte-identical. Task reported "up to date" and left a binary stamped with a
+  commit the tree could no longer reach, which `install:verify` then correctly
+  diagnosed while prescribing `task build` — a no-op in exactly that situation.
+  Now gated on a `status:` check comparing the binary's embedded commit to
+  HEAD. Same class as `mache-46af85` (go:embed assets missing from `sources:`),
+  one input further out: there the input was a file, here it is the git
+  position itself.
+
+- **The sheaf e2e tests leaked a daemon per run.** `leyline daemon` spawns
+  `mache serve --control` as a child, and the tests signalled only the direct
+  process, orphaning the grandchild — 84 had accumulated on one machine (~1.1 GB
+  resident) and each `go test -run Sheaf` added two more. They share
+  `~/.mache/default.arena`, a documented source of smell-count jitter, so a
+  leaked daemon silently perturbs later gate results. Fixed with the existing
+  `setProcessGroup`/`signalProcessGroup` seam, and the structural gate that was
+  written for this class (`mache-823d91`) now scans the package's test files
+  rather than `socket.go` alone — it had been unable to see the sites where the
+  leak actually recurred. (`mache-e797ce`)
 
 ## [v0.20.0] — 2026-07-30
 
