@@ -2,13 +2,11 @@ package cmd
 
 import (
 	"database/sql"
-	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	_ "modernc.org/sqlite"
 )
 
 // v_test_nodes detects Rust test code STRUCTURALLY: Rust states test-ness in an
@@ -30,32 +28,21 @@ import (
 // ATTRIBUTE and silently miss the module — which is why the query filters to
 // function_item/mod_item when finding the target.
 
-type testNodeFixtureRow struct {
-	nodeID string
-	kind   string
-	sb, eb int
-	token  string // non-empty only for identifier rows
-}
-
-// buildTestNodesFixture writes an _ast + node_content pair shaped like leyline
-// parse output. Byte ranges are what encode both containment and the
-// attribute→item association, so they are chosen to be unambiguous.
+// buildTestNodesFixture writes an `_ast` + `node_content` pair shaped like
+// ley-line parse output — with fixturedb.Leyline saying so, rather than a
+// hand-written CREATE TABLE implying it. Byte ranges encode both containment
+// and the attribute→item association, so they are chosen to be unambiguous.
 func buildTestNodesFixture(t *testing.T) *sql.DB {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "tn.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	db.SetMaxOpenConns(1) // TEMP tables are per-connection
-	t.Cleanup(func() { _ = db.Close() })
 
-	_, err = db.Exec(`
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL,
-			start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, node_hash BLOB);
-		CREATE TABLE node_content (node_hash BLOB PRIMARY KEY, token TEXT);`)
-	require.NoError(t, err)
-
-	rows := []testNodeFixtureRow{
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("f.rs", "rust", "")
+	for _, r := range []struct {
+		nodeID string
+		kind   string
+		sb, eb int
+		token  string // non-empty only for identifier rows
+	}{
 		// a production function — must stay unmarked
 		{"f/prod_fn", "function_item", 0, 50, ""},
 
@@ -79,23 +66,12 @@ func buildTestNodesFixture(t *testing.T) *sql.DB {
 		{"f/attr4/id", "identifier", 327, 332, "allow"},
 		{"f/mod_stacked", "mod_item", 350, 450, ""},
 		{"f/mod_stacked/s_fn", "function_item", 380, 430, ""},
+	} {
+		b.ASTNode(r.nodeID, r.kind, "f.rs", fixturedb.Bytes(r.sb, r.eb),
+			fixturedb.Detail{Token: r.token})
 	}
-	for i, r := range rows {
-		var hash any
-		if r.token != "" {
-			h := []byte{byte(i + 1)}
-			hash = h
-			_, err = db.Exec(`INSERT OR IGNORE INTO node_content(node_hash, token) VALUES (?, ?)`, h, r.token)
-			require.NoError(t, err)
-		}
-		_, err = db.Exec(`INSERT INTO _ast(node_id, source_id, node_kind, start_byte, end_byte, node_hash)
-			VALUES (?, 'f.rs', ?, ?, ?, ?)`, r.nodeID, r.kind, r.sb, r.eb, hash)
-		require.NoError(t, err)
-	}
-
-	_, err = db.Exec("CREATE TEMP TABLE v_test_nodes AS " + testNodesViewSQL(true))
-	require.NoError(t, err)
-	return db
+	_, f := b.Build()
+	return f.DB()
 }
 
 func markedTestNodes(t *testing.T, db *sql.DB) map[string]bool {
@@ -156,14 +132,13 @@ func TestTestNodesView_DoesNotMarkTheAttributeNodes(t *testing.T) {
 // must yield an empty set rather than an error, so every rule's SQL stays
 // identical across backends instead of branching.
 func TestTestNodesView_EmptyWithoutAST(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "noast.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	db.SetMaxOpenConns(1)
-	defer func() { _ = db.Close() }()
-
-	_, err = db.Exec("CREATE TEMP TABLE v_test_nodes AS " + testNodesViewSQL(false))
-	require.NoError(t, err, "the no-AST form must be valid SQL on a db with no _ast at all")
+	// "a projection with no _ast" is not a shape to be hand-typed: it is what
+	// fixturedb.Standalone IS, and Build installs the degraded v_test_nodes
+	// through the real ensureCanonicalViews rather than a test-local CREATE.
+	_, f := fixturedb.New(t, fixturedb.Standalone).
+		Def("Run", "pkg/functions/Run", fixturedb.Function).
+		Build()
+	db := f.DB()
 
 	var n int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_test_nodes`).Scan(&n))
