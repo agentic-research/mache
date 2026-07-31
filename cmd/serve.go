@@ -73,10 +73,6 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	// This affects only a leyline daemon that Mache starts later via
-	// DiscoverOrStart. An existing daemon cannot change its startup args.
-	leyline.SetDaemonCDC(serveCDC)
-
 	// When spawned by the daemon (--control), auto-assign port if --http wasn't
 	// explicitly set. Avoids "address already in use" when port 7532 is taken.
 	if serveControl != "" && !cmd.Flags().Changed("http") {
@@ -137,14 +133,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		log.Printf("find_smells: external rules dir = %s (rescanned per request)", registry.smellRulesDir)
 	}
 
-	// Configure the leyline daemon's --source so live LSP/embed enrichment
-	// (get_type_info / get_diagnostics with file=) can run: op_enrich
-	// requires the daemon to know the source tree (mache-303036). Only set
-	// when serving a source directory; a pre-baked .db carries its own
-	// _lsp* tables and needs no live enrichment.
-	if src := servedSourceDir(args, servePath, serveRepo != ""); src != "" {
-		leyline.SetDaemonSource(src)
+	// Configure managed Leyline startup only after the served input is known.
+	// An explicit --path with no positional input is itself the source tree;
+	// a positional .db always wins and must never inherit CDC from --path.
+	baseIsSource := serveRepo != "" || cmd.Flags().Changed("path")
+	if len(serveMounts) > 0 {
+		baseIsSource = false
 	}
+	configureManagedLeylineRuntime(args, servePath, baseIsSource, serveControl != "", serveCDC)
 
 	// Startup wire-compat handshake (mache-8kif): if a leyline daemon is
 	// already reachable, refuse to serve on a structural wire-format mismatch
@@ -762,26 +758,36 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 	}, nil
 }
 
-// servedSourceDir returns the absolute source-tree directory mache is
-// serving, for configuring the leyline daemon's --source. It prefers a
-// positional argument that is an existing directory; for --repo mode (no
-// positional source) the clone at basePath is the tree. Returns "" when
-// serving a pre-baked .db — there's no live source to enrich, and the .db
-// carries its own _lsp* tables.
-func servedSourceDir(args []string, basePath string, repoMode bool) string {
-	for _, a := range args {
+// servedSourceDir returns the absolute source-tree directory Mache is
+// serving. A positional input is authoritative: a positional prebuilt .db
+// returns "" even when basePath names a directory. With no positional input,
+// baseIsSource identifies an explicit --path or an ephemeral --repo clone.
+func servedSourceDir(args []string, basePath string, baseIsSource bool) string {
+	if len(args) > 0 {
+		a := args[0]
 		if fi, err := os.Stat(a); err == nil && fi.IsDir() {
 			if abs, err := filepath.Abs(a); err == nil {
 				return abs
 			}
 		}
+		return ""
 	}
-	if repoMode {
+	if baseIsSource {
 		if abs, err := filepath.Abs(basePath); err == nil {
 			return abs
 		}
 	}
 	return ""
+}
+
+// configureManagedLeylineRuntime clears prior process configuration and then
+// enables CDC only for a source-backed runtime whose daemon Mache owns. A
+// prebuilt database can still use read-only daemon operations on demand, but
+// --cdc never changes the startup argv of a daemon reached from that graph.
+func configureManagedLeylineRuntime(args []string, basePath string, baseIsSource, externalDaemon, cdcRequested bool) {
+	sourceDir := servedSourceDir(args, basePath, baseIsSource)
+	leyline.SetDaemonSource(sourceDir)
+	leyline.SetDaemonCDC(sourceDir != "" && !externalDaemon && cdcRequested)
 }
 
 // autoInvokeLeylineParse runs `leyline parse <sourceDir> -o <tmpdb>` and

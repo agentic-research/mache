@@ -1268,6 +1268,48 @@ func TestGetDataflow_BuildsBoundedNodeRefEdges(t *testing.T) {
 	}`, resultText(t, result))
 }
 
+func TestGetDataflow_TraversesProductionSourceFileCallerRefs(t *testing.T) {
+	store := graph.NewMemoryStore()
+	for _, id := range []string{"flow/Root", "flow/Middle", "flow/Outer", "flow/Leaf"} {
+		store.AddNode(&graph.Node{
+			ID:       id,
+			Mode:     fs.ModeDir,
+			Children: []string{id + "/source"},
+		})
+		store.AddNode(&graph.Node{ID: id + "/source", Data: []byte("source")})
+	}
+	require.NoError(t, store.AddDef("Root", "flow/Root"))
+	g := &dataflowGraph{
+		MemoryStore: store,
+		callers: map[string][]*graph.Node{
+			"Root":   {{ID: "flow/Middle/source"}},
+			"Middle": {{ID: "flow/Outer/source"}},
+		},
+		callees: map[string][]*graph.Node{
+			"flow/Middle": {{ID: "flow/Leaf"}},
+		},
+	}
+
+	result, err := makeGetDataflowHandler(g)(context.Background(),
+		makeRequest(map[string]any{"symbol": "Root", "direction": "both", "depth": 2}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var flow dataflowResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	assert.Equal(t, []dataflowNode{
+		{Path: "flow/Leaf", Depth: 2},
+		{Path: "flow/Middle", Depth: 1},
+		{Path: "flow/Outer", Depth: 2},
+		{Path: "flow/Root", Depth: 0},
+	}, flow.Nodes)
+	assert.Equal(t, []dataflowEdge{
+		{From: "flow/Middle", To: "flow/Leaf", Direction: "callee", Evidence: "node_ref"},
+		{From: "flow/Middle", To: "flow/Root", Direction: "caller", Evidence: "node_ref"},
+		{From: "flow/Outer", To: "flow/Middle", Direction: "caller", Evidence: "node_ref"},
+	}, flow.Edges)
+}
+
 func TestGetDataflow_UsesSingleFiveHundredItemBudget(t *testing.T) {
 	store := graph.NewMemoryStore()
 	store.AddNode(&graph.Node{ID: "flow/Root", Mode: fs.ModeDir})

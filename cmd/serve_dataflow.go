@@ -127,7 +127,7 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("get callers for %q: %v", entry.id, err)), nil
 				}
-				ids := sortedDataflowNodeIDs(callers)
+				ids := sortedDataflowCallerIDs(g, callers)
 				for _, id := range ids {
 					edge := dataflowEdge{From: id, To: entry.id, Direction: "caller", Evidence: "node_ref"}
 					identity := dataflowEdgeIdentity{From: edge.From, To: edge.To, Evidence: edge.Evidence}
@@ -252,6 +252,28 @@ func sortedDataflowNodeIDs(nodes []*graph.Node) []string {
 		if node != nil && node.ID != "" {
 			ids = append(ids, node.ID)
 		}
+	}
+	return sortedUniqueStrings(ids)
+}
+
+// sortedDataflowCallerIDs converts the production node_refs call-site shape
+// (a construct's non-directory "source" child) back to the construct ID that
+// Graph.GetCallers/GetCallees can traverse. Older and synthetic backends may
+// already return construct directories, which remain unchanged.
+func sortedDataflowCallerIDs(g graph.Graph, nodes []*graph.Node) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node == nil || node.ID == "" {
+			continue
+		}
+		id := node.ID
+		if !node.Mode.IsDir() && filepath.Base(id) == "source" {
+			parentID := filepath.Dir(id)
+			if parent, err := g.GetNode(parentID); err == nil && parent.Mode.IsDir() {
+				id = parentID
+			}
+		}
+		ids = append(ids, id)
 	}
 	return sortedUniqueStrings(ids)
 }

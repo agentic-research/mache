@@ -10,13 +10,19 @@ this preserves the documented `mache serve --stdio .` invocation and keeps
 the shared daemon safe.
 
 Documentation will prefer `mache serve --stdio --path .` because it makes the
-fallback unambiguous. It will state that a Roots failure occurs before any
-repository scan, so it is not evidence that a monorepo is too large.
+fallback unambiguous and associates that explicit path with a managed daemon's
+`--source`. A positional pre-built database remains authoritative even when
+`--path` is present. Documentation will state that a Roots failure occurs
+before any repository scan, so it is not evidence that a monorepo is too
+large.
 
 CDC remains opt-in. Add `mache serve --cdc` and pass it to Mache's managed
-Leyline daemon, which activates CDC before it publishes the first arena
-snapshot. Do not activate CDC for a pre-built database or an external
-`serve --control` daemon: those lifecycles belong to their operators.
+Leyline daemon only when the selected graph is source-backed, which activates
+CDC before it publishes the first arena snapshot. Do not activate CDC for a
+pre-built database or an external `serve --control` daemon: those lifecycles
+belong to their operators. A pre-built database may still cause an on-demand
+daemon launch, but that launch receives neither the database as `--source` nor
+Mache's `--cdc` request.
 
 Leyline already supplies symbol-resolution evidence through `node_refs`,
 `node_defs`, `_lsp_refs`, `_lsp_defs`, and the append-only binding log.
@@ -27,21 +33,24 @@ tool. It resolves a supplied function or symbol, then returns a bounded
 interprocedural reference/call graph whose edges are explicitly labeled
 `node_ref`. This is inspectable reference-flow evidence for an LLM, not a
 claim of LSP-confirmed binding, SSA, taint analysis, or full data dependence.
+Production `node_refs` identify a caller through its non-directory `source`
+child. For traversal and construct-level output, Mache maps that shape to its
+parent only when the parent resolves as a graph directory; backends that
+already return construct IDs remain unchanged.
 
 LSP-confirmed edge provenance requires a separate Leyline UDS operation; it
 is deliberately outside this Mache-only PR rather than being inferred from
 unavailable data.
 
-The response is deterministic because its roots, nodes, and edges are sorted;
-compare the complete canonical `get_dataflow` JSON for CDC-off and CDC-on runs
-before treating any latency measurement as meaningful. The MCP response does
-not carry elapsed time or a result digest. A validation client may hash the
-canonical response externally, but that hash is test evidence rather than a
-wire contract. Snapshot generation/root remains separate through
-`get_sheaf_status` when a daemon is reachable; adding it to the flow response
-needs a distinct daemon metadata operation. A frozen source snapshot or a
-short-lived stdio session may truthfully report the daemon unavailable, so this
-status must not be mistaken for a CDC behavioral comparison.
+The response is deterministic because its roots, nodes, and edges are sorted,
+but it is not a CDC comparison surface. A source-backed serve auto-parses a
+frozen temporary SQLite graph, and `get_dataflow` reads that graph rather than
+the managed daemon arena. Equality between CDC-off and CDC-on flow responses
+therefore does not validate CDC. Snapshot generation/root remains separate
+through `get_sheaf_status` when a daemon is reachable, but current cache state
+is also not a controlled CDC contrast. Mache can validate only the managed
+launch boundary (`--source` in both isolated runs and `--cdc` in the opted-in
+run); semantic CDC output must be evaluated through Leyline's own command/API.
 
 ## Tests
 
@@ -52,11 +61,10 @@ status must not be mistaken for a CDC behavioral comparison.
 - Documentation command tests accept the corrected stdio examples.
 - A fixture with a caller and callee proves that `get_dataflow` returns
   bounded `node_ref`-typed edges for a symbol root.
-- CDC-on and CDC-off runs over the same fixture have equal canonical flow
-  responses (or equal externally calculated hashes of those responses).
 - A fresh managed-daemon run logs its argv (or uses the lifecycle argv test)
-  to prove that only the CDC-on invocation receives `--cdc`; existing or
-  external daemons are deliberately outside that proof.
+  to prove that both source-backed invocations receive `--source` and only the
+  CDC-on invocation receives `--cdc`; a positional database and external
+  daemon never opt into that flag.
 
 ## Non-goals
 

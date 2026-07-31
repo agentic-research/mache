@@ -134,18 +134,19 @@ claude mcp add mache -- mache serve --stdio --cdc --path .
 mache serve --stdio --cdc --path .
 ```
 
-The flag is applied only when Mache starts a managed Leyline daemon. A pre-built
-`.db` does not start one, and an externally managed daemon selected with
-`--control` keeps its existing startup arguments. Start those external Leyline
-daemons with Leyline's own `--cdc` flag if CDC is required; a daemon already
-running cannot be reconfigured by Mache.
+The flag is forwarded only for a source-backed runtime when Mache starts the
+Leyline daemon. A pre-built `.db` can still reach or start a daemon for an
+on-demand operation such as embedding, but its daemon launch never receives
+`--cdc`. An externally managed daemon selected with `--control` likewise keeps
+its operator-provided startup arguments. Start that daemon with Leyline's own
+`--cdc` flag if CDC is required; a daemon already running cannot be
+reconfigured by Mache.
 
-### CDC ablation
+### Validate the CDC launch boundary
 
-For a semantic CDC ablation, use the same source tree with two **fresh
-Mache-managed** runtime directories (so neither run can reuse a daemon), then
-compare the complete `get_dataflow` response for the same symbol, direction,
-and depth:
+The current Mache integration can validate CDC-off/on daemon startup, but it
+does **not** provide a semantic CDC ablation. From the source tree, use two
+fresh Mache runtime directories so neither run can reuse a daemon:
 
 ```bash
 cdc_off_home=$(mktemp -d)
@@ -156,24 +157,24 @@ HOME="$cdc_on_home" mache serve --stdio --cdc --path .
 ```
 
 Each assignment gives that invocation its own Mache runtime under
-`$HOME/.mache`; do not reuse either directory for the other run. Run the
-commands sequentially (each stdio session ends before starting the next one).
+`$HOME/.mache`; do not reuse either directory for the other run. `--path .`
+both selects the rootless graph fallback and associates that directory with
+the managed daemon as its `--source`. Initialize each stdio session and call a
+graph tool such as `get_overview` to trigger lazy graph access. The managed
+spawn log must contain the same `--source` in both runs and `--cdc` only in the
+second run. The daemon-argv lifecycle tests pin the same boundary.
 
-Initialize each stdio session and call `get_overview` before the flow query to
-confirm that rootless `--path .` selected the intended project. `get_dataflow`
-is deterministic: compare its sorted `roots`, `nodes`, `edges`, and
-`truncated` fields, including the `node_ref` evidence label. A graph difference
-is a correctness regression; latency is only a separate measurement. The tool
-does not currently report a timing value or result digest, so a validation
-client may hash the canonical JSON response as an external comparison aid.
+Do not compare `get_dataflow` and call that a CDC ablation. For a directory
+source, Mache auto-parses a frozen temporary SQLite graph; `get_dataflow` reads
+that graph's `node_refs` reference projection, not the managed daemon arena.
+Equal responses therefore say nothing about CDC behavior. Likewise,
+`get_sheaf_status` reports the reachable daemon's current cache state, not a
+controlled CDC-off/on semantic difference.
 
-Call `get_sheaf_status` separately when a daemon is reachable to inspect its
-generation and cache state. It may honestly return `available: false` for a
-frozen source snapshot or while its short-lived stdio session has no reachable
-managed socket; that result is not evidence of a CDC-on/off graph difference.
-The managed spawn log (or the daemon-argv lifecycle test) is the proof that
-Mache passed `--cdc`; an externally managed or already-running daemon cannot
-be reconfigured or retrospectively classified by this flag.
+For Leyline's database-level CDC workflow, invoke the pinned binary directly,
+for example `mache leyline exec -- cdc enable --db ./code.db`, and use the
+Leyline command/API for the CDC output being evaluated. Mache currently has no
+CDC-derived result endpoint to compare.
 
 Mache asks the MCP client for its workspace roots before it starts scanning. `--path`
 provides a safe fallback when a client cannot supply roots; pass one positional source
