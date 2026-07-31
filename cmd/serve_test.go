@@ -1211,6 +1211,130 @@ func TestGetDiagnostics_RejectsNonRefsQuerierBackend(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// get_dataflow handler tests
+// ---------------------------------------------------------------------------
+
+func TestGetDataflow_BuildsBoundedNodeRefEdges(t *testing.T) {
+	store := buildTestGraph(t)
+	store.AddNode(&graph.Node{
+		ID:       "pkg/util/Callee",
+		Mode:     fs.ModeDir,
+		Children: []string{"pkg/util/Callee/source"},
+	})
+	store.AddNode(&graph.Node{ID: "pkg/util/Callee/source", Data: []byte("func Callee() {}")})
+	require.NoError(t, store.AddDef("Callee", "pkg/util/Callee"))
+	require.NoError(t, store.AddRef("Callee", "pkg/util/helper/source"))
+
+	result, err := makeGetDataflowHandler(store)(context.Background(),
+		makeRequest(map[string]any{"symbol": "Helper", "direction": "callees", "depth": 2}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.JSONEq(t, `{
+		"symbol":"Helper",
+		"roots":["pkg/util/helper"],
+		"nodes":[
+			{"path":"pkg/util/Callee","depth":1},
+			{"path":"pkg/util/helper","depth":0}
+		],
+		"edges":[{
+			"from":"pkg/util/helper",
+			"to":"pkg/util/Callee",
+			"direction":"callee",
+			"evidence":"node_ref"
+		}],
+		"truncated":false
+	}`, resultText(t, result))
+}
+
+func TestGetDataflow_CapsSortedNodesAtFiveHundred(t *testing.T) {
+	store := graph.NewMemoryStore()
+	store.AddNode(&graph.Node{ID: "flow/Root", Mode: fs.ModeDir})
+	require.NoError(t, store.AddDef("Root", "flow/Root"))
+	for i := 500; i >= 0; i-- {
+		id := fmt.Sprintf("flow/caller-%03d", i)
+		store.AddNode(&graph.Node{ID: id, Mode: fs.ModeDir})
+		require.NoError(t, store.AddRef("Root", id))
+	}
+
+	result, err := makeGetDataflowHandler(store)(context.Background(),
+		makeRequest(map[string]any{"symbol": "Root", "direction": "callers", "depth": 1}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var flow dataflowResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	assert.Len(t, flow.Nodes, maxDataflowNodes)
+	assert.Len(t, flow.Edges, maxDataflowNodes-1)
+	assert.True(t, flow.Truncated)
+	assert.Equal(t, dataflowNode{Path: "flow/Root", Depth: 0}, flow.Nodes[0])
+	assert.Equal(t, dataflowNode{Path: "flow/caller-000", Depth: 1}, flow.Nodes[1])
+	assert.Equal(t, dataflowNode{Path: "flow/caller-498", Depth: 1}, flow.Nodes[len(flow.Nodes)-1])
+}
+
+func TestGetDataflow_CapsDenseEdgeOutputAtFiveHundred(t *testing.T) {
+	store := graph.NewMemoryStore()
+	store.AddNode(&graph.Node{ID: "flow/Root", Mode: fs.ModeDir})
+	require.NoError(t, store.AddDef("Root", "flow/Root"))
+	for i := 0; i < maxDataflowNodes-1; i++ {
+		id := fmt.Sprintf("flow/caller-%03d", i)
+		store.AddNode(&graph.Node{ID: id, Mode: fs.ModeDir})
+		require.NoError(t, store.AddRef("Root", id))
+		require.NoError(t, store.AddRef("caller-000", id))
+	}
+	require.NoError(t, store.AddRef("caller-000", "flow/Root"))
+
+	result, err := makeGetDataflowHandler(store)(context.Background(),
+		makeRequest(map[string]any{"symbol": "Root", "direction": "callers", "depth": 2}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var flow dataflowResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	assert.LessOrEqual(t, len(flow.Edges), maxDataflowNodes)
+	assert.True(t, flow.Truncated)
+}
+
+func TestGetDataflow_SortsRootsAndEdges(t *testing.T) {
+	store := graph.NewMemoryStore()
+	for _, id := range []string{"flow/Zed", "flow/Alpha", "flow/caller-z", "flow/caller-a"} {
+		store.AddNode(&graph.Node{ID: id, Mode: fs.ModeDir})
+	}
+	require.NoError(t, store.AddDef("Thing", "flow/Zed"))
+	require.NoError(t, store.AddDef("Thing", "flow/Alpha"))
+	require.NoError(t, store.AddRef("Zed", "flow/caller-z"))
+	require.NoError(t, store.AddRef("Alpha", "flow/caller-a"))
+
+	result, err := makeGetDataflowHandler(store)(context.Background(),
+		makeRequest(map[string]any{"symbol": "Thing", "direction": "callers", "depth": 1}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	var flow dataflowResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	assert.Equal(t, []string{"flow/Alpha", "flow/Zed"}, flow.Roots)
+	assert.Equal(t, []dataflowEdge{
+		{From: "flow/caller-a", To: "flow/Alpha", Direction: "caller", Evidence: "node_ref"},
+		{From: "flow/caller-z", To: "flow/Zed", Direction: "caller", Evidence: "node_ref"},
+	}, flow.Edges)
+}
+
+func TestGetDataflow_ValidatesRequiredArguments(t *testing.T) {
+	handler := makeGetDataflowHandler(buildTestGraph(t))
+
+	missing, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	assert.True(t, missing.IsError)
+	assert.Contains(t, resultText(t, missing), "symbol is required")
+
+	invalid, err := handler(context.Background(), makeRequest(map[string]any{
+		"symbol": "Helper", "direction": "sideways",
+	}))
+	require.NoError(t, err)
+	assert.True(t, invalid.IsError)
+	assert.Contains(t, resultText(t, invalid), "direction")
+}
+
+// ---------------------------------------------------------------------------
 // get_impact handler tests
 // ---------------------------------------------------------------------------
 

@@ -29,7 +29,7 @@ For the full first-run flow — source choice (directory vs `.db` vs live hot-sw
 
 ## Code intelligence: what it gives an agent
 
-The code projection is where the engine is deepest. **18 MCP tools** wrap the projected graph — 17 read-surface plus `write_file`.
+The code projection is where the engine is deepest. **19 MCP tools** wrap the projected graph — 18 read-surface plus `write_file`.
 
 | What you get                                | Tools                                                                     | Tier         | Status                                                |
 | ------------------------------------------- | ------------------------------------------------------------------------- | ------------ | ----------------------------------------------------- |
@@ -37,7 +37,7 @@ The code projection is where the engine is deepest. **18 MCP tools** wrap the pr
 | **Orient** in an unfamiliar repo            | `get_overview`, `get_architecture`, `get_diagram`                         | base         | Stable                                                |
 | **Cluster** related code                    | `get_communities`                                                         | base         | *Beta* — Louvain                                      |
 | **Navigate** by structure, not string match | `find_definition`, `list_directory`, `read_file`, `resolve_ref`, `search` | base         | Stable                                                |
-| **Trace** the call graph, both directions   | `find_callers`, `find_callees`, `get_impact`                              | base         | Stable — `find_callees` on serve fixed in v0.18.0     |
+| **Trace** reference flow, both directions   | `find_callers`, `find_callees`, `get_impact`, `get_dataflow`              | base         | Stable — edges are explicitly `node_ref` evidence     |
 | **Judge** structural quality                | `find_smells` — 14 rules                                                  | base¹        | Stable — `fan_out_skew` is qualifier-aware            |
 | **Edit** without breaking the file          | `write_file` — validate → format → splice, draft mode on reject           | base         | Stable                                                |
 | **Types + diagnostics** from a real LSP     | `get_type_info`, `get_diagnostics`                                        | + LSP pass   | Stable, optional tier                                 |
