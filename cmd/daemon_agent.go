@@ -36,6 +36,115 @@ var runSupervisorCmd = func(name string, args ...string) error {
 	return exec.Command(name, args...).Run()
 }
 
+// querySupervisorCmd is the read-side seam: it returns a supervisor query's
+// STDOUT so callers can inspect job state, not merely whether the command
+// exited 0. Separate from runSupervisorCmd because the two have different
+// contracts — one acts, one observes — and tests stub them independently.
+var querySupervisorCmd = func(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).Output()
+	return string(out), err
+}
+
+// supervisorJob is what the platform supervisor reports about the mache
+// daemon: the program it is configured to launch, and whether an instance is
+// currently running.
+//
+// Read from the SUPERVISOR rather than by parsing its config file. `launchctl
+// print` emits `program = <path>` already decoded, so a path containing a
+// space, `&`, or a quote round-trips correctly — whereas re-reading the plist
+// requires reversing xmlText's escaping (and the systemd unit requires
+// reversing systemdQuote), which is a second encoder that can drift from the
+// first. The supervisor is the authority on its own state; asking it removes
+// the drift rather than mirroring it.
+type supervisorJob struct {
+	Program string
+	Running bool
+	Loaded  bool
+}
+
+// querySupervisorJob reports the daemon job's state. Loaded=false means the
+// user never ran `mache init --global` (or booted it out) — the benign common
+// case, not an error.
+func querySupervisorJob() supervisorJob {
+	switch runtime.GOOS {
+	case "darwin":
+		launchctl, err := exec.LookPath("launchctl")
+		if err != nil {
+			return supervisorJob{}
+		}
+		out, err := querySupervisorCmd(launchctl, "print",
+			fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel))
+		if err != nil {
+			return supervisorJob{} // not loaded
+		}
+		return parseLaunchctlPrint(out)
+	case "linux":
+		systemctl, err := exec.LookPath("systemctl")
+		if err != nil {
+			return supervisorJob{}
+		}
+		out, err := querySupervisorCmd(systemctl, "--user", "show", "mache.service",
+			"--property=ExecStart", "--property=ActiveState", "--property=LoadState")
+		if err != nil {
+			return supervisorJob{}
+		}
+		return parseSystemctlShow(out)
+	}
+	return supervisorJob{}
+}
+
+// parseLaunchctlPrint reads `state = running` and `program = <path>` out of
+// launchctl print's indented key = value output. Structural: it splits on the
+// first " = " of a trimmed line rather than pattern-matching the whole block.
+func parseLaunchctlPrint(out string) supervisorJob {
+	job := supervisorJob{Loaded: true}
+	for _, line := range strings.Split(out, "\n") {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), " = ")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "program":
+			if job.Program == "" {
+				job.Program = val
+			}
+		case "state":
+			// The job's own state line comes before the nested per-service
+			// ones; take the first and ignore the rest.
+			if val == "running" {
+				job.Running = true
+			}
+		}
+	}
+	return job
+}
+
+// parseSystemctlShow reads systemctl's KEY=VALUE property output. ExecStart is
+// a structured record whose `path=` field carries the binary, already
+// unquoted by systemd.
+func parseSystemctlShow(out string) supervisorJob {
+	var job supervisorJob
+	for _, line := range strings.Split(out, "\n") {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "LoadState":
+			job.Loaded = val == "loaded"
+		case "ActiveState":
+			job.Running = val == "active" || val == "activating"
+		case "ExecStart":
+			// `{ path=/usr/bin/mache ; argv[]=... }`
+			if _, rest, found := strings.Cut(val, "path="); found {
+				pathVal, _, _ := strings.Cut(rest, " ")
+				job.Program = strings.TrimSpace(strings.TrimSuffix(pathVal, ";"))
+			}
+		}
+	}
+	return job
+}
+
 // logf writes a progress line, discarding the write error (best-effort output).
 func logf(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 
@@ -240,10 +349,29 @@ func restartDaemonAgent(w io.Writer) {
 		if err != nil {
 			return // no supervisor tooling; nothing was running under it
 		}
+		// `launchctl kickstart` is a START verb — man launchctl: "Instructs
+		// launchd to run the specified service immediately, REGARDLESS OF ITS
+		// CONFIGURED LAUNCH CONDITIONS"; -k only adds kill-first when an
+		// instance is already up. So kickstart alone does not implement
+		// restart-if-running: a job that is loaded but IDLE gets started.
+		//
+		// That state is reachable for mache, not hypothetical. The plist sets
+		// KeepAlive{SuccessfulExit:false} and `mache serve` exits 0 on SIGTERM,
+		// so `launchctl stop com.agentic-research.mache` leaves the job loaded
+		// and not running. Without this guard, the next `task install` would
+		// resurrect a daemon the user had deliberately stopped — and announce
+		// that it had merely restarted it.
+		//
+		// Linux needs no equivalent guard: systemctl try-restart is documented
+		// as restart-only-if-running.
+		if job := querySupervisorJob(); !job.Running {
+			// Not loaded, or loaded-and-idle. Either way there is no running
+			// daemon serving a stale binary, which is the only thing this
+			// exists to fix. Starting one is `mache init --global`'s decision.
+			return
+		}
 		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
 		if err := runSupervisorCmd(launchctl, "kickstart", "-k", target); err != nil {
-			// Not loaded is the common, benign case: the user never ran
-			// `mache init --global`. Do not present that as a problem.
 			return
 		}
 		logf(w, "restarted the supervised daemon (%s) so it serves the new binary\n", launchAgentLabel)
