@@ -174,7 +174,6 @@ var lloTestFixtureAllowlist = []string{
 	"cmd/find_smells_duplicate_code_test.go",
 	"cmd/kind_discriminator_leyline_ast_test.go",
 	"cmd/leyline_callees_test.go",
-	"cmd/leyline_crosslang_smells_test.go",
 	"cmd/leyline_test.go",
 	"cmd/serve_find_smells_bench_test.go",
 	"cmd/serve_find_smells_test.go",

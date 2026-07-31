@@ -2,14 +2,12 @@ package cmd
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
 // mache-caaae9 — after LLO v0.7.0 (qualified tokens + Python/JS/TS extraction +
@@ -27,23 +25,30 @@ import (
 //
 // Node_id shapes below are the real ones emitted by `leyline parse` (v0.7.0).
 
-func newCrossLangGraph(t *testing.T, ddl string) *smellTestGraph {
+// crossLangDef is one leyline-emitted definition: a token, the construct that
+// defines it, and its κ kind.
+type crossLangDef struct {
+	token  string
+	nodeID fixturedb.ConstructID
+	kind   fixturedb.CanonicalKind
+	name   string // nodes.name; defaults to the id's last segment
+}
+
+// newCrossLangGraph builds the fixture for these tests.
+//
+// It used to take a `ddl string` — a helper PARAMETERIZED ON SQL, on top of a
+// hardcoded two-column node_defs. That was the mache-projection shape, while
+// every node_id below is a real `leyline parse` path and the file's own header
+// says so. The producer and the shape disagreed, and nothing in the test said
+// which one it meant (mache-7555da).
+func newCrossLangGraph(t *testing.T, defs []crossLangDef) *smellTestGraph {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "xlang.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, size INTEGER, mtime INTEGER NOT NULL,
-			record_id TEXT, record TEXT, source_file TEXT
-		);
-		CREATE TABLE node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-		CREATE TABLE node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-	` + ddl)
-	require.NoError(t, err)
-	return &smellTestGraph{db: db}
+	return newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
+		for _, d := range defs {
+			b.Construct(d.nodeID, fixturedb.Where{Name: d.name})
+			b.Def(d.token, d.nodeID, d.kind)
+		}
+	})
 }
 
 func findingsFor(t *testing.T, tg *smellTestGraph, rule string) []smellFinding {
@@ -63,22 +68,20 @@ func findingsFor(t *testing.T, tg *smellTestGraph, rule string) []smellFinding {
 // under class_definition/block/function_definition) must not be flagged; a
 // genuine free-function duplicate still is.
 func TestDuplicateDefinitions_PythonMethods_NotFlagged(t *testing.T) {
-	tg := newCrossLangGraph(t, `
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
-			('m.py/class_definition_0', NULL, 'Foo', 1, 0, 'm.py'),
-			('m.py/class_definition_0/block/function_definition_0', NULL, 'new', 1, 0, 'm.py'),
-			('m.py/class_definition_1', NULL, 'Bar', 1, 0, 'm.py'),
-			('m.py/class_definition_1/block/function_definition_0', NULL, 'new', 1, 0, 'm.py'),
-			('m.py/function_definition_0', NULL, 'dup_free', 1, 0, 'm.py'),
-			('n.py/function_definition_0', NULL, 'dup_free', 1, 0, 'n.py');
-		INSERT INTO node_defs (token, node_id) VALUES
-			('Foo.new', 'm.py/class_definition_0/block/function_definition_0'),
-			('new',     'm.py/class_definition_0/block/function_definition_0'),
-			('Bar.new', 'm.py/class_definition_1/block/function_definition_0'),
-			('new',     'm.py/class_definition_1/block/function_definition_0'),
-			('dup_free', 'm.py/function_definition_0'),
-			('dup_free', 'n.py/function_definition_0');
-	`)
+	// leyline DUAL-REGISTERS a method: the qualified `Foo.new` AND the bare
+	// `new`, both at the same construct. Two rows at one node_id is exactly
+	// what ley-line's missing primary key permits and the mache projection's
+	// PRIMARY KEY (token, node_id) would have silently collapsed.
+	tg := newCrossLangGraph(t, []crossLangDef{
+		{"Foo", "m.py/class_definition_0", fixturedb.Type, "Foo"},
+		{"Foo.new", "m.py/class_definition_0/block/function_definition_0", fixturedb.Method, "new"},
+		{"new", "m.py/class_definition_0/block/function_definition_0", fixturedb.Method, "new"},
+		{"Bar", "m.py/class_definition_1", fixturedb.Type, "Bar"},
+		{"Bar.new", "m.py/class_definition_1/block/function_definition_0", fixturedb.Method, "new"},
+		{"new", "m.py/class_definition_1/block/function_definition_0", fixturedb.Method, "new"},
+		{"dup_free", "m.py/function_definition_0", fixturedb.Function, "dup_free"},
+		{"dup_free", "n.py/function_definition_0", fixturedb.Function, "dup_free"},
+	})
 	var sawMethod, sawDupFree bool
 	for _, f := range findingsFor(t, tg, "duplicate_definitions") {
 		if f.NodeID == "m.py/class_definition_0/block/function_definition_0" ||
@@ -96,16 +99,12 @@ func TestDuplicateDefinitions_PythonMethods_NotFlagged(t *testing.T) {
 // TestDuplicateDefinitions_JSMethods_NotFlagged — JS methods (method_definition
 // under class_body) must not be flagged.
 func TestDuplicateDefinitions_JSMethods_NotFlagged(t *testing.T) {
-	tg := newCrossLangGraph(t, `
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
-			('m.js/class_declaration_0/class_body/method_definition_0', NULL, 'create', 1, 0, 'm.js'),
-			('m.js/class_declaration_1/class_body/method_definition_0', NULL, 'create', 1, 0, 'm.js');
-		INSERT INTO node_defs (token, node_id) VALUES
-			('Foo.create', 'm.js/class_declaration_0/class_body/method_definition_0'),
-			('create',     'm.js/class_declaration_0/class_body/method_definition_0'),
-			('Bar.create', 'm.js/class_declaration_1/class_body/method_definition_0'),
-			('create',     'm.js/class_declaration_1/class_body/method_definition_0');
-	`)
+	tg := newCrossLangGraph(t, []crossLangDef{
+		{"Foo.create", "m.js/class_declaration_0/class_body/method_definition_0", fixturedb.Method, "create"},
+		{"create", "m.js/class_declaration_0/class_body/method_definition_0", fixturedb.Method, "create"},
+		{"Bar.create", "m.js/class_declaration_1/class_body/method_definition_0", fixturedb.Method, "create"},
+		{"create", "m.js/class_declaration_1/class_body/method_definition_0", fixturedb.Method, "create"},
+	})
 	for _, f := range findingsFor(t, tg, "duplicate_definitions") {
 		assert.NotContains(t, f.NodeID, "method_definition",
 			"JS method (bare `create` under class_body) must not be a duplicate (mache-caaae9)")
@@ -116,18 +115,12 @@ func TestDuplicateDefinitions_JSMethods_NotFlagged(t *testing.T) {
 // struct_item/trait_item, Python class_definition) as dead now that leyline
 // populates source_file; a genuinely-dead free function still is.
 func TestDeadCode_LeylineTypesNotFlagged(t *testing.T) {
-	tg := newCrossLangGraph(t, `
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
-			('src/lib.rs/struct_item_0', NULL, 'Foo', 1, 0, 'src/lib.rs'),
-			('src/lib.rs/trait_item', NULL, 'Runner', 1, 0, 'src/lib.rs'),
-			('m.py/class_definition_0', NULL, 'Widget', 1, 0, 'm.py'),
-			('src/lib.rs/function_item_1', NULL, 'never_called', 1, 0, 'src/lib.rs');
-		INSERT INTO node_defs (token, node_id) VALUES
-			('Foo', 'src/lib.rs/struct_item_0'),
-			('Runner', 'src/lib.rs/trait_item'),
-			('Widget', 'm.py/class_definition_0'),
-			('never_called', 'src/lib.rs/function_item_1');
-	`)
+	tg := newCrossLangGraph(t, []crossLangDef{
+		{"Foo", "src/lib.rs/struct_item_0", fixturedb.Type, "Foo"},
+		{"Runner", "src/lib.rs/trait_item", fixturedb.Interface, "Runner"},
+		{"Widget", "m.py/class_definition_0", fixturedb.Type, "Widget"},
+		{"never_called", "src/lib.rs/function_item_1", fixturedb.Function, "never_called"},
+	})
 	var sawType, sawDeadFn bool
 	for _, f := range findingsFor(t, tg, "dead_code") {
 		switch f.NodeID {
