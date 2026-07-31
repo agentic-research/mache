@@ -3,6 +3,7 @@ package leyline
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -1751,12 +1752,14 @@ func TestCloseConcurrentWithSubscribeReader(t *testing.T) {
 
 		// Subscribe goroutine should exit cleanly via the closed-conn
 		// error path — channel close is our signal.
+		waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
 		select {
 		case <-evCh:
 			// Either a residual event we don't care about, or the channel closed.
-		case <-time.After(2 * time.Second):
+		case <-waitCtx.Done():
 			t.Fatalf("iter %d: subscribe read goroutine did not exit within 2s after Close", i)
 		}
+		cancelWait()
 		<-closeDone
 
 		// Second Close MUST be a clean no-op — the sync.Once contract.

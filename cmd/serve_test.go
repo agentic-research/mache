@@ -406,7 +406,7 @@ func TestReadFile_BatchRejectsTotalContentOverflow(t *testing.T) {
 // find_callers handler tests
 // ---------------------------------------------------------------------------
 
-func TestFindCallers_Found(t *testing.T) {
+func TestFindCallers_FoundWithoutLSPTable(t *testing.T) {
 	store := buildTestGraph(t)
 	handler := makeFindCallersHandler(store)
 
@@ -3228,12 +3228,19 @@ func TestQueryLSPDefs_Found(t *testing.T) {
 	assert.Equal(t, 10, defs[0].StartLine)
 }
 
-func TestQueryLSPDefs_NotFound(t *testing.T) {
+func TestQueryLSP_NotFound(t *testing.T) {
 	sg := openLSPFixture(t)
 
-	defs, err := queryLSPDefs(sg, "NonExistentSymbol")
-	require.NoError(t, err)
-	assert.Empty(t, defs, "should return empty for unknown symbol")
+	t.Run("definitions", func(t *testing.T) {
+		defs, err := queryLSPDefs(sg, "NonExistentSymbol")
+		require.NoError(t, err)
+		assert.Empty(t, defs, "should return empty definitions for unknown symbol")
+	})
+	t.Run("references", func(t *testing.T) {
+		refs, err := queryLSPRefs(sg, "NonExistentSymbol")
+		require.NoError(t, err)
+		assert.Empty(t, refs, "should return empty references for unknown symbol")
+	})
 }
 
 func TestQueryLSPRefs_Found(t *testing.T) {
@@ -3250,14 +3257,6 @@ func TestQueryLSPRefs_Found(t *testing.T) {
 	}
 	assert.Contains(t, uris, "file:///project/main_test.go")
 	assert.Contains(t, uris, "file:///project/handler.go")
-}
-
-func TestQueryLSPRefs_NotFound(t *testing.T) {
-	sg := openLSPFixture(t)
-
-	refs, err := queryLSPRefs(sg, "NonExistentSymbol")
-	require.NoError(t, err)
-	assert.Empty(t, refs, "should return empty for unknown symbol")
 }
 
 func TestFindDefinition_LSPFallback(t *testing.T) {
@@ -3319,21 +3318,6 @@ func TestFindCallers_WithLSPRefs(t *testing.T) {
 	}
 	assert.Contains(t, refURIs, "file:///project/main_test.go")
 	assert.Contains(t, refURIs, "file:///project/handler.go")
-}
-
-func TestFindCallers_NoLSPTable(t *testing.T) {
-	// In-memory refs DB has no _lsp_refs table — handler should return original format
-	store := buildTestGraph(t)
-	handler := makeFindCallersHandler(store)
-
-	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Helper"}))
-	require.NoError(t, err)
-	require.False(t, result.IsError)
-
-	// Should be plain array (backward-compatible format)
-	var paths []string
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &paths))
-	assert.Contains(t, paths, "pkg/main/source")
 }
 
 // ---------------------------------------------------------------------------
