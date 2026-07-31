@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.20.0
-last-verified: 2026-07-29
+covers-version: v0.21.0
+last-verified: 2026-07-31
 sources-of-truth:
   - internal/lang/lang.go
   - internal/leyline/socket.go

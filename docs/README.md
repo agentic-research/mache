@@ -1,7 +1,7 @@
 ---
 status: current
-covers-version: v0.20.0
-last-verified: 2026-07-28
+covers-version: v0.21.0
+last-verified: 2026-07-31
 sources-of-truth:
   - CHANGELOG.md
 audience: [contributors, maintainers, users]
