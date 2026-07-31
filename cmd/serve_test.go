@@ -1810,6 +1810,16 @@ func TestGraphRegistry_RootDiscoveryFailureWithoutBasePathDoesNotScanCWD(t *test
 	assert.Equal(t, 1, session.calls)
 }
 
+func TestGraphRegistry_RootDiscoveryFailureWithExplicitStdioSourceUsesSource(t *testing.T) {
+	prev := serveStdio
+	serveStdio = true
+	t.Cleanup(func() { serveStdio = prev })
+	source := t.TempDir()
+	registry := newGraphRegistry("", []string{source})
+	g := registry.resolveSession(context.Background(), &failingRootsSession{id: "rootless-stdio"})
+	assert.Equal(t, source, g.basePath)
+}
+
 func TestGraphRegistry_SessionRouting(t *testing.T) {
 	registry := newGraphRegistry("/default", nil)
 

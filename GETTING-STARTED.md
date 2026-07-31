@@ -118,10 +118,14 @@ codex mcp list
 **stdio (subprocess per session — no standing daemon to babysit):**
 
 ```bash
-claude mcp add mache -- mache serve --stdio .
+claude mcp add mache -- mache serve --stdio --path .
 # or point at a leyline .db for the accurate tier:
-claude mcp add mache -- mache serve --stdio ./code.db
+claude mcp add mache -- mache serve --stdio --path . ./code.db
 ```
+
+Mache asks the MCP client for its workspace roots before it starts scanning. `--path`
+provides a safe fallback when a client cannot supply roots; pass one positional source
+only for a snapshot such as `./code.db`.
 
 Add `--scope user|project|local` to either `claude mcp add` to control where the registration is written (`local` = this project only, `user` = all your projects). Or write `.mcp.json` by hand:
 
@@ -130,7 +134,7 @@ Add `--scope user|project|local` to either `claude mcp add` to control where the
   "mcpServers": {
     "mache": {
       "command": "mache",
-      "args": ["serve", "--stdio", "."]
+      "args": ["serve", "--stdio", "--path", "."]
     }
   }
 }
@@ -143,7 +147,7 @@ Add `--scope user|project|local` to either `claude mcp add` to control where the
   "mcpServers": {
     "mache": {
       "command": "/path/to/mache",
-      "args": ["serve", "--stdio", "/path/to/code"]
+      "args": ["serve", "--stdio", "--path", "/path/to/code"]
     }
   }
 }
