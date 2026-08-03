@@ -1,0 +1,77 @@
+[
+  {
+    "id": 1,
+    "category": "code_explanation",
+    "prompt": "Walk me through the full ingestion pipeline for a Go source file in mache, from when mache build encounters the file to when its constructs land as nodes in the SQLite output. Be specific: which package/function handles each phase, what's stored in node_refs vs node_defs vs nodes, and what role the SitterWalker plays."
+  },
+  {
+    "id": 2,
+    "category": "code_explanation",
+    "prompt": "Explain how a find_callers MCP tool call resolves on a pre-built .db file. Trace from the MCP handler through the graph backend, including which SQL tables are consulted and how the call gets routed through lazyGraph and CompositeGraph wrappers."
+  },
+  {
+    "id": 3,
+    "category": "code_explanation",
+    "prompt": "Describe the relationship between the projected filesystem view (mounting mache) and the MCP tool surface. When a coding agent reads /mnt/mache/pkg/Foo/callers/Bar, what's actually happening under the hood, and how does that compare to invoking the find_callers MCP tool?"
+  },
+  {
+    "id": 4,
+    "category": "bug_fix",
+    "prompt": "find_callers(token=\"Topology\") returns an empty list on a pre-built .db, even though grep finds 100+ references in the corpus. Diagnose the root cause and propose the fix. Be specific about which file and which code path is responsible."
+  },
+  {
+    "id": 5,
+    "category": "bug_fix",
+    "prompt": "The MCP tool find_callees returns [] for every construct path on a fresh mache build, but the materialized <construct>/callees/ virtual directory is populated with correct data. Find the discrepancy between these two code paths and identify which one has the bug."
+  },
+  {
+    "id": 6,
+    "category": "bug_fix",
+    "prompt": "search(role=\"definition\") returns [] for every pattern despite find_definition resolving the same tokens correctly via DefsMap. The graph chain is lazyGraph -> CompositeGraph -> SQLiteGraph. Identify exactly which layer drops the lookup and how the dispatch sequence breaks."
+  },
+  {
+    "id": 7,
+    "category": "feature_add",
+    "prompt": "Add support for a new language (say, Kotlin) to mache's tree-sitter ingestion path. List concretely which files need changes: the language registry, the ref-extraction patterns, the schema preset, and any places that hardcode known-language lists. Include the tree-sitter query you'd register for capturing function calls in Kotlin."
+  },
+  {
+    "id": 8,
+    "category": "feature_add",
+    "prompt": "Design and outline the implementation for a new MCP tool called find_implementers that, given an interface name, returns all types in the corpus that satisfy that interface. Specify the schema-side query patterns it needs, the SQLiteGraph methods it would call, and the response shape. Cover Go specifically; note what would change for Python/TypeScript."
+  },
+  {
+    "id": 9,
+    "category": "feature_add",
+    "prompt": "Add a way to expose ley-line LSP enrichment results (the _lsp_hover, _lsp_defs tables) through a new MCP tool called get_call_signature that returns the parameter types and return type for a given function. Specify the SQL queries, the response JSON shape, and where in the existing handler registry it gets wired in."
+  },
+  {
+    "id": 10,
+    "category": "refactoring",
+    "prompt": "The lazyGraph wrapper in cmd/serve_registry.go has many near-identical passthrough methods (LookupDef, SearchDefs, GetCallers, GetCallees, ListChildren, GetNode, ...). Identify the repetition and propose a refactoring that reduces it without changing observable behavior. Specifically address how the optional-interface passthroughs (defsSearcher, defsLookuper) interact with the always-present passthroughs."
+  },
+  {
+    "id": 11,
+    "category": "refactoring",
+    "prompt": "internal/ingest/engine_languages.go declares ref-extraction tree-sitter queries for several languages (Go, Python, Rust, Elixir, Terraform, YAML) via repeated RegisterRefQuery calls. The Go entry has grown to 30+ patterns covering call expressions, keyed elements, and type-position references. Propose a structure that keeps the Go entry readable as it grows further, without breaking the existing API."
+  },
+  {
+    "id": 12,
+    "category": "architecture",
+    "prompt": "Mache positions itself as a 'schema-driven projection' system. Compare its architecture against a hypothetical LSP-live approach (always query a running language server) on three axes: cold-start latency, memory footprint, cross-repo navigation. Be specific about which mache components contribute to each tradeoff."
+  },
+  {
+    "id": 13,
+    "category": "architecture",
+    "prompt": "Trace the lifecycle of a single .db file from creation by mache build, through being served by mache serve, through being read by an MCP tool call. List every place the .db is opened or queried, what schema each consumer expects, and which tables (nodes, node_refs, node_defs, _lsp_*) are required by which consumer. Note any soft dependencies."
+  },
+  {
+    "id": 14,
+    "category": "debugging",
+    "prompt": "A user reports that mache serve on a 100K-LOC Go monorepo takes 30+ seconds before the first MCP tool call returns useful data. Walk through the cold-path bottleneck candidates: SQLite scan, schema compile, sidecar refs DB creation, MaterializeVirtuals. Which would you instrument first to find the actual slow phase?"
+  },
+  {
+    "id": 15,
+    "category": "debugging",
+    "prompt": "Memory usage during mache build on a large repo grows unbounded and OOMs. Identify the top 3 candidates for unbounded growth in the ingestion pipeline. Cite specific data structures and the code paths that populate them. Propose how you'd verify each candidate empirically."
+  }
+]
