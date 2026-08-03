@@ -23,10 +23,20 @@ type smellFinding struct {
 	Snippet   string `json:"snippet,omitempty"` // short source preview
 }
 
-// runSmellRule executes the rule's SQL, optionally scoped to one source.
-func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
+// ensureSmellQueryContext installs the canonical views/tables (v_defs,
+// v_refs, v_test_nodes, v_doc_refs) and loads the capnp binding sidecar for
+// qg's connection. v_test_nodes and v_doc_refs are materialized TEMP TABLEs,
+// not views, specifically so their cost is paid once per connection rather
+// than once per rule (see ensureTestNodesView's comment) — but that only
+// holds if the CALLER invokes this once and then runs every rule with
+// runSmellRuleQuery. A caller that runs N rules against the same qg in one
+// process (find-smells --rule '*', the MCP digest) MUST call this once
+// before the loop; calling runSmellRule per rule instead silently
+// re-materializes both tables N times (measured: ~9s/rule on a mid-size
+// Rust repo's leyline .db, dominating the whole invocation — mache-808b0b).
+func ensureSmellQueryContext(qg refsQuerier) error {
 	if err := ensureCanonicalViews(qg); err != nil {
-		return nil, err
+		return err
 	}
 	// Capnp readthrough (mache-190508 step 3): if this querier knows
 	// its dbPath AND a sibling .bindings.capnp event log exists, load
@@ -35,10 +45,29 @@ func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) (
 	// (in ensureCanonicalViews); empty table → no extra rows.
 	if dp, ok := qg.(dbPathProvider); ok {
 		if err := LoadCapnpBindings(qg, dp.DBPath()); err != nil {
-			return nil, err
+			return err
 		}
 	}
+	return nil
+}
 
+// runSmellRule executes the rule's SQL, optionally scoped to one source.
+// Single-rule callers (the MCP find_smells tool, one rule per request) use
+// this directly. Callers that run multiple rules against the same qg in one
+// process must call ensureSmellQueryContext once before the loop and use
+// runSmellRuleQuery per rule instead — see ensureSmellQueryContext.
+func runSmellRule(qg refsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
+	if err := ensureSmellQueryContext(qg); err != nil {
+		return nil, err
+	}
+	return runSmellRuleQuery(qg, rule, sourceID, limit)
+}
+
+// runSmellRuleQuery executes rule's SQL assuming ensureSmellQueryContext has
+// already run on qg's connection. Extracted out of runSmellRule so
+// multi-rule callers pay the view/table setup cost once instead of once per
+// rule.
+func runSmellRuleQuery(qg refsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
 	scope := ""
 	args := []any{}
 	if sourceID != "" && rule.ScopeColumn != "" {
