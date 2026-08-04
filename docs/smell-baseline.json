@@ -114,6 +114,11 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "cmd/serve_hosted.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_hosted_test.go",
       "count": 2
     },
     {
