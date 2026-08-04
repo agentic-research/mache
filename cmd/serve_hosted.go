@@ -39,11 +39,19 @@ type repoContextKey struct{}
 // schemaContextKey is a context key for the ?schema= URL query parameter.
 type schemaContextKey struct{}
 
-// hostedContextFromRequest extracts ?repo= and ?schema= from the HTTP request
-// URL and stashes them in context. This is the server.HTTPContextFunc for mcp-go.
+// projectContextKey is a context key for the ?project= URL query parameter.
+type projectContextKey struct{}
+
+// hostedContextFromRequest extracts ?repo=, ?schema=, and ?project= from the
+// HTTP request URL and stashes them in context. This is the
+// server.HTTPContextFunc for mcp-go.
 //
 // Security: repo URLs are validated (HTTPS only, no option injection).
-// Schema values are validated against known presets (no arbitrary file reads).
+// Schema values are validated against known presets (no arbitrary file
+// reads). ?project= is passed through as an opaque token — it is never used
+// as a path directly; resolveProjectToken looks it up in the local registry
+// (mache-6ec106), so an unrecognized value here just produces a registry
+// miss downstream, not a path.
 func hostedContextFromRequest(ctx context.Context, r *http.Request) context.Context {
 	q := r.URL.Query()
 	if repo := q.Get("repo"); repo != "" {
@@ -59,6 +67,9 @@ func hostedContextFromRequest(ctx context.Context, r *http.Request) context.Cont
 		} else {
 			log.Printf("rejected ?schema=%s: not a known preset", schema)
 		}
+	}
+	if project := q.Get("project"); project != "" {
+		ctx = context.WithValue(ctx, projectContextKey{}, project)
 	}
 	return ctx
 }
@@ -98,6 +109,13 @@ func repoFromContext(ctx context.Context) (string, bool) {
 func schemaFromContext(ctx context.Context) (string, bool) {
 	schema, ok := ctx.Value(schemaContextKey{}).(string)
 	return schema, ok
+}
+
+// projectTokenFromContext extracts the ?project= token from context, if
+// present.
+func projectTokenFromContext(ctx context.Context) (string, bool) {
+	token, ok := ctx.Value(projectContextKey{}).(string)
+	return token, ok
 }
 
 // getOrCreateRepoClone returns the base clone dir for a repo URL.

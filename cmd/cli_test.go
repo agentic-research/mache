@@ -309,6 +309,7 @@ func TestClean_RunsWithoutError(t *testing.T) {
 
 func TestInit_AutoDetectsGo(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	oldCwd, _ := os.Getwd()
 	require.NoError(t, os.Chdir(tmpDir))
 	defer func() { _ = os.Chdir(oldCwd) }()
@@ -326,6 +327,7 @@ func TestInit_AutoDetectsGo(t *testing.T) {
 
 func TestInit_AutoDetectsPython(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	oldCwd, _ := os.Getwd()
 	require.NoError(t, os.Chdir(tmpDir))
 	defer func() { _ = os.Chdir(oldCwd) }()

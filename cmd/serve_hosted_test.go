@@ -127,6 +127,23 @@ func TestExtractSchemaFromContext_NoSchema(t *testing.T) {
 	assert.False(t, ok, "no schema param means no context value")
 }
 
+func TestExtractProjectTokenFromContext(t *testing.T) {
+	req := httptest.NewRequest("POST", "/mcp?project=abc123", nil)
+	ctx := hostedContextFromRequest(req.Context(), req)
+
+	token, ok := projectTokenFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "abc123", token)
+}
+
+func TestExtractProjectTokenFromContext_NoParam(t *testing.T) {
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	ctx := hostedContextFromRequest(req.Context(), req)
+
+	_, ok := projectTokenFromContext(ctx)
+	assert.False(t, ok, "no project param means no context value")
+}
+
 // ---------------------------------------------------------------------------
 // hosted mode: resolveSession wiring tests
 // ---------------------------------------------------------------------------

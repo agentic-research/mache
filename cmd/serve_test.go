@@ -2094,6 +2094,50 @@ func TestGraphRegistry_RootDiscoveryFailureWithExplicitStdioSourceUsesSource(t *
 	assert.Equal(t, source, g.basePath)
 }
 
+// TestGraphRegistry_ProjectTokenResolvesWithoutListRoots — mache-6ec106. A
+// registered ?project= token must resolve the session's root directly from
+// the local registry, without ever calling the client's ListRoots — this is
+// the whole point: clients that never answer ListRoots (the Codex case) get
+// a working session anyway.
+func TestGraphRegistry_ProjectTokenResolvesWithoutListRoots(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	projectDir := t.TempDir()
+	token, err := registerProject(projectDir)
+	require.NoError(t, err)
+
+	registry := newGraphRegistry("", nil)
+	session := &failingRootsSession{id: "project-token-session"}
+	ctx := context.WithValue(context.Background(), projectContextKey{}, token)
+
+	g := registry.resolveSession(ctx, session)
+
+	assert.Equal(t, projectDir, g.basePath)
+	assert.Equal(t, 0, session.calls, "a resolved ?project= token must short-circuit before ListRoots is ever called")
+}
+
+// TestGraphRegistry_UnknownProjectTokenIsADistinctCachedError — an
+// unrecognized token (stale, guessed, or from a wiped registry) must fail
+// with a distinct, actionable message naming `mache init`, not the generic
+// "no roots" diagnostic, and must not fall through to ListRoots — a bad
+// token is not evidence the client won't answer roots.
+func TestGraphRegistry_UnknownProjectTokenIsADistinctCachedError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	registry := newGraphRegistry("", nil)
+	session := &failingRootsSession{id: "unknown-token-session"}
+	ctx := context.WithValue(context.Background(), projectContextKey{}, "not-a-real-token")
+
+	g := registry.resolveSession(ctx, session)
+	_, err := g.ListChildren("")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mache init")
+	assert.Equal(t, 0, session.calls, "an unrecognized token must not fall through to ListRoots")
+
+	// Cached, like the no-roots diagnostic — a second call must not re-lookup.
+	assert.Same(t, g, registry.resolveSession(ctx, session))
+}
+
 func TestGraphRegistry_SessionRouting(t *testing.T) {
 	registry := newGraphRegistry("/default", nil)
 
@@ -2946,6 +2990,39 @@ func TestServeLandingPage_FallbackPlainText(t *testing.T) {
 	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
 	assert.Contains(t, rec.Body.String(), "mache MCP server")
 	assert.Contains(t, rec.Body.String(), "http://mache.rosary.bot/mcp")
+}
+
+// TestServeLandingPage_FallbackConnectLineHasNoRepoParam — mache-6ec106. The
+// primary "Connect:" line previously suggested `?repo=<your-repo-url>` as the
+// universal fix, which is wrong for a local shared daemon: `?repo=` is a
+// hosted-mode escape hatch that clones a remote HTTPS URL, it does not accept
+// a local checkout path, and `mache init` itself never registers a `?repo=`
+// URL. That mismatch left operators chasing the wrong fix when a client's
+// ListRoots doesn't resolve (see mache-76c919's history). The page must lead
+// with the bare URL `mache init` actually registers, and name `--path` — the
+// same recovery `resolveSession`'s own tool-call error names — not `?repo=`.
+func TestServeLandingPage_FallbackConnectLineHasNoRepoParam(t *testing.T) {
+	orig := landingPagePath
+	landingPagePath = "/nonexistent/landing.html"
+	defer func() { landingPagePath = orig }()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "mache.rosary.bot"
+
+	serveLandingPage(rec, req)
+
+	body := rec.Body.String()
+	var connectLine string
+	for line := range strings.SplitSeq(body, "\n") {
+		if strings.HasPrefix(line, "Connect:") {
+			connectLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, connectLine, "fallback text must contain a Connect: line")
+	assert.NotContains(t, connectLine, "?repo=", "the primary connect line must not send operators to hosted-mode ?repo=")
+	assert.Contains(t, body, "--path", "the fallback text must name --path, the same recovery the tool-call error names")
 }
 
 func TestServeLandingPage_FallbackUsesXForwardedProto(t *testing.T) {

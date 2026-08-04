@@ -6,6 +6,43 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`mache init` registers a per-project token so shared-daemon sessions
+  resolve without depending on MCP `roots/list`** (`mache-6ec106`). The
+  canonical setup — one shared HTTP daemon, `mache init` registering a bare
+  `http://localhost:7532/mcp` in every client — depends entirely on the
+  connecting client answering a server-initiated `roots/list` request.
+  `roots/list` requires the client to keep a channel open for server-pushed
+  messages; many real MCP HTTP clients are plain request/response and never
+  open one, so for them root discovery isn't slow, it's structurally
+  undeliverable — confirmed against `mache-76c919`'s history (~15
+  reproductions from Codex across ~10 repos, zero successful `ListRoots`
+  resolutions) and reproduced directly with a raw HTTP client that never
+  declares MCP roots support.
+
+  `mache init` now writes `?project=<token>` into the URL it registers,
+  where the token is `BLAKE3(local-machine-salt ‖ absolute-project-path)` —
+  deterministic (re-running `mache init` reproduces the same token instead
+  of orphaning already-registered client configs) but salted so a remote
+  attacker can't just hash a guessed path and get a hit. The daemon resolves
+  `?project=` by looking the token up in its own local registry
+  (`~/.mache/projects.json`, written only by `mache init`) — it never
+  accepts or trusts a caller-supplied path directly, so a guessed or stale
+  token produces a registry miss, not a disclosure. An unrecognized token
+  gets a distinct, actionable error naming `mache init` rather than the
+  generic "workspace root unavailable" diagnostic.
+
+### Fixed
+
+- **The `/health`/landing-page fallback told operators to fix root
+  resolution with `?repo=<repo-url>`, which cannot work for a local
+  checkout** (`mache-6ec106`). `?repo=` is a hosted-mode escape hatch that
+  clones a remote HTTPS URL — it doesn't accept a local path, and `mache init` itself never registers a `?repo=` URL. The message now leads with
+  the bare URL `mache init` actually writes and names the real recoveries:
+  `mache init` (automatic, per-project) or `--path <dir>` (manual,
+  single-project).
+
 ### Changed
 
 - **Leyline pin bumped v0.13.0 → v0.15.1.** Adopts three upstream releases

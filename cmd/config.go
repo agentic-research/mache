@@ -164,13 +164,25 @@ func evalOrAbs(p string) (string, error) {
 // the shared Streamable HTTP daemon (see ADR-0022). Onboarding never registers
 // a stdio command — `mache serve --stdio` is an explicit CI/sandbox escape
 // hatch, not an editor-registered transport.
-func httpServerEntry() map[string]any {
-	return map[string]any{"type": "http", "url": macheHTTPURL}
+//
+// projectToken, when non-empty, is appended as ?project=<token> so the
+// session resolves its root from the local project registry instead of
+// depending on the client answering ListRoots (mache-6ec106) — see
+// registerProject/resolveProjectToken in project_registry.go. Machine-wide
+// editor registrations (detectEditors, registerClaudeCodeCLI) aren't tied to
+// a single project and pass "".
+func httpServerEntry(projectToken string) map[string]any {
+	url := macheHTTPURL
+	if projectToken != "" {
+		url += "?project=" + projectToken
+	}
+	return map[string]any{"type": "http", "url": url}
 }
 
 // writeClaudeMCPConfig writes or merges a mache entry into .claude/mcp.json.
 // Uses map[string]any as root type to preserve unknown top-level keys.
-func writeClaudeMCPConfig(projectDir, _ string) error {
+// projectToken is forwarded to httpServerEntry — see its doc comment.
+func writeClaudeMCPConfig(projectDir, projectToken string) error {
 	claudeDir := filepath.Join(projectDir, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		return fmt.Errorf("create .claude dir: %w", err)
@@ -192,7 +204,7 @@ func writeClaudeMCPConfig(projectDir, _ string) error {
 		servers = make(map[string]any)
 	}
 
-	servers["mache"] = httpServerEntry()
+	servers["mache"] = httpServerEntry(projectToken)
 	root["mcpServers"] = servers
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -297,7 +309,7 @@ func detectEditors(binaryPath string) []editorConfig {
 			ConfigPath:   filepath.Join(home, ".config", "zed", "settings.json"),
 			ServerKey:    "context_servers",
 			SharedConfig: true,
-			EntryFunc:    func(string) map[string]any { return httpServerEntry() },
+			EntryFunc:    func(string) map[string]any { return httpServerEntry("") },
 		},
 	}
 
@@ -314,7 +326,7 @@ func detectEditors(binaryPath string) []editorConfig {
 			Name:       "VS Code",
 			ConfigPath: vscodePath,
 			ServerKey:  "servers",
-			EntryFunc:  func(string) map[string]any { return httpServerEntry() },
+			EntryFunc:  func(string) map[string]any { return httpServerEntry("") },
 		})
 	}
 
@@ -322,7 +334,7 @@ func detectEditors(binaryPath string) []editorConfig {
 }
 
 func mcpServersEntry(string) map[string]any {
-	return httpServerEntry()
+	return httpServerEntry("")
 }
 
 // registerEditorMCP upserts mache into an editor's MCP config file.

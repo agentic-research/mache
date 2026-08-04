@@ -52,7 +52,7 @@ func execInit(w io.Writer, macheCmd string, opts initOpts) error {
 	if opts.Global {
 		return execInitGlobal(w, macheCmd)
 	}
-	return execInitProject(w, macheCmd, opts)
+	return execInitProject(w, opts)
 }
 
 func execInitGlobal(w io.Writer, macheCmd string) error {
@@ -73,7 +73,7 @@ func execInitGlobal(w io.Writer, macheCmd string) error {
 	return nil
 }
 
-func execInitProject(w io.Writer, macheCmd string, opts initOpts) error {
+func execInitProject(w io.Writer, opts initOpts) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
@@ -108,8 +108,16 @@ func execInitProject(w io.Writer, macheCmd string, opts initOpts) error {
 	}
 	_, _ = fmt.Fprintf(w, "Created %s\n", configPath)
 
+	// Register this project locally so the shared daemon can resolve its
+	// session root from ?project=<token> instead of depending on the client
+	// answering MCP ListRoots (mache-6ec106) — see project_registry.go.
+	token, err := registerProject(cwd)
+	if err != nil {
+		return fmt.Errorf("register project: %w", err)
+	}
+
 	// Write/merge .claude/mcp.json
-	if err := writeClaudeMCPConfig(cwd, macheCmd); err != nil {
+	if err := writeClaudeMCPConfig(cwd, token); err != nil {
 		return fmt.Errorf("write claude mcp config: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "Updated .claude/mcp.json\n")

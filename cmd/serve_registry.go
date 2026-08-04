@@ -244,6 +244,30 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		return errGraph.(*lazyGraph)
 	}
 
+	// ?project= token from HTTP context: `mache init` registered this
+	// project's path locally (mache-6ec106) and baked the resulting token
+	// into the URL it wrote to .claude/mcp.json, so a session can resolve
+	// its root without depending on the client ever answering ListRoots.
+	// Checked BEFORE ListRoots — a client that supplies this has already
+	// told us exactly what it wants; there's no reason to also wait on
+	// roots discovery. An unrecognized token is a distinct, actionable
+	// error (stale/wiped registry) rather than a silent fall-through to the
+	// generic "no roots" diagnostic, and — like the ListRoots failure path
+	// — is cached per session so a bad token doesn't re-pay a lookup on
+	// every tool call.
+	if token, ok := projectTokenFromContext(ctx); ok {
+		rootPath, found := resolveProjectToken(token)
+		if !found {
+			errGraph := newErrorLazyGraph(fmt.Errorf(
+				"?project= token not recognized; re-run `mache init` in this project to re-register it"))
+			actual, _ := r.sessionErrors.LoadOrStore(sid, errGraph)
+			return actual.(*lazyGraph)
+		}
+		r.registerSession(sid, rootPath)
+		log.Printf("session %s → %s (via ?project=)", sid, rootPath)
+		return r.getOrCreateGraph(rootPath)
+	}
+
 	// Hosted mode: ?repo= URL from HTTP context.
 	// This runs BEFORE CLI repo mode check because hosted mode has per-repo
 	// clones, not a single global repoCloneDir.
