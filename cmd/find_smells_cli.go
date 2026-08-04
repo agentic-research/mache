@@ -210,6 +210,15 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	// already carries its RuleID so downstream consumers can split
 	// by rule. Output is one envelope per rule in JSON/MD modes; CI
 	// mode interleaves lines (per the gh/ripgrep convention).
+	//
+	// ensureSmellQueryContext runs ONCE here rather than once per rule
+	// inside the loop: it materializes v_test_nodes/v_doc_refs as TEMP
+	// TABLEs specifically so their cost is paid once per invocation
+	// (see its doc comment) — looping runSmellRule per rule defeated
+	// that and dominated the whole gate's runtime on large repos.
+	if err := ensureSmellQueryContext(qg); err != nil {
+		return printAndCode(4, fmt.Errorf("prepare smell query context: %w", err))
+	}
 	results := make([]ruleRunResult, 0, len(matched))
 
 	for _, rule := range matched {
@@ -241,7 +250,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 			))
 		}
 
-		findings, rErr := runSmellRule(qg, rule, findSmellsSourceID, findSmellsLimit)
+		findings, rErr := runSmellRuleQuery(qg, rule, findSmellsSourceID, findSmellsLimit)
 		if rErr != nil {
 			return printAndCode(4, fmt.Errorf("rule %q: %w", rule.ID, rErr))
 		}

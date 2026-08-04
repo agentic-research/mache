@@ -53,6 +53,12 @@ func buildSmellDigest(qg refsQuerier, rules []SmellRule, worstN, fileTopN int) (
 	}
 	byFile := map[string]int{}
 
+	// Once for the whole digest, not once per rule — see
+	// ensureSmellQueryContext's doc comment.
+	if err := ensureSmellQueryContext(qg); err != nil {
+		return smellDigest{}, err
+	}
+
 	for i := range rules {
 		rule := &rules[i]
 		missing, err := missingTables(qg, rule.Requires)
@@ -65,55 +71,17 @@ func buildSmellDigest(qg refsQuerier, rules []SmellRule, worstN, fileTopN int) (
 		}
 		d.Rules++
 
-		findings, err := runSmellRule(qg, rule, "", digestScanCap)
+		rd, fileCounts, ok, err := digestOneRule(qg, rule, worstN)
 		if err != nil {
 			return smellDigest{}, err
 		}
-		// Capture whether the SCAN hit the cap before any metric filtering —
-		// otherwise a rule whose default threshold drops the result below the
-		// cap would mis-report Truncated=false while the underlying scan was
-		// actually capped (and Count understated).
-		scannedAtCap := len(findings) >= digestScanCap
-		// Apply the rule's default metric threshold so the digest counts match
-		// what a bare `rule=<id>` call would surface (which also applies it).
-		if rule.DefaultMinMetric > 0 {
-			kept := findings[:0]
-			for _, f := range findings {
-				if f.Metric >= rule.DefaultMinMetric {
-					kept = append(kept, f)
-				}
-			}
-			findings = kept
-		}
-		if len(findings) == 0 {
+		if !ok {
 			continue
 		}
-
-		// Worst-first by metric (ties broken by file then line for stability).
-		sort.Slice(findings, func(a, b int) bool {
-			if findings[a].Metric != findings[b].Metric {
-				return findings[a].Metric > findings[b].Metric
-			}
-			if findings[a].SourceID != findings[b].SourceID {
-				return findings[a].SourceID < findings[b].SourceID
-			}
-			return findings[a].Line < findings[b].Line
-		})
-
-		rd := ruleDigest{
-			Rule:      rule.ID,
-			Count:     len(findings),
-			Truncated: scannedAtCap,
-		}
-		for j := 0; j < worstN && j < len(findings); j++ {
-			rd.Worst = append(rd.Worst, findings[j])
-		}
 		d.ByRule = append(d.ByRule, rd)
-		d.Total += len(findings)
-		for _, f := range findings {
-			if f.SourceID != "" {
-				byFile[f.SourceID]++
-			}
+		d.Total += rd.Count
+		for f, c := range fileCounts {
+			byFile[f] += c
 		}
 	}
 
@@ -127,6 +95,62 @@ func buildSmellDigest(qg refsQuerier, rules []SmellRule, worstN, fileTopN int) (
 
 	d.ByFileTop = topFiles(byFile, fileTopN)
 	return d, nil
+}
+
+// digestOneRule runs a single rule for the L1 digest: executes the query,
+// applies the rule's default metric threshold, and sorts worst-first by
+// metric (ties broken by file then line for stability). Returns ok=false
+// when the rule produced no findings after filtering — the caller adds
+// nothing to the digest in that case. fileCounts is this rule's per-file
+// finding counts, for the caller to merge into the running by-file rollup.
+// Split out of buildSmellDigest to keep that function under the long_function
+// gate threshold.
+func digestOneRule(qg refsQuerier, rule *SmellRule, worstN int) (rd ruleDigest, fileCounts map[string]int, ok bool, err error) {
+	findings, err := runSmellRuleQuery(qg, rule, "", digestScanCap)
+	if err != nil {
+		return ruleDigest{}, nil, false, err
+	}
+	// Capture whether the SCAN hit the cap before any metric filtering —
+	// otherwise a rule whose default threshold drops the result below the
+	// cap would mis-report Truncated=false while the underlying scan was
+	// actually capped (and Count understated).
+	scannedAtCap := len(findings) >= digestScanCap
+	// Apply the rule's default metric threshold so the digest counts match
+	// what a bare `rule=<id>` call would surface (which also applies it).
+	if rule.DefaultMinMetric > 0 {
+		kept := findings[:0]
+		for _, f := range findings {
+			if f.Metric >= rule.DefaultMinMetric {
+				kept = append(kept, f)
+			}
+		}
+		findings = kept
+	}
+	if len(findings) == 0 {
+		return ruleDigest{}, nil, false, nil
+	}
+
+	sort.Slice(findings, func(a, b int) bool {
+		if findings[a].Metric != findings[b].Metric {
+			return findings[a].Metric > findings[b].Metric
+		}
+		if findings[a].SourceID != findings[b].SourceID {
+			return findings[a].SourceID < findings[b].SourceID
+		}
+		return findings[a].Line < findings[b].Line
+	})
+
+	rd = ruleDigest{Rule: rule.ID, Count: len(findings), Truncated: scannedAtCap}
+	for j := 0; j < worstN && j < len(findings); j++ {
+		rd.Worst = append(rd.Worst, findings[j])
+	}
+	fileCounts = make(map[string]int, len(findings))
+	for _, f := range findings {
+		if f.SourceID != "" {
+			fileCounts[f.SourceID]++
+		}
+	}
+	return rd, fileCounts, true, nil
 }
 
 // topFiles returns the n files with the most findings, count-descending then
