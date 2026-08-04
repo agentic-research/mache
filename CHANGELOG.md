@@ -6,6 +6,26 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [v0.21.1] — 2026-08-03
+
+### Fixed
+
+- **`find-smells` re-materialized its canonical setup once per rule instead
+  of once per invocation, dominating runtime on large repos.**
+  `ensureCanonicalViews` builds `v_test_nodes` / `v_doc_refs` as real
+  `CREATE TEMP TABLE ... AS SELECT`, not lazy views, specifically so their
+  cost is paid once per `find-smells` invocation — but it ran from inside
+  `runSmellRule`, which both the CLI's `--rule '*'` loop and the MCP digest
+  builder called once *per matched rule*, silently re-paying the full
+  materialization cost 9-14x per run. Measured as a 5-8x regression in a
+  downstream repo's CI after adopting this find-smells action version (27
+  prior successful runs at 49-205s vs. 4 successful runs at 466-521s after);
+  reproduced locally (81s → 13.8s for one `--rule '*' --tags=gate` run on a
+  971MB leyline `.db`, SARIF output verified byte-identical before/after).
+  Setup now runs once via `ensureSmellQueryContext`, called before both
+  multi-rule loops; the single-rule-per-call MCP `find_smells` handler is
+  unaffected. (`mache-808b0b`)
+
 ## [v0.21.0] — 2026-07-31
 
 ### Added
