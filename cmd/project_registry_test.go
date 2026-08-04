@@ -9,26 +9,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProjectToken_DeterministicGivenSameSaltAndPath(t *testing.T) {
-	salt := []byte("0123456789abcdef0123456789abcdef")[:32]
-	a := projectToken(salt, "/Users/x/repo")
-	b := projectToken(salt, "/Users/x/repo")
-	assert.Equal(t, a, b)
-}
-
-func TestProjectToken_DiffersByPath(t *testing.T) {
-	salt := []byte("0123456789abcdef0123456789abcdef")[:32]
-	a := projectToken(salt, "/Users/x/repo-one")
-	b := projectToken(salt, "/Users/x/repo-two")
-	assert.NotEqual(t, a, b)
-}
-
-func TestProjectToken_DiffersBySalt(t *testing.T) {
-	saltA := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+func TestProjectToken(t *testing.T) {
+	saltA := []byte("0123456789abcdef0123456789abcdef")[:32]
 	saltB := []byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	a := projectToken(saltA, "/Users/x/repo")
-	b := projectToken(saltB, "/Users/x/repo")
-	assert.NotEqual(t, a, b, "an attacker who doesn't know the local salt must not be able to reproduce the token from the path alone")
+
+	cases := []struct {
+		name       string
+		saltX      []byte
+		pathX      string
+		saltY      []byte
+		pathY      string
+		wantEqual  bool
+		ineqReason string
+	}{
+		{
+			name: "same salt and path are deterministic", saltX: saltA, pathX: "/Users/x/repo",
+			saltY: saltA, pathY: "/Users/x/repo", wantEqual: true,
+		},
+		{
+			name: "differs by path", saltX: saltA, pathX: "/Users/x/repo-one",
+			saltY: saltA, pathY: "/Users/x/repo-two", wantEqual: false,
+		},
+		{
+			name: "differs by salt", saltX: saltA, pathX: "/Users/x/repo",
+			saltY: saltB, pathY: "/Users/x/repo", wantEqual: false,
+			ineqReason: "an attacker who doesn't know the local salt must not be able to reproduce the token from the path alone",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := projectToken(tc.saltX, tc.pathX)
+			b := projectToken(tc.saltY, tc.pathY)
+			if tc.wantEqual {
+				assert.Equal(t, a, b)
+			} else {
+				assert.NotEqual(t, a, b, tc.ineqReason)
+			}
+		})
+	}
 }
 
 func TestLoadOrCreateProjectSalt_PersistsAcrossCalls(t *testing.T) {
