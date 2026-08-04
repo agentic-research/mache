@@ -6,6 +6,24 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Leyline pin bumped v0.13.0 → v0.15.1.** Adopts three upstream releases
+  (v0.14.0 "the signing train": DSSE/in-toto envelope, wasm32 artifacts,
+  `leyline self install/update`; v0.15.0 "execution/v1": tier ceilings, the
+  confinement manifest + attested digest; v0.15.1: fixes the v0.15.0
+  confinement digest so it actually commits to the policy). None of it
+  touches the \_ast/node_refs projection mache consumes — `ir_schema_version`
+  (merkle-ast-v2) and `wire_format_major` (1) are unchanged across the gap,
+  and the fixture DDL conformance test
+  (`TestLeylineSchema_MatchesPinnedBinary`) is byte-identical against the new
+  binary, so no `.db` rebuild is required. Two smell-baseline entries moved
+  in the safe direction (false positives removed): `duplicate_code` in
+  `cmd/serve_test.go` (33 → 31) and `untested_function` on
+  `internal/leyline/daemon_source.go` (1 → 0, since `SetDaemonSource`/
+  `DaemonSource` are in fact exercised by `cmd/serve_lsp_enrich_test.go` — a
+  cross-package test-linkage case v0.13.0 missed).
+
 ## [v0.21.1] — 2026-08-03
 
 ### Fixed

@@ -809,17 +809,24 @@ func (c *SocketClient) Prioritize(files []string) error {
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
 // As of this pin, both the daemon binary and go.mod's leyline-schema module are
-// v0.13.0. The wire major (1) and compatibility floor (0.6.0) are unchanged
+// v0.15.1. The wire major (1) and compatibility floor (0.6.0) are unchanged
 // from the 0.10 line; the version-parity gate (mache-b8af69) enforces the
 // [floor, binary] range.
 //
-// v0.12.1 -> v0.13.0 DOES NOT CROSS AN IR LINEAGE BOUNDARY — checked by
-// measurement: _meta.ir_schema_version reads "merkle-ast-v2" on both,
-// extraction_epoch is unchanged (4 -> 4). injection_epoch DOES change
-// (markdown's inline grammar now runs where it previously didn't — see
-// below), which is the correctly-scoped signal: a narrower epoch moved
-// because the injection mechanism changed, not the whole IR. No .db rebuild
-// is required crossing this bump.
+// v0.13.0 -> v0.15.1 DOES NOT CROSS AN IR LINEAGE BOUNDARY — checked against
+// LLO's own compatibility.json at each tag: ir_schema_version reads
+// "merkle-ast-v2" and wire_format_major reads 1 at v0.13.0, v0.14.0, v0.15.0,
+// and v0.15.1 alike. No .db rebuild is required crossing this bump.
+//
+// The three intervening releases (v0.14.0 "the signing train": DSSE/in-toto
+// envelope, wasm32 artifacts, `leyline self install/update`; v0.15.0
+// "execution/v1": tier ceilings, the confinement manifest + attested digest;
+// v0.15.1: fixes the v0.15.0 confinement digest so it actually commits to the
+// policy) are all execution/confinement/signing surface. None of it touches
+// the _ast/node_refs/node_defs projection mache actually consumes — verified
+// by grepping each release's CHANGELOG entry for _ast/node_refs/schema
+// mentions (none) and by the unchanged ir_schema_version/wire_format_major
+// above, not by assuming "sounds orthogonal" is enough.
 //
 // MARKDOWN BACKTICK SPANS BECOME node_refs (ley-line-open-ea1e42, mache
 // bead mache-eb2bf3). Every markdown `inline` node now reparses under
@@ -903,7 +910,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch.
-const leylineBinaryVersion = "v0.13.0"
+const leylineBinaryVersion = "v0.15.1"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

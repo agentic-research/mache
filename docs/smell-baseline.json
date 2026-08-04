@@ -144,7 +144,7 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "cmd/serve_test.go",
-      "count": 33
+      "count": 31
     },
     {
       "rule_id": "duplicate_code",
@@ -2099,11 +2099,6 @@
     {
       "rule_id": "untested_function",
       "source_id": "internal/ingest/benchmark_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "untested_function",
-      "source_id": "internal/leyline/daemon_source.go",
       "count": 1
     },
     {
