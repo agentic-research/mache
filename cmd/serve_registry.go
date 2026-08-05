@@ -3,7 +3,9 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/url"
@@ -16,8 +18,10 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/resolve"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"golang.org/x/sync/singleflight"
 )
 
 // ---------------------------------------------------------------------------
@@ -61,6 +65,23 @@ type graphRegistry struct {
 	// disconnected, last-seen generation, reason). nil when no
 	// subscriber was started at runServe time.
 	sheafSubscriber *leyline.SheafSubscriber
+}
+
+// resolveMountIDPrefix is the id-namespace prefix that routes a lazyGraph
+// delegate call to resolveMounts instead of the base graph. Paths under it
+// are only ever handed out by resolve_ref's graph_path response field, so
+// callers never need to guess the prefix.
+const resolveMountIDPrefix = "resolve/"
+
+// shortHash returns a short, stable, filesystem/URL-safe identifier for s —
+// used to name resolve_ref mount prefixes ("resolve/abc12345") so repeated
+// resolutions of the same target are visually recognizable. Not
+// security-sensitive (unlike mache-6ec106's salted project tokens): this
+// only dedupes mount points within one already-trusted local session, so a
+// plain truncated SHA-256 is sufficient.
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 func newGraphRegistry(basePath string, args []string) *graphRegistry {
@@ -490,6 +511,121 @@ type lazyGraph struct {
 	// invalidator. The router is the seam for daemon-pushed events,
 	// not a hard requirement for serving the graph.
 	sheafRouter *sheafEventRouter
+
+	// resolveMounts is the side CompositeGraph resolve_ref (mache-be0b9f)
+	// dynamically mounts resolved sub-graphs into, exposed to callers under
+	// "resolve/<hash>" IDs. Kept separate from `inner` (rather than
+	// mounting into inner directly) because inner is only a
+	// *graph.CompositeGraph when the caller used --mount; the common
+	// single-source serve has no composite to mount into, and wrapping it
+	// in one would change the root/path identity every existing tool
+	// already depends on.
+	//
+	// Two-level nesting: resolveMounts has exactly one static mount,
+	// "resolve" -> resolveHashMounts, and each resolved target is mounted
+	// into resolveHashMounts under its bare hash (no slash — CompositeGraph
+	// mount prefixes are single path segments; Mount("resolve/<hash>", g)
+	// directly would silently never route, since resolve() only cuts the
+	// first segment). Nesting gets correct two-level ID reprefixing for
+	// free from CompositeGraph's own (already-tested) GetNode/ListChildren/
+	// etc, instead of duplicating that logic here.
+	//
+	// Both nil until the first successful resolve_ref mount; created
+	// together, lazily, via ensureResolveMounts.
+	resolveMounts     *graph.CompositeGraph
+	resolveHashMounts *graph.CompositeGraph
+	resolveMountsOnce sync.Once
+
+	// resolveRegistry is the scheme -> Resolver registry (ADR-0016) used by
+	// resolve_ref, anchored to this lazyGraph's own served root. Shared
+	// across every session serving the same root, same as inner.
+	resolveRegistry     *resolve.Registry
+	resolveRegistryOnce sync.Once
+
+	// resolveMountPrefixes memoizes cacheKey -> "resolve/<hash>" so a
+	// repeated resolve_ref call for the same target returns the existing
+	// mount instead of erroring on CompositeGraph.Mount's duplicate-prefix
+	// check. resolveMountSF coalesces concurrent first-time mounts of the
+	// same cacheKey (build+mount is real subprocess/IO cost).
+	resolveMountPrefixes sync.Map // cacheKey string -> prefix string
+	resolveMountSF       singleflight.Group
+}
+
+// ensureResolveMounts lazily creates the two-level side CompositeGraph
+// resolve_ref mounts into (see the resolveMounts field doc for why it's
+// nested). Safe to call from multiple goroutines/sessions.
+func (lg *lazyGraph) ensureResolveMounts() *graph.CompositeGraph {
+	lg.resolveMountsOnce.Do(func() {
+		inner := graph.NewCompositeGraph()
+		outer := graph.NewCompositeGraph()
+		_ = outer.Mount(strings.TrimSuffix(resolveMountIDPrefix, "/"), inner) // fresh composite; Mount cannot fail here
+		lg.resolveHashMounts = inner
+		lg.resolveMounts = outer
+	})
+	return lg.resolveMounts
+}
+
+// resolverRegistry lazily builds the mod/gomod resolver registry, anchored
+// to this lazyGraph's own served root — both LocalPathResolver (relative-
+// locator escape checks) and GoModResolver (`go list`'s working directory)
+// need an anchor, and the session's served root is the only one resolve_ref
+// has to offer.
+//
+// Implements the resolveMounter interface (cmd/serve_resolve_ref.go) so the
+// resolve_ref handler can reach this without every other Graph
+// implementation needing to grow these methods.
+func (lg *lazyGraph) resolverRegistry() *resolve.Registry {
+	lg.resolveRegistryOnce.Do(func() {
+		root := lg.resolvedBasePath()
+		reg := resolve.NewRegistry()
+		reg.Register("mod", &resolve.LocalPathResolver{Anchor: root})
+		reg.Register("gomod", &resolve.GoModResolver{WorkDir: root})
+		lg.resolveRegistry = reg
+	})
+	return lg.resolveRegistry
+}
+
+// mountResolved mounts the graph build() produces under a
+// "resolve/<hash-of-cacheKey>" prefix and returns that prefix, or returns
+// the existing prefix if cacheKey was already mounted. Idempotent, and
+// coalesces concurrent callers for the same cacheKey via singleflight so
+// two racing resolve_ref calls for the same target build and mount it once.
+func (lg *lazyGraph) mountResolved(cacheKey string, build func() (graph.Graph, error)) (string, error) {
+	if cached, ok := lg.resolveMountPrefixes.Load(cacheKey); ok {
+		return cached.(string), nil
+	}
+	v, err, _ := lg.resolveMountSF.Do(cacheKey, func() (any, error) {
+		if cached, ok := lg.resolveMountPrefixes.Load(cacheKey); ok {
+			return cached.(string), nil
+		}
+		g, buildErr := build()
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		lg.ensureResolveMounts() // populates resolveHashMounts as a side effect
+		hash := shortHash(cacheKey)
+		if mountErr := lg.resolveHashMounts.Mount(hash, g); mountErr != nil {
+			// Lost a mount race for the same hash — the winner's result
+			// is just as good, use it instead of failing this caller.
+			if cached, ok := lg.resolveMountPrefixes.Load(cacheKey); ok {
+				return cached.(string), nil
+			}
+			return nil, mountErr
+		}
+		prefix := resolveMountIDPrefix + hash
+		lg.resolveMountPrefixes.Store(cacheKey, prefix)
+		return prefix, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
+}
+
+// isResolveMountPath reports whether id falls under the resolve_ref mount
+// namespace and so should route to resolveMounts instead of the base graph.
+func isResolveMountPath(id string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(id, "/"), resolveMountIDPrefix)
 }
 
 func newErrorLazyGraph(err error) *lazyGraph {
@@ -680,6 +816,9 @@ func (lg *lazyGraph) get() (graph.Graph, error) {
 }
 
 func (lg *lazyGraph) GetNode(id string) (*graph.Node, error) {
+	if isResolveMountPath(id) {
+		return lg.ensureResolveMounts().GetNode(id)
+	}
 	g, err := lg.get()
 	if err != nil {
 		return nil, err
@@ -688,6 +827,9 @@ func (lg *lazyGraph) GetNode(id string) (*graph.Node, error) {
 }
 
 func (lg *lazyGraph) ListChildren(id string) ([]string, error) {
+	if isResolveMountPath(id) {
+		return lg.ensureResolveMounts().ListChildren(id)
+	}
 	g, err := lg.get()
 	if err != nil {
 		return nil, err
@@ -696,6 +838,9 @@ func (lg *lazyGraph) ListChildren(id string) ([]string, error) {
 }
 
 func (lg *lazyGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
+	if isResolveMountPath(id) {
+		return lg.ensureResolveMounts().ListChildStats(id)
+	}
 	g, err := lg.get()
 	if err != nil {
 		return nil, err
@@ -704,6 +849,9 @@ func (lg *lazyGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
 }
 
 func (lg *lazyGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
+	if isResolveMountPath(id) {
+		return lg.ensureResolveMounts().ReadContent(id, buf, offset)
+	}
 	g, err := lg.get()
 	if err != nil {
 		return 0, err
@@ -711,15 +859,33 @@ func (lg *lazyGraph) ReadContent(id string, buf []byte, offset int64) (int, erro
 	return g.ReadContent(id, buf, offset)
 }
 
+// GetCallers federates across the base graph and any resolve_ref mounts —
+// unlike GetNode/ListChildren, a caller token isn't namespaced by mount
+// prefix, so a token defined in either graph should surface its callers
+// from both. resolveMounts is only queried once it has an actual mount
+// (nil until then), so this is a no-op federation for every session that
+// never calls resolve_ref.
 func (lg *lazyGraph) GetCallers(token string) ([]*graph.Node, error) {
 	g, err := lg.get()
 	if err != nil {
 		return nil, err
 	}
-	return g.GetCallers(token)
+	callers, err := g.GetCallers(token)
+	if err != nil {
+		return nil, err
+	}
+	if lg.resolveMounts != nil {
+		if extra, extraErr := lg.resolveMounts.GetCallers(token); extraErr == nil {
+			callers = append(callers, extra...)
+		}
+	}
+	return callers, nil
 }
 
 func (lg *lazyGraph) GetCallees(id string) ([]*graph.Node, error) {
+	if isResolveMountPath(id) {
+		return lg.ensureResolveMounts().GetCallees(id)
+	}
 	g, err := lg.get()
 	if err != nil {
 		return nil, err
@@ -768,14 +934,22 @@ func (lg *lazyGraph) RefsMap() map[string][]string {
 }
 
 func (lg *lazyGraph) DefsMap() map[string][]string {
+	out := map[string][]string{}
+	if lg.resolveMounts != nil {
+		for token, ids := range lg.resolveMounts.DefsMap() {
+			out[token] = append(out[token], ids...)
+		}
+	}
 	g, err := lg.get()
 	if err != nil || g == nil {
-		return nil
+		return nilIfEmpty(out)
 	}
 	if dp, ok := g.(defsMapProvider); ok {
-		return dp.DefsMap()
+		for token, ids := range dp.DefsMap() {
+			out[token] = append(out[token], ids...)
+		}
 	}
-	return nil
+	return nilIfEmpty(out)
 }
 
 func (lg *lazyGraph) UpdateNodeContent(id string, data []byte, origin *graph.SourceOrigin, modTime time.Time) error {
@@ -823,15 +997,24 @@ func (lg *lazyGraph) MountPrefixOf(id string) string {
 //
 // Returns nil when the inner doesn't implement defsLookuper —
 // callers fall through to DefsMap as before.
+// LookupDef federates the base graph and any resolve_ref mounts — a token
+// may be defined in either, and dir IDs from resolveMounts already carry
+// their "resolve/<hash>/..." prefix (CompositeGraph.LookupDef applies it),
+// so results from both sides are directly usable by GetNode/ReadContent
+// without further qualification.
 func (lg *lazyGraph) LookupDef(token string) []string {
+	var out []string
+	if lg.resolveMounts != nil {
+		out = append(out, lg.resolveMounts.LookupDef(token)...)
+	}
 	g, err := lg.get()
 	if err != nil || g == nil {
-		return nil
+		return out
 	}
 	if dl, ok := g.(interface{ LookupDef(string) []string }); ok {
-		return dl.LookupDef(token)
+		out = append(out, dl.LookupDef(token)...)
 	}
-	return nil
+	return out
 }
 
 // SearchDefs forwards the optional defsSearcher interface so
@@ -841,16 +1024,35 @@ func (lg *lazyGraph) LookupDef(token string) []string {
 // Returns nil when the inner doesn't implement defsSearcher —
 // the search handler falls through to defsMapProvider iteration.
 func (lg *lazyGraph) SearchDefs(pattern string, limit int) map[string][]string {
+	out := map[string][]string{}
+	if lg.resolveMounts != nil {
+		for token, ids := range lg.resolveMounts.SearchDefs(pattern, limit) {
+			out[token] = append(out[token], ids...)
+		}
+	}
 	g, err := lg.get()
 	if err != nil || g == nil {
-		return nil
+		return nilIfEmpty(out)
 	}
 	if ds, ok := g.(interface {
 		SearchDefs(string, int) map[string][]string
 	}); ok {
-		return ds.SearchDefs(pattern, limit)
+		for token, ids := range ds.SearchDefs(pattern, limit) {
+			out[token] = append(out[token], ids...)
+		}
 	}
-	return nil
+	return nilIfEmpty(out)
+}
+
+// nilIfEmpty normalizes an empty federation result back to nil so callers
+// that branch on "backend doesn't support this" (nil) vs. "supports it but
+// found nothing" (empty map) keep seeing the same nil they did before
+// resolveMounts federation was added.
+func nilIfEmpty(m map[string][]string) map[string][]string {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // ---------------------------------------------------------------------------

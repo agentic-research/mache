@@ -235,9 +235,9 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	s.AddTool(
 		mcp.NewTool("resolve_ref",
 			readTool(),
-			mcp.WithDescription("Resolve a typed cross-language ref token (scheme:locator) to its target. First milestone of the cross-language ref graph (mache-q43l). Today supports the `mod:` scheme with local-relative paths (./X, ../Y) — returns the resolved absolute path plus a directory listing with detected languages. Other schemes return a `remote_hint` so the caller knows resolution was skipped. Useful for following Terraform `module { source = ... }` references into the projected target."),
-			mcp.WithString("token", mcp.Required(), mcp.Description("Typed ref token in `scheme:locator` form (e.g. `mod:./modules/vpc`).")),
-			mcp.WithString("base_path", mcp.Description("File or directory the locator is interpreted relative to. Required for local-relative locators.")),
+			mcp.WithDescription("Resolve a typed cross-language ref token (scheme:locator) to its target. Part of the cross-language ref graph (mache-q43l, ADR-0016). Supports `mod:` (local-relative paths, ./X or ../Y, resolved against base_path — e.g. following a Terraform `module { source = ... }` reference) and `gomod:` (a Go import path, resolved via `go list` against the served project's own go.mod — e.g. `gomod:golang.org/x/sync/singleflight`). Other schemes return a `remote_hint` so the caller knows resolution was skipped. A successful resolution returns `graph_path`: pass it to list_directory/find_definition/find_callers/read_file to query the resolved code directly, no separate clone or ingest step needed."),
+			mcp.WithString("token", mcp.Required(), mcp.Description("Typed ref token in `scheme:locator` form (e.g. `mod:./modules/vpc` or `gomod:golang.org/x/sync/singleflight`).")),
+			mcp.WithString("base_path", mcp.Description("File or directory the locator is interpreted relative to. Required for `mod:` locators; unused for `gomod:`.")),
 		),
 		r.wrapHandler(makeResolveRefHandler),
 	)

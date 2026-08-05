@@ -134,12 +134,7 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "cmd/serve_registry.go",
-      "count": 8
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_resolve_ref.go",
-      "count": 1
+      "count": 4
     },
     {
       "rule_id": "duplicate_code",
@@ -405,6 +400,21 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/nfsmount/graphfs_test.go",
       "count": 14
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/resolve/gomod_resolver_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/resolve/localpath_resolver.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/resolve/localpath_resolver_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",

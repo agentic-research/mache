@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/graph"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,10 +42,7 @@ func TestGoModResolver_ResolvesToQueryableGraph(t *testing.T) {
 	// result should support (see mache-04972b, this session — the whole
 	// point of routing through graph.Build+graph.Open instead of a
 	// hand-rolled import).
-	type lookupDefer interface {
-		LookupDef(token string) []string
-	}
-	ld, ok := g.(lookupDefer)
+	ld, ok := g.(interface{ LookupDef(token string) []string })
 	require.True(t, ok, "resolved graph must support LookupDef")
 	require.NotEmpty(t, ld.LookupDef("Hello"), "must find the function actually defined in the resolved module")
 }
@@ -62,12 +60,9 @@ func TestGoModResolver_CachesRepeatedResolution(t *testing.T) {
 	workDir, importPath := newFakeModule(t)
 	r := &GoModResolver{WorkDir: workDir}
 
-	first, err := r.Resolve(context.Background(), importPath)
-	require.NoError(t, err)
-	second, err := r.Resolve(context.Background(), importPath)
-	require.NoError(t, err)
-
-	require.Same(t, first, second, "a cached Resolve must return the same graph instance, not rebuild")
+	assertResolveIsCached(t, func() (graph.Graph, error) {
+		return r.Resolve(context.Background(), importPath)
+	})
 }
 
 func TestGoModResolver_MissingWorkDirErrors(t *testing.T) {

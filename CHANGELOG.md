@@ -8,6 +8,29 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`resolve_ref` mounts resolved sub-graphs so other MCP tools can query
+  them, and gains a `gomod:` scheme** (`mache-bdcd2b`, `mache-be0b9f`,
+  ADR-0016 steps 2–3). Previously `makeResolveRefHandler` discarded its
+  `graph.Graph` parameter entirely and returned flat filesystem metadata; a
+  Terraform `mod:./modules/vpc` reference or a Go `gomod:` import path now
+  resolves via `internal/resolve`'s `Registry` (`LocalPathResolver` /
+  `GoModResolver`) and mounts the result under a `resolve/<hash>` prefix
+  returned as `graph_path` — `list_directory`, `find_definition`, and
+  `find_callers` on a `*lazyGraph` session route into it transparently
+  (`find_definition`/`find_callers` federate base graph + mounts; a
+  single-source serve's root identity is unchanged, since resolve mounts
+  live in a side `CompositeGraph`, not the served graph itself). Mounting
+  is idempotent and coalesced (`singleflight`) per resolved target.
+  `LocalPathResolver` reuses `graph.Build`/`graph.Open` exactly like
+  `GoModResolver` — no separate `ingest.Engine` ingestion path.
+
+- **`resolve/` — the public facade for `internal/resolve`**, mirroring
+  `graph.Open`/`graph.Build`'s pattern: `Registry`, `Resolver`,
+  `GoModResolver`, `LocalPathResolver` re-exported via type aliases so an
+  external Go consumer can resolve a `gomod:`/`mod:` locator to a queryable
+  `graph.Graph` without importing `internal/resolve` (which Go's `internal/`
+  visibility rule makes otherwise unreachable outside this module).
+
 - **`internal/resolve` — the first two beads of ADR-0016's cross-language
   reference resolver, and a new companion ADR-0025 for how resolver
   bodies work** (`mache-e6d582`). ADR-0016 (Proposed since May) defines an

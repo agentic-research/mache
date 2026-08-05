@@ -32,7 +32,7 @@ is no duplicate `#` heading.
 | [0013](0013-refs-defs-canonical-schema.md)                      | Proposed    | Refs/Defs Canonical Schema (Fidelity Poset Over Producers)                        |
 | [0014](0014-mache-in-constellation.md)                          | Proposed    | Mache as observation producer in the constellation                                |
 | [0015](0015-syntax-aware-write-protection.md)                   | Accepted    | Syntax-Aware Write Protection                                                     |
-| [0016](0016-cross-language-reference-resolver.md)               | Proposed    | Cross-Language Reference Resolver                                                 |
+| [0016](0016-cross-language-reference-resolver.md)               | Accepted    | Cross-Language Reference Resolver                                                 |
 | [0017](0017-test-harness.md)                                    | Proposed    | Matrix-Coverage Test Harness — Invariants for "What 100% Means"                   |
 | [0018](0018-doc-drift-as-executable-specs.md)                   | Accepted    | Doc-Drift Detection as Executable Specs (find_smells First-Class Workflow)        |
 | [0019](0019-real-corpus-fixture-registry.md)                    | Proposed    | Real-Corpus Fixture Registry as First-Class Test Infrastructure                   |
