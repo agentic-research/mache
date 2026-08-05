@@ -341,8 +341,32 @@ func DiscoverOrStart() (string, error) {
 	// CDC is opt-in for Mache-managed daemons only. Existing sockets and
 	// external --control daemons retain the configuration chosen by their
 	// operator; a live daemon cannot change startup arguments.
+	//
+	// cdcTarget names the activation target for the arena-config record below.
+	// Bare --cdc means leyline's default target, `nodes`; spelling it out here
+	// is what lets a later flip to `source-blobs` invalidate the arena rather
+	// than strand the previous target's manifest (mache-18caf3).
+	cdcTarget := ""
 	if DaemonCDC() {
 		daemonArgs = append(daemonArgs, "--cdc")
+		cdcTarget = "nodes"
+	}
+	// A warm arena is only reusable for the configuration it was built with.
+	// mache serves every project from this one fixed arena path, so serving a
+	// second tree would otherwise hit leyline's warm-start refusal and fail
+	// the spawn — see arenaSpawnConfig for the full failure mode. Cold-start
+	// instead: one reparse, versus a daemon that never comes up.
+	arenaCfg := arenaSpawnConfig{
+		SourceRoot: canonicalSourceRoot(DaemonSource()),
+		CDCTarget:  cdcTarget,
+	}
+	//
+	// The invalidation is done by removing files rather than by passing
+	// leyline's own --reset-arena flag, which is broken in the pinned binary
+	// and on the integration branch alike — see resetArenaState.
+	if arenaNeedsReset(arenaPath, arenaCfg) {
+		log.Printf("leyline: arena was built for a different configuration — cold-starting %s", arenaPath)
+		resetArenaState(arenaPath, ctrlPath)
 	}
 	cmd := exec.Command(leylineBin, daemonArgs...)
 	// Detach from our stdio so it doesn't interfere with MCP transport
@@ -385,6 +409,12 @@ func DiscoverOrStart() (string, error) {
 	for time.Now().Before(deadline) {
 		if isSocketAlive(sockPath) {
 			log.Printf("leyline daemon ready (pid=%d, socket=%s)", cmd.Process.Pid, sockPath)
+			// Record only now that the daemon is actually serving: a config
+			// written before the spawn would describe an arena state a crashed
+			// startup never produced, and the next run would warm-start onto it.
+			if err := recordArenaConfig(arenaPath, arenaCfg); err != nil {
+				log.Printf("leyline: could not record arena config (next spawn will cold-start): %v", err)
+			}
 			return sockPath, nil
 		}
 		// If the daemon already exited, the socket will never appear — stop
