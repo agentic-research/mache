@@ -80,19 +80,7 @@ func makeResolveRefHandler(g graph.Graph) server.ToolHandlerFunc {
 		switch scheme {
 		case "mod":
 			resp = resolveModScheme(locator, basePath)
-			if canMount && resp.Error == "" && resp.Exists && resp.IsDir {
-				resolved := resp.Resolved
-				prefix, mountErr := mounter.mountResolved(resolved, func() (graph.Graph, error) {
-					return mounter.resolverRegistry().Resolve(ctx, "mod", resolved)
-				})
-				if mountErr == nil {
-					resp.GraphPath = prefix
-				}
-				// A mount failure (e.g. leyline can't parse this
-				// language) doesn't invalidate the flat filesystem
-				// metadata already gathered above — degrade quietly,
-				// graph_path just stays empty.
-			}
+			mountModScheme(ctx, mounter, canMount, &resp)
 		case "gomod":
 			resp = resolveGomodScheme(ctx, mounter, canMount, locator)
 		default:
@@ -104,6 +92,28 @@ func makeResolveRefHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("encode response: %v", err)), nil
 		}
 		return mcp.NewToolResultText(string(body)), nil
+	}
+}
+
+// mountModScheme mounts a successful mod: resolution's directory so other
+// MCP tools can query it, setting resp.GraphPath on success. Split out of
+// makeResolveRefHandler's closure so that closure stays a thin dispatcher
+// (parse token -> per-scheme resolve -> encode) rather than also carrying
+// the mount branch's own conditions and calls inline.
+//
+// A mount failure (e.g. leyline can't parse this language) doesn't
+// invalidate the flat filesystem metadata resolveModScheme already
+// gathered — degrade quietly, graph_path just stays empty.
+func mountModScheme(ctx context.Context, mounter resolveMounter, canMount bool, resp *resolveRefResponse) {
+	if !canMount || resp.Error != "" || !resp.Exists || !resp.IsDir {
+		return
+	}
+	resolved := resp.Resolved
+	prefix, err := mounter.mountResolved(resolved, func() (graph.Graph, error) {
+		return mounter.resolverRegistry().Resolve(ctx, "mod", resolved)
+	})
+	if err == nil {
+		resp.GraphPath = prefix
 	}
 }
 

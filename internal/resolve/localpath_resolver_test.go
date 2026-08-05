@@ -33,8 +33,7 @@ func TestLocalPathResolver_ResolvesRelativeLocator(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, g)
 
-	type lookupDefer interface{ LookupDef(string) []string }
-	ld, ok := g.(lookupDefer)
+	ld, ok := g.(interface{ LookupDef(string) []string })
 	require.True(t, ok, "resolved graph must support LookupDef")
 	require.NotEmpty(t, ld.LookupDef("New"), "must find the function actually defined in the resolved directory")
 }

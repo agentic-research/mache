@@ -5,12 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 
-	pubgraph "github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/graph"
 	"golang.org/x/sync/singleflight"
 )
@@ -88,24 +85,7 @@ func (r *GoModResolver) resolveUncached(ctx context.Context, locator string) (gr
 	if err != nil {
 		return nil, err
 	}
-
-	dbDir, err := os.MkdirTemp("", "mache-gomod-resolve-*")
-	if err != nil {
-		return nil, fmt.Errorf("gomod resolver: create temp dir: %w", err)
-	}
-	dbPath := filepath.Join(dbDir, "resolved.db")
-
-	if err := pubgraph.Build(dir, dbPath); err != nil {
-		_ = os.RemoveAll(dbDir)
-		return nil, fmt.Errorf("gomod resolver: build %s: %w", dir, err)
-	}
-
-	g, err := pubgraph.Open(dbPath)
-	if err != nil {
-		_ = os.RemoveAll(dbDir)
-		return nil, fmt.Errorf("gomod resolver: open resolved db: %w", err)
-	}
-	return g, nil
+	return buildAndOpen("mache-gomod-resolve-*", dir)
 }
 
 // goListDir shells out to `go list -json <locator>` and returns the

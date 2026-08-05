@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	pubgraph "github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/graph"
 	"golang.org/x/sync/singleflight"
 )
@@ -107,24 +106,7 @@ func (r *LocalPathResolver) resolveUncached(dir string) (graph.Graph, error) {
 	if !info.IsDir() {
 		dir = filepath.Dir(dir)
 	}
-
-	dbDir, err := os.MkdirTemp("", "mache-localpath-resolve-*")
-	if err != nil {
-		return nil, fmt.Errorf("localpath resolver: create temp dir: %w", err)
-	}
-	dbPath := filepath.Join(dbDir, "resolved.db")
-
-	if err := pubgraph.Build(dir, dbPath); err != nil {
-		_ = os.RemoveAll(dbDir)
-		return nil, fmt.Errorf("localpath resolver: build %s: %w", dir, err)
-	}
-
-	g, err := pubgraph.Open(dbPath)
-	if err != nil {
-		_ = os.RemoveAll(dbDir)
-		return nil, fmt.Errorf("localpath resolver: open resolved db: %w", err)
-	}
-	return g, nil
+	return buildAndOpen("mache-localpath-resolve-*", dir)
 }
 
 type localCacheEntry struct {
