@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExportImportRoundTrip(t *testing.T) {
@@ -113,4 +115,82 @@ func TestExportImportEmptyStore(t *testing.T) {
 	if len(imported.RootIDs()) != 0 {
 		t.Errorf("expected 0 roots, got %d", len(imported.RootIDs()))
 	}
+}
+
+// newFixtureDB builds a mache-shaped .db via internal/fixturedb — never
+// hand-written DDL (internal/lint's LLO boundary rule forbids test files
+// from hand-typing node_defs/node_refs; a hand-written CREATE TABLE is a
+// hidden test parameter, since ensureCanonicalViews emits a structurally
+// different v_refs/v_defs per column combination). fixturedb.Leyline derives
+// the exact shape from the real pinned producer.
+func newFixtureDB(t *testing.T) string {
+	t.Helper()
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Def("dedupSuffix", "functions/dedupSuffix", fixturedb.Function)
+	b.Ref("dedupSuffix", "functions/caller", "functions/caller/call_0", "")
+	dbPath, _ := b.Build()
+	return dbPath
+}
+
+// TestOpen_LookupDefWorksWithoutImport is the regression test for the bug
+// this session found: a consumer loading a mache .db via
+// MemoryStore+ImportSQLite got LookupDef returning nil and QueryRefs
+// erroring "refsDB not initialized" — not because the .db lacked the data,
+// but because ImportSQLite only replicates the node tree and never touches
+// node_defs/node_refs. Open (backed by SQLiteGraph) reads those tables
+// directly, so both work immediately with no import/populate step.
+func TestOpen_LookupDefWorksWithoutImport(t *testing.T) {
+	dbPath := newFixtureDB(t)
+
+	g, err := graph.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	ids := g.LookupDef("dedupSuffix")
+	require.Equal(t, []string{"functions/dedupSuffix"}, ids,
+		"LookupDef must resolve directly from node_defs, no AddDef call required")
+
+	require.Nil(t, g.LookupDef("NotInTheTable"),
+		"an absent token must return nil, not a phantom match")
+}
+
+// TestOpen_QueryRefsWorksWithoutImport is QueryRefs' half of the same
+// regression: querying node_refs must work directly against the file.
+func TestOpen_QueryRefsWorksWithoutImport(t *testing.T) {
+	dbPath := newFixtureDB(t)
+
+	g, err := graph.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	rows, err := g.QueryRefs("SELECT node_id FROM node_refs WHERE token = ?", "dedupSuffix")
+	require.NoError(t, err, "QueryRefs must not require an explicit InitRefsDB/FlushRefs step")
+	defer func() { _ = rows.Close() }()
+
+	var nodeIDs []string
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		nodeIDs = append(nodeIDs, id)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"functions/caller/call_0"}, nodeIDs)
+}
+
+// TestImportSQLite_DoesNotWireLookupDefOrQueryRefs pins ImportSQLite's
+// documented limitation so a future change either fixes it deliberately
+// (updating this test) or is caught here rather than rediscovered blind by
+// the next consumer. Use Open, not ImportSQLite, when LookupDef/QueryRefs
+// need to work.
+func TestImportSQLite_DoesNotWireLookupDefOrQueryRefs(t *testing.T) {
+	dbPath := newFixtureDB(t)
+
+	imported, err := graph.ImportSQLite(dbPath)
+	require.NoError(t, err)
+
+	require.Nil(t, imported.LookupDef("dedupSuffix"),
+		"ImportSQLite does not read node_defs — LookupDef stays empty until this is fixed or documented otherwise")
+
+	_, err = imported.QueryRefs("SELECT 1")
+	require.Error(t, err, "ImportSQLite does not call InitRefsDB — QueryRefs must still error")
 }
