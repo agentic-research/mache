@@ -173,9 +173,17 @@ func TestPublishedImageReportsItsTagVersion(t *testing.T) {
 // the containerised form of the mache-19326d skew: the .db an image builds
 // would be parsed by a different leyline than the one its mache expects.
 //
-// The comparison is only meaningful when the image is the one THIS tree
-// publishes — an older tag legitimately pins an older leyline — so a
-// non-matching tag logs rather than asserts.
+// The comparison is only meaningful when THIS COMMIT is the one the image
+// was actually built from — an unreleased commit that bumped the leyline pin
+// (a normal PR, not yet a release) legitimately diverges from the last
+// published image, which was built from an earlier commit. verifyImage's
+// default resolves the image tag from this tree's OWN version.txt, so
+// comparing d.image against that same re-derived string can never catch
+// this — both sides come from the identical formula. The only real signal is
+// whether HEAD is actually tagged: tagAtHEAD mirrors `task version:check`
+// (mache-4d7f2c's own release-integrity invariant), so this stays consistent
+// with how the sibling TestInstalledMacheReportsExpectedVersion in
+// version_test.go decides the same question.
 func TestPublishedImageBundlesThePinnedLeyline(t *testing.T) {
 	d := setupDockerImage(t)
 
@@ -186,9 +194,10 @@ func TestPublishedImageBundlesThePinnedLeyline(t *testing.T) {
 	require.NotEmptyf(t, got, "bundled leyline printed no version:\n%s", res.combined())
 
 	want := expectedLeylinePin(t)
-	if img, expected := d.image, "ghcr.io/agentic-research/mache:v"+versionTxt(t, macheTreeRoot(t)); img != expected {
-		t.Logf("image %s is not this tree's release image (%s); bundled leyline is %s, this tree pins %s",
-			img, expected, got, want)
+	root := macheTreeRoot(t)
+	if tag := tagAtHEAD(t, root); tag == "" {
+		t.Logf("HEAD is not a release tag (this tree is ahead of its last release); "+
+			"image %s bundles leyline %s, this tree pins %s — not compared", d.image, got, want)
 		return
 	}
 	assert.Equal(t, want, got, "the image bundles a leyline that is not this tree's pin")
