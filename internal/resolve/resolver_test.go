@@ -64,6 +64,19 @@ func TestRegistry_PropagatesResolverError(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrNotResolvable))
 }
 
+// assertResolveIsCached calls resolve twice and asserts the second call
+// returns the identical graph.Graph instance — the shared assertion behind
+// every Resolver implementation's "CachesRepeatedResolution" test
+// (GoModResolver, LocalPathResolver, ...).
+func assertResolveIsCached(t *testing.T, resolve func() (graph.Graph, error)) {
+	t.Helper()
+	first, err := resolve()
+	require.NoError(t, err)
+	second, err := resolve()
+	require.NoError(t, err)
+	require.Same(t, first, second, "a cached Resolve must return the same graph instance, not rebuild")
+}
+
 func TestRegistry_LaterRegistrationReplacesEarlier(t *testing.T) {
 	first := graph.NewMemoryStore()
 	second := graph.NewMemoryStore()

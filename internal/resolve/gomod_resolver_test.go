@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/graph"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,12 +60,9 @@ func TestGoModResolver_CachesRepeatedResolution(t *testing.T) {
 	workDir, importPath := newFakeModule(t)
 	r := &GoModResolver{WorkDir: workDir}
 
-	first, err := r.Resolve(context.Background(), importPath)
-	require.NoError(t, err)
-	second, err := r.Resolve(context.Background(), importPath)
-	require.NoError(t, err)
-
-	require.Same(t, first, second, "a cached Resolve must return the same graph instance, not rebuild")
+	assertResolveIsCached(t, func() (graph.Graph, error) {
+		return r.Resolve(context.Background(), importPath)
+	})
 }
 
 func TestGoModResolver_MissingWorkDirErrors(t *testing.T) {

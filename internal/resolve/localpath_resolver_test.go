@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/graph"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,11 +75,9 @@ func TestLocalPathResolver_CachesRepeatedResolution(t *testing.T) {
 	anchor := newFakeAnchor(t)
 	r := &LocalPathResolver{Anchor: anchor}
 
-	first, err := r.Resolve(context.Background(), "./modules/vpc")
-	require.NoError(t, err)
-	second, err := r.Resolve(context.Background(), "./modules/vpc")
-	require.NoError(t, err)
-	require.Same(t, first, second, "a cached Resolve must return the same graph instance, not rebuild")
+	assertResolveIsCached(t, func() (graph.Graph, error) {
+		return r.Resolve(context.Background(), "./modules/vpc")
+	})
 }
 
 func TestIsLocalRelativeLocator(t *testing.T) {
