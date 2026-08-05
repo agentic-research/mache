@@ -279,7 +279,7 @@ func TestDetectProjectType_RequirementsTxt(t *testing.T) {
 
 func TestWriteClaudeMCPConfig_Fresh(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, writeClaudeMCPConfig(dir, "mache"))
+	require.NoError(t, writeClaudeMCPConfig(dir, ""))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
 	require.NoError(t, err)
@@ -302,7 +302,7 @@ func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
 	existing := `{"mcpServers": {"github": {"command": "gh", "args": ["mcp"]}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "mcp.json"), []byte(existing), 0o644))
 
-	require.NoError(t, writeClaudeMCPConfig(dir, "/usr/local/bin/mache"))
+	require.NoError(t, writeClaudeMCPConfig(dir, ""))
 
 	data, err := os.ReadFile(filepath.Join(claudeDir, "mcp.json"))
 	require.NoError(t, err)
@@ -328,7 +328,7 @@ func TestWriteClaudeMCPConfig_PreservesUnknownKeys(t *testing.T) {
 	existing := `{"mcpServers": {}, "customSetting": true, "version": 2}`
 	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "mcp.json"), []byte(existing), 0o644))
 
-	require.NoError(t, writeClaudeMCPConfig(dir, "mache"))
+	require.NoError(t, writeClaudeMCPConfig(dir, ""))
 
 	data, err := os.ReadFile(filepath.Join(claudeDir, "mcp.json"))
 	require.NoError(t, err)
@@ -338,6 +338,23 @@ func TestWriteClaudeMCPConfig_PreservesUnknownKeys(t *testing.T) {
 	assert.Equal(t, true, root["customSetting"])
 	assert.Equal(t, float64(2), root["version"])
 	assert.Contains(t, root["mcpServers"].(map[string]any), "mache")
+}
+
+// TestWriteClaudeMCPConfig_EmbedsProjectToken — mache-6ec106. A non-empty
+// token must be embedded as ?project=<token> so the session resolves its
+// root from the local registry without depending on MCP roots.
+func TestWriteClaudeMCPConfig_EmbedsProjectToken(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, writeClaudeMCPConfig(dir, "deadbeef1234"))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
+	require.NoError(t, err)
+
+	var root map[string]any
+	require.NoError(t, json.Unmarshal(data, &root))
+	servers := root["mcpServers"].(map[string]any)
+	mache := servers["mache"].(map[string]any)
+	assert.Equal(t, macheHTTPURL+"?project=deadbeef1234", mache["url"])
 }
 
 func TestWriteClaudeMD_Fresh(t *testing.T) {

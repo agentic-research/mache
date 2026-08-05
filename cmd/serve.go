@@ -310,7 +310,21 @@ func serveLandingPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", landingPageCacheControl)
 	_, _ = fmt.Fprintln(w, "mache MCP server")
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintf(w, "Connect: claude mcp add --transport http mache \"%s://%s/mcp?repo=<your-repo-url>\"\n", scheme, r.Host)
+	_, _ = fmt.Fprintf(w, "Connect: claude mcp add --transport http mache \"%s://%s/mcp\"\n", scheme, r.Host)
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "This shared daemon routes each session to a project by asking the")
+	_, _ = fmt.Fprintln(w, "connecting client for its MCP workspace roots. If your client does not")
+	_, _ = fmt.Fprintln(w, "answer that request, tool calls fail with \"workspace root unavailable\".")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Fix: run `mache init` inside the project directory — it registers the")
+	_, _ = fmt.Fprintln(w, "project locally and rewrites .claude/mcp.json with a ?project=<token> URL")
+	_, _ = fmt.Fprintln(w, "that resolves the session without depending on client roots at all. To")
+	_, _ = fmt.Fprintln(w, "serve one fixed project without per-client registration, restart this")
+	_, _ = fmt.Fprintln(w, "daemon with --path <project-dir> instead.")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintf(w, "?repo=<https-git-url> is a separate hosted-mode escape hatch that clones a\n")
+	_, _ = fmt.Fprintln(w, "remote HTTPS repo per session — it does not accept a local path and is not")
+	_, _ = fmt.Fprintln(w, "what an already-checked-out local project needs.")
 }
 
 // requestScheme returns "https" if behind a TLS-terminating proxy, else "http".
