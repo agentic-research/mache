@@ -1,9 +1,18 @@
 ---
-title: "ADR-0016: Cross-Language Reference Resolver"
-status: Proposed
+title: 'ADR-0016: Cross-Language Reference Resolver'
+status: Accepted
 date: 2026-05-10
 tags: [architecture, cross-language, references, resolver, refs]
 ---
+
+**Implementation status (2026-08-05):** steps 1–3 of the sequence below have
+shipped — `mache-bd97d9`/`GoModResolver` (`mache-e6d582`), and
+`mache-bdcd2b`/`mache-be0b9f` (`internal/resolve/localpath_resolver.go` +
+`resolve_ref` mounting). `mod:` and `gomod:` are both live scheme resolvers,
+so step 4's generalization question is already answered empirically — two
+independent `Resolver` implementations share the `Registry`/mount-and-query
+pipeline with no changes to either. Step 5 (`mache-be3da9`, `callers/`
+virtual-dir entries) remains open.
 
 **Relates to:**
 
