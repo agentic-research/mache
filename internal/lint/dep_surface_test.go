@@ -66,6 +66,16 @@ var thinDepAllowlist = map[string]string{
 	// correct implementation beats owning a subtly wrong one.
 	"golang.org/x/text/cases":    "cases.Title — Unicode-correct title casing; hand-rolling would be a fidelity regression",
 	"golang.org/x/text/language": "language.Und — the locale tag cases.Title requires",
+
+	// One call, but it's the correct primitive: request coalescing under a
+	// race is exactly the class of thing worth not hand-rolling (a homemade
+	// version is a mutex-and-map bug waiting to happen). singleflight.Group
+	// coalesces concurrent GoModResolver.Resolve calls for the same import
+	// path (internal/resolve/gomod_resolver.go) so two callers racing to
+	// resolve the same locator pay one `go list` + graph.Build, not two —
+	// the same coalescing ADR-0016's sibling bead (LocalPathResolver,
+	// mache-bdcd2b) already commits to for its own resolver.
+	"golang.org/x/sync/singleflight": "singleflight.Group — coalesces concurrent resolution of the same locator (ADR-0016, docs/adr/0025)",
 }
 
 // blankImportOnly are dependencies imported solely for their side effects
