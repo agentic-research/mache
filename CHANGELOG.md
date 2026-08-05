@@ -8,6 +8,21 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`graph.Build` — produce a `.db` without shelling out to the `mache`
+  CLI** (`mache-3edd21`). `graph.Open` (below) fixed *querying* an
+  already-built `.db` as a library, but *producing* one still required the
+  CLI: `cmd/build.go`'s leyline resolution/auto-download and `leyline parse`
+  invocation weren't exposed anywhere in the public `graph`/`ingest`
+  packages. `graph.Build(source, output)` is the library equivalent of
+  `mache build <source> <output>` with no `--schema` flag — the common case,
+  and what `Open` expects (a raw leyline-parsed `.db`). It resolves the
+  pinned leyline binary the same way every mache entry point does
+  (PATH-if-pin-matching, else the version-namespaced cache, else
+  SHA-verified auto-download). Deliberately scoped to that: the `--schema`
+  re-projection path (`Engine`+`ASTWalker` over a custom `api.Topology`) and
+  the CLI's `_mache_meta` provenance stamping (which identifies the mache
+  *binary*, meaningless for a library caller) stay CLI-only.
+
 - **`graph.Open` — a facade that makes the public `graph` package actually
   work as a library** (`mache-04972b`). Loading a mache `.db` via
   `graph.MemoryStore` + `graph.ImportSQLite` left `LookupDef` returning `[]`
