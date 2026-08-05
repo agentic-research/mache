@@ -1,15 +1,14 @@
 package graph_test
 
 import (
-	"database/sql"
 	"encoding/json"
 	"io/fs"
 	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
 func TestExportImportRoundTrip(t *testing.T) {
@@ -118,47 +117,18 @@ func TestExportImportEmptyStore(t *testing.T) {
 	}
 }
 
-// newFixtureDB creates a minimal nodes-table .db with the shape
-// `mache build`/`leyline parse` produces: a nodes tree plus node_defs and
-// node_refs tables carrying one definition and one reference.
+// newFixtureDB builds a mache-shaped .db via internal/fixturedb — never
+// hand-written DDL (internal/lint's LLO boundary rule forbids test files
+// from hand-typing node_defs/node_refs; a hand-written CREATE TABLE is a
+// hidden test parameter, since ensureCanonicalViews emits a structurally
+// different v_refs/v_defs per column combination). fixturedb.Leyline derives
+// the exact shape from the real pinned producer.
 func newFixtureDB(t *testing.T) string {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "fixture.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY,
-			parent_id TEXT,
-			name TEXT NOT NULL,
-			kind INTEGER NOT NULL,
-			size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL,
-			record_id TEXT,
-			record TEXT
-		);
-		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
-
-		CREATE TABLE node_refs (
-			token TEXT,
-			node_id TEXT,
-			PRIMARY KEY (token, node_id)
-		) WITHOUT ROWID;
-
-		CREATE TABLE node_defs (
-			token TEXT,
-			node_id TEXT,
-			PRIMARY KEY (token, node_id)
-		) WITHOUT ROWID;
-
-		INSERT INTO nodes VALUES ('functions', '', 'functions', 1, 0, 1000, NULL, NULL);
-		INSERT INTO nodes VALUES ('functions/dedupSuffix', 'functions', 'dedupSuffix', 1, 0, 2000, NULL, NULL);
-
-		INSERT INTO node_defs VALUES ('dedupSuffix', 'functions/dedupSuffix');
-		INSERT INTO node_refs VALUES ('dedupSuffix', 'functions/dedupSuffix');
-	`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Def("dedupSuffix", "functions/dedupSuffix", fixturedb.Function)
+	b.Ref("dedupSuffix", "functions/caller", "functions/caller/call_0", "")
+	dbPath, _ := b.Build()
 	return dbPath
 }
 
@@ -204,7 +174,7 @@ func TestOpen_QueryRefsWorksWithoutImport(t *testing.T) {
 		nodeIDs = append(nodeIDs, id)
 	}
 	require.NoError(t, rows.Err())
-	require.Equal(t, []string{"functions/dedupSuffix"}, nodeIDs)
+	require.Equal(t, []string{"functions/caller/call_0"}, nodeIDs)
 }
 
 // TestImportSQLite_DoesNotWireLookupDefOrQueryRefs pins ImportSQLite's
