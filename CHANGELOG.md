@@ -8,6 +8,20 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`internal/resolve` — the first two beads of ADR-0016's cross-language
+  reference resolver, and a new companion ADR-0025 for how resolver
+  bodies work** (`mache-e6d582`). ADR-0016 (Proposed since May) defines an
+  open scheme registry for cross-language locators (`mod:`, `npm:`,
+  `gomod:`, ...) but nothing in its 5-bead implementation sequence had
+  landed. Ships `Resolver`/`Registry` (`mache-bd97d9`, exactly per its
+  spec) plus `GoModResolver` — a `gomod:` resolver that shells out to `go list -json` (Go's own module-resolution tool, not a hand-rolled
+  `go.mod`/semver parser) and, once it names the resolved package's
+  directory, indexes it with this session's own `graph.Build` +
+  `graph.Open` facades. ADR-0025 documents the general pattern this
+  establishes for future ecosystem schemes (`npm:`, `cargo:`, ...): shell
+  out to that ecosystem's own JSON-emitting resolution tool, don't
+  reimplement its manifest/lockfile semantics.
+
 - **`graph.Build` — produce a `.db` without shelling out to the `mache`
   CLI** (`mache-3edd21`). `graph.Open` (below) fixed *querying* an
   already-built `.db` as a library, but *producing* one still required the

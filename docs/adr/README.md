@@ -41,6 +41,7 @@ is no duplicate `#` heading.
 | [0022](0022-mcp-transport-canonical.md)                         | Accepted    | Streamable HTTP is the canonical MCP transport; stdio is an escape hatch          |
 | [0023](0023-unified-code-fact-ir.md)                            | Superseded  | Unified Code-Fact IR — Property Graph over a Content-Addressed Symbol Set         |
 | [0024](0024-incremental-dataflow-taint-as-substrate-queries.md) | Proposed    | Incremental Dataflow & Taint as Substrate Queries                                 |
+| [0025](0025-resolver-body-native-ecosystem-tooling.md)          | Accepted    | Resolver bodies shell out to each ecosystem's own tool (go list, cargo metadata…) |
 
 ## Notes on the non-obvious statuses
 

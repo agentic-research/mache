@@ -678,6 +678,11 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "internal/resolve/resolver.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/curate.go",
       "count": 1
     },
@@ -685,6 +690,11 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/registry.go",
       "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/vfs/resolver.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
