@@ -178,6 +178,11 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "graph/sqlite_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/control/control_test.go",
       "count": 1
     },
@@ -225,6 +230,11 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/graph/memstore_refs.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/graph/props_sql_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
