@@ -118,6 +118,16 @@ func exportNode(store *MemoryStore, stmt *sql.Stmt, nodeID, parentID string) err
 
 // ImportSQLite reads nodes from a SQLite database into a new MemoryStore.
 // The database must have a nodes table in the standard mache format.
+//
+// This ONLY replicates the node tree (GetNode/ListChildren/ReadContent work
+// on the result). It does not read node_defs/node_refs, so the returned
+// MemoryStore's LookupDef returns nil for every token and QueryRefs errors
+// "refsDB not initialized" — those indices live in MemoryStore's own
+// AddDef/AddRef/InitRefsDB+FlushRefs machinery, which this function never
+// calls. For a mache-produced .db (mache build / leyline parse) where you
+// need LookupDef/QueryRefs/GetCallers working, use Open instead: it opens a
+// *SQLiteGraph, which answers those directly against the file's own
+// node_defs/node_refs tables with no import step at all.
 func ImportSQLite(dbPath string) (*MemoryStore, error) {
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	if err != nil {

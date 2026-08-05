@@ -6,7 +6,9 @@
 package graph
 
 import (
+	"github.com/agentic-research/mache/api"
 	ig "github.com/agentic-research/mache/internal/graph"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 )
 
 // Graph is the interface for the FUSE layer and external consumers.
@@ -82,3 +84,35 @@ var (
 	PropRaw       = ig.PropRaw
 	SetPropRaw    = ig.SetPropRaw
 )
+
+// SQLiteGraph is the zero-copy backend that reads directly from a mache .db
+// file (produced by `mache build` / `leyline parse`) — GetNode/ListChildren/
+// ReadContent read the nodes table on demand, and LookupDef/QueryRefs/
+// GetCallers query the db's own node_defs/node_refs tables directly. Unlike
+// ImportSQLite (below), nothing needs to be pre-populated: a freshly opened
+// SQLiteGraph answers LookupDef/QueryRefs immediately, because the data was
+// never copied out of the file in the first place.
+type SQLiteGraph = ig.SQLiteGraph
+
+// OpenSQLiteGraph opens dbPath with a custom schema and template renderer.
+// Most callers want Open, below, which fills in the defaults every mache
+// entry point (task pack, mache serve, ...) already uses for a plain .db
+// source.
+var OpenSQLiteGraph = ig.OpenSQLiteGraph
+
+// Open opens a mache .db file for querying, with the same defaults mache's
+// own CLI uses for a bare .db source (empty schema — auto-detected from the
+// db's own tables — and mache's pure-Go template renderer). Returns a
+// *SQLiteGraph, which implements Graph plus LookupDef/QueryRefs/GetCallers
+// directly against the file — no import/populate step required.
+//
+// This is the fix for the trap MemoryStore + ImportSQLite falls into: a
+// MemoryStore built by ImportSQLite has an empty defs map and an
+// uninitialized refs sidecar (ImportSQLite only replicates the node tree),
+// so LookupDef silently returns nil and QueryRefs errors
+// "refsDB not initialized" — not because the .db lacks the data, but
+// because it was never copied into MemoryStore's separate in-memory
+// indices. Open sidesteps the whole class by not copying anything.
+func Open(dbPath string) (*SQLiteGraph, error) {
+	return ig.OpenSQLiteGraph(dbPath, &api.Topology{}, machetmpl.Render)
+}

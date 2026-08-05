@@ -1,12 +1,15 @@
 package graph_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io/fs"
 	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 func TestExportImportRoundTrip(t *testing.T) {
@@ -113,4 +116,111 @@ func TestExportImportEmptyStore(t *testing.T) {
 	if len(imported.RootIDs()) != 0 {
 		t.Errorf("expected 0 roots, got %d", len(imported.RootIDs()))
 	}
+}
+
+// newFixtureDB creates a minimal nodes-table .db with the shape
+// `mache build`/`leyline parse` produces: a nodes tree plus node_defs and
+// node_refs tables carrying one definition and one reference.
+func newFixtureDB(t *testing.T) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "fixture.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			kind INTEGER NOT NULL,
+			size INTEGER DEFAULT 0,
+			mtime INTEGER NOT NULL,
+			record_id TEXT,
+			record TEXT
+		);
+		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
+
+		CREATE TABLE node_refs (
+			token TEXT,
+			node_id TEXT,
+			PRIMARY KEY (token, node_id)
+		) WITHOUT ROWID;
+
+		CREATE TABLE node_defs (
+			token TEXT,
+			node_id TEXT,
+			PRIMARY KEY (token, node_id)
+		) WITHOUT ROWID;
+
+		INSERT INTO nodes VALUES ('functions', '', 'functions', 1, 0, 1000, NULL, NULL);
+		INSERT INTO nodes VALUES ('functions/dedupSuffix', 'functions', 'dedupSuffix', 1, 0, 2000, NULL, NULL);
+
+		INSERT INTO node_defs VALUES ('dedupSuffix', 'functions/dedupSuffix');
+		INSERT INTO node_refs VALUES ('dedupSuffix', 'functions/dedupSuffix');
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	return dbPath
+}
+
+// TestOpen_LookupDefWorksWithoutImport is the regression test for the bug
+// this session found: a consumer loading a mache .db via
+// MemoryStore+ImportSQLite got LookupDef returning nil and QueryRefs
+// erroring "refsDB not initialized" — not because the .db lacked the data,
+// but because ImportSQLite only replicates the node tree and never touches
+// node_defs/node_refs. Open (backed by SQLiteGraph) reads those tables
+// directly, so both work immediately with no import/populate step.
+func TestOpen_LookupDefWorksWithoutImport(t *testing.T) {
+	dbPath := newFixtureDB(t)
+
+	g, err := graph.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	ids := g.LookupDef("dedupSuffix")
+	require.Equal(t, []string{"functions/dedupSuffix"}, ids,
+		"LookupDef must resolve directly from node_defs, no AddDef call required")
+
+	require.Nil(t, g.LookupDef("NotInTheTable"),
+		"an absent token must return nil, not a phantom match")
+}
+
+// TestOpen_QueryRefsWorksWithoutImport is QueryRefs' half of the same
+// regression: querying node_refs must work directly against the file.
+func TestOpen_QueryRefsWorksWithoutImport(t *testing.T) {
+	dbPath := newFixtureDB(t)
+
+	g, err := graph.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+
+	rows, err := g.QueryRefs("SELECT node_id FROM node_refs WHERE token = ?", "dedupSuffix")
+	require.NoError(t, err, "QueryRefs must not require an explicit InitRefsDB/FlushRefs step")
+	defer func() { _ = rows.Close() }()
+
+	var nodeIDs []string
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		nodeIDs = append(nodeIDs, id)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"functions/dedupSuffix"}, nodeIDs)
+}
+
+// TestImportSQLite_DoesNotWireLookupDefOrQueryRefs pins ImportSQLite's
+// documented limitation so a future change either fixes it deliberately
+// (updating this test) or is caught here rather than rediscovered blind by
+// the next consumer. Use Open, not ImportSQLite, when LookupDef/QueryRefs
+// need to work.
+func TestImportSQLite_DoesNotWireLookupDefOrQueryRefs(t *testing.T) {
+	dbPath := newFixtureDB(t)
+
+	imported, err := graph.ImportSQLite(dbPath)
+	require.NoError(t, err)
+
+	require.Nil(t, imported.LookupDef("dedupSuffix"),
+		"ImportSQLite does not read node_defs — LookupDef stays empty until this is fixed or documented otherwise")
+
+	_, err = imported.QueryRefs("SELECT 1")
+	require.Error(t, err, "ImportSQLite does not call InitRefsDB — QueryRefs must still error")
 }

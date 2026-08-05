@@ -8,6 +8,20 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`graph.Open` — a facade that makes the public `graph` package actually
+  work as a library** (`mache-04972b`). Loading a mache `.db` via
+  `graph.MemoryStore` + `graph.ImportSQLite` left `LookupDef` returning `[]`
+  and `QueryRefs` erroring "refsDB not initialized": `ImportSQLite` only
+  replicates the plain node tree and never touches the `node_defs`/
+  `node_refs` tables a mache-produced `.db` carries. `graph.Open(dbPath)`
+  wraps the same `SQLiteGraph` backend mache's own CLI already uses for a
+  `.db` source — it reads `node_defs`/`node_refs` directly off the file, so
+  `LookupDef`/`QueryRefs`/`GetCallers` work immediately with no
+  import/populate step. `graph.SQLiteGraph` and the full-signature
+  `graph.OpenSQLiteGraph` are also now exported for callers who need a
+  custom schema or renderer. `ImportSQLite`'s doc comment now states its
+  limitation explicitly.
+
 - **`mache init` registers a per-project token so shared-daemon sessions
   resolve without depending on MCP `roots/list`** (`mache-6ec106`). The
   canonical setup — one shared HTTP daemon, `mache init` registering a bare
