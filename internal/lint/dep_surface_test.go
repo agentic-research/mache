@@ -72,7 +72,7 @@ var thinDepAllowlist = map[string]string{
 	// version is a mutex-and-map bug waiting to happen). singleflight.Group
 	// coalesces concurrent GoModResolver.Resolve calls for the same import
 	// path (resolve/gomod_resolver.go) so two callers racing to
-	// resolve the same locator pay one `go list` + graph.Build, not two —
+	// resolve the same locator pay one `go list` + build.Parse, not two —
 	// the same coalescing ADR-0016's sibling bead (LocalPathResolver,
 	// mache-bdcd2b) already commits to for its own resolver.
 	"golang.org/x/sync/singleflight": "singleflight.Group — coalesces concurrent resolution of the same locator (ADR-0016, docs/adr/0025)",

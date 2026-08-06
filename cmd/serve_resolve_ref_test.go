@@ -212,7 +212,7 @@ func TestMakeResolveRefHandler_ModSchemeMountIsIdempotent(t *testing.T) {
 func TestMakeResolveRefHandler_GomodSchemeMountsQueryableGraph(t *testing.T) {
 	// gomod: resolves against the served root's own go.mod — mache's own
 	// repo root already imports testify, so this exercises the real `go
-	// list` + graph.Build/Open pipeline against a real dependency, not a
+	// list` + build.Parse + graph.Open pipeline against a real dependency, not a
 	// synthetic fixture.
 	//
 	// repoRoot is derived from this source file's own compiled-in path

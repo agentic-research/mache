@@ -18,7 +18,7 @@ import (
 // local-relative references such as a Terraform `module { source = "./x" }`.
 //
 // Like GoModResolver, it deliberately does not hand-roll ingestion: once a
-// locator resolves to a directory, graph.Build (leyline parse) + graph.Open
+// locator resolves to a directory, build.Parse (leyline parse) + graph.Open
 // index and open it exactly as any other mache-produced .db, so the result
 // supports LookupDef/QueryRefs/GetCallers immediately.
 type LocalPathResolver struct {

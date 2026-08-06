@@ -174,9 +174,7 @@ func (c *CompositeGraph) SearchDefs(pattern string, limit int) map[string][]stri
 	out := make(map[string][]string)
 	for prefix, g := range c.mounts {
 		var perMount map[string][]string
-		if ds, ok := g.(interface {
-			SearchDefs(string, int) map[string][]string
-		}); ok {
+		if ds, ok := g.(DefsSearcher); ok {
 			perMount = ds.SearchDefs(pattern, limit)
 		}
 		if perMount == nil {

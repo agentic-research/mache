@@ -250,7 +250,7 @@ func TestRouteSheafEvent_AllKnownNoResultNoOps(t *testing.T) {
 }
 
 // fakeGraph is a minimal graph.Graph that records Invalidate calls
-// for assertion. Mirrors the mockGraph in internal/graph but lives
+// for assertion. Mirrors the mockGraph in the graph package but lives
 // here so the cmd-package routing test isn't coupled to that file's
 // (internal) test types.
 type fakeGraph struct {

@@ -23,7 +23,7 @@ import (
 // resolution semantics.
 //
 // Once `go list` names the resolved package's directory, that directory is
-// indexed with graph.Build (leyline parse, this session's library facade —
+// indexed with build.Parse (leyline parse, this session's library facade —
 // see docs/CHANGELOG under mache-3edd21) and opened with graph.Open, so
 // LookupDef/QueryRefs/GetCallers work on the result exactly as they do on
 // any other mache-produced .db.
@@ -66,7 +66,7 @@ func (r *GoModResolver) Resolve(ctx context.Context, locator string) (graph.Grap
 	}
 
 	// singleflight coalesces concurrent Resolve calls for the same import
-	// path into one `go list` + graph.Build — both are real subprocess/IO
+	// path into one `go list` + build.Parse — both are real subprocess/IO
 	// cost, and two callers racing to resolve the same locator should not
 	// pay it twice.
 	v, err, _ := r.sf.Do(locator, func() (any, error) {

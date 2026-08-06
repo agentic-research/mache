@@ -111,12 +111,12 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	// defeat this reader's laziness. props never holds content, so there is
 	// nothing left to filter.
 	var props []byte
-	cols := "kind, size, mtime, record_id"
+	cols := "n.kind, n.size, n.mtime, n.record_id"
 	if r.hasProps {
-		cols += ", props"
+		cols += ", n.props"
 	}
 	if r.hasContext {
-		cols += ", context"
+		cols += ", n.context"
 	}
 	dest := []any{&kind, &size, &mtimeNano, &recordID}
 	if r.hasProps {
@@ -125,7 +125,24 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	if r.hasContext {
 		dest = append(dest, &context)
 	}
-	err := r.db.QueryRow("SELECT "+cols+" FROM nodes WHERE id = ?", id).Scan(dest...)
+
+	// The source location rides along on THIS query rather than a second one.
+	// GetNode is called per-node inside bulk walks — get_architecture BFSes up
+	// to 50,000 nodes (cmd/serve_architecture.go) reading only Mode.IsDir() —
+	// so a separate `SELECT ... FROM _ast WHERE node_id = ?` would add one
+	// round-trip per node to callers that never read Origin. A LEFT JOIN costs
+	// nothing extra when the row is absent and nothing at all when the db has
+	// no _ast (mache-e57065).
+	var loc astLocation
+	from := "nodes n"
+	if r.hasAST {
+		cols += ", a.source_id, a.start_byte, a.end_byte, a.start_row, a.start_col, a.end_row, a.end_col"
+		from += " LEFT JOIN _ast a ON a.node_id = n.id"
+		dest = append(dest, &loc.sourceID, &loc.startByte, &loc.endByte,
+			&loc.startRow, &loc.startCol, &loc.endRow, &loc.endCol)
+	}
+
+	err := r.db.QueryRow("SELECT "+cols+" FROM "+from+" WHERE n.id = ?", id).Scan(dest...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -150,7 +167,7 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	// map shape — that's expected, and leaves Properties nil.
 	node.Properties = DecodeProps(props)
 
-	node.Origin = r.originOf(id)
+	node.Origin = loc.origin()
 
 	if kind == NodeKindFile {
 		if cachedSize, ok := r.sizeCache.Load(id); ok {
@@ -172,31 +189,37 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 //
 // Rows are tree-sitter's 0-based; lines and columns are stored 1-based here so
 // a consumer can use them directly, and so 0 unambiguously means unknown.
-func (r *NodesTableReader) originOf(id string) *SourceOrigin {
-	if !r.hasAST {
-		return nil
-	}
-	var (
-		sourceID           string
-		startByte, endByte uint32
-		startRow, startCol uint32
-		endRow, endCol     uint32
-	)
-	err := r.db.QueryRow(
-		`SELECT source_id, start_byte, end_byte, start_row, start_col, end_row, end_col
-		   FROM _ast WHERE node_id = ?`, id,
-	).Scan(&sourceID, &startByte, &endByte, &startRow, &startCol, &endRow, &endCol)
-	if err != nil {
+// astLocation holds the nullable `_ast` columns a GetNode LEFT JOIN produces.
+// Every field is nullable because the join misses for directories and virtual
+// nodes, which have no parse-tree row.
+type astLocation struct {
+	sourceID           sql.NullString
+	startByte, endByte sql.NullInt64
+	startRow, startCol sql.NullInt64
+	endRow, endCol     sql.NullInt64
+}
+
+// origin converts the joined row into a SourceOrigin, or nil when the node has
+// no `_ast` row — the documented "not locatable" sentinel. A zero-valued
+// Origin would read as "line 0 of an empty file" to every consumer, which is
+// worse than admitting we do not know.
+//
+// Rows and columns are tree-sitter's 0-based; they are stored 1-based here so
+// a consumer can use them directly and so 0 unambiguously means unknown. Byte
+// offsets pass through UNCHANGED — write-back splices by byte and must not get
+// the +1 the reader-facing units need.
+func (l astLocation) origin() *SourceOrigin {
+	if !l.sourceID.Valid {
 		return nil
 	}
 	return &SourceOrigin{
-		FilePath:  sourceID,
-		StartByte: startByte,
-		EndByte:   endByte,
-		StartLine: startRow + 1,
-		StartCol:  startCol + 1,
-		EndLine:   endRow + 1,
-		EndCol:    endCol + 1,
+		FilePath:  l.sourceID.String,
+		StartByte: uint32(l.startByte.Int64),
+		EndByte:   uint32(l.endByte.Int64),
+		StartLine: uint32(l.startRow.Int64) + 1,
+		StartCol:  uint32(l.startCol.Int64) + 1,
+		EndLine:   uint32(l.endRow.Int64) + 1,
+		EndCol:    uint32(l.endCol.Int64) + 1,
 	}
 }
 
@@ -272,7 +295,25 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 			IsDir:       kind == NodeKindDir,
 			ContentSize: int64(size),
 			ModTime:     time.Unix(0, mtimeNano),
-			HasOrigin:   false,
+			// Deliberately false even though GetNode now returns a non-nil
+			// Origin for the same node (mache-e57065), which makes this the
+			// one place NodeStat's "HasOrigin == (Origin != nil)" contract is
+			// knowingly under-reported. Two reasons, both stronger than the
+			// inconsistency:
+			//
+			//   1. GraphFS.statToFileInfo maps HasOrigin -> mode 0o644, so
+			//      flipping it advertises every leyline-backed file as
+			//      WRITABLE over NFS and routes it into the write-back
+			//      pipeline (validate -> format -> splice -> ShiftOrigins),
+			//      which has never been exercised against _ast-derived
+			//      origins. Under-reporting fails closed; over-reporting
+			//      fails into an untested write path.
+			//   2. Computing it honestly means an _ast lookup PER CHILD, on
+			//      the readdir hot path this method exists to keep cheap.
+			//
+			// Revisit together with write-back support for leyline origins,
+			// not before.
+			HasOrigin: false,
 		})
 	}
 	return stats, rows.Err()

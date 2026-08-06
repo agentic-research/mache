@@ -40,7 +40,7 @@ func TestGoModResolver_ResolvesToQueryableGraph(t *testing.T) {
 	// error" — so this asserts against a symbol only this fixture package
 	// defines, via the LookupDef fast path any SQLiteGraph-backed Resolve
 	// result should support (see mache-04972b, this session — the whole
-	// point of routing through graph.Build+graph.Open instead of a
+	// point of routing through build.Parse+graph.Open instead of a
 	// hand-rolled import).
 	ld, ok := g.(graph.DefsLookuper)
 	require.True(t, ok, "resolved graph must satisfy graph.DefsLookuper")

@@ -34,11 +34,31 @@ func originReader(t *testing.T, withAST bool) *NodesTableReader {
 	return NewNodesTableReader(f.DB(), "nodes", nil, nil, 0o644, 0o755, 16)
 }
 
+// mustOrigin / originOrNil read the location through GetNode — the production
+// path — rather than a private helper. Folding the _ast lookup into GetNode's
+// own SELECT removed the standalone helper these used to call, and testing the
+// real path is the better test anyway.
+func mustOrigin(t *testing.T, r *NodesTableReader, id string) *SourceOrigin {
+	t.Helper()
+	n, err := r.GetNode(id)
+	require.NoError(t, err)
+	return n.Origin
+}
+
+func originOrNil(t *testing.T, r *NodesTableReader, id string) *SourceOrigin {
+	t.Helper()
+	n, err := r.GetNode(id)
+	if err != nil {
+		return nil
+	}
+	return n.Origin
+}
+
 // TestOriginOf_ConvertsTreeSitterRowsToOneBased is the off-by-one guard. A
 // "> 0" assertion would pass on the raw 0-based row, so this pins the exact
 // value: row 6 is line 7, not line 6.
 func TestOriginOf_ConvertsTreeSitterRowsToOneBased(t *testing.T) {
-	origin := originReader(t, true).originOf("greeter.go/method_declaration")
+	origin := mustOrigin(t, originReader(t, true), "greeter.go/method_declaration")
 	require.NotNil(t, origin, "a node with an _ast row must be locatable")
 
 	assert.Equal(t, uint32(7), origin.StartLine, "tree-sitter row 6 is the 7th line, 1-based")
@@ -58,13 +78,13 @@ func TestOriginOf_ConvertsTreeSitterRowsToOneBased(t *testing.T) {
 // a zero-valued one. A zero-valued Origin reads as "line 0 of an empty file"
 // to every consumer — worse than admitting we don't know.
 func TestOriginOf_NoASTTableYieldsNil(t *testing.T) {
-	assert.Nil(t, originReader(t, false).originOf("greeter.go/method_declaration"))
+	assert.Nil(t, originOrNil(t, originReader(t, false), "greeter.go/method_declaration"))
 }
 
 // TestOriginOf_NodeAbsentFromASTYieldsNil covers directories and virtual
 // nodes: the table exists, the node simply has no row in it.
 func TestOriginOf_NodeAbsentFromASTYieldsNil(t *testing.T) {
-	assert.Nil(t, originReader(t, true).originOf("greeter.go"))
+	assert.Nil(t, originOrNil(t, originReader(t, true), "greeter.go"))
 }
 
 // TestGetNode_AttachesOrigin proves the lookup is wired into the read path —
