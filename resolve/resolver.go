@@ -13,7 +13,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // ErrNotResolvable is returned by a Resolver when the locator is

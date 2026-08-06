@@ -104,13 +104,6 @@ func (c *CompositeGraph) MountPrefixOf(id string) string {
 	return prefix
 }
 
-// defsMapper is the optional interface a sub-graph implements when
-// it has a token → dir IDs definition index. Both MemoryStore and
-// SQLiteGraph implement this; CompositeGraph aggregates over them.
-type defsMapper interface {
-	DefsMap() map[string][]string
-}
-
 // LookupDef federates LookupDef across mounts: returns all dir IDs
 // across every mount that defines `token`, prefixed with the mount
 // name. Cheaper than DefsMap when only one token is wanted —
@@ -118,16 +111,15 @@ type defsMapper interface {
 func (c *CompositeGraph) LookupDef(token string) []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	type lookuper interface{ LookupDef(string) []string }
 
 	var out []string
 	for prefix, g := range c.mounts {
-		dl, ok := g.(lookuper)
+		dl, ok := g.(DefsLookuper)
 		if !ok {
 			// Fall back to DefsMap snapshot for backends without
 			// a direct lookup method. Keeps this method total even
 			// when sub-graphs are heterogeneous.
-			dm, dmOK := g.(defsMapper)
+			dm, dmOK := g.(DefsMapper)
 			if !dmOK {
 				continue
 			}
@@ -191,7 +183,7 @@ func (c *CompositeGraph) SearchDefs(pattern string, limit int) map[string][]stri
 			// Backend doesn't implement SearchDefs — fall back to
 			// DefsMap iteration with the same matching semantics
 			// the search handler uses for the in-memory path.
-			if dp, ok := g.(defsMapper); ok {
+			if dp, ok := g.(DefsMapper); ok {
 				perMount = make(map[string][]string)
 				for token, ids := range dp.DefsMap() {
 					if !likeMatch(pattern, token) {
@@ -232,7 +224,7 @@ func (c *CompositeGraph) DefsMap() map[string][]string {
 	defer c.mu.RUnlock()
 	out := make(map[string][]string)
 	for prefix, g := range c.mounts {
-		dp, ok := g.(defsMapper)
+		dp, ok := g.(DefsMapper)
 		if !ok {
 			continue
 		}

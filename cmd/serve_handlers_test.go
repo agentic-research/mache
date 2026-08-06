@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/mcpregistry"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"

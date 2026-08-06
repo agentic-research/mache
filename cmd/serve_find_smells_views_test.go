@@ -21,7 +21,7 @@ import (
 // fidelity rows. When missing or pre-Step-1 schema, the views fall
 // back to mention-only — same shape as PR #341.
 
-// sqlDBQuerier wraps a *sql.DB as a refsQuerier. The smellTestGraph
+// sqlDBQuerier wraps a *sql.DB as a graph.RefsQuerier. The smellTestGraph
 // in serve_find_smells_test.go is heavier than these tests need
 // (full graph + AST plumbing); a thin wrapper is enough.
 type sqlDBQuerier struct {
@@ -33,7 +33,7 @@ func (q *sqlDBQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return q.db.Query(query, args...)
 }
 
-// DBPath implements dbPathProvider when path is set, opting this
+// DBPath implements graph.DBPathProvider when path is set, opting this
 // querier into the capnp-readthrough path. Tests that don't set path
 // keep the legacy mention + SQL-binding view shape.
 func (q *sqlDBQuerier) DBPath() string { return q.path }
@@ -457,10 +457,10 @@ func TestLoadCapnpBindings_NoSiblingLogIsNoOp(t *testing.T) {
 	assert.Equal(t, 1, mentionRefs, "mention arm still works")
 }
 
-// TestLoadCapnpBindings_EmptyDBPathIsNoOp asserts a refsQuerier
+// TestLoadCapnpBindings_EmptyDBPathIsNoOp asserts a graph.RefsQuerier
 // without a known path (e.g. in-memory test fixtures) skips the
 // capnp readthrough silently. This is the "querier doesn't implement
-// dbPathProvider" branch as exercised through the CLI/MCP entry
+// graph.DBPathProvider" branch as exercised through the CLI/MCP entry
 // points.
 func TestLoadCapnpBindings_EmptyDBPathIsNoOp(t *testing.T) {
 	dir := t.TempDir()

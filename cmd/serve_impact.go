@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -46,7 +46,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Resolve starting definition(s) for the symbol via the defs map.
-		dp, ok := g.(defsMapProvider)
+		dp, ok := g.(graph.DefsMapper)
 		if !ok {
 			return mcp.NewToolResultError("backend does not support impact analysis (no defs map)"), nil
 		}

@@ -13,7 +13,7 @@ import (
 	"sort"
 
 	daemonwire "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/daemon/wire"
-	graph "github.com/agentic-research/mache/internal/graph"
+	graph "github.com/agentic-research/mache/graph"
 )
 
 // δ⁰ stalk geometry. Matches LLO's `real_repo_sheaf_bench.rs` shape so

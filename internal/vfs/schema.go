@@ -1,6 +1,6 @@
 package vfs
 
-import "github.com/agentic-research/mache/internal/graph"
+import "github.com/agentic-research/mache/graph"
 
 // SchemaHandler serves the /_schema.json virtual file.
 type SchemaHandler struct {

@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
 	machetmpl "github.com/agentic-research/mache/internal/template"
@@ -724,12 +724,12 @@ func TestGetCommunities_CustomMinSize(t *testing.T) {
 	assert.Empty(t, cr.Communities)
 }
 
-// stubLazyWrapper mimics the lazyGraph wrapper's defsSearcher passthrough
+// stubLazyWrapper mimics the lazyGraph wrapper's graph.DefsSearcher passthrough
 // behavior in the PR #373 post-fix audit. It always satisfies the
-// defsSearcher interface (so handler type assertion succeeds) but
+// graph.DefsSearcher interface (so handler type assertion succeeds) but
 // returns nil from SearchDefs — simulating "inner backend doesn't
 // implement SearchDefs." Used to prove the search-handler fallback
-// from defsSearcher → defsMapProvider works when the wrapper passes
+// from graph.DefsSearcher → graph.DefsMapper works when the wrapper passes
 // nil through. Wraps a real Graph for everything else.
 type stubLazyWrapper struct {
 	inner graph.Graph
@@ -785,8 +785,8 @@ func (s *stubLazyWrapper) SearchDefs(_ string, _ int) map[string][]string {
 
 // TestSearch_RoleDefinition_FallsThroughOnNilSearchDefs pins the
 // dispatch chain bug surfaced by the PR #373 post-fix audit: a wrapper
-// that satisfies the defsSearcher type assertion but returns nil must
-// trigger the handler's fallback to defsMapProvider iteration. Without
+// that satisfies the graph.DefsSearcher type assertion but returns nil must
+// trigger the handler's fallback to graph.DefsMapper iteration. Without
 // the nil-check, every wrapped backend returns [] for every pattern.
 //
 // Bench evidence (from
@@ -798,9 +798,9 @@ func (s *stubLazyWrapper) SearchDefs(_ string, _ int) map[string][]string {
 func TestSearch_RoleDefinition_FallsThroughOnNilSearchDefs(t *testing.T) {
 	store := graph.NewMemoryStore()
 	require.NoError(t, store.AddDef("dedupSuffix", "internal/ingest/functions/dedupSuffix"))
-	require.NoError(t, store.AddDef("NewMemoryStore", "internal/graph/functions/NewMemoryStore"))
+	require.NoError(t, store.AddDef("NewMemoryStore", "graph/functions/NewMemoryStore"))
 
-	// Wrap in a defsSearcher-satisfying stub that always returns nil.
+	// Wrap in a graph.DefsSearcher-satisfying stub that always returns nil.
 	// This mirrors lazyGraph wrapping a backend that doesn't implement
 	// SearchDefs — the exact production scenario the post-fix bench
 	// caught.
@@ -1179,13 +1179,13 @@ func TestGetDiagnostics_NoLSPTableWithFile(t *testing.T) {
 }
 
 // TestGetTypeInfo_RejectsNonRefsQuerierBackend pins the fail-fast
-// contract: if the graph backend doesn't implement refsQuerier
+// contract: if the graph backend doesn't implement graph.RefsQuerier
 // (which provides QueryRefs for SQL access), get_type_info must
 // refuse with a clear error mentioning the SQL-backend
 // requirement, not a generic "data not available" message and
 // not an unchecked-assertion panic.
 //
-// Today MemoryStore + lazyGraph both satisfy refsQuerier, so
+// Today MemoryStore + lazyGraph both satisfy graph.RefsQuerier, so
 // this only fires for a future backend that drops the method.
 // The test uses a minimal Graph implementation that deliberately
 // omits QueryRefs.
@@ -1195,7 +1195,7 @@ func TestGetTypeInfo_RejectsNonRefsQuerierBackend(t *testing.T) {
 
 	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Foo"}))
 	require.NoError(t, err)
-	require.True(t, result.IsError, "non-refsQuerier backend must yield an error result")
+	require.True(t, result.IsError, "non-graph.RefsQuerier backend must yield an error result")
 	assert.Contains(t, resultText(t, result), "SQL-capable",
 		"error must explain the missing capability, not say 'data not available'")
 }
@@ -1206,7 +1206,7 @@ func TestGetDiagnostics_RejectsNonRefsQuerierBackend(t *testing.T) {
 
 	result, err := handler(context.Background(), makeRequest(map[string]any{}))
 	require.NoError(t, err)
-	require.True(t, result.IsError, "non-refsQuerier backend must yield an error result")
+	require.True(t, result.IsError, "non-graph.RefsQuerier backend must yield an error result")
 	assert.Contains(t, resultText(t, result), "SQL-capable")
 }
 
@@ -2316,7 +2316,7 @@ func TestGetCommunities_EmptyRefsReturnsMessage(t *testing.T) {
 	assert.Empty(t, communities)
 }
 
-// noRefsGraph is a minimal graph.Graph that does NOT implement refsMapProvider.
+// noRefsGraph is a minimal graph.Graph that does NOT implement graph.RefsMapper.
 // Used to test the unchecked type assertion guard in makeGetCommunitiesHandler.
 type noRefsGraph struct {
 	graph.Graph
@@ -2580,7 +2580,7 @@ func TestFindCallees_GenericNameWarning(t *testing.T) {
 // search unchecked assertion tests
 // ---------------------------------------------------------------------------
 
-// noQueryGraph is a minimal graph.Graph that does NOT implement refsQuerier.
+// noQueryGraph is a minimal graph.Graph that does NOT implement graph.RefsQuerier.
 type noQueryGraph struct {
 	graph.Graph
 }
@@ -2676,7 +2676,7 @@ func newTestLazyGraph(g graph.Graph, basePath string) *lazyGraph {
 // Arena test: ingest real Go source, exercise all 14 read-only MCP tools
 // ---------------------------------------------------------------------------
 
-// TestArena_AllTools ingests mache's own internal/graph/*.go files using the
+// TestArena_AllTools ingests mache's own graph/*.go files using the
 // Go schema preset, builds a real MemoryStore with refs/defs/callees, and then
 // exercises every read-only MCP tool handler to verify they produce valid,
 // non-error results against a real graph.
@@ -2686,11 +2686,11 @@ func TestArena_AllTools(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok, "runtime.Caller failed")
 	repoRoot := filepath.Dir(filepath.Dir(thisFile)) // cmd/serve_test.go -> cmd/ -> repo root
-	graphDir := filepath.Join(repoRoot, "internal", "graph")
+	graphDir := filepath.Join(repoRoot, "graph")
 
 	// Verify the source directory exists.
 	info, err := os.Stat(graphDir)
-	require.NoError(t, err, "internal/graph directory must exist")
+	require.NoError(t, err, "graph directory must exist")
 	require.True(t, info.IsDir())
 
 	// Load the Go schema preset.
@@ -2700,7 +2700,7 @@ func TestArena_AllTools(t *testing.T) {
 
 	// Build a real MemoryStore via the engine ingestion pipeline. ADR-0012
 	// step 4 removed in-process CGO tree-sitter, so source projection goes
-	// through ley-line: parse internal/graph into an `_ast` db and wire an
+	// through ley-line: parse graph into an `_ast` db and wire an
 	// ASTWalker + the pure-Go AST call extractor. Skips when the pinned
 	// leyline isn't available (no download in tests).
 	store := graph.NewMemoryStore()
@@ -2715,7 +2715,7 @@ func TestArena_AllTools(t *testing.T) {
 	}
 	defer astCleanup()
 	store.SetCallExtractor(newASTCallExtractor(astDB))
-	require.NoError(t, engine.Ingest(graphDir), "ingestion of internal/graph failed")
+	require.NoError(t, engine.Ingest(graphDir), "ingestion of graph failed")
 
 	// Initialize the refs database (needed by search, get_type_info, get_diagnostics).
 	require.NoError(t, store.InitRefsDB())
@@ -2780,14 +2780,14 @@ func TestArena_AllTools(t *testing.T) {
 	t.Run("find_callers", func(t *testing.T) {
 		handler := makeFindCallersHandler(store)
 		// find_callers indexes function calls (not type references).
-		// NewMemoryStore is called throughout internal/graph test files.
+		// NewMemoryStore is called throughout graph test files.
 		result, err := handler(context.Background(), makeRequest(map[string]any{"token": "NewMemoryStore"}))
 		require.NoError(t, err)
 		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
 
 		var paths []string
 		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &paths))
-		assert.NotEmpty(t, paths, "NewMemoryStore should have callers in internal/graph")
+		assert.NotEmpty(t, paths, "NewMemoryStore should have callers in graph")
 	})
 
 	// --- 4. find_callees ---
@@ -3149,7 +3149,7 @@ func TestRequestScheme_RejectsArbitraryProto(t *testing.T) {
 // TestSQLiteGraphGoldenPath exercises the full .db serve pipeline end-to-end:
 // schema + JSON data → ingest → SQLiteWriter → .db file → SQLiteGraph (via
 // machetmpl.Render) → MCP tool handlers. This validates the decoupled path
-// where the MCP serve layer only depends on internal/graph + internal/template,
+// where the MCP serve layer only depends on graph + internal/template,
 // not on internal/ingest or tree-sitter.
 func TestSQLiteGraphGoldenPath(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)

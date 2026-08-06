@@ -3,8 +3,8 @@ package cmd
 import (
 	"testing"
 
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
-	"github.com/agentic-research/mache/internal/graph"
 )
 
 // Tests in this package build their .db fixtures through internal/fixturedb,

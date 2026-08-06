@@ -4,7 +4,7 @@
 // to a shared Resolver instead of duplicating if-chains.
 package vfs
 
-import "github.com/agentic-research/mache/internal/graph"
+import "github.com/agentic-research/mache/graph"
 
 // EntryKind classifies a virtual entry.
 type EntryKind int

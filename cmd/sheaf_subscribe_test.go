@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -6,6 +6,49 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `internal/graph` and `internal/resolve` are now the public
+  `graph` and `resolve` packages, and the type-alias facades are gone**
+  (`mache-9a89cd`). The facades were curating the wrong axis. A
+  `type X = internal.X` alias is a TOTAL re-export — every exported method
+  comes with it — so they provided no encapsulation, while the interfaces a
+  consumer actually needs (defs lookup, refs query, db path, schema) stayed
+  unexported in `cmd/`. What they did cost was documentation: because the
+  real types lived in an `internal/` package that pkg.go.dev will not render,
+  `go doc ./graph Node` printed
+
+  ```
+  type Node = ig.Node
+  ```
+
+  and nothing else — no fields, no methods. `SQLiteGraph` was sharper still,
+  its doc comment advertising "LookupDef/QueryRefs/GetCallers query the db's
+  own tables directly" while hiding every one of those signatures. The public
+  API was undocumentable as built, which defeats the purpose of the `resolve/`
+  facade (ADR-0016), whose entire reason to exist is external consumption.
+
+  Migration is an import-path rewrite; no symbol names changed:
+
+  ```
+  github.com/agentic-research/mache/internal/graph   -> .../graph
+  github.com/agentic-research/mache/internal/resolve -> .../resolve
+  ```
+
+- **BREAKING: `graph.Build` moved to the new `build` package as
+  `build.Parse`.** Merging `internal/graph` into `graph` would otherwise close
+  an import cycle — `graph/build.go` imports `internal/leyline`, which imports
+  the graph package for `Node`/`CommunityResult`/`DetectCommunities`. `Build`
+  touches no graph types (it shells out to `leyline parse`), so it belongs
+  with build orchestration rather than the graph data structures. Breaking the
+  cycle by inverting leyline's dependency would have meant duplicating those
+  types, and by injecting the resolver through a package var would have meant
+  action at a distance.
+
+  ```
+  graph.Build(src, out)  ->  build.Parse(src, out)
+  ```
+
 ### Added
 
 - **`resolve_ref` mounts resolved sub-graphs so other MCP tools can query

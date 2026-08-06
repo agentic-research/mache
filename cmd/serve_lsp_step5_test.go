@@ -20,7 +20,7 @@ import (
 
 // stepOneLSPDB builds a fixture with the post-Step-1 _lsp_* schema —
 // def_token populated on _lsp_defs and (referrer_node_id, ref_token)
-// populated on _lsp_refs. Returns the *sql.DB wrapped as a refsQuerier.
+// populated on _lsp_refs. Returns the *sql.DB wrapped as a graph.RefsQuerier.
 func stepOneLSPDB(t *testing.T) *sqlDBQuerier {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "step1.db")

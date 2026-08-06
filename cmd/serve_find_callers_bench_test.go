@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // buildFindCallersBenchGraph seeds a MemoryStore where one popular
@@ -36,7 +36,7 @@ func buildFindCallersBenchGraph(b *testing.B, nFanout int) *graph.MemoryStore {
 // BenchmarkFindCallers_HotToken measures the agent's most common path:
 // look up a token that's referenced from many callers. Covers the
 // graph.GetCallers + JSON-marshal pipeline. The LSP-supplement branch
-// is exercised lazily — MemoryStore implements refsQuerier but its
+// is exercised lazily — MemoryStore implements graph.RefsQuerier but its
 // node_refs table doesn't contain the token, so the LSP query returns
 // empty and the handler falls through to the no-LSP shape.
 func BenchmarkFindCallers_HotToken(b *testing.B) {

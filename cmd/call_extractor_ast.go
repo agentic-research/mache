@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"log"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 )
 

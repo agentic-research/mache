@@ -157,7 +157,7 @@ func TestArenaFlusher_Coalesce(t *testing.T) {
 }
 
 // BenchmarkArenaFlush measures flush latency at various DB sizes.
-// Run with: task test -- -run=^$ -bench=BenchmarkArenaFlush -benchmem ./internal/graph/
+// Run with: task test -- -run=^$ -bench=BenchmarkArenaFlush -benchmem ./graph/
 func BenchmarkArenaFlush(b *testing.B) {
 	for _, sizeKB := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("%dKB", sizeKB), func(b *testing.B) {

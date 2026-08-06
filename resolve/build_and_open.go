@@ -5,11 +5,11 @@ import (
 	"os"
 	"path/filepath"
 
-	pubgraph "github.com/agentic-research/mache/graph"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/build"
+	"github.com/agentic-research/mache/graph"
 )
 
-// buildAndOpen leyline-parses dir into a temp .db (graph.Build) and opens it
+// buildAndOpen leyline-parses dir into a temp .db (build.Parse) and opens it
 // (graph.Open) — the "resolve this directory to a queryable graph" tail
 // shared by every filesystem-directory-based resolver (GoModResolver once
 // `go list` names a directory; LocalPathResolver once its locator is
@@ -23,12 +23,12 @@ func buildAndOpen(tmpPattern, dir string) (graph.Graph, error) {
 	}
 	dbPath := filepath.Join(dbDir, "resolved.db")
 
-	if err := pubgraph.Build(dir, dbPath); err != nil {
+	if err := build.Parse(dir, dbPath); err != nil {
 		_ = os.RemoveAll(dbDir)
 		return nil, fmt.Errorf("resolve: build %s: %w", dir, err)
 	}
 
-	g, err := pubgraph.Open(dbPath)
+	g, err := graph.Open(dbPath)
 	if err != nil {
 		_ = os.RemoveAll(dbDir)
 		return nil, fmt.Errorf("resolve: open resolved db: %w", err)

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/agentic-research/mache/graph"
 )
 
 // mache-238673 phase-1 — content-addressed (node_hash-memoized) evaluation of
@@ -79,7 +81,7 @@ type astFunc struct {
 // truncated to limit. Functions whose node_hash is already memoized skip the
 // branch-count join; functions with no node_hash are always computed (never
 // cached) so correctness never depends on the producer emitting a hash.
-func runCyclomaticComplexityMemo(qg refsQuerier, sourceID string, limit int, memo *smellMemo) ([]smellFinding, error) {
+func runCyclomaticComplexityMemo(qg graph.RefsQuerier, sourceID string, limit int, memo *smellMemo) ([]smellFinding, error) {
 	funcs, err := scanASTFunctions(qg, sourceID)
 	if err != nil {
 		return nil, err
@@ -178,7 +180,7 @@ func runCyclomaticComplexityMemo(qg refsQuerier, sourceID string, limit int, mem
 
 // scanASTFunctions reads every function/method occurrence from _ast, with its
 // node_hash (when the column exists) and span. Optionally scoped to one source.
-func scanASTFunctions(qg refsQuerier, sourceID string) ([]astFunc, error) {
+func scanASTFunctions(qg graph.RefsQuerier, sourceID string) ([]astFunc, error) {
 	hasHash, err := tableHasColumn(qg, "_ast", "node_hash")
 	if err != nil {
 		return nil, fmt.Errorf("probe _ast.node_hash: %w", err)
@@ -223,7 +225,7 @@ func scanASTFunctions(qg refsQuerier, sourceID string) ([]astFunc, error) {
 // occurrences (representatives of distinct subtrees) and returns node_id →
 // metric. Empty input is a no-op — the whole point of the memo is that a warm
 // re-run schedules nothing.
-func computeCyclomaticMetrics(qg refsQuerier, funcs []astFunc) (map[string]int64, error) {
+func computeCyclomaticMetrics(qg graph.RefsQuerier, funcs []astFunc) (map[string]int64, error) {
 	out := make(map[string]int64, len(funcs))
 	if len(funcs) == 0 {
 		return out, nil

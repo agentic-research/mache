@@ -1,6 +1,10 @@
 package cmd
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/agentic-research/mache/graph"
+)
 
 // docRefsViewSQL builds `v_doc_refs` — markdown backtick-span citations,
 // scoped to Rust paths, with the noise this measurably needed filtered out
@@ -57,7 +61,7 @@ func docRefsViewSQL(hasSourceID bool) string {
 
 // ensureDocRefsView installs v_doc_refs. Best-effort in the same sense as
 // the other canonical views: a failure to build it must not fail the run.
-func ensureDocRefsView(qg refsQuerier, hasSourceID bool) error {
+func ensureDocRefsView(qg graph.RefsQuerier, hasSourceID bool) error {
 	for _, s := range []string{
 		"DROP TABLE IF EXISTS temp.v_doc_refs",
 		"CREATE TEMP TABLE v_doc_refs AS " + docRefsViewSQL(hasSourceID),

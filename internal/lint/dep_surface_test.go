@@ -71,7 +71,7 @@ var thinDepAllowlist = map[string]string{
 	// race is exactly the class of thing worth not hand-rolling (a homemade
 	// version is a mutex-and-map bug waiting to happen). singleflight.Group
 	// coalesces concurrent GoModResolver.Resolve calls for the same import
-	// path (internal/resolve/gomod_resolver.go) so two callers racing to
+	// path (resolve/gomod_resolver.go) so two callers racing to
 	// resolve the same locator pay one `go list` + graph.Build, not two —
 	// the same coalescing ADR-0016's sibling bead (LocalPathResolver,
 	// mache-bdcd2b) already commits to for its own resolver.

@@ -1,6 +1,10 @@
 package cmd
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/agentic-research/mache/graph"
+)
 
 // testNodesViewSQL builds `v_test_nodes` — the single definition of "this
 // construct is test code", consumed by every rule that should not judge tests
@@ -120,7 +124,7 @@ func testNodesViewSQL(hasAST bool) string {
 // the canonical views: a failure to build it must not fail the run, because a
 // missing test-exclusion degrades to today's behaviour (tests judged as
 // production) rather than to a wrong answer.
-func ensureTestNodesView(qg refsQuerier, hasAST bool) error {
+func ensureTestNodesView(qg graph.RefsQuerier, hasAST bool) error {
 	// Materialised as a TEMP TABLE, not a VIEW. The detection query walks a
 	// 250k-row _ast twice (attribute lookup, then byte-range containment) and
 	// costs ~2s on a mid-size Rust corpus. As a view every rule that filters

@@ -3,7 +3,7 @@ package vfs
 import (
 	"sync"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // DiagnosticsHandler serves the /_diagnostics/ virtual directory.

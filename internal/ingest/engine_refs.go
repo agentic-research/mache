@@ -3,7 +3,7 @@ package ingest
 import (
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // --- Parallel ingestion types ---

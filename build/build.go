@@ -1,4 +1,4 @@
-package graph
+package build
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"github.com/agentic-research/mache/internal/leyline"
 )
 
-// Build parses source with the pinned leyline binary and writes the result
+// Parse parses source with the pinned leyline binary and writes the result
 // to output — the library equivalent of `mache build <source> <output>` with
 // no --schema flag. That is the common case, and it is what Open expects: a
 // raw leyline-parsed .db (nodes/node_defs/node_refs), which SQLiteGraph reads
@@ -26,7 +26,7 @@ import (
 // mache_commit there identify the mache BINARY that built the file, which a
 // library caller isn't one of, and nothing in this package or Open reads
 // that table.
-func Build(source, output string) error {
+func Parse(source, output string) error {
 	leylineBin, err := leyline.ResolveBinary(true)
 	if err != nil {
 		return fmt.Errorf("resolve leyline: %w", err)

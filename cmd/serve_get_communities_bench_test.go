@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // buildCommunityBenchGraph seeds a MemoryStore with `nClusters`
@@ -33,7 +33,7 @@ func buildCommunityBenchGraph(b *testing.B, nClusters, clusterSize int) *graph.M
 }
 
 // BenchmarkGetCommunities_Detect covers the full handler path:
-// type-assert refsMapProvider, call RefsMap (snapshot copy), run
+// type-assert graph.RefsMapper, call RefsMap (snapshot copy), run
 // Louvain, marshal JSON. Three scales bracket realistic codebases.
 //
 // 5×10  = 50 nodes, 5 clusters       — tiny project

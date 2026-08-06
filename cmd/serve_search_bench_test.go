@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // buildSearchBenchGraph seeds a MemoryStore with N distinct defs.
