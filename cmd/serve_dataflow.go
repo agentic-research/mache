@@ -189,7 +189,7 @@ func (t *dataflowTraversal) expandCallers(entry dataflowQueueEntry) error {
 	if t.direction != "callers" && t.direction != "both" {
 		return nil
 	}
-	callers, err := t.g.GetCallers(filepath.Base(entry.id))
+	callers, err := t.g.GetCallers(tokenForNode(t.g, entry.id))
 	if err != nil {
 		return fmt.Errorf("get callers for %q: %v", entry.id, err)
 	}
