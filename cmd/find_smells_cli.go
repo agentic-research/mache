@@ -498,29 +498,21 @@ func renderListingMD(w io.Writer, listing any) error {
 }
 
 func renderFindings(w io.Writer, ruleID string, findings []smellFinding, format string) error {
-	// Emit an empty finding set as `[]`, not `null`: a nil slice marshals to
-	// null, which forces json consumers to special-case it and diverges from
-	// --format sarif (which always emits arrays). Zero findings is the common
-	// clean-gate case, so keep the shape a stable array.
-	if findings == nil {
-		findings = []smellFinding{}
-	}
-	resp := struct {
-		Rule     string         `json:"rule"`
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}{Rule: ruleID, Total: len(findings), Findings: findings}
+	// Envelope construction (including the nil -> `[]` normalization) is
+	// shared with the find_smells MCP handler via newSmellResponse, so the
+	// two paths cannot serialize the same finding set differently.
+	resp := newSmellResponse(ruleID, findings)
 
 	if format == "md" {
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "# find_smells: `%s`\n\n", ruleID)
-		fmt.Fprintf(&sb, "**%d findings**\n\n", len(findings))
-		if len(findings) == 0 {
+		fmt.Fprintf(&sb, "**%d findings**\n\n", resp.Total)
+		if resp.Total == 0 {
 			sb.WriteString("No findings on this run.\n")
 		} else {
 			sb.WriteString("| Source | Node | Line | Metric |\n")
 			sb.WriteString("| --- | --- | ---: | ---: |\n")
-			for _, f := range findings {
+			for _, f := range resp.Findings {
 				fmt.Fprintf(&sb, "| %s | %s | %d | %d |\n",
 					escapePipes(f.SourceID), escapePipes(f.NodeID), f.Line, f.Metric)
 			}

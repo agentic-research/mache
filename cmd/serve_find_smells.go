@@ -140,16 +140,10 @@ func makeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 		// (older .dbs) we just leave Snippet empty.
 		populateSnippets(qg, findings)
 
-		resp := struct {
-			Rule     string         `json:"rule"`
-			Total    int            `json:"total"`
-			Findings []smellFinding `json:"findings"`
-		}{
-			Rule:     rule.ID,
-			Total:    len(findings),
-			Findings: findings,
-		}
-		return mcp.NewToolResultText(jsonOrPanic(resp)), nil
+		// Shared with the find-smells CLI (newSmellResponse) so the two
+		// consumers of the same rules over the same .db cannot serialize the
+		// same answer differently.
+		return mcp.NewToolResultText(jsonOrPanic(newSmellResponse(rule.ID, findings))), nil
 	}
 }
 
