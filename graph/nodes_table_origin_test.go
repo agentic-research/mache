@@ -24,7 +24,11 @@ import (
 func originReader(t *testing.T, withAST bool) *NodesTableReader {
 	t.Helper()
 	b := fixturedb.New(t, fixturedb.Leyline).
-		Construct("greeter.go/method_declaration")
+		Construct("greeter.go/method_declaration").
+		// "greeter.go" must exist in `nodes` and have NO _ast row: it is the
+		// subject of the join-miss test below. Without this Construct, GetNode
+		// returns ErrNotFound and that test passes down the wrong path.
+		Construct("greeter.go")
 	if withAST {
 		// tree-sitter rows and columns are 0-based: row 6 is the SEVENTH line.
 		b = b.ASTNode("greeter.go/method_declaration", "method_declaration", "greeter.go",
@@ -34,7 +38,7 @@ func originReader(t *testing.T, withAST bool) *NodesTableReader {
 	return NewNodesTableReader(f.DB(), "nodes", nil, nil, 0o644, 0o755, 16)
 }
 
-// mustOrigin / originOrNil read the location through GetNode — the production
+// mustOrigin reads the location through GetNode — the production
 // path — rather than a private helper. Folding the _ast lookup into GetNode's
 // own SELECT removed the standalone helper these used to call, and testing the
 // real path is the better test anyway.
@@ -42,15 +46,6 @@ func mustOrigin(t *testing.T, r *NodesTableReader, id string) *SourceOrigin {
 	t.Helper()
 	n, err := r.GetNode(id)
 	require.NoError(t, err)
-	return n.Origin
-}
-
-func originOrNil(t *testing.T, r *NodesTableReader, id string) *SourceOrigin {
-	t.Helper()
-	n, err := r.GetNode(id)
-	if err != nil {
-		return nil
-	}
 	return n.Origin
 }
 
@@ -78,13 +73,24 @@ func TestOriginOf_ConvertsTreeSitterRowsToOneBased(t *testing.T) {
 // a zero-valued one. A zero-valued Origin reads as "line 0 of an empty file"
 // to every consumer — worse than admitting we don't know.
 func TestOriginOf_NoASTTableYieldsNil(t *testing.T) {
-	assert.Nil(t, originOrNil(t, originReader(t, false), "greeter.go/method_declaration"))
+	node, err := originReader(t, false).GetNode("greeter.go/method_declaration")
+	require.NoError(t, err, "the node must exist — otherwise this asserts nothing about _ast")
+	assert.Nil(t, node.Origin)
 }
 
 // TestOriginOf_NodeAbsentFromASTYieldsNil covers directories and virtual
-// nodes: the table exists, the node simply has no row in it.
+// nodes: the `_ast` table exists, the node exists in `nodes`, and it simply
+// has no parse-tree row — so astLocation.origin() takes its !Valid branch.
+//
+// The node's EXISTENCE is asserted, not assumed. An earlier version of this
+// test queried an id the fixture never created, so GetNode returned
+// ErrNotFound and the nil-Origin assertion passed without the join-miss branch
+// ever running. require.NoError is what keeps that from silently recurring.
 func TestOriginOf_NodeAbsentFromASTYieldsNil(t *testing.T) {
-	assert.Nil(t, originOrNil(t, originReader(t, true), "greeter.go"))
+	node, err := originReader(t, true).GetNode("greeter.go")
+	require.NoError(t, err,
+		"the node must EXIST in `nodes` — if this errors the test is exercising ErrNotFound, not the LEFT JOIN miss")
+	assert.Nil(t, node.Origin, "a node with no _ast row is not locatable")
 }
 
 // TestGetNode_AttachesOrigin proves the lookup is wired into the read path —

@@ -94,55 +94,8 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		return &Node{ID: "", Mode: os.ModeDir | r.dirMode}, nil
 	}
 
-	var kind, size int
-	var mtimeNano int64
-	var recordID sql.NullString
-	var context []byte
-	// Older / leyline-produced nodes tables predate the context and props
-	// columns; only select each when present so GetNode stays backward-
-	// compatible (mache-b8fe72, mache-90b89b). node.Context feeds the
-	// `context` virtual file; props carries lang/pkg/imports, without which
-	// every construct read at serve time lost them and qualified-callee
-	// resolution fell back to scraping context text (mache-f930b6).
-	//
-	// props is read unconditionally by kind. The CASE WHEN kind guard this
-	// replaces existed only because Properties shared `record` with rendered
-	// file content, and shipping a file body just to answer a GetNode would
-	// defeat this reader's laziness. props never holds content, so there is
-	// nothing left to filter.
-	var props []byte
-	cols := "n.kind, n.size, n.mtime, n.record_id"
-	if r.hasProps {
-		cols += ", n.props"
-	}
-	if r.hasContext {
-		cols += ", n.context"
-	}
-	dest := []any{&kind, &size, &mtimeNano, &recordID}
-	if r.hasProps {
-		dest = append(dest, &props)
-	}
-	if r.hasContext {
-		dest = append(dest, &context)
-	}
-
-	// The source location rides along on THIS query rather than a second one.
-	// GetNode is called per-node inside bulk walks — get_architecture BFSes up
-	// to 50,000 nodes (cmd/serve_architecture.go) reading only Mode.IsDir() —
-	// so a separate `SELECT ... FROM _ast WHERE node_id = ?` would add one
-	// round-trip per node to callers that never read Origin. A LEFT JOIN costs
-	// nothing extra when the row is absent and nothing at all when the db has
-	// no _ast (mache-e57065).
-	var loc astLocation
-	from := "nodes n"
-	if r.hasAST {
-		cols += ", a.source_id, a.start_byte, a.end_byte, a.start_row, a.start_col, a.end_row, a.end_col"
-		from += " LEFT JOIN _ast a ON a.node_id = n.id"
-		dest = append(dest, &loc.sourceID, &loc.startByte, &loc.endByte,
-			&loc.startRow, &loc.startCol, &loc.endRow, &loc.endCol)
-	}
-
-	err := r.db.QueryRow("SELECT "+cols+" FROM "+from+" WHERE n.id = ?", id).Scan(dest...)
+	var row nodeRow
+	err := r.db.QueryRow(r.nodeSelect(), id).Scan(row.scanTargets(r)...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -151,44 +104,89 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	}
 
 	mode := r.fileMode
-	if kind == NodeKindDir {
+	if row.kind == NodeKindDir {
 		mode = os.ModeDir | r.dirMode
 	}
 
 	node := &Node{
 		ID:      id,
 		Mode:    mode,
-		ModTime: time.Unix(0, mtimeNano),
-		Context: context,
+		ModTime: time.Unix(0, row.mtimeNano),
+		Context: row.context,
 	}
 
 	// Mirrors SQLiteWriter.GetNode: a dir node's `record` is its marshaled
 	// Properties. A dir node with inline Data instead won't unmarshal into the
 	// map shape — that's expected, and leaves Properties nil.
-	node.Properties = DecodeProps(props)
+	node.Properties = DecodeProps(row.props)
 
-	node.Origin = loc.origin()
+	node.Origin = row.loc.origin()
 
-	if kind == NodeKindFile {
+	if row.kind == NodeKindFile {
 		if cachedSize, ok := r.sizeCache.Load(id); ok {
 			node.Ref = &ContentRef{ContentLen: cachedSize.(int64)}
 			return node, nil
 		}
-		node.Ref = &ContentRef{ContentLen: int64(size)}
-		r.sizeCache.Store(id, int64(size))
+		node.Ref = &ContentRef{ContentLen: int64(row.size)}
+		r.sizeCache.Store(id, int64(row.size))
 	}
 	return node, nil
 }
 
-// originOf resolves a node's location in source from ley-line-open's `_ast`
-// table, which is keyed by the same node_id LookupDef returns.
-//
-// Returns nil when the db has no `_ast` (a standalone mache-built projection)
-// or the node has no row there (directories, virtual nodes) — a nil Origin
-// means "not locatable", which callers already handle.
-//
-// Rows are tree-sitter's 0-based; lines and columns are stored 1-based here so
-// a consumer can use them directly, and so 0 unambiguously means unknown.
+// nodeRow is one `nodes` row plus the `_ast` columns joined onto it. It exists
+// so GetNode reads as "query, then build the node" rather than fifty lines of
+// conditional column assembly — the smell gate flagged the inlined version as
+// a long function, and it was right.
+type nodeRow struct {
+	kind, size int
+	mtimeNano  int64
+	recordID   sql.NullString
+	context    []byte
+	props      []byte
+	loc        astLocation
+}
+
+// nodeSelect builds the statement, and scanTargets builds the destinations, in
+// the SAME order. They are adjacent and must stay that way: a column added to
+// one without the other scans a value into the wrong field, which SQLite will
+// not necessarily reject if the types happen to be compatible.
+func (r *NodesTableReader) nodeSelect() string {
+	cols := "n.kind, n.size, n.mtime, n.record_id"
+	if r.hasProps {
+		cols += ", n.props"
+	}
+	if r.hasContext {
+		cols += ", n.context"
+	}
+	from := "nodes n"
+	// The source location rides along on THIS query rather than a second one.
+	// GetNode is called per-node inside bulk walks — get_architecture BFSes up
+	// to 50,000 nodes (cmd/serve_architecture.go) reading only Mode.IsDir() —
+	// so a separate SELECT against _ast would add one round-trip per node to
+	// callers that never read Origin. A LEFT JOIN costs nothing extra when the
+	// row is absent, and nothing at all when the db has no _ast (mache-e57065).
+	if r.hasAST {
+		cols += ", a.source_id, a.start_byte, a.end_byte, a.start_row, a.start_col, a.end_row, a.end_col"
+		from += " LEFT JOIN _ast a ON a.node_id = n.id"
+	}
+	return "SELECT " + cols + " FROM " + from + " WHERE n.id = ?"
+}
+
+func (row *nodeRow) scanTargets(r *NodesTableReader) []any {
+	dest := []any{&row.kind, &row.size, &row.mtimeNano, &row.recordID}
+	if r.hasProps {
+		dest = append(dest, &row.props)
+	}
+	if r.hasContext {
+		dest = append(dest, &row.context)
+	}
+	if r.hasAST {
+		dest = append(dest, &row.loc.sourceID, &row.loc.startByte, &row.loc.endByte,
+			&row.loc.startRow, &row.loc.startCol, &row.loc.endRow, &row.loc.endCol)
+	}
+	return dest
+}
+
 // astLocation holds the nullable `_ast` columns a GetNode LEFT JOIN produces.
 // Every field is nullable because the join misses for directories and virtual
 // nodes, which have no parse-tree row.
