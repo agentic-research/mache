@@ -36,6 +36,23 @@ type SourceOrigin struct {
 	FilePath  string `json:"file"`
 	StartByte uint32 `json:"start_byte"`
 	EndByte   uint32 `json:"end_byte"`
+
+	// Line/column of the same range, 1-based, or 0 when unknown.
+	//
+	// Byte offsets are the right primitive for write-back — a splice needs
+	// bytes — but they are the wrong unit for a READER. No editor, terminal,
+	// or LLM context references source by byte; everything downstream speaks
+	// "path:line". Carrying both means a consumer never has to re-read the
+	// file and count newlines to act on a result (mache-e57065).
+	//
+	// 1-based because that is what every consumer of a line number expects.
+	// ley-line-open's `_ast` stores tree-sitter's 0-based rows, so the
+	// producer side adds one; 0 here therefore means "not known", never
+	// "first line". Columns follow the same convention.
+	StartLine uint32 `json:"start_line,omitempty"`
+	StartCol  uint32 `json:"start_col,omitempty"`
+	EndLine   uint32 `json:"end_line,omitempty"`
+	EndCol    uint32 `json:"end_col,omitempty"`
 }
 
 // NodeStat holds the immutable stat fields needed for directory listing.

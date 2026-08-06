@@ -47,6 +47,7 @@ type NodesTableReader struct {
 	cache      *ContentCache    // FIFO-bounded rendered content
 	hasContext bool             // nodes table carries the context column (mache-b8fe72)
 	hasProps   bool             // nodes table carries the props column (mache-90b89b)
+	hasAST     bool             // db carries ley-line-open's _ast table, so nodes can be located in source (mache-e57065)
 }
 
 // ColumnExists reports whether table has a column named col. Readers use it
@@ -80,6 +81,9 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 		cache:      NewContentCache(cacheSize),
 		hasContext: ColumnExists(db, "nodes", "context"),
 		hasProps:   ColumnExists(db, "nodes", "props"),
+		// _ast is ley-line-open's; a standalone mache-built .db has no such
+		// table and simply yields nodes without a source location.
+		hasAST: ColumnExists(db, "_ast", "start_row"),
 	}
 }
 
@@ -146,6 +150,8 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	// map shape — that's expected, and leaves Properties nil.
 	node.Properties = DecodeProps(props)
 
+	node.Origin = r.originOf(id)
+
 	if kind == NodeKindFile {
 		if cachedSize, ok := r.sizeCache.Load(id); ok {
 			node.Ref = &ContentRef{ContentLen: cachedSize.(int64)}
@@ -155,6 +161,43 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		r.sizeCache.Store(id, int64(size))
 	}
 	return node, nil
+}
+
+// originOf resolves a node's location in source from ley-line-open's `_ast`
+// table, which is keyed by the same node_id LookupDef returns.
+//
+// Returns nil when the db has no `_ast` (a standalone mache-built projection)
+// or the node has no row there (directories, virtual nodes) — a nil Origin
+// means "not locatable", which callers already handle.
+//
+// Rows are tree-sitter's 0-based; lines and columns are stored 1-based here so
+// a consumer can use them directly, and so 0 unambiguously means unknown.
+func (r *NodesTableReader) originOf(id string) *SourceOrigin {
+	if !r.hasAST {
+		return nil
+	}
+	var (
+		sourceID           string
+		startByte, endByte uint32
+		startRow, startCol uint32
+		endRow, endCol     uint32
+	)
+	err := r.db.QueryRow(
+		`SELECT source_id, start_byte, end_byte, start_row, start_col, end_row, end_col
+		   FROM _ast WHERE node_id = ?`, id,
+	).Scan(&sourceID, &startByte, &endByte, &startRow, &startCol, &endRow, &endCol)
+	if err != nil {
+		return nil
+	}
+	return &SourceOrigin{
+		FilePath:  sourceID,
+		StartByte: startByte,
+		EndByte:   endByte,
+		StartLine: startRow + 1,
+		StartCol:  startCol + 1,
+		EndLine:   endRow + 1,
+		EndCol:    endCol + 1,
+	}
 }
 
 // ListChildren returns child IDs for a directory from the nodes table.

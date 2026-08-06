@@ -143,42 +143,58 @@ func TestLadder_SegmentsToPiecesToSymbols(t *testing.T) {
 	}
 }
 
-// TestLadder_SourceLocationGap records, as an executable fact, that the public
-// browse path cannot yet locate a symbol in source.
+// TestLadder_ReachesSourceLocation is the top rung: a reader who has found
+// `Greet` must be able to OPEN it.
 //
-// This is the last rung: a reader who has found `Greet` still has to open it.
-// Every tool downstream — editor, terminal, LLM context — addresses source as
-// "path:line". mache knows the line (ley-line-open's _lsp tables carry it), but
-// graph.Open returns nodes whose Origin is nil, so through the public API a
-// consumer gets no location at all: not line, not column, not even the byte
-// range SourceOrigin is shaped to hold.
+// This replaced TestLadder_SourceLocationGap, which asserted the opposite —
+// that Origin was always nil — and failed the moment positions landed. That
+// was the point: the gap was recorded as an executable fact so closing it
+// forced a deliberate update here rather than leaving a stale comment.
 //
-// Asserted rather than described, so it cannot quietly stay true. When
-// positions land (mache-e57065) this test FAILS, and the fix is to replace it
-// with the positive assertion in the comment below — a deliberate step, which
-// is the point.
-func TestLadder_SourceLocationGap(t *testing.T) {
+// Byte offsets are kept because write-back splices by byte. Lines are added
+// because nothing downstream — editor, terminal, LLM context — addresses
+// source any other way.
+func TestLadder_ReachesSourceLocation(t *testing.T) {
 	g := openLadder(t)
 
 	lookuper, ok := g.(graph.DefsLookuper)
 	if !ok {
-		t.Skip("backend does not implement graph.DefsLookuper")
+		t.Fatal("graph.Open's result must satisfy graph.DefsLookuper")
 	}
 	defs := lookuper.LookupDef("Greet")
 	if len(defs) == 0 {
-		t.Skip("no definition to locate")
+		t.Fatal("LookupDef(Greet) found nothing")
 	}
 
 	node, err := g.GetNode(defs[0])
 	if err != nil {
 		t.Fatalf("GetNode(%q): %v", defs[0], err)
 	}
-
-	if node.Origin != nil {
-		t.Fatalf("Origin is now populated (%s bytes [%d,%d)) — the location gap closed. "+
-			"Replace this test with the positive assertion: file plus a 1-based line "+
-			"a reader can act on (mache-e57065).",
-			node.Origin.FilePath, node.Origin.StartByte, node.Origin.EndByte)
+	if node.Origin == nil {
+		t.Fatalf("node %q has no Origin — a consumer cannot locate it in source", defs[0])
 	}
-	t.Logf("symbol %q is findable but not locatable: Origin is nil through graph.Open (mache-e57065)", defs[0])
+
+	if node.Origin.FilePath == "" {
+		t.Error("Origin carries no file path")
+	}
+	if node.Origin.EndByte <= node.Origin.StartByte {
+		t.Errorf("byte range is empty: [%d,%d)", node.Origin.StartByte, node.Origin.EndByte)
+	}
+	// 1-based: 0 means "unknown", never "first line". Greet is declared well
+	// past the top of the file, so a correct 1-based line cannot be 1 either —
+	// which is what catches an off-by-one that a >0 check would wave through.
+	if node.Origin.StartLine < 2 {
+		t.Errorf("StartLine=%d — expected a 1-based line pointing at Greet's declaration, "+
+			"not 0 (unknown) or 1 (an off-by-one from tree-sitter's 0-based rows)",
+			node.Origin.StartLine)
+	}
+	if node.Origin.EndLine < node.Origin.StartLine {
+		t.Errorf("EndLine %d precedes StartLine %d", node.Origin.EndLine, node.Origin.StartLine)
+	}
+	if node.Origin.StartCol == 0 {
+		t.Error("StartCol=0 — columns are 1-based, so 0 means unknown")
+	}
+
+	// The whole ladder, in the form a reader actually consumes.
+	t.Logf("Greet -> %s:%d:%d", node.Origin.FilePath, node.Origin.StartLine, node.Origin.StartCol)
 }
