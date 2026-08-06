@@ -12,21 +12,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// smellParityGraph is the serve-mode backend shape: a graph.Graph whose SQL
-// handle and .db path are the real fixture. MemoryStore supplies the Graph
-// surface; QueryRefs and DBPath are the two capabilities the smell engine
-// actually reaches for, and both are overridden here to hit the fixture db.
+// smellParityGraph is the serve-mode backend shape: a graph.Graph that also
+// carries a SQL handle and a .db path. MemoryStore supplies the Graph surface;
+// the two capabilities the smell engine actually reaches for are delegated to
+// the very *dbQuerier the CLI runs on.
+//
+// Sharing the production querier rather than re-implementing it is what makes
+// the parity claim tight: with both sides driving identical QueryRefs/DBPath
+// behavior, the only remaining difference between the two paths is the
+// lazyGraph wrapper — which is exactly the thing under test.
 type smellParityGraph struct {
 	*graph.MemoryStore
-	db   *sql.DB
-	path string
+	q *dbQuerier
 }
 
 func (s *smellParityGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	return s.db.Query(query, args...)
+	return s.q.QueryRefs(query, args...)
 }
 
-func (s *smellParityGraph) DBPath() string { return s.path }
+func (s *smellParityGraph) DBPath() string { return s.q.DBPath() }
 
 // runSmellCLIJSON runs one rule through the find-smells CLI and returns its
 // JSON payload. The Encoder's trailing newline is stream framing, not payload,
@@ -68,7 +72,8 @@ func runSmellMCPJSON(t *testing.T, dbPath, rule string) string {
 	db.SetMaxOpenConns(1)
 
 	lg := newTestLazyGraph(&smellParityGraph{
-		MemoryStore: graph.NewMemoryStore(), db: db, path: dbPath,
+		MemoryStore: graph.NewMemoryStore(),
+		q:           &dbQuerier{db: db, path: dbPath},
 	}, "")
 
 	res, err := makeFindSmellsHandler(lg)(context.Background(), makeRequest(map[string]any{
