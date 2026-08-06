@@ -173,7 +173,12 @@ func (r *NodesTableReader) ListChildren(id string) ([]string, error) {
 	var rows *sql.Rows
 	var err error
 	if id == "" {
-		rows, err = r.db.Query("SELECT id FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		// `id != ''` excludes the root row itself. leyline writes a root
+		// node whose id AND parent_id are both empty, so without this the
+		// root lists ITSELF as a child — and since ListChildren("") then
+		// returns that same "" again, any consumer doing a recursive walk
+		// never terminates. Found by examples/publicapi's ladder test.
+		rows, err = r.db.Query("SELECT id FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name")
 	} else {
 		rows, err = r.db.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
 	}
@@ -200,7 +205,9 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 	var rows *sql.Rows
 	var err error
 	if id == "" {
-		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		// Same self-child exclusion as ListChildren above; the two must
+		// agree or a stat-based walk and an id-based walk see different trees.
+		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name")
 	} else {
 		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
 	}
