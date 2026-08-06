@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -61,6 +63,46 @@ func TestQueryLSPRefs_ThroughLazyGraph_ReadsSiblingCapnpLog(t *testing.T) {
 			"without the DBPath forwarder this falls through to the retired _lsp_refs SQL path and returns nothing")
 	assert.Equal(t, "pkg/functions/Read", refs[0].NodeID)
 	assert.Equal(t, "file:///pkg/caller.go", refs[0].URI)
+}
+
+// TestFindCallers_ReadsCapnpRefsThroughLazyGraph closes the gap the smell side
+// already had covered and the caller side did not.
+//
+// find_callers is the OTHER consumer of the missing DBPath forwarder, but its
+// existing coverage misses the production configuration twice over:
+// TestFindCallers_WithLSPRefs hands the backend straight to
+// makeFindCallersHandler, never through a lazyGraph, and it exercises the
+// legacy `_lsp_refs` SQL rows rather than the sibling capnp log that replaced
+// them. So handler -> lazyGraph -> capnp — exactly what serve mode does on any
+// .db built after LLO T8.2 — had no test at all.
+//
+// The fixture's MemoryStore has no refs DB initialized, which makes the
+// assertion self-enforcing: if the capnp path is NOT taken, queryLSPRefs falls
+// through to the legacy SQL path, that errors, the handler drops the lsp_refs
+// block entirely, and this fails.
+func TestFindCallers_ReadsCapnpRefsThroughLazyGraph(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "project.db")
+	writeBindingLogForTest(t, dbPath,
+		"pkg/functions/Validate", "Validate", "pkg/functions/Caller", "file:///pkg/caller.go")
+
+	lg := newTestLazyGraph(&pathfulStore{MemoryStore: graph.NewMemoryStore(), dbPath: dbPath}, "")
+
+	res, err := makeFindCallersHandler(lg)(context.Background(), makeRequest(map[string]any{
+		"token": "Validate",
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "handler must succeed: %s", resultText(t, res))
+
+	var out struct {
+		Callers []string         `json:"callers"`
+		LSPRefs []lspRefLocation `json:"lsp_refs"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &out))
+	require.Len(t, out.LSPRefs, 1,
+		"find_callers must supplement from the sibling capnp log through the lazyGraph; "+
+			"without the DBPath forwarder this block is absent entirely")
+	assert.Equal(t, "file:///pkg/caller.go", out.LSPRefs[0].URI)
+	assert.Equal(t, "pkg/functions/Validate", out.LSPRefs[0].NodeID)
 }
 
 // TestQueryLSPRefs_ThroughLazyGraph_NoLogFallsBackCleanly is the negative: the
