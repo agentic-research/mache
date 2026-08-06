@@ -108,62 +108,6 @@ func TestCanonicalSourceRoot_ResolvesSymlinks(t *testing.T) {
 		"a symlink and its target name the same tree and must not invalidate each other's arena")
 }
 
-// TestResetArenaState_RemovesBothWarmStartSources pins the two-layer lesson
-// measured against the pinned binary: removing only the living database is not
-// enough, because the arena file carries a snapshot root of its own and
-// leyline refuses one layer down with "warm start (arena)" instead of
-// "warm start (live-db)".
-func TestResetArenaState_RemovesBothWarmStartSources(t *testing.T) {
-	dir := t.TempDir()
-	arena := filepath.Join(dir, "default.arena")
-	ctrl := filepath.Join(dir, "default.ctrl")
-	stale := []string{
-		"default.arena", "default.arena.owner", "default.arena.lock", "default.ctrl",
-		"default.live.db", "default.live.db-wal", "default.live.db-shm",
-		"default.live.ast.capnp", "default.live.head.capnp", "default.live.source.capnp",
-	}
-	for _, name := range stale {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("stale"), 0o644))
-	}
-	require.NoError(t, recordArenaConfig(arena, arenaSpawnConfig{SourceRoot: "/projects/alpha"}))
-
-	resetArenaState(arena, ctrl)
-
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	assert.Empty(t, entries,
-		"every warm-start source, the owner/lock sentinels, and our own stale record must go")
-}
-
-// TestResetArenaState_LeavesUnrelatedNeighboursAlone guards the glob. The real
-// ~/.mache holds a plain file literally named "default" next to
-// default.arena; a stem glob that matched it would delete unrelated state.
-func TestResetArenaState_LeavesUnrelatedNeighboursAlone(t *testing.T) {
-	dir := t.TempDir()
-	keep := []string{"default", "default.livewire", "other.live.db", "default.arena.bak"}
-	for _, name := range keep {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("keep"), 0o644))
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "default.live.db"), []byte("stale"), 0o644))
-
-	resetArenaState(filepath.Join(dir, "default.arena"), filepath.Join(dir, "default.ctrl"))
-
-	for _, name := range keep {
-		assert.FileExists(t, filepath.Join(dir, name), "%s is not arena state and must survive", name)
-	}
-	assert.NoFileExists(t, filepath.Join(dir, "default.live.db"))
-}
-
-// TestResetArenaState_MissingFilesAreNotAnError covers the first-ever spawn:
-// nothing exists yet, and invalidation must be a silent no-op rather than a
-// failure that takes the daemon down with it.
-func TestResetArenaState_MissingFilesAreNotAnError(t *testing.T) {
-	dir := t.TempDir()
-	assert.NotPanics(t, func() {
-		resetArenaState(filepath.Join(dir, "default.arena"), filepath.Join(dir, "default.ctrl"))
-	})
-}
-
 func TestCanonicalSourceRoot_EmptyStaysEmpty(t *testing.T) {
 	assert.Empty(t, canonicalSourceRoot(""),
 		`a daemon spawned without --source records "", not the process working directory`)

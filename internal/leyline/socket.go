@@ -342,14 +342,18 @@ func DiscoverOrStart() (string, error) {
 	// external --control daemons retain the configuration chosen by their
 	// operator; a live daemon cannot change startup arguments.
 	//
-	// cdcTarget names the activation target for the arena-config record below.
-	// Bare --cdc means leyline's default target, `nodes`; spelling it out here
-	// is what lets a later flip to `source-blobs` invalidate the arena rather
-	// than strand the previous target's manifest (mache-18caf3).
+	// source-blobs, not leyline's `nodes` default. Measured on mache's own
+	// projection (mache-abf404): `nodes` costs +468MB/+21% index for 2.06MB of
+	// dedup, because 421,424 of 421,424 nodes fall below CDC's 8 KiB chunking
+	// floor — construct-granular rows are simply smaller than a chunk.
+	// `source-blobs` chunks whole files instead and is cost-neutral
+	// (+7.5MB/+0.35%). The selector only reaches the daemon from v0.18.0
+	// (ley-line-open-c3d746, traced from this exact flip), which is why the
+	// pin bump and this flag must land together.
 	cdcTarget := ""
 	if DaemonCDC() {
-		daemonArgs = append(daemonArgs, "--cdc")
-		cdcTarget = "nodes"
+		cdcTarget = "source-blobs"
+		daemonArgs = append(daemonArgs, "--cdc", "--cdc-target", cdcTarget)
 	}
 	// A warm arena is only reusable for the configuration it was built with.
 	// mache serves every project from this one fixed arena path, so serving a
@@ -361,12 +365,21 @@ func DiscoverOrStart() (string, error) {
 		CDCTarget:  cdcTarget,
 	}
 	//
-	// The invalidation is done by removing files rather than by passing
-	// leyline's own --reset-arena flag, which is broken in the pinned binary
-	// and on the integration branch alike — see resetArenaState.
+	// --reset-arena is leyline's own mechanism for this and is used in
+	// preference to mache deleting the files itself: the set of files a warm
+	// start can recover from is leyline's business and has grown across
+	// releases (arena, controller, live db + WAL/shm, capnp sidecars, the
+	// owner and lock sentinels). A hand-maintained list here would silently
+	// become incomplete the next time one is added, and an incomplete
+	// invalidation reproduces exactly the silent warm-start refusal this
+	// guards against.
+	//
+	// The flag was unusable before v0.18.0 — it failed even on a fresh arena
+	// (ley-line-open-e37e03, filed from here) — which is the second reason the
+	// pin bump and this call belong in one commit.
 	if arenaNeedsReset(arenaPath, arenaCfg) {
 		log.Printf("leyline: arena was built for a different configuration — cold-starting %s", arenaPath)
-		resetArenaState(arenaPath, ctrlPath)
+		daemonArgs = append(daemonArgs, "--reset-arena")
 	}
 	cmd := exec.Command(leylineBin, daemonArgs...)
 	// Detach from our stdio so it doesn't interfere with MCP transport
@@ -936,11 +949,30 @@ func (c *SocketClient) Prioritize(files []string) error {
 // The go.mod leyline-schema pin only needs bumping when a schema module tag is
 // published. The parity gate enforces the [floor, binary] compatibility range.
 //
+// v0.15.1 -> v0.18.0 DOES NOT CROSS AN IR LINEAGE BOUNDARY. IR_SCHEMA_VERSION
+// is "merkle-ast-v2" at both tags, so node addresses are derived identically
+// and .db artifacts built by the previous pin stay valid — no forced rebuild,
+// unlike the v0.11.0 merkle-ast-v1 -> v2 bump (mache-438104). LLO's
+// compat_min_schema_version is still 0.4.1, below mache's stricter v0.6.0
+// floor, so the floor is unmoved. Nothing in v0.16.0-v0.18.0 touches _ast,
+// node_defs or node_refs; the release content is confinement grants, the CDC
+// target selector, and the --reset-arena fix.
+//
+// Two of those exist because mache asked for them, and this bump is what
+// consumes them:
+//
+//   - --cdc-target reaches the daemon (ley-line-open-c3d746). Before it, the
+//     daemon hardcoded the `nodes` walk, so mache could not select the
+//     cost-neutral target no matter what it passed.
+//   - --reset-arena actually works (ley-line-open-e37e03). It previously
+//     failed even on a fresh arena, while being the remedy leyline's own
+//     cross-source refusal told operators to use.
+//
 // Doubles as this build's leyline schema-client version for the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch.
-const leylineBinaryVersion = "v0.15.1"
+const leylineBinaryVersion = "v0.18.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

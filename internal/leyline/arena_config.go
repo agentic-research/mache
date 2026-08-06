@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // arenaSpawnConfig is the subset of daemon startup configuration that a warm
@@ -95,61 +94,6 @@ func arenaNeedsReset(arenaPath string, want arenaSpawnConfig) bool {
 		return true
 	}
 	return got != want
-}
-
-// resetArenaState invalidates a warm arena by removing the files leyline
-// warm-starts from, so the next spawn cold-parses against the new --source.
-//
-// This does by hand what leyline's own `--reset-arena` flag advertises,
-// because that flag does not work. Measured against the pinned v0.15.1
-// binary, a daemon given --reset-arena fails on a COMPLETELY FRESH arena:
-//
-//	cold start (--reset-arena): unlinking any live db ... + zeroing controller
-//	parsing /tmp/lz3/p1 ...
-//	Error: open arena file
-//	Caused by: 0: open arena file  1: No such file or directory (os error 2)
-//
-// The same command without the flag comes up cleanly. The cause is visible in
-// cmd_daemon.rs: setup_arena stamps the controller with the real arena path,
-// the reset branch then blanks it with set_arena_with_root("", 0, [0u8; 32]),
-// and snapshot_to_arena reads that now-empty path back via ctrl.arena_path()
-// into create_arena(...).context("open arena file"). The in-crate snapshot
-// test only ever passes reset_arena: false, which is why it survived. The
-// branch is byte-identical on the integration branch, so v0.18.0 will not fix
-// it either — filed upstream.
-//
-// Removing the files reaches the same end state and is verified end-to-end:
-// after it, a second project cold-starts and comes up, and a subsequent
-// unchanged run still warm-starts rather than reparsing.
-//
-// Both warm-start sources must go. Removing only the living database leaves
-// the arena itself carrying a snapshot root, and leyline refuses again one
-// layer down — "warm start (arena)" rather than "warm start (live-db)".
-//
-// Errors are deliberately not propagated: a file that cannot be removed
-// yields at worst the warm-start refusal this is trying to avoid, which is no
-// worse than not having tried, and failing the spawn over a cleanup problem
-// would be a strictly larger outage.
-func resetArenaState(arenaPath, ctrlPath string) {
-	paths := []string{
-		arenaPath,
-		arenaPath + ".owner", // source-root sentinel (arena_owner::try_acquire)
-		arenaPath + ".lock",  // flock admission file
-		ctrlPath,
-		arenaConfigPath(arenaPath), // our own record; rewritten only on success
-	}
-	// The living database and its capnp sidecars are derived from the control
-	// path's stem: <stem>.ctrl -> <stem>.live.db, plus -wal/-shm and
-	// <stem>.live.{ast,head,source}.capnp. Glob the family rather than listing
-	// the suffixes, which have grown over releases. The glob is anchored to
-	// ".live." so a neighbouring file sharing the stem is never matched.
-	stem := strings.TrimSuffix(ctrlPath, ".ctrl")
-	if matches, err := filepath.Glob(stem + ".live.*"); err == nil {
-		paths = append(paths, matches...)
-	}
-	for _, p := range paths {
-		_ = os.Remove(p)
-	}
 }
 
 // recordArenaConfig persists the configuration a managed daemon was
