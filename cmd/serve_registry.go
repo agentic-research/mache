@@ -933,6 +933,38 @@ func (lg *lazyGraph) RefsMap() map[string][]string {
 	return nil
 }
 
+// DBPath implements the dbPathProvider opt-in by delegating to the inner
+// graph, the same way QueryRefs and RefsMap do.
+//
+// Without this forwarder the `qg.(dbPathProvider)` assertion fails for every
+// serve-mode query — handlers hold a *lazyGraph, not the SQLiteGraph or
+// WritableGraph underneath it — so the sibling `.bindings.capnp` event log is
+// never consulted and both of its consumers silently degrade:
+//
+//   - queryLSPRefs falls through to queryLSPRefsLegacy, the `_lsp_refs` SQL
+//     path that mache-6bd4d8 retired as the consumer-side contract. On a .db
+//     built after LLO T8.2 (which emits the capnp log and no longer populates
+//     those columns) find_callers loses its lsp_refs supplement entirely.
+//   - ensureSmellQueryContext skips LoadCapnpBindings, so the
+//     `_capnp_binding_refs` TEMP table stays empty and the v_refs UNION arm
+//     over it contributes nothing. MCP find_smells then sees strictly fewer
+//     refs than the find-smells CLI, whose dbQuerier does implement DBPath —
+//     same rules, same .db, different answers.
+//
+// Returning "" for a backend that has no path is the documented "no source"
+// sentinel: readLSPRefsFromCapnp and LoadCapnpBindings both no-op on it, so a
+// MemoryStore-backed graph degrades exactly as it did before.
+func (lg *lazyGraph) DBPath() string {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return ""
+	}
+	if dp, ok := g.(dbPathProvider); ok {
+		return dp.DBPath()
+	}
+	return ""
+}
+
 func (lg *lazyGraph) DefsMap() map[string][]string {
 	out := map[string][]string{}
 	if lg.resolveMounts != nil {
@@ -1116,3 +1148,32 @@ type writeBacker interface {
 	UpdateNodeContent(id string, data []byte, origin *graph.SourceOrigin, modTime time.Time) error
 	ShiftOrigins(filePath string, afterByte uint32, delta int32)
 }
+
+// Every opt-in interface above is reached by a `g.(X)` assertion in some
+// handler, and in serve mode `g` is ALWAYS a *lazyGraph — never the
+// SQLiteGraph or WritableGraph underneath it. So a capability lazyGraph
+// forgets to forward is not a compile error and not a test failure: the
+// assertion just returns ok=false and the caller takes its "backend doesn't
+// support this" path. The feature silently disappears for every consumer
+// reaching mache through `mache serve`, which is every MCP client.
+//
+// That is not hypothetical — DBPath was missing, which cost find_callers its
+// lsp_refs supplement and left MCP find_smells reading a strictly smaller ref
+// set than the find-smells CLI over the identical .db.
+//
+// These assertions turn the whole class into a build failure. Adding an opt-in
+// interface without a lazyGraph forwarder now fails to compile instead of
+// silently degrading at runtime.
+var (
+	_ refsQuerier              = (*lazyGraph)(nil)
+	_ refsMapProvider          = (*lazyGraph)(nil)
+	_ defsMapProvider          = (*lazyGraph)(nil)
+	_ defsLookuper             = (*lazyGraph)(nil)
+	_ defsSearcher             = (*lazyGraph)(nil)
+	_ dbPathProvider           = (*lazyGraph)(nil)
+	_ mountPrefixer            = (*lazyGraph)(nil)
+	_ schemaProvider           = (*lazyGraph)(nil)
+	_ sheafInvalidatorProvider = (*lazyGraph)(nil)
+	_ writeBacker              = (*lazyGraph)(nil)
+	_ graph.Graph              = (*lazyGraph)(nil)
+)
