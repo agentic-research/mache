@@ -94,7 +94,7 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		return &Node{ID: "", Mode: os.ModeDir | r.dirMode}, nil
 	}
 
-	var row nodeRow
+	var row nodeScan
 	err := r.db.QueryRow(r.nodeSelect(), id).Scan(row.scanTargets(r)...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -133,11 +133,11 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	return node, nil
 }
 
-// nodeRow is one `nodes` row plus the `_ast` columns joined onto it. It exists
+// nodeScan is one `nodes` row plus the `_ast` columns joined onto it. It exists
 // so GetNode reads as "query, then build the node" rather than fifty lines of
 // conditional column assembly — the smell gate flagged the inlined version as
 // a long function, and it was right.
-type nodeRow struct {
+type nodeScan struct {
 	kind, size int
 	mtimeNano  int64
 	recordID   sql.NullString
@@ -172,7 +172,7 @@ func (r *NodesTableReader) nodeSelect() string {
 	return "SELECT " + cols + " FROM " + from + " WHERE n.id = ?"
 }
 
-func (row *nodeRow) scanTargets(r *NodesTableReader) []any {
+func (row *nodeScan) scanTargets(r *NodesTableReader) []any {
 	dest := []any{&row.kind, &row.size, &row.mtimeNano, &row.recordID}
 	if r.hasProps {
 		dest = append(dest, &row.props)
