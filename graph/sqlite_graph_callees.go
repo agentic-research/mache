@@ -75,7 +75,30 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 		scoped = true
 	}
 
-	if !scoped {
+	if !scoped && g.useNodesTable {
+		// Leyline projections resolve straight from the construct's own
+		// container edge, and must be tried BEFORE the "source"-child lookup
+		// below — that lookup is a mache-schema assumption. A leyline
+		// construct's children are parse-tree nodes (`block`, `identifier`,
+		// `parameter_list`), never a `source` leaf, so sourceID came back
+		// empty and GetCallees returned nil before reaching any fallback.
+		// find_callees was therefore empty for EVERY construct on a leyline
+		// .db — the primary backend (mache-cb8fb9).
+		//
+		// The edge already exists: leyline writes node_refs rows whose
+		// container_node_id is the enclosing definition's node_id, so the
+		// callees of a construct are exactly the tokens its container owns.
+		// Nothing is derived here that the producer had not already computed.
+		tokens, rerr := g.calleeTokensFromContainer(id)
+		if rerr != nil {
+			return nil, rerr
+		}
+		for _, tok := range tokens {
+			qcalls = append(qcalls, QualifiedCall{Token: tok})
+		}
+	}
+
+	if !scoped && len(qcalls) == 0 {
 		// 1. Find the "source" file child
 		children, err := g.ListChildren(id)
 		if err != nil {
@@ -282,6 +305,34 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 // nil) when node_refs simply has no rows for sourceID (nothing to fall back
 // to, not an error); a genuine query/scan failure is surfaced so a
 // transient DB error doesn't silently masquerade as "no callees".
+// calleeTokensFromContainer returns the distinct call tokens made by the
+// construct at nodeID, read from the container edge leyline records at parse
+// time: node_refs.container_node_id holds the enclosing definition's node_id
+// for every call site.
+//
+// DISTINCT is load-bearing rather than cosmetic — a function calling the same
+// helper twice has two node_refs rows (two call SITES, one callee), and
+// GetCallees answers "what does this call", not "how many times".
+func (g *SQLiteGraph) calleeTokensFromContainer(nodeID string) ([]string, error) {
+	rows, err := g.db.Query("SELECT DISTINCT token FROM node_refs WHERE container_node_id = ?", nodeID)
+	if err != nil {
+		// No node_refs table, or no container_node_id column on an older
+		// projection: not an error, just nothing to resolve from here.
+		return nil, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tokens []string
+	for rows.Next() {
+		var tok string
+		if err := rows.Scan(&tok); err != nil {
+			return nil, fmt.Errorf("scan callee token for %s: %w", nodeID, err)
+		}
+		tokens = append(tokens, tok)
+	}
+	return tokens, rows.Err()
+}
+
 func (g *SQLiteGraph) calleeTokensFromRefs(sourceID string) ([]string, error) {
 	rows, err := g.db.Query("SELECT token FROM node_refs WHERE node_id = ?", sourceID)
 	if err != nil {
