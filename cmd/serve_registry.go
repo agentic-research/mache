@@ -195,12 +195,14 @@ func (r *graphRegistry) graphForSession(sessionID string) *lazyGraph {
 func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error) *lazyGraph {
 	if r.basePath != "" {
 		r.registerSession(sessionID, r.basePath)
+		rememberResolvedRoot(r.basePath, "--path")
 		return r.getOrCreateGraph(r.basePath)
 	}
 	if serveStdio && len(r.args) == 1 {
 		source, err := filepath.Abs(r.args[0])
 		if err == nil {
 			r.registerSession(sessionID, source)
+			rememberResolvedRoot(source, "stdio arg")
 			return r.getOrCreateGraph(source)
 		}
 	}
@@ -212,8 +214,13 @@ func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error
 	if rootsErr != nil {
 		detail = rootsErr.Error()
 	}
+	// `mache init` leads because for the clients that reach this branch it is
+	// the only remedy that works — see rememberResolvedRoot (mache-6ec106).
 	errGraph := newErrorLazyGraph(fmt.Errorf(
-		"workspace root unavailable (%s); configure MCP roots or start mache with an explicit --path",
+		"workspace root unavailable (%s). Run `mache init` in the project you want served: "+
+			"it registers the project and writes a ?project= token into this client's MCP URL, "+
+			"which resolves without the client needing to answer roots/list. "+
+			"Alternatives: start mache with an explicit --path, or use a client that supports MCP roots",
 		detail,
 	))
 	actual, _ := r.sessionErrors.LoadOrStore(sessionID, errGraph)
@@ -321,6 +328,7 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 	rootPath, rootsErr := discoverSessionRoot(ctx, session)
 	if rootPath != "" {
 		r.registerSession(sid, rootPath)
+		rememberResolvedRoot(rootPath, "client roots")
 		log.Printf("session %s → %s", sid, rootPath)
 		return r.getOrCreateGraph(rootPath)
 	}
@@ -358,6 +366,34 @@ func (r *graphRegistry) resolveProjectSession(ctx context.Context, sid string) (
 	r.registerSession(sid, rootPath)
 	log.Printf("session %s → %s (via ?project=)", sid, rootPath)
 	return r.getOrCreateGraph(rootPath), true
+}
+
+// rememberResolvedRoot records a workspace root the daemon just resolved, so
+// the project is addressable by ?project= token on a LATER connection.
+//
+// Learning a root is the only moment the daemon knows what project a client
+// means, and how it learned it — client roots, --path, a stdio arg — does not
+// change how authoritative that statement is. So all three register on the
+// same terms.
+//
+// The ordering is the whole point. Before this, registerProject had exactly
+// one caller, `mache init`, so a daemon could serve a project for days with
+// ~/.mache/projects.json absent and every token lookup necessarily missing.
+// The clients that most NEED token resolution — plain request/response HTTP,
+// with no channel for roots/list — are precisely the ones that can never
+// populate the registry themselves. Someone else has to do it for them, and
+// the daemon is the only party that ever finds out.
+//
+// `mache init` keeps its own job: writing the token into the client's config,
+// which a server cannot do for it.
+//
+// Failure is deliberately silent. A read-only HOME or a corrupt registry must
+// not take down a session that is otherwise resolving fine — serving the graph
+// is the job; registration is an optimization for the next client.
+func rememberResolvedRoot(rootPath, how string) {
+	if ensureProjectRegistered(rootPath) {
+		log.Printf("registered project %s (discovered via %s)", rootPath, how)
+	}
 }
 
 // discoverSessionRoot asks the client for its first workspace root. The short

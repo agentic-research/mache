@@ -139,24 +139,101 @@ func registerProject(absPath string) (string, error) {
 	}
 	token := projectToken(salt, absPath)
 
-	reg, err := loadProjectRegistry()
-	if err != nil {
-		return "", err
-	}
-	reg[token] = absPath
+	// The load/insert/write below is a read-modify-write over a file shared by
+	// every mache goroutine AND every mache process. Unserialized, concurrent
+	// registrations each write back a map they read BEFORE the others' inserts,
+	// so all but the last are silently dropped — measured at 47-49 losses out
+	// of 50 concurrent roots. See withRegistryLock.
+	err = withRegistryLock(func() error {
+		reg, lerr := loadProjectRegistry()
+		if lerr != nil {
+			return lerr
+		}
+		reg[token] = absPath
 
-	data, err := json.MarshalIndent(reg, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal project registry: %w", err)
-	}
-	path, err := projectRegistryPath()
+		data, merr := json.MarshalIndent(reg, "", "  ")
+		if merr != nil {
+			return fmt.Errorf("marshal project registry: %w", merr)
+		}
+		path, perr := projectRegistryPath()
+		if perr != nil {
+			return perr
+		}
+		if werr := writeFileAtomic(path, append(data, '\n')); werr != nil {
+			return fmt.Errorf("write %s: %w", path, werr)
+		}
+		return nil
+	})
 	if err != nil {
 		return "", err
-	}
-	if err := writeFileAtomic(path, append(data, '\n')); err != nil {
-		return "", fmt.Errorf("write %s: %w", path, err)
 	}
 	return token, nil
+}
+
+// ensureProjectRegistered records rootPath in the local registry if it is not
+// already there, and reports whether a write happened.
+//
+// This is what makes registration a BYPRODUCT of serving rather than a
+// separate setup step. Before it, registerProject had exactly one caller —
+// `mache init` — so a daemon could serve a project a hundred times and
+// ~/.mache/projects.json would still not exist. That is not hypothetical: a
+// long-running shared daemon was found serving this repo with an empty
+// registry, so every ?project= lookup necessarily missed (mache-6ec106's
+// resolution path was in place but had nothing to resolve against).
+//
+// Now any session that resolves a workspace root by ANY means — client roots,
+// an explicit --path — registers it, so the token exists for the next client
+// that cannot answer roots/list. `mache init` keeps its distinct job: writing
+// the ?project= token into the client's config, which a server cannot do.
+//
+// Deliberately non-fatal and quiet on failure. A read-only HOME or a corrupt
+// registry must not take down a session that is otherwise resolving fine —
+// serving the graph is the job; registration is an optimization for later.
+// The existence check keeps the steady state read-only: re-registering on
+// every tool call would rewrite the file constantly for no gain.
+func ensureProjectRegistered(rootPath string) bool {
+	if rootPath == "" {
+		return false
+	}
+	registered := false
+	err := withRegistryLock(func() error {
+		reg, lerr := loadProjectRegistry()
+		if lerr != nil {
+			return lerr
+		}
+		for _, p := range reg {
+			if p == rootPath {
+				return nil // already known; stay read-only
+			}
+		}
+		// registerProject takes the same lock, which is why it must be
+		// reentrant-safe: withRegistryLock is NOT reentrant (flock on a second
+		// descriptor from the same process would deadlock against itself on
+		// Linux), so the write is inlined here rather than delegated.
+		salt, serr := loadOrCreateProjectSalt()
+		if serr != nil {
+			return serr
+		}
+		reg[projectToken(salt, rootPath)] = rootPath
+
+		data, merr := json.MarshalIndent(reg, "", "  ")
+		if merr != nil {
+			return merr
+		}
+		path, perr := projectRegistryPath()
+		if perr != nil {
+			return perr
+		}
+		if werr := writeFileAtomic(path, append(data, '\n')); werr != nil {
+			return werr
+		}
+		registered = true
+		return nil
+	})
+	if err != nil {
+		return false
+	}
+	return registered
 }
 
 // resolveProjectToken looks up token in the local registry, returning the
