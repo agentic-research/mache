@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // seedDuplicateCodeAST builds an _ast fixture with three Go functions:

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // CallPattern describes one shape of function call for a language.

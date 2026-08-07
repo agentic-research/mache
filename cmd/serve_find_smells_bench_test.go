@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	_ "modernc.org/sqlite"
 )
 

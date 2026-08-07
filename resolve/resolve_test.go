@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/resolve"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func TestPublicFacade_GoModResolver(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, g)
 
-	ld, ok := g.(interface{ LookupDef(string) []string })
+	ld, ok := g.(graph.DefsLookuper)
 	require.True(t, ok)
 	require.NotEmpty(t, ld.LookupDef("Hello"))
 }

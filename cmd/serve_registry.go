@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
-	"github.com/agentic-research/mache/internal/resolve"
+	"github.com/agentic-research/mache/resolve"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"golang.org/x/sync/singleflight"
@@ -908,7 +908,7 @@ func (lg *lazyGraph) Act(id, action, payload string) (*graph.ActionResult, error
 	return g.Act(id, action, payload)
 }
 
-// lazyGraph also implements refsQuerier, refsMapProvider, and defsMapProvider
+// lazyGraph also implements graph.RefsQuerier, graph.RefsMapper, and graph.DefsMapper
 // by delegating to the inner graph if it supports those interfaces.
 
 func (lg *lazyGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
@@ -916,7 +916,7 @@ func (lg *lazyGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
-	if qg, ok := g.(refsQuerier); ok {
+	if qg, ok := g.(graph.RefsQuerier); ok {
 		return qg.QueryRefs(query, args...)
 	}
 	return nil, fmt.Errorf("backend does not support QueryRefs")
@@ -927,16 +927,16 @@ func (lg *lazyGraph) RefsMap() map[string][]string {
 	if err != nil || g == nil {
 		return nil
 	}
-	if rp, ok := g.(refsMapProvider); ok {
+	if rp, ok := g.(graph.RefsMapper); ok {
 		return rp.RefsMap()
 	}
 	return nil
 }
 
-// DBPath implements the dbPathProvider opt-in by delegating to the inner
+// DBPath implements the graph.DBPathProvider opt-in by delegating to the inner
 // graph, the same way QueryRefs and RefsMap do.
 //
-// Without this forwarder the `qg.(dbPathProvider)` assertion fails for every
+// Without this forwarder the `qg.(graph.DBPathProvider)` assertion fails for every
 // serve-mode query — handlers hold a *lazyGraph, not the SQLiteGraph or
 // WritableGraph underneath it — so the sibling `.bindings.capnp` event log is
 // never consulted and both of its consumers silently degrade:
@@ -959,7 +959,7 @@ func (lg *lazyGraph) DBPath() string {
 	if err != nil || g == nil {
 		return ""
 	}
-	if dp, ok := g.(dbPathProvider); ok {
+	if dp, ok := g.(graph.DBPathProvider); ok {
 		return dp.DBPath()
 	}
 	return ""
@@ -976,7 +976,7 @@ func (lg *lazyGraph) DefsMap() map[string][]string {
 	if err != nil || g == nil {
 		return nilIfEmpty(out)
 	}
-	if dp, ok := g.(defsMapProvider); ok {
+	if dp, ok := g.(graph.DefsMapper); ok {
 		for token, ids := range dp.DefsMap() {
 			out[token] = append(out[token], ids...)
 		}
@@ -1020,14 +1020,14 @@ func (lg *lazyGraph) MountPrefixOf(id string) string {
 	return ""
 }
 
-// LookupDef forwards the optional defsLookuper interface so
+// LookupDef forwards the optional graph.DefsLookuper interface so
 // find_definition's anchored-exact path can use the O(1) lookup
 // instead of falling through to the O(N) DefsMap snapshot. Without
 // this passthrough, every find_definition call in production paid
 // the snapshot cost even when the inner backend (MemoryStore,
 // SQLiteGraph, CompositeGraph) had a fast lookup available.
 //
-// Returns nil when the inner doesn't implement defsLookuper —
+// Returns nil when the inner doesn't implement graph.DefsLookuper —
 // callers fall through to DefsMap as before.
 // LookupDef federates the base graph and any resolve_ref mounts — a token
 // may be defined in either, and dir IDs from resolveMounts already carry
@@ -1043,18 +1043,18 @@ func (lg *lazyGraph) LookupDef(token string) []string {
 	if err != nil || g == nil {
 		return out
 	}
-	if dl, ok := g.(interface{ LookupDef(string) []string }); ok {
+	if dl, ok := g.(graph.DefsLookuper); ok {
 		out = append(out, dl.LookupDef(token)...)
 	}
 	return out
 }
 
-// SearchDefs forwards the optional defsSearcher interface so
+// SearchDefs forwards the optional graph.DefsSearcher interface so
 // `search role=definition` can use a SQL-pushdown when the inner
 // backend supports it. Mirrors LookupDef's passthrough shape.
 //
-// Returns nil when the inner doesn't implement defsSearcher —
-// the search handler falls through to defsMapProvider iteration.
+// Returns nil when the inner doesn't implement graph.DefsSearcher —
+// the search handler falls through to graph.DefsMapper iteration.
 func (lg *lazyGraph) SearchDefs(pattern string, limit int) map[string][]string {
 	out := map[string][]string{}
 	if lg.resolveMounts != nil {
@@ -1091,22 +1091,13 @@ func nilIfEmpty(m map[string][]string) map[string][]string {
 // Interface types for optional graph backend capabilities
 // ---------------------------------------------------------------------------
 
-// refsQuerier is the subset of Graph backends that support SQL queries.
-type refsQuerier interface {
-	QueryRefs(query string, args ...any) (*sql.Rows, error)
-}
+// graph.RefsQuerier is the subset of Graph backends that support SQL queries.
 
-// refsMapProvider is the subset of Graph backends that expose their refs map
+// graph.RefsMapper is the subset of Graph backends that expose their refs map
 // for community detection (Louvain).
-type refsMapProvider interface {
-	RefsMap() map[string][]string
-}
 
-// defsMapProvider is the subset of Graph backends that expose their defs map
+// graph.DefsMapper is the subset of Graph backends that expose their defs map
 // for find_definition (symbol → where it's defined).
-type defsMapProvider interface {
-	DefsMap() map[string][]string
-}
 
 // sheafInvalidatorProvider is the subset of Graph backends that own a
 // SheafInvalidator wired into their file-watcher onChange path. The
@@ -1120,15 +1111,12 @@ type sheafInvalidatorProvider interface {
 	SheafInvalidator() *graph.SheafInvalidator
 }
 
-// defsLookuper is the cheaper alternative to defsMapProvider for the
+// graph.DefsLookuper is the cheaper alternative to graph.DefsMapper for the
 // common case of looking up exactly one symbol. Backends that
 // implement it avoid the O(N) snapshot copy of the full defs map
 // when the caller only needs one token's dir IDs.
-type defsLookuper interface {
-	LookupDef(token string) []string
-}
 
-// defsSearcher supports pattern-based search across the defs index
+// graph.DefsSearcher supports pattern-based search across the defs index
 // without snapshotting the whole map. The pattern uses SQL LIKE
 // syntax ('%' = any chars, '_' = single char). SQL-backed graphs
 // push the filter down to the database; in-memory graphs may
@@ -1138,9 +1126,6 @@ type defsLookuper interface {
 // search role=definition uses this when available — fixes the
 // bug where SQLiteGraph's empty in-memory defs map made the
 // search handler return [] for every pattern (bead mache-9cba08).
-type defsSearcher interface {
-	SearchDefs(pattern string, limit int) map[string][]string
-}
 
 // writeBacker is the subset of Graph backends that support surgical write-back
 // (validate → format → splice → update node).
@@ -1165,13 +1150,13 @@ type writeBacker interface {
 // interface without a lazyGraph forwarder now fails to compile instead of
 // silently degrading at runtime.
 var (
-	_ refsQuerier              = (*lazyGraph)(nil)
-	_ refsMapProvider          = (*lazyGraph)(nil)
-	_ defsMapProvider          = (*lazyGraph)(nil)
-	_ defsLookuper             = (*lazyGraph)(nil)
-	_ defsSearcher             = (*lazyGraph)(nil)
-	_ dbPathProvider           = (*lazyGraph)(nil)
-	_ mountPrefixer            = (*lazyGraph)(nil)
+	_ graph.RefsQuerier        = (*lazyGraph)(nil)
+	_ graph.RefsMapper         = (*lazyGraph)(nil)
+	_ graph.DefsMapper         = (*lazyGraph)(nil)
+	_ graph.DefsLookuper       = (*lazyGraph)(nil)
+	_ graph.DefsSearcher       = (*lazyGraph)(nil)
+	_ graph.DBPathProvider     = (*lazyGraph)(nil)
+	_ graph.MountPrefixer      = (*lazyGraph)(nil)
 	_ schemaProvider           = (*lazyGraph)(nil)
 	_ sheafInvalidatorProvider = (*lazyGraph)(nil)
 	_ writeBacker              = (*lazyGraph)(nil)

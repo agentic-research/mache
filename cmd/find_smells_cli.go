@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// dbQuerier wraps a *sql.DB so it satisfies refsQuerier — the only
+// dbQuerier wraps a *sql.DB so it satisfies graph.RefsQuerier — the only
 // interface runSmellRule / missingTables / populateSnippets need.
 // Lets the CLI run rules against any SQLite db (mache-built or
 // LLO-built) without touching the graph stack.
@@ -26,7 +26,7 @@ func (q *dbQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return q.db.Query(query, args...)
 }
 
-// DBPath implements the dbPathProvider opt-in (cmd/serve_find_smells.go)
+// DBPath implements the graph.DBPathProvider opt-in (cmd/serve_find_smells.go)
 // so canonical-view setup can find the sibling .bindings.capnp event
 // log next to this .db.
 func (q *dbQuerier) DBPath() string { return q.path }

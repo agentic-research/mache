@@ -36,7 +36,7 @@ var removedSymbols = map[string]string{
 var removedSymbolBaseline = map[string]int{
 	"cmd/call_extractor_ast.go":              1,
 	"cmd/serve.go":                           1,
-	"internal/graph/composite.go":            1,
+	"graph/composite.go":                     1,
 	"internal/ingest/ast_walker.go":          7,
 	"internal/ingest/ast_walker_calls.go":    3,
 	"internal/ingest/ast_walker_extract.go":  4,

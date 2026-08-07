@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // ingestSQLiteStreaming processes a SQLite database using a parallel worker pool.

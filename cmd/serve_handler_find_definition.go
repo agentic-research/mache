@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -50,7 +50,7 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		// O(N) snapshot copy of the entire defs map. Falls back
 		// to DefsMap for backends that haven't implemented the
 		// optional lookup method.
-		if dl, ok := g.(defsLookuper); ok {
+		if dl, ok := g.(graph.DefsLookuper); ok {
 			if dirIDs := dl.LookupDef(symbol); len(dirIDs) > 0 {
 				if filtered, hit := acceptKind(dirIDs); hit {
 					if r := findDefinitionResultScoped(g, symbol, filtered); r != nil {
@@ -64,12 +64,12 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		// Backends that ONLY expose DefsMap (older/composite shapes)
 		// or that didn't hit on the LookupDef path fall through to
 		// the snapshot for the case-insensitive + fuzzy paths below.
-		dp := g.(defsMapProvider)
+		dp := g.(graph.DefsMapper)
 		defs := dp.DefsMap()
 
 		// 1b. Anchored exact via the snapshot — only reached when
-		// the backend lacks a defsLookuper. Mirrors the old behavior.
-		if _, hasLookup := g.(defsLookuper); !hasLookup {
+		// the backend lacks a graph.DefsLookuper. Mirrors the old behavior.
+		if _, hasLookup := g.(graph.DefsLookuper); !hasLookup {
 			if dirIDs, ok := defs[symbol]; ok {
 				if filtered, hit := acceptKind(dirIDs); hit {
 					if r := findDefinitionResultScoped(g, symbol, filtered); r != nil {
@@ -119,7 +119,7 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		// under-matches. Tracked in mache-aba090 (symmetric to
 		// mache-5bb181); _lsp also exposes a symbol_kind column that may
 		// be the cleaner fix.
-		if qg, ok := g.(refsQuerier); ok {
+		if qg, ok := g.(graph.RefsQuerier); ok {
 			lspDefs, err := queryLSPDefs(qg, symbol)
 			if err == nil && len(lspDefs) > 0 {
 				lspDefs = filterByNodeIDKind(lspDefs, kind, func(d lspDefLocation) string { return d.NodeID })

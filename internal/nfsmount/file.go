@@ -6,7 +6,7 @@ import (
 
 	billy "github.com/go-git/go-billy/v5"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // WriteBackFunc is the callback triggered when a writable file is closed.

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +44,7 @@ func TestLazyGraph_DBPathEmptyWhenBackendHasNone(t *testing.T) {
 // It exercises the real production call — queryLSPRefs against the graph a
 // handler actually holds — rather than against the backend directly, which is
 // what hid the defect: every existing queryLSPRefs test passes a querier that
-// already implements dbPathProvider, so the capnp path was well covered and
+// already implements graph.DBPathProvider, so the capnp path was well covered and
 // the serve-mode path that reaches it was not covered at all.
 //
 // The fixture deliberately has NO _lsp_refs table, so the legacy SQL fallback

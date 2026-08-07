@@ -173,6 +173,91 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "graph/arena_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/composite_defs_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/composite_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/delete_file_nodes_perf_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/graph_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/hotswap.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/memstore.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/memstore_refs.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/shared_test.go",
+      "count": 7
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sheaf_invalidate_test.go",
+      "count": 7
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sqlite_graph_refs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sqlite_resolver_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/store_local.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/vdirpath.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/vdirpath_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/writable_graph.go",
+      "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/control/control_test.go",
       "count": 1
     },
@@ -180,91 +265,6 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/fixturedb/build.go",
       "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/arena_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/composite_defs_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/composite_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/delete_file_nodes_perf_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/graph_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/hotswap.go",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/memstore.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/memstore_refs.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/shared_test.go",
-      "count": 7
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/sheaf_invalidate_test.go",
-      "count": 7
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/sqlite_graph.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/sqlite_graph_refs.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/sqlite_resolver_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/store_local.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/vdirpath.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/vdirpath_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/graph/writable_graph.go",
-      "count": 6
     },
     {
       "rule_id": "duplicate_code",
@@ -403,21 +403,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/resolve/gomod_resolver_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/resolve/localpath_resolver.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/resolve/localpath_resolver_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "internal/vfs/callees.go",
       "count": 1
     },
@@ -460,6 +445,21 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/writeback/validate_test.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "resolve/gomod_resolver_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "resolve/localpath_resolver.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "resolve/localpath_resolver_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
@@ -618,18 +618,28 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/graph/graph.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/graph/quotient.go",
+      "source_id": "graph/capabilities.go",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/graph/sqlite_graph_test.go",
+      "source_id": "graph/graph.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "graph/quotient.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "graph/sqlite_graph_test.go",
       "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/fixturedb/types.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -688,11 +698,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/resolve/resolver.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/curate.go",
       "count": 1
     },
@@ -725,6 +730,11 @@
       "rule_id": "duplicate_definitions",
       "source_id": "mount/mount.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "resolve/resolver.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1008,11 +1018,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/agent.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/build.go",
       "count": 1
     },
@@ -1034,7 +1039,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/leyline.go",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -1054,7 +1059,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/serve.go",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -1113,11 +1118,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_hosted.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/serve_impact.go",
       "count": 1
     },
@@ -1143,67 +1143,57 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/arena_writer.go",
+      "source_id": "graph/arena_writer.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/community.go",
+      "source_id": "graph/community.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/memstore_callees.go",
+      "source_id": "graph/memstore_callees.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/memstore_refsdb.go",
+      "source_id": "graph/memstore_refsdb.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/memstore_write.go",
+      "source_id": "graph/memstore_write.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/sqlite_graph.go",
+      "source_id": "graph/sqlite_graph.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/sqlite_graph_callees.go",
+      "source_id": "graph/sqlite_graph_callees.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/sqlite_graph_refs.go",
+      "source_id": "graph/sqlite_graph_refs.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/sqlite_graph_scan.go",
+      "source_id": "graph/sqlite_graph_scan.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/graph/store_local.go",
+      "source_id": "graph/store_local.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/ast_walker.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/ast_walker_calls.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/ast_walker_extract.go",
       "count": 1
     },
     {
@@ -1263,22 +1253,12 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/leyline/trigger.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/lltest/project.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/materialize/json.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/nfsmount/graphfs.go",
       "count": 1
     },
     {
@@ -1294,7 +1274,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/testfixtures/registry.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1334,7 +1314,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/mod.rs",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -1364,7 +1344,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
-      "count": 7
+      "count": 6
     },
     {
       "rule_id": "fan_out_skew",
@@ -1813,68 +1793,68 @@
     },
     {
       "rule_id": "long_function",
+      "source_id": "graph/arena_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/community.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/graph_suite_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/memstore_callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/memstore_write.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/quotient.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/quotient_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sheaf_invalidate.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sqlite_graph_callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sqlite_graph_scan.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sqlite_graph_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
       "source_id": "graph/sqlite_test.go",
       "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/arena_writer.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/community.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/graph_suite_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/memstore_callees.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/memstore_write.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/quotient.go",
-      "count": 2
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/quotient_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/sheaf_invalidate.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/sqlite_graph.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/sqlite_graph_callees.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/sqlite_graph_scan.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/graph/sqlite_graph_test.go",
-      "count": 2
     },
     {
       "rule_id": "long_function",
@@ -2048,17 +2028,17 @@
     },
     {
       "rule_id": "sleep_in_test",
-      "source_id": "internal/graph/arena_writer_test.go",
+      "source_id": "graph/arena_writer_test.go",
       "count": 1
     },
     {
       "rule_id": "sleep_in_test",
-      "source_id": "internal/graph/live_graph_test.go",
+      "source_id": "graph/live_graph_test.go",
       "count": 2
     },
     {
       "rule_id": "sleep_in_test",
-      "source_id": "internal/graph/writable_graph_test.go",
+      "source_id": "graph/writable_graph_test.go",
       "count": 1
     },
     {
@@ -2123,7 +2103,7 @@
     },
     {
       "rule_id": "untested_function",
-      "source_id": "internal/graph/nodes_table_reader.go",
+      "source_id": "graph/nodes_table_reader.go",
       "count": 1
     },
     {

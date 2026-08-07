@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/control"
-	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 )

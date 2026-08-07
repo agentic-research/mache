@@ -5,7 +5,7 @@
 // This file is the contract every scheme's resolver builds on
 // (mache-bd97d9). Pure Go, no CGO or tree-sitter dependency at this layer —
 // individual resolvers (in their own files) may depend on more; this file
-// depends on internal/graph only.
+// depends on the public graph package only.
 package resolve
 
 import (
@@ -13,7 +13,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // ErrNotResolvable is returned by a Resolver when the locator is

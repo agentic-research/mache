@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // buildImpactBenchGraph seeds a chain graph: Root → L1.0…L1.fan → L2.0…L2.fan² → …

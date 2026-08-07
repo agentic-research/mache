@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -52,7 +52,7 @@ func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Supplement with LSP references if available
-		if qg, ok := g.(refsQuerier); ok {
+		if qg, ok := g.(graph.RefsQuerier); ok {
 			lspRefs, lspErr := queryLSPRefs(qg, token)
 			if lspErr == nil && len(lspRefs) > 0 {
 				// Apply kind filter to LSP refs. NOTE: this still uses

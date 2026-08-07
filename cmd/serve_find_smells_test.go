@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -27,7 +27,7 @@ func (s *smellTestGraph) QueryRefs(query string, args ...any) (*sql.Rows, error)
 	return s.db.Query(query, args...)
 }
 
-// DBPath implements dbPathProvider when path is set, opting this
+// DBPath implements graph.DBPathProvider when path is set, opting this
 // test graph into capnp readthrough (mache-190508 step 3 / mache-6bd4d8).
 // Tests that don't set path keep the legacy mention-only view shape.
 func (s *smellTestGraph) DBPath() string { return s.path }
@@ -314,7 +314,7 @@ func TestFindSmells_UnknownRuleErrors(t *testing.T) {
 }
 
 func TestFindSmells_BackendWithoutAstReturnsError(t *testing.T) {
-	// MemoryStore implements refsQuerier (its sidecar DB only has
+	// MemoryStore implements graph.RefsQuerier (its sidecar DB only has
 	// node_refs — no _ast). Running the smell rule must surface a
 	// clear error rather than crashing or returning empty success.
 	store := graph.NewMemoryStore()
@@ -2343,7 +2343,7 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	// Write the sibling .bindings.capnp with 24 records: 12 projection-
 	// shaped (qualifier='rec'), 12 orchestrator-shaped (12 distinct
 	// qualifiers). LoadCapnpBindings reads this when runSmellRule
-	// fires (via dbPathProvider opt-in on smellTestGraph).
+	// fires (via graph.DBPathProvider opt-in on smellTestGraph).
 	writeMultiBindingLogForTest(t, dbPath, []bindingRec{
 		{construct: "functions/bindingFromRecord/source", token: "Method01", qualifier: "rec"},
 		{construct: "functions/bindingFromRecord/source", token: "Method02", qualifier: "rec"},

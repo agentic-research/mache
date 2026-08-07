@@ -5,7 +5,7 @@ package leyline
 import (
 	"log"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // TriggerEmbedding walks all file nodes in the graph and pushes their content

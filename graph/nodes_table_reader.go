@@ -47,6 +47,7 @@ type NodesTableReader struct {
 	cache      *ContentCache    // FIFO-bounded rendered content
 	hasContext bool             // nodes table carries the context column (mache-b8fe72)
 	hasProps   bool             // nodes table carries the props column (mache-90b89b)
+	hasAST     bool             // db carries ley-line-open's _ast table, so nodes can be located in source (mache-e57065)
 }
 
 // ColumnExists reports whether table has a column named col. Readers use it
@@ -80,6 +81,9 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 		cache:      NewContentCache(cacheSize),
 		hasContext: ColumnExists(db, "nodes", "context"),
 		hasProps:   ColumnExists(db, "nodes", "props"),
+		// _ast is ley-line-open's; a standalone mache-built .db has no such
+		// table and simply yields nodes without a source location.
+		hasAST: ColumnExists(db, "_ast", "start_row"),
 	}
 }
 
@@ -90,38 +94,8 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		return &Node{ID: "", Mode: os.ModeDir | r.dirMode}, nil
 	}
 
-	var kind, size int
-	var mtimeNano int64
-	var recordID sql.NullString
-	var context []byte
-	// Older / leyline-produced nodes tables predate the context and props
-	// columns; only select each when present so GetNode stays backward-
-	// compatible (mache-b8fe72, mache-90b89b). node.Context feeds the
-	// `context` virtual file; props carries lang/pkg/imports, without which
-	// every construct read at serve time lost them and qualified-callee
-	// resolution fell back to scraping context text (mache-f930b6).
-	//
-	// props is read unconditionally by kind. The CASE WHEN kind guard this
-	// replaces existed only because Properties shared `record` with rendered
-	// file content, and shipping a file body just to answer a GetNode would
-	// defeat this reader's laziness. props never holds content, so there is
-	// nothing left to filter.
-	var props []byte
-	cols := "kind, size, mtime, record_id"
-	if r.hasProps {
-		cols += ", props"
-	}
-	if r.hasContext {
-		cols += ", context"
-	}
-	dest := []any{&kind, &size, &mtimeNano, &recordID}
-	if r.hasProps {
-		dest = append(dest, &props)
-	}
-	if r.hasContext {
-		dest = append(dest, &context)
-	}
-	err := r.db.QueryRow("SELECT "+cols+" FROM nodes WHERE id = ?", id).Scan(dest...)
+	var row nodeScan
+	err := r.db.QueryRow(r.nodeSelect(), id).Scan(row.scanTargets(r)...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -130,31 +104,121 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	}
 
 	mode := r.fileMode
-	if kind == NodeKindDir {
+	if row.kind == NodeKindDir {
 		mode = os.ModeDir | r.dirMode
 	}
 
 	node := &Node{
 		ID:      id,
 		Mode:    mode,
-		ModTime: time.Unix(0, mtimeNano),
-		Context: context,
+		ModTime: time.Unix(0, row.mtimeNano),
+		Context: row.context,
 	}
 
 	// Mirrors SQLiteWriter.GetNode: a dir node's `record` is its marshaled
 	// Properties. A dir node with inline Data instead won't unmarshal into the
 	// map shape — that's expected, and leaves Properties nil.
-	node.Properties = DecodeProps(props)
+	node.Properties = DecodeProps(row.props)
 
-	if kind == NodeKindFile {
+	node.Origin = row.loc.origin()
+
+	if row.kind == NodeKindFile {
 		if cachedSize, ok := r.sizeCache.Load(id); ok {
 			node.Ref = &ContentRef{ContentLen: cachedSize.(int64)}
 			return node, nil
 		}
-		node.Ref = &ContentRef{ContentLen: int64(size)}
-		r.sizeCache.Store(id, int64(size))
+		node.Ref = &ContentRef{ContentLen: int64(row.size)}
+		r.sizeCache.Store(id, int64(row.size))
 	}
 	return node, nil
+}
+
+// nodeScan is one `nodes` row plus the `_ast` columns joined onto it. It exists
+// so GetNode reads as "query, then build the node" rather than fifty lines of
+// conditional column assembly — the smell gate flagged the inlined version as
+// a long function, and it was right.
+type nodeScan struct {
+	kind, size int
+	mtimeNano  int64
+	recordID   sql.NullString
+	context    []byte
+	props      []byte
+	loc        astLocation
+}
+
+// nodeSelect builds the statement, and scanTargets builds the destinations, in
+// the SAME order. They are adjacent and must stay that way: a column added to
+// one without the other scans a value into the wrong field, which SQLite will
+// not necessarily reject if the types happen to be compatible.
+func (r *NodesTableReader) nodeSelect() string {
+	cols := "n.kind, n.size, n.mtime, n.record_id"
+	if r.hasProps {
+		cols += ", n.props"
+	}
+	if r.hasContext {
+		cols += ", n.context"
+	}
+	from := "nodes n"
+	// The source location rides along on THIS query rather than a second one.
+	// GetNode is called per-node inside bulk walks — get_architecture BFSes up
+	// to 50,000 nodes (cmd/serve_architecture.go) reading only Mode.IsDir() —
+	// so a separate SELECT against _ast would add one round-trip per node to
+	// callers that never read Origin. A LEFT JOIN costs nothing extra when the
+	// row is absent, and nothing at all when the db has no _ast (mache-e57065).
+	if r.hasAST {
+		cols += ", a.source_id, a.start_byte, a.end_byte, a.start_row, a.start_col, a.end_row, a.end_col"
+		from += " LEFT JOIN _ast a ON a.node_id = n.id"
+	}
+	return "SELECT " + cols + " FROM " + from + " WHERE n.id = ?"
+}
+
+func (row *nodeScan) scanTargets(r *NodesTableReader) []any {
+	dest := []any{&row.kind, &row.size, &row.mtimeNano, &row.recordID}
+	if r.hasProps {
+		dest = append(dest, &row.props)
+	}
+	if r.hasContext {
+		dest = append(dest, &row.context)
+	}
+	if r.hasAST {
+		dest = append(dest, &row.loc.sourceID, &row.loc.startByte, &row.loc.endByte,
+			&row.loc.startRow, &row.loc.startCol, &row.loc.endRow, &row.loc.endCol)
+	}
+	return dest
+}
+
+// astLocation holds the nullable `_ast` columns a GetNode LEFT JOIN produces.
+// Every field is nullable because the join misses for directories and virtual
+// nodes, which have no parse-tree row.
+type astLocation struct {
+	sourceID           sql.NullString
+	startByte, endByte sql.NullInt64
+	startRow, startCol sql.NullInt64
+	endRow, endCol     sql.NullInt64
+}
+
+// origin converts the joined row into a SourceOrigin, or nil when the node has
+// no `_ast` row — the documented "not locatable" sentinel. A zero-valued
+// Origin would read as "line 0 of an empty file" to every consumer, which is
+// worse than admitting we do not know.
+//
+// Rows and columns are tree-sitter's 0-based; they are stored 1-based here so
+// a consumer can use them directly and so 0 unambiguously means unknown. Byte
+// offsets pass through UNCHANGED — write-back splices by byte and must not get
+// the +1 the reader-facing units need.
+func (l astLocation) origin() *SourceOrigin {
+	if !l.sourceID.Valid {
+		return nil
+	}
+	return &SourceOrigin{
+		FilePath:  l.sourceID.String,
+		StartByte: uint32(l.startByte.Int64),
+		EndByte:   uint32(l.endByte.Int64),
+		StartLine: uint32(l.startRow.Int64) + 1,
+		StartCol:  uint32(l.startCol.Int64) + 1,
+		EndLine:   uint32(l.endRow.Int64) + 1,
+		EndCol:    uint32(l.endCol.Int64) + 1,
+	}
 }
 
 // ListChildren returns child IDs for a directory from the nodes table.
@@ -173,7 +237,12 @@ func (r *NodesTableReader) ListChildren(id string) ([]string, error) {
 	var rows *sql.Rows
 	var err error
 	if id == "" {
-		rows, err = r.db.Query("SELECT id FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		// `id != ''` excludes the root row itself. leyline writes a root
+		// node whose id AND parent_id are both empty, so without this the
+		// root lists ITSELF as a child — and since ListChildren("") then
+		// returns that same "" again, any consumer doing a recursive walk
+		// never terminates. Found by examples/publicapi's ladder test.
+		rows, err = r.db.Query("SELECT id FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name")
 	} else {
 		rows, err = r.db.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
 	}
@@ -200,7 +269,9 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 	var rows *sql.Rows
 	var err error
 	if id == "" {
-		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = '' OR parent_id IS NULL ORDER BY name")
+		// Same self-child exclusion as ListChildren above; the two must
+		// agree or a stat-based walk and an id-based walk see different trees.
+		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name")
 	} else {
 		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
 	}
@@ -222,7 +293,25 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 			IsDir:       kind == NodeKindDir,
 			ContentSize: int64(size),
 			ModTime:     time.Unix(0, mtimeNano),
-			HasOrigin:   false,
+			// Deliberately false even though GetNode now returns a non-nil
+			// Origin for the same node (mache-e57065), which makes this the
+			// one place NodeStat's "HasOrigin == (Origin != nil)" contract is
+			// knowingly under-reported. Two reasons, both stronger than the
+			// inconsistency:
+			//
+			//   1. GraphFS.statToFileInfo maps HasOrigin -> mode 0o644, so
+			//      flipping it advertises every leyline-backed file as
+			//      WRITABLE over NFS and routes it into the write-back
+			//      pipeline (validate -> format -> splice -> ShiftOrigins),
+			//      which has never been exercised against _ast-derived
+			//      origins. Under-reporting fails closed; over-reporting
+			//      fails into an untested write path.
+			//   2. Computing it honestly means an _ast lookup PER CHILD, on
+			//      the readdir hot path this method exists to keep cheap.
+			//
+			// Revisit together with write-back support for leyline origins,
+			// not before.
+			HasOrigin: false,
 		})
 	}
 	return stats, rows.Err()

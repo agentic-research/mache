@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,7 +109,7 @@ func TestFindCallers_CompositeNoCallersKeepsLegacyShape(t *testing.T) {
 // passed because they bypassed the wrapper).
 //
 // The fix: lazyGraph.MountPrefixOf forwards to its inner so the
-// mountPrefixer interface assertion sees through the wrapper.
+// graph.MountPrefixer interface assertion sees through the wrapper.
 func TestLazyGraph_MountPrefixOf_ForwardsToCompositeInner(t *testing.T) {
 	auth, billing := twoMountStores(t)
 	cg := graph.NewCompositeGraph()
@@ -121,9 +121,9 @@ func TestLazyGraph_MountPrefixOf_ForwardsToCompositeInner(t *testing.T) {
 	lg := &lazyGraph{inner: cg}
 	lg.once.Do(func() {})
 
-	// Sanity: lazyGraph satisfies mountPrefixer.
-	mp, ok := graph.Graph(lg).(mountPrefixer)
-	require.True(t, ok, "lazyGraph must satisfy mountPrefixer (handlers depend on this)")
+	// Sanity: lazyGraph satisfies graph.MountPrefixer.
+	mp, ok := graph.Graph(lg).(graph.MountPrefixer)
+	require.True(t, ok, "lazyGraph must satisfy graph.MountPrefixer (handlers depend on this)")
 
 	assert.Equal(t, "auth", mp.MountPrefixOf("auth/functions/AuthCaller/source"))
 	assert.Equal(t, "billing", mp.MountPrefixOf("billing/functions/Charge/source"))
@@ -163,10 +163,10 @@ func TestFindCallers_AnnotatesMountThroughLazyGraph(t *testing.T) {
 
 // TestLazyGraph_LookupDef_ForwardsToInner pins the same
 // wrapper-passthrough invariant as MountPrefixOf, but for the
-// defsLookuper interface used by find_definition. Without
+// graph.DefsLookuper interface used by find_definition. Without
 // passthrough, the production handler always took the O(N)
 // DefsMap snapshot path because lazyGraph doesn't satisfy
-// defsLookuper directly — its inner does.
+// graph.DefsLookuper directly — its inner does.
 func TestLazyGraph_LookupDef_ForwardsToInner(t *testing.T) {
 	store := graph.NewMemoryStore()
 	store.AddRoot(&graph.Node{ID: "pkg/funcs/Foo", Mode: 0})
@@ -175,9 +175,9 @@ func TestLazyGraph_LookupDef_ForwardsToInner(t *testing.T) {
 	lg := &lazyGraph{inner: store}
 	lg.once.Do(func() {})
 
-	// Sanity: lazyGraph satisfies defsLookuper through the wrapper.
-	dl, ok := graph.Graph(lg).(defsLookuper)
-	require.True(t, ok, "lazyGraph must satisfy defsLookuper (find_definition fast path depends on this)")
+	// Sanity: lazyGraph satisfies graph.DefsLookuper through the wrapper.
+	dl, ok := graph.Graph(lg).(graph.DefsLookuper)
+	require.True(t, ok, "lazyGraph must satisfy graph.DefsLookuper (find_definition fast path depends on this)")
 
 	got := dl.LookupDef("Foo")
 	assert.Equal(t, []string{"pkg/funcs/Foo"}, got, "Foo def must surface through the wrapper")

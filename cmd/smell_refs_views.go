@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/agentic-research/mache/graph"
+
 	"github.com/agentic-research/mache/internal/lsp"
 )
 
@@ -30,7 +32,7 @@ import (
 //
 // Idempotent — DROP VIEW IF EXISTS before each CREATE — so safe to
 // call before every rule execution.
-func ensureCanonicalViews(qg refsQuerier) error {
+func ensureCanonicalViews(qg graph.RefsQuerier) error {
 	// _lsp_defs probe still runs because v_defs's binding-fidelity
 	// arm has not yet migrated to capnp — BindingRecord covers refs
 	// (the link from a call site to a definition), not standalone
@@ -272,7 +274,7 @@ func ensureCanonicalViews(qg refsQuerier) error {
 // naturally, so this isn't a correctness issue. Once the capnp event
 // log is the canonical producer (post-T8.5), the _lsp_refs UNION arm
 // in ensureCanonicalViews can be removed.
-func LoadCapnpBindings(qg refsQuerier, dbPath string) error {
+func LoadCapnpBindings(qg graph.RefsQuerier, dbPath string) error {
 	if dbPath == "" {
 		return nil
 	}
@@ -315,7 +317,7 @@ func LoadCapnpBindings(qg refsQuerier, dbPath string) error {
 // _lsp_refs table (without referrer_node_id / ref_token) reads as
 // "no binding-fidelity rows available" and the views fall back to
 // mention-only — same shape as today.
-func tableHasColumn(qg refsQuerier, table, col string) (bool, error) {
+func tableHasColumn(qg graph.RefsQuerier, table, col string) (bool, error) {
 	// Table name is interpolated directly; PRAGMA table_info doesn't
 	// accept positional parameters. table comes from a hardcoded
 	// constant in this file (not user input), so injection risk is
@@ -368,14 +370,4 @@ func isSimpleIdent(s string) bool {
 		}
 	}
 	return true
-}
-
-// dbPathProvider is the opt-in interface a refsQuerier implements
-// when it knows its backing .db file path. The path is only used to
-// locate the sibling .bindings.capnp event log for capnp-readthrough
-// (mache-190508 step 3); queriers that don't know the path (in-memory
-// test fixtures, the in-process arena) skip the capnp source
-// silently. The mention + legacy SQL binding paths still apply.
-type dbPathProvider interface {
-	DBPath() string
 }

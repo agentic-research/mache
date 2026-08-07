@@ -66,7 +66,7 @@ type RefsQuerier interface {
 // consumer hands the installer over ONCE and [Builder.Build] applies it to every
 // fixture it ever produces.
 //
-// Packages with no canonical views (internal/graph, internal/ingest) leave it
+// Packages with no canonical views (graph, internal/ingest) leave it
 // unset and Build simply skips the step.
 var viewInstaller func(RefsQuerier) error
 

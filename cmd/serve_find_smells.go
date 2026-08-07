@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -51,8 +51,8 @@ func makeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			// L1 digest mode — "shape without weight": per-rule counts +
 			// per-file rollup + a few worst exemplars, instead of a flat
 			// (capped) dump. Drill to L2 with rule=<id> (+ source_id).
-			qg, ok := g.(refsQuerier)
-			if !ok { // coverage:ignore — all test graphs implement refsQuerier
+			qg, ok := g.(graph.RefsQuerier)
+			if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier
 				return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
 			} // coverage:ignore
 			digest, err := buildSmellDigest(qg, rules, 5, 10)
@@ -91,9 +91,9 @@ func makeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 		}
 
 		// Need a *sql.DB to run the rule. Today we hand-shake via the
-		// refsQuerier interface that other handlers already use.
-		qg, ok := g.(refsQuerier)
-		if !ok { // coverage:ignore — all test graphs implement refsQuerier; non-SQL backend can't be exercised in-process
+		// graph.RefsQuerier interface that other handlers already use.
+		qg, ok := g.(graph.RefsQuerier)
+		if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier; non-SQL backend can't be exercised in-process
 			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
 		} // coverage:ignore
 
@@ -204,7 +204,7 @@ func rulesListing(rules []SmellRule) any {
 // it produces (see cmd/build_meta.go); older or third-party-produced
 // .dbs return "" silently so the caller can fall back to a generic
 // message. Best-effort by design — never returns an error.
-func queryBuildBackend(qg refsQuerier) string {
+func queryBuildBackend(qg graph.RefsQuerier) string {
 	rows, err := qg.QueryRefs(`SELECT value FROM _mache_meta WHERE key = 'backend'`)
 	if err != nil {
 		return ""
@@ -227,7 +227,7 @@ func queryBuildBackend(qg refsQuerier) string {
 // sqlite_master on the active backend. Returns nil if everything is
 // present (or `required` is empty). The query uses placeholders for
 // the IN list so it works with arbitrary SQLite drivers.
-func missingTables(qg refsQuerier, required []string) ([]string, error) {
+func missingTables(qg graph.RefsQuerier, required []string) ([]string, error) {
 	if len(required) == 0 { // coverage:ignore — every built-in rule declares Requires; empty slice happens only for hypothetical bare external rules
 		return nil, nil // coverage:ignore
 	} // coverage:ignore

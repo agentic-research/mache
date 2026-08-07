@@ -10,7 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -100,7 +100,7 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 		arch.TestFiles = testFiles
 
 		// Most referenced: symbols with highest fan-in (most referencing nodes).
-		if rp, ok := g.(refsMapProvider); ok {
+		if rp, ok := g.(graph.RefsMapper); ok {
 			refs := rp.RefsMap()
 			type tokenCount struct {
 				token string
@@ -169,7 +169,7 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Key abstractions: symbols with most definition sites.
-		if dp, ok := g.(defsMapProvider); ok {
+		if dp, ok := g.(graph.DefsMapper); ok {
 			defs := dp.DefsMap()
 			type symDef struct {
 				symbol string

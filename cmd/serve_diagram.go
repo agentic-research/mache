@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -42,7 +42,7 @@ func makeGetDiagramHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
-		rp, ok := g.(refsMapProvider)
+		rp, ok := g.(graph.RefsMapper)
 		if !ok {
 			return mcp.NewToolResultError("get_diagram requires a graph with cross-reference data"), nil
 		}

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/graph"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -426,7 +428,7 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	// cmd test binary triggers ingest (~5s); subsequent tests reuse
 	// the same .db. Cleanup is process-lifetime (see registry docs).
 	g := testfixtures.Get(t, "mache-self")
-	qg := refsQuerier(g) // *SQLiteGraph implements refsQuerier directly.
+	qg := graph.RefsQuerier(g) // *SQLiteGraph implements graph.RefsQuerier directly.
 
 	rule := findRegisteredRule(t, "dead_code")
 

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 )
 

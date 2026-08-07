@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -31,12 +31,12 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		// Definition search.
 		//
-		// Two backends: SQL-pushdown via defsSearcher (preferred — covers
+		// Two backends: SQL-pushdown via graph.DefsSearcher (preferred — covers
 		// pre-built .db files whose in-memory defs map is empty), and
-		// in-memory map iteration via defsMapProvider (legacy MemoryStore
+		// in-memory map iteration via graph.DefsMapper (legacy MemoryStore
 		// and live-ingest paths).
 		//
-		// Wrappers like lazyGraph always satisfy the defsSearcher
+		// Wrappers like lazyGraph always satisfy the graph.DefsSearcher
 		// interface (they have the method, even if the inner backend
 		// doesn't). If the wrapper returns nil from SearchDefs because
 		// the inner didn't implement it, fall through to the DefsMap
@@ -49,11 +49,11 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		// fallback was unreachable due to dispatch ordering).
 		if role == "definition" {
 			var matches map[string][]string
-			if ds, ok := g.(defsSearcher); ok {
+			if ds, ok := g.(graph.DefsSearcher); ok {
 				matches = ds.SearchDefs(pattern, limit)
 			}
 			if matches == nil {
-				if dp, ok := g.(defsMapProvider); ok {
+				if dp, ok := g.(graph.DefsMapper); ok {
 					defs := dp.DefsMap()
 					matches = make(map[string][]string, len(defs))
 					for token, ids := range defs {
@@ -104,7 +104,7 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		// locations and would surface as fake "/path/file.go"
 		// results. NodesTableReader.GetCallers applies the same
 		// filter; this puts search/role=reference in agreement.
-		qg, ok := g.(refsQuerier)
+		qg, ok := g.(graph.RefsQuerier)
 		if !ok {
 			return mcp.NewToolResultError("reference search requires a SQLite-backed graph; use role=definition for in-memory search"), nil
 		}

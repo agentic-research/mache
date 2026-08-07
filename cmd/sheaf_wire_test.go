@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
@@ -301,7 +301,7 @@ func TestBuildServeGraph_OnDeleteAlsoFiresInvalidator(t *testing.T) {
 // the two prerequisites SheafInvalidator needs.
 
 // testGraphWithSI is a minimal wrapper that satisfies graph.Graph,
-// refsMapProvider (via the embedded MemoryStore), AND the
+// graph.RefsMapper (via the embedded MemoryStore), AND the
 // sheafInvalidatorProvider interface — lets unit tests stand in for
 // a lazyGraph without building the full lazy-init / session-routing
 // machinery. Embedding the concrete *graph.MemoryStore (not the
