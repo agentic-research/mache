@@ -159,6 +159,46 @@ func registerProject(absPath string) (string, error) {
 	return token, nil
 }
 
+// ensureProjectRegistered records rootPath in the local registry if it is not
+// already there, and reports whether a write happened.
+//
+// This is what makes registration a BYPRODUCT of serving rather than a
+// separate setup step. Before it, registerProject had exactly one caller —
+// `mache init` — so a daemon could serve a project a hundred times and
+// ~/.mache/projects.json would still not exist. That is not hypothetical: a
+// long-running shared daemon was found serving this repo with an empty
+// registry, so every ?project= lookup necessarily missed (mache-6ec106's
+// resolution path was in place but had nothing to resolve against).
+//
+// Now any session that resolves a workspace root by ANY means — client roots,
+// an explicit --path — registers it, so the token exists for the next client
+// that cannot answer roots/list. `mache init` keeps its distinct job: writing
+// the ?project= token into the client's config, which a server cannot do.
+//
+// Deliberately non-fatal and quiet on failure. A read-only HOME or a corrupt
+// registry must not take down a session that is otherwise resolving fine —
+// serving the graph is the job; registration is an optimization for later.
+// The existence check keeps the steady state read-only: re-registering on
+// every tool call would rewrite the file constantly for no gain.
+func ensureProjectRegistered(rootPath string) bool {
+	if rootPath == "" {
+		return false
+	}
+	reg, err := loadProjectRegistry()
+	if err != nil {
+		return false
+	}
+	for _, p := range reg {
+		if p == rootPath {
+			return false // already known; stay read-only
+		}
+	}
+	if _, err := registerProject(rootPath); err != nil {
+		return false
+	}
+	return true
+}
+
 // resolveProjectToken looks up token in the local registry, returning the
 // absolute path it was registered against. ok is false when the token is
 // unknown — whether guessed, stale, or from a registry that was wiped after
