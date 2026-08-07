@@ -139,22 +139,33 @@ func registerProject(absPath string) (string, error) {
 	}
 	token := projectToken(salt, absPath)
 
-	reg, err := loadProjectRegistry()
-	if err != nil {
-		return "", err
-	}
-	reg[token] = absPath
+	// The load/insert/write below is a read-modify-write over a file shared by
+	// every mache goroutine AND every mache process. Unserialized, concurrent
+	// registrations each write back a map they read BEFORE the others' inserts,
+	// so all but the last are silently dropped — measured at 47-49 losses out
+	// of 50 concurrent roots. See withRegistryLock.
+	err = withRegistryLock(func() error {
+		reg, lerr := loadProjectRegistry()
+		if lerr != nil {
+			return lerr
+		}
+		reg[token] = absPath
 
-	data, err := json.MarshalIndent(reg, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal project registry: %w", err)
-	}
-	path, err := projectRegistryPath()
+		data, merr := json.MarshalIndent(reg, "", "  ")
+		if merr != nil {
+			return fmt.Errorf("marshal project registry: %w", merr)
+		}
+		path, perr := projectRegistryPath()
+		if perr != nil {
+			return perr
+		}
+		if werr := writeFileAtomic(path, append(data, '\n')); werr != nil {
+			return fmt.Errorf("write %s: %w", path, werr)
+		}
+		return nil
+	})
 	if err != nil {
 		return "", err
-	}
-	if err := writeFileAtomic(path, append(data, '\n')); err != nil {
-		return "", fmt.Errorf("write %s: %w", path, err)
 	}
 	return token, nil
 }
@@ -184,19 +195,45 @@ func ensureProjectRegistered(rootPath string) bool {
 	if rootPath == "" {
 		return false
 	}
-	reg, err := loadProjectRegistry()
+	registered := false
+	err := withRegistryLock(func() error {
+		reg, lerr := loadProjectRegistry()
+		if lerr != nil {
+			return lerr
+		}
+		for _, p := range reg {
+			if p == rootPath {
+				return nil // already known; stay read-only
+			}
+		}
+		// registerProject takes the same lock, which is why it must be
+		// reentrant-safe: withRegistryLock is NOT reentrant (flock on a second
+		// descriptor from the same process would deadlock against itself on
+		// Linux), so the write is inlined here rather than delegated.
+		salt, serr := loadOrCreateProjectSalt()
+		if serr != nil {
+			return serr
+		}
+		reg[projectToken(salt, rootPath)] = rootPath
+
+		data, merr := json.MarshalIndent(reg, "", "  ")
+		if merr != nil {
+			return merr
+		}
+		path, perr := projectRegistryPath()
+		if perr != nil {
+			return perr
+		}
+		if werr := writeFileAtomic(path, append(data, '\n')); werr != nil {
+			return werr
+		}
+		registered = true
+		return nil
+	})
 	if err != nil {
 		return false
 	}
-	for _, p := range reg {
-		if p == rootPath {
-			return false // already known; stay read-only
-		}
-	}
-	if _, err := registerProject(rootPath); err != nil {
-		return false
-	}
-	return true
+	return registered
 }
 
 // resolveProjectToken looks up token in the local registry, returning the

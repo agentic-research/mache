@@ -314,11 +314,23 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 // helper twice has two node_refs rows (two call SITES, one callee), and
 // GetCallees answers "what does this call", not "how many times".
 func (g *SQLiteGraph) calleeTokensFromContainer(nodeID string) ([]string, error) {
+	// Probe for the column rather than letting the query fail and swallowing
+	// the error. node_refs on a mache-native projection has only
+	// (token, node_id) — no container_node_id — and cmd/smell_refs_views.go
+	// already established this probe-then-branch convention for exactly this
+	// leyline-vs-native divergence.
+	//
+	// The distinction matters: "this schema has no such column" is a shape
+	// fact and means fall through; a disk error or lock timeout is a FAILURE
+	// and must surface. Swallowing both alike would make a transient DB fault
+	// read as "this function calls nothing" — which is precisely what
+	// calleeTokensFromRefs' doc comment, three functions below, warns against.
+	if !ColumnExists(g.db, "node_refs", "container_node_id") {
+		return nil, nil
+	}
 	rows, err := g.db.Query("SELECT DISTINCT token FROM node_refs WHERE container_node_id = ?", nodeID)
 	if err != nil {
-		// No node_refs table, or no container_node_id column on an older
-		// projection: not an error, just nothing to resolve from here.
-		return nil, nil
+		return nil, fmt.Errorf("query callee tokens for %s: %w", nodeID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
