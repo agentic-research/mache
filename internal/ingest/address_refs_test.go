@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/agentic-research/mache/api"
@@ -65,7 +66,13 @@ func main() {
 	require.NoError(t, err)
 	assert.Contains(t, refs, "env:DATABASE_URL")
 	assert.Contains(t, refs, "env:API_KEY")
-	assert.Len(t, refs, 2, "should find exactly two env refs")
+	var envRefs []string
+	for _, ref := range refs {
+		if strings.HasPrefix(ref, "env:") {
+			envRefs = append(envRefs, ref)
+		}
+	}
+	assert.Len(t, envRefs, 2, "should find exactly two env refs")
 }
 
 func TestExtractAddressRefs_GoOsGetenv_Dedup(t *testing.T) {
@@ -83,7 +90,13 @@ func main() {
 
 	refs, err := w.ExtractAddressRefs("main.go", "go")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"env:SAME_VAR"}, refs, "duplicates should be deduplicated")
+	var envRefs []string
+	for _, ref := range refs {
+		if strings.HasPrefix(ref, "env:") {
+			envRefs = append(envRefs, ref)
+		}
+	}
+	assert.Equal(t, []string{"env:SAME_VAR"}, envRefs, "duplicates should be deduplicated")
 }
 
 func TestExtractAddressRefs_GoOsGetenv_NotMatched(t *testing.T) {
@@ -101,7 +114,9 @@ func main() {
 
 	refs, err := w.ExtractAddressRefs("main.go", "go")
 	require.NoError(t, err)
-	assert.Empty(t, refs, "fmt.Println should not emit env refs")
+	for _, ref := range refs {
+		assert.NotContains(t, ref, "env:", "fmt.Println should not emit env refs")
+	}
 }
 
 func TestExtractAddressRefs_HCLVariable(t *testing.T) {
@@ -162,6 +177,79 @@ resource "aws_instance" "web" {
 		assert.NotContains(t, ref, "aws_instance", "resource source attributes must not produce mod refs")
 		assert.NotContains(t, ref, "this should not match", "non-module block sources must not match")
 	}
+}
+
+func TestExtractAddressRefs_GoImports(t *testing.T) {
+	w, _ := parseSourceToASTWalker(t, "go", map[string]string{
+		"main.go": `package main
+
+import (
+	std "fmt"
+	_ ` + "`example.com/blank`" + `
+	. "example.com/dot"
+	"example.com/normal"
+)
+
+func main() {
+	std.Println(normal.Name)
+	_ = Name
+}
+`,
+	})
+
+	refs, err := w.ExtractAddressRefs("main.go", "go")
+	require.NoError(t, err)
+	assert.Contains(t, refs, "gomod:fmt")
+	assert.Contains(t, refs, "gomod:example.com/blank")
+	assert.Contains(t, refs, "gomod:example.com/dot")
+	assert.Contains(t, refs, "gomod:example.com/normal")
+	assert.Len(t, refs, 4, "aliases, blank imports, dot imports, and raw literals must not affect import identity")
+}
+
+func TestEngine_AddressRefs_GoImportsReachNodeRefs(t *testing.T) {
+	bin, err := leyline.ResolveBinary(false)
+	if err != nil {
+		t.Skipf("pinned leyline unavailable (%v)", err)
+	}
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(`package main
+
+import dep "example.com/acme/dep"
+
+func UseDep() {
+	_ = dep.Value
+}
+`), 0o644))
+
+	schemaJSON := `{
+  "version": "v1",
+  "nodes": [{
+    "name": "functions",
+    "selector": "$",
+    "language": "go",
+    "children": [{"name": "{{.name}}", "selector": "(function_declaration name: (identifier) @name) @scope", "files": [{"name": "source", "content_template": "{{.scope}}"}]}]
+  }]
+}`
+	var schema api.Topology
+	require.NoError(t, json.Unmarshal([]byte(schemaJSON), &schema))
+
+	dbPath := filepath.Join(t.TempDir(), "ast.db")
+	out, err := exec.Command(bin, "parse", tmpDir, "-o", dbPath).CombinedOutput() //nolint:gosec // test-only, pinned binary
+	require.NoError(t, err, "leyline parse failed: %s", string(out))
+	astDB, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = astDB.Close() }()
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(&schema, store)
+	engine.SetASTWalker(NewASTWalker(astDB))
+	require.NoError(t, engine.Ingest(tmpDir))
+
+	callers, err := store.GetCallers("gomod:example.com/acme/dep")
+	require.NoError(t, err)
+	require.Len(t, callers, 1)
+	assert.Equal(t, "functions/UseDep/source", callers[0].ID)
 }
 
 // TestEngine_AddressRefs_CrossLanguageBridge — a mixed Go + HCL project where
