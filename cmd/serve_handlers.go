@@ -106,7 +106,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithString("query", mcp.Required(), mcp.Description("Natural language description of what you're looking for")),
 			mcp.WithNumber("k", mcp.Description("Max results (default 10)")),
 		),
-		r.wrapHandler(makeSemanticSearchHandler),
+		r.wrapDegradedHandler(makeSemanticSearchHandler),
 	)
 
 	s.AddTool(
@@ -239,7 +239,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 			mcp.WithString("token", mcp.Required(), mcp.Description("Typed ref token in `scheme:locator` form (e.g. `mod:./modules/vpc` or `gomod:golang.org/x/sync/singleflight`).")),
 			mcp.WithString("base_path", mcp.Description("File or directory the locator is interpreted relative to. Required for `mod:` locators; unused for `gomod:`.")),
 		),
-		r.wrapHandler(makeResolveRefHandler),
+		r.wrapDegradedHandler(makeResolveRefHandler),
 	)
 
 	s.AddTool(

@@ -47,7 +47,7 @@ func corpus(t *testing.T) string {
 		"main.go": "package demo\n\n" +
 			"func Run() string {\n" +
 			"\tg := &Greeter{Prefix: \"hello \"}\n" +
-			"\treturn g.Greet(\"world\")\n" +
+			"\treturn g.Greet(\"world\") + g.Greet(\"again\")\n" +
 			"}\n",
 	}
 	for name, body := range files {
@@ -140,6 +140,57 @@ func TestLadder_SegmentsToPiecesToSymbols(t *testing.T) {
 	def := defs[0]
 	if _, err := g.GetNode(def); err != nil {
 		t.Fatalf("LookupDef returned %q but GetNode cannot resolve it: %v", def, err)
+	}
+}
+
+// TestLadder_NavigatesCallEdges covers the sideways move: from a symbol to
+// what it calls, and back to who calls it. Browsing is not only up and down a
+// tree — following a call is how a reader actually traverses code.
+//
+// This is a regression for mache-cb8fb9. GetCallees returned nothing for EVERY
+// construct on a leyline projection — the primary backend — because the
+// resolution path looked for a child node named "source" before consulting
+// node_refs. That is a mache-schema shape; a leyline construct's children are
+// parse-tree nodes (block, identifier, parameter_list), so the lookup came
+// back empty and the function returned before any fallback ran.
+//
+// Empty is the dangerous failure here: an agent cannot distinguish "this
+// function calls nothing" from "this backend cannot answer", so it draws the
+// wrong conclusion instead of asking a different question.
+func TestLadder_NavigatesCallEdges(t *testing.T) {
+	g := openLadder(t)
+
+	lookuper, ok := g.(graph.DefsLookuper)
+	if !ok {
+		t.Fatal("graph.Open's result must satisfy graph.DefsLookuper")
+	}
+	run := lookuper.LookupDef("Run")
+	if len(run) == 0 {
+		t.Fatal("LookupDef(Run) found nothing")
+	}
+
+	// Forward: Run calls Greet. Twice in the corpus — one callee, since
+	// GetCallees answers "what does this call", not "how many times".
+	callees, err := g.GetCallees(run[0])
+	if err != nil {
+		t.Fatalf("GetCallees(%q): %v", run[0], err)
+	}
+	if len(callees) == 0 {
+		t.Fatal("GetCallees returned nothing for a function with a call in its body — " +
+			"empty here is indistinguishable from \"calls nothing\", which is why this regressed unnoticed")
+	}
+	if len(callees) != 1 {
+		t.Errorf("Run calls Greet twice but has ONE callee; got %d — DISTINCT is not being applied", len(callees))
+	}
+
+	// Backward: whoever Run calls must name Run among its callers. The two
+	// directions have to agree, or navigation is a one-way street.
+	callers, err := g.GetCallers("Greet")
+	if err != nil {
+		t.Fatalf("GetCallers(Greet): %v", err)
+	}
+	if len(callers) == 0 {
+		t.Fatal("GetCallers(Greet) found nothing, but GetCallees just reported Greet as a callee")
 	}
 }
 

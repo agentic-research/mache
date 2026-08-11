@@ -29,6 +29,15 @@ func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 		if symbol == "" {
 			return mcp.NewToolResultError("symbol is required"), nil
 		}
+		// Refuse to answer a question about the code when there is no code
+		// loaded. Every negative result below ("no definition found") is a
+		// claim ABOUT THE CODEBASE, and making that claim from an unbuilt
+		// graph is not a degraded answer, it is a false one (mache-c5e114).
+		if err := graphUnavailable(g); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"cannot look up %q: the workspace graph is unavailable, so this is NOT a statement that the symbol is absent — %v",
+				symbol, err)), nil
+		}
 		fuzzy := request.GetBool("fuzzy", false)
 		kind, errResult := validateKindParam(request)
 		if errResult != nil {

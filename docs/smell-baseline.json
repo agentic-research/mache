@@ -104,7 +104,7 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "cmd/serve_find_smells_test.go",
-      "count": 29
+      "count": 30
     },
     {
       "rule_id": "duplicate_code",
@@ -1423,17 +1423,7 @@
     },
     {
       "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/harmony.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/parse.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/provenance.rs",
       "count": 1
     },
     {
@@ -1453,11 +1443,6 @@
     },
     {
       "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_dolt.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_sqlite.rs",
       "count": 1
     },
@@ -1468,32 +1453,12 @@
     },
     {
       "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/session.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/tests.rs",
       "count": 1
     },
     {
       "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dsse.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/github.rs",
       "count": 1
     },
     {
@@ -1544,11 +1509,6 @@
     {
       "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/sprites.rs",
       "count": 1
     },
     {
