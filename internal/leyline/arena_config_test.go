@@ -104,17 +104,17 @@ func TestCanonicalSourceRoot_ResolvesSymlinks(t *testing.T) {
 	link := filepath.Join(dir, "link-to-tree")
 	require.NoError(t, os.Symlink(real, link))
 
-	assert.Equal(t, canonicalSourceRoot(real), canonicalSourceRoot(link),
+	assert.Equal(t, CanonicalSourceRoot(real), CanonicalSourceRoot(link),
 		"a symlink and its target name the same tree and must not invalidate each other's arena")
 }
 
 func TestCanonicalSourceRoot_EmptyStaysEmpty(t *testing.T) {
-	assert.Empty(t, canonicalSourceRoot(""),
+	assert.Empty(t, CanonicalSourceRoot(""),
 		`a daemon spawned without --source records "", not the process working directory`)
 }
 
 func TestCanonicalSourceRoot_NonexistentPathIsStillAbsolute(t *testing.T) {
-	got := canonicalSourceRoot("relative/not/created")
+	got := CanonicalSourceRoot("relative/not/created")
 	assert.True(t, filepath.IsAbs(got),
 		"an unresolvable path must still normalize to absolute rather than fail the spawn")
 }

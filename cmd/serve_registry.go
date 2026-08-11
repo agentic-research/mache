@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -223,18 +224,91 @@ func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error
 			"Alternatives: start mache with an explicit --path, or use a client that supports MCP roots",
 		detail,
 	))
+
+	// Only memoize a PERMANENT failure. A client that does not implement roots
+	// will not grow the capability mid-session, so caching that spares every
+	// later tool call a pointless 5s wait. A TIMEOUT is different in kind: it
+	// says nothing about the client, only that this attempt was too slow.
+	//
+	// Caching it was an unrecoverable state produced by a recoverable cause,
+	// and it is the failure actually observed — a machine under load (64 stray
+	// leyline workers) pushed one roots/list past its deadline, that error was
+	// memoized, and every subsequent call in the session failed even though
+	// the client would have answered immediately. The session was poisoned by
+	// a transient condition that had already passed (mache-c5e114).
+	//
+	// Not retrying in a loop here: the next tool call retries naturally, so
+	// the retry rate is bounded by the client's own call rate rather than by
+	// anything mache spins.
+	if isTransientRootsError(rootsErr) {
+		return errGraph
+	}
 	actual, _ := r.sessionErrors.LoadOrStore(sessionID, errGraph)
 	return actual.(*lazyGraph)
 }
 
-// wrapHandler turns a handler factory (graph → handler) into a session-aware
-// handler that resolves the correct graph per-session at call time.
+// isTransientRootsError reports whether a roots-discovery failure might
+// succeed on a later attempt, and so must NOT be memoized for the session.
+//
+// Deadline and cancellation are the transient cases: they describe this
+// attempt, not the client. Everything else — "client does not support MCP
+// roots", "returned no workspace roots", an invalid root URI — is a property
+// of the peer that will not change mid-session, and is worth caching so later
+// calls fail fast instead of each paying the full timeout.
+func isTransientRootsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// graphUnavailable reports why the session's graph could not be built, or nil
+// when it is usable.
+//
+// Handlers that answer a QUESTION ABOUT THE CODE must consult this before
+// reporting a negative result. Without it, find_definition answered "no
+// definition found for X" while the server held no graph at all — an
+// infrastructure failure rendered as a fact about the codebase, which an agent
+// acts on by concluding the symbol does not exist (mache-c5e114).
+//
+// The distinction is the same one mache-91956b and mache-cb8fb9 turned on: an
+// inability to answer is not a negative answer. get_sheaf_status is the model —
+// it returns {available:false, reason} rather than erroring OR lying.
+func graphUnavailable(g graph.Graph) error {
+	lg, ok := g.(*lazyGraph)
+	if !ok {
+		return nil
+	}
+	_, err := lg.get()
+	return err
+}
+
+// wrapHandler turns a code-query handler factory (graph → handler) into a
+// session-aware handler that resolves the correct graph per-session at call
+// time. Code-query handlers require a usable graph: allowing an error-backed
+// lazyGraph to reach them produces tool-specific empty or "not found" answers
+// that falsely describe the codebase instead of the infrastructure failure.
 //
 // On the first tool call for an unmapped session, it calls ListRoots to
 // discover the client's workspace root and caches the mapping. This is done
 // here (not in OnAfterInitialize) because ListRoots deadlocks during the
 // initialize handshake — the client can't respond until initialize completes.
 func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return r.wrapHandlerWithAvailability(handlerFactory, true)
+}
+
+// wrapDegradedHandler is the explicit exception for handlers whose primary
+// data source is outside the graph and which can still return useful results
+// while graph enrichment is unavailable. semantic_search (daemon-first) and
+// resolve_ref (filesystem/module resolution) intentionally use this path.
+func (r *graphRegistry) wrapDegradedHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return r.wrapHandlerWithAvailability(handlerFactory, false)
+}
+
+func (r *graphRegistry) wrapHandlerWithAvailability(
+	handlerFactory func(graph.Graph) server.ToolHandlerFunc,
+	requireGraph bool,
+) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		session := server.ClientSessionFromContext(ctx)
 		var lg *lazyGraph
@@ -242,6 +316,12 @@ func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.Tool
 			lg = r.resolveSession(ctx, session)
 		} else {
 			lg = r.getOrCreateGraph(r.resolvedBasePath())
+		}
+
+		if requireGraph {
+			if err := graphUnavailable(lg); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("workspace graph is unavailable: %v", err)), nil
+			}
 		}
 
 		// Readiness gate: in daemon mode, check if the graph has any content.

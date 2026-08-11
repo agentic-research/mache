@@ -361,7 +361,7 @@ func DiscoverOrStart() (string, error) {
 	// the spawn — see arenaSpawnConfig for the full failure mode. Cold-start
 	// instead: one reparse, versus a daemon that never comes up.
 	arenaCfg := arenaSpawnConfig{
-		SourceRoot: canonicalSourceRoot(DaemonSource()),
+		SourceRoot: CanonicalSourceRoot(DaemonSource()),
 		CDCTarget:  cdcTarget,
 	}
 	//

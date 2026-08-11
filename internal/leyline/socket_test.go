@@ -1068,7 +1068,7 @@ func TestDiscoverOrStart_NoResetWhenConfigUnchanged(t *testing.T) {
 	t.Cleanup(func() { SetDaemonSource("") })
 
 	argv := captureDaemonArgv(t, func(home string) {
-		seedWarmArena(t, home, arenaSpawnConfig{SourceRoot: canonicalSourceRoot(source)})
+		seedWarmArena(t, home, arenaSpawnConfig{SourceRoot: CanonicalSourceRoot(source)})
 	})
 
 	assert.NotContains(t, argv, "--reset-arena",
@@ -1090,7 +1090,7 @@ func TestDiscoverOrStart_RecordsArenaConfigAfterSuccessfulSpawn(t *testing.T) {
 	})
 	assert.Contains(t, argv, "--reset-arena", "no prior record means this spawn cold-starts")
 
-	assert.False(t, arenaNeedsReset(arena, arenaSpawnConfig{SourceRoot: canonicalSourceRoot(source)}),
+	assert.False(t, arenaNeedsReset(arena, arenaSpawnConfig{SourceRoot: CanonicalSourceRoot(source)}),
 		"the spawn must record its configuration, or the next identical spawn invalidates again")
 }
 

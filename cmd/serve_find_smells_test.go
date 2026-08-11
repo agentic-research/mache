@@ -1983,6 +1983,58 @@ func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
 	assert.Empty(t, resp.Findings, "*_test.go file must be skipped despite high def count")
 }
 
+// TestFindSmells_GodFileExcludedFilesDoNotDiluteMean pins the population
+// invariant behind mache-ce0bcd: files excluded from god_file findings must
+// also be excluded from the project mean. With the production files alone,
+// the mean is (10+1+1)/3 = 4 and core.go is not an outlier. If either the
+// one-def helper_test.go or generated wire.capnp.go is allowed to dilute the
+// mean, it becomes (10+1+1+1)/4 = 3.25 and core.go spuriously clears the 3x
+// threshold.
+func TestFindSmells_GodFileExcludedFilesDoNotDiluteMean(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		WITH RECURSIVE seq(n) AS (
+			SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10
+		)
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record)
+		SELECT printf('pkg/core/F%d', n), 'pkg/core', printf('F%d', n),
+		       1, 0, 'pkg/core.go', ''
+		FROM seq;
+		WITH RECURSIVE seq(n) AS (
+			SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10
+		)
+		INSERT INTO node_defs
+		SELECT printf('F%d', n), printf('pkg/core/F%d', n) FROM seq;
+
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/A', 'pkg/a', 'A', 1, 0, 'pkg/a.go', ''),
+		  ('pkg/b/B', 'pkg/b', 'B', 1, 0, 'pkg/b.go', ''),
+		  ('pkg/tests/helper', 'pkg/tests', 'helper', 1, 0, 'pkg/helper_test.go', ''),
+		  ('pkg/generated/wire', 'pkg/generated', 'wire', 1, 0, 'pkg/wire.capnp.go', '');
+		INSERT INTO node_defs VALUES
+		  ('A', 'pkg/a/A'),
+		  ('B', 'pkg/b/B'),
+		  ('helper', 'pkg/tests/helper'),
+		  ('wire', 'pkg/generated/wire');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	assert.Empty(t, resp.Findings,
+		"excluded test/generated definitions must not change production god_file findings")
+}
+
 // TestFindSmells_FanOutSkew seeds a god-function and several normal
 // callers and asserts only the god-function is flagged. Mean fan-out
 // is (12 + 6×1) / 7 ≈ 2.57; 3×mean ≈ 7.7, well below the god's 12.
