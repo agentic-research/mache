@@ -49,7 +49,7 @@ func arenaConfigPath(arenaPath string) string {
 	return arenaPath + ".mache-config.json"
 }
 
-// canonicalSourceRoot resolves dir the way leyline's own check does, so
+// CanonicalSourceRoot resolves dir the way leyline's own check does, so
 // mache's reset decision and leyline's refusal decision agree on whether two
 // paths name the same tree.
 //
@@ -60,7 +60,7 @@ func arenaConfigPath(arenaPath string) string {
 // mismatch leyline itself would not, cold-starting on every alternation.
 // A path that cannot be resolved (does not exist yet) falls back to Abs, and
 // then to the input, so this never fails the spawn.
-func canonicalSourceRoot(dir string) string {
+func CanonicalSourceRoot(dir string) string {
 	if dir == "" {
 		return ""
 	}

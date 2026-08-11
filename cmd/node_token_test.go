@@ -1,10 +1,18 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
+	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,4 +59,90 @@ func TestTokenForNode_FallsBackForNodesThatDefineNothing(t *testing.T) {
 // wrong on leyline, which is what the fix distinguishes.
 func TestTokenForNode_FallsBackWithoutASQLHandle(t *testing.T) {
 	assert.Equal(t, "Alpha", tokenForNode(graph.NewMemoryStore(), "pkg/functions/Alpha"))
+}
+
+// TestLeylineProjection_CallersImpactAndDataflowAgree exercises the real
+// producer/consumer seam. A hand-built fixture can accidentally encode
+// Mache-shaped IDs (ending in the symbol) and miss the production failure:
+// Leyline IDs end in tree-sitter kinds such as function_declaration_0.
+func TestLeylineProjection_CallersImpactAndDataflowAgree(t *testing.T) {
+	requirePinnedLeyline(t)
+
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "sample.go"), []byte(`package sample
+
+func Alpha() {}
+func Beta() { Alpha() }
+func Gamma() { Alpha() }
+`), 0o644))
+
+	dbPath, cleanup, err := autoInvokeLeylineParse(src)
+	require.NoError(t, err)
+	defer cleanup()
+
+	sg, err := graph.OpenSQLiteGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, machetmpl.Render)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, sg.Close()) }()
+	require.NoError(t, sg.EagerScan())
+
+	callerResult, err := makeFindCallersHandler(sg)(context.Background(), makeRequest(map[string]any{
+		"token": "Alpha",
+	}))
+	require.NoError(t, err)
+	require.False(t, callerResult.IsError, resultText(t, callerResult))
+	var callers []string
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, callerResult)), &callers))
+	sort.Strings(callers)
+	require.NotEmpty(t, callers, "the real Leyline projection must contain Alpha call sites")
+
+	impactResult, err := makeGetImpactHandler(sg)(context.Background(), makeRequest(map[string]any{
+		"symbol":    "Alpha",
+		"kind":      "function",
+		"direction": "callers",
+		"depth":     1,
+	}))
+	require.NoError(t, err)
+	require.False(t, impactResult.IsError, resultText(t, impactResult))
+	var impact struct {
+		Nodes []struct {
+			Path      string `json:"path"`
+			Depth     int    `json:"depth"`
+			Direction string `json:"direction"`
+		} `json:"nodes"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, impactResult)), &impact))
+	impactCallers := make([]string, 0)
+	for _, node := range impact.Nodes {
+		if node.Depth == 1 && node.Direction == "caller" {
+			impactCallers = append(impactCallers, node.Path)
+		}
+	}
+	sort.Strings(impactCallers)
+
+	dataflowCallResult, err := makeGetDataflowHandler(sg)(context.Background(), makeRequest(map[string]any{
+		"symbol":    "Alpha",
+		"kind":      "function",
+		"direction": "callers",
+		"depth":     1,
+	}))
+	require.NoError(t, err)
+	require.False(t, dataflowCallResult.IsError, resultText(t, dataflowCallResult))
+	var flow dataflowResult
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, dataflowCallResult)), &flow))
+	flowCallers := make([]string, 0)
+	for _, node := range flow.Nodes {
+		if node.Depth == 1 {
+			flowCallers = append(flowCallers, node.Path)
+		}
+	}
+	sort.Strings(flowCallers)
+
+	assert.Equal(t, callers, impactCallers,
+		"get_impact must traverse the same real node_refs callers as find_callers")
+	assert.Equal(t, callers, flowCallers,
+		"get_dataflow must traverse the same real node_refs callers as find_callers")
+	for _, path := range append(append([]string{}, impactCallers...), flowCallers...) {
+		assert.False(t, strings.Contains(path, ".md/") || strings.Contains(path, "docs/"),
+			"construct-kind lookup must not drift into Markdown prose: %s", path)
+	}
 }
