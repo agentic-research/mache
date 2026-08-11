@@ -36,6 +36,17 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Terraform address references now reach Mache's caller graph**
+  (`mache-91beb0`). Mache pins the official ley-line-open `v0.18.2` binaries
+  and their four platform SHA-256 digests. That release repairs the HCL
+  extraction dispatcher, so `leyline parse` serializes `env:` variable and
+  `mod:` module-source tokens into `node_refs` instead of producing a complete
+  `_ast` with an empty reference table. The paired Apache-2.0 Go schema client
+  is `v0.18.1`, matching the binary's unchanged public-schema handshake; wire
+  major `1`, compatibility floor `v0.6.0`, and `merkle-ast-v2` lineage are
+  unchanged. A real released-binary regression now proves those rows survive
+  through `find_callers`.
+
 - **The root listed itself as its own child, so a recursive browse never
   terminated** (`mache-77cf75`). ley-line writes a root node whose `id` and
   `parent_id` are both empty, and `NodesTableReader`'s root query matched it —
