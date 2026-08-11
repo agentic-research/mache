@@ -87,6 +87,19 @@ func init() {
 			(#eq? @_func "Getenv"))
 	`)
 
+	// Go imports become typed module references. The resolver layer decides
+	// whether the path is stdlib, part of the main module, or an external
+	// module; keeping the import path in node_refs preserves the cross-graph
+	// join even when resolution is deferred.
+	RegisterAddressRefQuery("go", "gomod", `
+		(import_spec
+			path: (interpreted_string_literal) @ref)
+	`)
+	RegisterAddressRefQuery("go", "gomod", `
+		(import_spec
+			path: (raw_string_literal) @ref)
+	`)
+
 	// HCL: variable "VAR_NAME" { ... } → env:VAR_NAME
 	RegisterAddressRefQuery("terraform", "env", `
 		(block

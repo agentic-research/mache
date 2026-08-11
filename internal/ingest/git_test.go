@@ -17,6 +17,10 @@ func TestLoadGitCommits(t *testing.T) {
 	runGit(t, tmpDir, "init")
 	runGit(t, tmpDir, "config", "user.name", "Tester")
 	runGit(t, tmpDir, "config", "user.email", "test@example.com")
+	// Keep the fixture independent of a developer's global Git signing policy.
+	// Some machines enable commit.gpgsign globally, which makes this synthetic
+	// repository fail before LoadGitCommits is exercised.
+	runGit(t, tmpDir, "config", "commit.gpgsign", "false")
 
 	// Commit 1
 	runGit(t, tmpDir, "commit", "--allow-empty", "-m", "Initial commit")
