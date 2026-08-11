@@ -20,7 +20,7 @@ package fixturedb
 
 // leylineSchemaVersion is the ley-line-open release these statements were
 // derived from. The conformance test asserts the pinned binary still reports it.
-const leylineSchemaVersion = "v0.18.0"
+const leylineSchemaVersion = "v0.18.2"
 
 // leylineTables is the ley-line-owned subset fixtures model, keyed by table
 // name. Deliberately not every table ley-line writes — `capnp_blobs`,
