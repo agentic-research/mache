@@ -283,14 +283,32 @@ func graphUnavailable(g graph.Graph) error {
 	return err
 }
 
-// wrapHandler turns a handler factory (graph → handler) into a session-aware
-// handler that resolves the correct graph per-session at call time.
+// wrapHandler turns a code-query handler factory (graph → handler) into a
+// session-aware handler that resolves the correct graph per-session at call
+// time. Code-query handlers require a usable graph: allowing an error-backed
+// lazyGraph to reach them produces tool-specific empty or "not found" answers
+// that falsely describe the codebase instead of the infrastructure failure.
 //
 // On the first tool call for an unmapped session, it calls ListRoots to
 // discover the client's workspace root and caches the mapping. This is done
 // here (not in OnAfterInitialize) because ListRoots deadlocks during the
 // initialize handshake — the client can't respond until initialize completes.
 func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return r.wrapHandlerWithAvailability(handlerFactory, true)
+}
+
+// wrapDegradedHandler is the explicit exception for handlers whose primary
+// data source is outside the graph and which can still return useful results
+// while graph enrichment is unavailable. semantic_search (daemon-first) and
+// resolve_ref (filesystem/module resolution) intentionally use this path.
+func (r *graphRegistry) wrapDegradedHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return r.wrapHandlerWithAvailability(handlerFactory, false)
+}
+
+func (r *graphRegistry) wrapHandlerWithAvailability(
+	handlerFactory func(graph.Graph) server.ToolHandlerFunc,
+	requireGraph bool,
+) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		session := server.ClientSessionFromContext(ctx)
 		var lg *lazyGraph
@@ -298,6 +316,12 @@ func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.Tool
 			lg = r.resolveSession(ctx, session)
 		} else {
 			lg = r.getOrCreateGraph(r.resolvedBasePath())
+		}
+
+		if requireGraph {
+			if err := graphUnavailable(lg); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("workspace graph is unavailable: %v", err)), nil
+			}
 		}
 
 		// Readiness gate: in daemon mode, check if the graph has any content.
