@@ -3,7 +3,7 @@ package vfs
 import (
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // CalleesHandler serves the virtual callees/ directory and its symlink entries.

@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // buildBenchGraph constructs a directory with `nChildren` subdirs, each

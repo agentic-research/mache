@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,8 +34,8 @@ func TestLocalPathResolver_ResolvesRelativeLocator(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, g)
 
-	ld, ok := g.(interface{ LookupDef(string) []string })
-	require.True(t, ok, "resolved graph must support LookupDef")
+	ld, ok := g.(graph.DefsLookuper)
+	require.True(t, ok, "resolved graph must satisfy graph.DefsLookuper")
 	require.NotEmpty(t, ld.LookupDef("New"), "must find the function actually defined in the resolved directory")
 }
 

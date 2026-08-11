@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -29,7 +29,7 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 		minSize := request.GetInt("min_size", 2)
 		summary := request.GetBool("summary", false)
 
-		rp, ok := g.(refsMapProvider)
+		rp, ok := g.(graph.RefsMapper)
 		if !ok {
 			return mcp.NewToolResultError("community detection requires a graph with cross-reference data (SQLite backend or MemoryStore with refs)"), nil
 		}

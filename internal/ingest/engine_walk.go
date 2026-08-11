@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // toNodeID converts a filesystem path to a graph node ID by normalizing

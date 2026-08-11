@@ -29,7 +29,7 @@ import (
 //	          design: anything that starts binding a string here inherits the
 //	          bug silently.
 //
-//	WRITEBACK — WritableGraph.UpdateRecord (internal/graph/writable_graph.go:99)
+//	WRITEBACK — WritableGraph.UpdateRecord (graph/writable_graph.go:99)
 //	          binds string(content). That is TEXT, and TEXT is exactly what
 //	          NUMERIC affinity rewrites. Editing a projected file through the
 //	          mount so its whole body is '007' stores 7 — and since `size` is

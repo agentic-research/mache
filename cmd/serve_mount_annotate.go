@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // scopedItem is the {path, mount} shape MCP handlers emit for results
@@ -11,15 +11,6 @@ import (
 type scopedItem struct {
 	Path  string `json:"path"`
 	Mount string `json:"mount,omitempty"`
-}
-
-// mountPrefixer is satisfied by anything that can resolve a node ID
-// to its mount prefix. *graph.CompositeGraph implements this directly;
-// *lazyGraph implements it by delegating to its inner graph if that
-// inner is itself a CompositeGraph. The interface lets annotateMounts
-// reach the composite even when handlers receive a wrapped graph.
-type mountPrefixer interface {
-	MountPrefixOf(id string) string
 }
 
 // annotateMounts returns scoped items if g exposes a mount-prefix
@@ -35,7 +26,7 @@ type mountPrefixer interface {
 // production never hit the annotated branch. Switching to an interface
 // lets lazyGraph forward MountPrefixOf to its inner.
 func annotateMounts(g graph.Graph, paths []string) []scopedItem {
-	mp, ok := g.(mountPrefixer)
+	mp, ok := g.(graph.MountPrefixer)
 	if !ok || len(paths) == 0 {
 		return nil
 	}

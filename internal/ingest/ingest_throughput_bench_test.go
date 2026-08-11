@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // loadGoSchemaForBench parses examples/go-schema.json once. The

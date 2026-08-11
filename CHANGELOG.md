@@ -8,6 +8,87 @@ bumps may include breaking changes.
 
 ### Added
 
+- **Nodes carry a source location, completing the browse ladder**
+  (`mache-e57065`). `graph.Open` previously returned nodes whose `Origin` was
+  nil, so a consumer could FIND a symbol and not open it — no line, no column,
+  not even the byte range `SourceOrigin` is shaped to hold. `_ast` already had
+  everything needed, keyed by the same `node_id` `LookupDef` returns, so this
+  is mache-side plumbing with no ley-line-open change.
+
+  `SourceOrigin` now carries both units, and the distinction matters: byte
+  offsets pass through unchanged because write-back splices by byte, while
+  `StartLine`/`StartCol`/`EndLine`/`EndCol` add the +1 that turns tree-sitter's
+  0-based rows into what every editor, terminal and LLM context speaks. 1-based
+  means `0` unambiguously signals unknown. A projection without `_ast`
+  (standalone mache, no ley-line) yields a nil Origin rather than a
+  zero-valued one.
+
+- **`examples/publicapi` — an executable proof that the public API is
+  sufficient on its own** (`mache-77cf75`). Every other test in this repo may
+  import `internal/`, so none of them can answer "could an external consumer do
+  this?". This one imports only `mache/build` and `mache/graph`, enforced by a
+  lint that fails the build if that stops being true — and whose stated remedy
+  is to promote what the example needed into the public API rather than add the
+  import.
+
+  It found two defects on its first run, in an API that had just been
+  deliberately reviewed.
+
+### Fixed
+
+- **The root listed itself as its own child, so a recursive browse never
+  terminated** (`mache-77cf75`). ley-line writes a root node whose `id` and
+  `parent_id` are both empty, and `NodesTableReader`'s root query matched it —
+  `ListChildren("")` returned `""`, and listing that returned the root listing
+  again. `ListChildStats` carried the identical query and the identical bug,
+  which is worse than a duplicate: the two walks would have had to disagree for
+  anyone to notice. Both now exclude the root row.
+
+### Changed
+
+- **BREAKING: `internal/graph` and `internal/resolve` are now the public
+  `graph` and `resolve` packages, and the type-alias facades are gone**
+  (`mache-9a89cd`). The facades were curating the wrong axis. A
+  `type X = internal.X` alias is a TOTAL re-export — every exported method
+  comes with it — so they provided no encapsulation, while the interfaces a
+  consumer actually needs (defs lookup, refs query, db path, schema) stayed
+  unexported in `cmd/`. What they did cost was documentation: because the
+  real types lived in an `internal/` package that pkg.go.dev will not render,
+  `go doc ./graph Node` printed
+
+  ```
+  type Node = ig.Node
+  ```
+
+  and nothing else — no fields, no methods. `SQLiteGraph` was sharper still,
+  its doc comment advertising "LookupDef/QueryRefs/GetCallers query the db's
+  own tables directly" while hiding every one of those signatures. The public
+  API was undocumentable as built, which defeats the purpose of the `resolve/`
+  facade (ADR-0016), whose entire reason to exist is external consumption.
+
+  Migration is an import-path rewrite; no symbol names changed:
+
+  ```
+  github.com/agentic-research/mache/internal/graph   -> .../graph
+  github.com/agentic-research/mache/internal/resolve -> .../resolve
+  ```
+
+- **BREAKING: `graph.Build` moved to the new `build` package as
+  `build.Parse`.** Merging `internal/graph` into `graph` would otherwise close
+  an import cycle — `graph/build.go` imports `internal/leyline`, which imports
+  the graph package for `Node`/`CommunityResult`/`DetectCommunities`. `Build`
+  touches no graph types (it shells out to `leyline parse`), so it belongs
+  with build orchestration rather than the graph data structures. Breaking the
+  cycle by inverting leyline's dependency would have meant duplicating those
+  types, and by injecting the resolver through a package var would have meant
+  action at a distance.
+
+  ```
+  graph.Build(src, out)  ->  build.Parse(src, out)
+  ```
+
+### Added
+
 - **`resolve_ref` mounts resolved sub-graphs so other MCP tools can query
   them, and gains a `gomod:` scheme** (`mache-bdcd2b`, `mache-be0b9f`,
   ADR-0016 steps 2–3). Previously `makeResolveRefHandler` discarded its

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -250,7 +250,7 @@ func TestRouteSheafEvent_AllKnownNoResultNoOps(t *testing.T) {
 }
 
 // fakeGraph is a minimal graph.Graph that records Invalidate calls
-// for assertion. Mirrors the mockGraph in internal/graph but lives
+// for assertion. Mirrors the mockGraph in the graph package but lives
 // here so the cmd-package routing test isn't coupled to that file's
 // (internal) test types.
 type fakeGraph struct {

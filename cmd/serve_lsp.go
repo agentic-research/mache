@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/lsp"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -144,9 +144,9 @@ func makeGetTypeInfoHandler(g graph.Graph) server.ToolHandlerFunc {
 		// Fail fast on non-SQL backends with a clear message instead
 		// of the generic post-assertion "LSP data not available" which
 		// is the same string we use for "table missing." Today
-		// lazyGraph always satisfies refsQuerier; this guards a future
+		// lazyGraph always satisfies graph.RefsQuerier; this guards a future
 		// backend that drops the method.
-		qg, ok := g.(refsQuerier)
+		qg, ok := g.(graph.RefsQuerier)
 		if !ok {
 			return mcp.NewToolResultError("get_type_info requires a SQL-capable graph backend (mache standalone or leyline-parsed .db)"), nil
 		}
@@ -190,7 +190,7 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		// Mirror get_type_info: fail fast with a specific error if
 		// the backend doesn't support SQL queries.
-		qg, ok := g.(refsQuerier)
+		qg, ok := g.(graph.RefsQuerier)
 		if !ok {
 			return mcp.NewToolResultError("get_diagnostics requires a SQL-capable graph backend (mache standalone or leyline-parsed .db)"), nil
 		}
@@ -314,7 +314,7 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 
 // queryTypeInfoFromGraph queries _lsp_hover from mache's in-memory graph
 // (used when LSP tables already exist in the graph, e.g. from leyline lsp CLI).
-func queryTypeInfoFromGraph(qg refsQuerier, symbol, kind string) (*mcp.CallToolResult, error) {
+func queryTypeInfoFromGraph(qg graph.RefsQuerier, symbol, kind string) (*mcp.CallToolResult, error) {
 	type hoverResult struct {
 		NodeID    string `json:"node_id"`
 		HoverText string `json:"hover_text"`
@@ -486,7 +486,7 @@ func noDiagnosticsResultWithSkipReasons(symbol, kind string, skipReasons []strin
 }
 
 // queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph.
-func queryDiagnosticsFromGraph(qg refsQuerier, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
+func queryDiagnosticsFromGraph(qg graph.RefsQuerier, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
 	type diagResult struct {
 		NodeID      string `json:"node_id"`
 		SymbolKind  string `json:"symbol_kind"`
@@ -559,7 +559,7 @@ type lspRefLocation struct {
 // present. The legacy suffix-then-broader-LIKE fallback survives
 // for pre-Step-1 .dbs that still have only the (node_id, def_uri,
 // ...) columns.
-func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
+func queryLSPDefs(qg graph.RefsQuerier, symbol string) ([]lspDefLocation, error) {
 	hasDefToken, err := tableHasColumn(qg, "_lsp_defs", "def_token")
 	if err != nil {
 		return nil, fmt.Errorf("probe _lsp_defs schema: %w", err)
@@ -608,11 +608,11 @@ func queryLSPDefs(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
 // post-LLO-T8.2 builds always emit the capnp log.
 //
 // Returns (nil, nil) when neither source has data for the symbol.
-func queryLSPRefs(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
+func queryLSPRefs(qg graph.RefsQuerier, symbol string) ([]lspRefLocation, error) {
 	// Capnp source: requires the querier to know its dbPath
-	// (dbPathProvider opt-in, mache-190508 step 3). When available,
+	// (graph.DBPathProvider opt-in, mache-190508 step 3). When available,
 	// it's the canonical source.
-	if dp, ok := qg.(dbPathProvider); ok {
+	if dp, ok := qg.(graph.DBPathProvider); ok {
 		if results, err := readLSPRefsFromCapnp(dp.DBPath(), symbol); err != nil {
 			return nil, err
 		} else if results != nil {
@@ -676,7 +676,7 @@ func readLSPRefsFromCapnp(dbPath, symbol string) ([]lspRefLocation, error) {
 // for .dbs that still have the legacy _lsp_defs schema (no def_token
 // column). New consumers should rely on queryLSPDefs which prefers
 // the direct token match when available.
-func queryLSPDefsLegacy(qg refsQuerier, symbol string) ([]lspDefLocation, error) {
+func queryLSPDefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspDefLocation, error) {
 	// First confirm the table exists at all — tableHasColumn returns
 	// false for both "no table" and "table without column", so we
 	// have to disambiguate here for the legacy code path.
@@ -730,7 +730,7 @@ func queryLSPDefsLegacy(qg refsQuerier, symbol string) ([]lspDefLocation, error)
 }
 
 // queryLSPRefsLegacy mirrors queryLSPDefsLegacy for the refs table.
-func queryLSPRefsLegacy(qg refsQuerier, symbol string) ([]lspRefLocation, error) {
+func queryLSPRefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspRefLocation, error) {
 	exists, err := refsTableExists(qg, "_lsp_refs")
 	if err != nil {
 		return nil, err
@@ -784,7 +784,7 @@ func queryLSPRefsLegacy(qg refsQuerier, symbol string) ([]lspRefLocation, error)
 // the active database. Used by queryLSP*Legacy to short-circuit when
 // the table doesn't exist (consistent with the original "(nil, nil)
 // = no table" contract).
-func refsTableExists(qg refsQuerier, name string) (bool, error) {
+func refsTableExists(qg graph.RefsQuerier, name string) (bool, error) {
 	if !isSimpleIdent(name) {
 		return false, fmt.Errorf("invalid table name: %q", name)
 	}

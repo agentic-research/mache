@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -104,7 +104,7 @@ var astNodeKindToCanonical = map[string]string{
 // hasASTTable reports whether the backing SQL store exposes an `_ast`
 // table (i.e. it is a ley-line-parsed projection). Construct-dir
 // MemoryStore mounts have no `_ast` and fall back to path-segment matching.
-func hasASTTable(qg refsQuerier) bool {
+func hasASTTable(qg graph.RefsQuerier) bool {
 	rows, err := qg.QueryRefs(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='_ast' LIMIT 1`)
 	if err != nil {
 		return false
@@ -117,7 +117,7 @@ func hasASTTable(qg refsQuerier) bool {
 // upgrading ambiguous function kinds to "method" when the node has a
 // method-container ancestor. Returns "" when the node is absent from
 // _ast or its node_kind is unmapped — caller falls back to path-segment.
-func resolveKindFromAST(qg refsQuerier, nodeID string) string {
+func resolveKindFromAST(qg graph.RefsQuerier, nodeID string) string {
 	rows, err := qg.QueryRefs(`SELECT node_kind FROM _ast WHERE node_id = ? LIMIT 1`, nodeID)
 	if err != nil {
 		return ""
@@ -142,7 +142,7 @@ func resolveKindFromAST(qg refsQuerier, nodeID string) string {
 // astNodeHasMethodContainerAncestor walks the nodes.parent_id chain and
 // reports whether any ancestor's _ast.node_kind is a method container.
 // A single recursive CTE keeps this one round-trip regardless of depth.
-func astNodeHasMethodContainerAncestor(qg refsQuerier, nodeID string) bool {
+func astNodeHasMethodContainerAncestor(qg graph.RefsQuerier, nodeID string) bool {
 	// The depth column bounds recursion at 256 — real AST ancestry to a
 	// method container is shallow; the cap is purely a guard against a
 	// malformed leyline `nodes` table with a cyclic parent_id (which would
@@ -180,7 +180,7 @@ func filterDirIDsByKindGraph(g graph.Graph, dirIDs []string, kind string) ([]str
 	if !known {
 		return nil, false
 	}
-	qg, ok := g.(refsQuerier)
+	qg, ok := g.(graph.RefsQuerier)
 	if !ok || !hasASTTable(qg) {
 		return filterDirIDsByKind(dirIDs, kind)
 	}

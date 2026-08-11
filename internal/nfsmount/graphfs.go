@@ -17,7 +17,7 @@ import (
 	"github.com/go-git/go-billy/v5/helper/chroot"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/vfs"
 )
 

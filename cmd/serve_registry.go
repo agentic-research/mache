@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -16,9 +17,9 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
-	"github.com/agentic-research/mache/internal/resolve"
+	"github.com/agentic-research/mache/resolve"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"golang.org/x/sync/singleflight"
@@ -195,12 +196,14 @@ func (r *graphRegistry) graphForSession(sessionID string) *lazyGraph {
 func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error) *lazyGraph {
 	if r.basePath != "" {
 		r.registerSession(sessionID, r.basePath)
+		rememberResolvedRoot(r.basePath, "--path")
 		return r.getOrCreateGraph(r.basePath)
 	}
 	if serveStdio && len(r.args) == 1 {
 		source, err := filepath.Abs(r.args[0])
 		if err == nil {
 			r.registerSession(sessionID, source)
+			rememberResolvedRoot(source, "stdio arg")
 			return r.getOrCreateGraph(source)
 		}
 	}
@@ -212,22 +215,100 @@ func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error
 	if rootsErr != nil {
 		detail = rootsErr.Error()
 	}
+	// `mache init` leads because for the clients that reach this branch it is
+	// the only remedy that works — see rememberResolvedRoot (mache-6ec106).
 	errGraph := newErrorLazyGraph(fmt.Errorf(
-		"workspace root unavailable (%s); configure MCP roots or start mache with an explicit --path",
+		"workspace root unavailable (%s). Run `mache init` in the project you want served: "+
+			"it registers the project and writes a ?project= token into this client's MCP URL, "+
+			"which resolves without the client needing to answer roots/list. "+
+			"Alternatives: start mache with an explicit --path, or use a client that supports MCP roots",
 		detail,
 	))
+
+	// Only memoize a PERMANENT failure. A client that does not implement roots
+	// will not grow the capability mid-session, so caching that spares every
+	// later tool call a pointless 5s wait. A TIMEOUT is different in kind: it
+	// says nothing about the client, only that this attempt was too slow.
+	//
+	// Caching it was an unrecoverable state produced by a recoverable cause,
+	// and it is the failure actually observed — a machine under load (64 stray
+	// leyline workers) pushed one roots/list past its deadline, that error was
+	// memoized, and every subsequent call in the session failed even though
+	// the client would have answered immediately. The session was poisoned by
+	// a transient condition that had already passed (mache-c5e114).
+	//
+	// Not retrying in a loop here: the next tool call retries naturally, so
+	// the retry rate is bounded by the client's own call rate rather than by
+	// anything mache spins.
+	if isTransientRootsError(rootsErr) {
+		return errGraph
+	}
 	actual, _ := r.sessionErrors.LoadOrStore(sessionID, errGraph)
 	return actual.(*lazyGraph)
 }
 
-// wrapHandler turns a handler factory (graph → handler) into a session-aware
-// handler that resolves the correct graph per-session at call time.
+// isTransientRootsError reports whether a roots-discovery failure might
+// succeed on a later attempt, and so must NOT be memoized for the session.
+//
+// Deadline and cancellation are the transient cases: they describe this
+// attempt, not the client. Everything else — "client does not support MCP
+// roots", "returned no workspace roots", an invalid root URI — is a property
+// of the peer that will not change mid-session, and is worth caching so later
+// calls fail fast instead of each paying the full timeout.
+func isTransientRootsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// graphUnavailable reports why the session's graph could not be built, or nil
+// when it is usable.
+//
+// Handlers that answer a QUESTION ABOUT THE CODE must consult this before
+// reporting a negative result. Without it, find_definition answered "no
+// definition found for X" while the server held no graph at all — an
+// infrastructure failure rendered as a fact about the codebase, which an agent
+// acts on by concluding the symbol does not exist (mache-c5e114).
+//
+// The distinction is the same one mache-91956b and mache-cb8fb9 turned on: an
+// inability to answer is not a negative answer. get_sheaf_status is the model —
+// it returns {available:false, reason} rather than erroring OR lying.
+func graphUnavailable(g graph.Graph) error {
+	lg, ok := g.(*lazyGraph)
+	if !ok {
+		return nil
+	}
+	_, err := lg.get()
+	return err
+}
+
+// wrapHandler turns a code-query handler factory (graph → handler) into a
+// session-aware handler that resolves the correct graph per-session at call
+// time. Code-query handlers require a usable graph: allowing an error-backed
+// lazyGraph to reach them produces tool-specific empty or "not found" answers
+// that falsely describe the codebase instead of the infrastructure failure.
 //
 // On the first tool call for an unmapped session, it calls ListRoots to
 // discover the client's workspace root and caches the mapping. This is done
 // here (not in OnAfterInitialize) because ListRoots deadlocks during the
 // initialize handshake — the client can't respond until initialize completes.
 func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return r.wrapHandlerWithAvailability(handlerFactory, true)
+}
+
+// wrapDegradedHandler is the explicit exception for handlers whose primary
+// data source is outside the graph and which can still return useful results
+// while graph enrichment is unavailable. semantic_search (daemon-first) and
+// resolve_ref (filesystem/module resolution) intentionally use this path.
+func (r *graphRegistry) wrapDegradedHandler(handlerFactory func(graph.Graph) server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return r.wrapHandlerWithAvailability(handlerFactory, false)
+}
+
+func (r *graphRegistry) wrapHandlerWithAvailability(
+	handlerFactory func(graph.Graph) server.ToolHandlerFunc,
+	requireGraph bool,
+) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		session := server.ClientSessionFromContext(ctx)
 		var lg *lazyGraph
@@ -235,6 +316,12 @@ func (r *graphRegistry) wrapHandler(handlerFactory func(graph.Graph) server.Tool
 			lg = r.resolveSession(ctx, session)
 		} else {
 			lg = r.getOrCreateGraph(r.resolvedBasePath())
+		}
+
+		if requireGraph {
+			if err := graphUnavailable(lg); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("workspace graph is unavailable: %v", err)), nil
+			}
 		}
 
 		// Readiness gate: in daemon mode, check if the graph has any content.
@@ -321,6 +408,7 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 	rootPath, rootsErr := discoverSessionRoot(ctx, session)
 	if rootPath != "" {
 		r.registerSession(sid, rootPath)
+		rememberResolvedRoot(rootPath, "client roots")
 		log.Printf("session %s → %s", sid, rootPath)
 		return r.getOrCreateGraph(rootPath)
 	}
@@ -358,6 +446,34 @@ func (r *graphRegistry) resolveProjectSession(ctx context.Context, sid string) (
 	r.registerSession(sid, rootPath)
 	log.Printf("session %s → %s (via ?project=)", sid, rootPath)
 	return r.getOrCreateGraph(rootPath), true
+}
+
+// rememberResolvedRoot records a workspace root the daemon just resolved, so
+// the project is addressable by ?project= token on a LATER connection.
+//
+// Learning a root is the only moment the daemon knows what project a client
+// means, and how it learned it — client roots, --path, a stdio arg — does not
+// change how authoritative that statement is. So all three register on the
+// same terms.
+//
+// The ordering is the whole point. Before this, registerProject had exactly
+// one caller, `mache init`, so a daemon could serve a project for days with
+// ~/.mache/projects.json absent and every token lookup necessarily missing.
+// The clients that most NEED token resolution — plain request/response HTTP,
+// with no channel for roots/list — are precisely the ones that can never
+// populate the registry themselves. Someone else has to do it for them, and
+// the daemon is the only party that ever finds out.
+//
+// `mache init` keeps its own job: writing the token into the client's config,
+// which a server cannot do for it.
+//
+// Failure is deliberately silent. A read-only HOME or a corrupt registry must
+// not take down a session that is otherwise resolving fine — serving the graph
+// is the job; registration is an optimization for the next client.
+func rememberResolvedRoot(rootPath, how string) {
+	if ensureProjectRegistered(rootPath) {
+		log.Printf("registered project %s (discovered via %s)", rootPath, how)
+	}
 }
 
 // discoverSessionRoot asks the client for its first workspace root. The short
@@ -908,7 +1024,7 @@ func (lg *lazyGraph) Act(id, action, payload string) (*graph.ActionResult, error
 	return g.Act(id, action, payload)
 }
 
-// lazyGraph also implements refsQuerier, refsMapProvider, and defsMapProvider
+// lazyGraph also implements graph.RefsQuerier, graph.RefsMapper, and graph.DefsMapper
 // by delegating to the inner graph if it supports those interfaces.
 
 func (lg *lazyGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
@@ -916,7 +1032,7 @@ func (lg *lazyGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
-	if qg, ok := g.(refsQuerier); ok {
+	if qg, ok := g.(graph.RefsQuerier); ok {
 		return qg.QueryRefs(query, args...)
 	}
 	return nil, fmt.Errorf("backend does not support QueryRefs")
@@ -927,10 +1043,42 @@ func (lg *lazyGraph) RefsMap() map[string][]string {
 	if err != nil || g == nil {
 		return nil
 	}
-	if rp, ok := g.(refsMapProvider); ok {
+	if rp, ok := g.(graph.RefsMapper); ok {
 		return rp.RefsMap()
 	}
 	return nil
+}
+
+// DBPath implements the graph.DBPathProvider opt-in by delegating to the inner
+// graph, the same way QueryRefs and RefsMap do.
+//
+// Without this forwarder the `qg.(graph.DBPathProvider)` assertion fails for every
+// serve-mode query — handlers hold a *lazyGraph, not the SQLiteGraph or
+// WritableGraph underneath it — so the sibling `.bindings.capnp` event log is
+// never consulted and both of its consumers silently degrade:
+//
+//   - queryLSPRefs falls through to queryLSPRefsLegacy, the `_lsp_refs` SQL
+//     path that mache-6bd4d8 retired as the consumer-side contract. On a .db
+//     built after LLO T8.2 (which emits the capnp log and no longer populates
+//     those columns) find_callers loses its lsp_refs supplement entirely.
+//   - ensureSmellQueryContext skips LoadCapnpBindings, so the
+//     `_capnp_binding_refs` TEMP table stays empty and the v_refs UNION arm
+//     over it contributes nothing. MCP find_smells then sees strictly fewer
+//     refs than the find-smells CLI, whose dbQuerier does implement DBPath —
+//     same rules, same .db, different answers.
+//
+// Returning "" for a backend that has no path is the documented "no source"
+// sentinel: readLSPRefsFromCapnp and LoadCapnpBindings both no-op on it, so a
+// MemoryStore-backed graph degrades exactly as it did before.
+func (lg *lazyGraph) DBPath() string {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return ""
+	}
+	if dp, ok := g.(graph.DBPathProvider); ok {
+		return dp.DBPath()
+	}
+	return ""
 }
 
 func (lg *lazyGraph) DefsMap() map[string][]string {
@@ -944,7 +1092,7 @@ func (lg *lazyGraph) DefsMap() map[string][]string {
 	if err != nil || g == nil {
 		return nilIfEmpty(out)
 	}
-	if dp, ok := g.(defsMapProvider); ok {
+	if dp, ok := g.(graph.DefsMapper); ok {
 		for token, ids := range dp.DefsMap() {
 			out[token] = append(out[token], ids...)
 		}
@@ -988,14 +1136,14 @@ func (lg *lazyGraph) MountPrefixOf(id string) string {
 	return ""
 }
 
-// LookupDef forwards the optional defsLookuper interface so
+// LookupDef forwards the optional graph.DefsLookuper interface so
 // find_definition's anchored-exact path can use the O(1) lookup
 // instead of falling through to the O(N) DefsMap snapshot. Without
 // this passthrough, every find_definition call in production paid
 // the snapshot cost even when the inner backend (MemoryStore,
 // SQLiteGraph, CompositeGraph) had a fast lookup available.
 //
-// Returns nil when the inner doesn't implement defsLookuper —
+// Returns nil when the inner doesn't implement graph.DefsLookuper —
 // callers fall through to DefsMap as before.
 // LookupDef federates the base graph and any resolve_ref mounts — a token
 // may be defined in either, and dir IDs from resolveMounts already carry
@@ -1011,18 +1159,18 @@ func (lg *lazyGraph) LookupDef(token string) []string {
 	if err != nil || g == nil {
 		return out
 	}
-	if dl, ok := g.(interface{ LookupDef(string) []string }); ok {
+	if dl, ok := g.(graph.DefsLookuper); ok {
 		out = append(out, dl.LookupDef(token)...)
 	}
 	return out
 }
 
-// SearchDefs forwards the optional defsSearcher interface so
+// SearchDefs forwards the optional graph.DefsSearcher interface so
 // `search role=definition` can use a SQL-pushdown when the inner
 // backend supports it. Mirrors LookupDef's passthrough shape.
 //
-// Returns nil when the inner doesn't implement defsSearcher —
-// the search handler falls through to defsMapProvider iteration.
+// Returns nil when the inner doesn't implement graph.DefsSearcher —
+// the search handler falls through to graph.DefsMapper iteration.
 func (lg *lazyGraph) SearchDefs(pattern string, limit int) map[string][]string {
 	out := map[string][]string{}
 	if lg.resolveMounts != nil {
@@ -1059,22 +1207,13 @@ func nilIfEmpty(m map[string][]string) map[string][]string {
 // Interface types for optional graph backend capabilities
 // ---------------------------------------------------------------------------
 
-// refsQuerier is the subset of Graph backends that support SQL queries.
-type refsQuerier interface {
-	QueryRefs(query string, args ...any) (*sql.Rows, error)
-}
+// graph.RefsQuerier is the subset of Graph backends that support SQL queries.
 
-// refsMapProvider is the subset of Graph backends that expose their refs map
+// graph.RefsMapper is the subset of Graph backends that expose their refs map
 // for community detection (Louvain).
-type refsMapProvider interface {
-	RefsMap() map[string][]string
-}
 
-// defsMapProvider is the subset of Graph backends that expose their defs map
+// graph.DefsMapper is the subset of Graph backends that expose their defs map
 // for find_definition (symbol → where it's defined).
-type defsMapProvider interface {
-	DefsMap() map[string][]string
-}
 
 // sheafInvalidatorProvider is the subset of Graph backends that own a
 // SheafInvalidator wired into their file-watcher onChange path. The
@@ -1088,15 +1227,12 @@ type sheafInvalidatorProvider interface {
 	SheafInvalidator() *graph.SheafInvalidator
 }
 
-// defsLookuper is the cheaper alternative to defsMapProvider for the
+// graph.DefsLookuper is the cheaper alternative to graph.DefsMapper for the
 // common case of looking up exactly one symbol. Backends that
 // implement it avoid the O(N) snapshot copy of the full defs map
 // when the caller only needs one token's dir IDs.
-type defsLookuper interface {
-	LookupDef(token string) []string
-}
 
-// defsSearcher supports pattern-based search across the defs index
+// graph.DefsSearcher supports pattern-based search across the defs index
 // without snapshotting the whole map. The pattern uses SQL LIKE
 // syntax ('%' = any chars, '_' = single char). SQL-backed graphs
 // push the filter down to the database; in-memory graphs may
@@ -1106,9 +1242,6 @@ type defsLookuper interface {
 // search role=definition uses this when available — fixes the
 // bug where SQLiteGraph's empty in-memory defs map made the
 // search handler return [] for every pattern (bead mache-9cba08).
-type defsSearcher interface {
-	SearchDefs(pattern string, limit int) map[string][]string
-}
 
 // writeBacker is the subset of Graph backends that support surgical write-back
 // (validate → format → splice → update node).
@@ -1116,3 +1249,32 @@ type writeBacker interface {
 	UpdateNodeContent(id string, data []byte, origin *graph.SourceOrigin, modTime time.Time) error
 	ShiftOrigins(filePath string, afterByte uint32, delta int32)
 }
+
+// Every opt-in interface above is reached by a `g.(X)` assertion in some
+// handler, and in serve mode `g` is ALWAYS a *lazyGraph — never the
+// SQLiteGraph or WritableGraph underneath it. So a capability lazyGraph
+// forgets to forward is not a compile error and not a test failure: the
+// assertion just returns ok=false and the caller takes its "backend doesn't
+// support this" path. The feature silently disappears for every consumer
+// reaching mache through `mache serve`, which is every MCP client.
+//
+// That is not hypothetical — DBPath was missing, which cost find_callers its
+// lsp_refs supplement and left MCP find_smells reading a strictly smaller ref
+// set than the find-smells CLI over the identical .db.
+//
+// These assertions turn the whole class into a build failure. Adding an opt-in
+// interface without a lazyGraph forwarder now fails to compile instead of
+// silently degrading at runtime.
+var (
+	_ graph.RefsQuerier        = (*lazyGraph)(nil)
+	_ graph.RefsMapper         = (*lazyGraph)(nil)
+	_ graph.DefsMapper         = (*lazyGraph)(nil)
+	_ graph.DefsLookuper       = (*lazyGraph)(nil)
+	_ graph.DefsSearcher       = (*lazyGraph)(nil)
+	_ graph.DBPathProvider     = (*lazyGraph)(nil)
+	_ graph.MountPrefixer      = (*lazyGraph)(nil)
+	_ schemaProvider           = (*lazyGraph)(nil)
+	_ sheafInvalidatorProvider = (*lazyGraph)(nil)
+	_ writeBacker              = (*lazyGraph)(nil)
+	_ graph.Graph              = (*lazyGraph)(nil)
+)

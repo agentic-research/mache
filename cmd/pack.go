@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/spf13/cobra"
 )
@@ -130,10 +130,10 @@ func writeOverviewSection(w *bufio.Writer, g graph.Graph) error {
 	}
 
 	refTokens, defTokens := 0, 0
-	if rp, ok := g.(refsMapProvider); ok {
+	if rp, ok := g.(graph.RefsMapper); ok {
 		refTokens = len(rp.RefsMap())
 	}
-	if dp, ok := g.(defsMapProvider); ok {
+	if dp, ok := g.(graph.DefsMapper); ok {
 		defTokens = len(dp.DefsMap())
 	}
 
@@ -149,7 +149,7 @@ func writeOverviewSection(w *bufio.Writer, g graph.Graph) error {
 
 func writeArchitectureSection(w *bufio.Writer, g graph.Graph, maxEntries int) error {
 	// Refs map → most-referenced symbols (entry points by fan-in).
-	rp, ok := g.(refsMapProvider)
+	rp, ok := g.(graph.RefsMapper)
 	if !ok {
 		_, _ = fmt.Fprintf(w, "## Architecture\n\n_No cross-reference data available; skipping._\n\n")
 		return nil
@@ -177,7 +177,7 @@ func writeArchitectureSection(w *bufio.Writer, g graph.Graph, maxEntries int) er
 	_, _ = fmt.Fprintln(w)
 
 	// Defs map → key abstractions + API surface.
-	dp, ok := g.(defsMapProvider)
+	dp, ok := g.(graph.DefsMapper)
 	if !ok {
 		return nil
 	}
@@ -240,7 +240,7 @@ func writeArchitectureSection(w *bufio.Writer, g graph.Graph, maxEntries int) er
 }
 
 func writeCommunitiesSection(w *bufio.Writer, g graph.Graph, maxEntries int) {
-	rp, ok := g.(refsMapProvider)
+	rp, ok := g.(graph.RefsMapper)
 	if !ok {
 		return
 	}
@@ -296,5 +296,5 @@ func writeToolRoutingSection(w *bufio.Writer) {
 	_, _ = fmt.Fprintln(w, "Use `Read` / `Grep` only for free-text searches (log strings, magic constants) or non-code files.")
 }
 
-// rootCmd, refsMapProvider, defsMapProvider are defined in serve_registry.go.
+// rootCmd, graph.RefsMapper, graph.DefsMapper are defined in serve_registry.go.
 // min was added to the stdlib in Go 1.21 — we use 1.25, so the builtin works.

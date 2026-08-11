@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/buildinfo"
-	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"

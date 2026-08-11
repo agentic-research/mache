@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -46,7 +45,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Resolve starting definition(s) for the symbol via the defs map.
-		dp, ok := g.(defsMapProvider)
+		dp, ok := g.(graph.DefsMapper)
 		if !ok {
 			return mcp.NewToolResultError("backend does not support impact analysis (no defs map)"), nil
 		}
@@ -125,7 +124,7 @@ func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 			// avoid explosion — these ubiquitous tokens would pull in most of
 			// the codebase and drown out the real impact signal.
 			if direction == "callers" || direction == "both" {
-				token := filepath.Base(entry.id)
+				token := tokenForNode(g, entry.id)
 				if entry.depth == 0 || !genericNames[token] {
 					callers, err := g.GetCallers(token)
 					if err == nil {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -54,10 +54,10 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Count refs/defs if available
-		if rp, ok := g.(refsMapProvider); ok {
+		if rp, ok := g.(graph.RefsMapper); ok {
 			ov.RefTokens = len(rp.RefsMap())
 		}
-		if dp, ok := g.(defsMapProvider); ok {
+		if dp, ok := g.(graph.DefsMapper); ok {
 			ov.DefTokens = len(dp.DefsMap())
 		}
 

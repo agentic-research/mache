@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -27,7 +27,7 @@ func (s *smellTestGraph) QueryRefs(query string, args ...any) (*sql.Rows, error)
 	return s.db.Query(query, args...)
 }
 
-// DBPath implements dbPathProvider when path is set, opting this
+// DBPath implements graph.DBPathProvider when path is set, opting this
 // test graph into capnp readthrough (mache-190508 step 3 / mache-6bd4d8).
 // Tests that don't set path keep the legacy mention-only view shape.
 func (s *smellTestGraph) DBPath() string { return s.path }
@@ -314,7 +314,7 @@ func TestFindSmells_UnknownRuleErrors(t *testing.T) {
 }
 
 func TestFindSmells_BackendWithoutAstReturnsError(t *testing.T) {
-	// MemoryStore implements refsQuerier (its sidecar DB only has
+	// MemoryStore implements graph.RefsQuerier (its sidecar DB only has
 	// node_refs — no _ast). Running the smell rule must surface a
 	// clear error rather than crashing or returning empty success.
 	store := graph.NewMemoryStore()
@@ -1983,6 +1983,58 @@ func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
 	assert.Empty(t, resp.Findings, "*_test.go file must be skipped despite high def count")
 }
 
+// TestFindSmells_GodFileExcludedFilesDoNotDiluteMean pins the population
+// invariant behind mache-ce0bcd: files excluded from god_file findings must
+// also be excluded from the project mean. With the production files alone,
+// the mean is (10+1+1)/3 = 4 and core.go is not an outlier. If either the
+// one-def helper_test.go or generated wire.capnp.go is allowed to dilute the
+// mean, it becomes (10+1+1+1)/4 = 3.25 and core.go spuriously clears the 3x
+// threshold.
+func TestFindSmells_GodFileExcludedFilesDoNotDiluteMean(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.db.Close() }()
+
+	_, err := tg.db.Exec(`
+		WITH RECURSIVE seq(n) AS (
+			SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10
+		)
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record)
+		SELECT printf('pkg/core/F%d', n), 'pkg/core', printf('F%d', n),
+		       1, 0, 'pkg/core.go', ''
+		FROM seq;
+		WITH RECURSIVE seq(n) AS (
+			SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10
+		)
+		INSERT INTO node_defs
+		SELECT printf('F%d', n), printf('pkg/core/F%d', n) FROM seq;
+
+		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		  ('pkg/a/A', 'pkg/a', 'A', 1, 0, 'pkg/a.go', ''),
+		  ('pkg/b/B', 'pkg/b', 'B', 1, 0, 'pkg/b.go', ''),
+		  ('pkg/tests/helper', 'pkg/tests', 'helper', 1, 0, 'pkg/helper_test.go', ''),
+		  ('pkg/generated/wire', 'pkg/generated', 'wire', 1, 0, 'pkg/wire.capnp.go', '');
+		INSERT INTO node_defs VALUES
+		  ('A', 'pkg/a/A'),
+		  ('B', 'pkg/b/B'),
+		  ('helper', 'pkg/tests/helper'),
+		  ('wire', 'pkg/generated/wire');
+	`)
+	require.NoError(t, err)
+
+	handler := makeFindSmellsHandler(tg)
+	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	assert.Empty(t, resp.Findings,
+		"excluded test/generated definitions must not change production god_file findings")
+}
+
 // TestFindSmells_FanOutSkew seeds a god-function and several normal
 // callers and asserts only the god-function is flagged. Mean fan-out
 // is (12 + 6×1) / 7 ≈ 2.57; 3×mean ≈ 7.7, well below the god's 12.
@@ -2343,7 +2395,7 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	// Write the sibling .bindings.capnp with 24 records: 12 projection-
 	// shaped (qualifier='rec'), 12 orchestrator-shaped (12 distinct
 	// qualifiers). LoadCapnpBindings reads this when runSmellRule
-	// fires (via dbPathProvider opt-in on smellTestGraph).
+	// fires (via graph.DBPathProvider opt-in on smellTestGraph).
 	writeMultiBindingLogForTest(t, dbPath, []bindingRec{
 		{construct: "functions/bindingFromRecord/source", token: "Method01", qualifier: "rec"},
 		{construct: "functions/bindingFromRecord/source", token: "Method02", qualifier: "rec"},

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -84,7 +84,7 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 			return errResult, nil
 		}
 
-		dp, ok := g.(defsMapProvider)
+		dp, ok := g.(graph.DefsMapper)
 		if !ok {
 			return mcp.NewToolResultError("backend does not support reference flow (no defs map)"), nil
 		}
@@ -189,7 +189,7 @@ func (t *dataflowTraversal) expandCallers(entry dataflowQueueEntry) error {
 	if t.direction != "callers" && t.direction != "both" {
 		return nil
 	}
-	callers, err := t.g.GetCallers(filepath.Base(entry.id))
+	callers, err := t.g.GetCallers(tokenForNode(t.g, entry.id))
 	if err != nil {
 		return fmt.Errorf("get callers for %q: %v", entry.id, err)
 	}

@@ -5,15 +5,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/graph"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// countingQuerier wraps a refsQuerier and counts QueryRefs calls whose SQL
+// countingQuerier wraps a graph.RefsQuerier and counts QueryRefs calls whose SQL
 // contains substr, so a test can assert setup work runs a fixed number of
 // times regardless of how many rules are evaluated against it.
 type countingQuerier struct {
-	refsQuerier
+	graph.RefsQuerier
 	substr string
 	count  int
 }
@@ -22,7 +24,7 @@ func (c *countingQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error
 	if strings.Contains(query, c.substr) {
 		c.count++
 	}
-	return c.refsQuerier.QueryRefs(query, args...)
+	return c.RefsQuerier.QueryRefs(query, args...)
 }
 
 // TestEnsureSmellQueryContext_MaterializesViewsOncePerInvocation guards the
@@ -38,7 +40,7 @@ func (c *countingQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error
 // invocations per PR.
 func TestEnsureSmellQueryContext_MaterializesViewsOncePerInvocation(t *testing.T) {
 	g := seedSmellAST(t)
-	spy := &countingQuerier{refsQuerier: g, substr: "CREATE TEMP TABLE v_test_nodes"}
+	spy := &countingQuerier{RefsQuerier: g, substr: "CREATE TEMP TABLE v_test_nodes"}
 
 	require.NoError(t, ensureSmellQueryContext(spy))
 

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // Read modes for the read_file MCP tool (mache-qzsk).

@@ -596,7 +596,7 @@ func TestSQLiteGraph_Integration_NVD(t *testing.T) {
 //
 //   MACHE_TEST_KEV_DB=~/.agentic-research/venturi/kev/results/results.db \
 //   MACHE_TEST_NVD_DB=~/.agentic-research/venturi/nvd/results/results.db \
-//   go test ./internal/graph/... -bench=BenchmarkScanRoot -benchmem -count=3
+//   go test ./graph/... -bench=BenchmarkScanRoot -benchmem -count=3
 // ---------------------------------------------------------------------------
 
 func BenchmarkScanRoot_KEV(b *testing.B) {
