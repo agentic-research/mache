@@ -45,22 +45,21 @@ PROMPTS_FILE = ROOT / "prompts.json"
 MCP_CONFIG = ROOT / "mcp.json"
 
 
-def log(msg: str) -> None:
+def bench_log(msg: str) -> None:
     print(f"[bench] {msg}", file=sys.stderr, flush=True)
 
 
 def parse_claude_json(stdout: str) -> dict:
-    """Claude Code emits JSON on stdout under --output-format json. Be
-    tolerant of trailing log lines — the JSON object is the first
-    line that starts with '{'."""
-    for line in stdout.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                continue
-    return {}
+    """Extract Claude Code's JSON object from potentially noisy stdout."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", stdout):
+        try:
+            value, _ = decoder.raw_decode(stdout[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError("Claude stdout did not contain a valid JSON object")
 
 
 def run_claude(prompt: str, corpus: Path, db: Path, mode: str) -> dict:
@@ -104,8 +103,15 @@ def run_claude(prompt: str, corpus: Path, db: Path, mode: str) -> dict:
             f"claude exited {result.returncode}: {result.stderr[-300:]}",
         )
 
-    data = parse_claude_json(result.stdout)
-    usage = data.get("usage", {})
+    try:
+        data = parse_claude_json(result.stdout)
+        usage = data["usage"]
+        response_text = data["result"]
+        if not isinstance(usage, dict) or not isinstance(response_text, str):
+            raise TypeError("result must be a string and usage must be an object")
+    except (KeyError, TypeError, ValueError) as exc:
+        return _err_result(wall_time, "error", f"claude returned invalid JSON output: {exc}")
+
     raw_input = usage.get("input_tokens", 0)
     cache_create = usage.get("cache_creation_input_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
@@ -122,7 +128,7 @@ def run_claude(prompt: str, corpus: Path, db: Path, mode: str) -> dict:
         "cache_creation_tokens": cache_create,
         "cache_read_tokens": cache_read,
         "total_cost_usd": data.get("total_cost_usd", 0.0),
-        "response_text": data.get("result", ""),
+        "response_text": response_text,
         "num_turns": data.get("num_turns", 1),
         "stop_reason": data.get("stop_reason", ""),
     }
@@ -160,7 +166,7 @@ def score_quality(response: str, category: str) -> dict:
         structure       0-6   (headings, bullets, numbered lists)
         category_bonus  0-8   (category-specific signals)
     """
-    if not response or "error" in response.lower()[:50]:
+    if not response:
         return {"total": 0, "word_count": 0, "file_mentions": 0, "code_blocks": 0,
                 "specificity": 0, "structure": 0, "category_bonus": 0}
 
@@ -252,7 +258,7 @@ def load_completed_ids(out_file: Path) -> set:
     return done
 
 
-def main():
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--corpus", required=True, type=Path, help="Path to the codebase to run prompts against")
     parser.add_argument("--db", required=True, type=Path, help="Path to the mache .db file (for mache mode)")
@@ -260,44 +266,45 @@ def main():
     parser.add_argument("--prompts", help="Comma-separated prompt IDs (default: all)")
     parser.add_argument("--modes", default="normal,mache", help="Comma-separated mode list (default: normal,mache)")
     parser.add_argument("--resume", action="store_true", help="Skip prompt-mode pairs already in the JSONL")
-    args = parser.parse_args()
+    return parser.parse_args(argv)
 
-    with PROMPTS_FILE.open() as f:
-        all_prompts = json.load(f)
 
-    if args.prompts:
-        wanted = {int(x) for x in args.prompts.split(",")}
-        prompts = [p for p in all_prompts if p["id"] in wanted]
-    else:
-        prompts = all_prompts
+def selected_prompts(prompt_ids: str | None) -> list[dict]:
+    """Load the prompt corpus and apply an optional comma-separated ID filter."""
+    with PROMPTS_FILE.open() as prompt_file:
+        prompts = json.load(prompt_file)
+    if prompt_ids is None:
+        return prompts
+    wanted = {int(value) for value in prompt_ids.split(",")}
+    return [prompt for prompt in prompts if prompt["id"] in wanted]
 
-    modes = [m.strip() for m in args.modes.split(",")]
-    for m in modes:
-        if m not in ("normal", "mache"):
-            log(f"unknown mode {m!r}; must be 'normal' or 'mache'")
-            return 2
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    done = load_completed_ids(args.out) if args.resume else set()
+def selected_modes(mode_names: str) -> list[str]:
+    """Parse and validate the requested benchmark modes."""
+    modes = [mode.strip() for mode in mode_names.split(",")]
+    unknown = [mode for mode in modes if mode not in ("normal", "mache")]
+    if unknown:
+        raise ValueError(f"unknown mode {unknown[0]!r}; must be 'normal' or 'mache'")
+    return modes
 
-    log(f"corpus={args.corpus} db={args.db} out={args.out}")
-    log(f"prompts={len(prompts)} modes={modes} resume_skip={len(done)}")
 
+def write_benchmark_rows(args: argparse.Namespace, prompts: list[dict], modes: list[str], done: set) -> None:
+    """Run unfinished prompt/mode pairs and append their measurements."""
     with args.out.open("a") as out_f:
-        for p in prompts:
+        for prompt in prompts:
             for mode in modes:
-                key = (p["id"], mode)
+                key = (prompt["id"], mode)
                 if key in done:
-                    log(f"skip prompt={p['id']} mode={mode} (already done)")
+                    bench_log(f"skip prompt={prompt['id']} mode={mode} (already done)")
                     continue
 
-                log(f"prompt={p['id']} category={p['category']} mode={mode} -> running")
-                metrics = run_claude(p["prompt"], args.corpus, args.db, mode)
-                quality = score_quality(metrics["response_text"], p["category"])
+                bench_log(f"prompt={prompt['id']} category={prompt['category']} mode={mode} -> running")
+                metrics = run_claude(prompt["prompt"], args.corpus, args.db, mode)
+                quality = score_quality(metrics["response_text"], prompt["category"])
 
                 row = {
-                    "prompt_id": p["id"],
-                    "category": p["category"],
+                    "prompt_id": prompt["id"],
+                    "category": prompt["category"],
                     "mode": mode,
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     **metrics,
@@ -305,16 +312,38 @@ def main():
                 }
                 out_f.write(json.dumps(row) + "\n")
                 out_f.flush()
-
-                err = metrics.get("error", "")
-                cost = metrics.get("total_cost_usd", 0.0)
-                turns = metrics.get("num_turns", 0)
-                qtotal = quality["total"]
-                log(f"  done cost=${cost:.4f} turns={turns} quality={qtotal}/50 wall={metrics['wall_time_s']:.1f}s {err}")
-
+                log_completed_measurement(metrics, quality)
                 time.sleep(COOLDOWN_S)
 
-    log("aggregating...")
+
+def log_completed_measurement(metrics: dict, quality: dict) -> None:
+    """Write the compact status line for one completed measurement."""
+    error = metrics.get("error", "")
+    bench_log(
+        f"  done cost=${metrics.get('total_cost_usd', 0.0):.4f} "
+        f"turns={metrics.get('num_turns', 0)} quality={quality['total']}/50 "
+        f"wall={metrics['wall_time_s']:.1f}s {error}"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    try:
+        prompts = selected_prompts(args.prompts)
+        modes = selected_modes(args.modes)
+    except ValueError as exc:
+        bench_log(str(exc))
+        return 2
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    done = load_completed_ids(args.out) if args.resume else set()
+
+    bench_log(f"corpus={args.corpus} db={args.db} out={args.out}")
+    bench_log(f"prompts={len(prompts)} modes={modes} resume_skip={len(done)}")
+
+    write_benchmark_rows(args, prompts, modes, done)
+    bench_log("aggregating...")
     aggregate(args.out)
     return 0
 
