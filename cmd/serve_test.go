@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -1032,6 +1033,81 @@ func TestFindDefinition_RequiredSymbol(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "required")
+}
+
+func TestFindDefinition_UnavailableGraphIsNotReportedAsMissingSymbol(t *testing.T) {
+	graphErr := errors.New("workspace root unavailable (context deadline exceeded)")
+	handler := makeFindDefinitionHandler(newErrorLazyGraph(graphErr))
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "GetCallees"}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, graphErr.Error())
+	assert.NotContains(t, text, "no definition found",
+		"an unavailable graph cannot support a negative claim about the code")
+}
+
+func TestGraphRegistry_CodeHandlersPreserveUnavailableGraphError(t *testing.T) {
+	root := t.TempDir()
+	graphErr := errors.New("workspace root unavailable (sentinel)")
+	registry := newGraphRegistry(root, nil)
+	registry.graphs.Store(root, newErrorLazyGraph(graphErr))
+
+	codeHandlers := []struct {
+		name    string
+		factory func(graph.Graph) server.ToolHandlerFunc
+	}{
+		{name: "list_directory", factory: makeListDirHandler},
+		{name: "read_file", factory: makeReadFileHandler},
+		{name: "find_callers", factory: makeFindCallersHandler},
+		{name: "find_callees", factory: makeFindCalleesHandler},
+		{name: "search", factory: makeSearchHandler},
+		{name: "get_communities", factory: makeGetCommunitiesHandler},
+		{name: "find_definition", factory: makeFindDefinitionHandler},
+		{name: "get_type_info", factory: makeGetTypeInfoHandler},
+		{name: "get_diagnostics", factory: makeGetDiagnosticsHandler},
+		{name: "get_overview", factory: makeGetOverviewHandler},
+		{name: "get_impact", factory: makeGetImpactHandler},
+		{name: "get_dataflow", factory: makeGetDataflowHandler},
+		{name: "get_architecture", factory: makeGetArchitectureHandler},
+		{name: "get_diagram", factory: makeGetDiagramHandler},
+		{name: "write_file", factory: makeWriteFileHandler},
+		{name: "find_smells", factory: func(g graph.Graph) server.ToolHandlerFunc {
+			return makeFindSmellsHandler(g, registry.smellRulesDir)
+		}},
+	}
+
+	for _, tc := range codeHandlers {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := registry.wrapHandler(tc.factory)(context.Background(), makeRequest(nil))
+			require.NoError(t, err)
+			require.True(t, result.IsError, "an unavailable graph must not become an empty code answer")
+			assert.Contains(t, resultText(t, result), graphErr.Error(),
+				"every code-query tool must preserve the root graph diagnostic")
+		})
+	}
+}
+
+func TestGraphRegistry_DegradedHandlerCanRunWithoutGraph(t *testing.T) {
+	root := t.TempDir()
+	registry := newGraphRegistry(root, nil)
+	registry.graphs.Store(root, newErrorLazyGraph(errors.New("workspace root unavailable")))
+
+	called := false
+	handler := registry.wrapDegradedHandler(func(graph.Graph) server.ToolHandlerFunc {
+		return func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			called = true
+			return mcp.NewToolResultText("degraded result"), nil
+		}
+	})
+
+	result, err := handler(context.Background(), makeRequest(nil))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.True(t, called)
+	assert.Equal(t, "degraded result", resultText(t, result))
 }
 
 // TestFindDefinition_NoFuzzyByDefault — bead mache-nmia.
@@ -2111,7 +2187,7 @@ func TestGraphRegistry_ProjectTokenResolvesWithoutListRoots(t *testing.T) {
 
 	g := registry.resolveSession(ctx, session)
 
-	assert.Equal(t, projectDir, g.basePath)
+	assert.Equal(t, leyline.CanonicalSourceRoot(projectDir), g.basePath)
 	assert.Equal(t, 0, session.calls, "a resolved ?project= token must short-circuit before ListRoots is ever called")
 }
 

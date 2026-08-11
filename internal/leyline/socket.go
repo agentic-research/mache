@@ -361,7 +361,7 @@ func DiscoverOrStart() (string, error) {
 	// the spawn — see arenaSpawnConfig for the full failure mode. Cold-start
 	// instead: one reparse, versus a daemon that never comes up.
 	arenaCfg := arenaSpawnConfig{
-		SourceRoot: canonicalSourceRoot(DaemonSource()),
+		SourceRoot: CanonicalSourceRoot(DaemonSource()),
 		CDCTarget:  cdcTarget,
 	}
 	//
@@ -949,30 +949,28 @@ func (c *SocketClient) Prioritize(files []string) error {
 // The go.mod leyline-schema pin only needs bumping when a schema module tag is
 // published. The parity gate enforces the [floor, binary] compatibility range.
 //
-// v0.15.1 -> v0.18.0 DOES NOT CROSS AN IR LINEAGE BOUNDARY. IR_SCHEMA_VERSION
-// is "merkle-ast-v2" at both tags, so node addresses are derived identically
-// and .db artifacts built by the previous pin stay valid — no forced rebuild,
-// unlike the v0.11.0 merkle-ast-v1 -> v2 bump (mache-438104). LLO's
-// compat_min_schema_version is still 0.4.1, below mache's stricter v0.6.0
-// floor, so the floor is unmoved. Nothing in v0.16.0-v0.18.0 touches _ast,
-// node_defs or node_refs; the release content is confinement grants, the CDC
-// target selector, and the --reset-arena fix.
+// v0.18.0 -> v0.18.2 DOES NOT CROSS AN IR LINEAGE BOUNDARY.
+// IR_SCHEMA_VERSION remains "merkle-ast-v2", so node addresses stay
+// comparable with artifacts built by the previous pin — unlike the v0.11.0
+// merkle-ast-v1 -> v2 bump (mache-438104). The wire major remains 1 and the
+// compatibility floor remains v0.6.0. The public schema client advances only
+// to v0.18.1: v0.18.2 is deliberately a binary-only release.
 //
-// Two of those exist because mache asked for them, and this bump is what
-// consumes them:
+// The emitted FACTS do change. v0.18.2 runs the registered HCL address-ref
+// extractor, so Terraform variable blocks and literal module sources finally
+// populate node_refs with env: and mod: tokens. LLO raises its extraction
+// epoch from 4 to 5 so an existing arena is reprojected; Mache also namespaces
+// its downloaded binary and source-projection cache by this exact pin. A
+// caller supplying a pre-built v0.18.0 .db may continue to read it, but must
+// re-run `leyline parse` to gain the repaired Terraform refs (mache-91beb0,
+// ley-line-open-55c1cc).
 //
-//   - --cdc-target reaches the daemon (ley-line-open-c3d746). Before it, the
-//     daemon hardcoded the `nodes` walk, so mache could not select the
-//     cost-neutral target no matter what it passed.
-//   - --reset-arena actually works (ley-line-open-e37e03). It previously
-//     failed even on a fresh arena, while being the remedy leyline's own
-//     cross-source refusal told operators to use.
-//
-// Doubles as this build's leyline schema-client version for the startup
+// This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
-// mismatch.
-const leylineBinaryVersion = "v0.18.0"
+// mismatch. The actual client version is the independently tagged go.mod
+// dependency described below.
+const leylineBinaryVersion = "v0.18.2"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
