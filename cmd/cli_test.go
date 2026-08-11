@@ -57,6 +57,40 @@ func TestBuild_ProducesDB(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output DB should be non-empty")
 }
 
+// TestBuild_RegisteredGoImportRefsReachNodeRefs exercises the production
+// leyline-parse -> ASTWalker -> Engine path. The lower-level query tests prove
+// registration, but this guards the actual `mache build --schema go` output
+// consumed by graph callers: an import must survive as a typed gomod token in
+// node_refs, not merely exist in the temporary _ast database.
+func TestBuild_RegisteredGoImportRefsReachNodeRefs(t *testing.T) {
+	requirePinnedLeyline(t)
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "go.mod"),
+		[]byte("module example.com/app\n\ngo 1.23\n\nrequire example.com/acme/dep v0.0.0\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(
+		"package main\n\nimport dep \"example.com/acme/dep\"\n\nfunc main() { dep.Run() }\n",
+	), 0o644))
+
+	outDB := filepath.Join(tmpDir, "out.db")
+	oldSchemaPath := schemaPath
+	schemaPath = "go"
+	defer func() { schemaPath = oldSchemaPath }()
+	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
+
+	db, err := sql.Open("sqlite", outDB)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var refs int
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM node_refs WHERE token = ?`, "gomod:example.com/acme/dep",
+	).Scan(&refs))
+	assert.GreaterOrEqual(t, refs, 1,
+		"mache build must project registered Go import refs into node_refs.token")
+}
+
 // inferGoFCASchema runs the SURVIVING source-code FCA inference path
 // (ADR-0012 step 4): leyline-parse the tree into an `_ast` db, run
 // pure-Go lattice.InferFromASTDB via inferLanguages, and unwrap the
