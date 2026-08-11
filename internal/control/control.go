@@ -111,10 +111,20 @@ func OpenOrCreate(path string) (*Controller, error) {
 }
 
 // GetCurrentRoot returns the BLAKE3 root hash of the arena payload that
-// the writer most recently published. An Acquire-load on the private
-// sync atom fences the subsequent root-byte reads against the writer's
-// Release-store + write. The zero sentinel `[32]byte{}` means no
-// snapshot has been published yet (fresh controller).
+// the writer most recently published, or the zero sentinel `[32]byte{}`
+// when no snapshot has been published yet.
+//
+// The Acquire-load only fences root-byte reads against a publish whose
+// Release-store this load observes. A writer that begins after the load writes
+// the 32-byte root before bumping sync, so a concurrent read can still be
+// torn. A reader-only retry cannot close that window: a real seqlock requires
+// the shared Go/Rust writer protocol to mark the write in progress before
+// changing the payload and complete it afterward (mache-0df550).
+//
+// Callers may use this for advisory or uncontended reads. Anything that polls
+// or treats the root as a coherent identity must re-open a fresh Controller
+// after observing a root change, matching ley-line-open's controller contract,
+// until both sides adopt an odd/even seqlock protocol.
 func (c *Controller) GetCurrentRoot() [32]byte {
 	atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offSync])))
 	var out [32]byte

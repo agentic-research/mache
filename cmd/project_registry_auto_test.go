@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/agentic-research/mache/internal/leyline"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,15 +27,86 @@ func TestEnsureProjectRegistered_RegistersAnUnknownRoot(t *testing.T) {
 
 	require.True(t, ensureProjectRegistered(root), "an unknown root must be registered")
 
+	// Compare against the CANONICAL path. t.TempDir() hands back
+	// /var/folders/... which on macOS is a symlink to /private/var/folders/...,
+	// so an equality check against the raw path fails — which is precisely the
+	// hazard mache-0e4773 is about, reproduced here by accident.
+	want := leyline.CanonicalSourceRoot(root)
 	reg, err := loadProjectRegistry()
 	require.NoError(t, err)
 	found := false
 	for _, p := range reg {
-		if p == root {
+		if p == want {
 			found = true
 		}
 	}
-	assert.True(t, found, "the registry must now resolve a token to %s", root)
+	assert.True(t, found, "the registry must resolve a token to the canonical %s", want)
+}
+
+// TestEnsureProjectRegistered_SymlinkAndRealPathShareOneToken is the
+// regression for mache-0e4773.
+//
+// The project registry was the ONE layer in mache that did not canonicalize —
+// leyline's verify_source_root_matches compares Rust-canonicalized paths,
+// ingest canonicalizes, and arena_config's CanonicalSourceRoot exists with a
+// comment naming this exact hazard. So `mache init` from ~/github/art/mache
+// and from ~/remotes/art/mache minted two tokens for one tree.
+//
+// The asymmetry is why this needs a test rather than vigilance: a too-COARSE
+// identity is caught loudly by leyline's cross-source refusal, while a
+// too-FINE one is caught by nothing — each side stays internally consistent
+// and simply disagrees.
+func TestEnsureProjectRegistered_SymlinkAndRealPathShareOneToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	real := filepath.Join(home, "real-project")
+	require.NoError(t, os.MkdirAll(real, 0o755))
+	link := filepath.Join(home, "link-to-project")
+	require.NoError(t, os.Symlink(real, link))
+
+	require.True(t, ensureProjectRegistered(real), "first registration writes")
+	assert.False(t, ensureProjectRegistered(link),
+		"the symlinked path is the SAME project — it must not mint a second entry")
+
+	reg, err := loadProjectRegistry()
+	require.NoError(t, err)
+	assert.Len(t, reg, 1, "one tree must have exactly one token, however it is spelled")
+}
+
+// TestRegisterProject_PreservesLegacyUncanonicalizedToken records the
+// migration decision for mache-0e4773. Existing client configs contain the
+// old token, so convergence on a canonical token must add an alias rather than
+// orphaning those URLs.
+func TestRegisterProject_PreservesLegacyUncanonicalizedToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	real := filepath.Join(home, "real-project")
+	require.NoError(t, os.MkdirAll(real, 0o755))
+	link := filepath.Join(home, "legacy-link")
+	require.NoError(t, os.Symlink(real, link))
+
+	salt, err := loadOrCreateProjectSalt()
+	require.NoError(t, err)
+	legacyToken := projectToken(salt, link)
+	registryPath, err := projectRegistryPath()
+	require.NoError(t, err)
+	legacyRegistry, err := json.Marshal(map[string]string{legacyToken: link})
+	require.NoError(t, err)
+	require.NoError(t, writeFileAtomic(registryPath, append(legacyRegistry, '\n')))
+
+	canonicalToken, err := registerProject(link)
+	require.NoError(t, err)
+	assert.NotEqual(t, legacyToken, canonicalToken,
+		"new registrations must converge on the canonical-path token")
+
+	gotLegacy, ok := resolveProjectToken(legacyToken)
+	require.True(t, ok, "an existing client URL must survive the migration")
+	assert.Equal(t, link, gotLegacy)
+	gotCanonical, ok := resolveProjectToken(canonicalToken)
+	require.True(t, ok)
+	assert.Equal(t, leyline.CanonicalSourceRoot(real), gotCanonical)
 }
 
 // TestEnsureProjectRegistered_ConcurrentRootsAllSurvive is the regression for
@@ -113,7 +187,8 @@ func TestEnsureProjectRegistered_TokenResolvesBackToTheRoot(t *testing.T) {
 
 	got, ok := resolveProjectToken(token)
 	require.True(t, ok, "the token the daemon just registered must resolve")
-	assert.Equal(t, root, got)
+	assert.Equal(t, leyline.CanonicalSourceRoot(root), got,
+		"the registry stores canonical paths, so every layer comparing them agrees")
 }
 
 // TestEnsureProjectRegistered_SurvivesAnUnwritableRegistry pins the

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/agentic-research/mache/internal/leyline"
+
 	"github.com/zeebo/blake3"
 )
 
@@ -132,7 +134,25 @@ func loadProjectRegistry() (map[string]string, error) {
 // token and returns the token. Idempotent: re-registering the same path
 // (e.g. re-running `mache init`) reproduces the same token and simply
 // overwrites its own entry — every other project's entry is preserved.
+// That preservation is also the migration policy for tokens minted before
+// path canonicalization: adding the canonical token does not delete the old
+// spelling, so already-written client URLs keep resolving during the grace
+// period. New registrations converge on the canonical token.
 func registerProject(absPath string) (string, error) {
+	// Canonicalize BEFORE hashing. Every other layer already does — leyline's
+	// verify_source_root_matches compares Rust-canonicalized paths, ingest
+	// canonicalizes, and arena_config's CanonicalSourceRoot exists with a
+	// comment naming this exact hazard: this repo is reachable through both
+	// ~/github/art/mache and ~/remotes/art/mache, the same tree behind a
+	// symlink. The registry was the ONE layer that did not, so `mache init`
+	// from the two paths minted two tokens for one project (mache-0e4773).
+	//
+	// The asymmetry is what makes this worth fixing at the choke point rather
+	// than at each caller: a too-COARSE identity is caught loudly by leyline's
+	// cross-source refusal, while a too-FINE one is caught by nothing — each
+	// side stays internally consistent and simply disagrees.
+	absPath = leyline.CanonicalSourceRoot(absPath)
+
 	salt, err := loadOrCreateProjectSalt()
 	if err != nil {
 		return "", err
@@ -195,6 +215,7 @@ func ensureProjectRegistered(rootPath string) bool {
 	if rootPath == "" {
 		return false
 	}
+	rootPath = leyline.CanonicalSourceRoot(rootPath)
 	registered := false
 	err := withRegistryLock(func() error {
 		reg, lerr := loadProjectRegistry()

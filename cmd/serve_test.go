@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -1032,6 +1033,20 @@ func TestFindDefinition_RequiredSymbol(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "required")
+}
+
+func TestFindDefinition_UnavailableGraphIsNotReportedAsMissingSymbol(t *testing.T) {
+	graphErr := errors.New("workspace root unavailable (context deadline exceeded)")
+	handler := makeFindDefinitionHandler(newErrorLazyGraph(graphErr))
+
+	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "GetCallees"}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, graphErr.Error())
+	assert.NotContains(t, text, "no definition found",
+		"an unavailable graph cannot support a negative claim about the code")
 }
 
 // TestFindDefinition_NoFuzzyByDefault — bead mache-nmia.
@@ -2111,7 +2126,7 @@ func TestGraphRegistry_ProjectTokenResolvesWithoutListRoots(t *testing.T) {
 
 	g := registry.resolveSession(ctx, session)
 
-	assert.Equal(t, projectDir, g.basePath)
+	assert.Equal(t, leyline.CanonicalSourceRoot(projectDir), g.basePath)
 	assert.Equal(t, 0, session.calls, "a resolved ?project= token must short-circuit before ListRoots is ever called")
 }
 
