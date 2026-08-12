@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/lang"
+	publicschema "github.com/agentic-research/mache/schema"
 )
 
 // ConfigFileName is the convention file looked up by `mache serve`.
@@ -59,34 +60,11 @@ func loadProjectConfig(dir string) (*ProjectConfig, error) {
 //
 // Returns nil if schemaRef is empty (caller should use inference or default).
 func resolveSchema(schemaRef, configDir string) (*api.Topology, error) {
-	if schemaRef == "" {
-		return nil, nil
-	}
-
-	// Check preset first
-	if _, ok := presetSchemas[schemaRef]; ok {
-		return loadPresetSchema(schemaRef)
-	}
-
-	// Treat as file path
-	schemaPath := schemaRef
-	if !filepath.IsAbs(schemaPath) {
-		schemaPath = filepath.Join(configDir, schemaPath)
-		// Containment check: relative paths must stay within configDir
-		if err := checkPathContainment(schemaPath, configDir); err != nil {
-			return nil, err
-		}
-	}
-
-	data, err := os.ReadFile(schemaPath)
+	resolved, err := publicschema.Resolve(schemaRef, configDir)
 	if err != nil {
-		return nil, fmt.Errorf("read schema %q: %w", schemaPath, err)
+		return nil, err
 	}
-	var topo api.Topology
-	if err := json.Unmarshal(data, &topo); err != nil {
-		return nil, fmt.Errorf("parse schema %q: %w", schemaPath, err)
-	}
-	return &topo, nil
+	return resolved.Topology, nil
 }
 
 // resolveDataSource resolves a data source path relative to configDir.
