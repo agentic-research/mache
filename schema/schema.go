@@ -5,9 +5,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/lang"
@@ -73,12 +74,7 @@ func LoadPreset(name string) (*Resolution, error) {
 
 // AvailablePresets returns the sorted names of all bundled schemas.
 func AvailablePresets() []string {
-	names := make([]string, 0, len(presetPaths))
-	for name := range presetPaths {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(presetPaths))
 }
 
 func isPreset(ref string) bool {
