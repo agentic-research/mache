@@ -206,6 +206,21 @@ func main() {
 	assert.Len(t, refs, 4, "aliases, blank imports, dot imports, and raw literals must not affect import identity")
 }
 
+func TestExtractAddressRefs_PreservesNestedSourceID(t *testing.T) {
+	w, _ := parseSourceToASTWalker(t, "go", map[string]string{
+		"sub/nested.go": `package nested
+
+import dep "example.com/nested/dep"
+
+func Nested() any { return dep.Value }
+`,
+	})
+
+	refs, err := w.ExtractAddressRefs("sub/nested.go", "go")
+	require.NoError(t, err)
+	assert.Contains(t, refs, "gomod:example.com/nested/dep")
+}
+
 func TestEngine_AddressRefs_GoImportsReachNodeRefs(t *testing.T) {
 	bin, err := leyline.ResolveBinary(false)
 	if err != nil {

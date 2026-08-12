@@ -285,7 +285,7 @@ func (e *Engine) processSourceFileResult(result *parsedSourceFile) error {
 	// 3. Extract file-level address refs (e.g., HCL variable declarations)
 	// by querying the _ast table for the same patterns.
 	var fileAddrRefs []string
-	if addrRefs, err := w.ExtractAddressRefs(result.job.path, result.job.langName); err == nil {
+	if addrRefs, err := w.ExtractAddressRefs(sourceID, result.job.langName); err == nil {
 		fileAddrRefs = addrRefs
 	}
 	// File-level refs (mache-02r9: top-level cobra RunE etc.) are

@@ -2,17 +2,17 @@ package ingest
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 )
 
-// ExtractAddressRefs runs all registered address ref queries for the given
-// language by querying the _ast table (whole file). Returns deduplicated,
-// scheme-prefixed tokens (e.g., "env:DATABASE_URL"). Mirrors
-// SitterWalker.ExtractAddressRefs but uses SQL instead of CGO tree-sitter.
-func (w *ASTWalker) ExtractAddressRefs(sourcePath, langName string) ([]string, error) {
-	refs, err := w.fileAddrRefs(filepath.Base(sourcePath), langName)
+// ExtractAddressRefs runs all registered address ref queries for sourceID and
+// language by querying the _ast table (whole file). sourceID is leyline's
+// root-relative _source.id (for example "sub/nested.go"), not an arbitrary OS
+// path. Returns deduplicated, scheme-prefixed tokens such as
+// "env:DATABASE_URL".
+func (w *ASTWalker) ExtractAddressRefs(sourceID, langName string) ([]string, error) {
+	refs, err := w.fileAddrRefs(sourceID, langName)
 	if err != nil {
 		return nil, err
 	}

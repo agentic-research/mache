@@ -8,6 +8,14 @@ bumps may include breaking changes.
 
 ### Added
 
+- **Public schema resolution and schema-projected builds** (`mache-734971`).
+  The new `schema` package owns bundled presets and contained file references.
+  `build.ParseWithSchema` accepts a caller-provided topology, while
+  `build.ParseWithSchemaRef` accepts a preset or schema path and retains the
+  language metadata needed by the grammar-coverage guard. Both run the complete
+  pinned-leyline → `ASTWalker` → `Engine` → SQLite pipeline without CGO. The
+  CLI now delegates to this API instead of carrying a second projection recipe.
+
 - **Nodes carry a source location, completing the browse ladder**
   (`mache-e57065`). `graph.Open` previously returned nodes whose `Origin` was
   nil, so a consumer could FIND a symbol and not open it — no line, no column,
@@ -35,6 +43,14 @@ bumps may include breaking changes.
   deliberately reviewed.
 
 ### Fixed
+
+- **Nested source files retain registered address references**
+  (`mache-498bc3`). Mache previously computed leyline's correct root-relative
+  source ID and then reduced the address-ref lookup to a basename, so
+  `mache build --schema go` populated `gomod:` only for root files and nested
+  Terraform `mod:` / `env:` refs disappeared for the same reason. The exact
+  `_source.id` now flows through the registry. Production-path regressions
+  cover both nested Go and Terraform files; no ley-line-open change was needed.
 
 - **Terraform address references now reach Mache's caller graph**
   (`mache-91beb0`). Mache pins the official ley-line-open `v0.18.2` binaries

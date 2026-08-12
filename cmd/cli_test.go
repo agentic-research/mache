@@ -72,6 +72,10 @@ func TestBuild_RegisteredGoImportRefsReachNodeRefs(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(
 		"package main\n\nimport dep \"example.com/acme/dep\"\n\nfunc main() { dep.Run() }\n",
 	), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(srcDir, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "sub", "nested.go"), []byte(
+		"package sub\n\nimport dep \"example.com/acme/nested\"\n\nfunc Nested() { dep.Run() }\n",
+	), 0o644))
 
 	outDB := filepath.Join(tmpDir, "out.db")
 	oldSchemaPath := schemaPath
@@ -89,6 +93,11 @@ func TestBuild_RegisteredGoImportRefsReachNodeRefs(t *testing.T) {
 	).Scan(&refs))
 	assert.GreaterOrEqual(t, refs, 1,
 		"mache build must project registered Go import refs into node_refs.token")
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM node_refs WHERE token = ?`, "gomod:example.com/acme/nested",
+	).Scan(&refs))
+	assert.GreaterOrEqual(t, refs, 1,
+		"mache build --schema go must preserve registered refs from nested files")
 }
 
 // inferGoFCASchema runs the SURVIVING source-code FCA inference path
@@ -146,7 +155,7 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 	schema := inferGoFCASchema(t, srcDir, 2)
 
 	outDB := filepath.Join(tmpDir, "out.db")
-	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema, false, nil))
+	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema))
 
 	db, err := sql.Open("sqlite", outDB)
 	require.NoError(t, err)
@@ -201,7 +210,7 @@ func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
 	}
 
 	outDB := filepath.Join(tmpDir, "out.db")
-	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema, false, nil))
+	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema))
 
 	db, err := sql.Open("sqlite", outDB)
 	require.NoError(t, err)

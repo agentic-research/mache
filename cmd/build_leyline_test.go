@@ -65,7 +65,7 @@ func TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, true)
+	err := runBuildViaLeyline(src, output)
 	require.Error(t, err, "leyline missing must error, not silently fall back")
 	assert.Contains(t, err.Error(), "leyline backend",
 		"error must identify which backend failed (helps the user diagnose)")
@@ -97,7 +97,7 @@ func TestRunBuildViaLeyline_HappyPath(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	require.NoError(t, runBuildViaLeyline(src, output, true))
+	require.NoError(t, runBuildViaLeyline(src, output))
 
 	info, err := os.Stat(output)
 	require.NoError(t, err, "output .db must exist at the user-supplied path")
@@ -153,7 +153,7 @@ func TestRunBuildViaLeyline_SchemaLoadErrorSurfaces(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, true)
+	err := runBuildViaLeyline(src, output)
 	require.Error(t, err, "a missing schema file must fail the build")
 	assert.Contains(t, err.Error(), "load schema",
 		"error must come from the schema-load step, not a backend contradiction")
@@ -184,7 +184,7 @@ func TestRunBuildViaLeyline_SchemaProceedsToParse(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, false)
+	err := runBuildViaLeyline(src, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "leyline backend",
 		"a valid schema must proceed to the leyline parse step")
@@ -220,7 +220,7 @@ func TestRunBuildViaLeylineSchema_ProducesSchemaShapedDB(t *testing.T) {
 		[]byte("package main\n\nfunc Exported() int { return 1 }\n\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	require.NoError(t, runBuildViaLeyline(src, output, true))
+	require.NoError(t, runBuildViaLeyline(src, output))
 
 	db, err := sql.Open("sqlite", output)
 	require.NoError(t, err)

@@ -39,7 +39,7 @@ var removedSymbolBaseline = map[string]int{
 	"graph/composite.go":                     1,
 	"internal/ingest/ast_walker.go":          7,
 	"internal/ingest/ast_walker_calls.go":    3,
-	"internal/ingest/ast_walker_extract.go":  4,
+	"internal/ingest/ast_walker_extract.go":  3,
 	"internal/ingest/ast_walker_index.go":    1,
 	"internal/ingest/ast_walker_selector.go": 3,
 	"internal/ingest/engine_languages.go":    2,
