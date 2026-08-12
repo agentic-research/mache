@@ -162,7 +162,6 @@ var lloWriterAllowlist = map[string]string{
 // while production runs the full arm, and neither side notices. See
 // internal/fixturedb's package doc for the measurement (mache-7555da).
 var lloTestFixtureAllowlist = []string{
-	"cmd/build_leyline_coverage_test.go",
 	"cmd/cache_ast_test.go",
 	"cmd/cache_test.go",
 	"cmd/call_extractor_ast_test.go",

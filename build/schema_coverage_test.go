@@ -7,32 +7,23 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	_ "modernc.org/sqlite"
 )
 
 func seedCoverageFixture(t *testing.T) (*sql.DB, string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "parse.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	_, err = db.Exec(`CREATE TABLE _ast (
-		node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL,
-		start_byte INTEGER, end_byte INTEGER, start_row INTEGER, start_col INTEGER,
-		end_row INTEGER, end_col INTEGER, node_hash BLOB)`)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO _ast (node_id, source_id, node_kind) VALUES
-		('main.go/function_declaration', 'main.go', 'function_declaration')`)
-	require.NoError(t, err)
+	_, fixture := fixturedb.New(t, fixturedb.Leyline).
+		ASTNode("main.go/function_declaration", "function_declaration", "main.go", fixturedb.Bytes(0, 14)).
+		Build()
 
 	source := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(source, "main.go"),
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(source, "util.sql"),
 		[]byte("CREATE TABLE users (id INTEGER);\n"), 0o644))
-	return db, source
+	return fixture.DB(), source
 }
 
 func TestSchemaCoverageGaps(t *testing.T) {
