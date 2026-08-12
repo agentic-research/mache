@@ -27,22 +27,19 @@ type Match = ii.Match
 type JsonWalker = ii.JsonWalker
 
 // SQLiteWriter is the IngestionTarget that persists a projection to a SQLite
-// .db (nodes/node_defs/node_refs per the schema). Re-exporrted so external consumers
-// can assemble the schema-projection pipeline that run the address-ref registry
-// (env:/mod:/gomod: tokens) - which the raw leyline parse (build,Parse) does not.
+// .db (nodes/node_defs/node_refs per the schema). It is exported for consumers
+// that need custom ingestion control; most callers should use
+// build.ParseWithSchema or build.ParseWithSchemaRef.
 type SQLiteWriter = ii.SQLiteWriter
 
-// ASTWaler projects a leyline-parsed _ast SQLite db (rather than in-process tree-sitter)
-// Pair it with an Engine via Engine.SetASTWalker to run the schema projection over a leyline parse output
+// ASTWalker projects an open, caller-owned leyline _ast SQLite database. Pair
+// it with an Engine via Engine.SetASTWalker for custom projection control.
 type ASTWalker = ii.ASTWalker
 
 // NewSQLiteWriter opens (creating/truncating) a SQLite projection target.
-// TODO: fold this + NewASTWalker + NewEngine into a single public `build.ParseWithSchema(source, output, scheme)`
-// wrapper over the existing (internal) `runBuildViaLeyLineScheme`, so consumers call one function instead
-// of assembling the pipeline = which is the DRY home for the projection recipe
 var NewSQLiteWriter = ii.NewSQLiteWriter
 
-// NewASTWalker opens a leyline-parsed SQLite _ast db.
+// NewASTWalker constructs a walker over an open, caller-owned leyline _ast DB.
 var NewASTWalker = ii.NewASTWalker
 
 // NewEngine creates a new ingestion engine for the given schema and store.
