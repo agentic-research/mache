@@ -12,7 +12,7 @@ require (
 	github.com/go-task/task/v3 v3.52.0
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/mark3labs/mcp-go v0.57.0
-	github.com/ohler55/ojg v1.28.2
+	github.com/ohler55/ojg v1.28.3
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/willscott/go-nfs v0.0.4
