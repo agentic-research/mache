@@ -115,6 +115,39 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
+## Public Go API
+
+Library callers can produce either a raw leyline database or a Mache
+schema-projected database without invoking the `mache` CLI:
+
+```go
+import (
+	"github.com/agentic-research/mache/build"
+	"github.com/agentic-research/mache/schema"
+)
+
+// Resolve a bundled preset or a schema file relative to the project.
+resolved, err := schema.Resolve("go", projectDir)
+if err != nil {
+	return err
+}
+
+// Use the resolved topology directly...
+if err := build.ParseWithSchema(projectDir, outputDB, resolved.Topology); err != nil {
+	return err
+}
+
+// ...or let build preserve preset metadata used by the grammar guard.
+return build.ParseWithSchemaRef(projectDir, outputDB, "go", projectDir)
+```
+
+`build.Parse` writes leyline's raw parse shape. `ParseWithSchema` and
+`ParseWithSchemaRef` additionally run Mache's `Engine` + `ASTWalker`
+projection, including the registered `env:`, `mod:`, and `gomod:` reference
+extractors. All paths invoke the pinned leyline executable and keep Mache
+CGO-free. Address-reference extraction uses leyline's root-relative source IDs,
+so files below the source root participate in the same graph as root files.
+
 ## Running the pinned leyline (mache-19326d)
 
 <details>
