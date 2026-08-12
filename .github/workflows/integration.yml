@@ -70,14 +70,25 @@ jobs:
         # exact SHA-pinned published Leyline artifact before Go tests run.
         run: task test -- -run TestIntegration -v ./tests/
 
-      # Large-tier whole-repo E2E (mache-self, real corpora). These are gated
-      # out of the -race unit run in ci.yml because -race + pure-Go SQLite over
-      # the whole repo blows the 20m budget (mache-4f3840); here they run
-      # WITHOUT -race and with the large-tier opt-in, so coverage is preserved.
-      - name: Large-tier E2E (whole-repo projections, no -race)
+      # Large-tier whole-repo E2E is gated out of the -race unit run in ci.yml
+      # because -race + pure-Go SQLite over the whole repo blows the 20m budget
+      # (mache-4f3840). Keep the sentinel and distinct-corpora invocations
+      # separate so each suite owns its timeout and verbose progress is visible.
+      - name: Large-tier E2E (mache-self sentinel, no -race)
         env:
           MACHE_E2E_LARGE: '1'
-        run: go test -tags boltdb -timeout 25m -run 'TestE2E_MacheOnMache|TestE2E_RealCorpora' ./cmd/
+        run: |
+          set -o pipefail
+          go test -tags boltdb -timeout 25m -run '^TestE2E_MacheOnMache$' -v ./cmd/ 2>&1 \
+            | sed '/\[WARN\] duplicate construct name/d'
+
+      - name: Large-tier E2E (distinct real corpora, no -race)
+        env:
+          MACHE_E2E_LARGE: '1'
+        run: |
+          set -o pipefail
+          go test -tags boltdb -timeout 25m -run '^TestE2E_RealCorpora$' -v ./cmd/ 2>&1 \
+            | sed '/\[WARN\] duplicate construct name/d'
 
   required:
     name: Integration required

@@ -248,11 +248,13 @@ func indexProfiles(profiles []toolProfile) map[string]toolProfile {
 	return out
 }
 
-// TestE2E_RealCorpora — exercises the tool surface across every
-// medium-tier fixture in the registry. Default behavior (post-ADR-0019
-// PR 2) iterates `testfixtures.All()` filtered to `Tier == "medium"`
-// and runs the matrix runner against each. No env var needed: medium
-// tier is always-on per testfixtures.RequireTier.
+// TestE2E_RealCorpora — exercises the tool surface across distinct
+// medium-tier fixtures in the registry. Default behavior (post-ADR-0019
+// PR 2) iterates `defaultRealCorpusFixtures` and runs the matrix runner
+// against each. No env var needed: medium tier is always-on per
+// testfixtures.RequireTier. The mache-self fixture stays in the registry,
+// but its stronger matrix already runs in TestE2E_MacheOnMache and is not
+// repeated here.
 //
 // MACHE_E2E_CORPORA override (legacy / ad-hoc path):
 //
@@ -285,18 +287,24 @@ func TestE2E_RealCorpora(t *testing.T) {
 		return
 	}
 
-	// Default path: iterate every medium-tier fixture in the registry.
-	// Both mache-self and medium-rust-rosary run here under -short=false;
-	// mache-self double-runs vs TestE2E_MacheOnMache but the registry
-	// cache means the second ingest is free.
-	for _, fx := range testfixtures.All() {
-		if fx.Tier != "medium" {
-			continue
-		}
+	// Default path: iterate distinct medium-tier fixtures in the registry.
+	// mache-self is covered by the stronger TestE2E_MacheOnMache matrix.
+	for _, fx := range defaultRealCorpusFixtures() {
 		t.Run(fx.ID, func(t *testing.T) {
 			runRealCorpusFixture(t, fx, opts)
 		})
 	}
+}
+
+func defaultRealCorpusFixtures() []testfixtures.Fixture {
+	var fixtures []testfixtures.Fixture
+	for _, fx := range testfixtures.All() {
+		if fx.Tier != "medium" || fx.ID == "mache-self" {
+			continue
+		}
+		fixtures = append(fixtures, fx)
+	}
+	return fixtures
 }
 
 // runRealCorpusFixture executes the backend matrix for one registry
@@ -448,18 +456,16 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	testfixtures.AssertWithinBaseline(t, "find_smells:dead_code", "mache-self", elapsed)
 }
 
-// TestE2E_RealCorpora_RegistryDrivenByDefault asserts the migration
-// of TestE2E_RealCorpora (ADR-0019 PR 2) actually drives off the
-// fixture registry rather than the legacy MACHE_E2E_CORPORA env var.
+// TestE2E_RealCorpora_RegistryDrivenByDefault asserts the fixture registry
+// retains both the mache-self sentinel and the distinct Rust corpus rather
+// than falling back to the legacy MACHE_E2E_CORPORA env var.
 //
 // This is a structural check, not a behavioral one — we can't ride
 // through testing.T.Run dynamically to verify the subtests were
-// created without massively expanding the test surface, so we assert
-// the precondition: the registry contains BOTH expected medium-tier
-// fixtures (mache-self + medium-rust-rosary), which is what the
-// migrated TestE2E_RealCorpora iterates by default. If either is
-// missing, the matrix runner would silently skip a corpus that
-// reviewers expect to be exercised.
+// created without massively expanding the test surface. This test pins
+// registry membership; DefaultSelectionDoesNotDuplicateMacheSelf below pins
+// which registered fixtures the real-corpora matrix executes after the
+// stronger standalone sentinel has covered mache-self.
 func TestE2E_RealCorpora_RegistryDrivenByDefault(t *testing.T) {
 	want := map[string]bool{
 		"mache-self":         false,
@@ -475,11 +481,21 @@ func TestE2E_RealCorpora_RegistryDrivenByDefault(t *testing.T) {
 	}
 	for id, found := range want {
 		assert.True(t, found,
-			"medium-tier fixture %q must be in the registry; "+
-				"TestE2E_RealCorpora drives off testfixtures.All() filtered to medium, "+
-				"so a missing entry means the corpus silently stops being exercised",
+			"medium-tier fixture %q must remain in the registry",
 			id)
 	}
+}
+
+func TestE2E_RealCorpora_DefaultSelectionDoesNotDuplicateMacheSelf(t *testing.T) {
+	var selected []string
+	for _, fx := range defaultRealCorpusFixtures() {
+		selected = append(selected, fx.ID)
+	}
+
+	assert.NotContains(t, selected, "mache-self",
+		"TestE2E_MacheOnMache already runs the stronger mache-self matrix")
+	assert.Contains(t, selected, "medium-rust-rosary",
+		"distinct medium-tier corpora must remain in the default matrix")
 }
 
 func parseCorpusSpec(spec string) (name, path, schema string, ok bool) {
