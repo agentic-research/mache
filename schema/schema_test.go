@@ -14,7 +14,7 @@ func TestResolvePreset(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, got.Topology.Nodes)
 	require.Equal(t, []string{"go"}, got.Languages)
-	require.Contains(t, schema.PresetNames(), "terraform")
+	require.Contains(t, schema.AvailablePresets(), "terraform")
 }
 
 func TestResolveContainedFile(t *testing.T) {
@@ -37,12 +37,12 @@ func TestResolveRejectsEscape(t *testing.T) {
 }
 
 func TestResolveUnknownPresetLikeNameReportsAvailablePresets(t *testing.T) {
-	_, err := schema.Preset("fortran")
+	_, err := schema.LoadPreset("fortran")
 	require.ErrorContains(t, err, `unknown preset schema "fortran"`)
 	require.ErrorContains(t, err, "go")
 }
 
 func TestParseReportsInvalidJSON(t *testing.T) {
-	_, err := schema.Parse([]byte(`{"version":`))
+	_, err := schema.ParseTopology([]byte(`{"version":`))
 	require.ErrorContains(t, err, "parse schema")
 }

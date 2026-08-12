@@ -46,13 +46,28 @@ func parseWithSchema(source, output string, topology *api.Topology, extraLanguag
 	}
 	defer cleanup()
 
-	db, err := sql.Open("sqlite", parsedDB)
+	db, err := openParsedDatabase(parsedDB)
 	if err != nil {
-		return fmt.Errorf("open leyline parse output %s: %w", parsedDB, err)
+		return err
 	}
 	defer func() { _ = db.Close() }()
-	internalingest.TuneReadConnForBuild(db)
 
+	if err := requireSchemaCoverage(db, topology, source, extraLanguages); err != nil {
+		return err
+	}
+	return projectTopology(db, topology, source, output)
+}
+
+func openParsedDatabase(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open leyline parse output %s: %w", path, err)
+	}
+	internalingest.TuneReadConnForBuild(db)
+	return db, nil
+}
+
+func requireSchemaCoverage(db *sql.DB, topology *api.Topology, source string, extraLanguages []string) error {
 	gaps, err := schemaCoverageGaps(db, topology, source, extraLanguages)
 	if err != nil {
 		return fmt.Errorf("leyline schema coverage probe: %w", err)
@@ -64,7 +79,10 @@ func parseWithSchema(source, output string, topology *api.Topology, extraLanguag
 				"is no fallback parser — wait for ley-line to add these grammars, or drop them from the schema",
 			strings.Join(gaps, ", "), strings.Join(gaps, "/"))
 	}
+	return nil
+}
 
+func projectTopology(db *sql.DB, topology *api.Topology, source, output string) error {
 	if err := os.Remove(output); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove existing output %s: %w", output, err)
 	}

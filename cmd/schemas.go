@@ -11,19 +11,19 @@ var presetSchemas map[string]string
 
 func init() {
 	presetSchemas = make(map[string]string)
-	for _, name := range publicschema.PresetNames() {
+	for _, name := range publicschema.AvailablePresets() {
 		presetSchemas[name] = name
 	}
 }
 
 // PresetNames returns the sorted list of available preset schema names.
 func PresetNames() []string {
-	return publicschema.PresetNames()
+	return publicschema.AvailablePresets()
 }
 
 // loadPresetSchema loads a bundled schema by preset name.
 func loadPresetSchema(name string) (*api.Topology, error) {
-	resolved, err := publicschema.Preset(name)
+	resolved, err := publicschema.LoadPreset(name)
 	if err != nil {
 		return nil, err
 	}

@@ -31,7 +31,7 @@ ______________________________________________________________________
 
 **Interfaces:**
 
-- Produces: `schema.Resolution`, `schema.Parse`, `schema.Resolve`, `schema.Preset`, and `schema.PresetNames`.
+- Produces: `schema.Resolution`, `schema.ParseTopology`, `schema.Resolve`, `schema.LoadPreset`, and `schema.AvailablePresets`.
 
 - Consumes: `api.Topology` and `internal/lang.Registry`.
 
@@ -72,7 +72,7 @@ type Resolution struct {
     Languages []string
 }
 
-func Parse(data []byte) (*api.Topology, error) {
+func ParseTopology(data []byte) (*api.Topology, error) {
     var topology api.Topology
     if err := json.Unmarshal(data, &topology); err != nil {
         return nil, fmt.Errorf("parse schema: %w", err)
@@ -120,7 +120,7 @@ git commit -m "[mache-734971] feat(schema): expose preset and file resolution"
 
 ```go
 func TestParseWithSchemaProjectsCallerTopology(t *testing.T) {
-    topology, err := schema.Parse([]byte(`{
+    topology, err := schema.ParseTopology([]byte(`{
       "version":"v1",
       "nodes":[{"name":"functions","selector":"$","language":"go",
         "children":[{"name":"{{.name}}","selector":"(function_declaration name: (identifier) @name) @scope",

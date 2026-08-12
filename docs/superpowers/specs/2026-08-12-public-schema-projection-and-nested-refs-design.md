@@ -38,10 +38,10 @@ type Resolution struct {
     Languages []string
 }
 
-func Parse(data []byte) (*api.Topology, error)
+func ParseTopology(data []byte) (*api.Topology, error)
 func Resolve(ref, baseDir string) (*Resolution, error)
-func Preset(name string) (*Resolution, error)
-func PresetNames() []string
+func LoadPreset(name string) (*Resolution, error)
+func AvailablePresets() []string
 ```
 
 `Resolve` accepts a built-in preset name, an absolute path, or a relative path
@@ -49,6 +49,10 @@ contained by `baseDir`. `Resolution.Languages` carries the preset language
 identity used by the missing-grammar guard; file schemas derive languages from
 their `Node.Language` fields. The preset JSON files move under this package so
 there is one embedded source of truth. The CLI delegates to this package.
+
+The longer names distinguish topology decoding from `build.Parse` and avoid a
+second `PresetNames` definition in the CLI facade; the repository smell gate
+surfaced both ambiguities during implementation.
 
 Extend the public `build` package with two levels of entry point:
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/lang"
+	"github.com/agentic-research/mache/internal/pathguard"
 	publicschema "github.com/agentic-research/mache/schema"
 )
 
@@ -90,52 +91,7 @@ func resolveDataSource(sourcePath, configDir string) (string, error) {
 // exist yet (EvalSymlinks errors), falls back to filepath.Abs since
 // nonexistent paths cannot point anywhere malicious until they are created.
 func checkPathContainment(resolved, base string) error {
-	absResolved, err := evalOrAbs(resolved)
-	if err != nil {
-		return fmt.Errorf("resolve absolute path %q: %w", resolved, err)
-	}
-	absBase, err := evalOrAbs(base)
-	if err != nil {
-		return fmt.Errorf("resolve absolute path %q: %w", base, err)
-	}
-	rel, err := filepath.Rel(absBase, absResolved)
-	if err != nil {
-		return fmt.Errorf("path %q escapes project directory %q", resolved, base)
-	}
-	if strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("path %q escapes project directory %q", resolved, base)
-	}
-	return nil
-}
-
-// evalOrAbs resolves symlinks if the path exists. If the path itself
-// doesn't exist (e.g. configured target not yet created), it walks up to
-// the nearest existing parent, resolves that, and reattaches the missing
-// tail. This avoids false escapes caused by platform symlink quirks like
-// macOS /var → /private/var when one of the comparison paths is real and
-// the other is purely lexical.
-func evalOrAbs(p string) (string, error) {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
-	}
-	if r, err := filepath.EvalSymlinks(abs); err == nil {
-		return r, nil
-	}
-	// Walk up until we hit an existing dir, resolve it, then rejoin the tail.
-	dir := abs
-	var tail []string
-	for {
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return abs, nil // hit filesystem root with no existing ancestor
-		}
-		tail = append([]string{filepath.Base(dir)}, tail...)
-		dir = parent
-		if r, err := filepath.EvalSymlinks(dir); err == nil {
-			return filepath.Join(append([]string{r}, tail...)...), nil
-		}
-	}
+	return pathguard.RequireContained(resolved, base)
 }
 
 // httpServerEntry is the canonical MCP client entry for mache: a pointer to

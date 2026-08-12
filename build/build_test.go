@@ -64,7 +64,7 @@ func TestParseWithSchemaProjectsCallerTopology(t *testing.T) {
 func Use() string { return "ok" }
 `), 0o644))
 
-	topology, err := schema.Parse([]byte(`{
+	topology, err := schema.ParseTopology([]byte(`{
   "version": "v1",
   "nodes": [{
     "name": "functions",
