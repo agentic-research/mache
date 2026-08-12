@@ -1,13 +1,17 @@
 package build_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/build"
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/schema"
 	"github.com/stretchr/testify/require"
+
+	_ "modernc.org/sqlite"
 )
 
 // TestBuildThenOpen is the end-to-end regression test for the gap this
@@ -49,4 +53,59 @@ func TestBuild_MissingSourceErrors(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "out.db")
 	err := build.Parse(filepath.Join(t.TempDir(), "does-not-exist"), dbPath)
 	require.Error(t, err)
+}
+
+func TestParseWithSchemaProjectsCallerTopology(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "src")
+	require.NoError(t, os.MkdirAll(sourceDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "main.go"), []byte(`package sample
+
+func Use() string { return "ok" }
+`), 0o644))
+
+	topology, err := schema.Parse([]byte(`{
+  "version": "v1",
+  "nodes": [{
+    "name": "functions",
+    "selector": "$",
+    "language": "go",
+    "children": [{
+      "name": "{{.name}}",
+      "selector": "(function_declaration name: (identifier) @name) @scope",
+      "files": [{"name": "source", "content_template": "{{.scope}}"}]
+    }]
+  }]
+}`))
+	require.NoError(t, err)
+
+	outputDB := filepath.Join(dir, "projected.db")
+	require.NoError(t, build.ParseWithSchema(sourceDir, outputDB, topology))
+	require.Equal(t, 1, sqliteCount(t, outputDB,
+		`SELECT count(*) FROM nodes WHERE id = 'functions/Use/source'`))
+}
+
+func TestParseWithSchemaRefProjectsPreset(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "src")
+	require.NoError(t, os.MkdirAll(sourceDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "main.go"), []byte(`package sample
+
+func Use() string { return "ok" }
+`), 0o644))
+
+	outputDB := filepath.Join(dir, "projected.db")
+	require.NoError(t, build.ParseWithSchemaRef(sourceDir, outputDB, "go", sourceDir))
+	require.Equal(t, 1, sqliteCount(t, outputDB,
+		`SELECT count(*) FROM nodes WHERE id = 'sample/functions/Use/source'`))
+}
+
+func sqliteCount(t *testing.T, dbPath, query string, args ...any) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	var count int
+	require.NoError(t, db.QueryRow(query, args...).Scan(&count))
+	return count
 }
