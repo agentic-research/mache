@@ -18,9 +18,11 @@ the later global Go-map materialization or quadratic pair expansion cheap.
 Mache must preserve restrictions across the SQL-to-analysis boundary so work
 irrelevant to a query never enters the projection.
 
-The first increment proves this premise for explicit path/module restrictions.
-It does not claim that independently clustering arbitrary modules is equivalent
-to global Louvain clustering.
+The first increment proves this premise for explicit projected-graph roots
+(package/module/file/construct roots when the active schema exposes them). It
+does not claim that independently clustering arbitrary modules is equivalent to
+global Louvain clustering. Source-filesystem and import-closure selectors are
+later selector kinds because schema projection can reorganize source paths.
 
 ## Decision
 
@@ -46,6 +48,7 @@ type RefRestriction struct {
 type RefSnapshot struct {
     Refs              map[string][]string
     RestrictionDigest string
+    ContentDigest     string
     RowsRead          uint64
     Tokens            uint64
     Nodes             uint64
@@ -63,14 +66,19 @@ restriction, not the current graph contents; a later derived-result cache must
 combine it with graph snapshot identity, schema identity, and algorithm
 parameters.
 
+`ContentDigest` is BLAKE3 over the normalized selected `(token, node_id)` rows.
+Unlike `RestrictionDigest`, it changes when the selected graph facts change and
+can participate in an exact derived-result cache key.
+
 ## SQLite and Backend Behavior
 
 `SQLiteGraph.RefsWithin` pushes every root predicate into SQL against
 `node_refs.node_id`. Prefixes are matched on path boundaries, not with a raw
 `root%` expression that would confuse `pkg/a` with `pkg/ab`. The query must use
-the existing node-ID index and must not scan or decode rows outside the
-restriction. Overlapping roots cannot produce duplicate rows after
-normalization.
+a node-ID index and must not scan or decode rows outside the restriction.
+Ley-line-open v0.18.2 already emits `idx_refs_node`; Mache's schema-projection
+`SQLiteWriter` must add the equivalent index to its table contract. Overlapping
+roots cannot produce duplicate rows after normalization.
 
 `MemoryStore` implements the same capability by filtering its immutable refs
 snapshot. This preserves backend parity, although only SQLite can prove storage
@@ -103,12 +111,15 @@ one repository-wide report. Giving only its community phase a hidden scope
 would make that report internally inconsistent. A separately designed scoped
 architecture response can follow once all of its fields share one restriction.
 
-Within a process, identical community requests should share one computation
-using graph snapshot identity, normalized restriction, minimum community size,
-and filtering options as the key. This removes duplicate execution across
-`get_communities` and `get_diagram`; it also supports the unrestricted key used
-by repository-wide consumers. Durable cross-process reuse remains a follow-on
-through ley-line-open's restriction-addressed daemon cache.
+Within a process, identical community requests share one computation using the
+selected `RefSnapshot.ContentDigest`, normalized restriction, minimum community
+size, and filtering options as the key. A warm request may still scan and hash
+its selected rows so an externally updated SQLite database cannot return stale
+analysis; the expensive pair expansion and Louvain work are reused. This
+removes duplicate execution across `get_communities` and `get_diagram`; it also
+supports the unrestricted key used by repository-wide consumers. Durable
+cross-process reuse remains a follow-on through ley-line-open's
+restriction-addressed daemon cache.
 
 ## Correctness and Performance Proof
 
