@@ -100,6 +100,51 @@ func Use() string { return "ok" }
 		`SELECT count(*) FROM nodes WHERE id = 'sample/functions/Use/source'`))
 }
 
+func TestParseWithSchemaRef_NestedGoRefs(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "src")
+	require.NoError(t, os.MkdirAll(filepath.Join(sourceDir, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "root.go"), []byte(`package root
+
+import dep "example.com/root/dep"
+
+func Root() any { return dep.Value }
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "sub", "nested.go"), []byte(`package nested
+
+import dep "example.com/nested/dep"
+
+func Nested() any { return dep.Value }
+`), 0o644))
+
+	outputDB := filepath.Join(dir, "projected.db")
+	require.NoError(t, build.ParseWithSchemaRef(sourceDir, outputDB, "go", sourceDir))
+	require.GreaterOrEqual(t, sqliteCount(t, outputDB,
+		`SELECT count(*) FROM node_refs WHERE token = 'gomod:example.com/root/dep'`), 1)
+	require.GreaterOrEqual(t, sqliteCount(t, outputDB,
+		`SELECT count(*) FROM node_refs WHERE token = 'gomod:example.com/nested/dep'`), 1)
+	require.Equal(t, 1, sqliteCount(t, outputDB,
+		`SELECT count(*) FROM nodes WHERE id = 'nested/functions/Nested/source' AND record LIKE '%func Nested%'`),
+		"the nested construct must contain projected source, not just an empty directory")
+}
+
+func TestParseWithSchemaRef_NestedTerraformRefs(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "src")
+	require.NoError(t, os.MkdirAll(filepath.Join(sourceDir, "infra"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "infra", "nested.tf"), []byte(`module "vpc" {
+  source = "./modules/vpc"
+}
+`), 0o644))
+
+	outputDB := filepath.Join(dir, "projected.db")
+	require.NoError(t, build.ParseWithSchemaRef(sourceDir, outputDB, "terraform", sourceDir))
+	require.GreaterOrEqual(t, sqliteCount(t, outputDB,
+		`SELECT count(*) FROM node_refs WHERE token = 'mod:./modules/vpc'`), 1)
+	require.Equal(t, 1, sqliteCount(t, outputDB,
+		`SELECT count(*) FROM nodes WHERE name = 'source' AND length(record) > 0`))
+}
+
 func sqliteCount(t *testing.T, dbPath, query string, args ...any) int {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
