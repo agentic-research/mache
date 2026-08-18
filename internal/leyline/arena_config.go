@@ -130,3 +130,71 @@ func recordArenaConfig(arenaPath string, cfg arenaSpawnConfig) error {
 	}
 	return nil
 }
+
+// ArenaState is what `mache doctor` needs to explain a warm-start refusal
+// without the operator reading JSON out of ~/.mache by hand.
+//
+// The incident this exists for: two stale daemons squatting the shared arena
+// presented as three unrelated symptoms (empty sheaf cache, get_overview
+// timeout, killed leyline parse), and nothing in mache could report that the
+// arena was pinned to a different tree than the one being served.
+type ArenaState struct {
+	// Path is the shared arena file. It may not exist yet.
+	Path string
+	// ConfigPath is mache's sidecar record beside it.
+	ConfigPath string
+	// Exists reports whether the arena file itself is present.
+	Exists bool
+	// HasRecord reports whether mache has a parseable record of the config it
+	// last spawned with. False means "cannot vouch for this arena" — which is
+	// the reset trigger, not an error.
+	HasRecord bool
+	// SourceRoot is the canonicalized tree the arena is bound to, when known.
+	SourceRoot string
+	// CDCTarget is the activation target recorded for it, when known.
+	CDCTarget string
+}
+
+// InspectArena reports the shared arena's state without mutating anything.
+//
+// A missing arena, a missing record, and an unparseable record are all
+// reported rather than returned as errors: each is a legitimate state a
+// diagnostic must describe, and only a failure to locate the home directory
+// is a genuine error.
+func InspectArena() (ArenaState, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ArenaState{}, err
+	}
+	arena := filepath.Join(home, ".mache", "default.arena")
+	st := ArenaState{Path: arena, ConfigPath: arenaConfigPath(arena)}
+
+	if _, statErr := os.Stat(arena); statErr == nil {
+		st.Exists = true
+	}
+	raw, readErr := os.ReadFile(st.ConfigPath)
+	if readErr != nil {
+		return st, nil // no record — reported, not an error
+	}
+	var cfg arenaSpawnConfig
+	if json.Unmarshal(raw, &cfg) != nil {
+		return st, nil // unparseable record is not a match; same as absent
+	}
+	st.HasRecord = true
+	st.SourceRoot = cfg.SourceRoot
+	st.CDCTarget = cfg.CDCTarget
+	return st, nil
+}
+
+// ArenaBoundElsewhere reports whether the arena is recorded against a tree
+// other than want — the exact condition leyline's verify_source_root_matches
+// refuses to warm-start on. Comparison is canonicalized on both sides so a
+// symlinked checkout does not read as a mismatch leyline itself would not see.
+//
+// Returns false when there is no record: unknown is not disagreement.
+func (s ArenaState) ArenaBoundElsewhere(want string) bool {
+	if !s.HasRecord || s.SourceRoot == "" || want == "" {
+		return false
+	}
+	return CanonicalSourceRoot(s.SourceRoot) != CanonicalSourceRoot(want)
+}

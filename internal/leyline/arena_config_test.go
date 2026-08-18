@@ -118,3 +118,95 @@ func TestCanonicalSourceRoot_NonexistentPathIsStillAbsolute(t *testing.T) {
 	assert.True(t, filepath.IsAbs(got),
 		"an unresolvable path must still normalize to absolute rather than fail the spawn")
 }
+
+// TestInspectArena_ReportsEveryStateRatherThanErroring pins the contract that
+// makes InspectArena usable from a diagnostic: a missing arena, a missing
+// record, and an unparseable record are all STATES to describe, not errors to
+// propagate. A diagnostic that errors out on "nothing configured yet" cannot
+// report on a machine that has never run mache — which is exactly the machine
+// most likely to need it.
+func TestInspectArena_ReportsEveryStateRatherThanErroring(t *testing.T) {
+	t.Run("nothing present", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		st, err := InspectArena()
+		require.NoError(t, err)
+		assert.False(t, st.Exists)
+		assert.False(t, st.HasRecord)
+		assert.NotEmpty(t, st.Path, "the path must be reported even when the file is absent")
+		assert.Equal(t, arenaConfigPath(st.Path), st.ConfigPath)
+	})
+
+	t.Run("arena without a record", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		require.NoError(t, os.MkdirAll(filepath.Join(home, ".mache"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(home, ".mache", "default.arena"), []byte("x"), 0o644))
+
+		st, err := InspectArena()
+		require.NoError(t, err)
+		assert.True(t, st.Exists)
+		assert.False(t, st.HasRecord, "an arena mache never recorded cannot be vouched for")
+	})
+
+	t.Run("unparseable record reads as absent, not as agreement", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		require.NoError(t, os.MkdirAll(filepath.Join(home, ".mache"), 0o700))
+		arena := filepath.Join(home, ".mache", "default.arena")
+		require.NoError(t, os.WriteFile(arena, []byte("x"), 0o644))
+		require.NoError(t, os.WriteFile(arenaConfigPath(arena), []byte("{not json"), 0o644))
+
+		st, err := InspectArena()
+		require.NoError(t, err)
+		assert.False(t, st.HasRecord, "corrupt bookkeeping must never be read as a match")
+	})
+
+	t.Run("intact record round-trips", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		require.NoError(t, os.MkdirAll(filepath.Join(home, ".mache"), 0o700))
+		arena := filepath.Join(home, ".mache", "default.arena")
+		require.NoError(t, os.WriteFile(arena, []byte("x"), 0o644))
+		require.NoError(t, recordArenaConfig(arena, arenaSpawnConfig{SourceRoot: "/projects/alpha", CDCTarget: "source-blobs"}))
+
+		st, err := InspectArena()
+		require.NoError(t, err)
+		require.True(t, st.HasRecord)
+		assert.Equal(t, "/projects/alpha", st.SourceRoot)
+		assert.Equal(t, "source-blobs", st.CDCTarget)
+	})
+}
+
+// TestArenaBoundElsewhere_UnknownIsNotDisagreement is the guard against a
+// diagnostic that reports a conflict it cannot actually observe. Without a
+// record, or without a candidate, there is nothing to disagree with — and
+// claiming otherwise would send an operator chasing a warm-start refusal that
+// ley-line is not going to issue.
+func TestArenaBoundElsewhere_UnknownIsNotDisagreement(t *testing.T) {
+	assert.False(t, ArenaState{}.ArenaBoundElsewhere("/anywhere"),
+		"no record means unknown, and unknown is not disagreement")
+	assert.False(t, ArenaState{HasRecord: true}.ArenaBoundElsewhere("/anywhere"),
+		"an empty recorded source_root is 'bound to no tree', not a conflict")
+	assert.False(t, ArenaState{HasRecord: true, SourceRoot: "/a"}.ArenaBoundElsewhere(""),
+		"no candidate to compare against is not a conflict either")
+}
+
+// TestArenaBoundElsewhere_CanonicalizesBothSides is the symlink case that would
+// otherwise report a mismatch ley-line itself would never see: this repo is
+// reached through both ~/github/art/mache and ~/remotes/art/mache.
+func TestArenaBoundElsewhere_CanonicalizesBothSides(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "tree")
+	require.NoError(t, os.MkdirAll(real, 0o755))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(real, link))
+
+	st := ArenaState{HasRecord: true, SourceRoot: real}
+	assert.False(t, st.ArenaBoundElsewhere(link),
+		"a symlink and its target name the same tree; reporting a conflict would be a false alarm")
+
+	other := filepath.Join(dir, "elsewhere")
+	require.NoError(t, os.MkdirAll(other, 0o755))
+	assert.True(t, st.ArenaBoundElsewhere(other),
+		"a genuinely different tree must still be reported")
+}
