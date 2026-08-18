@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,4 +305,57 @@ func TestEmitDoctorJSON_StaysParseableWhenChecksFail(t *testing.T) {
 		"the JSON writer must emit nothing but JSON, even when reporting a failure")
 	assert.Equal(t, 1, decoded.Failed)
 	assert.Len(t, decoded.Checks, 2)
+}
+
+// TestCheckClientToken_SeparatesRegistrationFromReachability covers the gap
+// that validation exposed: doctor reported six green checks while
+// find_definition returned "workspace root unavailable (context deadline
+// exceeded)". The project WAS registered — the client's URL just carried no
+// token and its roots/list never answered. Registered and reachable are
+// different questions.
+func TestCheckClientToken_SeparatesRegistrationFromReachability(t *testing.T) {
+	write := func(t *testing.T, path, url string) {
+		t.Helper()
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		body := fmt.Sprintf(`{"mcpServers":{"mache":{"type":"http","url":%q}}}`, url)
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+	}
+
+	t.Run("bare URL warns and never gates", func(t *testing.T) {
+		root := t.TempDir()
+		write(t, filepath.Join(root, ".mcp.json"), "http://localhost:7532/mcp")
+
+		got := checkClientToken(root)
+		assert.Equal(t, statusWarn, got.Status,
+			"a client that answers roots/list works without a token, so this must not fail the exit code")
+		assert.Contains(t, got.Detail, "no ?project= token")
+		assert.Contains(t, got.Fix, "mache init")
+	})
+
+	t.Run("token present passes", func(t *testing.T) {
+		root := t.TempDir()
+		write(t, filepath.Join(root, ".claude", "mcp.json"), "http://localhost:7532/mcp?project=deadbeef")
+		assert.Equal(t, statusOK, checkClientToken(root).Status)
+	})
+
+	t.Run("a tokenless file alongside a tokened one still passes", func(t *testing.T) {
+		root := t.TempDir()
+		write(t, filepath.Join(root, ".mcp.json"), "http://localhost:7532/mcp")
+		write(t, filepath.Join(root, ".claude", "mcp.json"), "http://localhost:7532/mcp?project=deadbeef")
+		assert.Equal(t, statusOK, checkClientToken(root).Status,
+			"the committed .mcp.json CANNOT carry a machine-specific token; the per-machine file is what resolves")
+	})
+
+	t.Run("no config at all warns rather than claiming health", func(t *testing.T) {
+		assert.Equal(t, statusWarn, checkClientToken(t.TempDir()).Status)
+	})
+
+	t.Run("unreadable config is no opinion, not a verdict", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"), []byte("{not json"), 0o644))
+		got := checkClientToken(root)
+		assert.Equal(t, statusWarn, got.Status)
+		assert.NotContains(t, got.Detail, "no ?project= token",
+			"a file doctor cannot parse must not be reported as a file lacking a token")
+	})
 }

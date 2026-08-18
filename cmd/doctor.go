@@ -86,6 +86,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		checkPinnedLeyline(),
 		checkArena(root),
 		checkProjectRegistration(root),
+		checkClientToken(root),
 	}
 
 	if doctorJSON {
@@ -254,6 +255,89 @@ func checkProjectRegistration(cwd string) check {
 		Detail: fmt.Sprintf("%s is NOT registered; MCP tools here will fail to resolve a workspace root", want),
 		Fix:    "mache init   # registers this project with the shared daemon",
 	}
+}
+
+// mcpClientConfigs are the per-project files an MCP client reads, in the order
+// doctor reports them. The user-scope config is deliberately excluded: doctor
+// cannot know which client is asking, and a global entry that lacks a token is
+// correct for clients that answer roots/list.
+var mcpClientConfigs = []string{
+	filepath.Join(".claude", "mcp.json"),
+	".mcp.json",
+}
+
+// checkClientToken closes the gap that made the `project` check give false
+// confidence: a project can be REGISTERED with the daemon while the client
+// still cannot reach it.
+//
+// Observed during validation — doctor reported six green checks while
+// find_definition returned "workspace root unavailable (context deadline
+// exceeded)", because the client's URL was the bare endpoint and its
+// roots/list never answered. Registration and reachability are different
+// questions, and only the first was being asked.
+//
+// A missing token is a WARN, not a fail: a client that answers roots/list
+// resolves without one. It is reported because when roots/list does NOT
+// answer, this is the difference between working and timing out — and the
+// timeout says nothing about the cause.
+func checkClientToken(root string) check {
+	var withToken, without []string
+	for _, rel := range mcpClientConfigs {
+		url, ok := macheURLIn(filepath.Join(root, rel))
+		if !ok {
+			continue
+		}
+		if strings.Contains(url, "project=") {
+			withToken = append(withToken, rel)
+		} else {
+			without = append(without, rel)
+		}
+	}
+	switch {
+	case len(withToken) == 0 && len(without) == 0:
+		return check{
+			Name:   "client-token",
+			Status: statusWarn,
+			Detail: "no per-project MCP client config found; a client must answer roots/list to resolve this workspace",
+			Fix:    "mache init   # writes .claude/mcp.json with a ?project= token",
+		}
+	case len(withToken) > 0:
+		return check{
+			Name:   "client-token",
+			Status: statusOK,
+			Detail: fmt.Sprintf("%s carries a ?project= token", strings.Join(withToken, ", ")),
+		}
+	default:
+		return check{
+			Name:   "client-token",
+			Status: statusWarn,
+			Detail: fmt.Sprintf("no ?project= token in %s; tools resolve only if your client answers roots/list", strings.Join(without, ", ")),
+			Fix:    "mache init   # writes .claude/mcp.json with a ?project= token",
+		}
+	}
+}
+
+// macheURLIn reads one MCP client config and returns the mache server's URL.
+// A missing or unparseable file is simply "no opinion" — doctor describes what
+// it finds and does not editorialise about files it cannot read.
+func macheURLIn(path string) (string, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			URL string `json:"url"`
+		} `json:"mcpServers"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return "", false
+	}
+	entry, ok := cfg.MCPServers["mache"]
+	if !ok || entry.URL == "" {
+		return "", false
+	}
+	return entry.URL, true
 }
 
 // workspaceRootFor walks up from dir to the enclosing repository root, because
