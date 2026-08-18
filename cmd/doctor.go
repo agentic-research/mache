@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -76,13 +77,15 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 
 	daemonVersion, daemonErr := probeDaemonVersion(cmd.Context())
 
+	root := workspaceRootFor(cwd)
+
 	checks := []check{
 		checkLocalBinary(),
 		checkDaemon(daemonVersion, daemonErr),
 		checkVersionSkew(daemonVersion, daemonErr),
 		checkPinnedLeyline(),
-		checkArena(cwd),
-		checkProjectRegistration(cwd),
+		checkArena(root),
+		checkProjectRegistration(root),
 	}
 
 	if doctorJSON {
@@ -253,6 +256,49 @@ func checkProjectRegistration(cwd string) check {
 	}
 }
 
+// workspaceRootFor walks up from dir to the enclosing repository root, because
+// that — not the process working directory — is what actually gets registered.
+// MCP clients advertise a workspace root and mache registers THAT; asking
+// whether a subdirectory is registered answers a question nobody posed.
+//
+// Getting this wrong is worse than a false alarm: the remediation would tell an
+// operator to run `mache init` inside e.g. cmd/, minting a SECOND token for a
+// nested path and making the registry genuinely wrong.
+//
+// A `.git` entry may be a directory (normal clone) or a file (worktree or
+// submodule, holding a gitdir pointer); either marks the root. Falls back to
+// dir when nothing above it looks like a repository.
+func workspaceRootFor(dir string) string {
+	cur := dir
+	for {
+		if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return dir
+		}
+		cur = parent
+	}
+}
+
+// newInitializeRequest builds the MCP handshake probe. Split out so
+// probeDaemonVersion reads as what it is — dispatch, session hygiene, parse —
+// rather than interleaving request construction with all three.
+func newInitializeRequest(ctx context.Context) (*http.Request, error) {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":` +
+		`{"protocolVersion":"2025-06-18","capabilities":{},` +
+		`"clientInfo":{"name":"mache-doctor","version":"1"}}}`)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, macheHTTPURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	return req, nil
+}
+
 // probeDaemonVersion performs a real MCP initialize and reads serverInfo.version.
 // A plain TCP connect would prove only that something holds the port — which is
 // exactly the wrong answer when the problem is a stale daemon still listening.
@@ -263,22 +309,27 @@ func probeDaemonVersion(parent context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, doctorProbeTimeout)
 	defer cancel()
 
-	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":` +
-		`{"protocolVersion":"2025-06-18","capabilities":{},` +
-		`"clientInfo":{"name":"mache-doctor","version":"1"}}}`)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, macheHTTPURL, bytes.NewReader(body))
+	req, err := newInitializeRequest(ctx)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	// Streamable HTTP is stateful: initialize ALLOCATES a server-side session.
+	// Without this, every `mache doctor` run leaks one — and a diagnostic
+	// people are encouraged to run in a loop or a gate is the worst possible
+	// place to leak a resource. Terminating is best-effort: a daemon that
+	// ignores DELETE still sweeps idle sessions, so failing to clean up must
+	// not turn a healthy probe into a reported failure.
+	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
+		defer releaseMCPSession(parent, sid)
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -287,6 +338,24 @@ func probeDaemonVersion(parent context.Context) (string, error) {
 		return "", err
 	}
 	return serverVersionFromMCPReply(raw)
+}
+
+// releaseMCPSession terminates the session initialize allocated. Errors are
+// deliberately swallowed: this is hygiene, not a health signal, and a daemon
+// that refuses DELETE is not thereby unhealthy.
+func releaseMCPSession(parent context.Context, sessionID string) {
+	ctx, cancel := context.WithTimeout(parent, doctorProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, macheHTTPURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Mcp-Session-Id", sessionID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 // serverVersionFromMCPReply tolerates both response framings the transport may

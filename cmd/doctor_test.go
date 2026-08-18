@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -246,4 +247,61 @@ func TestCheckPinnedLeyline_MissingBinaryFailsWithoutDownloading(t *testing.T) {
 		assert.Empty(t, entries,
 			"doctor must not fetch a binary while diagnosing; it reports the world, it does not change it")
 	}
+}
+
+// TestWorkspaceRootFor_ResolvesTheRegisteredUnit is the fix for a false alarm
+// that shipped in the first cut: run from cmd/, doctor reported the project
+// "NOT registered" and told the operator to run `mache init` there — which
+// would mint a SECOND token for a nested path and make the registry genuinely
+// wrong. MCP clients advertise a workspace ROOT and mache registers that; the
+// process working directory is not the question anyone asked.
+func TestWorkspaceRootFor_ResolvesTheRegisteredUnit(t *testing.T) {
+	t.Run("finds the root from a nested directory", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+		nested := filepath.Join(root, "cmd", "deep")
+		require.NoError(t, os.MkdirAll(nested, 0o755))
+
+		assert.Equal(t, root, workspaceRootFor(nested))
+	})
+
+	t.Run("worktrees and submodules count — .git is a FILE there", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: /elsewhere\n"), 0o644))
+		nested := filepath.Join(root, "pkg")
+		require.NoError(t, os.MkdirAll(nested, 0o755))
+
+		assert.Equal(t, root, workspaceRootFor(nested),
+			"a worktree checkout is a real workspace; missing it would resurrect the false alarm")
+	})
+
+	t.Run("falls back to the input rather than escaping to /", func(t *testing.T) {
+		orphan := t.TempDir() // no .git anywhere it will find inside the temp tree
+		got := workspaceRootFor(orphan)
+		assert.True(t, got == orphan || strings.HasPrefix(orphan, got),
+			"a directory outside any repo must report itself, never walk up to the filesystem root and claim that")
+	})
+}
+
+// TestEmitDoctorJSON_StaysParseableWhenChecksFail pins half of a two-part fix.
+// The writer must emit ONLY JSON; the other half is cmd.Execute writing its
+// error to stderr rather than stdout. Together they keep `mache doctor --json`
+// machine-readable in the failure case — which is the case an agent most needs
+// to parse, and the one where it was previously invalid.
+func TestEmitDoctorJSON_StaysParseableWhenChecksFail(t *testing.T) {
+	var buf bytes.Buffer
+	err := emitDoctorJSON(&buf, []check{
+		{Name: "ok-one", Status: statusOK, Detail: "fine"},
+		{Name: "bad-one", Status: statusFail, Detail: "broken", Fix: "do the thing"},
+	})
+	require.Error(t, err, "a failing check must still set the exit code")
+
+	var decoded struct {
+		Checks []check `json:"checks"`
+		Failed int     `json:"failed"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded),
+		"the JSON writer must emit nothing but JSON, even when reporting a failure")
+	assert.Equal(t, 1, decoded.Failed)
+	assert.Len(t, decoded.Checks, 2)
 }
