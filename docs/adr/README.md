@@ -42,6 +42,7 @@ is no duplicate `#` heading.
 | [0023](0023-unified-code-fact-ir.md)                            | Superseded  | Unified Code-Fact IR — Property Graph over a Content-Addressed Symbol Set         |
 | [0024](0024-incremental-dataflow-taint-as-substrate-queries.md) | Proposed    | Incremental Dataflow & Taint as Substrate Queries                                 |
 | [0025](0025-resolver-body-native-ecosystem-tooling.md)          | Accepted    | Resolver bodies shell out to each ecosystem's own tool (go list, cargo metadata…) |
+| [0027](0027-one-startup-path-with-ablatable-capabilities.md)    | Proposed    | One startup path — Resolve → Plan → Open, with capabilities as ablatable axes     |
 
 ## Notes on the non-obvious statuses
 
