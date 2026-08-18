@@ -557,7 +557,11 @@ var rootCmd = &cobra.Command{
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		// STDERR, not stdout: a command whose stdout is machine-readable
+		// (`mache doctor --json`) emitted valid JSON followed by this line,
+		// so a parser got "Extra data" exactly when a check failed — the
+		// moment the output matters most.
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
