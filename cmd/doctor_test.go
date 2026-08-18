@@ -220,3 +220,30 @@ func TestEveryFailingCheckNamesARemediation(t *testing.T) {
 		assert.NotEmpty(t, c.Fix, "failing check %q must name a remediation", c.Name)
 	}
 }
+
+// TestCheckPinnedLeyline_MissingBinaryFailsWithoutDownloading is the fifth
+// failure mode. Two things must hold at once, and they pull in opposite
+// directions: an unresolvable pin has to FAIL loudly (a projection built by the
+// wrong leyline diverges from CI silently — the exact class mache-608a3c), and
+// the check must not fetch anything while establishing that. A diagnostic that
+// repairs the world cannot describe it.
+func TestCheckPinnedLeyline_MissingBinaryFailsWithoutDownloading(t *testing.T) {
+	// Isolate both places ResolveBinary looks: $PATH and ~/.mache/bin.
+	empty := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", empty)
+
+	got := checkPinnedLeyline()
+
+	require.Equal(t, statusFail, got.Status,
+		"an unresolvable pin must fail — a wrong-version leyline produces a projection that diverges from CI without saying so")
+	assert.Contains(t, got.Detail, "not resolvable")
+	assert.Contains(t, got.Fix, "mache install", "a failing check must name its remediation")
+
+	// The load-bearing half: nothing was downloaded into the isolated home.
+	home := os.Getenv("HOME")
+	if entries, err := os.ReadDir(filepath.Join(home, ".mache", "bin")); err == nil {
+		assert.Empty(t, entries,
+			"doctor must not fetch a binary while diagnosing; it reports the world, it does not change it")
+	}
+}
