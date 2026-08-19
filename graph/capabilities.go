@@ -91,3 +91,20 @@ type DBPathProvider interface {
 type MountPrefixer interface {
 	MountPrefixOf(id string) string
 }
+
+// RefResolver answers the two questions a reference-walking consumer asks that
+// [Graph] does not: where is this reference in the file, and what definition
+// does it point at.
+//
+// Both were previously reachable only by hand-writing SQL against node_refs,
+// _ast and _imports — the join every consumer rewrote, and the bare-token
+// matching that cannot tell a local Join from filepath.Join. See
+// [RefTarget.Resolution] for why "did not resolve" is four distinct answers
+// rather than a boolean.
+type RefResolver interface {
+	// RefRangeOf reports where a reference node sits, or nil when the
+	// projection carries no spans.
+	RefRangeOf(nodeID string) (*RefRange, error)
+	// ResolveRef reports what a reference points at, classified.
+	ResolveRef(nodeID string) (*RefTarget, error)
+}
