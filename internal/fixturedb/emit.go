@@ -1,6 +1,10 @@
 package fixturedb
 
-import "database/sql"
+import (
+	"database/sql"
+
+	"github.com/agentic-research/mache/internal/sqlintro"
+)
 
 // Emission: the ONE place a spec becomes columns.
 //
@@ -10,8 +14,14 @@ import "database/sql"
 
 // emitter carries the per-build state the row writers share.
 type emitter struct {
-	b  *Builder
-	db *sql.DB
+	// derivedParent is true when the producer's nodes.parent_id is a GENERATED
+	// column, which ley-line-open made it in projection-v4 (v0.19.0). Naming a
+	// generated column in an INSERT is rejected at PREPARE time, so the column
+	// LIST has to differ — the value does not, since the derivation reproduces
+	// exactly what this emitter would have written.
+	derivedParent bool
+	b             *Builder
+	db            *sql.DB
 	// hasNodeContent reports whether this fixture has a node_content table to
 	// point node_hash values at. Ley-line always does; a Standalone fixture only
 	// does when it modelled the cache-hydration path.
@@ -20,7 +30,11 @@ type emitter struct {
 
 func (b *Builder) insertRows(db *sql.DB) {
 	b.t.Helper()
-	e := &emitter{b: b, db: db, hasNodeContent: b.producer == Leyline || len(b.ast) > 0}
+	e := &emitter{
+		b: b, db: db,
+		hasNodeContent: b.producer == Leyline || len(b.ast) > 0,
+		derivedParent:  sqlintro.ColumnIsGenerated(db, "nodes", "parent_id"),
+	}
 	e.emitNodes()
 	e.emitDefs()
 	e.emitRefs()
@@ -56,6 +70,12 @@ func (e *emitter) emitNodes() {
 		kind := 1
 		if c.dirKind {
 			kind = 0
+		}
+		if e.derivedParent {
+			e.exec(`INSERT OR REPLACE INTO nodes (id, name, kind, size, mtime, record_id, record, source_file)
+				VALUES (?, ?, ?, 0, 0, '', '', ?)`,
+				string(c.id), c.name, kind, string(c.source))
+			continue
 		}
 		e.exec(`INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file)
 			VALUES (?, ?, ?, ?, 0, 0, '', '', ?)`,

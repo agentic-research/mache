@@ -71,8 +71,15 @@ func TestExtractSemver(t *testing.T) {
 	}
 }
 
+// TestPinnedBinaryReleaseMatchesAdoptedContract is a deliberate tripwire, not a
+// tautology: it restates the pin so that moving it cannot be a one-character
+// edit. ley-line-open ships _ast schema changes in releases (v0.7.4, v0.7.5, and
+// projection-v4 in v0.19.0), so a pin bump is an ADOPTION of a new producer
+// contract and has to be accompanied by re-deriving internal/fixturedb's mirror
+// and refreshing leylinePinnedSHA256. Updating this line without those is the
+// mistake it exists to make loud.
 func TestPinnedBinaryReleaseMatchesAdoptedContract(t *testing.T) {
-	assert.Equal(t, "v0.18.2", leylineBinaryVersion)
+	assert.Equal(t, "v0.19.0", leylineBinaryVersion)
 }
 
 func TestPinnedBinarySHA256CoversSupportedPlatforms(t *testing.T) {

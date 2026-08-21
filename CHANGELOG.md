@@ -73,6 +73,28 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **Leyline pin bumped v0.18.2 → v0.19.0, adopting `projection-v4`**
+  (`mache-bc6ca3`). `nodes.parent_id` is now a GENERATED column derived from the
+  row's own `id` and `name`; `node_defs`/`node_refs` carry their own
+  `node_kind` and span columns so a range no longer requires a join against
+  `_ast`; `_ast` gains `blob_ord`. Reads are unaffected and nothing was removed,
+  but an INSERT or UPDATE that merely NAMES a generated column is rejected at
+  PREPARE time — so mache probes the shape and adapts its column list rather
+  than assuming. The probe is deliberately at runtime rather than keyed on the
+  projection version, because ley-line-open plans to return `parent_id` to a
+  stored integer FK in a later break.
+
+  `internal/fixturedb`'s mirror was re-derived from the released binary, and
+  now stores the DDL with SQL comments stripped: upstream documents columns
+  inline and those comments contain backticks, which cannot appear in a Go raw
+  string literal. `normalizeDDL` already discarded comments on both sides, so
+  the conformance guarantee is unchanged.
+
+  `fixturedb` additionally refuses a `Where{Name}` or `Where{Parent}` that
+  contradicts the construct's id. Under a stored `parent_id` such a fixture was
+  merely odd; under a derived one it silently takes a parent nobody wrote, and
+  six smell rules join on `parent_id`.
+
 - **BREAKING: `internal/graph` and `internal/resolve` are now the public
   `graph` and `resolve` packages, and the type-alias facades are gone**
   (`mache-9a89cd`). The facades were curating the wrong axis. A

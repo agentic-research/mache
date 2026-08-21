@@ -24,15 +24,22 @@ const ProjectionSchemaVersionKey = "projection_schema_version"
 // query_set_epoch and nothing else. mache's own `mache build` output has no
 // `_meta` either.
 var knownProjections = map[string]string{
-	// Stamped by ley-line-open after v0.18.2; the same shape the released
-	// v0.18.x binaries write without declaring it. This is the pinned shape.
-	"projection-v2": "the pinned shape: parent_id stored, spans only on _ast",
-	// nodes.parent_id becomes GENERATED; node_defs/node_refs gain their own
-	// node_kind + span columns; _ast gains blob_ord. Verified against a real
-	// arena from the projection-v4 branch: every change is ADDITIVE except the
-	// parent_id conversion, and nothing is removed. mache's write path for the
-	// generated column landed in mache-bc6ca3.
-	"projection-v4": "parent_id derived; spans on node_defs/node_refs; _ast.blob_ord",
+	// The shape the v0.18.x releases write. They do not DECLARE it — the
+	// _meta channel did not exist yet — but ley-line-open's main stamped it
+	// between v0.18.2 and v0.19.0, so arenas from that window say so.
+	"projection-v2": "pre-v0.19.0: parent_id stored, spans only on _ast",
+	// THE PINNED SHAPE as of leyline v0.19.0. nodes.parent_id becomes
+	// GENERATED; node_defs/node_refs gain their own node_kind + span columns;
+	// _ast gains blob_ord. Every change is ADDITIVE except the parent_id
+	// conversion, and nothing is removed — verified by re-deriving
+	// internal/fixturedb's mirror from the released binary.
+	//
+	// The generated column is TRANSITIONAL, not the steady state: LLO plans to
+	// delete it in ley-line-open-17c271 and return parent_id to a STORED
+	// integer FK, because the derivation only means anything while ids are
+	// path-shaped. mache probes the column at runtime rather than keying on
+	// this version, so that reversal needs no change here (mache-bc6ca3).
+	"projection-v4": "the pinned shape: parent_id derived; spans on node_defs/node_refs; _ast.blob_ord",
 }
 
 // ProjectionVersion returns the projection shape an artifact declares and

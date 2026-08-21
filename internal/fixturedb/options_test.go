@@ -15,8 +15,11 @@ import (
 func TestWhere_ShapesTheNodesRow(t *testing.T) {
 	b := New(t, Leyline)
 	b.Construct("pkg", Where{Directory: true})
-	b.Construct("pkg/orphan.go/function_declaration_0",
-		Where{Parent: "pkg", Name: "Orphan", Source: "pkg/orphan.go"})
+	// id, name and parent must agree: ley-line writes nodes.name as the id's
+	// last segment, and projection-v4 DERIVES parent_id by stripping
+	// "/"+name from the id. A fixture that disagrees describes a node the
+	// producer cannot emit — see TestWhere_RefusesAnIncoherentNodeShape.
+	b.Construct("pkg/Orphan", Where{Parent: "pkg", Name: "Orphan", Source: "pkg/orphan.go"})
 	_, f := b.Build()
 
 	var parent, name string
@@ -24,7 +27,7 @@ func TestWhere_ShapesTheNodesRow(t *testing.T) {
 	var source string
 	require.NoError(t, f.DB().QueryRow(
 		`SELECT parent_id, name, kind, source_file FROM nodes WHERE id=?`,
-		"pkg/orphan.go/function_declaration_0").Scan(&parent, &name, &kind, &source))
+		"pkg/Orphan").Scan(&parent, &name, &kind, &source))
 	assert.Equal(t, "pkg", parent)
 	assert.Equal(t, "Orphan", name)
 	assert.Equal(t, 1, kind, "a construct is a leaf node")
@@ -33,6 +36,43 @@ func TestWhere_ShapesTheNodesRow(t *testing.T) {
 	require.NoError(t, f.DB().QueryRow(
 		`SELECT kind FROM nodes WHERE id='pkg'`).Scan(&kind))
 	assert.Equal(t, 0, kind, "Where{Directory:true} marks a directory node")
+}
+
+// TestWhere_RefusesAnIncoherentNodeShape pins the guard that projection-v4 made
+// load-bearing.
+//
+// Before v4, nodes.parent_id was STORED, so a fixture could set a name unrelated
+// to its id and the written parent still won. v4 derives parent_id by stripping
+// "/"+name from the id, so the same fixture now yields a parent nobody wrote —
+// and six smell rules join on parent_id. The failure is invisible: a wrong
+// parent reads as an empty directory, not as an error.
+//
+// Asserted on the predicates rather than through Construct, whose Fatalf would
+// terminate the test making the assertion.
+func TestWhere_RefusesAnIncoherentNodeShape(t *testing.T) {
+	t.Run("name must be the id's last segment", func(t *testing.T) {
+		// The real shape: ley-line writes `a.go/package_clause` with name
+		// `package_clause`, never with a symbol.
+		want, ok := nameMatchesID("a.go/package_clause", "package_clause")
+		assert.True(t, ok)
+		assert.Equal(t, "package_clause", want)
+
+		// The shape three tests used to state: a SYMBOL as the name of a
+		// grammar-path node. That belongs on Def(token, ...).
+		want, ok = nameMatchesID("src/lib.rs/impl_item_0/declaration_list/function_item_0", "new")
+		assert.False(t, ok, "a symbol is not the id's last segment")
+		assert.Equal(t, "function_item_0", want, "the guard must name the segment it expected")
+	})
+
+	t.Run("id must be parent + / + name", func(t *testing.T) {
+		want, ok := parentMatchesID("pkg/Orphan", "pkg", "Orphan")
+		assert.True(t, ok)
+		assert.Equal(t, "pkg/Orphan", want)
+
+		want, ok = parentMatchesID("pkg/orphan.go/function_declaration_0", "pkg", "Orphan")
+		assert.False(t, ok, "the id does not spell this parent")
+		assert.Equal(t, "pkg/Orphan", want)
+	})
 }
 
 // TestDetailContainer_PopulatesTheDefContainer covers node_defs.container_node_id,

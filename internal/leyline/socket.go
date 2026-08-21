@@ -970,7 +970,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.18.2"
+const leylineBinaryVersion = "v0.19.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

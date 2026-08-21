@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/sqlintro"
 	_ "modernc.org/sqlite"
 )
 
@@ -43,21 +44,7 @@ func beginNodeTx(db *sql.DB) (*nodeTx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &nodeTx{Tx: tx, derivedParent: nodesParentIsGenerated(tx)}, nil
-}
-
-// nodesParentIsGenerated mirrors graph.ColumnIsGenerated for a *sql.Tx.
-// pragma_table_xinfo.hidden: 2 = GENERATED VIRTUAL, 3 = GENERATED STORED.
-// table_info would be useless here — it omits generated columns entirely, so
-// it cannot distinguish "derived" from "absent".
-func nodesParentIsGenerated(tx *sql.Tx) bool {
-	var hidden int
-	if err := tx.QueryRow(
-		`SELECT hidden FROM pragma_table_xinfo('nodes') WHERE name = 'parent_id'`,
-	).Scan(&hidden); err != nil {
-		return false
-	}
-	return hidden == 2 || hidden == 3
+	return &nodeTx{Tx: tx, derivedParent: sqlintro.ColumnIsGenerated(tx, "nodes", "parent_id")}, nil
 }
 
 // insertNode inserts one node row. orReplace selects INSERT OR REPLACE.

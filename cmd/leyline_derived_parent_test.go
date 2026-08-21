@@ -8,33 +8,32 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/sqlintro"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// generatedParentIDColumn is ley-line-open's projection-v4 definition of
-// nodes.parent_id (mache-bc6ca3): the row's own id with the trailing "/"+name
-// removed, computed rather than stored.
+// storedParentIDColumn is what nodes.parent_id was before ley-line-open's
+// projection-v4 made it derived, and what it becomes again when
+// ley-line-open-17c271 replaces it with a stored integer FK. mache must handle
+// both, so the tests below build both.
 //
-// This is the ONLY DDL text this test authors. Everything else about the table
-// — every other column, its order, its types — is taken from the fixture's
-// actual `nodes` DDL, which internal/fixturedb derives from the pinned
-// producer. Retyping the whole CREATE TABLE would reintroduce the drift that
-// package exists to remove; substituting one column keeps the rest pinned.
-const generatedParentIDColumn = `parent_id TEXT GENERATED ALWAYS AS (
-	CASE WHEN length(id) > length(name)
-	     THEN substr(id, 1, length(id) - length(name) - 1)
-	     ELSE '' END
-) VIRTUAL`
+// This is the ONLY DDL text this file authors. Everything else about the table
+// — every other column, its order, its types — comes from the fixture's actual
+// `nodes` DDL, which internal/fixturedb derives from the pinned producer.
+const storedParentIDColumn = "parent_id TEXT"
 
-// buildLeylineFixture returns the path to a ley-line-shaped fixture carrying
-// two function constructs where ProcessOrder calls HandleRequest — enough for
+// buildLeylineFixture returns the path to a ley-line-shaped fixture carrying two
+// function constructs where ProcessOrder calls HandleRequest — enough for
 // materializeCallers and materializeCallees to have something to project.
+//
+// Since the v0.19.0 re-pin this fixture's parent_id is GENERATED, because that
+// is what the pinned producer writes.
 //
 // node_defs / node_refs come from fixturedb rather than hand-written DDL: their
 // column set decides which arm of ensureCanonicalViews runs, and node_id means
 // different things on the two producers, so a fixture that invents a shape is a
-// hidden test parameter (see internal/lint's LLO boundary rule, mache-7555da).
+// hidden test parameter (internal/lint's LLO boundary rule, mache-7555da).
 func buildLeylineFixture(t *testing.T) string {
 	t.Helper()
 	path, _ := fixturedb.New(t, fixturedb.Leyline).
@@ -48,17 +47,21 @@ func buildLeylineFixture(t *testing.T) string {
 	return path
 }
 
-// migrateNodesToDerivedParent rewrites the fixture's `nodes` table into the
-// projection-v4 shape, using the same steps ley-line-open's own migration takes:
-// rename aside, create from the new DDL, copy the shared columns, drop the old
-// table, rebuild the indexes.
+// migrateNodesToStoredParent rewrites the fixture's `nodes` table so parent_id
+// is an ordinary stored column, giving the pre-v4 shape to compare against.
 //
-// The new DDL is DERIVED from the table already present — read back out of
-// sqlite_master and rewritten at one column — so if the pinned producer's
-// `nodes` shape ever changes, this follows it instead of pinning a stale copy.
-// A missing substitution target fails loudly rather than silently producing a
-// table with a stored parent_id, which would make the parity assertion vacuous.
-func migrateNodesToDerivedParent(t *testing.T, dbPath string) {
+// The direction is deliberately this way round since the v0.19.0 re-pin: the
+// fixture's own DDL is now the DERIVED one, so the stored arm is the synthetic
+// one. The new DDL is DERIVED from the table already present — read out of
+// sqlite_master and rewritten at one column — so it follows the pinned producer
+// instead of pinning a stale copy. The stored column is populated FROM the
+// derived values, which is what makes the parity assertion meaningful: both
+// arms carry the parent the producer would have computed.
+//
+// A missing substitution target fails loudly rather than quietly leaving the
+// table generated, which would make the parity assertion vacuous by comparing
+// two identical shapes.
+func migrateNodesToStoredParent(t *testing.T, dbPath string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
@@ -68,11 +71,17 @@ func migrateNodesToDerivedParent(t *testing.T, dbPath string) {
 	require.NoError(t, db.QueryRow(
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name='nodes'`).Scan(&create))
 
-	const storedCol = "parent_id TEXT,"
-	require.Contains(t, create, storedCol,
-		"the pinned nodes DDL no longer declares a plain `parent_id TEXT` column, so this "+
-			"migration cannot find what to replace — re-derive it rather than skipping")
-	generated := strings.Replace(create, storedCol, generatedParentIDColumn+",", 1)
+	// Located by span rather than by pattern: mache treats regex as a smell
+	// (there is an import ratchet), and the two anchors here are exact literals
+	// the producer emits.
+	const genPrefix, genSuffix = "parent_id TEXT GENERATED ALWAYS AS (", ") VIRTUAL"
+	i := strings.Index(create, genPrefix)
+	require.GreaterOrEqual(t, i, 0,
+		"the pinned nodes DDL no longer declares a GENERATED parent_id, so this migration "+
+			"cannot find what to replace — re-derive it rather than skipping:\n%s", create)
+	j := strings.Index(create[i:], genSuffix)
+	require.GreaterOrEqual(t, j, 0, "unterminated GENERATED column in:\n%s", create)
+	stored := create[:i] + storedParentIDColumn + create[i+j+len(genSuffix):]
 
 	var indexes []string
 	rows, err := db.Query(
@@ -86,39 +95,35 @@ func migrateNodesToDerivedParent(t *testing.T, dbPath string) {
 	require.NoError(t, rows.Err())
 	_ = rows.Close()
 
-	// The columns to carry over: everything the new table declares except the
-	// derived one, which cannot be named in an INSERT.
-	cols, err := db.Query(`SELECT name FROM pragma_table_xinfo('nodes') WHERE hidden = 0`)
+	// Carry every column over, parent_id INCLUDED — reading the derived value
+	// out and storing it is precisely the equivalence under test.
+	cols, err := db.Query(`SELECT name FROM pragma_table_xinfo('nodes') WHERE hidden IN (0, 2, 3)`)
 	require.NoError(t, err)
 	var names []string
 	for cols.Next() {
 		var n string
 		require.NoError(t, cols.Scan(&n))
-		if n != "parent_id" {
-			names = append(names, n)
-		}
+		names = append(names, n)
 	}
 	require.NoError(t, cols.Err())
 	_ = cols.Close()
 	list := strings.Join(names, ", ")
 
 	stmts := append([]string{
-		`ALTER TABLE nodes RENAME TO nodes_pre_v4`,
-		generated,
-		fmt.Sprintf(`INSERT INTO nodes (%s) SELECT %s FROM nodes_pre_v4`, list, list),
-		`DROP TABLE nodes_pre_v4`,
+		`ALTER TABLE nodes RENAME TO nodes_v4`,
+		stored,
+		fmt.Sprintf(`INSERT INTO nodes (%s) SELECT %s FROM nodes_v4`, list, list),
+		`DROP TABLE nodes_v4`,
 	}, indexes...)
 	for _, s := range stmts {
 		_, err := db.Exec(s)
 		require.NoError(t, err, "migration step failed:\n%s", s)
 	}
 
-	// The migration is only a valid setup for the parity test if it actually
-	// produced a generated column; otherwise both arms would test one shape.
 	var hidden int
 	require.NoError(t, db.QueryRow(
 		`SELECT hidden FROM pragma_table_xinfo('nodes') WHERE name='parent_id'`).Scan(&hidden))
-	require.Equal(t, 2, hidden, "parent_id must be GENERATED VIRTUAL after migration")
+	require.Equal(t, 0, hidden, "parent_id must be an ordinary stored column after migration")
 }
 
 // dumpTree reads every node as (id, parent_id, name, kind), the tuple the NFS
@@ -164,9 +169,9 @@ func TestMaterializeVirtuals_ParityAcrossParentIDShapes(t *testing.T) {
 		Nodes:   []api.Node{{Name: "functions", Selector: "(function_declaration)"}},
 	}
 
+	derived := buildLeylineFixture(t) // the pinned producer's own shape
 	stored := buildLeylineFixture(t)
-	derived := buildLeylineFixture(t)
-	migrateNodesToDerivedParent(t, derived)
+	migrateNodesToStoredParent(t, stored)
 
 	require.NoError(t, materializeVirtuals(stored, schema, true),
 		"stored parent_id: the shape that already worked")
@@ -199,13 +204,13 @@ func TestNodesParentIsGenerated_DistinguishesTheTwoShapes(t *testing.T) {
 		migrate bool
 		want    bool
 	}{
-		{"stored column", false, false},
-		{"generated column", true, true},
+		{"generated column (the pinned shape)", false, true},
+		{"stored column", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := buildLeylineFixture(t)
 			if tc.migrate {
-				migrateNodesToDerivedParent(t, path)
+				migrateNodesToStoredParent(t, path)
 			}
 			db, err := sql.Open("sqlite", path)
 			require.NoError(t, err)
@@ -215,7 +220,7 @@ func TestNodesParentIsGenerated_DistinguishesTheTwoShapes(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { _ = tx.Rollback() }()
 
-			assert.Equal(t, tc.want, nodesParentIsGenerated(tx))
+			assert.Equal(t, tc.want, sqlintro.ColumnIsGenerated(tx, "nodes", "parent_id"))
 
 			// The instrument this replaced: table_info sees the stored column
 			// and misses the generated one, so it cannot tell them apart.

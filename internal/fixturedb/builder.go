@@ -76,9 +76,11 @@ func (b *Builder) Construct(id ConstructID, where ...Where) *Builder {
 		c.source = w.Source
 	}
 	if w.Name != "" {
+		requireNameMatchesID(b.t, id, w.Name)
 		c.name = w.Name
 	}
 	if w.Parent != "" {
+		requireParentMatchesID(b.t, id, w.Parent, c.name)
 		c.parent = w.Parent
 	}
 	if w.Directory {
@@ -224,4 +226,57 @@ func inferSource(id ConstructID) SourceID {
 func subtreeHash(label string) []byte {
 	sum := sha256.Sum256([]byte(label))
 	return sum[:]
+}
+
+// requireNameMatchesID refuses a name that is not the id's last path segment.
+//
+// ley-line ALWAYS writes nodes.name as the final segment of nodes.id — verified
+// against a v0.19.0 arena, where `a.go/package_clause` has name
+// `package_clause`, not a symbol. A fixture that sets a symbol here is stating a
+// shape the producer never emits, which is the class of hidden test parameter
+// this package exists to remove.
+//
+// It became load-bearing in projection-v4: parent_id is now DERIVED by stripping
+// the trailing "/"+name from the id, so an inconsistent name silently yields a
+// garbage parent — and six smell rules join on parent_id. Before v4 the stored
+// column hid it. A symbol belongs on Def(token, ...), which every such call site
+// already makes.
+func requireNameMatchesID(t *testing.T, id ConstructID, name string) {
+	t.Helper()
+	if want, ok := nameMatchesID(id, name); !ok {
+		t.Fatalf("fixturedb: Where{Name: %q} on construct %q — ley-line always writes "+
+			"nodes.name as the id's last segment (%q here), and projection-v4 derives "+
+			"parent_id by stripping \"/\"+name from the id, so this would give the row a "+
+			"parent nobody wrote. Drop Where{Name} (a symbol belongs on Def), or use an "+
+			"id whose last segment IS the name.", name, id, want)
+	}
+}
+
+// requireParentMatchesID refuses a parent that the id does not spell, for the
+// same reason: under a derived parent_id the stored value is not consulted, so a
+// fixture whose Parent disagrees with its id is describing a node that cannot
+// exist.
+func requireParentMatchesID(t *testing.T, id, parent ConstructID, name string) {
+	t.Helper()
+	if want := string(parent) + "/" + name; string(id) != want {
+		t.Fatalf("fixturedb: Where{Parent: %q} on construct %q with name %q — the id must "+
+			"be parent+\"/\"+name (%q), because projection-v4 DERIVES parent_id from the id "+
+			"and would ignore this value.", parent, id, name, want)
+	}
+}
+
+// nameMatchesID reports whether name is the id's last path segment, returning
+// the segment it should have been. Separated from the reporting so the rule can
+// be asserted directly, without a *testing.T whose Fatalf would terminate the
+// test making the assertion.
+func nameMatchesID(id ConstructID, name string) (string, bool) {
+	want := path.Base(string(id))
+	return want, name == want
+}
+
+// parentMatchesID reports whether the id is exactly parent+"/"+name, returning
+// the id it should have been.
+func parentMatchesID(id, parent ConstructID, name string) (string, bool) {
+	want := string(parent) + "/" + name
+	return want, string(id) == want
 }
