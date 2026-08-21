@@ -108,3 +108,15 @@ type RefResolver interface {
 	// ResolveRef reports what a reference points at, classified.
 	ResolveRef(nodeID string) (*RefTarget, error)
 }
+
+// DefsNodeLookuper is [DefsLookuper]'s node-returning twin, for consumers that
+// want the definition itself rather than its id.
+//
+// Both exist deliberately. Ids are the right answer when the caller only needs
+// identity — resolving nodes it will discard is waste — but returning ids from
+// one accessor while [Graph.GetCallers] and [Graph.GetCallees] return nodes
+// left every consumer writing the same conversion. That asymmetry is what drove
+// downstream wrappers around this surface.
+type DefsNodeLookuper interface {
+	LookupDefNodes(token string) ([]*Node, error)
+}

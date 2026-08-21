@@ -24,6 +24,16 @@ func resolverFor(t *testing.T, build func(*fixturedb.Builder)) *SQLiteGraph {
 	return g
 }
 
+// graphWithOneDef is the minimal valid projection: one definition, for tests
+// that need a working graph but nothing from its contents. Naming it says so —
+// two identical inline fixtures read as though the specific def mattered.
+func graphWithOneDef(t *testing.T) *SQLiteGraph {
+	t.Helper()
+	return resolverFor(t, func(b *fixturedb.Builder) {
+		b.Def("Run", "alpha.go/function_declaration_0", "function")
+	})
+}
+
 // TestResolveRef_PicksTheBareTokenRowOfADualEmit is the regression for the bug
 // that only real data exposed: a node_id is NOT a unique key into node_refs.
 // A qualified call emits TWO rows at the same node — `pkg.Fn` and `Fn` — and
@@ -161,14 +171,56 @@ func TestRefRangeOf_ConvertsToOneBased(t *testing.T) {
 	assert.Equal(t, "caller.go", got.SourceID)
 }
 
-// TestRefRangeOf_AbsentNodeIsNilNotZero: a zero-valued range reads as "line 0
-// of an empty file" to every consumer, which is worse than admitting we do not
-// know.
-func TestRefRangeOf_AbsentNodeIsNilNotZero(t *testing.T) {
+// TestLookupDefNodes_ReturnsNodesNotIDs pins the symmetry: the node-returning
+// accessor must agree with LookupDef on WHICH definitions exist, and differ
+// only in what it hands back. If they can disagree, a consumer that switches
+// between them silently changes its answer.
+func TestLookupDefNodes_ReturnsNodesNotIDs(t *testing.T) {
 	g := resolverFor(t, func(b *fixturedb.Builder) {
 		b.Def("Run", "alpha.go/function_declaration_0", "function")
+		b.Def("Run", "beta.go/function_declaration_0", "function")
+		b.Def("Solo", "gamma.go/function_declaration_0", "function")
 	})
-	got, err := g.RefRangeOf("nope/does_not_exist")
+
+	ids := g.LookupDef("Run")
+	nodes, err := g.LookupDefNodes("Run")
 	require.NoError(t, err)
-	assert.Nil(t, got)
+
+	require.Len(t, nodes, len(ids),
+		"the two accessors must agree on which definitions exist; only the return type may differ")
+	got := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		require.NotNil(t, n)
+		got = append(got, n.ID)
+	}
+	assert.ElementsMatch(t, ids, got)
+
+	solo, err := g.LookupDefNodes("Solo")
+	require.NoError(t, err)
+	assert.Len(t, solo, 1)
+}
+
+// TestAbsentInputsAnswerEmptyWithoutError groups the "asked about something
+// that is not there" cases, which share one contract: absence is a legitimate
+// answer, not a failure. Erroring would make callers wrap every lookup in
+// error handling for the common case.
+//
+// Grouped rather than written as two functions because they differed only in
+// which accessor they called — the smell ratchet flagged the pair as
+// structurally identical, and it was right.
+func TestAbsentInputsAnswerEmptyWithoutError(t *testing.T) {
+	g := graphWithOneDef(t)
+
+	t.Run("RefRangeOf on an unknown node is nil, not a zero range", func(t *testing.T) {
+		got, err := g.RefRangeOf("nope/does_not_exist")
+		require.NoError(t, err)
+		assert.Nil(t, got,
+			`a zero-valued range reads as "line 0 of an empty file" — worse than admitting we do not know`)
+	})
+
+	t.Run("LookupDefNodes on an undefined token is empty", func(t *testing.T) {
+		nodes, err := g.LookupDefNodes("NeverDefined")
+		require.NoError(t, err)
+		assert.Empty(t, nodes)
+	})
 }
