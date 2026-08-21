@@ -11,6 +11,105 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// nodeTx is a write transaction that also knows the shape of the `nodes`
+// table it is writing to.
+//
+// materializeVirtuals is handed whatever .db the caller points at, which may be
+// a ley-line-open arena rather than a mache-built one. ley-line-open's
+// projection-v4 makes nodes.parent_id a GENERATED column (mache-bc6ca3): SQLite
+// rejects an INSERT that merely NAMES a generated column, and rejects it at
+// PREPARE time, so the column list has to differ between the two shapes. The
+// value does not — a generated parent_id is `id` with the trailing "/"+`name`
+// removed, which is what every caller here already passes.
+//
+// The shape rides ON the transaction rather than beside it because the two must
+// not come apart: a shape probed from one transaction and used to write through
+// another would silently pick the wrong column list.
+//
+// *sql.Tx is EMBEDDED, not wrapped: Query/QueryRow/Commit/Rollback are promoted
+// rather than restated. Hand-written one-line delegations are duplicate bodies
+// that the duplicate_code gate correctly objects to, and they would have to be
+// kept in step with a type this file does not own.
+type nodeTx struct {
+	*sql.Tx
+	// derivedParent is true when nodes.parent_id is generated, so inserts
+	// must omit it and let SQLite compute it.
+	derivedParent bool
+}
+
+// beginNodeTx opens the transaction and probes the nodes shape together.
+func beginNodeTx(db *sql.DB) (*nodeTx, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	return &nodeTx{Tx: tx, derivedParent: nodesParentIsGenerated(tx)}, nil
+}
+
+// nodesParentIsGenerated mirrors graph.ColumnIsGenerated for a *sql.Tx.
+// pragma_table_xinfo.hidden: 2 = GENERATED VIRTUAL, 3 = GENERATED STORED.
+// table_info would be useless here — it omits generated columns entirely, so
+// it cannot distinguish "derived" from "absent".
+func nodesParentIsGenerated(tx *sql.Tx) bool {
+	var hidden int
+	if err := tx.QueryRow(
+		`SELECT hidden FROM pragma_table_xinfo('nodes') WHERE name = 'parent_id'`,
+	).Scan(&hidden); err != nil {
+		return false
+	}
+	return hidden == 2 || hidden == 3
+}
+
+// insertNode inserts one node row. orReplace selects INSERT OR REPLACE.
+//
+// It refuses a row whose name is not the last segment of its own id. Under a
+// stored parent_id such a row is merely odd; under a derived one it silently
+// takes the WRONG parent (usually the root), and a directory listing quietly
+// goes empty rather than erroring. ley-line-open hit exactly that on a fixture
+// with id='root/tricky', name='line1\nline2'. Checked on both shapes so the
+// two paths cannot disagree about where a node lives.
+func (n *nodeTx) insertNode(orReplace bool, id, parentID, name string,
+	kind, size int, mtime int64, record any,
+) error {
+	if err := checkParentDerivable(id, parentID, name); err != nil {
+		return err
+	}
+	verb := "INSERT INTO"
+	if orReplace {
+		verb = "INSERT OR REPLACE INTO"
+	}
+	if n.derivedParent {
+		_, err := n.Exec(verb+
+			` nodes (id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?)`,
+			id, name, kind, size, mtime, record)
+		return err
+	}
+	_, err := n.Exec(verb+
+		` nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, parentID, name, kind, size, mtime, record)
+	return err
+}
+
+// checkParentDerivable asserts the invariant ley-line-open's generated
+// parent_id depends on: a node's id is either exactly its name (a root, parent
+// "") or its parent's id followed by "/"+name. Returns an error naming the row
+// rather than letting the mismatch through, because the failure it prevents is
+// invisible — a wrong parent reads as an empty directory, not as an error.
+func checkParentDerivable(id, parentID, name string) error {
+	if parentID == "" {
+		if id != name {
+			return fmt.Errorf("node %q: root node name %q must equal its id "+
+				"(parent_id is derived from id and name)", id, name)
+		}
+		return nil
+	}
+	if want := parentID + "/" + name; id != want {
+		return fmt.Errorf("node %q: id must be parent %q + \"/\" + name %q = %q "+
+			"(parent_id is derived from id and name)", id, parentID, name, want)
+	}
+	return nil
+}
+
 // materializeVirtuals adds virtual file nodes to the .db so that leyline's
 // NFS mount can serve them without mache-specific runtime logic.
 //
@@ -28,11 +127,11 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 	}
 	defer func() { _ = db.Close() }()
 
-	tx, err := db.Begin()
+	nt, err := beginNodeTx(db)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = nt.Rollback() }()
 
 	now := time.Now().UnixNano()
 
@@ -41,8 +140,7 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 	if err != nil {
 		return fmt.Errorf("marshal schema: %w", err)
 	}
-	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	if err := nt.insertNode(true,
 		"_schema.json", "", "_schema.json", 0, len(schemaJSON), now, string(schemaJSON),
 	); err != nil {
 		return fmt.Errorf("insert _schema.json: %w", err)
@@ -51,8 +149,7 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 	// 2. PROMPT.txt if agent mode
 	if agentMode {
 		prompt := "# Mache Agent Mode\n\nThis mount was generated by mache for use with AI agents.\nRead source files under the function directories.\n"
-		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		if err := nt.insertNode(true,
 			"PROMPT.txt", "", "PROMPT.txt", 0, len(prompt), now, prompt,
 		); err != nil {
 			return fmt.Errorf("insert PROMPT.txt: %w", err)
@@ -60,26 +157,26 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 	}
 
 	// 3. Materialize callers
-	if err := materializeCallers(tx, now); err != nil {
+	if err := materializeCallers(nt, now); err != nil {
 		return fmt.Errorf("materialize callers: %w", err)
 	}
 
 	// 4. Materialize callees
-	if err := materializeCallees(tx, now); err != nil {
+	if err := materializeCallees(nt, now); err != nil {
 		return fmt.Errorf("materialize callees: %w", err)
 	}
 
 	// 5. Materialize content-source files declared in the schema
-	if err := materializeContentSources(tx, schema, now); err != nil {
+	if err := materializeContentSources(nt, schema, now); err != nil {
 		return fmt.Errorf("materialize content sources: %w", err)
 	}
 
 	// 6. Strip full content from _project_files/ (metadata-only in --out mode)
-	if err := stripProjectFileContent(tx); err != nil {
+	if err := stripProjectFileContent(nt.Tx); err != nil {
 		return fmt.Errorf("strip project file content: %w", err)
 	}
 
-	return tx.Commit()
+	return nt.Commit()
 }
 
 // materializeCallers reads node_refs and creates callers/ directory nodes
@@ -89,10 +186,10 @@ func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 // this creates:
 //   - functions/HandleRequest/callers       (dir)
 //   - functions/HandleRequest/callers/ProcessOrder (file, content = node_id)
-func materializeCallers(tx *sql.Tx, now int64) error {
+func materializeCallers(nt *nodeTx, now int64) error {
 	// Check if node_refs table exists
 	var count int
-	err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_refs'`).Scan(&count)
+	err := nt.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_refs'`).Scan(&count)
 	if err != nil || count == 0 {
 		return nil // no refs table, nothing to do
 	}
@@ -106,7 +203,7 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 	// sentinel's path component) and store the sentinel string
 	// itself as caller content. find_callers / search already
 	// filter these; the materializer does so for the same reason.
-	rows, err := tx.Query(`SELECT token, node_id FROM node_refs WHERE node_id NOT LIKE '_file_level:%'`)
+	rows, err := nt.Query(`SELECT token, node_id FROM node_refs WHERE node_id NOT LIKE '_file_level:%'`)
 	if err != nil {
 		return fmt.Errorf("query node_refs: %w", err)
 	}
@@ -130,7 +227,7 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 	for token, callerNodeIDs := range callerMap {
 		// Look up the directory that defines this token
 		var dirID string
-		err := tx.QueryRow(`SELECT node_id FROM node_defs WHERE token = ?`, token).Scan(&dirID)
+		err := nt.QueryRow(`SELECT node_id FROM node_defs WHERE token = ?`, token).Scan(&dirID)
 		if err != nil {
 			continue // no definition found, skip
 		}
@@ -140,10 +237,9 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 
 		// Check if callers/ dir already exists
 		var exists int
-		_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, callersID).Scan(&exists)
+		_ = nt.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, callersID).Scan(&exists)
 		if exists == 0 {
-			if _, err := tx.Exec(
-				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			if err := nt.insertNode(false,
 				callersID, dirID, "callers", 1, 0, now, nil,
 			); err != nil {
 				return fmt.Errorf("insert callers dir %s: %w", callersID, err)
@@ -162,14 +258,13 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 			entryID := callersID + "/" + callerName
 			// Check if entry already exists
 			var entryExists int
-			_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, entryID).Scan(&entryExists)
+			_ = nt.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, entryID).Scan(&entryExists)
 			if entryExists > 0 {
 				continue
 			}
 
 			content := callerNodeID // content points to the calling node
-			if _, err := tx.Exec(
-				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			if err := nt.insertNode(false,
 				entryID, callersID, callerName, 0, len(content), now, content,
 			); err != nil {
 				return fmt.Errorf("insert caller entry %s: %w", entryID, err)
@@ -190,14 +285,14 @@ func materializeCallers(tx *sql.Tx, now int64) error {
 // this creates:
 //   - pkg/functions/FuncA/callees       (dir)
 //   - pkg/functions/FuncA/callees/FuncB (file, content = dir_id of the callee)
-func materializeCallees(tx *sql.Tx, now int64) error {
+func materializeCallees(nt *nodeTx, now int64) error {
 	// Check if required tables exist
 	var count int
-	err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_refs'`).Scan(&count)
+	err := nt.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_refs'`).Scan(&count)
 	if err != nil || count == 0 {
 		return nil
 	}
-	err = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_defs'`).Scan(&count)
+	err = nt.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_defs'`).Scan(&count)
 	if err != nil || count == 0 {
 		return nil
 	}
@@ -205,7 +300,7 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	// Pre-load all defs: token → []dir_id (multiple constructs may define
 	// the same token, e.g. Init in different packages).
 	defsMap := make(map[string][]string)
-	defRows, err := tx.Query(`SELECT token, node_id FROM node_defs`)
+	defRows, err := nt.Query(`SELECT token, node_id FROM node_defs`)
 	if err != nil {
 		return fmt.Errorf("query node_defs: %w", err)
 	}
@@ -228,7 +323,7 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	// the subsequent "exists in nodes" check filters it accidentally,
 	// but we'd rather not depend on that — explicit is better, and
 	// the SQL filter is cheaper than the per-row JOIN check.
-	rows, err := tx.Query(`SELECT token, node_id FROM node_refs WHERE node_id NOT LIKE '_file_level:%'`)
+	rows, err := nt.Query(`SELECT token, node_id FROM node_refs WHERE node_id NOT LIKE '_file_level:%'`)
 	if err != nil {
 		return fmt.Errorf("query node_refs: %w", err)
 	}
@@ -271,7 +366,7 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 	for callerDir, callees := range callerCallees {
 		// Verify caller dir exists in nodes
 		var exists int
-		_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, callerDir).Scan(&exists)
+		_ = nt.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, callerDir).Scan(&exists)
 		if exists == 0 {
 			continue
 		}
@@ -280,10 +375,9 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 
 		// Create callees/ directory
 		var dirExists int
-		_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, calleesID).Scan(&dirExists)
+		_ = nt.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, calleesID).Scan(&dirExists)
 		if dirExists == 0 {
-			if _, err := tx.Exec(
-				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			if err := nt.insertNode(false,
 				calleesID, callerDir, "callees", 1, 0, now, nil,
 			); err != nil {
 				return fmt.Errorf("insert callees dir %s: %w", calleesID, err)
@@ -296,14 +390,13 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 
 			entryID := calleesID + "/" + calleeName
 			var entryExists int
-			_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, entryID).Scan(&entryExists)
+			_ = nt.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, entryID).Scan(&entryExists)
 			if entryExists > 0 {
 				continue
 			}
 
 			content := callee.dirID
-			if _, err := tx.Exec(
-				`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			if err := nt.insertNode(false,
 				entryID, calleesID, calleeName, 0, len(content), now, content,
 			); err != nil {
 				return fmt.Errorf("insert callee entry %s: %w", entryID, err)
@@ -326,7 +419,7 @@ func materializeCallees(tx *sql.Tx, now int64) error {
 //
 // The matching logic: LSP node_ids use "symbols/{name}" format. We extract the
 // leaf name and match it against directory names in the nodes table.
-func materializeContentSources(tx *sql.Tx, schema *api.Topology, now int64) error {
+func materializeContentSources(nt *nodeTx, schema *api.Topology, now int64) error {
 	// Collect all unique content_source values from the schema.
 	sources := collectContentSources(schema)
 	if len(sources) == 0 {
@@ -334,14 +427,14 @@ func materializeContentSources(tx *sql.Tx, schema *api.Topology, now int64) erro
 	}
 
 	// Build name→dirID index for matching LSP symbols to construct directories.
-	nameToDir, err := buildNameToDirIndex(tx)
+	nameToDir, err := buildNameToDirIndex(nt.Tx)
 	if err != nil {
 		return err
 	}
 
 	// For each content source, load data and create file nodes.
 	for source, fileName := range sources {
-		data, err := loadContentSource(tx, source)
+		data, err := loadContentSource(nt.Tx, source)
 		if err != nil {
 			return fmt.Errorf("load content source %q: %w", source, err)
 		}
@@ -357,12 +450,11 @@ func materializeContentSources(tx *sql.Tx, schema *api.Topology, now int64) erro
 			for _, dirID := range dirs {
 				fileID := dirID + "/" + fileName
 				var exists int
-				_ = tx.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, fileID).Scan(&exists)
+				_ = nt.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id = ?`, fileID).Scan(&exists)
 				if exists > 0 {
 					continue
 				}
-				if _, err := tx.Exec(
-					`INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				if err := nt.insertNode(false,
 					fileID, dirID, fileName, 0, len(content), now, content,
 				); err != nil {
 					return fmt.Errorf("insert %s: %w", fileID, err)

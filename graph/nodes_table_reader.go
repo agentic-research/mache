@@ -54,13 +54,44 @@ type NodesTableReader struct {
 // to stay compatible with nodes tables written before a column was added
 // (e.g. `context`, mache-b8fe72) or produced by leyline, and writers use it
 // to decide whether an ALTER is needed.
+//
+// Deliberately pragma_table_xinfo, NOT pragma_table_info: table_info omits
+// GENERATED columns entirely, so it answers "missing" for a column that is
+// present, readable, indexed, and returned by SELECT *. ley-line-open already
+// ships one (`source_blobs.byte_len` STORED) and projection-v4 makes
+// `nodes.parent_id` another (mache-bc6ca3). Under table_info a reader would
+// silently downgrade to a compatibility path for a column it can read, and a
+// writer would emit an ALTER that fails with "duplicate column name". xinfo
+// reports the same rows as info plus generated and hidden ones, so no existing
+// probe changes its answer.
 func ColumnExists(db *sql.DB, table, col string) bool {
-	rows, err := db.Query("SELECT 1 FROM pragma_table_info(?) WHERE name = ?", table, col)
+	rows, err := db.Query("SELECT 1 FROM pragma_table_xinfo(?) WHERE name = ?", table, col)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = rows.Close() }()
 	return rows.Next()
+}
+
+// ColumnIsGenerated reports whether table.col is a GENERATED column, which is
+// readable but rejected at prepare time by any INSERT or UPDATE that names it.
+// Writers that target a table they did not create must ask before building a
+// column list; see materializeVirtuals, which writes into whatever `nodes`
+// table the caller points it at.
+//
+// pragma_table_xinfo.hidden encodes the kind: 0 ordinary, 1 hidden (virtual-
+// table), 2 GENERATED ... VIRTUAL, 3 GENERATED ... STORED. Only 2 and 3 are
+// unwritable — a virtual table's hidden column still accepts writes.
+// A missing table or column reads as not-generated, matching ColumnExists's
+// convention of collapsing absence into the negative answer.
+func ColumnIsGenerated(db *sql.DB, table, col string) bool {
+	var hidden int
+	err := db.QueryRow(
+		"SELECT hidden FROM pragma_table_xinfo(?) WHERE name = ?", table, col).Scan(&hidden)
+	if err != nil {
+		return false
+	}
+	return hidden == 2 || hidden == 3
 }
 
 // DB returns the underlying database connection.

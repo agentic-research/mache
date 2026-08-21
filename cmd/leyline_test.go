@@ -70,7 +70,7 @@ func TestMaterializeCallers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeCallers(tx, 9999); err != nil {
+	if err := materializeCallers(&nodeTx{Tx: tx, derivedParent: nodesParentIsGenerated(tx)}, 9999); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -124,7 +124,7 @@ func TestMaterializeCallers_FiltersFileLevelSentinel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := materializeCallers(tx, 9999); err != nil {
+	if err := materializeCallers(&nodeTx{Tx: tx, derivedParent: nodesParentIsGenerated(tx)}, 9999); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -191,7 +191,7 @@ func TestMaterializeCallersNoRefs(t *testing.T) {
 	}
 
 	// Should not error when node_refs doesn't exist
-	if err := materializeCallers(tx, 9999); err != nil {
+	if err := materializeCallers(&nodeTx{Tx: tx, derivedParent: nodesParentIsGenerated(tx)}, 9999); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
