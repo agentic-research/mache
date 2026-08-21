@@ -152,6 +152,10 @@ func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRendere
 			_ = db.Close()
 			return nil, fmt.Errorf("open %s: %w", dbPath, err)
 		}
+		// One indexed single-row lookup: constant cost, independent of
+		// projection size, so it does not disturb Open's laziness guarantee
+		// (see TestOpen_CostDoesNotScaleWithProjectionSize).
+		warnUnknownProjection(db, dbPath)
 		levels := compileLevels(schema)
 		ntr := NewNodesTableReader(db, tableName, render, levels, 0o444, 0o555, 2048)
 		return &SQLiteGraph{

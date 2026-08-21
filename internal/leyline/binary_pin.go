@@ -59,7 +59,7 @@ func leylineVersionMatchesPin(path string) bool {
 	if err != nil {
 		return false
 	}
-	got := extractSemver(string(out))
+	got := ExtractSemver(string(out))
 	if got == "" {
 		return false
 	}
@@ -68,9 +68,13 @@ func leylineVersionMatchesPin(path string) bool {
 	return want == have
 }
 
-// extractSemver pulls the first "MAJOR.MINOR[.PATCH]" token from a version line
+// ExtractSemver pulls the first "MAJOR.MINOR[.PATCH]" token from a version line
 // such as "leyline 0.7.0 (open)". Returns "" when none is present.
-func extractSemver(s string) string {
+//
+// Exported because lltest must parse the same line when resolving an override
+// binary, and a second implementation of "read leyline's version" is exactly
+// the drift this repo keeps paying for elsewhere.
+func ExtractSemver(s string) string {
 	for tok := range strings.FieldsSeq(s) {
 		t := strings.TrimPrefix(tok, "v")
 		i := strings.IndexByte(t, '.')

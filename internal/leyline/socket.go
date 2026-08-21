@@ -1017,7 +1017,7 @@ func ResolveBinary(allowDownload bool) (string, error) {
 	// Explicit developer override first (MACHE_LEYLINE_BINARY). Checked before
 	// every pinned tier so it is a decision, not a fallback: if it is set and
 	// broken we fail rather than quietly resolving something else.
-	if p, set, err := overrideBinary(); set {
+	if p, set, err := OverrideBinary(); set {
 		if err != nil {
 			return "", err
 		}
