@@ -490,7 +490,17 @@ func TestTableHasColumn(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	_, err = db.Exec(`CREATE TABLE present (a TEXT, b INTEGER)`)
+	// `derived` is a GENERATED column: readable, indexable, returned by
+	// SELECT *, and INVISIBLE to PRAGMA table_info. ley-line-open ships them
+	// (source_blobs.byte_len STORED, and nodes.parent_id VIRTUAL from
+	// projection-v4, mache-bc6ca3), and tableHasColumn decides whether the
+	// binding-fidelity clause is added to a view body — so probing with
+	// table_info would drop a usable column's rows on the floor.
+	_, err = db.Exec(`CREATE TABLE present (
+		a TEXT,
+		b INTEGER,
+		derived INTEGER GENERATED ALWAYS AS (length(a)) VIRTUAL
+	)`)
 	require.NoError(t, err)
 
 	qg := &sqlDBQuerier{db: db}
@@ -506,7 +516,14 @@ func TestTableHasColumn(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got)
 
-	// Missing table — also false (PRAGMA table_info returns 0 rows).
+	// A GENERATED column is present and usable in a view body, so the probe
+	// must report it. PRAGMA table_info omits generated columns entirely and
+	// would answer false here; PRAGMA table_xinfo is why this passes.
+	got, err = tableHasColumn(qg, "present", "derived")
+	require.NoError(t, err)
+	assert.True(t, got, "a generated column is readable, so the probe must see it")
+
+	// Missing table — also false (PRAGMA table_xinfo returns 0 rows).
 	got, err = tableHasColumn(qg, "absent", "a")
 	require.NoError(t, err)
 	assert.False(t, got)

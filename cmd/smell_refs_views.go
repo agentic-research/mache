@@ -308,9 +308,13 @@ func LoadCapnpBindings(qg graph.RefsQuerier, dbPath string) error {
 }
 
 // tableHasColumn returns true iff the given table exists AND contains
-// a column of the given name. Implemented via PRAGMA table_info, which
+// a column of the given name. Implemented via PRAGMA table_xinfo, which
 // returns zero rows for missing tables (rather than erroring), so this
 // helper collapses "table missing" and "column missing" into false.
+//
+// xinfo rather than info because table_info omits GENERATED columns, which
+// are readable and therefore usable in a view body — see graph.ColumnExists
+// for the full reasoning. xinfo carries one extra trailing column (hidden).
 //
 // Used by ensureCanonicalViews to decide whether to add the binding-
 // fidelity UNION ALL clause to the v_defs / v_refs body. A pre-Step-1
@@ -318,14 +322,14 @@ func LoadCapnpBindings(qg graph.RefsQuerier, dbPath string) error {
 // "no binding-fidelity rows available" and the views fall back to
 // mention-only — same shape as today.
 func tableHasColumn(qg graph.RefsQuerier, table, col string) (bool, error) {
-	// Table name is interpolated directly; PRAGMA table_info doesn't
+	// Table name is interpolated directly; PRAGMA table_xinfo does not
 	// accept positional parameters. table comes from a hardcoded
 	// constant in this file (not user input), so injection risk is
 	// nil — but assert anyway via a defensive check.
 	if !isSimpleIdent(table) {
 		return false, fmt.Errorf("invalid table name: %q", table)
 	}
-	rows, err := qg.QueryRefs(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	rows, err := qg.QueryRefs(fmt.Sprintf("PRAGMA table_xinfo(%s)", table))
 	if err != nil {
 		// SQLite returns rows (possibly zero) for valid PRAGMA calls
 		// whether or not the table exists; an error here is genuine.
@@ -341,8 +345,9 @@ func tableHasColumn(qg graph.RefsQuerier, table, col string) (bool, error) {
 			notnull   int
 			dfltValue sql.NullString
 			pk        int
+			hidden    int
 		)
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk, &hidden); err != nil {
 			return false, err
 		}
 		if name == col {
@@ -352,7 +357,7 @@ func tableHasColumn(qg graph.RefsQuerier, table, col string) (bool, error) {
 	return false, rows.Err()
 }
 
-// isSimpleIdent guards against SQL injection in PRAGMA table_info
+// isSimpleIdent guards against SQL injection in PRAGMA table_xinfo
 // where the table name can't be parameterized. Allows ASCII letters,
 // digits, and underscores — the shape of every table mache writes.
 func isSimpleIdent(s string) bool {
