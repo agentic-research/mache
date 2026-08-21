@@ -30,26 +30,29 @@ const nilSliceMessage = "Nil slice declaration. Consider 'make([]T, 0)' for JSON
 //
 // Structure over `_ast` rows: a `var_spec` node whose DIRECT child is a
 // `slice_type` (the declared type) and which has NO direct `expression_list`
-// child (the initializer). Direct-child is expressed through the hierarchical
-// node_id path the daemon emits (child id = parent id + "/" + segment): the
-// child's id extends the parent's by exactly one segment. That excludes e.g.
-// the slice_type inside `var w []int = []int{1}`'s composite literal, which
-// sits under expression_list/composite_literal — two extra segments.
+// child (the initializer). That excludes e.g. the slice_type inside
+// `var w []int = []int{1}`'s composite literal, which sits under
+// expression_list/composite_literal — two levels down, not one.
+//
+// Direct-child is read from an explicit parent_id column, NOT from arithmetic
+// on the node id. This used to be three `substr`/`instr` expressions relying on
+// the daemon's hierarchical path encoding (child id = parent id + "/" +
+// segment). That encoding is under active review upstream
+// (ley-line-open-17c271 proposes integer node keys), and depth-1 containment is
+// not derivable from byte spans alone — so the assumption now lives in exactly
+// one Go line where it is obvious, instead of being spread through SQL that
+// would silently stop matching.
 const nilSliceSQL = `
 SELECT v.start_row
 FROM _ast v
 WHERE v.node_kind = 'var_spec'
   AND EXISTS (
     SELECT 1 FROM _ast c
-    WHERE c.node_kind = 'slice_type'
-      AND substr(c.node_id, 1, length(v.node_id) + 1) = v.node_id || '/'
-      AND instr(substr(c.node_id, length(v.node_id) + 2), '/') = 0
+    WHERE c.node_kind = 'slice_type' AND c.parent_id = v.node_id
   )
   AND NOT EXISTS (
     SELECT 1 FROM _ast c
-    WHERE c.node_kind = 'expression_list'
-      AND substr(c.node_id, 1, length(v.node_id) + 1) = v.node_id || '/'
-      AND instr(substr(c.node_id, length(v.node_id) + 2), '/') = 0
+    WHERE c.node_kind = 'expression_list' AND c.parent_id = v.node_id
   )
 ORDER BY v.start_row`
 
@@ -68,6 +71,24 @@ func Lint(content []byte, langName string) ([]Diagnostic, error) {
 	return LintAST(res.AST)
 }
 
+// parentIDOf derives a node's parent from the daemon's hierarchical id
+// encoding: a child's id is its parent's id plus "/" plus one segment. A
+// top-level node (no separator) has no parent and yields "".
+//
+// THIS IS THE ONLY PLACE the linter assumes anything about node-id shape. It
+// is isolated deliberately: ley-line-open-17c271 proposes replacing the path
+// with an integer key, and emit_ast's ASTRow carries no parent field, so this
+// derivation is what would have to change. Byte spans cannot substitute —
+// they express descendant, not direct child, and a node sharing its parent's
+// span (a parent with a single child) is indistinguishable by span alone.
+func parentIDOf(nodeID string) string {
+	i := strings.LastIndexByte(nodeID, '/')
+	if i <= 0 {
+		return ""
+	}
+	return nodeID[:i]
+}
+
 // LintAST runs the SQL rules over an already-parsed emit_ast payload — no
 // daemon round trip. A nil payload (pass-through language, or a caller that
 // validated without emit_ast) yields no diagnostics. Non-Go payloads yield no
@@ -83,7 +104,7 @@ func LintAST(ast *leyline.ASTPayload) ([]Diagnostic, error) {
 	}
 	defer func() { _ = db.Close() }()
 
-	if _, err := db.Exec(`CREATE TABLE _ast (node_id TEXT PRIMARY KEY, node_kind TEXT NOT NULL, start_row INTEGER NOT NULL)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE _ast (node_id TEXT PRIMARY KEY, parent_id TEXT, node_kind TEXT NOT NULL, start_row INTEGER NOT NULL)`); err != nil {
 		return nil, fmt.Errorf("create lint _ast table: %w", err)
 	}
 
@@ -91,13 +112,13 @@ func LintAST(ast *leyline.ASTPayload) ([]Diagnostic, error) {
 	if err != nil {
 		return nil, fmt.Errorf("begin lint insert: %w", err)
 	}
-	stmt, err := tx.Prepare(`INSERT INTO _ast (node_id, node_kind, start_row) VALUES (?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO _ast (node_id, parent_id, node_kind, start_row) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("prepare lint insert: %w", err)
 	}
 	for _, row := range ast.AST {
-		if _, err := stmt.Exec(row.NodeID, row.NodeKind, row.StartRow); err != nil {
+		if _, err := stmt.Exec(row.NodeID, parentIDOf(row.NodeID), row.NodeKind, row.StartRow); err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("insert lint _ast row %s: %w", row.NodeID, err)
