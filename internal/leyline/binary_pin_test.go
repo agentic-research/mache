@@ -67,7 +67,7 @@ func TestExtractSemver(t *testing.T) {
 		"":                     "",
 	}
 	for in, want := range cases {
-		assert.Equalf(t, want, extractSemver(in), "extractSemver(%q)", in)
+		assert.Equalf(t, want, ExtractSemver(in), "ExtractSemver(%q)", in)
 	}
 }
 

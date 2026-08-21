@@ -14,7 +14,7 @@ import (
 // argument collapses.
 func TestOverrideBinary_UnsetIsNoOp(t *testing.T) {
 	t.Setenv(BinaryOverrideEnv, "")
-	p, set, err := overrideBinary()
+	p, set, err := OverrideBinary()
 	require.NoError(t, err)
 	assert.False(t, set, "an unset override must not participate in resolution")
 	assert.Empty(t, p)
@@ -27,7 +27,7 @@ func TestOverrideBinary_SetReturnsThatPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho 'leyline 9.9.9 (dev)'\n"), 0o755))
 
 	t.Setenv(BinaryOverrideEnv, bin)
-	p, set, err := overrideBinary()
+	p, set, err := OverrideBinary()
 	require.NoError(t, err)
 	assert.True(t, set)
 	assert.Equal(t, bin, p, "the override wins over the pin, by design")
@@ -38,7 +38,7 @@ func TestOverrideBinary_SetReturnsThatPath(t *testing.T) {
 // exact silent-divergence class the pin exists to prevent.
 func TestOverrideBinary_MissingPathFailsRatherThanFallingBack(t *testing.T) {
 	t.Setenv(BinaryOverrideEnv, filepath.Join(t.TempDir(), "does-not-exist"))
-	p, set, err := overrideBinary()
+	p, set, err := OverrideBinary()
 	require.Error(t, err)
 	assert.True(t, set, "set-but-broken must still short-circuit resolution")
 	assert.Empty(t, p)
@@ -48,7 +48,7 @@ func TestOverrideBinary_MissingPathFailsRatherThanFallingBack(t *testing.T) {
 
 func TestOverrideBinary_DirectoryIsRejected(t *testing.T) {
 	t.Setenv(BinaryOverrideEnv, t.TempDir())
-	_, set, err := overrideBinary()
+	_, set, err := OverrideBinary()
 	require.Error(t, err)
 	assert.True(t, set)
 	assert.Contains(t, err.Error(), "directory")
