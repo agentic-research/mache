@@ -256,4 +256,38 @@ func hasPathSegment(id, dir string) bool {
 // Compile-time proof that the SQL backend satisfies the capability, so a
 // signature drift breaks the build here rather than at a consumer's type
 // assertion, which would silently degrade to "capability absent".
-var _ RefResolver = (*SQLiteGraph)(nil)
+var (
+	_ RefResolver      = (*SQLiteGraph)(nil)
+	_ DefsNodeLookuper = (*SQLiteGraph)(nil)
+)
+
+// LookupDefNodes returns the definition NODES for token, closing the return-type
+// asymmetry that made every consumer write the same conversion loop:
+//
+//	LookupDef(token)  ->  []string          // ids
+//	GetCallers(token) ->  ([]*Node, error)  // nodes
+//	GetCallees(id)    ->  ([]*Node, error)  // nodes
+//
+// Ids from one accessor and Nodes from the next is why modmap wrapped this
+// surface in its own callerResolver. LookupDef stays as-is — ids ARE the right
+// answer when the caller only needs identity, and fetching nodes it will throw
+// away is waste. This is the variant for when it actually wants the node.
+//
+// A definition whose node cannot be loaded is SKIPPED rather than failing the
+// call: node_defs can outlive a node during an incremental reparse, and one
+// stale row should not deny a caller the definitions that did resolve.
+func (g *SQLiteGraph) LookupDefNodes(token string) ([]*Node, error) {
+	ids, err := g.defsForToken(token)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Node, 0, len(ids))
+	for _, id := range ids {
+		n, err := g.GetNode(id)
+		if err != nil {
+			continue // stale index row; the other definitions still stand
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}

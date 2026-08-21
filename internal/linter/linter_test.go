@@ -153,3 +153,32 @@ func TestLint_NonGoLanguage_NoDaemonContact(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, diags)
 }
+
+// TestParentIDOf_IsTheOnlyNodeIDShapeAssumption pins the one derivation the
+// linter makes about node-id shape, so a change upstream fails HERE with a
+// clear name rather than as a silently empty diagnostic list.
+//
+// ley-line-open-17c271 proposes replacing the hierarchical path with an integer
+// key. emit_ast's ASTRow carries no parent field and byte spans cannot
+// substitute — they express descendant, not direct child, and a parent sharing
+// its only child's span is indistinguishable by span alone. So this function is
+// exactly what would have to change, and it is worth naming.
+func TestParentIDOf_IsTheOnlyNodeIDShapeAssumption(t *testing.T) {
+	for name, tc := range map[string]struct{ in, want string }{
+		"nested node":                 {"f.go/var_spec_0/slice_type_0", "f.go/var_spec_0"},
+		"one level down":              {"f.go/var_spec_0", "f.go"},
+		"file root has no parent":     {"f.go", ""},
+		"empty is empty":              {"", ""},
+		"leading slash has no parent": {"/f.go", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, parentIDOf(tc.in))
+		})
+	}
+
+	// The distinction that a mutation would otherwise slip past: the parent is
+	// the LAST separator, not the first. Using IndexByte would make every deep
+	// node a child of the file, and the direct-child rules would stop firing.
+	assert.Equal(t, "a/b/c", parentIDOf("a/b/c/d"),
+		"parent is the last path segment boundary; taking the first would flatten the tree")
+}
