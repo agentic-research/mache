@@ -84,7 +84,7 @@ func TestMaterializeCallees(t *testing.T) {
 	// Materialize callers (existing)
 	tx, err := db.Begin()
 	require.NoError(t, err)
-	err = materializeCallers(tx, now)
+	err = materializeCallers(&nodeTx{Tx: tx, derivedParent: nodesParentIsGenerated(tx)}, now)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 
@@ -96,7 +96,7 @@ func TestMaterializeCallees(t *testing.T) {
 	// Now test: materialize callees (the new feature)
 	tx2, err := db.Begin()
 	require.NoError(t, err)
-	err = materializeCallees(tx2, now)
+	err = materializeCallees(&nodeTx{Tx: tx2, derivedParent: nodesParentIsGenerated(tx2)}, now)
 	require.NoError(t, err)
 	require.NoError(t, tx2.Commit())
 
