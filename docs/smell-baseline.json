@@ -1458,6 +1458,11 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dsse.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
       "count": 1
     },

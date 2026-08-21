@@ -36,7 +36,7 @@ func UsePinnedDaemon(t *testing.T) {
 func StartPinnedDaemon(t *testing.T) string {
 	t.Helper()
 
-	bin := PinnedBinaryOrSkip(t)
+	bin := ResolveBinaryOrSkip(t).Path
 
 	// /tmp keeps the socket path under the ~104-byte sun_path limit; the
 	// daemon binds <control-stem>.sock next to the control file.
@@ -181,13 +181,6 @@ func ResolveBinaryOrSkip(t TestingT) Binary {
 			leyline.BinaryOverrideEnv, d.bin.Path, d.bin.Version, leyline.PinnedBinaryVersion())
 	}
 	return d.bin
-}
-
-// PinnedBinaryOrSkip returns just the path, for gates that only need to exec
-// something and do not care which producer answered.
-func PinnedBinaryOrSkip(t TestingT) string {
-	t.Helper()
-	return ResolveBinaryOrSkip(t).Path
 }
 
 // awaitSocket polls until a UDS listener answers at sock or the deadline
