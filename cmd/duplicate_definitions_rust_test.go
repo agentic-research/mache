@@ -53,7 +53,7 @@ func rustDupFixture(t *testing.T) *smellTestGraph {
 			// A unique free function: never flagged (copies == 1).
 			{"solo", "src/lib.rs/function_item_9", fixturedb.Function},
 		} {
-			b.Construct(d.in, fixturedb.Where{Name: d.token})
+			b.Construct(d.in) // symbol lives on Def; nodes.name is the id's last segment
 			b.Def(d.token, d.in, d.kind)
 		}
 	})
@@ -152,7 +152,7 @@ func TestDuplicateDefinitions_LeylineGoMethods_NotFlagged(t *testing.T) {
 			{"DupFree", "a.go/function_declaration_0", fixturedb.Function},
 			{"DupFree", "b.go/function_declaration_0", fixturedb.Function},
 		} {
-			b.Construct(d.in, fixturedb.Where{Name: d.token})
+			b.Construct(d.in) // symbol lives on Def; nodes.name is the id's last segment
 			b.Def(d.token, d.in, d.kind)
 		}
 	})

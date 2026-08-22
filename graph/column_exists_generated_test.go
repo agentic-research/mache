@@ -81,37 +81,3 @@ func TestColumnExists_StillAnswersFalseForAbsent(t *testing.T) {
 	assert.False(t, ColumnExists(db, "no_such_table", "id"),
 		"a missing table collapses to false rather than erroring")
 }
-
-// TestColumnIsGenerated_ClassifiesByWritability pins the distinction that
-// decides whether a writer may name a column: generated columns are readable
-// but rejected at PREPARE time by any INSERT or UPDATE naming them.
-func TestColumnIsGenerated_ClassifiesByWritability(t *testing.T) {
-	db := openGeneratedColumnDB(t)
-
-	assert.False(t, ColumnIsGenerated(db, "nodes", "id"), "ordinary column is writable")
-	assert.False(t, ColumnIsGenerated(db, "nodes", "name"), "ordinary column is writable")
-	assert.True(t, ColumnIsGenerated(db, "nodes", "parent_id"), "GENERATED ... VIRTUAL")
-	assert.True(t, ColumnIsGenerated(db, "nodes", "byte_len"), "GENERATED ... STORED")
-
-	assert.False(t, ColumnIsGenerated(db, "nodes", "no_such_column"),
-		"absence is not generatedness")
-	assert.False(t, ColumnIsGenerated(db, "no_such_table", "id"))
-
-	// The classification is only useful if it predicts the write failure, so
-	// assert the behaviour it stands for rather than trusting the pragma.
-	_, err := db.Exec(`INSERT INTO nodes (id, name) VALUES ('a/b', 'b')`)
-	require.NoError(t, err, "an INSERT omitting the generated columns must succeed")
-
-	_, err = db.Exec(`INSERT INTO nodes (id, parent_id, name) VALUES ('x/y', 'x', 'y')`)
-	require.Error(t, err, "naming a generated column must fail")
-	assert.Contains(t, err.Error(), "cannot INSERT into generated column")
-
-	_, err = db.Exec(`UPDATE nodes SET parent_id = 'z' WHERE id = 'a/b'`)
-	require.Error(t, err, "updating a generated column must fail")
-
-	// And the derived value is the one a stored column would have held.
-	var parent string
-	require.NoError(t, db.QueryRow(
-		`SELECT parent_id FROM nodes WHERE id = 'a/b'`).Scan(&parent))
-	assert.Equal(t, "a", parent)
-}

@@ -73,27 +73,6 @@ func ColumnExists(db *sql.DB, table, col string) bool {
 	return rows.Next()
 }
 
-// ColumnIsGenerated reports whether table.col is a GENERATED column, which is
-// readable but rejected at prepare time by any INSERT or UPDATE that names it.
-// Writers that target a table they did not create must ask before building a
-// column list; see materializeVirtuals, which writes into whatever `nodes`
-// table the caller points it at.
-//
-// pragma_table_xinfo.hidden encodes the kind: 0 ordinary, 1 hidden (virtual-
-// table), 2 GENERATED ... VIRTUAL, 3 GENERATED ... STORED. Only 2 and 3 are
-// unwritable — a virtual table's hidden column still accepts writes.
-// A missing table or column reads as not-generated, matching ColumnExists's
-// convention of collapsing absence into the negative answer.
-func ColumnIsGenerated(db *sql.DB, table, col string) bool {
-	var hidden int
-	err := db.QueryRow(
-		"SELECT hidden FROM pragma_table_xinfo(?) WHERE name = ?", table, col).Scan(&hidden)
-	if err != nil {
-		return false
-	}
-	return hidden == 2 || hidden == 3
-}
-
 // DB returns the underlying database connection.
 // Used by WritableGraph for write operations and Close.
 func (r *NodesTableReader) DB() *sql.DB { return r.db }

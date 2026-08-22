@@ -45,7 +45,7 @@ func newCrossLangGraph(t *testing.T, defs []crossLangDef) *smellTestGraph {
 	t.Helper()
 	return newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
 		for _, d := range defs {
-			b.Construct(d.nodeID, fixturedb.Where{Name: d.name})
+			b.Construct(d.nodeID) // symbol lives on Def; nodes.name is the id's last segment
 			b.Def(d.token, d.nodeID, d.kind)
 		}
 	})
