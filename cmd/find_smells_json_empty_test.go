@@ -16,7 +16,7 @@ import (
 // case on a clean gate, so the shape must be a stable array.
 func TestRenderFindings_JSONEmptyIsArrayNotNull(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, renderFindings(&buf, "dead_code", nil, "json"))
+	require.NoError(t, renderFindings(&buf, "dead_code", nil, "json", 200))
 
 	assert.Contains(t, buf.String(), `"findings": []`, "empty findings must render as [] not null")
 

@@ -287,7 +287,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 		}
 	default:
 		for _, r := range results {
-			if err := renderFindings(cmd.OutOrStdout(), r.rule.ID, r.findings, findSmellsFormat); err != nil {
+			if err := renderFindings(cmd.OutOrStdout(), r.rule.ID, r.findings, findSmellsFormat, findSmellsLimit); err != nil {
 				return 0, err
 			}
 		}
@@ -497,16 +497,22 @@ func renderListingMD(w io.Writer, listing any) error {
 	return err
 }
 
-func renderFindings(w io.Writer, ruleID string, findings []smellFinding, format string) error {
+func renderFindings(w io.Writer, ruleID string, findings []smellFinding, format string, limit int) error {
 	// Envelope construction (including the nil -> `[]` normalization) is
 	// shared with the find_smells MCP handler via newSmellResponse, so the
 	// two paths cannot serialize the same finding set differently.
-	resp := newSmellResponse(ruleID, findings)
+	resp := newSmellResponse(ruleID, findings, limit)
 
 	if format == "md" {
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "# find_smells: `%s`\n\n", ruleID)
-		fmt.Fprintf(&sb, "**%d findings**\n\n", resp.Total)
+		if resp.Truncated {
+			// The md report is what a human reads; a silent cap here is the
+			// same defect as a silent cap in JSON.
+			fmt.Fprintf(&sb, "**%d findings (capped at --limit %d; more may exist)**\n\n", resp.Total, limit)
+		} else {
+			fmt.Fprintf(&sb, "**%d findings**\n\n", resp.Total)
+		}
 		if resp.Total == 0 {
 			sb.WriteString("No findings on this run.\n")
 		} else {

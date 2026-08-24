@@ -143,7 +143,7 @@ func makeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 		// Shared with the find-smells CLI (newSmellResponse) so the two
 		// consumers of the same rules over the same .db cannot serialize the
 		// same answer differently.
-		return mcp.NewToolResultText(jsonOrPanic(newSmellResponse(rule.ID, findings))), nil
+		return mcp.NewToolResultText(jsonOrPanic(newSmellResponse(rule.ID, findings, limit))), nil
 	}
 }
 
