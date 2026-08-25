@@ -246,8 +246,8 @@ func installLaunchAgent(w io.Writer, binPath string) {
 		return
 	}
 	agentDir := filepath.Join(home, "Library", "LaunchAgents")
-	logPath := filepath.Join(home, "Library", "Logs", "mache.log")
-	plistPath := filepath.Join(agentDir, launchAgentLabel+".plist")
+	logPath := daemonLogPath()
+	plistPath := launchAgentPlistPath()
 
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		logf(w, "  [daemon] could not create %s: %v\n", agentDir, err)
@@ -374,7 +374,7 @@ func restartDaemonAgent(w io.Writer) {
 		if err := runSupervisorCmd(launchctl, "kickstart", "-k", target); err != nil {
 			return
 		}
-		logf(w, "restarted the supervised daemon (%s) so it serves the new binary\n", launchAgentLabel)
+		confirmRestart(w, launchAgentLabel)
 	case "linux":
 		systemctl, err := exec.LookPath("systemctl")
 		if err != nil {
@@ -383,6 +383,74 @@ func restartDaemonAgent(w io.Writer) {
 		if err := runSupervisorCmd(systemctl, "--user", "try-restart", "mache.service"); err != nil {
 			return
 		}
-		logf(w, "restarted the supervised daemon (mache.service) so it serves the new binary\n")
+		confirmRestart(w, "mache.service")
 	}
+}
+
+// confirmRestart reports the restart HONESTLY: it waits for the endpoint to
+// answer and says so if it does not.
+//
+// The message used to print on the supervisor command's exit status alone,
+// which means the kill-and-relaunch REQUEST was accepted — not that anything
+// is listening. Observed after a real `task install`: "restarted the supervised
+// daemon" printed while `launchctl list` showed no PID and LastExitStatus 9,
+// and it stayed down. Every MCP client pointed at the endpoint was failing
+// while the install reported success (mache-609a10).
+//
+// Deliberately does not fail the install. A binary that is correctly on disk
+// IS installed, and turning a supervisor hiccup into a failed install would be
+// its own overreach — but it must not be reported as a restart that happened.
+func confirmRestart(w io.Writer, label string) {
+	version, ok := awaitDaemon(true)
+	if !ok {
+		logf(w, "WARNING: asked %s to restart and it accepted, but nothing is answering at %s.\n"+
+			"         The binary is installed; the daemon is not serving it.\n"+
+			"         Try: mache daemon start   (then: mache doctor)\n"+
+			"         Log: %s\n", label, macheHTTPURL, daemonLogHint())
+		return
+	}
+	logf(w, "restarted the supervised daemon (%s); answering at %s, serving %s\n",
+		label, macheHTTPURL, version)
+}
+
+// launchAgentPlistPath is the one definition of where the LaunchAgent lives.
+// Both the installer (which writes it) and `mache daemon start` (which
+// bootstraps it by path) need it, and two spellings of the same path is the
+// class of drift this repo keeps paying for elsewhere.
+//
+// Returns "" when the home dir cannot be resolved; callers surface that as a
+// supervisor error rather than bootstrapping a bare filename.
+func launchAgentPlistPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")
+}
+
+// daemonLogPath is where the supervisor sends the daemon's stdout/stderr.
+func daemonLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Logs", "mache.log")
+	default:
+		return ""
+	}
+}
+
+// daemonLogHint names where to look when a start or restart does not settle.
+// On systemd the log is not a file, so point at the reader instead of inventing
+// a path that does not exist.
+func daemonLogHint() string {
+	if p := daemonLogPath(); p != "" {
+		return p
+	}
+	if runtime.GOOS == "linux" {
+		return "journalctl --user -u mache.service -n 50"
+	}
+	return "the supervisor's log"
 }

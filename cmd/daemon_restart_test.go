@@ -6,10 +6,41 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// stubDaemonSettle removes this file's LAST environment dependence.
+//
+// The stubs above already remove the supervisor's: without them these tests
+// reached real launchctl and passed only where a daemon happened to be loaded.
+// confirmRestart then added a second one — a real HTTP probe of
+// localhost:7532 — so the same tests passed on a developer machine with the
+// daemon up and, on CI, spent the full 20s settle window before taking the
+// warning path. That is how this shipped green locally and failed on both CI
+// platforms (PR #637).
+//
+// up=true makes the endpoint answer immediately, which is the state a restart
+// is supposed to produce.
+func stubDaemonSettle(t *testing.T, up bool) {
+	t.Helper()
+	prevProbe := daemonEndpointUp
+	prevTimeout, prevPoll := daemonSettleTimeout, daemonSettlePoll
+	daemonEndpointUp = func() (string, bool) {
+		if up {
+			return "1.2.3-test", true
+		}
+		return "", false
+	}
+	daemonSettleTimeout = 30 * time.Millisecond
+	daemonSettlePoll = 5 * time.Millisecond
+	t.Cleanup(func() {
+		daemonEndpointUp = prevProbe
+		daemonSettleTimeout, daemonSettlePoll = prevTimeout, prevPoll
+	})
+}
 
 // The defect these pin (mache install / task install leaving a stale daemon):
 // replacing the binary on disk does not re-exec a supervisor that is already
@@ -25,6 +56,8 @@ func TestRestartDaemonAgent_RespectsAutoloadGate(t *testing.T) {
 	prev := daemonAgentAutoload
 	daemonAgentAutoload = false
 	t.Cleanup(func() { daemonAgentAutoload = prev })
+
+	stubDaemonSettle(t, true)
 
 	var buf bytes.Buffer
 	restartDaemonAgent(&buf)
@@ -60,6 +93,8 @@ func TestRestartDaemonAgent_UsesRestartNotStart(t *testing.T) {
 		got = append([]string{filepath.Base(name)}, args...)
 		return nil
 	}
+
+	stubDaemonSettle(t, true)
 
 	var buf bytes.Buffer
 	restartDaemonAgent(&buf)
@@ -105,6 +140,7 @@ func TestRestartDaemonAgent_SupervisorFailureIsSilent(t *testing.T) {
 	runSupervisorCmd = func(string, ...string) error { return errors.New("Could not find service") }
 
 	var buf bytes.Buffer
+	stubDaemonSettle(t, true)
 	require.NotPanics(t, func() { restartDaemonAgent(&buf) })
 	assert.Empty(t, buf.String(),
 		"a not-loaded supervisor is the benign common case; it must not claim a restart nor report an error")
@@ -163,6 +199,8 @@ func TestRestartDaemonAgent_DoesNotStartAnIdleJob(t *testing.T) {
 		return nil
 	}
 
+	stubDaemonSettle(t, true)
+
 	var buf bytes.Buffer
 	restartDaemonAgent(&buf)
 
@@ -192,6 +230,8 @@ func TestRestartDaemonAgent_RestartsARunningJob(t *testing.T) {
 		ran = append(ran, append([]string{name}, args...))
 		return nil
 	}
+
+	stubDaemonSettle(t, true)
 
 	var buf bytes.Buffer
 	restartDaemonAgent(&buf)
