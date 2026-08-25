@@ -249,11 +249,27 @@ func checkProjectRegistration(cwd string) check {
 			}
 		}
 	}
+	// NOT a failure. Registration is an optimization, not a prerequisite: the
+	// daemon asks the connecting client for its workspace root over
+	// roots/list, and only falls back to the ?project= token for clients that
+	// cannot answer. Claude Code answers — verified against a live daemon,
+	// where a session resolved /Users/.../ley-line-open with no registry entry
+	// and no .claude/mcp.json at all.
+	//
+	// This check previously said "MCP tools here will fail to resolve a
+	// workspace root" and returned statusFail, which made `mache doctor` exit
+	// 1 on a perfectly healthy tree and sent people to run `mache init` per
+	// directory — and, because a git worktree is its own path, per BRANCH. The
+	// claim was false for exactly the client most users have.
+	//
+	// doctor cannot know which client will connect, so it cannot know whether
+	// the token is needed. Report the fact and let the reader decide.
 	return check{
 		Name:   "project",
-		Status: statusFail,
-		Detail: fmt.Sprintf("%s is NOT registered; MCP tools here will fail to resolve a workspace root", want),
-		Fix:    "mache init   # registers this project with the shared daemon",
+		Status: statusWarn,
+		Detail: fmt.Sprintf("%s is not pre-registered; clients that answer roots/list (Claude Code does) "+
+			"resolve it anyway, and the daemon registers it on first use", want),
+		Fix: "mache init   # only needed for clients that cannot answer roots/list",
 	}
 }
 

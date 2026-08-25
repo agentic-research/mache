@@ -169,14 +169,27 @@ func TestCheckArena_DistinguishesEveryState(t *testing.T) {
 // TestCheckProjectRegistration_UnregisteredIsNamedNotTimedOut is the honesty
 // fix for "workspace root unavailable (context deadline exceeded)" — a message
 // describing the symptom rather than the cause.
+//
+// It must also not over-correct into the opposite lie. An unregistered project
+// is NOT broken: the daemon asks the client for its root over roots/list and
+// only needs the ?project= token when the client cannot answer. Claude Code
+// answers — verified against a live daemon, where a session resolved a repo
+// that had no registry entry and no .claude/mcp.json. Reporting FAIL here made
+// `mache doctor` exit 1 on a healthy tree and sent people to run `mache init`
+// per directory, and per BRANCH once git worktrees are involved.
 func TestCheckProjectRegistration_UnregisteredIsNamedNotTimedOut(t *testing.T) {
 	home := isolateHome(t)
 	cwd := t.TempDir()
 
 	got := checkProjectRegistration(cwd)
-	require.Equal(t, statusFail, got.Status)
-	assert.Contains(t, got.Detail, "NOT registered")
+	require.Equal(t, statusWarn, got.Status,
+		"unregistered is a note, not a failure: roots/list clients resolve without it")
+	assert.Contains(t, got.Detail, "not pre-registered")
+	assert.Contains(t, got.Detail, "roots/list",
+		"the reader has to know WHICH clients need the remedy")
 	assert.Contains(t, got.Fix, "mache init")
+	assert.NotContains(t, got.Detail, "will fail",
+		"doctor cannot know which client will connect, so it must not predict failure")
 	assert.NotContains(t, got.Detail, "deadline",
 		"an unregistered project must be reported as unregistered, never as a timeout")
 
@@ -216,7 +229,6 @@ func TestEveryFailingCheckNamesARemediation(t *testing.T) {
 	for _, c := range []check{
 		checkVersionSkew("1.0.0-9-gdef", nil),
 		checkArena(t.TempDir()),
-		checkProjectRegistration(t.TempDir()),
 	} {
 		require.Equal(t, statusFail, c.Status, "fixture must actually produce a failure for %q", c.Name)
 		assert.NotEmpty(t, c.Fix, "failing check %q must name a remediation", c.Name)
