@@ -19,7 +19,25 @@ import (
 // supervisor may legitimately delay a launch. launchd's ThrottleInterval on
 // mache's own plist is 10s, so anything shorter would report failure for a
 // restart that was merely throttled.
-var daemonSettleTimeout = 20 * time.Second
+//
+// 90s because the FIRST exec of newly-written bytes is far slower than a
+// restart of the same binary, and `task install` produces exactly that.
+// Measured on an Apple Silicon Mac:
+//
+//	unchanged binary       0s
+//	freshly built bytes   10s
+//	after a full install  43s   (exceeded the old 20s budget and reported failure
+//	                             for a daemon that came back fine)
+//
+// macOS assesses a binary it has not seen before (Gatekeeper/syspolicyd), and
+// that cost lands on the first launch after any install. An earlier attempt to
+// rule this out re-signed IDENTICAL content and measured 1s — a cache hit, not
+// a refutation. The budget has to cover the slow path or it reports failure for
+// success, which is the defect this whole surface exists to remove.
+//
+// The wait announces itself after daemonSettleAnnounceAfter, so a long budget
+// is not a silent one.
+var daemonSettleTimeout = 90 * time.Second
 
 // daemonSettlePoll is the gap between endpoint probes while settling.
 //

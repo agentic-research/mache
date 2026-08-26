@@ -28,6 +28,17 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		minSize := request.GetInt("min_size", 2)
 		summary := request.GetBool("summary", false)
+		// Hub cap. The projection joins every PAIR of nodes sharing a token, so
+		// a token with fan-in K costs K(K-1)/2 edges — on mache, `t` alone
+		// (K=9,903) was 49M of 84.8M insertions. Exposed because a threshold
+		// nobody can change without editing source is the mistake the old
+		// hardcoded refs cap made (mache-233902 discussion).
+		maxFanIn := request.GetInt("max_fan_in", graph.DefaultMaxFanIn)
+		// Number of communities returned. summary=true previously capped
+		// MEMBERS per community but not the community COUNT, so mache's own
+		// 4,762 communities serialized to 2,369,884 characters — a "summary"
+		// that blew the response budget by orders of magnitude.
+		limit := request.GetInt("limit", 50)
 
 		rp, ok := g.(graph.RefsMapper)
 		if !ok {
@@ -51,7 +62,7 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			return mcp.NewToolResultText(string(data)), nil
 		}
 
-		result := graph.DetectCommunities(refs, minSize)
+		result := graph.DetectCommunitiesWithFanIn(refs, minSize, maxFanIn)
 
 		// Push topology to ley-line sheaf cache (fire-and-forget).
 		// Errors are best-effort: the daemon may be missing
@@ -160,19 +171,31 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 				TopMembers []string `json:"top_members"`
 			}
 			type summaryResult struct {
-				NumCommunities int                `json:"num_communities"`
-				NumNodes       int                `json:"num_nodes"`
-				NumEdges       int                `json:"num_edges"`
-				Modularity     float64            `json:"modularity"`
-				Communities    []communitySummary `json:"communities"`
+				NumCommunities    int                 `json:"num_communities"`
+				Returned          int                 `json:"returned"`
+				NumNodes          int                 `json:"num_nodes"`
+				NumEdges          int                 `json:"num_edges"`
+				Modularity        float64             `json:"modularity"`
+				EffectiveMaxFanIn int                 `json:"effective_max_fan_in"`
+				ProjectedPairs    int                 `json:"projected_pairs"`
+				PrunedTokens      []graph.PrunedToken `json:"pruned_tokens,omitempty"`
+				Communities       []communitySummary  `json:"communities"`
+			}
+			shown := result.Communities
+			if limit > 0 && len(shown) > limit {
+				shown = shown[:limit]
 			}
 			sr := summaryResult{
-				NumCommunities: len(result.Communities),
-				NumNodes:       result.NumNodes,
-				NumEdges:       result.NumEdges,
-				Modularity:     result.Modularity,
+				NumCommunities:    len(result.Communities),
+				Returned:          len(shown),
+				NumNodes:          result.NumNodes,
+				NumEdges:          result.NumEdges,
+				Modularity:        result.Modularity,
+				EffectiveMaxFanIn: result.EffectiveMaxFanIn,
+				ProjectedPairs:    result.ProjectedPairs,
+				PrunedTokens:      topPruned(result.PrunedTokens, 10),
 			}
-			for _, c := range result.Communities {
+			for _, c := range shown {
 				top := c.Members
 				if len(top) > 5 {
 					top = top[:5]
@@ -240,4 +263,15 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 		data, _ := json.MarshalIndent(out, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
+}
+
+// topPruned returns at most n pruned tokens. The full list can run to hundreds
+// (184 on mache); the point is to show the reader WHICH references stopped
+// shaping the partition, and the largest few carry essentially all of it — the
+// top ten were 86% of the edge work.
+func topPruned(all []graph.PrunedToken, n int) []graph.PrunedToken {
+	if len(all) > n {
+		return all[:n]
+	}
+	return all
 }

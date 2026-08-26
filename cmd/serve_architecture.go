@@ -122,13 +122,20 @@ func makeGetArchitectureHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 
 			// Dependency layers via community detection.
-			// Skip for large graphs to avoid O(n^2) cost.
-			const communityLimit = 5000
-			if len(refs) > communityLimit {
-				arch.DependencyLayers = []dependencyLayer{{
-					Note: fmt.Sprintf("skipped: refs count %d exceeds %d threshold", len(refs), communityLimit),
-				}}
-			} else {
+			//
+			// This used to skip entirely when len(refs) exceeded 5000, which
+			// measured the WRONG QUANTITY: the projection's cost is
+			// Σ K(K-1)/2 over tokens, not the token count. On mache that is
+			// 12,275 tokens against 84,813,280 edge insertions — the guard was
+			// off by ~7000x, so it refused a graph it could have handled while
+			// a pathological one with few hot tokens would have sailed through.
+			//
+			// DetectCommunities now prunes hub tokens and clamps itself to a
+			// pair budget, so it is bounded by construction and returns a
+			// (possibly tightened) answer instead of nothing. Measured: 32.5s
+			// and modularity 0.543 before, 215ms and 0.985 after — the guard
+			// was hiding a wrong answer, not just a slow one.
+			{
 				result := graph.DetectCommunities(refs, 2)
 				// Bead mache-9cd921: get_architecture previously appended
 				// every community returned by Louvain, blowing past the
