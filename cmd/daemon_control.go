@@ -132,9 +132,11 @@ var daemonEndpointUp = func() (string, bool) {
 // accepted, not that anything is listening (mache-609a10). Observed after a
 // real `task install` — success printed, launchctl showed no PID and
 // LastExitStatus 9, and it stayed down.
-func awaitDaemon(up bool) (string, bool) {
-	deadline := time.Now().Add(daemonSettleTimeout)
+func awaitDaemon(w io.Writer, up bool) (string, bool) {
+	start := time.Now()
+	deadline := start.Add(daemonSettleTimeout)
 	var version string
+	announced := false
 	for {
 		v, ok := daemonEndpointUp()
 		if ok {
@@ -146,9 +148,26 @@ func awaitDaemon(up bool) (string, bool) {
 		if time.Now().After(deadline) {
 			return version, false
 		}
+		// Say something once it stops being instant. A bounded wait that
+		// prints nothing for 20s is reported as a hang — which is exactly how
+		// this surfaced ("mache daemon start appears to hang"). Silence and
+		// wedged look identical from the outside, so the wait names itself.
+		if !announced && time.Since(start) > daemonSettleAnnounceAfter {
+			announced = true
+			what := "to answer"
+			if !up {
+				what = "to stop"
+			}
+			logf(w, "waiting up to %s for the daemon %s at %s…\n",
+				daemonSettleTimeout, what, macheHTTPURL)
+		}
 		time.Sleep(daemonSettlePoll)
 	}
 }
+
+// daemonSettleAnnounceAfter is how long a settle may stay silent before it
+// tells the caller what it is doing.
+var daemonSettleAnnounceAfter = 1500 * time.Millisecond
 
 // runDaemonVerb executes verb and then VERIFIES the state it claims to have
 // produced, rather than trusting the supervisor's exit status.
@@ -191,7 +210,7 @@ func runDaemonVerb(w io.Writer, verb supervisorVerb) error {
 	}
 
 	wantUp := verb != verbStop
-	version, ok := awaitDaemon(wantUp)
+	version, ok := awaitDaemon(w, wantUp)
 	if !ok {
 		if wantUp {
 			return fmt.Errorf(

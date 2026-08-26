@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Canonical MCP transport endpoint. mache serves Streamable HTTP on this
@@ -33,7 +35,33 @@ var daemonAgentAutoload = true
 // inspecting the argv. Executing the real command in a test would also restart
 // the developer's own daemon as a side effect, which a test must never do.
 var runSupervisorCmd = func(name string, args ...string) error {
-	return exec.Command(name, args...).Run()
+	return runBounded(name, args...)
+}
+
+// supervisorCmdTimeout bounds every launchctl/systemctl invocation.
+//
+// These were unbounded `exec.Command(...).Run()`, and launchctl BLOCKS: a
+// `bootstrap` against a job in a bad state can wait forever, with no output,
+// which is indistinguishable from a hang. Reported from a real machine as
+// "mache daemon start appears to hang".
+//
+// A supervisor that has not answered in this long is not going to; reporting
+// that is strictly better than waiting on it, because the caller can act on an
+// error and cannot act on silence.
+var supervisorCmdTimeout = 15 * time.Second
+
+// runBounded runs a supervisor command under supervisorCmdTimeout and turns a
+// timeout into a NAMED error rather than an indefinite wait.
+func runBounded(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), supervisorCmdTimeout)
+	defer cancel()
+	err := exec.CommandContext(ctx, name, args...).Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s %s did not return within %s (the supervisor is wedged; "+
+			"inspect it with: launchctl print gui/$(id -u)/%s)",
+			filepath.Base(name), strings.Join(args, " "), supervisorCmdTimeout, launchAgentLabel)
+	}
+	return err
 }
 
 // querySupervisorCmd is the read-side seam: it returns a supervisor query's
@@ -41,7 +69,16 @@ var runSupervisorCmd = func(name string, args ...string) error {
 // exited 0. Separate from runSupervisorCmd because the two have different
 // contracts — one acts, one observes — and tests stub them independently.
 var querySupervisorCmd = func(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), supervisorCmdTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	if ctx.Err() != nil {
+		// A wedged query must not wedge the caller. Reporting "nothing loaded"
+		// is the safe reading: every caller already treats that as the benign
+		// case, and `mache daemon status` then says the endpoint is not
+		// answering rather than blocking forever on launchctl.
+		return "", fmt.Errorf("%s did not answer within %s", filepath.Base(name), supervisorCmdTimeout)
+	}
 	return string(out), err
 }
 
@@ -401,7 +438,7 @@ func restartDaemonAgent(w io.Writer) {
 // IS installed, and turning a supervisor hiccup into a failed install would be
 // its own overreach — but it must not be reported as a restart that happened.
 func confirmRestart(w io.Writer, label string) {
-	version, ok := awaitDaemon(true)
+	version, ok := awaitDaemon(w, true)
 	if !ok {
 		logf(w, "WARNING: asked %s to restart and it accepted, but nothing is answering at %s.\n"+
 			"         The binary is installed; the daemon is not serving it.\n"+
