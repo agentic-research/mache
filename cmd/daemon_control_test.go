@@ -201,3 +201,84 @@ func TestRunDaemonVerb_StartStillActsWithNoSupervisedDaemon(t *testing.T) {
 	require.NoError(t, runDaemonVerb(&buf, verbStart))
 	require.Len(t, *ran, 1, "start must still reach the supervisor")
 }
+
+// TestRunDaemonVerb_AnnouncesALongWait covers a failure that is not a crash:
+// a bounded wait that prints nothing.
+//
+// start/restart may legitimately take seconds while the supervisor relaunches,
+// and the old code sat silent for the whole settle window. Reported from a
+// real machine as "mache daemon start appears to hang" — from the outside,
+// silence and wedged are the same observation, so the wait has to name itself.
+func TestRunDaemonVerb_AnnouncesALongWait(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("supervisor verbs are Unix-only")
+	}
+	stubSupervisor(t)
+	// Never comes up, so the settle runs to its deadline.
+	stubEndpoint(t, false)
+
+	prevAnnounce := daemonSettleAnnounceAfter
+	prevTimeout, prevPoll := daemonSettleTimeout, daemonSettlePoll
+	daemonSettleAnnounceAfter = 5 * time.Millisecond
+	daemonSettleTimeout = 60 * time.Millisecond
+	daemonSettlePoll = 5 * time.Millisecond
+	t.Cleanup(func() {
+		daemonSettleAnnounceAfter = prevAnnounce
+		daemonSettleTimeout, daemonSettlePoll = prevTimeout, prevPoll
+	})
+
+	var buf bytes.Buffer
+	require.Error(t, runDaemonVerb(&buf, verbStart))
+
+	assert.Contains(t, buf.String(), "waiting up to",
+		"a wait longer than a blink must say it is waiting")
+	assert.Contains(t, buf.String(), macheHTTPURL,
+		"and say what it is waiting ON, so the reader can check it themselves")
+}
+
+// TestRunDaemonVerb_StaysQuietWhenItSettlesImmediately is the other half: the
+// announcement must not fire on the common fast path, or it becomes noise that
+// trains people to ignore it.
+func TestRunDaemonVerb_StaysQuietWhenItSettlesImmediately(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("supervisor verbs are Unix-only")
+	}
+	stubSupervisor(t)
+	// Down, then up: one poll of real waiting, far under the announce
+	// threshold. Settling on the FIRST probe would return before the guard is
+	// ever reached, so the test would pass even for code that always
+	// announces — verified by mutation.
+	stubEndpoint(t, false, true)
+
+	var buf bytes.Buffer
+	require.NoError(t, runDaemonVerb(&buf, verbStart))
+	assert.NotContains(t, buf.String(), "waiting up to",
+		"a wait far shorter than the threshold must not announce one")
+}
+
+// TestRunBounded_TimesOutInsteadOfWaitingForever pins the bound itself.
+//
+// The supervisor seam is stubbed in every other test here, so reverting
+// exec.CommandContext to exec.Command survives them all — the real
+// implementation is never reached. This drives it directly with a command that
+// does not return. launchctl blocks exactly like this against a wedged job,
+// which is how "mache daemon start appears to hang" was reported.
+func TestRunBounded_TimesOutInsteadOfWaitingForever(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("needs a POSIX sleep")
+	}
+	prev := supervisorCmdTimeout
+	supervisorCmdTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { supervisorCmdTimeout = prev })
+
+	start := time.Now()
+	err := runBounded("/bin/sleep", "30")
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "a command that never returns must produce an error, not a hang")
+	assert.Less(t, elapsed, 5*time.Second, "must not wait for the command to finish")
+	assert.Contains(t, err.Error(), "did not return within",
+		"the error must say it timed out, not surface an opaque exec failure")
+	assert.Contains(t, err.Error(), "launchctl print",
+		"and must hand the operator a way to inspect the wedged supervisor")
+}
