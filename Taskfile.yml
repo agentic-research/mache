@@ -16,20 +16,26 @@ tasks:
     desc: Build and install mache plus its exact published Leyline backend
     deps: [build, leyline:ensure]
     cmds:
-      - mkdir -p ~/.local/bin
-      - cp {{.BINARY_NAME}} ~/.local/bin/mache
-      - cmd: codesign -s - --force --deep --entitlements entitlements.plist ~/.local/bin/mache
-        platforms: [darwin]
-      # Replacing the file does NOT re-exec a supervisor that is already
-      # running — it holds the old process. Observed: installed binary at
-      # v0.20.0 while the daemon on :7532 still answered as 0.19.0-10, so
-      # every MCP session got pre-release code silently. `mache daemon
-      # restart` is restart-if-running (launchctl kickstart -k / systemctl
-      # try-restart), so this never starts a daemon on a machine whose owner
-      # did not run `mache init --global`. Uses the binary we just installed,
-      # so the restart logic is the installed version's, not the source
-      # tree's.
-      - ~/.local/bin/mache daemon restart
+      # Delegate to `mache install` rather than reimplementing it here. The
+      # binary already does this job, and did it MORE CORRECTLY: copyExecutable
+      # writes a temp file and os.Rename's it, because — in its own words —
+      # "the old inode survives for anyone holding it open, where writing in
+      # place would corrupt a live process". The `cp` this replaces overwrote
+      # ~/.local/bin/mache in place while the supervised daemon was executing
+      # it, and the kickstart that followed then failed to relaunch: observed
+      # as `task install` leaving the MCP daemon dead on :7532.
+      #
+      # It also drops a redundant codesign. `task build` already runs the
+      # identical `codesign -s - --force --deep --entitlements entitlements.plist`
+      # on the same bytes (identifiers and entitlements verified equal), so
+      # re-signing after the copy modified an already-correct binary — in
+      # place, after the daemon had been pointed at it.
+      #
+      # `mache install` additionally provisions the pinned leyline and restarts
+      # the supervised daemon restart-if-running, reporting honestly when the
+      # daemon does not come back without failing an install whose binary is
+      # correctly on disk.
+      - ./{{.BINARY_NAME}} install
 
   install:verify:
     desc: |
