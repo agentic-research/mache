@@ -39,6 +39,19 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 		// 4,762 communities serialized to 2,369,884 characters — a "summary"
 		// that blew the response budget by orders of magnitude.
 		limit := request.GetInt("limit", 50)
+		// Cell size. The fs hierarchy is already in every node id
+		// (fs -> CST/AST), so file/dir cells are a prefix operation on data
+		// mache already holds — no re-ingestion. Construct cells answer "which
+		// AST nodes co-reference"; file/dir cells answer "which files/packages
+		// belong together", which is the question a decomposition needs.
+		granularity := graph.Granularity(request.GetString("granularity", string(graph.GranularityConstruct)))
+		switch granularity {
+		case graph.GranularityConstruct, graph.GranularityFile, graph.GranularityDir:
+		default:
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"unknown granularity %q: want construct, file, or dir", granularity)), nil
+		}
+		scope := request.GetString("scope", "")
 
 		rp, ok := g.(graph.RefsMapper)
 		if !ok {
@@ -62,6 +75,7 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 			return mcp.NewToolResultText(string(data)), nil
 		}
 
+		refs = graph.AggregateRefs(refs, granularity, scope)
 		result := graph.DetectCommunitiesWithFanIn(refs, minSize, maxFanIn)
 
 		// Push topology to ley-line sheaf cache (fire-and-forget).
