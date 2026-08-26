@@ -169,11 +169,35 @@ func checkPinnedLeyline() check {
 			Fix:    "mache install   # fetches and SHA-verifies the pinned release",
 		}
 	}
+	// The resolved BINARY is only half the answer. A daemon already running was
+	// adopted, not spawned, so the exact pin ResolveBinary enforces never
+	// applied to it — this check reported `ok v0.19.0` while saying nothing
+	// about what was actually serving. Accurate about what it measured, silent
+	// about what the reader cares about (mache-233902).
+	//
+	// Undeterminable is not a failure: no daemon running, or one predating the
+	// leyline_version op, are both normal.
+	if got, ok := leyline.AdoptedDaemonVersion(); ok && !sameSemver(got, leyline.BinaryVersion) {
+		return check{
+			Name:   "leyline-pin",
+			Status: statusWarn,
+			Detail: fmt.Sprintf("binary %s resolved at %s, but the RUNNING daemon reports %s — "+
+				"_ast output may differ from CI (ley-line-open ships schema changes in patch releases)",
+				leyline.BinaryVersion, path, got),
+			Fix: "mache daemon restart   # or stop the stale leyline daemon so the pinned one is spawned",
+		}
+	}
 	return check{
 		Name:   "leyline-pin",
 		Status: statusOK,
 		Detail: fmt.Sprintf("%s resolved at %s", leyline.BinaryVersion, path),
 	}
+}
+
+// sameSemver compares two version strings ignoring a leading "v", so a daemon
+// reporting "0.19.0" matches a pin written "v0.19.0".
+func sameSemver(a, b string) bool {
+	return strings.TrimPrefix(a, "v") == strings.TrimPrefix(b, "v")
 }
 
 // checkArena surfaces the warm-start refusal that previously showed up only as

@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // expectedLeylineWireFormatMajor is the ley-line-open daemon wire-format major
@@ -169,4 +170,74 @@ func parseSemverParts(v string) [3]uint64 {
 		out[i], _ = strconv.ParseUint(p, 10, 64)
 	}
 	return out
+}
+
+// driftCheckOnce guards the adoption-path drift probe so a warning fires once
+// per process rather than once per operation.
+//
+// DiscoverOrStart is called per-op by several consumers (validate, trigger,
+// semantic_search, get_communities, the LSP handlers), so an unguarded probe
+// would add a socket round-trip to every call and repeat the same line until it
+// is noise. Once is enough: the adopted daemon cannot change version underneath
+// a running process without the socket going away, and a socket that goes away
+// re-enters the spawn path.
+var driftCheckOnce sync.Once
+
+// warnIfAdoptedDaemonDrifts probes a daemon mache did NOT spawn and warns when
+// its leyline version differs from the pin.
+//
+// WHY HERE. The same probe already existed behind VerifyReachableDaemonVersion,
+// but that has exactly one caller — `mache serve` startup — while adoption
+// happens in DiscoverOrStart, which every consumer reaches. So the path with
+// the SMALLEST consequence was checked and the one that PRODUCES projections
+// (`mache build`) was not, even though _ast identity is precisely what the pin
+// protects (mache-233902).
+//
+// Only for ADOPTED daemons. A daemon this process spawned came from
+// ResolveBinary, which already enforces the exact pin at every tier, so probing
+// it would ask a question whose answer is structural.
+//
+// Warn, never refuse — see warnOnPinDrift. The daemon may be someone else's,
+// and a probe must not be stricter than the decode.
+func warnIfAdoptedDaemonDrifts(sock string) {
+	driftCheckOnce.Do(func() {
+		c, err := DialSocket(sock)
+		if err != nil {
+			return // transient: never block adoption on a diagnostic
+		}
+		defer func() { _ = c.Close() }()
+		resp, err := c.SendOp(map[string]any{"op": "leyline_version"})
+		if err != nil {
+			return // predates the op; cannot be judged, so is not judged
+		}
+		warnOnPinDrift(resp)
+	})
+}
+
+// AdoptedDaemonVersion reports the leyline version a reachable daemon claims,
+// and whether it could be determined. Exported for `mache doctor`, which
+// otherwise reports the RESOLVED BINARY's pin and says nothing about the daemon
+// actually serving — accurate about what it measured, silent about what the
+// reader cares about.
+func AdoptedDaemonVersion() (string, bool) {
+	sock, err := findExistingSocket()
+	if err != nil || !isSocketAlive(sock) {
+		return "", false
+	}
+	c, err := DialSocket(sock)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = c.Close() }()
+	resp, err := c.SendOp(map[string]any{"op": "leyline_version"})
+	if err != nil {
+		return "", false
+	}
+	if v, ok := resp["version"].(string); ok && v != "" {
+		return v, true
+	}
+	if v, ok := resp["schema_version"].(string); ok && v != "" {
+		return v, true
+	}
+	return "", false
 }

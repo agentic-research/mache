@@ -17,7 +17,59 @@ type CommunityResult struct {
 	Modularity  float64        // Final modularity score (0 to 1, higher = better partition)
 	NumNodes    int            // Total nodes in the graph
 	NumEdges    int            // Total edges (undirected)
+	// PrunedTokens are hub tokens excluded from the projection, most-referenced
+	// first. Reported rather than dropped silently: a caller reading these
+	// communities is entitled to know which references did not shape them.
+	PrunedTokens []PrunedToken
+	// EffectiveMaxFanIn is the cap actually applied. It differs from the
+	// requested one when the pair budget forced a tighter cap — reported so a
+	// caller can tell "these are your communities" from "these are your
+	// communities under a budget I had to impose".
+	EffectiveMaxFanIn int
+	// ProjectedPairs is the edge-insertion count the projection performed.
+	ProjectedPairs int
 }
+
+// PrunedToken is a token excluded for exceeding the fan-in cap.
+type PrunedToken struct {
+	Token string `json:"token"`
+	FanIn int    `json:"fan_in"`
+}
+
+// DefaultMaxFanIn is the per-token fan-in above which a token is treated as a
+// hub and excluded from the co-reference projection.
+//
+// The projection connects every PAIR of nodes sharing a token, so a token
+// referenced by K nodes costs K(K-1)/2 edges. Measured on mache itself: 12,275
+// tokens produce 84,813,280 edge insertions, and the single token `t` (the
+// ubiquitous *testing.T receiver, K=9,903) accounts for 49M of them — 58% of
+// the total. The top ten tokens — t, err, NoError, require.NoError, Equal,
+// len — are 86%.
+//
+// Cost is only half the reason. Those hubs also DESTROY the answer: `t` joins
+// 9,903 nodes into a near-complete subgraph, so Louvain collapses everything
+// that touches *testing.T into one blob. A token that nearly everything
+// references is not evidence of shared purpose; it is the co-occurrence
+// equivalent of a stopword.
+//
+// 100 keeps 12,091 of 12,275 tokens (98.5%) and removes 99.2% of the edge
+// work. The threshold is a heuristic, exposed as a parameter — it is not a
+// constant anyone should have to edit source to change, which is exactly the
+// mistake the old refs-count cap made.
+const DefaultMaxFanIn = 100
+
+// DefaultMaxPairs bounds the projection's total edge insertions — Σ K(K-1)/2
+// over surviving tokens — as a backstop behind the fan-in cap.
+//
+// Fan-in pruning removes the DOMINANT term, not the whole cost. With a cap of
+// 100, a pathological repo where every one of 12,275 tokens sits exactly at the
+// cap would still project 60.8M pairs; mache measures 681K only because real
+// fan-in is heavily skewed. A budget keyed on the quantity that actually costs
+// is the guard the old refs-count cap was reaching for and missed by ~7000×.
+//
+// 5,000,000 is ~7x mache's own measured cost, so a repo an order of magnitude
+// larger still runs unclamped.
+const DefaultMaxPairs = 5_000_000
 
 // DetectCommunities runs Louvain community detection on a bipartite refs graph.
 // Input: refs maps token → []nodeID (which nodes reference that token).
@@ -27,16 +79,26 @@ type CommunityResult struct {
 //
 // minCommunitySize filters out communities smaller than this (default 2 if 0).
 func DetectCommunities(refs map[string][]string, minCommunitySize int) *CommunityResult {
+	return DetectCommunitiesWithFanIn(refs, minCommunitySize, DefaultMaxFanIn)
+}
+
+// DetectCommunitiesWithFanIn is DetectCommunities with an explicit hub cap.
+// maxFanIn <= 0 disables pruning and restores the pre-pruning behaviour, which
+// is quadratic in the hottest token's fan-in — see DefaultMaxFanIn.
+func DetectCommunitiesWithFanIn(refs map[string][]string, minCommunitySize, maxFanIn int) *CommunityResult {
 	if minCommunitySize <= 0 {
 		minCommunitySize = 2
 	}
+	maxFanIn = fitFanInToBudget(refs, maxFanIn, DefaultMaxPairs)
+	refs, pruned := pruneHubTokens(refs, maxFanIn)
+	projected := projectedPairs(refs)
 
 	// Step 1: Build unipartite projection from bipartite refs graph.
 	// Two nodes are connected if they share a token. Weight = # shared tokens.
 	adj, nodeIndex, indexToNode := buildProjection(refs)
 	n := len(nodeIndex)
 	if n == 0 {
-		return &CommunityResult{}
+		return &CommunityResult{PrunedTokens: pruned, EffectiveMaxFanIn: maxFanIn, ProjectedPairs: projected}
 	}
 
 	// Step 2: Pre-compute node degrees (static — adjacency never changes)
@@ -50,7 +112,7 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 		totalWeight += degree[i]
 	}
 	if totalWeight == 0 {
-		return &CommunityResult{}
+		return &CommunityResult{PrunedTokens: pruned, EffectiveMaxFanIn: maxFanIn, ProjectedPairs: projected}
 	}
 
 	// Step 3: Initialize — each node in its own community.
@@ -180,11 +242,15 @@ func DetectCommunities(refs map[string][]string, minCommunitySize int) *Communit
 	numEdges /= 2 // undirected
 
 	return &CommunityResult{
-		Communities: communities,
-		Membership:  membership,
-		Modularity:  mod,
-		NumNodes:    n,
-		NumEdges:    numEdges,
+		Communities:  communities,
+		Membership:   membership,
+		Modularity:   mod,
+		NumNodes:     n,
+		NumEdges:     numEdges,
+		PrunedTokens: pruned,
+
+		EffectiveMaxFanIn: maxFanIn,
+		ProjectedPairs:    projected,
 	}
 }
 
@@ -387,4 +453,77 @@ func ConnectedComponents(refs map[string][]string) [][]string {
 	})
 
 	return components
+}
+
+// pruneHubTokens removes tokens referenced by more than maxFanIn nodes and
+// returns the survivors plus what was dropped, most-referenced first.
+//
+// Returns refs unchanged when maxFanIn <= 0 or nothing exceeds it, so the
+// common case allocates nothing.
+func pruneHubTokens(refs map[string][]string, maxFanIn int) (map[string][]string, []PrunedToken) {
+	if maxFanIn <= 0 {
+		return refs, nil
+	}
+	var pruned []PrunedToken
+	for tok, nodes := range refs {
+		if len(nodes) > maxFanIn {
+			pruned = append(pruned, PrunedToken{Token: tok, FanIn: len(nodes)})
+		}
+	}
+	if len(pruned) == 0 {
+		return refs, nil
+	}
+	sort.Slice(pruned, func(i, j int) bool {
+		if pruned[i].FanIn != pruned[j].FanIn {
+			return pruned[i].FanIn > pruned[j].FanIn
+		}
+		return pruned[i].Token < pruned[j].Token // deterministic ties (mache-ff7e31)
+	})
+	kept := make(map[string][]string, len(refs)-len(pruned))
+	for tok, nodes := range refs {
+		if len(nodes) <= maxFanIn {
+			kept[tok] = nodes
+		}
+	}
+	return kept, pruned
+}
+
+// projectedPairs is the edge-insertion count buildProjection will perform:
+// Σ K(K-1)/2 over tokens. O(tokens), so it is cheap enough to compute BEFORE
+// deciding whether the projection is affordable.
+func projectedPairs(refs map[string][]string) int {
+	total := 0
+	for _, nodes := range refs {
+		k := len(nodes)
+		if k > 1 {
+			total += k * (k - 1) / 2
+		}
+	}
+	return total
+}
+
+// fitFanInToBudget lowers maxFanIn until the projection fits maxPairs, and
+// returns the cap that does.
+//
+// Tightening beats refusing. The old behaviour returned a note saying the graph
+// was too large and NO communities, which is the least useful of the available
+// answers — a caller asking "what clusters together" would rather have the
+// answer computed under a stated cap than nothing at all. The cap actually used
+// rides back on the result, so a clamped answer is never mistaken for an
+// unclamped one.
+//
+// Deterministic: a pure function of refs and the budget, halving from the
+// requested cap, so identical input yields an identical cap and therefore an
+// identical partition (mache-ff7e31).
+func fitFanInToBudget(refs map[string][]string, maxFanIn, maxPairs int) int {
+	if maxFanIn <= 0 || maxPairs <= 0 {
+		return maxFanIn // pruning or budgeting disabled — caller's explicit choice
+	}
+	for cap := maxFanIn; cap > 1; cap /= 2 {
+		kept, _ := pruneHubTokens(refs, cap)
+		if projectedPairs(kept) <= maxPairs {
+			return cap
+		}
+	}
+	return 1 // every remaining token connects at most one node: no pairs at all
 }

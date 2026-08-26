@@ -237,6 +237,13 @@ func DiscoverOrStart() (string, error) {
 	// long after this returned "found it!".
 	if sock, err := findExistingSocket(); err == nil {
 		if isSocketAlive(sock) {
+			// Adopting a daemon this process did not spawn, so the exact pin
+			// ResolveBinary enforces was never applied to it. Say so once if it
+			// drifts — every consumer of DiscoverOrStart inherits this, which
+			// is the point: the check previously ran only at `mache serve`
+			// startup, leaving `mache build` (the path that PRODUCES
+			// projections) unwarned (mache-233902).
+			warnIfAdoptedDaemonDrifts(sock)
 			return sock, nil
 		}
 		// Stale: file exists, no listener. Remove it so the spawn below
@@ -970,7 +977,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.19.0"
+const leylineBinaryVersion = "v0.19.1"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
