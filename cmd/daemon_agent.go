@@ -17,11 +17,25 @@ import (
 // address (serve.go default), and onboarding (`mache init`) registers clients
 // against it. stdio is a deliberate escape hatch (`mache serve --stdio`) for
 // CI / sandbox / headless use — it is never registered. See ADR-0022.
-const (
-	macheHTTPListen  = "localhost:7532"
-	macheHTTPURL     = "http://localhost:7532/mcp"
-	launchAgentLabel = "com.agentic-research.mache"
+// Overridable via environment so a second, isolated daemon can coexist with
+// the canonical one — the hermetic real-launchd E2E (mache-96465d layer 3)
+// runs a private label + port under a throwaway HOME, and an operator can run
+// a canary the same way. The plist/unit generator bakes the resolved values
+// into ProgramArguments, so the supervised daemon needs no environment of its
+// own.
+var (
+	macheHTTPListen  = envOr("MACHE_DAEMON_LISTEN", "localhost:7532")
+	macheHTTPURL     = "http://" + macheHTTPListen + "/mcp"
+	launchAgentLabel = envOr("MACHE_DAEMON_LABEL", "com.agentic-research.mache")
 )
+
+// envOr returns the environment value for key, or fallback when unset/empty.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // daemonAgentAutoload gates the launchctl/systemctl load step. Tests set it
 // false to exercise plist/unit writing without a real supervisor side effect.
@@ -223,7 +237,14 @@ func systemdQuote(s string) string {
 // KeepAlive only restarts on failure (SuccessfulExit=false) and ThrottleInterval
 // guards against a tight crash-loop if the daemon can't start (e.g. stale
 // ~/.mache state — mache-823d91). Pure function so it can be unit-tested.
-func launchAgentPlist(binPath, logPath string) string {
+// launchAgentPlist renders the LaunchAgent definition. HOME is baked as an
+// EnvironmentVariables entry: the agent is installed FOR a specific home
+// (plist path, log path, arena, project registry all live under it), and
+// launchd's default environment must not be able to point the daemon at a
+// different one. In production the two agree and the entry is redundant; in
+// the hermetic E2E (isolated HOME) it is what keeps the supervised daemon
+// inside the sandbox instead of writing to the real ~/.mache.
+func launchAgentPlist(binPath, homeDir, logPath string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -237,6 +258,11 @@ func launchAgentPlist(binPath, logPath string) string {
 		<string>--http</string>
 		<string>%s</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>%s</string>
+	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -254,7 +280,7 @@ func launchAgentPlist(binPath, logPath string) string {
 	<string>%s</string>
 </dict>
 </plist>
-`, launchAgentLabel, xmlText(binPath), macheHTTPListen, xmlText(logPath), xmlText(logPath))
+`, launchAgentLabel, xmlText(binPath), macheHTTPListen, xmlText(homeDir), xmlText(logPath), xmlText(logPath))
 }
 
 // systemdUserUnit renders the Linux systemd --user service that keepalives the
@@ -304,7 +330,7 @@ func installLaunchAgent(w io.Writer, binPath string) {
 		logf(w, "  [daemon] could not create %s: %v\n", agentDir, err)
 		return
 	}
-	if err := os.WriteFile(plistPath, []byte(launchAgentPlist(binPath, logPath)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(launchAgentPlist(binPath, home, logPath)), 0o644); err != nil {
 		logf(w, "  [daemon] could not write %s: %v\n", plistPath, err)
 		return
 	}
@@ -432,6 +458,13 @@ func restartDaemonAgent(w io.Writer) {
 		// races to unloaded — bootstrap wants that state anyway.
 		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
 		_ = runSupervisorCmd(launchctl, "bootout", target)
+		// bootout's effect is asynchronous: bootstrapping while the outgoing
+		// job still holds the label fails with EIO (caught by the launchd
+		// E2E). Wait for the label to actually leave the domain.
+		if !awaitJobGone() {
+			logf(w, "WARNING: the outgoing daemon did not release its job within %s; reload may fail\n",
+				daemonDrainTimeout)
+		}
 		if plist := launchAgentPlistPath(); plist != "" {
 			if err := runSupervisorCmd(launchctl, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plist); err != nil {
 				logf(w, "WARNING: could not reload the daemon job: %v\n", err)

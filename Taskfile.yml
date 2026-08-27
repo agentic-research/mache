@@ -350,6 +350,11 @@ tasks:
     cmds:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
 
+  test:launchd-e2e:
+    desc: "Hermetic REAL-launchd lifecycle E2E (darwin only): private label + isolated HOME through install → serve → binary-swap restart → session continuity → stop → crash-loop visibility. The only layer that can see identity pinning, RunAtLoad, and the bootout drain race — stubs structurally cannot (mache-96465d layer 3)."
+    cmds:
+      - MACHE_TEST_LAUNCHD_E2E=1 go test -v -run TestLaunchdLifecycleE2E -count=1 -timeout 10m ./cmd/
+
   leyline:ensure:
     desc: "Provision the exact published ley-line pin into ~/.mache/bin so backend and daemon-conformance tests cannot skip or substitute an unverified PATH build. Idempotent when the exact cached release is already available."
     cmds:

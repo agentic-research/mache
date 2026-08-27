@@ -15,10 +15,16 @@ import (
 )
 
 func TestLaunchAgentPlist_ShapeAndArgs(t *testing.T) {
-	plist := launchAgentPlist("/usr/local/bin/mache", "/tmp/mache.log")
+	plist := launchAgentPlist("/usr/local/bin/mache", "/Users/u", "/tmp/mache.log")
 
 	assert.Contains(t, plist, "<?xml")
 	assert.Contains(t, plist, launchAgentLabel)
+	// HOME is baked so launchd cannot point the daemon at a different home
+	// than the one the agent was installed for (and so the hermetic E2E's
+	// isolated HOME actually isolates the supervised process).
+	assert.Contains(t, plist, "<key>EnvironmentVariables</key>")
+	assert.Contains(t, plist, "<key>HOME</key>")
+	assert.Contains(t, plist, "<string>/Users/u</string>")
 	assert.Contains(t, plist, "/usr/local/bin/mache")
 	// Canonical transport: serve --http localhost:7532, never --stdio.
 	assert.Contains(t, plist, "<string>serve</string>")
@@ -43,7 +49,7 @@ func TestSystemdUserUnit_ExecStart(t *testing.T) {
 // producing a malformed plist.
 func TestLaunchAgentPlist_EscapesSpecialChars(t *testing.T) {
 	bin := "/Applications/Mache & Tools/<m>ache"
-	plist := launchAgentPlist(bin, "/tmp/a&b<c>.log")
+	plist := launchAgentPlist(bin, "/Users/a&b", "/tmp/a&b<c>.log")
 
 	// Must be well-formed XML end to end.
 	dec := xml.NewDecoder(strings.NewReader(plist))
