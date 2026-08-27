@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,7 +111,7 @@ func (d docCall) where() string {
 // and may legitimately quote a CLI surface that has since changed.
 func gatedDocs(t *testing.T) []string {
 	t.Helper()
-	root := macheRepoRoot(t)
+	root := testutil.MacheRepoRoot(t)
 	files := []string{
 		filepath.Join(root, "README.md"),
 		filepath.Join(root, "GETTING-STARTED.md"),
@@ -125,7 +126,7 @@ func gatedDocs(t *testing.T) []string {
 // docCallsInGatedDocs returns every command recovered from the gated docs.
 func docCallsInGatedDocs(t *testing.T) []docCall {
 	t.Helper()
-	root := macheRepoRoot(t)
+	root := testutil.MacheRepoRoot(t)
 	var all []docCall
 	for _, path := range gatedDocs(t) {
 		raw, err := os.ReadFile(path)
@@ -540,7 +541,7 @@ func (defs imageDefinitions_) forRef(ref string) (imageDefinition, bool) {
 // ships, rather than restating them.
 func imageDefinitions(t *testing.T) imageDefinitions_ {
 	t.Helper()
-	root := macheRepoRoot(t)
+	root := testutil.MacheRepoRoot(t)
 	apkoEntry, apkoCmd := parseApkoEntrypoint(t, filepath.Join(root, "apko.yaml"))
 	dockerEntry, dockerCmd := parseDockerfileEntrypoint(t, filepath.Join(root, "Dockerfile.release"))
 	return imageDefinitions_{

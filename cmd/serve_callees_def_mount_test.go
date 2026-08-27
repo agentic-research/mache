@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,7 +58,7 @@ func TestFindDefinition_AnnotatesMountOnComposite(t *testing.T) {
 	require.NoError(t, cg.Mount("billing", billing))
 
 	handler := makeFindDefinitionHandler(cg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Validate"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -65,7 +66,7 @@ func TestFindDefinition_AnnotatesMountOnComposite(t *testing.T) {
 		Symbol      string       `json:"symbol"`
 		Definitions []scopedItem `json:"definitions"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Equal(t, "Validate", resp.Symbol)
 	require.Len(t, resp.Definitions, 1)
 	assert.Equal(t, "auth/functions/Validate", resp.Definitions[0].Path)
@@ -78,7 +79,7 @@ func TestFindDefinition_AnnotatesMountOnComposite(t *testing.T) {
 func TestFindDefinition_NonCompositeKeepsLegacyShape(t *testing.T) {
 	auth, _ := twoMountStoresWithDefs(t)
 	handler := makeFindDefinitionHandler(auth)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Validate"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -86,7 +87,7 @@ func TestFindDefinition_NonCompositeKeepsLegacyShape(t *testing.T) {
 		Symbol      string   `json:"symbol"`
 		Definitions []string `json:"definitions"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Equal(t, "Validate", resp.Symbol)
 	assert.Equal(t, []string{"functions/Validate"}, resp.Definitions)
 }
@@ -112,14 +113,14 @@ func TestFindDefinition_FederatesAcrossMounts(t *testing.T) {
 		{"Charge", "billing", "billing/functions/Charge"},
 	} {
 		t.Run(tc.symbol, func(t *testing.T) {
-			res, err := handler(context.Background(), makeRequest(map[string]any{"symbol": tc.symbol}))
+			res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": tc.symbol}))
 			require.NoError(t, err)
 			require.False(t, res.IsError)
 
 			var resp struct {
 				Definitions []scopedItem `json:"definitions"`
 			}
-			require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+			require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 			require.Len(t, resp.Definitions, 1)
 			assert.Equal(t, tc.path, resp.Definitions[0].Path)
 			assert.Equal(t, tc.mount, resp.Definitions[0].Mount)
@@ -151,7 +152,7 @@ func TestFindCallees_AnnotatesMountOnComposite(t *testing.T) {
 		Data: []byte("package main\nfunc Validate() { Validate() }\n"),
 	})
 	require.NoError(t, auth.AddDef("Validate", "functions/Validate"))
-	auth.SetCallExtractor(testGoCallExtractor())
+	auth.SetCallExtractor(testutil.GoCallExtractorForTest())
 
 	billing := graph.NewMemoryStore()
 	billing.AddRoot(&graph.Node{ID: "functions", Mode: fs.ModeDir})
@@ -161,14 +162,14 @@ func TestFindCallees_AnnotatesMountOnComposite(t *testing.T) {
 	require.NoError(t, cg.Mount("billing", billing))
 
 	handler := makeFindCalleesHandler(cg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"path": "auth/functions/Validate"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "auth/functions/Validate"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Callees []scopedItem `json:"callees"`
 	}
-	if err := json.Unmarshal([]byte(resultText(t, res)), &resp); err != nil {
+	if err := json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp); err != nil {
 		// CGO tree-sitter may produce zero callees in some envs (no
 		// extractor wired in tests). The annotation path is the
 		// thing under test; if there are no callees we skip rather
@@ -216,7 +217,7 @@ func TestFindCallees_CrossMountResolvesAndAnnotates(t *testing.T) {
 		Data: []byte("package main\nfunc Caller() { Validate() }\n"),
 	})
 	require.NoError(t, auth.AddDef("Caller", "functions/Caller"))
-	auth.SetCallExtractor(testGoCallExtractor())
+	auth.SetCallExtractor(testutil.GoCallExtractorForTest())
 
 	// billing: defines Validate, the cross-mount callee target.
 	billing := graph.NewMemoryStore()
@@ -234,17 +235,17 @@ func TestFindCallees_CrossMountResolvesAndAnnotates(t *testing.T) {
 	cg := graph.NewCompositeGraph()
 	require.NoError(t, cg.Mount("auth", auth))
 	require.NoError(t, cg.Mount("billing", billing))
-	cg.SetCallExtractor(testGoCallExtractor())
+	cg.SetCallExtractor(testutil.GoCallExtractorForTest())
 
 	handler := makeFindCalleesHandler(cg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"path": "auth/functions/Caller"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "auth/functions/Caller"}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "find_callees must succeed; got: %s", resultText(t, res))
+	require.False(t, res.IsError, "find_callees must succeed; got: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Callees []scopedItem `json:"callees"`
 	}
-	if err := json.Unmarshal([]byte(resultText(t, res)), &resp); err != nil {
+	if err := json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp); err != nil {
 		t.Skipf("call extractor produced unparseable result in this env: %v", err)
 	}
 	if len(resp.Callees) == 0 {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,20 +52,20 @@ func runSmellMCPJSON(t *testing.T, dbPath, rule string) string {
 	// out a second connection loses them non-deterministically.
 	db.SetMaxOpenConns(1)
 
-	// smellTestGraph is the serve-mode backend shape this package already
+	// testutil.SmellTestGraph is the serve-mode backend shape this package already
 	// has: a graph.Graph carrying a SQL handle plus the .db path that opts it
 	// into capnp readthrough. Setting path is what makes this test meaningful
 	// — an unset path would silently reproduce the very defect under test.
-	lg := newTestLazyGraph(&smellTestGraph{
-		MemoryStore: graph.NewMemoryStore(), db: db, path: dbPath,
+	lg := newTestLazyGraph(&testutil.SmellTestGraph{
+		MemoryStore: graph.NewMemoryStore(), DB: db, Path: dbPath,
 	}, "")
 
-	res, err := makeFindSmellsHandler(lg)(context.Background(), makeRequest(map[string]any{
+	res, err := makeFindSmellsHandler(lg)(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": rule, "limit": float64(200),
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "MCP run must succeed: %s", resultText(t, res))
-	return resultText(t, res)
+	require.False(t, res.IsError, "MCP run must succeed: %s", testutil.ResultText(t, res))
+	return testutil.ResultText(t, res)
 }
 
 // TestFindSmells_MCPAndCLI_ByteForByteParity is the standing proof that the
@@ -94,7 +95,7 @@ func TestFindSmells_MCPAndCLI_ByteForByteParity(t *testing.T) {
 	// did not, so the two paths disagreed about whether pkg/Dead was dead.
 	t.Run("capnp binding is visible to both paths", func(t *testing.T) {
 		dbPath := writeSmellCLIFixture(t)
-		writeBindingLogForTest(t, dbPath,
+		testutil.WriteBindingLogForTest(t, dbPath,
 			"pkg/Dead", "Dead", "pkg/Caller", "file:///pkg/caller.go")
 
 		cliOut := runSmellCLIJSON(t, dbPath, "dead_code")

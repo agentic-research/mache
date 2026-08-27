@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // buildImpactBenchGraph seeds a chain graph: Root → L1.0…L1.fan → L2.0…L2.fan² → …
@@ -72,7 +73,7 @@ func BenchmarkGetImpact_Callers(b *testing.B) {
 	for _, depth := range []int{1, 2, 3, 5} {
 		store := buildImpactBenchGraph(b, 4, depth)
 		handler := makeGetImpactHandler(store)
-		req := makeRequest(map[string]any{
+		req := testutil.MakeRequest(map[string]any{
 			"symbol":    "Root",
 			"depth":     float64(depth),
 			"direction": "callers",
@@ -96,7 +97,7 @@ func BenchmarkGetImpact_Callers(b *testing.B) {
 func BenchmarkGetImpact_NoDef(b *testing.B) {
 	store := buildImpactBenchGraph(b, 4, 2)
 	handler := makeGetImpactHandler(store)
-	req := makeRequest(map[string]any{"symbol": "NotDefinedAnywhere"})
+	req := testutil.MakeRequest(map[string]any{"symbol": "NotDefinedAnywhere"})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
@@ -116,7 +117,7 @@ func BenchmarkGetImpact_FanWidth(b *testing.B) {
 	for _, fan := range []int{2, 4, 8} {
 		store := buildImpactBenchGraph(b, fan, 2)
 		handler := makeGetImpactHandler(store)
-		req := makeRequest(map[string]any{
+		req := testutil.MakeRequest(map[string]any{
 			"symbol":    "Root",
 			"depth":     float64(2),
 			"direction": "callers",

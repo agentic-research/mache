@@ -21,6 +21,7 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
 	machetmpl "github.com/agentic-research/mache/internal/template"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
 	"github.com/mark3labs/mcp-go/server"
@@ -29,108 +30,18 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Test helper: build a known graph fixture
-// ---------------------------------------------------------------------------
-
-// buildTestGraph creates a MemoryStore with a predictable tree:
-//
-//	pkg/
-//	  main/
-//	    source       -> "func main() {}"
-//	    context      -> "package main"
-//	  util/
-//	    helper/
-//	      source     -> "func Helper() {}"
-//	empty/
-//
-// Refs: "Helper" -> ["pkg/util/helper"]
-// Defs: "Helper" -> ["pkg/util/helper"]
-func buildTestGraph(t *testing.T) *graph.MemoryStore {
-	t.Helper()
-	store := graph.NewMemoryStore()
-
-	// Root
-	store.AddRoot(&graph.Node{
-		ID:       "pkg",
-		Mode:     fs.ModeDir,
-		Children: []string{"pkg/main", "pkg/util"},
-	})
-
-	// pkg/main dir
-	store.AddNode(&graph.Node{
-		ID:       "pkg/main",
-		Mode:     fs.ModeDir,
-		Children: []string{"pkg/main/source"},
-		Context:  []byte("package main"),
-	})
-	store.AddNode(&graph.Node{
-		ID:   "pkg/main/source",
-		Mode: 0,
-		Data: []byte("func main() {}"),
-	})
-
-	// pkg/util dir
-	store.AddNode(&graph.Node{
-		ID:       "pkg/util",
-		Mode:     fs.ModeDir,
-		Children: []string{"pkg/util/helper"},
-	})
-	store.AddNode(&graph.Node{
-		ID:       "pkg/util/helper",
-		Mode:     fs.ModeDir,
-		Children: []string{"pkg/util/helper/source"},
-	})
-	store.AddNode(&graph.Node{
-		ID:   "pkg/util/helper/source",
-		Mode: 0,
-		Data: []byte("func Helper() {}"),
-	})
-
-	// empty dir (no children)
-	store.AddRoot(&graph.Node{
-		ID:       "empty",
-		Mode:     fs.ModeDir,
-		Children: []string{},
-	})
-
-	// Refs: "Helper" is referenced by pkg/main/source
-	require.NoError(t, store.AddRef("Helper", "pkg/main/source"))
-	// Defs: "Helper" is defined in pkg/util/helper
-	require.NoError(t, store.AddDef("Helper", "pkg/util/helper"))
-
-	return store
-}
-
-// resultText extracts the text from the first content item of a CallToolResult.
-func resultText(t *testing.T, result *mcp.CallToolResult) string {
-	t.Helper()
-	require.NotNil(t, result)
-	require.NotEmpty(t, result.Content, "result should have content")
-	tc, ok := result.Content[0].(mcp.TextContent)
-	require.True(t, ok, "first content should be TextContent, got %T", result.Content[0])
-	return tc.Text
-}
-
-// makeRequest constructs a CallToolRequest with the given arguments.
-func makeRequest(args map[string]any) mcp.CallToolRequest {
-	var req mcp.CallToolRequest
-	req.Params.Arguments = args
-	return req
-}
-
-// ---------------------------------------------------------------------------
 // list_directory handler tests
 // ---------------------------------------------------------------------------
 
 func TestListDir_Root(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeListDirHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": ""}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	var entries []nodeEntry
 	require.NoError(t, json.Unmarshal([]byte(text), &entries))
 
@@ -145,15 +56,15 @@ func TestListDir_Root(t *testing.T) {
 }
 
 func TestListDir_Subdir(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeListDirHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "pkg"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var entries []nodeEntry
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &entries))
 
 	assert.Len(t, entries, 2)
 	names := map[string]string{}
@@ -165,15 +76,15 @@ func TestListDir_Subdir(t *testing.T) {
 }
 
 func TestListDir_IncludesFiles(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeListDirHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/main"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "pkg/main"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var entries []nodeEntry
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &entries))
 
 	// bead mache-6fbaf1: buildTestGraph's fixture records
 	// AddRef("Helper", "pkg/main/source") + AddDef("Helper", "pkg/util/helper"),
@@ -189,39 +100,39 @@ func TestListDir_IncludesFiles(t *testing.T) {
 }
 
 func TestListDir_Empty(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeListDirHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "empty"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "empty"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var entries []nodeEntry
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &entries))
 	assert.Empty(t, entries)
 }
 
 func TestListDir_NotFound(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeListDirHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "nonexistent"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "nonexistent"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "nonexistent")
+	assert.Contains(t, testutil.ResultText(t, result), "nonexistent")
 }
 
 func TestListDir_DefaultEmptyPath(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeListDirHandler(store)
 
 	// No "path" arg at all — should default to root
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var entries []nodeEntry
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &entries))
 	assert.Len(t, entries, 2)
 }
 
@@ -244,17 +155,17 @@ func TestListDir_ExcludeTests(t *testing.T) {
 	handler := makeListDirHandler(store)
 
 	// Without filter: all 4
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "go/graph/functions"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "go/graph/functions"}))
 	require.NoError(t, err)
 	var all []nodeEntry
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &all))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &all))
 	assert.Len(t, all, 4)
 
 	// With exclude_tests: only NewMemoryStore and compileLevels
-	result, err = handler(context.Background(), makeRequest(map[string]any{"path": "go/graph/functions", "exclude_tests": true}))
+	result, err = handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "go/graph/functions", "exclude_tests": true}))
 	require.NoError(t, err)
 	var filtered []nodeEntry
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &filtered))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &filtered))
 	assert.Len(t, filtered, 2)
 	names := make([]string, len(filtered))
 	for i, e := range filtered {
@@ -269,44 +180,44 @@ func TestListDir_ExcludeTests(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReadFile_Success(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeReadFileHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/main/source"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "pkg/main/source"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "func main() {}", resultText(t, result))
+	assert.Equal(t, "func main() {}", testutil.ResultText(t, result))
 }
 
 func TestReadFile_NotFound(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeReadFileHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "nonexistent"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "nonexistent"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "not found")
+	assert.Contains(t, testutil.ResultText(t, result), "not found")
 }
 
 func TestReadFile_IsDirectory(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeReadFileHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/main"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "pkg/main"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "directory")
+	assert.Contains(t, testutil.ResultText(t, result), "directory")
 }
 
 func TestReadFile_RequiredPath(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeReadFileHandler(store)
 
 	// Empty path
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 func TestReadFile_EmptyContent(t *testing.T) {
@@ -323,10 +234,10 @@ func TestReadFile_EmptyContent(t *testing.T) {
 	})
 
 	handler := makeReadFileHandler(store)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "dir/empty-file"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "dir/empty-file"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "", resultText(t, result))
+	assert.Equal(t, "", testutil.ResultText(t, result))
 }
 
 func TestReadFile_RejectsOversizedContent(t *testing.T) {
@@ -345,10 +256,10 @@ func TestReadFile_RejectsOversizedContent(t *testing.T) {
 	})
 
 	handler := makeReadFileHandler(store)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "dir/huge"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "dir/huge"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "should reject files exceeding max read size")
-	assert.Contains(t, resultText(t, result), "too large")
+	assert.Contains(t, testutil.ResultText(t, result), "too large")
 }
 
 func TestReadFile_BatchRejectsTotalContentOverflow(t *testing.T) {
@@ -372,7 +283,7 @@ func TestReadFile_BatchRejectsTotalContentOverflow(t *testing.T) {
 
 	handler := makeReadFileHandler(store)
 	pathsJSON, _ := json.Marshal(childIDs)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"paths": string(pathsJSON)}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"paths": string(pathsJSON)}))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "batch returns per-file results, not top-level error")
 
@@ -383,7 +294,7 @@ func TestReadFile_BatchRejectsTotalContentOverflow(t *testing.T) {
 		Error   string `json:"error,omitempty"`
 	}
 	var results []fileResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 	require.Len(t, results, 10, "should have a result entry for every requested path")
 
 	var succeeded, capped, skipped int
@@ -408,36 +319,36 @@ func TestReadFile_BatchRejectsTotalContentOverflow(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFindCallers_FoundWithoutLSPTable(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindCallersHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "Helper"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var paths []string
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &paths))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &paths))
 	assert.Contains(t, paths, "pkg/main/source")
 }
 
 func TestFindCallers_NotFound(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindCallersHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "NonExistent"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "NonExistent"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "[]", resultText(t, result))
+	assert.Equal(t, "[]", testutil.ResultText(t, result))
 }
 
 func TestFindCallers_RequiredToken(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindCallersHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"token": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 // ---------------------------------------------------------------------------
@@ -445,7 +356,7 @@ func TestFindCallers_RequiredToken(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFindCallees_ResolvesViaNodeRefsWithoutExtractor(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindCalleesHandler(store)
 
 	// bead mache-6fbaf1: even with no CallExtractor/ScopedCallExtractor
@@ -454,22 +365,22 @@ func TestFindCallees_ResolvesViaNodeRefsWithoutExtractor(t *testing.T) {
 	// fixture's AddRef("Helper", "pkg/main/source") + AddDef("Helper",
 	// "pkg/util/helper") already carries everything needed. This used to
 	// silently return [] with a "hint" — that was the bug.
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/main"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "pkg/main"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Contains(t, resultText(t, result), `"callees"`)
-	assert.Contains(t, resultText(t, result), `"pkg/util/helper"`)
-	assert.NotContains(t, resultText(t, result), `"hint"`)
+	assert.Contains(t, testutil.ResultText(t, result), `"callees"`)
+	assert.Contains(t, testutil.ResultText(t, result), `"pkg/util/helper"`)
+	assert.NotContains(t, testutil.ResultText(t, result), `"hint"`)
 }
 
 func TestFindCallees_RequiredPath(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindCalleesHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 // ---------------------------------------------------------------------------
@@ -477,14 +388,14 @@ func TestFindCallees_RequiredPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSearch_Found(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
 
 	handler := makeSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"pattern": "Helper"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
@@ -493,7 +404,7 @@ func TestSearch_Found(t *testing.T) {
 		Path  string `json:"path"`
 	}
 	var results []searchResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 	assert.NotEmpty(t, results)
 	assert.Equal(t, "Helper", results[0].Token)
 }
@@ -515,7 +426,7 @@ func TestSearch_Found(t *testing.T) {
 // these for find_callers; this puts search/role=reference in
 // agreement.
 func TestSearch_FiltersFileLevelSentinel(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 
@@ -528,7 +439,7 @@ func TestSearch_FiltersFileLevelSentinel(t *testing.T) {
 	require.NoError(t, store.FlushRefs())
 
 	handler := makeSearchHandler(store)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"pattern": "Helper"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
@@ -537,7 +448,7 @@ func TestSearch_FiltersFileLevelSentinel(t *testing.T) {
 		Path  string `json:"path"`
 	}
 	var results []searchResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 
 	for _, r := range results {
 		assert.NotContains(t, r.Path, "_file_level:",
@@ -548,34 +459,34 @@ func TestSearch_FiltersFileLevelSentinel(t *testing.T) {
 }
 
 func TestSearch_NoResults(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
 
 	handler := makeSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "ZZZ_NO_MATCH_%"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"pattern": "ZZZ_NO_MATCH_%"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var results []json.RawMessage
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 	assert.Empty(t, results)
 }
 
 func TestSearch_RequiredPattern(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
 
 	handler := makeSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"pattern": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 func TestSearch_WithLimit(t *testing.T) {
@@ -590,7 +501,7 @@ func TestSearch_WithLimit(t *testing.T) {
 
 	handler := makeSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"pattern": "Token",
 		"limit":   float64(5), // JSON numbers are float64
 	}))
@@ -602,7 +513,7 @@ func TestSearch_WithLimit(t *testing.T) {
 		Path  string `json:"path"`
 	}
 	var results []searchResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 	assert.Len(t, results, 5)
 }
 
@@ -617,7 +528,7 @@ func TestSearch_WildcardPattern(t *testing.T) {
 
 	handler := makeSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "Func%"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"pattern": "Func%"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
@@ -626,7 +537,7 @@ func TestSearch_WildcardPattern(t *testing.T) {
 		Path  string `json:"path"`
 	}
 	var results []searchResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 	assert.Len(t, results, 2)
 }
 
@@ -640,7 +551,7 @@ func TestSearch_DefinitionDedup(t *testing.T) {
 
 	handler := makeSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"pattern": "%GetCallers%",
 		"role":    "definition",
 	}))
@@ -652,7 +563,7 @@ func TestSearch_DefinitionDedup(t *testing.T) {
 		Path  string `json:"path"`
 	}
 	var results []searchResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 	// All three tokens point to the same path — should be deduped to 1 result
 	assert.Len(t, results, 1)
 	assert.Equal(t, "go/graph/methods/MemoryStore.GetCallers", results[0].Path)
@@ -679,12 +590,12 @@ func TestGetCommunities_Found(t *testing.T) {
 	require.NoError(t, store.AddRef("delta", "b3"))
 
 	handler := makeGetCommunitiesHandler(store)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var cr graph.CommunityResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &cr))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &cr))
 	assert.Equal(t, 6, cr.NumNodes)
 	assert.Len(t, cr.Communities, 2)
 	assert.Greater(t, cr.Modularity, 0.0)
@@ -694,12 +605,12 @@ func TestGetCommunities_Empty(t *testing.T) {
 	store := graph.NewMemoryStore()
 	handler := makeGetCommunitiesHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	// Empty refs should return a diagnostic object, not bare "[]"
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Contains(t, out, "message")
 	assert.Empty(t, out["communities"])
 }
@@ -712,16 +623,16 @@ func TestGetCommunities_CustomMinSize(t *testing.T) {
 	handler := makeGetCommunitiesHandler(store)
 
 	// Min size 2 → includes the pair
-	result, err := handler(context.Background(), makeRequest(map[string]any{"min_size": float64(2)}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"min_size": float64(2)}))
 	require.NoError(t, err)
 	var cr graph.CommunityResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &cr))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &cr))
 	assert.Len(t, cr.Communities, 1)
 
 	// Min size 10 → filters it out
-	result, err = handler(context.Background(), makeRequest(map[string]any{"min_size": float64(10)}))
+	result, err = handler(context.Background(), testutil.MakeRequest(map[string]any{"min_size": float64(10)}))
 	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &cr))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &cr))
 	assert.Empty(t, cr.Communities)
 }
 
@@ -808,7 +719,7 @@ func TestSearch_RoleDefinition_FallsThroughOnNilSearchDefs(t *testing.T) {
 	wrapper := &stubLazyWrapper{inner: store}
 
 	handler := makeSearchHandler(wrapper)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"pattern": "dedupSuffix",
 		"role":    "definition",
 	}))
@@ -820,7 +731,7 @@ func TestSearch_RoleDefinition_FallsThroughOnNilSearchDefs(t *testing.T) {
 		Path  string `json:"path"`
 		Role  string `json:"role"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &hits))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &hits))
 	require.Len(t, hits, 1,
 		"handler must fall through to DefsMap when SearchDefs returns nil — "+
 			"otherwise every wrapper-around-MemoryStore search returns [] regardless of data")
@@ -840,14 +751,14 @@ func TestSearch_RoleDefinition_WildcardThroughWrapper(t *testing.T) {
 
 	wrapper := &stubLazyWrapper{inner: store}
 	handler := makeSearchHandler(wrapper)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"pattern": "New%",
 		"role":    "definition",
 	}))
 	require.NoError(t, err)
 
 	var hits []map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &hits))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &hits))
 	require.Len(t, hits, 2,
 		"wildcard 'New%%' must match both New-prefixed defs via the fallback path")
 }
@@ -891,11 +802,11 @@ func TestGetCommunities_TruncatesOversizedOutput(t *testing.T) {
 	// without resorting to time.Sleep / Gosched.
 	pushDone := make(chan struct{})
 	handler := makeGetCommunitiesHandlerWithDone(store, pushDone)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	body := resultText(t, result)
+	body := testutil.ResultText(t, result)
 	var out struct {
 		Communities       []graph.Community
 		ElidedCommunities int
@@ -930,14 +841,14 @@ func TestGetCommunities_TruncatesOversizedOutput(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetOverview_Basic(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeGetOverviewHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	var ov map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text), &ov))
 
@@ -964,12 +875,12 @@ func TestGetOverview_EmptyStore(t *testing.T) {
 	store := graph.NewMemoryStore()
 	handler := makeGetOverviewHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var ov map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &ov))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &ov))
 	topLevel, ok := ov["top_level"]
 	assert.True(t, ok || topLevel == nil, "empty store should have null or empty top_level")
 }
@@ -979,14 +890,14 @@ func TestGetOverview_EmptyStore(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFindDefinition_Found(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindDefinitionHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Helper"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	var defResult struct {
 		Symbol      string   `json:"symbol"`
 		Definitions []string `json:"definitions"`
@@ -997,26 +908,26 @@ func TestFindDefinition_Found(t *testing.T) {
 }
 
 func TestFindDefinition_NotFound(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindDefinitionHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "NonExistent"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "NonExistent"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, "no definition found")
 }
 
 func TestFindDefinition_CaseInsensitive(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindDefinitionHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "helper"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	var defResult struct {
 		Symbol      string   `json:"symbol"`
 		Definitions []string `json:"definitions"`
@@ -1026,24 +937,24 @@ func TestFindDefinition_CaseInsensitive(t *testing.T) {
 }
 
 func TestFindDefinition_RequiredSymbol(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindDefinitionHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 func TestFindDefinition_UnavailableGraphIsNotReportedAsMissingSymbol(t *testing.T) {
 	graphErr := errors.New("workspace root unavailable (context deadline exceeded)")
 	handler := makeFindDefinitionHandler(newErrorLazyGraph(graphErr))
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "GetCallees"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "GetCallees"}))
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, graphErr.Error())
 	assert.NotContains(t, text, "no definition found",
 		"an unavailable graph cannot support a negative claim about the code")
@@ -1081,10 +992,10 @@ func TestGraphRegistry_CodeHandlersPreserveUnavailableGraphError(t *testing.T) {
 
 	for _, tc := range codeHandlers {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := registry.wrapHandler(tc.factory)(context.Background(), makeRequest(nil))
+			result, err := registry.wrapHandler(tc.factory)(context.Background(), testutil.MakeRequest(nil))
 			require.NoError(t, err)
 			require.True(t, result.IsError, "an unavailable graph must not become an empty code answer")
-			assert.Contains(t, resultText(t, result), graphErr.Error(),
+			assert.Contains(t, testutil.ResultText(t, result), graphErr.Error(),
 				"every code-query tool must preserve the root graph diagnostic")
 		})
 	}
@@ -1103,11 +1014,11 @@ func TestGraphRegistry_DegradedHandlerCanRunWithoutGraph(t *testing.T) {
 		}
 	})
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	assert.True(t, called)
-	assert.Equal(t, "degraded result", resultText(t, result))
+	assert.Equal(t, "degraded result", testutil.ResultText(t, result))
 }
 
 // TestFindDefinition_NoFuzzyByDefault — bead mache-nmia.
@@ -1116,14 +1027,14 @@ func TestGraphRegistry_DegradedHandlerCanRunWithoutGraph(t *testing.T) {
 // "Helper" as a substring suggestion in the prior implementation; now it
 // reports no definition unless fuzzy=true is explicitly passed.
 func TestFindDefinition_NoFuzzyByDefault(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindDefinitionHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Help"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Help"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, "no definition found", "default mode must not return substring matches")
 	assert.Contains(t, text, "fuzzy=true", "default-mode response should hint at fuzzy=true")
 	// Make sure we didn't accidentally serialize a defResult JSON.
@@ -1132,17 +1043,17 @@ func TestFindDefinition_NoFuzzyByDefault(t *testing.T) {
 
 // TestFindDefinition_FuzzyOptIn — fuzzy=true brings substring matches back.
 func TestFindDefinition_FuzzyOptIn(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindDefinitionHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol": "Help",
 		"fuzzy":  true,
 	}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	var resp struct {
 		Message     string   `json:"message"`
 		Suggestions []string `json:"suggestions"`
@@ -1156,16 +1067,16 @@ func TestFindDefinition_FuzzyOptIn(t *testing.T) {
 // TestFindDefinition_FuzzyShortSymbolSkipped — symbols below minFuzzyLen
 // don't fuzzy-match even when fuzzy=true (they would match too much).
 func TestFindDefinition_FuzzyShortSymbolSkipped(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindDefinitionHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol": "He", // 2 chars, would match "Helper" but is below threshold
 		"fuzzy":  true,
 	}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "no definition found")
+	assert.Contains(t, testutil.ResultText(t, result), "no definition found")
 }
 
 // TestCollectFuzzyMatches caps at the requested limit.
@@ -1185,21 +1096,21 @@ func TestCollectFuzzyMatches_RespectsLimit(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetTypeInfo_RequiredSymbol(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
 
 	handler := makeGetTypeInfoHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 func TestGetTypeInfo_NoLSPTable(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1207,10 +1118,10 @@ func TestGetTypeInfo_NoLSPTable(t *testing.T) {
 	handler := makeGetTypeInfoHandler(store)
 
 	// Without LSP data, should return an error message about missing table
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Helper"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "_lsp_hover")
+	assert.Contains(t, testutil.ResultText(t, result), "_lsp_hover")
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,7 +1129,7 @@ func TestGetTypeInfo_NoLSPTable(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetDiagnostics_NoLSPTable(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1226,14 +1137,14 @@ func TestGetDiagnostics_NoLSPTable(t *testing.T) {
 	handler := makeGetDiagnosticsHandler(store)
 
 	// Without LSP data, should return an error about missing table
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Helper"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "_lsp")
+	assert.Contains(t, testutil.ResultText(t, result), "_lsp")
 }
 
 func TestGetDiagnostics_NoLSPTableWithFile(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1242,14 +1153,14 @@ func TestGetDiagnostics_NoLSPTableWithFile(t *testing.T) {
 
 	// With file param but no LSP table, should attempt auto-enrichment
 	// (which will fail without ley-line daemon — that's expected)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol": "Helper",
 		"file":   "/tmp/nonexistent.go",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	// Should mention either _lsp or auto-enrichment failure
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.True(t, strings.Contains(text, "_lsp") || strings.Contains(text, "enrichment"),
 		"expected LSP or enrichment error, got: %s", text)
 }
@@ -1269,10 +1180,10 @@ func TestGetTypeInfo_RejectsNonRefsQuerierBackend(t *testing.T) {
 	g := &readOnlyGraph{node: &graph.Node{ID: "x"}}
 	handler := makeGetTypeInfoHandler(g)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Foo"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Foo"}))
 	require.NoError(t, err)
 	require.True(t, result.IsError, "non-graph.RefsQuerier backend must yield an error result")
-	assert.Contains(t, resultText(t, result), "SQL-capable",
+	assert.Contains(t, testutil.ResultText(t, result), "SQL-capable",
 		"error must explain the missing capability, not say 'data not available'")
 }
 
@@ -1280,10 +1191,10 @@ func TestGetDiagnostics_RejectsNonRefsQuerierBackend(t *testing.T) {
 	g := &readOnlyGraph{node: &graph.Node{ID: "x"}}
 	handler := makeGetDiagnosticsHandler(g)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{}))
 	require.NoError(t, err)
 	require.True(t, result.IsError, "non-graph.RefsQuerier backend must yield an error result")
-	assert.Contains(t, resultText(t, result), "SQL-capable")
+	assert.Contains(t, testutil.ResultText(t, result), "SQL-capable")
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,7 +1224,7 @@ func (g *dataflowGraph) GetCallees(id string) ([]*graph.Node, error) {
 }
 
 func TestGetDataflow_BuildsBoundedNodeRefEdges(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	store.AddNode(&graph.Node{
 		ID:       "pkg/util/Callee",
 		Mode:     fs.ModeDir,
@@ -1324,7 +1235,7 @@ func TestGetDataflow_BuildsBoundedNodeRefEdges(t *testing.T) {
 	require.NoError(t, store.AddRef("Callee", "pkg/util/helper/source"))
 
 	result, err := makeGetDataflowHandler(store)(context.Background(),
-		makeRequest(map[string]any{"symbol": "Helper", "direction": "callees", "depth": 2}))
+		testutil.MakeRequest(map[string]any{"symbol": "Helper", "direction": "callees", "depth": 2}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	assert.JSONEq(t, `{
@@ -1341,7 +1252,7 @@ func TestGetDataflow_BuildsBoundedNodeRefEdges(t *testing.T) {
 			"evidence":"node_ref"
 		}],
 		"truncated":false
-	}`, resultText(t, result))
+	}`, testutil.ResultText(t, result))
 }
 
 func TestGetDataflow_TraversesProductionSourceFileCallerRefs(t *testing.T) {
@@ -1367,12 +1278,12 @@ func TestGetDataflow_TraversesProductionSourceFileCallerRefs(t *testing.T) {
 	}
 
 	result, err := makeGetDataflowHandler(g)(context.Background(),
-		makeRequest(map[string]any{"symbol": "Root", "direction": "both", "depth": 2}))
+		testutil.MakeRequest(map[string]any{"symbol": "Root", "direction": "both", "depth": 2}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var flow dataflowResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &flow))
 	assert.Equal(t, []dataflowNode{
 		{Path: "flow/Leaf", Depth: 2},
 		{Path: "flow/Middle", Depth: 1},
@@ -1399,12 +1310,12 @@ func TestGetDataflow_UsesSingleFiveHundredItemBudget(t *testing.T) {
 	}
 
 	result, err := makeGetDataflowHandler(store)(context.Background(),
-		makeRequest(map[string]any{"symbol": "Root", "direction": "callers", "depth": 1}))
+		testutil.MakeRequest(map[string]any{"symbol": "Root", "direction": "callers", "depth": 1}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var flow dataflowResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &flow))
 	assert.Len(t, flow.Nodes, 251, "two roots plus 249 discovered callers consume 251 node items")
 	assert.Len(t, flow.Edges, 249, "each discovered caller also consumes one edge item")
 	assert.Equal(t, 500, len(flow.Nodes)+len(flow.Edges), "nodes and edges share one 500-item budget")
@@ -1428,12 +1339,12 @@ func TestGetDataflow_CapsDenseEdgeOutputAtFiveHundred(t *testing.T) {
 	require.NoError(t, store.AddRef("caller-000", "flow/Root"))
 
 	result, err := makeGetDataflowHandler(store)(context.Background(),
-		makeRequest(map[string]any{"symbol": "Root", "direction": "callers", "depth": 2}))
+		testutil.MakeRequest(map[string]any{"symbol": "Root", "direction": "callers", "depth": 2}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var flow dataflowResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &flow))
 	assert.LessOrEqual(t, len(flow.Nodes)+len(flow.Edges), 500)
 	assert.True(t, flow.Truncated)
 }
@@ -1452,12 +1363,12 @@ func TestGetDataflow_DeduplicatesUnderlyingNodeRefEdge(t *testing.T) {
 	}
 
 	result, err := makeGetDataflowHandler(g)(context.Background(),
-		makeRequest(map[string]any{"symbol": "Thing", "direction": "both", "depth": 2}))
+		testutil.MakeRequest(map[string]any{"symbol": "Thing", "direction": "both", "depth": 2}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var flow dataflowResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &flow))
 	assert.Equal(t, []dataflowEdge{{
 		From: "flow/A", To: "flow/B", Direction: "caller", Evidence: "node_ref",
 	}}, flow.Edges, "caller and callee discovery of the same node_ref must emit one edge")
@@ -1474,12 +1385,12 @@ func TestGetDataflow_SortsRootsAndEdges(t *testing.T) {
 	require.NoError(t, store.AddRef("Alpha", "flow/caller-a"))
 
 	result, err := makeGetDataflowHandler(store)(context.Background(),
-		makeRequest(map[string]any{"symbol": "Thing", "direction": "callers", "depth": 1}))
+		testutil.MakeRequest(map[string]any{"symbol": "Thing", "direction": "callers", "depth": 1}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var flow dataflowResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &flow))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &flow))
 	assert.Equal(t, []string{"flow/Alpha", "flow/Zed"}, flow.Roots)
 	assert.Equal(t, []dataflowEdge{
 		{From: "flow/caller-a", To: "flow/Alpha", Direction: "caller", Evidence: "node_ref"},
@@ -1488,26 +1399,26 @@ func TestGetDataflow_SortsRootsAndEdges(t *testing.T) {
 }
 
 func TestGetDataflow_ValidatesRequiredArguments(t *testing.T) {
-	handler := makeGetDataflowHandler(buildTestGraph(t))
+	handler := makeGetDataflowHandler(testutil.BuildTestGraph(t))
 
-	missing, err := handler(context.Background(), makeRequest(nil))
+	missing, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	assert.True(t, missing.IsError)
-	assert.Contains(t, resultText(t, missing), "symbol is required")
+	assert.Contains(t, testutil.ResultText(t, missing), "symbol is required")
 
-	invalid, err := handler(context.Background(), makeRequest(map[string]any{
+	invalid, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol": "Helper", "direction": "sideways",
 	}))
 	require.NoError(t, err)
 	assert.True(t, invalid.IsError)
-	assert.Contains(t, resultText(t, invalid), "direction")
+	assert.Contains(t, testutil.ResultText(t, invalid), "direction")
 }
 
 func TestGetDataflow_ValidatesDepthRange(t *testing.T) {
-	handler := makeGetDataflowHandler(buildTestGraph(t))
+	handler := makeGetDataflowHandler(testutil.BuildTestGraph(t))
 	for _, depth := range []int{1, 5} {
 		t.Run(fmt.Sprintf("accepts_%d", depth), func(t *testing.T) {
-			result, err := handler(context.Background(), makeRequest(map[string]any{
+			result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 				"symbol": "Helper", "depth": depth,
 			}))
 			require.NoError(t, err)
@@ -1516,12 +1427,12 @@ func TestGetDataflow_ValidatesDepthRange(t *testing.T) {
 	}
 	for _, depth := range []int{-1, 0, 6} {
 		t.Run(fmt.Sprintf("rejects_%d", depth), func(t *testing.T) {
-			result, err := handler(context.Background(), makeRequest(map[string]any{
+			result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 				"symbol": "Helper", "depth": depth,
 			}))
 			require.NoError(t, err)
 			assert.True(t, result.IsError)
-			assert.Contains(t, resultText(t, result), "depth must be between 1 and 5")
+			assert.Contains(t, testutil.ResultText(t, result), "depth must be between 1 and 5")
 		})
 	}
 }
@@ -1551,11 +1462,11 @@ func TestGetDataflow_SurfacesTraversalBackendErrors(t *testing.T) {
 			store.AddNode(&graph.Node{ID: "flow/Root", Mode: fs.ModeDir})
 			require.NoError(t, store.AddDef("Root", "flow/Root"))
 			result, err := makeGetDataflowHandler(tc.build(store))(context.Background(),
-				makeRequest(map[string]any{"symbol": "Root", "direction": tc.direction}))
+				testutil.MakeRequest(map[string]any{"symbol": "Root", "direction": tc.direction}))
 			require.NoError(t, err)
 			assert.True(t, result.IsError)
-			assert.Contains(t, resultText(t, result), tc.want)
-			assert.Contains(t, resultText(t, result), "synthetic")
+			assert.Contains(t, testutil.ResultText(t, result), tc.want)
+			assert.Contains(t, testutil.ResultText(t, result), "synthetic")
 		})
 	}
 }
@@ -1565,14 +1476,14 @@ func TestGetDataflow_SurfacesTraversalBackendErrors(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetImpact_Found(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeGetImpactHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Helper"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	var impact struct {
 		Symbol    string   `json:"symbol"`
 		Roots     []string `json:"roots"`
@@ -1596,32 +1507,32 @@ func TestGetImpact_Found(t *testing.T) {
 }
 
 func TestGetImpact_NotFound(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeGetImpactHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "NonExistent"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "NonExistent"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, "no definition found")
 }
 
 func TestGetImpact_RequiredSymbol(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeGetImpactHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 func TestGetImpact_CallersDirection(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeGetImpactHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol":    "Helper",
 		"direction": "callers",
 	}))
@@ -1631,21 +1542,21 @@ func TestGetImpact_CallersDirection(t *testing.T) {
 	var impact struct {
 		Direction string `json:"direction"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &impact))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &impact))
 	assert.Equal(t, "callers", impact.Direction)
 }
 
 func TestGetImpact_InvalidDirection(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeGetImpactHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol":    "Helper",
 		"direction": "invalid",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "direction")
+	assert.Contains(t, testutil.ResultText(t, result), "direction")
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,14 +1564,14 @@ func TestGetImpact_InvalidDirection(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetArchitecture_Basic(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeGetArchitectureHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	var arch struct {
 		MostReferenced    []any          `json:"most_referenced"`
 		KeyAbstractions   []any          `json:"key_abstractions"`
@@ -1692,14 +1603,14 @@ func TestGetArchitecture_EmptyStore(t *testing.T) {
 	store := graph.NewMemoryStore()
 	handler := makeGetArchitectureHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var arch struct {
 		FileCount int `json:"file_count"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &arch))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &arch))
 	assert.Equal(t, 0, arch.FileCount)
 }
 
@@ -1708,24 +1619,24 @@ func TestGetArchitecture_EmptyStore(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSemanticSearch_RequiredQuery(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeSemanticSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"query": ""}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"query": ""}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "required")
+	assert.Contains(t, testutil.ResultText(t, result), "required")
 }
 
 func TestSemanticSearch_NoLeyLine(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeSemanticSearchHandler(store)
 
 	// Without ley-line daemon, should return a meaningful error
-	result, err := handler(context.Background(), makeRequest(map[string]any{"query": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"query": "Helper"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "ley-line")
+	assert.Contains(t, testutil.ResultText(t, result), "ley-line")
 }
 
 // ---------------------------------------------------------------------------
@@ -1733,7 +1644,7 @@ func TestSemanticSearch_NoLeyLine(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegisterMCPTools_AllToolsRegistered(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1783,7 +1694,7 @@ func TestRegisterMCPTools_AllToolsRegistered(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMCPRoundtrip_ListDirectory(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1811,7 +1722,7 @@ func TestMCPRoundtrip_ListDirectory(t *testing.T) {
 }
 
 func TestMCPRoundtrip_ReadFile(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1836,7 +1747,7 @@ func TestMCPRoundtrip_ReadFile(t *testing.T) {
 }
 
 func TestMCPRoundtrip_FindCallers(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1864,7 +1775,7 @@ func TestMCPRoundtrip_FindCallers(t *testing.T) {
 }
 
 func TestMCPRoundtrip_Search(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -1897,7 +1808,7 @@ func TestMCPRoundtrip_Search(t *testing.T) {
 }
 
 func TestMCPRoundtrip_ErrorPropagation(t *testing.T) {
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	require.NoError(t, store.InitRefsDB())
 	defer func() { _ = store.Close() }()
 	require.NoError(t, store.FlushRefs())
@@ -2266,9 +2177,9 @@ func TestGraphRegistry_WrapHandler_RoutesToSessionGraph(t *testing.T) {
 
 	// Without session in context, falls back to default graph
 	ctx := context.Background()
-	result, err := handler(ctx, makeRequest(nil))
+	result, err := handler(ctx, testutil.MakeRequest(nil))
 	require.NoError(t, err)
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	require.False(t, result.IsError, "unexpected error: %s", text)
 
 	// Default graph has "default-root" as top-level
@@ -2380,12 +2291,12 @@ func TestGetCommunities_EmptyRefsReturnsMessage(t *testing.T) {
 	store := graph.NewMemoryStore()
 	handler := makeGetCommunitiesHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Contains(t, out, "message", "empty refs should return a diagnostic message")
 	communities, ok := out["communities"]
 	require.True(t, ok)
@@ -2404,10 +2315,10 @@ func TestGetCommunities_UnsupportedBackend(t *testing.T) {
 	g := &noRefsGraph{graph.NewMemoryStore()}
 	handler := makeGetCommunitiesHandler(g)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "unsupported backend should return an error result")
-	assert.Contains(t, resultText(t, result), "cross-reference")
+	assert.Contains(t, testutil.ResultText(t, result), "cross-reference")
 }
 
 // ---------------------------------------------------------------------------
@@ -2442,11 +2353,11 @@ func TestGetDiagram_BasicMermaid(t *testing.T) {
 	store := buildDiagramTestGraph(t)
 	handler := makeGetDiagramHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "should succeed with refs data")
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, "graph TD", "default layout should be TD")
 	assert.Contains(t, text, "subgraph", "multi-member classes should produce subgraphs")
 }
@@ -2455,11 +2366,11 @@ func TestGetDiagram_LayoutOverride(t *testing.T) {
 	store := buildDiagramTestGraph(t)
 	handler := makeGetDiagramHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"layout": "LR"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"layout": "LR"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, "graph LR", "layout override should be respected")
 }
 
@@ -2467,30 +2378,30 @@ func TestGetDiagram_InvalidLayout(t *testing.T) {
 	store := buildDiagramTestGraph(t)
 	handler := makeGetDiagramHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"layout": "DIAGONAL"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"layout": "DIAGONAL"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "invalid layout should return error")
-	assert.Contains(t, resultText(t, result), "invalid layout")
+	assert.Contains(t, testutil.ResultText(t, result), "invalid layout")
 }
 
 func TestGetDiagram_NoRefs(t *testing.T) {
 	store := graph.NewMemoryStore()
 	handler := makeGetDiagramHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "empty refs should return error")
-	assert.Contains(t, resultText(t, result), "cross-references")
+	assert.Contains(t, testutil.ResultText(t, result), "cross-references")
 }
 
 func TestGetDiagram_UnsupportedBackend(t *testing.T) {
 	g := &noRefsGraph{graph.NewMemoryStore()}
 	handler := makeGetDiagramHandler(g)
 
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "unsupported backend should return error")
-	assert.Contains(t, resultText(t, result), "cross-reference")
+	assert.Contains(t, testutil.ResultText(t, result), "cross-reference")
 }
 
 func TestGetDiagram_SingleCommunity(t *testing.T) {
@@ -2502,11 +2413,11 @@ func TestGetDiagram_SingleCommunity(t *testing.T) {
 	require.NoError(t, store.AddRef("solo", "x2"))
 
 	handler := makeGetDiagramHandler(store)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "single community is valid")
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, "graph TD")
 	assert.NotContains(t, text, "-->", "single community should have no cross-class edges")
 }
@@ -2515,10 +2426,10 @@ func TestGetDiagram_CaseInsensitiveLayout(t *testing.T) {
 	store := buildDiagramTestGraph(t)
 	handler := makeGetDiagramHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"layout": "lr"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"layout": "lr"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "graph LR", "lowercase layout should be normalized")
+	assert.Contains(t, testutil.ResultText(t, result), "graph LR", "lowercase layout should be normalized")
 }
 
 // schemaGraph wraps a MemoryStore and adds schemaProvider support.
@@ -2542,10 +2453,10 @@ func TestGetDiagram_NameResolvesSchemaLayout(t *testing.T) {
 	}
 
 	handler := makeGetDiagramHandler(sg)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"name": "architecture"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"name": "architecture"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "graph LR", "name should resolve to schema-defined layout")
+	assert.Contains(t, testutil.ResultText(t, result), "graph LR", "name should resolve to schema-defined layout")
 }
 
 func TestGetDiagram_NameNotInSchema(t *testing.T) {
@@ -2561,10 +2472,10 @@ func TestGetDiagram_NameNotInSchema(t *testing.T) {
 	}
 
 	handler := makeGetDiagramHandler(sg)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"name": "missing"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"name": "missing"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "undefined diagram name should return error")
-	assert.Contains(t, resultText(t, result), "not defined")
+	assert.Contains(t, testutil.ResultText(t, result), "not defined")
 }
 
 func TestGetDiagram_LayoutOverridesName(t *testing.T) {
@@ -2581,13 +2492,13 @@ func TestGetDiagram_LayoutOverridesName(t *testing.T) {
 
 	// Explicit layout should take precedence over schema definition
 	handler := makeGetDiagramHandler(sg)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"name":   "architecture",
 		"layout": "BT",
 	}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "graph BT", "explicit layout should override schema")
+	assert.Contains(t, testutil.ResultText(t, result), "graph BT", "explicit layout should override schema")
 }
 
 func TestGetDiagram_SystemNameAlwaysAllowed(t *testing.T) {
@@ -2604,10 +2515,10 @@ func TestGetDiagram_SystemNameAlwaysAllowed(t *testing.T) {
 
 	// "system" should work even when not explicitly in the schema
 	handler := makeGetDiagramHandler(sg)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"name": "system"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"name": "system"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "graph TD", "system should default to TD")
+	assert.Contains(t, testutil.ResultText(t, result), "graph TD", "system should default to TD")
 }
 
 // ---------------------------------------------------------------------------
@@ -2640,12 +2551,12 @@ func TestFindCallees_GenericNameWarning(t *testing.T) {
 	})
 
 	handler := makeFindCalleesHandler(store)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"path": "pkg/svc"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "pkg/svc"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Contains(t, out, "callees")
 	assert.Contains(t, out, "warnings", "generic names should produce a warnings field")
 	warnings := out["warnings"].([]any)
@@ -2665,10 +2576,10 @@ func TestSearch_NonSQLiteBackendReturnsError(t *testing.T) {
 	g := &noQueryGraph{graph.NewMemoryStore()}
 	handler := makeSearchHandler(g)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "Foo"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"pattern": "Foo"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError, "non-SQLite backend should return an error, not panic")
-	assert.Contains(t, resultText(t, result), "role=definition")
+	assert.Contains(t, testutil.ResultText(t, result), "role=definition")
 }
 
 func TestRootURIToPath(t *testing.T) {
@@ -2785,7 +2696,7 @@ func TestArena_AllTools(t *testing.T) {
 	defer resolver.Close()
 
 	engine := ingest.NewEngine(schema, store)
-	astDB, astCleanup, ppErr := attachLeylineASTWalkerForTest(t, graphDir, engine)
+	astDB, astCleanup, ppErr := testutil.AttachLeylineASTWalkerForTest(t, graphDir, engine)
 	if ppErr != nil {
 		t.Skipf("pinned leyline unavailable for source projection: %v", ppErr)
 	}
@@ -2832,23 +2743,23 @@ func TestArena_AllTools(t *testing.T) {
 	// --- 1. list_directory ---
 	t.Run("list_directory", func(t *testing.T) {
 		handler := makeListDirHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"path": ""}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": ""}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		var entries []nodeEntry
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &entries))
 		assert.NotEmpty(t, entries, "root listing should have entries")
 	})
 
 	// --- 2. read_file ---
 	t.Run("read_file", func(t *testing.T) {
 		handler := makeReadFileHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"path": knownFilePath}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": knownFilePath}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.NotEmpty(t, text, "read_file should return non-empty content")
 	})
 
@@ -2857,49 +2768,49 @@ func TestArena_AllTools(t *testing.T) {
 		handler := makeFindCallersHandler(store)
 		// find_callers indexes function calls (not type references).
 		// NewMemoryStore is called throughout graph test files.
-		result, err := handler(context.Background(), makeRequest(map[string]any{"token": "NewMemoryStore"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "NewMemoryStore"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		var paths []string
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &paths))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &paths))
 		assert.NotEmpty(t, paths, "NewMemoryStore should have callers in graph")
 	})
 
 	// --- 4. find_callees ---
 	t.Run("find_callees", func(t *testing.T) {
 		handler := makeFindCalleesHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"path": knownDirPath}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": knownDirPath}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
-		text := resultText(t, result)
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
+		text := testutil.ResultText(t, result)
 		assert.NotEmpty(t, text, "find_callees should return JSON output")
 	})
 
 	// --- 5. search ---
 	t.Run("search", func(t *testing.T) {
 		handler := makeSearchHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"pattern": "%Memory%"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"pattern": "%Memory%"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		type searchResult struct {
 			Token string `json:"token"`
 			Path  string `json:"path"`
 		}
 		var results []searchResult
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &results))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &results))
 		assert.NotEmpty(t, results, "search for %%Memory%% should find matches")
 	})
 
 	// --- 6. semantic_search ---
 	t.Run("semantic_search", func(t *testing.T) {
 		handler := makeSemanticSearchHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"query": "memory store"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"query": "memory store"}))
 		require.NoError(t, err)
 		// Semantic search requires ley-line daemon; graceful error if not running.
 		require.NotNil(t, result)
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.NotEmpty(t, text, "semantic_search should return some output")
 	})
 
@@ -2917,12 +2828,12 @@ func TestArena_AllTools(t *testing.T) {
 		t.Setenv("LEYLINE_SOCKET", "/tmp/nonexistent-leyline-test.sock")
 		pushDone := make(chan struct{})
 		handler := makeGetCommunitiesHandlerWithDone(store, pushDone)
-		result, err := handler(context.Background(), makeRequest(nil))
+		result, err := handler(context.Background(), testutil.MakeRequest(nil))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		var cr graph.CommunityResult
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &cr))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &cr))
 		assert.Greater(t, cr.NumNodes, 0, "should detect nodes in communities")
 		assert.NotEmpty(t, cr.Communities, "should detect at least one community")
 		assert.Greater(t, cr.Modularity, 0.0, "modularity should be positive")
@@ -2937,11 +2848,11 @@ func TestArena_AllTools(t *testing.T) {
 	// --- 8. find_definition ---
 	t.Run("find_definition", func(t *testing.T) {
 		handler := makeFindDefinitionHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "MemoryStore"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.Contains(t, text, "MemoryStore", "should find definition for MemoryStore")
 		assert.Contains(t, text, "definitions", "response should have definitions field")
 	})
@@ -2949,29 +2860,29 @@ func TestArena_AllTools(t *testing.T) {
 	// --- 9. get_type_info ---
 	t.Run("get_type_info", func(t *testing.T) {
 		handler := makeGetTypeInfoHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "MemoryStore"}))
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.NotEmpty(t, text, "get_type_info should return some output")
 	})
 
 	// --- 10. get_diagnostics ---
 	t.Run("get_diagnostics", func(t *testing.T) {
 		handler := makeGetDiagnosticsHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "MemoryStore"}))
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.NotEmpty(t, text, "get_diagnostics should return some output")
 	})
 
 	// --- 11. get_overview ---
 	t.Run("get_overview", func(t *testing.T) {
 		handler := makeGetOverviewHandler(store)
-		result, err := handler(context.Background(), makeRequest(nil))
+		result, err := handler(context.Background(), testutil.MakeRequest(nil))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		type overview struct {
 			TotalDirs  int `json:"total_dirs"`
@@ -2980,7 +2891,7 @@ func TestArena_AllTools(t *testing.T) {
 			DefTokens  int `json:"def_tokens"`
 		}
 		var ov overview
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &ov))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &ov))
 		assert.Greater(t, ov.TotalDirs+ov.TotalFiles, 0, "overview should report nodes")
 		assert.Greater(t, ov.RefTokens, 0, "overview should report ref tokens")
 	})
@@ -2988,11 +2899,11 @@ func TestArena_AllTools(t *testing.T) {
 	// --- 12. get_impact ---
 	t.Run("get_impact", func(t *testing.T) {
 		handler := makeGetImpactHandler(store)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "MemoryStore"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "MemoryStore"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.NotEmpty(t, text, "get_impact should return impact info")
 		assert.Contains(t, text, "MemoryStore", "impact result should reference the symbol")
 	})
@@ -3000,9 +2911,9 @@ func TestArena_AllTools(t *testing.T) {
 	// --- 13. get_architecture ---
 	t.Run("get_architecture", func(t *testing.T) {
 		handler := makeGetArchitectureHandler(store)
-		result, err := handler(context.Background(), makeRequest(nil))
+		result, err := handler(context.Background(), testutil.MakeRequest(nil))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		type architecture struct {
 			MostReferenced    []any          `json:"most_referenced"`
@@ -3012,7 +2923,7 @@ func TestArena_AllTools(t *testing.T) {
 			TopLevelBreakdown map[string]int `json:"top_level_breakdown"`
 		}
 		var arch architecture
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &arch))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &arch))
 		assert.Greater(t, arch.FileCount, 0, "architecture should count files")
 		assert.NotEmpty(t, arch.TopLevelBreakdown, "should have top-level breakdown")
 	})
@@ -3020,11 +2931,11 @@ func TestArena_AllTools(t *testing.T) {
 	// --- 14. get_diagram ---
 	t.Run("get_diagram", func(t *testing.T) {
 		handler := makeGetDiagramHandler(store)
-		result, err := handler(context.Background(), makeRequest(nil))
+		result, err := handler(context.Background(), testutil.MakeRequest(nil))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.Contains(t, text, "graph TD", "diagram should start with mermaid directive")
 		assert.Contains(t, text, "subgraph", "diagram should contain subgraph sections")
 	})
@@ -3260,12 +3171,12 @@ func TestSQLiteGraphGoldenPath(t *testing.T) {
 	// Phase 3: Exercise MCP tool handlers against the SQLiteGraph.
 	t.Run("list_directory_root", func(t *testing.T) {
 		handler := makeListDirHandler(sg)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"path": ""}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": ""}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		var entries []nodeEntry
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &entries))
 		assert.NotEmpty(t, entries, "root should have entries")
 
 		// MCP schema projects: tools/, resources/, prompts/
@@ -3278,33 +3189,33 @@ func TestSQLiteGraphGoldenPath(t *testing.T) {
 
 	t.Run("list_directory_tools", func(t *testing.T) {
 		handler := makeListDirHandler(sg)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"path": "tools"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "tools"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
 		var entries []nodeEntry
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &entries))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &entries))
 		// MCP sample has 3 tools: search-issues, create-issue, read-file
 		assert.GreaterOrEqual(t, len(entries), 3, "tools/ should have at least 3 entries")
 	})
 
 	t.Run("read_file_tool_description", func(t *testing.T) {
 		handler := makeReadFileHandler(sg)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"path": "tools/search-issues/description"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "tools/search-issues/description"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.Contains(t, text, "Search for issues", "description should contain tool purpose")
 	})
 
 	t.Run("read_file_input_schema_json", func(t *testing.T) {
 		handler := makeReadFileHandler(sg)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"path": "tools/search-issues/input-schema.json"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"path": "tools/search-issues/input-schema.json"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		var inputSchema map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &inputSchema), "input-schema.json must be valid JSON")
 		assert.Equal(t, "object", inputSchema["type"])
@@ -3314,21 +3225,21 @@ func TestSQLiteGraphGoldenPath(t *testing.T) {
 		handler := makeSearchHandler(sg)
 		// JSON data schemas don't produce defs — verify search returns a clean
 		// response (empty array, no crash) rather than an error.
-		result, err := handler(context.Background(), makeRequest(map[string]any{
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 			"pattern": "%search%",
 			"role":    "definition",
 		}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		// Valid JSON response (may be empty array for JSON data schemas).
 		assert.True(t, strings.HasPrefix(text, "["), "should return JSON array")
 	})
 
 	t.Run("find_definition", func(t *testing.T) {
 		handler := makeFindDefinitionHandler(sg)
-		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "search-issues"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "search-issues"}))
 		require.NoError(t, err)
 		// May or may not find results depending on defs indexing — just verify no crash.
 		require.NotNil(t, result)
@@ -3336,11 +3247,11 @@ func TestSQLiteGraphGoldenPath(t *testing.T) {
 
 	t.Run("get_overview", func(t *testing.T) {
 		handler := makeGetOverviewHandler(sg)
-		result, err := handler(context.Background(), makeRequest(map[string]any{}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.NotEmpty(t, text, "overview should return non-empty content")
 	})
 }
@@ -3425,11 +3336,11 @@ func TestFindDefinition_LSPFallback(t *testing.T) {
 	// Actually, DefsMap for SQLiteGraph reads from node_defs table. Our
 	// fixture doesn't have node_defs, only node_refs. So DefsMap will be
 	// empty and the LSP fallback should kick in for any symbol.
-	result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Validate"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 
 	// Should come from LSP fallback since DefsMap is empty
 	var lspResult struct {
@@ -3448,11 +3359,11 @@ func TestFindCallers_WithLSPRefs(t *testing.T) {
 	sg := openLSPFixture(t)
 	handler := makeFindCallersHandler(sg)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "Validate"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 
 	// The fixture has node_refs for Validate, so GetCallers returns graph
 	// callers. LSP refs should also be present in the response.
@@ -3486,11 +3397,11 @@ func TestLSPPrebakedEndToEnd(t *testing.T) {
 	t.Run("get_type_info", func(t *testing.T) {
 		handler := makeGetTypeInfoHandler(sg)
 
-		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Validate"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.Contains(t, text, "func Validate", "hover text should contain function signature")
 	})
 
@@ -3499,11 +3410,11 @@ func TestLSPPrebakedEndToEnd(t *testing.T) {
 		handler := makeGetDiagnosticsHandler(sg)
 
 		// Query all diagnostics (no symbol filter) — fixture has clean code, no diagnostics
-		result, err := handler(context.Background(), makeRequest(nil))
+		result, err := handler(context.Background(), testutil.MakeRequest(nil))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		// Fixture _lsp rows have empty diagnostics — response should report none found
 		assert.Contains(t, text, "no diagnostics found", "clean fixture should report no diagnostics")
 	})
@@ -3512,11 +3423,11 @@ func TestLSPPrebakedEndToEnd(t *testing.T) {
 	t.Run("find_definition", func(t *testing.T) {
 		handler := makeFindDefinitionHandler(sg)
 
-		result, err := handler(context.Background(), makeRequest(map[string]any{"symbol": "Validate"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"symbol": "Validate"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		// LSP fallback path: fixture has _lsp_defs but no node_defs table
 		assert.Contains(t, text, "file:///project", "definition should contain file URI from _lsp_defs")
 	})
@@ -3525,11 +3436,11 @@ func TestLSPPrebakedEndToEnd(t *testing.T) {
 	t.Run("find_callers", func(t *testing.T) {
 		handler := makeFindCallersHandler(sg)
 
-		result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "Validate"}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		assert.Contains(t, text, "main_test.go", "LSP refs should include main_test.go")
 		assert.Contains(t, text, "handler.go", "LSP refs should include handler.go")
 	})
@@ -3538,11 +3449,11 @@ func TestLSPPrebakedEndToEnd(t *testing.T) {
 	t.Run("get_overview", func(t *testing.T) {
 		handler := makeGetOverviewHandler(sg)
 
-		result, err := handler(context.Background(), makeRequest(nil))
+		result, err := handler(context.Background(), testutil.MakeRequest(nil))
 		require.NoError(t, err)
-		require.False(t, result.IsError, "unexpected error: %s", resultText(t, result))
+		require.False(t, result.IsError, "unexpected error: %s", testutil.ResultText(t, result))
 
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		require.NotEmpty(t, text, "overview should return non-empty response")
 
 		var ov map[string]any

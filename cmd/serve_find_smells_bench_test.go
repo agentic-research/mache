@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	_ "modernc.org/sqlite"
 )
 
@@ -17,7 +18,7 @@ import (
 // def). For _ast we synthesize one source_file per "package" (10 defs
 // per package) plus one function_declaration per def — enough to make
 // cyclomatic_complexity non-trivial.
-func seedSmellBench(b *testing.B, nDefs int) *smellTestGraph {
+func seedSmellBench(b *testing.B, nDefs int) *testutil.SmellTestGraph {
 	b.Helper()
 	dbPath := filepath.Join(b.TempDir(), "smells.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -98,7 +99,7 @@ func seedSmellBench(b *testing.B, nDefs int) *smellTestGraph {
 	if err := tx.Commit(); err != nil {
 		b.Fatal(err)
 	}
-	return &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
+	return &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db}
 }
 
 // BenchmarkFindSmells_DeadCode exercises the node_defs/node_refs path,
@@ -108,9 +109,9 @@ func BenchmarkFindSmells_DeadCode(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			tg := seedSmellBench(b, n)
-			defer func() { _ = tg.db.Close() }()
+			defer func() { _ = tg.DB.Close() }()
 			handler := makeFindSmellsHandler(tg)
-			req := makeRequest(map[string]any{"rule": "dead_code", "limit": float64(10000)})
+			req := testutil.MakeRequest(map[string]any{"rule": "dead_code", "limit": float64(10000)})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -130,9 +131,9 @@ func BenchmarkFindSmells_CyclomaticComplexity(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			tg := seedSmellBench(b, n)
-			defer func() { _ = tg.db.Close() }()
+			defer func() { _ = tg.DB.Close() }()
 			handler := makeFindSmellsHandler(tg)
-			req := makeRequest(map[string]any{
+			req := testutil.MakeRequest(map[string]any{
 				"rule":       "cyclomatic_complexity",
 				"limit":      float64(10000),
 				"min_metric": float64(1),
@@ -156,9 +157,9 @@ func BenchmarkFindSmells_FanOutSkew(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			tg := seedSmellBench(b, n)
-			defer func() { _ = tg.db.Close() }()
+			defer func() { _ = tg.DB.Close() }()
 			handler := makeFindSmellsHandler(tg)
-			req := makeRequest(map[string]any{"rule": "fan_out_skew", "limit": float64(10000)})
+			req := testutil.MakeRequest(map[string]any{"rule": "fan_out_skew", "limit": float64(10000)})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -176,9 +177,9 @@ func BenchmarkFindSmells_FanOutSkew(b *testing.B) {
 // agents pre-flighting the tool against a backend.
 func BenchmarkFindSmells_RulesListing(b *testing.B) {
 	tg := seedSmellBench(b, 0)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 	handler := makeFindSmellsHandler(tg)
-	req := makeRequest(map[string]any{})
+	req := testutil.MakeRequest(map[string]any{})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -199,9 +200,9 @@ func BenchmarkFindSmells_UntestedFunction(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			tg := seedSmellBench(b, n)
-			defer func() { _ = tg.db.Close() }()
+			defer func() { _ = tg.DB.Close() }()
 			handler := makeFindSmellsHandler(tg)
-			req := makeRequest(map[string]any{"rule": "untested_function", "limit": float64(10000)})
+			req := testutil.MakeRequest(map[string]any{"rule": "untested_function", "limit": float64(10000)})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -221,9 +222,9 @@ func BenchmarkFindSmells_DuplicateDefinitions(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			tg := seedSmellBench(b, n)
-			defer func() { _ = tg.db.Close() }()
+			defer func() { _ = tg.DB.Close() }()
 			handler := makeFindSmellsHandler(tg)
-			req := makeRequest(map[string]any{"rule": "duplicate_definitions", "limit": float64(10000)})
+			req := testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions", "limit": float64(10000)})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -244,9 +245,9 @@ func BenchmarkFindSmells_GodFile(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			tg := seedSmellBench(b, n)
-			defer func() { _ = tg.db.Close() }()
+			defer func() { _ = tg.DB.Close() }()
 			handler := makeFindSmellsHandler(tg)
-			req := makeRequest(map[string]any{"rule": "god_file", "limit": float64(10000)})
+			req := testutil.MakeRequest(map[string]any{"rule": "god_file", "limit": float64(10000)})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {

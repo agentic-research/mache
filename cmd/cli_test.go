@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -63,7 +64,7 @@ func TestBuild_ProducesDB(t *testing.T) {
 // consumed by graph callers: an import must survive as a typed gomod token in
 // node_refs, not merely exist in the temporary _ast database.
 func TestBuild_RegisteredGoImportRefsReachNodeRefs(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
@@ -136,7 +137,7 @@ func inferGoFCASchema(t *testing.T, srcDir string, goFiles int) *api.Topology {
 // (lattice.InferFromASTDB) → runBuildViaLeylineSchema projection —
 // the same composition the mount/serve --infer paths use.
 func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
@@ -187,7 +188,7 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 // and stamps Language="go" on every generated node — the projection
 // must then route b.js to _project_files/ instead of matching it.
 func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))

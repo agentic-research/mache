@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // buildBenchGraph constructs a directory with `nChildren` subdirs, each
@@ -116,7 +117,7 @@ func BenchmarkListDirectory(b *testing.B) {
 		b.Run(fmt.Sprintf("children=%d", n), func(b *testing.B) {
 			store := buildBenchGraph(b, n)
 			handler := makeListDirHandler(store)
-			req := makeRequest(map[string]any{"path": "pkg"})
+			req := testutil.MakeRequest(map[string]any{"path": "pkg"})
 			ctx := context.Background()
 
 			if _, err := handler(ctx, req); err != nil {

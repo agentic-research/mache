@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // buildFindCallersBenchGraph seeds a MemoryStore where one popular
@@ -44,7 +45,7 @@ func BenchmarkFindCallers_HotToken(b *testing.B) {
 		b.Run(fmt.Sprintf("fanout=%d", n), func(b *testing.B) {
 			store := buildFindCallersBenchGraph(b, n)
 			handler := makeFindCallersHandler(store)
-			req := makeRequest(map[string]any{"token": "hot"})
+			req := testutil.MakeRequest(map[string]any{"token": "hot"})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for range b.N {
@@ -63,7 +64,7 @@ func BenchmarkFindCallers_HotToken(b *testing.B) {
 func BenchmarkFindCallers_RareToken(b *testing.B) {
 	store := buildFindCallersBenchGraph(b, 100)
 	handler := makeFindCallersHandler(store)
-	req := makeRequest(map[string]any{"token": "cold"})
+	req := testutil.MakeRequest(map[string]any{"token": "cold"})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
@@ -81,7 +82,7 @@ func BenchmarkFindCallers_RareToken(b *testing.B) {
 func BenchmarkFindCallers_MissingToken(b *testing.B) {
 	store := buildFindCallersBenchGraph(b, 1000)
 	handler := makeFindCallersHandler(store)
-	req := makeRequest(map[string]any{"token": "neverReferenced"})
+	req := testutil.MakeRequest(map[string]any{"token": "neverReferenced"})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {

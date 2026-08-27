@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // buildReadFileBenchGraph seeds a MemoryStore with files of varying
@@ -47,7 +48,7 @@ func BenchmarkReadFile_Single(b *testing.B) {
 	handler := makeReadFileHandler(store)
 	for _, name := range []string{"small", "medium", "large"} {
 		b.Run(name, func(b *testing.B) {
-			req := makeRequest(map[string]any{"path": "pkg/" + name + "/source"})
+			req := testutil.MakeRequest(map[string]any{"path": "pkg/" + name + "/source"})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for range b.N {
@@ -67,7 +68,7 @@ func BenchmarkReadFile_Single(b *testing.B) {
 func BenchmarkReadFile_MissingPath(b *testing.B) {
 	store := buildReadFileBenchGraph(b)
 	handler := makeReadFileHandler(store)
-	req := makeRequest(map[string]any{"path": "pkg/does/not/exist"})
+	req := testutil.MakeRequest(map[string]any{"path": "pkg/does/not/exist"})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
@@ -104,7 +105,7 @@ func BenchmarkReadFile_Batch(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			req := makeRequest(map[string]any{"paths": string(payload)})
+			req := testutil.MakeRequest(map[string]any{"paths": string(payload)})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for range b.N {

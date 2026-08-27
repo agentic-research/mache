@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // buildSearchBenchGraph seeds a MemoryStore with N distinct defs.
@@ -40,7 +41,7 @@ func BenchmarkSearch_DefinitionMode(b *testing.B) {
 		handler := makeSearchHandler(store)
 		for _, pat := range []string{"Func1%", "Func%", "NoMatch%"} {
 			b.Run(fmt.Sprintf("defs=%d/%s", n, pat), func(b *testing.B) {
-				req := makeRequest(map[string]any{
+				req := testutil.MakeRequest(map[string]any{
 					"pattern": pat,
 					"role":    "definition",
 				})
@@ -66,7 +67,7 @@ func BenchmarkSearch_TypeFilter(b *testing.B) {
 	handler := makeSearchHandler(store)
 
 	b.Run("no_filter", func(b *testing.B) {
-		req := makeRequest(map[string]any{"pattern": "Func1%", "role": "definition"})
+		req := testutil.MakeRequest(map[string]any{"pattern": "Func1%", "role": "definition"})
 		b.ResetTimer()
 		b.ReportAllocs()
 		for range b.N {
@@ -77,7 +78,7 @@ func BenchmarkSearch_TypeFilter(b *testing.B) {
 	})
 
 	b.Run("functions_filter", func(b *testing.B) {
-		req := makeRequest(map[string]any{
+		req := testutil.MakeRequest(map[string]any{
 			"pattern": "Func1%",
 			"role":    "definition",
 			"type":    "functions",

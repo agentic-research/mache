@@ -9,28 +9,11 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
-
-// smellTestGraph is a tiny graph backend that delegates QueryRefs to a
-// caller-supplied *sql.DB. It exists only for these tests because we
-// don't want to spin up a full SQLiteGraph just to run a SQL pattern.
-type smellTestGraph struct {
-	*graph.MemoryStore
-	db   *sql.DB
-	path string // optional: when set, exposed via DBPath() for capnp readthrough
-}
-
-func (s *smellTestGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	return s.db.Query(query, args...)
-}
-
-// DBPath implements graph.DBPathProvider when path is set, opting this
-// test graph into capnp readthrough (mache-190508 step 3 / mache-6bd4d8).
-// Tests that don't set path keep the legacy mention-only view shape.
-func (s *smellTestGraph) DBPath() string { return s.path }
 
 // seedSmellAST creates a minimal _ast database modeling the Go statements
 //
@@ -40,7 +23,7 @@ func (s *smellTestGraph) DBPath() string { return s.path }
 //
 // We don't represent the full AST — only the binary_expression and
 // int_literal rows that the rule needs, plus their parent_id wiring.
-func seedSmellAST(t *testing.T) *smellTestGraph {
+func seedSmellAST(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "smells.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -114,15 +97,15 @@ func seedSmellAST(t *testing.T) *smellTestGraph {
 		require.NoError(t, err)
 	}
 
-	return &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
+	return &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db}
 }
 
 func TestFindSmells_ListsRulesWhenNoRule(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -135,7 +118,7 @@ func TestFindSmells_ListsRulesWhenNoRule(t *testing.T) {
 			Requires    []string `json:"requires"`
 		} `json:"rules"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.NotEmpty(t, resp.Help)
 
 	byID := make(map[string][]string, len(resp.Rules))
@@ -175,10 +158,10 @@ func TestFindSmells_ListsRulesWhenNoRule(t *testing.T) {
 // and silent when descriptions evolve.
 func TestFindSmells_ListsRulesSurfacesDefaultMinMetric(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -188,7 +171,7 @@ func TestFindSmells_ListsRulesSurfacesDefaultMinMetric(t *testing.T) {
 			DefaultMinMetric int64  `json:"default_min_metric"`
 		} `json:"rules"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	byID := make(map[string]int64, len(resp.Rules))
 	for _, r := range resp.Rules {
@@ -213,10 +196,10 @@ func TestFindSmells_ListsRulesSurfacesDefaultMinMetric(t *testing.T) {
 
 func TestFindSmells_MagicIntInComparison(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "magic_int_in_comparison",
 	}))
 	require.NoError(t, err)
@@ -227,7 +210,7 @@ func TestFindSmells_MagicIntInComparison(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	assert.Equal(t, "magic_int_in_comparison", resp.Rule)
 	assert.Equal(t, 2, resp.Total, "should flag the two int_literals under binary_expression, not the assignment one")
@@ -255,9 +238,9 @@ func TestFindSmells_MagicIntInComparison(t *testing.T) {
 //   - Sleep called from a *_test.go leaf using a different token → NOT flagged
 func TestFindSmells_SleepInTest(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file) VALUES
 		  ('tests/functions/TestFlaky/source',  'tests/functions/TestFlaky',  'source', 0, 0, 'foo_test.go'),
 		  ('tests/functions/TestFlaky2/source', 'tests/functions/TestFlaky2', 'source', 0, 0, 'bar_test.go'),
@@ -273,18 +256,18 @@ func TestFindSmells_SleepInTest(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "sleep_in_test",
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "sleep_in_test should run cleanly: %s", resultText(t, res))
+	require.False(t, res.IsError, "sleep_in_test should run cleanly: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Rule     string         `json:"rule"`
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	assert.Equal(t, "sleep_in_test", resp.Rule)
 	require.Equal(t, 2, resp.Total,
@@ -302,15 +285,15 @@ func TestFindSmells_SleepInTest(t *testing.T) {
 
 func TestFindSmells_UnknownRuleErrors(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "no_such_rule",
 	}))
 	require.NoError(t, err)
 	require.True(t, res.IsError)
-	assert.Contains(t, resultText(t, res), "unknown rule")
+	assert.Contains(t, testutil.ResultText(t, res), "unknown rule")
 }
 
 func TestFindSmells_BackendWithoutAstReturnsError(t *testing.T) {
@@ -319,7 +302,7 @@ func TestFindSmells_BackendWithoutAstReturnsError(t *testing.T) {
 	// clear error rather than crashing or returning empty success.
 	store := graph.NewMemoryStore()
 	handler := makeFindSmellsHandler(store)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "magic_int_in_comparison",
 	}))
 	require.NoError(t, err)
@@ -327,7 +310,7 @@ func TestFindSmells_BackendWithoutAstReturnsError(t *testing.T) {
 	// We don't pin a specific message — different backends fail at
 	// different points (no refs DB, no _ast table, etc.). The
 	// invariant is that the user sees an error result.
-	assert.NotEmpty(t, resultText(t, res))
+	assert.NotEmpty(t, testutil.ResultText(t, res))
 }
 
 // TestFindSmells_PreflightFlagsMissingTables ensures that running an
@@ -345,34 +328,34 @@ func TestFindSmells_PreflightFlagsMissingTables(t *testing.T) {
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id));
 	`)
 	require.NoError(t, err)
-	tg := &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
-	defer func() { _ = tg.db.Close() }()
+	tg := &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db}
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "cyclomatic_complexity",
 	}))
 	require.NoError(t, err)
 	require.True(t, res.IsError)
 
-	msg := resultText(t, res)
+	msg := testutil.ResultText(t, res)
 	assert.Contains(t, msg, "_ast", "error must name the missing table")
 	assert.Contains(t, msg, "ley-line-open", "error should point users at LLO docs")
 
 	// Sanity: a rule that only needs node_defs/node_refs/nodes runs
 	// fine on the same backend.
-	res, err = handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err = handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError, "dead_code only needs node_defs/node_refs/nodes; pre-flight should pass")
 }
 
 func TestFindSmells_SourceIDFilterScopes(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	// Add a second source file with one magic int — make sure source_id
 	// filter excludes it.
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _source VALUES ('other.go', 'go', '');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES
 		  ('other_root', '', 'other_root', 1, 0, ''),
@@ -385,7 +368,7 @@ func TestFindSmells_SourceIDFilterScopes(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":      "magic_int_in_comparison",
 		"source_id": "other.go",
 	}))
@@ -396,7 +379,7 @@ func TestFindSmells_SourceIDFilterScopes(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Equal(t, 1, resp.Total)
 	assert.Equal(t, "other.go", resp.Findings[0].SourceID)
 }
@@ -406,9 +389,9 @@ func TestFindSmells_SourceIDFilterScopes(t *testing.T) {
 // rule's skip list (init) to verify that filter still works.
 func TestFindSmells_DeadCode(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -432,7 +415,7 @@ func TestFindSmells_DeadCode(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "dead_code",
 	}))
 	require.NoError(t, err)
@@ -442,7 +425,7 @@ func TestFindSmells_DeadCode(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only Orphan is unreferenced and not on the skip list")
 	assert.Equal(t, "pkg/funcs/Orphan", resp.Findings[0].NodeID)
 	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID,
@@ -457,9 +440,9 @@ func TestFindSmells_DeadCode(t *testing.T) {
 // standalone tree-sitter backend) the finding degrades to file-level (0/1).
 func TestFindSmells_NodeDefsRuleCarriesASTLocation(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- One dead function, with its real span recorded in _ast keyed by
 		-- node_id. dead_code skips nodes with no resolvable source_file (orphan
 		-- filter), so source_file is set; the span backfill is what's under test.
@@ -472,7 +455,7 @@ func TestFindSmells_NodeDefsRuleCarriesASTLocation(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -480,7 +463,7 @@ func TestFindSmells_NodeDefsRuleCarriesASTLocation(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total)
 	f := resp.Findings[0]
 	assert.Equal(t, "pkg/funcs/Orphan", f.NodeID)
@@ -498,9 +481,9 @@ func TestFindSmells_NodeDefsRuleCarriesASTLocation(t *testing.T) {
 // worst" — drill to L2 with rule=<id>.
 func TestFindSmells_DigestMode(t *testing.T) {
 	tg := seedSmellAST(t) // seeds magic_int fixtures (2 binexprs)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- A dead function with a real _ast span, so dead_code contributes a
 		-- located exemplar to the digest.
 		INSERT INTO node_defs VALUES ('Orphan', 'pkg/funcs/Orphan');
@@ -512,12 +495,12 @@ func TestFindSmells_DigestMode(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "*"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "*"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var d smellDigest
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &d))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &d))
 	assert.Greater(t, d.Total, 0, "digest aggregates findings across rules")
 	assert.NotEmpty(t, d.ByRule, "per-rule counts present")
 	assert.NotEmpty(t, d.ByFileTop, "by-file rollup present")
@@ -546,8 +529,8 @@ func TestEnrichLocations_ChunksLargeIDSets(t *testing.T) {
 	defer func() { enrichLocChunk = orig }()
 
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
-	_, err := tg.db.Exec(`
+	defer func() { _ = tg.DB.Close() }()
+	_, err := tg.DB.Exec(`
 		INSERT INTO node_defs VALUES ('D1','pkg/funcs/D1'),('D2','pkg/funcs/D2'),('D3','pkg/funcs/D3');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
 		  ('pkg/funcs/D1','pkg/funcs','D1',1,0,'d1.go',''),
@@ -561,13 +544,13 @@ func TestEnrichLocations_ChunksLargeIDSets(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Len(t, resp.Findings, 3)
 	for _, f := range resp.Findings {
 		assert.Greater(t, f.Line, 1, "finding %s must be located across chunk boundaries", f.NodeID)
@@ -585,8 +568,8 @@ func TestFindSmells_DigestTruncatedReflectsScanNotFilter(t *testing.T) {
 	defer func() { digestScanCap = orig }()
 
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
-	_, err := tg.db.Exec(`
+	defer func() { _ = tg.DB.Close() }()
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES
 		  ('a.go/long',  'a.go', 'function_declaration', 0, 5000, 10, 0, 210, 0),
 		  ('b.go/short', 'b.go', 'function_declaration', 0, 800,  10, 0, 60, 0);
@@ -614,9 +597,9 @@ func TestFindSmells_DigestTruncatedReflectsScanNotFilter(t *testing.T) {
 // (file:line, not :line). Verified live on the real assay db.
 func TestFindSmells_DuplicateDefinitionsBackfillsFileFromAST(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Same token defined twice (a real duplicate). source_file empty on
 		-- both construct dirs so the rule's source_id resolves to "".
 		INSERT INTO node_defs VALUES ('DupFn', 'functions/DupFn'), ('DupFn', 'pkg/functions/DupFn');
@@ -630,14 +613,14 @@ func TestFindSmells_DuplicateDefinitionsBackfillsFileFromAST(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.NotEmpty(t, resp.Findings)
 	for _, f := range resp.Findings {
 		assert.NotEmpty(t, f.SourceID, "file backfilled from _ast.source_id (was empty from SQL)")
@@ -652,9 +635,9 @@ func TestFindSmells_DuplicateDefinitionsBackfillsFileFromAST(t *testing.T) {
 // node_refs tracks function calls, not import paths.
 func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -672,7 +655,7 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -680,7 +663,7 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -701,9 +684,9 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 // 'cmd/types/SmellRule', 'cmd/constants/padding').
 func TestFindSmells_DeadCodeSkipsNonCallableCategories(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -725,7 +708,7 @@ func TestFindSmells_DeadCodeSkipsNonCallableCategories(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -733,7 +716,7 @@ func TestFindSmells_DeadCodeSkipsNonCallableCategories(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -755,9 +738,9 @@ func TestFindSmells_DeadCodeSkipsNonCallableCategories(t *testing.T) {
 // rather than via static call sites in the indexed scope.
 func TestFindSmells_DeadCodeSkipsExternalInterfaceMethods(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -805,7 +788,7 @@ func TestFindSmells_DeadCodeSkipsExternalInterfaceMethods(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -813,7 +796,7 @@ func TestFindSmells_DeadCodeSkipsExternalInterfaceMethods(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -831,9 +814,9 @@ func TestFindSmells_DeadCodeSkipsExternalInterfaceMethods(t *testing.T) {
 // of mache's pre-filter findings came from one capnp.go file).
 func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -863,7 +846,7 @@ func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -871,7 +854,7 @@ func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -896,9 +879,9 @@ func TestFindSmells_DeadCodeSkipsGeneratedFiles(t *testing.T) {
 // source data to navigate to.
 func TestFindSmells_DeadCodeSkipsOrphanNodes(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Orphan: defined, exists, but no leaf children with source_file.
 		INSERT INTO node_defs VALUES ('processUser', 'functions/processUser');
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -913,7 +896,7 @@ func TestFindSmells_DeadCodeSkipsOrphanNodes(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -921,7 +904,7 @@ func TestFindSmells_DeadCodeSkipsOrphanNodes(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -942,9 +925,9 @@ func TestFindSmells_DeadCodeSkipsOrphanNodes(t *testing.T) {
 // findings, 494 of them methods/. After this fix: 32.
 func TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -972,7 +955,7 @@ func TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -980,7 +963,7 @@ func TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -1006,9 +989,9 @@ func TestFindSmells_DeadCodeStripsReceiverPrefixForLeafMatch(t *testing.T) {
 // by changing only the synthetic fixture's expected output.
 func TestFindSmells_DeadCodeRegressionFloor(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Group 1: live free function (called from another).
 		INSERT INTO node_defs VALUES
 		  ('LiveHelper',     'pkg/functions/LiveHelper'),
@@ -1064,7 +1047,7 @@ func TestFindSmells_DeadCodeRegressionFloor(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code", "limit": 100}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code", "limit": 100}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -1072,7 +1055,7 @@ func TestFindSmells_DeadCodeRegressionFloor(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -1095,9 +1078,9 @@ func TestFindSmells_DeadCodeRegressionFloor(t *testing.T) {
 // PR diff (every finding scoped to ”).
 func TestFindSmells_DeadCodeSourceFileFallsBackToChildren(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -1114,7 +1097,7 @@ func TestFindSmells_DeadCodeSourceFileFallsBackToChildren(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -1122,7 +1105,7 @@ func TestFindSmells_DeadCodeSourceFileFallsBackToChildren(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Len(t, resp.Findings, 1)
 	assert.Equal(t, "functions/Orphan", resp.Findings[0].NodeID)
 	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID,
@@ -1135,9 +1118,9 @@ func TestFindSmells_DeadCodeSourceFileFallsBackToChildren(t *testing.T) {
 // work after the fallback.
 func TestFindSmells_DeadCodeSourceFileScopeFilter(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -1155,7 +1138,7 @@ func TestFindSmells_DeadCodeSourceFileScopeFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":      "dead_code",
 		"source_id": "a.go",
 	}))
@@ -1166,7 +1149,7 @@ func TestFindSmells_DeadCodeSourceFileScopeFilter(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Len(t, resp.Findings, 1, "only the OrphanA in a.go matches the source_id filter")
 	assert.Equal(t, "functions/OrphanA", resp.Findings[0].NodeID)
 	assert.Equal(t, "a.go", resp.Findings[0].SourceID)
@@ -1184,9 +1167,9 @@ func TestFindSmells_DeadCodeSourceFileScopeFilter(t *testing.T) {
 // the construct twice (once per qualified-but-unreferenced token).
 func TestFindSmells_DeadCodePerNodeAggregation(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -1212,7 +1195,7 @@ func TestFindSmells_DeadCodePerNodeAggregation(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -1220,7 +1203,7 @@ func TestFindSmells_DeadCodePerNodeAggregation(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -1238,9 +1221,9 @@ func TestFindSmells_DeadCodePerNodeAggregation(t *testing.T) {
 // itself.
 func TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -1270,7 +1253,7 @@ func TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "dead_code",
 	}))
 	require.NoError(t, err)
@@ -1280,7 +1263,7 @@ func TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only OrphanFunc should be flagged; testing-framework prefixes are skipped")
 	assert.Equal(t, "pkg/OrphanFunc", resp.Findings[0].NodeID)
 }
@@ -1290,9 +1273,9 @@ func TestFindSmells_DeadCodeSkipsTestingFrameworkPrefixes(t *testing.T) {
 // not the magic-int rule's `lit.source_id`.
 func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -1304,7 +1287,7 @@ func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":      "dead_code",
 		"source_id": "a.go",
 	}))
@@ -1314,7 +1297,7 @@ func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total)
 	assert.Equal(t, "a.go", resp.Findings[0].SourceID)
 }
@@ -1328,9 +1311,9 @@ func TestFindSmells_DeadCodeSourceIDFilter(t *testing.T) {
 // but leyline parses everything tracked).
 func TestFindSmells_DeadCodeSkipsFixtureCorpus(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
@@ -1349,7 +1332,7 @@ func TestFindSmells_DeadCodeSkipsFixtureCorpus(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "dead_code",
 	}))
 	require.NoError(t, err)
@@ -1358,7 +1341,7 @@ func TestFindSmells_DeadCodeSkipsFixtureCorpus(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "fixture-corpus defs (testdata/, test_data/) must not flag as dead")
 	assert.Equal(t, "pkg/real.go/function_declaration_0", resp.Findings[0].NodeID)
 }
@@ -1372,9 +1355,9 @@ func TestFindSmells_DeadCodeSkipsFixtureCorpus(t *testing.T) {
 // Both should appear; fnA first.
 func TestFindSmells_CyclomaticComplexity(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  ('fnA',                'main.go', 'function_declaration', 100, 200, 10, 0, 30, 0),
@@ -1386,7 +1369,7 @@ func TestFindSmells_CyclomaticComplexity(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "cyclomatic_complexity",
 	}))
 	require.NoError(t, err)
@@ -1396,7 +1379,7 @@ func TestFindSmells_CyclomaticComplexity(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	require.Equal(t, 2, resp.Total)
 	assert.Equal(t, "fnA", resp.Findings[0].NodeID, "highest-complexity function ranks first")
@@ -1424,9 +1407,9 @@ func TestFindSmells_CyclomaticComplexity(t *testing.T) {
 // only) changes the output, the failing diff is the regression.
 func TestFindSmells_CyclomaticComplexity_RegressionFloor(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  -- High-complexity function: 5 branches across all kinds.
@@ -1454,7 +1437,7 @@ func TestFindSmells_CyclomaticComplexity_RegressionFloor(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "cyclomatic_complexity",
 	}))
 	require.NoError(t, err)
@@ -1464,7 +1447,7 @@ func TestFindSmells_CyclomaticComplexity_RegressionFloor(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	got := map[string]int64{}
 	for _, f := range resp.Findings {
@@ -1492,9 +1475,9 @@ func TestFindSmells_CyclomaticComplexity_RegressionFloor(t *testing.T) {
 // or top-level branches outside any function don't get attributed.
 func TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  ('foo',         'main.go', 'function_declaration', 100, 200, 10, 0, 20, 0),
@@ -1508,7 +1491,7 @@ func TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "cyclomatic_complexity",
 	}))
 	require.NoError(t, err)
@@ -1516,7 +1499,7 @@ func TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction(t *testing.T) {
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	got := map[string]int64{}
 	for _, f := range resp.Findings {
@@ -1534,9 +1517,9 @@ func TestFindSmells_CyclomaticOnlyCountsBranchesUnderFunction(t *testing.T) {
 // the same set as min_metric=81 because the SQL filtered first.
 func TestFindSmells_LongFunction_MinMetricLowersThreshold(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  ('big_fn',   'main.go', 'function_declaration', 100, 200, 10,  0, 110, 0),  -- 100 lines
@@ -1546,7 +1529,7 @@ func TestFindSmells_LongFunction_MinMetricLowersThreshold(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "long_function",
 		"min_metric": float64(50),
 	}))
@@ -1557,7 +1540,7 @@ func TestFindSmells_LongFunction_MinMetricLowersThreshold(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -1576,9 +1559,9 @@ func TestFindSmells_LongFunction_MinMetricLowersThreshold(t *testing.T) {
 // sorted by length can opt out of the default threshold.
 func TestFindSmells_LongFunction_MinMetricZeroDisablesDefault(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  ('tiny',  'main.go', 'function_declaration', 100, 200, 10, 0, 12, 0),  -- 2 lines
@@ -1587,7 +1570,7 @@ func TestFindSmells_LongFunction_MinMetricZeroDisablesDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "long_function",
 		"min_metric": float64(0),
 	}))
@@ -1598,7 +1581,7 @@ func TestFindSmells_LongFunction_MinMetricZeroDisablesDefault(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -1612,9 +1595,9 @@ func TestFindSmells_LongFunction_MinMetricZeroDisablesDefault(t *testing.T) {
 // and asserts the rule flags only the one over the threshold (80 lines).
 func TestFindSmells_LongFunction(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  -- Long: 100 lines (10 → 110), should fire.
@@ -1627,7 +1610,7 @@ func TestFindSmells_LongFunction(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "long_function",
 	}))
 	require.NoError(t, err)
@@ -1637,7 +1620,7 @@ func TestFindSmells_LongFunction(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only big_fn (100 lines) is over the 80-line threshold")
 	assert.Equal(t, "big_fn", resp.Findings[0].NodeID)
 	assert.Equal(t, int64(100), resp.Findings[0].Metric)
@@ -1649,9 +1632,9 @@ func TestFindSmells_LongFunction(t *testing.T) {
 // def to prove the GLOB '[A-Z]' filter holds.
 func TestFindSmells_UntestedFunction(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Covered: TestFooBar exists, so FooBar is OK.
@@ -1693,7 +1676,7 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "untested_function",
 	}))
 	require.NoError(t, err)
@@ -1703,7 +1686,7 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only Orphan is uncovered + exported + not on skip list + in functions/")
 	assert.Equal(t, "pkg/functions/Orphan", resp.Findings[0].NodeID)
 	assert.Equal(t, "orphan.go", resp.Findings[0].SourceID)
@@ -1717,9 +1700,9 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 // threshold.
 func TestFindSmells_GodFile(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- God file: 15 distinct defs, all in pkg/god/sprawl.go.
@@ -1776,7 +1759,7 @@ func TestFindSmells_GodFile(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "god_file",
 	}))
 	require.NoError(t, err)
@@ -1786,7 +1769,7 @@ func TestFindSmells_GodFile(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only sprawl.go clears the 10-def floor AND 3×mean threshold")
 	assert.Equal(t, "pkg/god/sprawl.go", resp.Findings[0].SourceID)
 	assert.Equal(t, int64(15), resp.Findings[0].Metric, "def count is the metric")
@@ -1800,9 +1783,9 @@ func TestFindSmells_GodFile(t *testing.T) {
 // is ”, so god_file silently returned no findings on mache.db.
 func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- 11 distinct defs all attributed (via leaf source_file) to
 		-- the same file. Project mean across the 5 normal files +
 		-- this one is (11 + 5) / 6 ≈ 2.7; 3× ≈ 8 — the god file
@@ -1855,7 +1838,7 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -1863,7 +1846,7 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Len(t, resp.Findings, 1, "FCA-shape fixture: source_file is on the leaf, not the construct dir")
 	assert.Equal(t, "pkg/god/sprawl.go", resp.Findings[0].SourceID)
 	assert.Equal(t, int64(11), resp.Findings[0].Metric)
@@ -1875,9 +1858,9 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 // design, not architectural sprawl.
 func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- 12 defs in a generated file — would normally trigger
 		-- god_file, but must be skipped by the *.capnp.go suffix.
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -1912,7 +1895,7 @@ func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -1920,7 +1903,7 @@ func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Empty(t, resp.Findings, "generated capnp.go file must be skipped despite high def count")
 }
 
@@ -1933,9 +1916,9 @@ func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
 // god_file. After this fix that finding is filtered.
 func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- 12 defs in a *_test.go file — would normally trigger
 		-- god_file, but must be skipped by the *_test.go suffix.
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -1971,7 +1954,7 @@ func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -1979,7 +1962,7 @@ func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Empty(t, resp.Findings, "*_test.go file must be skipped despite high def count")
 }
 
@@ -1992,9 +1975,9 @@ func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
 // threshold.
 func TestFindSmells_GodFileExcludedFilesDoNotDiluteMean(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		WITH RECURSIVE seq(n) AS (
 			SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10
 		)
@@ -2022,7 +2005,7 @@ func TestFindSmells_GodFileExcludedFilesDoNotDiluteMean(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "god_file"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2030,7 +2013,7 @@ func TestFindSmells_GodFileExcludedFilesDoNotDiluteMean(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Empty(t, resp.Findings,
 		"excluded test/generated definitions must not change production god_file findings")
 }
@@ -2042,9 +2025,9 @@ func TestFindSmells_GodFileExcludedFilesDoNotDiluteMean(t *testing.T) {
 // past the mean check.
 func TestFindSmells_FanOutSkew(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- God-function: 12 distinct callees.
@@ -2085,7 +2068,7 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "fan_out_skew",
 	}))
 	require.NoError(t, err)
@@ -2095,7 +2078,7 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only Dispatcher exceeds 3×mean and the 5-call floor")
 	assert.Equal(t, "pkg/god/Dispatcher", resp.Findings[0].NodeID)
 	assert.Equal(t, "dispatcher.go", resp.Findings[0].SourceID)
@@ -2113,9 +2096,9 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 // tests are *expected* to call many things; no signal there.
 func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Construct hierarchy: parent dir → source-file node.
@@ -2163,7 +2146,7 @@ func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2171,7 +2154,7 @@ func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2188,9 +2171,9 @@ func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
 // noise (capnp.go entries dominated mache's pre-filter top-N).
 func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -2231,7 +2214,7 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2239,7 +2222,7 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2260,9 +2243,9 @@ func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
 // realWriteBack). After this fix: 46.
 func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
@@ -2304,7 +2287,7 @@ func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2312,7 +2295,7 @@ func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2395,44 +2378,44 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	// Write the sibling .bindings.capnp with 24 records: 12 projection-
 	// shaped (qualifier='rec'), 12 orchestrator-shaped (12 distinct
 	// qualifiers). LoadCapnpBindings reads this when runSmellRule
-	// fires (via graph.DBPathProvider opt-in on smellTestGraph).
-	writeMultiBindingLogForTest(t, dbPath, []bindingRec{
-		{construct: "functions/bindingFromRecord/source", token: "Method01", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method02", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method03", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method04", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method05", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method06", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method07", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method08", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method09", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method10", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method11", qualifier: "rec"},
-		{construct: "functions/bindingFromRecord/source", token: "Method12", qualifier: "rec"},
-		{construct: "functions/Dispatcher/source", token: "Action01", qualifier: "pkg01"},
-		{construct: "functions/Dispatcher/source", token: "Action02", qualifier: "pkg02"},
-		{construct: "functions/Dispatcher/source", token: "Action03", qualifier: "pkg03"},
-		{construct: "functions/Dispatcher/source", token: "Action04", qualifier: "pkg04"},
-		{construct: "functions/Dispatcher/source", token: "Action05", qualifier: "pkg05"},
-		{construct: "functions/Dispatcher/source", token: "Action06", qualifier: "pkg06"},
-		{construct: "functions/Dispatcher/source", token: "Action07", qualifier: "pkg07"},
-		{construct: "functions/Dispatcher/source", token: "Action08", qualifier: "pkg08"},
-		{construct: "functions/Dispatcher/source", token: "Action09", qualifier: "pkg09"},
-		{construct: "functions/Dispatcher/source", token: "Action10", qualifier: "pkg10"},
-		{construct: "functions/Dispatcher/source", token: "Action11", qualifier: "pkg11"},
-		{construct: "functions/Dispatcher/source", token: "Action12", qualifier: "pkg12"},
+	// fires (via graph.DBPathProvider opt-in on testutil.SmellTestGraph).
+	testutil.WriteMultiBindingLogForTest(t, dbPath, []testutil.BindingRec{
+		{Construct: "functions/bindingFromRecord/source", Token: "Method01", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method02", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method03", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method04", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method05", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method06", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method07", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method08", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method09", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method10", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method11", Qualifier: "rec"},
+		{Construct: "functions/bindingFromRecord/source", Token: "Method12", Qualifier: "rec"},
+		{Construct: "functions/Dispatcher/source", Token: "Action01", Qualifier: "pkg01"},
+		{Construct: "functions/Dispatcher/source", Token: "Action02", Qualifier: "pkg02"},
+		{Construct: "functions/Dispatcher/source", Token: "Action03", Qualifier: "pkg03"},
+		{Construct: "functions/Dispatcher/source", Token: "Action04", Qualifier: "pkg04"},
+		{Construct: "functions/Dispatcher/source", Token: "Action05", Qualifier: "pkg05"},
+		{Construct: "functions/Dispatcher/source", Token: "Action06", Qualifier: "pkg06"},
+		{Construct: "functions/Dispatcher/source", Token: "Action07", Qualifier: "pkg07"},
+		{Construct: "functions/Dispatcher/source", Token: "Action08", Qualifier: "pkg08"},
+		{Construct: "functions/Dispatcher/source", Token: "Action09", Qualifier: "pkg09"},
+		{Construct: "functions/Dispatcher/source", Token: "Action10", Qualifier: "pkg10"},
+		{Construct: "functions/Dispatcher/source", Token: "Action11", Qualifier: "pkg11"},
+		{Construct: "functions/Dispatcher/source", Token: "Action12", Qualifier: "pkg12"},
 	})
 
-	tg := &smellTestGraph{db: db, path: dbPath}
+	tg := &testutil.SmellTestGraph{DB: db, Path: dbPath}
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2510,16 +2493,16 @@ func TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	tg := &smellTestGraph{db: db, path: dbPath}
+	tg := &testutil.SmellTestGraph{DB: db, Path: dbPath}
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "fan_out_skew"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2538,9 +2521,9 @@ func TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean(t *testing.T) {
 // TestReadArenaHeader.
 func TestFindSmells_UntestedFunctionAcceptsTestCallCoverage(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Function exercised via call from a TestFoo construct's
 		-- source — no same-name TestReadArenaHeader needed.
 		INSERT INTO node_defs VALUES ('ReadArenaHeader', 'pkg/functions/ReadArenaHeader');
@@ -2561,7 +2544,7 @@ func TestFindSmells_UntestedFunctionAcceptsTestCallCoverage(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "untested_function"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2569,7 +2552,7 @@ func TestFindSmells_UntestedFunctionAcceptsTestCallCoverage(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2588,9 +2571,9 @@ func TestFindSmells_UntestedFunctionAcceptsTestCallCoverage(t *testing.T) {
 // recognise. Skip the prefix to avoid the FP.
 func TestFindSmells_UntestedFunctionSkipsRegisterPrefix(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO node_defs VALUES
 		  ('RegisterRefQuery',     'pkg/functions/RegisterRefQuery'),
 		  ('RegisterContextQuery', 'pkg/functions/RegisterContextQuery');
@@ -2609,7 +2592,7 @@ func TestFindSmells_UntestedFunctionSkipsRegisterPrefix(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "untested_function"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2617,7 +2600,7 @@ func TestFindSmells_UntestedFunctionSkipsRegisterPrefix(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2633,9 +2616,9 @@ func TestFindSmells_UntestedFunctionSkipsRegisterPrefix(t *testing.T) {
 // just under a different prefix.
 func TestFindSmells_UntestedFunctionSkipsFuzzPrefix(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO node_defs VALUES
 		  ('FuzzParseSelector', 'pkg/functions/FuzzParseSelector'),
 		  ('FuzzInferRecords',  'pkg/functions/FuzzInferRecords');
@@ -2648,7 +2631,7 @@ func TestFindSmells_UntestedFunctionSkipsFuzzPrefix(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "untested_function"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2656,7 +2639,7 @@ func TestFindSmells_UntestedFunctionSkipsFuzzPrefix(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Empty(t, resp.Findings, "Fuzz* are themselves test entry points; they shouldn't be flagged as untested")
 }
 
@@ -2667,9 +2650,9 @@ func TestFindSmells_UntestedFunctionSkipsFuzzPrefix(t *testing.T) {
 // type IS tested is a noise FP.
 func TestFindSmells_UntestedFunctionAcceptsTestTypePrefix(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Constructor with companion TestStore_Foo coverage — must NOT be flagged.
@@ -2708,7 +2691,7 @@ func TestFindSmells_UntestedFunctionAcceptsTestTypePrefix(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "untested_function"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2716,7 +2699,7 @@ func TestFindSmells_UntestedFunctionAcceptsTestTypePrefix(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2735,9 +2718,9 @@ func TestFindSmells_UntestedFunctionAcceptsTestTypePrefix(t *testing.T) {
 // project-side tests.
 func TestFindSmells_UntestedFunctionSkipsGeneratedFiles(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Exported funcs in generated files — must be skipped.
@@ -2760,7 +2743,7 @@ func TestFindSmells_UntestedFunctionSkipsGeneratedFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "untested_function"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2768,7 +2751,7 @@ func TestFindSmells_UntestedFunctionSkipsGeneratedFiles(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2802,9 +2785,9 @@ func TestFindSmells_UntestedFunctionSkipsGeneratedFiles(t *testing.T) {
 //   - The actual untested control          (group 9: TrulyUntested — must fire)
 func TestFindSmells_UntestedFunctionRegressionFloor(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Group 1: same-name Test counterpart → covered.
 		INSERT INTO node_defs VALUES
 		  ('HelperA',     'pkg/functions/HelperA'),
@@ -2880,7 +2863,7 @@ func TestFindSmells_UntestedFunctionRegressionFloor(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "untested_function", "limit": 100}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "untested_function", "limit": 100}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2888,7 +2871,7 @@ func TestFindSmells_UntestedFunctionRegressionFloor(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -2907,9 +2890,9 @@ func TestFindSmells_UntestedFunctionRegressionFloor(t *testing.T) {
 // (one def — excluded).
 func TestFindSmells_DuplicateDefinitions(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Duplicated helper — both should appear in findings.
@@ -2932,7 +2915,7 @@ func TestFindSmells_DuplicateDefinitions(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "duplicate_definitions",
 	}))
 	require.NoError(t, err)
@@ -2942,7 +2925,7 @@ func TestFindSmells_DuplicateDefinitions(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 2, resp.Total, "both Helper defs flagged, String skipped, Solo not duplicated")
 
 	gotIDs := []string{resp.Findings[0].NodeID, resp.Findings[1].NodeID}
@@ -2961,9 +2944,9 @@ func TestFindSmells_DuplicateDefinitions(t *testing.T) {
 // excluding imports/.
 func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Same import path in three packages — these should NOT
@@ -2989,7 +2972,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2997,7 +2980,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -3022,9 +3005,9 @@ func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
 // findings under generator output.
 func TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Generated types sharing method 'IsValid' — must be skipped.
@@ -3053,7 +3036,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -3061,7 +3044,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -3085,9 +3068,9 @@ func TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles(t *testing.T) {
 // GHA comment showing 9 variable-shape duplicate findings.
 func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Variable / constant / type duplicates — must NOT surface.
@@ -3117,7 +3100,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T)
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -3125,7 +3108,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T)
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -3151,9 +3134,9 @@ func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T)
 // Mirrors the dead_code skip extended in PR #239.
 func TestFindSmells_DuplicateDefinitionsSkipsExternalInterfaceMethods(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Two types each implementing vtab.Module's BestIndex —
 		-- legitimate Go interface implementations, not duplicates.
 		INSERT INTO node_defs VALUES
@@ -3182,7 +3165,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsExternalInterfaceMethods(t *testing
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -3190,7 +3173,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsExternalInterfaceMethods(t *testing
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -3211,9 +3194,9 @@ func TestFindSmells_DuplicateDefinitionsSkipsExternalInterfaceMethods(t *testing
 // Go package's init() function shows up as a duplicate definition.
 func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
 
 		-- Three init() functions across packages — Go expects one
@@ -3244,7 +3227,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -3252,7 +3235,7 @@ func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -3285,9 +3268,9 @@ func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
 // After this fix: 12.
 func TestFindSmells_DuplicateDefinitionsExcludesAllMethods(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Mache-internal interface (graph.Graph) implemented by 3 types.
 		-- 'ReadContent' is NOT in any named-skip list — only the
 		-- structural methods/ filter saves us.
@@ -3315,7 +3298,7 @@ func TestFindSmells_DuplicateDefinitionsExcludesAllMethods(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "duplicate_definitions"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -3323,7 +3306,7 @@ func TestFindSmells_DuplicateDefinitionsExcludesAllMethods(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -3346,9 +3329,9 @@ func TestFindSmells_DuplicateDefinitionsExcludesAllMethods(t *testing.T) {
 // lines, where the old SQL `> 1500` floor silently excluded them.
 func TestFindSmells_LongFile_MinMetricLowersThreshold(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  ('huge_root',   'huge.go',   'source_file', 0, 999999, 0, 0, 2000, 0),  -- 2000 lines
@@ -3358,7 +3341,7 @@ func TestFindSmells_LongFile_MinMetricLowersThreshold(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "long_file",
 		"min_metric": float64(800),
 	}))
@@ -3369,7 +3352,7 @@ func TestFindSmells_LongFile_MinMetricLowersThreshold(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {
@@ -3385,9 +3368,9 @@ func TestFindSmells_LongFile_MinMetricLowersThreshold(t *testing.T) {
 // TestFindSmells_LongFile flags _ast source_file rows over 1500 lines.
 func TestFindSmells_LongFile(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  ('huge_file_root', 'huge.go',  'source_file', 0, 999999, 0, 0, 2000, 0),
@@ -3396,7 +3379,7 @@ func TestFindSmells_LongFile(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "long_file",
 	}))
 	require.NoError(t, err)
@@ -3406,7 +3389,7 @@ func TestFindSmells_LongFile(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only huge.go is over 1500 lines")
 	assert.Equal(t, "huge.go", resp.Findings[0].SourceID)
 	assert.Equal(t, int64(2000), resp.Findings[0].Metric)
@@ -3414,10 +3397,10 @@ func TestFindSmells_LongFile(t *testing.T) {
 
 func TestFindSmells_LimitCaps(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":  "magic_int_in_comparison",
 		"limit": float64(1),
 	}))
@@ -3426,7 +3409,7 @@ func TestFindSmells_LimitCaps(t *testing.T) {
 	var resp struct {
 		Total int `json:"total"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Equal(t, 1, resp.Total)
 }
 
@@ -3435,9 +3418,9 @@ func TestFindSmells_LimitCaps(t *testing.T) {
 // arg gates findings on the metric column.
 func TestFindSmells_MinMetricFilters(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
 		VALUES
 		  ('a_root', 'a.go', 'source_file', 0, 100, 0, 0, 1600, 0),
@@ -3449,17 +3432,17 @@ func TestFindSmells_MinMetricFilters(t *testing.T) {
 	handler := makeFindSmellsHandler(tg)
 
 	// No threshold: all three files (>1500 lines) come back.
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "long_file"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "long_file"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 	var unfiltered struct {
 		Total int `json:"total"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &unfiltered))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &unfiltered))
 	require.Equal(t, 3, unfiltered.Total, "all three files exceed the rule's 1500-line floor")
 
 	// min_metric=2500 should keep only c.go (5000 lines).
-	res, err = handler(context.Background(), makeRequest(map[string]any{
+	res, err = handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "long_file",
 		"min_metric": float64(2500),
 	}))
@@ -3470,7 +3453,7 @@ func TestFindSmells_MinMetricFilters(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &filtered))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &filtered))
 	require.Equal(t, 1, filtered.Total, "only c.go passes the 2500-line cutoff")
 	assert.Equal(t, "c.go", filtered.Findings[0].SourceID)
 	assert.Equal(t, int64(5000), filtered.Findings[0].Metric)
@@ -3530,17 +3513,17 @@ type driftRuleSummary struct {
 func listingFor(t *testing.T, id string) driftRuleSummary {
 	t.Helper()
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Rules []driftRuleSummary `json:"rules"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	for _, r := range resp.Rules {
 		if r.ID == id {
 			return r
@@ -3557,21 +3540,21 @@ func listingFor(t *testing.T, id string) driftRuleSummary {
 func runPlaceholderRule(t *testing.T, id string) (int, []smellFinding) {
 	t.Helper()
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": id,
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "placeholder rule %q must execute cleanly: %s", id, resultText(t, res))
+	require.False(t, res.IsError, "placeholder rule %q must execute cleanly: %s", id, testutil.ResultText(t, res))
 
 	var resp struct {
 		Rule     string         `json:"rule"`
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, id, resp.Rule)
 	return resp.Total, resp.Findings
 }
@@ -3667,19 +3650,19 @@ func TestFindSmells_DriftDocRules_ListingExposesIt(t *testing.T) {
 // raw "SELECT nr.source_id" must not error here.
 func TestFindSmells_DriftDocDeadSymbolReference_SkipsGracefullyWithoutSourceID(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "drift_doc_dead_symbol_reference",
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "must degrade to zero findings, not error: %s", resultText(t, res))
+	require.False(t, res.IsError, "must degrade to zero findings, not error: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Total int `json:"total"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Zero(t, resp.Total)
 }
 
@@ -3688,7 +3671,7 @@ func TestFindSmells_DriftDocDeadSymbolReference_SkipsGracefullyWithoutSourceID(t
 // seedSmellAST fixture) plus node_defs. v_doc_refs only reads
 // token/node_id/source_id from node_refs; container_node_id/qualifier are
 // included for schema realism, not because this rule uses them.
-func buildDriftDocFixture(t *testing.T) *smellTestGraph {
+func buildDriftDocFixture(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "driftdoc.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -3709,7 +3692,7 @@ func buildDriftDocFixture(t *testing.T) *smellTestGraph {
 		INSERT INTO node_defs VALUES ('Handoff::chain_hash', 'f.rs/Handoff/chain_hash', 'f.rs');
 	`)
 	require.NoError(t, err)
-	return &smellTestGraph{db: db, path: dbPath}
+	return &testutil.SmellTestGraph{DB: db, Path: dbPath}
 }
 
 // TestFindSmells_DriftDocDeadSymbolReference_MatchesAliveBareAndQualified
@@ -3721,9 +3704,9 @@ func buildDriftDocFixture(t *testing.T) *smellTestGraph {
 // directly). Neither must be flagged as dead.
 func TestFindSmells_DriftDocDeadSymbolReference_MatchesAliveBareAndQualified(t *testing.T) {
 	tg := buildDriftDocFixture(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO node_refs VALUES ('epic::is_dominated_by', 'doc.md/code_span_0', 'doc.md', NULL, '');
 		INSERT INTO node_refs VALUES ('Handoff::chain_hash', 'doc.md/code_span_1', 'doc.md', NULL, '');
 		INSERT INTO node_refs VALUES ('Handoff::chain_hash()', 'doc.md/code_span_2', 'doc.md', NULL, '');
@@ -3740,9 +3723,9 @@ func TestFindSmells_DriftDocDeadSymbolReference_MatchesAliveBareAndQualified(t *
 // bare or qualified, must fire.
 func TestFindSmells_DriftDocDeadSymbolReference_FlagsGenuinelyDead(t *testing.T) {
 	tg := buildDriftDocFixture(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO node_refs VALUES ('epic::renamed_away', 'doc.md/code_span_0', 'doc.md', NULL, '');
 	`)
 	require.NoError(t, err)
@@ -3759,9 +3742,9 @@ func TestFindSmells_DriftDocDeadSymbolReference_FlagsGenuinelyDead(t *testing.T)
 // consts emit no defs).
 func TestFindSmells_DriftDocDeadSymbolReference_ScopesToRustPaths(t *testing.T) {
 	tg := buildDriftDocFixture(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Bare Go-shaped identifier, no def anywhere — would be a false
 		-- positive under 651909 if this rule considered non-Rust tokens.
 		INSERT INTO node_refs VALUES ('MaxRetries', 'doc.md/code_span_0', 'doc.md', NULL, '');
@@ -3781,9 +3764,9 @@ func TestFindSmells_DriftDocDeadSymbolReference_ScopesToRustPaths(t *testing.T) 
 // entirely, not just fail to resolve.
 func TestFindSmells_DriftDocDeadSymbolReference_ExcludesPathAndMalformedShapes(t *testing.T) {
 	tg := buildDriftDocFixture(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		INSERT INTO node_refs VALUES ('cmd/serve.go::registerMCPTools', 'doc.md/code_span_0', 'doc.md', NULL, '');
 		INSERT INTO node_refs VALUES ('Foo:: bar', 'doc.md/code_span_1', 'doc.md', NULL, '');
 		INSERT INTO node_refs VALUES ('ProvenanceRef::Code{repo, path}', 'doc.md/code_span_2', 'doc.md', NULL, '');
@@ -3799,20 +3782,20 @@ func TestFindSmells_DriftDocDeadSymbolReference_ExcludesPathAndMalformedShapes(t
 // buildDriftDocFixture and returns (total, findings) restricted to markdown
 // source rows (buildDriftDocFixture's own _ast row is a .rs file, present
 // only to satisfy the Requires gate).
-func runDriftDocRule(t *testing.T, tg *smellTestGraph) (int, []smellFinding) {
+func runDriftDocRule(t *testing.T, tg *testutil.SmellTestGraph) (int, []smellFinding) {
 	t.Helper()
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "drift_doc_dead_symbol_reference",
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "rule must execute cleanly: %s", resultText(t, res))
+	require.False(t, res.IsError, "rule must execute cleanly: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	return resp.Total, resp.Findings
 }
 
@@ -3876,9 +3859,9 @@ func TestFindSmells_DriftDocOutdatedCount_PlaceholderQueryReturnsZeroFindings(t 
 // not silence.
 func TestFindSmells_DeadCode_CorrectnessParity_FixtureUnchanged(t *testing.T) {
 	tg := seedSmellAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.db.Exec(`
+	_, err := tg.DB.Exec(`
 		-- Mirrors TestFindSmells_DeadCodeRegressionFloor's fixture
 		-- exactly — kept as a separate seed so the two tests are
 		-- independently auditable. If the regression-floor fixture
@@ -3940,7 +3923,7 @@ func TestFindSmells_DeadCode_CorrectnessParity_FixtureUnchanged(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code", "limit": 100}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code", "limit": 100}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -3948,7 +3931,7 @@ func TestFindSmells_DeadCode_CorrectnessParity_FixtureUnchanged(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	gotIDs := make([]string, len(resp.Findings))
 	for i, f := range resp.Findings {

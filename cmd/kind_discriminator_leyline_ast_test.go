@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -32,7 +33,7 @@ import (
 //   - MemoryStore defs: `parse` → both leyline node_ids (drives LookupDef)
 //   - nodes table: parent_id chain (file → impl_item → declaration_list → fn)
 //   - _ast table: node_kind per node (the projection-independent kind source)
-func buildLeylineRustASTFixture(t *testing.T) *smellTestGraph {
+func buildLeylineRustASTFixture(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 
 	const (
@@ -113,7 +114,7 @@ func buildLeylineRustASTFixture(t *testing.T) *smellTestGraph {
 		require.NoError(t, err)
 	}
 
-	return &smellTestGraph{MemoryStore: store, db: db, path: dbPath}
+	return &testutil.SmellTestGraph{MemoryStore: store, DB: db, Path: dbPath}
 }
 
 // TestKindDiscriminator_LeylineAST_FindDefinition is the regression
@@ -134,29 +135,29 @@ func TestKindDiscriminator_LeylineAST_FindDefinition(t *testing.T) {
 	handler := makeFindDefinitionHandler(g)
 
 	t.Run("no_kind_returns_both", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "parse"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "parse"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		dirs := extractDirIDs(t, resultText(t, result))
+		dirs := extractDirIDs(t, testutil.ResultText(t, result))
 		require.Len(t, dirs, 2, "without kind, both `parse` defs should return; got %v", dirs)
 		require.Contains(t, dirs, freeFn)
 		require.Contains(t, dirs, methodFn)
 	})
 
 	t.Run("kind_function_narrows_to_free_function", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "parse", "kind": "function"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "parse", "kind": "function"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		dirs := extractDirIDs(t, resultText(t, result))
+		dirs := extractDirIDs(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{freeFn}, dirs,
 			"kind=function must keep the free function_item (no impl_item ancestor), drop the method")
 	})
 
 	t.Run("kind_method_narrows_to_impl_method", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "parse", "kind": "method"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "parse", "kind": "method"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		dirs := extractDirIDs(t, resultText(t, result))
+		dirs := extractDirIDs(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{methodFn}, dirs,
 			"kind=method must keep the function_item under impl_item, drop the free function")
 	})
@@ -193,7 +194,7 @@ func TestResolveKindFromAST_EdgeCases(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO _ast (node_id, source_id, node_kind) VALUES ('sig','f.rs','function_signature_item')`)
 	require.NoError(t, err)
 
-	g := &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db, path: dbPath}
+	g := &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db, Path: dbPath}
 
 	require.Equal(t, "function", resolveKindFromAST(g, "A"),
 		"cyclic parent_id must terminate (depth cap) and resolve by own node_kind")
@@ -228,19 +229,19 @@ func TestKindDiscriminator_LeylineAST_FindCallers(t *testing.T) {
 	}
 
 	t.Run("kind_function_narrows_to_free_function_caller", func(t *testing.T) {
-		req := makeRequest(map[string]any{"token": "helper", "kind": "function"})
+		req := testutil.MakeRequest(map[string]any{"token": "helper", "kind": "function"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		callers := extractCallers(t, resultText(t, result))
+		callers := extractCallers(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{freeFn}, callers,
 			"kind=function must keep ONLY the free-function caller")
 	})
 
 	t.Run("kind_method_narrows_to_method_caller", func(t *testing.T) {
-		req := makeRequest(map[string]any{"token": "helper", "kind": "method"})
+		req := testutil.MakeRequest(map[string]any{"token": "helper", "kind": "method"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		callers := extractCallers(t, resultText(t, result))
+		callers := extractCallers(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{methodFn}, callers,
 			"kind=method must keep ONLY the method caller (function_item under impl_item)")
 	})

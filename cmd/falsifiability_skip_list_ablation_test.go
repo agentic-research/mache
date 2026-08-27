@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -251,7 +252,7 @@ func TestFalsifiabilityA_SyntheticHarness(t *testing.T) {
 	// event log, not the legacy _lsp_refs SQL table. Write a single
 	// record for MyType.Read (Quux deliberately omitted — it's the
 	// "LSP didn't see this" wedge-case 1 control).
-	writeBindingLogForTest(t, dbPath,
+	testutil.WriteBindingLogForTest(t, dbPath,
 		"pkg/methods/MyType.Read", // targetNodeId
 		"Read",                    // refToken
 		"pkg/functions/Caller",    // constructNodeId (referrer)

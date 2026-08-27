@@ -251,8 +251,9 @@ tasks:
       before `git add` and the commit-time hook is a no-op instead of
       reformatting your files out from under you and aborting the commit.
       Scoped to CHANGED files — not all tracked markdown — so it never
-      rewrites test fixtures (cmd/testdata/**) or vendored docs. Excludes
-      .beads/ and testdata/snapshots/, matching the hook's exclusion.
+      rewrites test fixtures (internal/testutil/testdata/**) or vendored
+      docs. Excludes .beads/, testdata/snapshots/, and the language preset
+      fixtures, matching the hook's exclusion.
     preconditions:
       - sh: command -v mdformat
         msg: "mdformat required — pip install mdformat mdformat-gfm mdformat-frontmatter"
@@ -263,7 +264,7 @@ tasks:
         { git ls-files -mo --exclude-standard '*.md'; \
           git diff --cached --name-only -- '*.md'; } \
           | sort -u \
-          | grep -vE '^(\.beads/|testdata/snapshots/)' \
+          | grep -vE '^(\.beads/|testdata/snapshots/|internal/testutil/testdata/)' \
           | while IFS= read -r f; do [ -f "$f" ] && mdformat "$f"; done
 
   fmt:check:

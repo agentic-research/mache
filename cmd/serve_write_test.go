@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/lltest"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,7 +86,7 @@ func TestWriteFile_FormatTrue_AppliesFormatter(t *testing.T) {
 	// changes the bytes depends on whether gofumpt accepts a fragment,
 	// which is brittle; covered separately with HCL.
 	content := "func Hello() {\n\treturn\n}\n"
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    nodePath,
 		"content": content,
 		// format defaults to true
@@ -97,7 +98,7 @@ func TestWriteFile_FormatTrue_AppliesFormatter(t *testing.T) {
 		Status        string `json:"status"`
 		FormatApplied bool   `json:"format_applied"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.Equal(t, "ok", resp.Status)
 	assert.True(t, resp.FormatApplied, "format=true (default) must report FormatApplied")
 }
@@ -131,7 +132,7 @@ func TestWriteFile_FormatTrue_HCLNormalizes(t *testing.T) {
 
 	// Misaligned HCL — hclwrite.Format will normalize the indentation.
 	misaligned := "resource \"aws_vpc\" \"this\" {\ncidr_block      =     \"10.0.0.0/16\"\n}\n"
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    "tf/vpc",
 		"content": misaligned,
 	}))
@@ -143,7 +144,7 @@ func TestWriteFile_FormatTrue_HCLNormalizes(t *testing.T) {
 		FormatApplied bool   `json:"format_applied"`
 		FormatChanged bool   `json:"format_changed"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.Equal(t, "ok", resp.Status)
 	assert.True(t, resp.FormatApplied)
 	assert.True(t, resp.FormatChanged, "hclwrite must normalize misaligned terraform")
@@ -156,7 +157,7 @@ func TestWriteFile_FormatFalse_SplicesVerbatim(t *testing.T) {
 	// Valid Go but with extra spaces gofumpt would normalize. With
 	// format=false the bytes must land on disk exactly as written.
 	verbatim := "func Hello()  {\n\treturn\n}\n"
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    nodePath,
 		"content": verbatim,
 		"format":  false,
@@ -169,7 +170,7 @@ func TestWriteFile_FormatFalse_SplicesVerbatim(t *testing.T) {
 		FormatApplied bool   `json:"format_applied"`
 		FormatChanged bool   `json:"format_changed"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.Equal(t, "ok", resp.Status)
 	assert.False(t, resp.FormatApplied, "format=false must skip the formatter")
 	assert.False(t, resp.FormatChanged, "format_changed must be false when formatter never ran")
@@ -192,7 +193,7 @@ func TestWriteFile_ValidationStillRunsWhenFormatFalse(t *testing.T) {
 	original, err := os.ReadFile(srcPath)
 	require.NoError(t, err)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    nodePath,
 		"content": broken,
 		"format":  false,
@@ -204,7 +205,7 @@ func TestWriteFile_ValidationStillRunsWhenFormatFalse(t *testing.T) {
 		Status string `json:"status"`
 		Error  string `json:"error"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.Equal(t, "validation_error", resp.Status,
 		"broken syntax must be rejected even with format=false")
 
@@ -246,7 +247,7 @@ func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
 
 	// Use the original byte range so Splice succeeds (we already wrote
 	// the source above with that exact length).
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    "pkg/Hello",
 		"content": "func Hello() { return }\n",
 		"format":  false,
@@ -258,7 +259,7 @@ func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
 		Status       string `json:"status"`
 		GraphWarning string `json:"graph_warning"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.Equal(t, "ok_graph_stale", resp.Status,
 		"UpdateNodeContent failure must downgrade status from ok to ok_graph_stale")
 	assert.Contains(t, resp.GraphWarning, "graph update failed after splice",
@@ -309,13 +310,13 @@ func TestWriteFile_RejectsNonWriteBackerBackend(t *testing.T) {
 	}
 	handler := makeWriteFileHandler(g)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    "pkg/Hello",
 		"content": "func Hello() { return }\n",
 	}))
 	require.NoError(t, err)
 	require.True(t, result.IsError, "non-writeBacker backend must yield an error result")
-	assert.Contains(t, resultText(t, result), "does not support write-back")
+	assert.Contains(t, testutil.ResultText(t, result), "does not support write-back")
 
 	// Source file must be untouched — the splice must not have run.
 	after, err := os.ReadFile(srcPath)
@@ -356,7 +357,7 @@ func TestWriteFile_FormatChangedFalseWhenAlreadyClean(t *testing.T) {
 	handler := makeWriteFileHandler(store)
 
 	clean := "func Hello() {\n\treturn\n}\n"
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    nodePath,
 		"content": clean,
 	}))
@@ -367,7 +368,7 @@ func TestWriteFile_FormatChangedFalseWhenAlreadyClean(t *testing.T) {
 		FormatApplied bool `json:"format_applied"`
 		FormatChanged bool `json:"format_changed"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.True(t, resp.FormatApplied)
 	assert.False(t, resp.FormatChanged, "clean input must not be reported as format-changed")
 }
@@ -389,7 +390,7 @@ func TestServeWriteFile_InfraFailureStatusDistinct(t *testing.T) {
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 
 	handler := makeWriteFileHandler(store)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    nodePath,
 		"content": "package main\n\nfunc Hello() {\n\treturn\n}\n",
 	}))
@@ -399,7 +400,7 @@ func TestServeWriteFile_InfraFailureStatusDistinct(t *testing.T) {
 		Status string `json:"status"`
 		Error  string `json:"error"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.Equal(t, "validator_unavailable", resp.Status,
 		"infra failure must not be reported as a validation_error")
 	assert.NotEmpty(t, resp.Error)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,17 +32,17 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 
 	overviewFor := func(t *testing.T, g graph.Graph) map[string]any {
 		t.Helper()
-		result, err := makeGetOverviewHandler(g)(context.Background(), makeRequest(nil))
+		result, err := makeGetOverviewHandler(g)(context.Background(), testutil.MakeRequest(nil))
 		require.NoError(t, err)
 		require.False(t, result.IsError)
 		var ov map[string]any
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &ov))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &ov))
 		return ov
 	}
 
 	t.Run("drift reports the block and a warning", func(t *testing.T) {
 		ov := overviewFor(t, &stalenessGraph{
-			Graph: buildTestGraph(t),
+			Graph: testutil.BuildTestGraph(t),
 			rep:   graph.IndexStaleness{BuiltAt: built, SourceRoot: "/src", ModifiedSince: 3},
 			ok:    true,
 		})
@@ -56,7 +57,7 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 
 	t.Run("capped drift says the number is a floor", func(t *testing.T) {
 		ov := overviewFor(t, &stalenessGraph{
-			Graph: buildTestGraph(t),
+			Graph: testutil.BuildTestGraph(t),
 			rep:   graph.IndexStaleness{BuiltAt: built, SourceRoot: "/src", ModifiedSince: 500, Capped: true},
 			ok:    true,
 		})
@@ -67,7 +68,7 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 
 	t.Run("fresh index reports the block but no warning", func(t *testing.T) {
 		ov := overviewFor(t, &stalenessGraph{
-			Graph: buildTestGraph(t),
+			Graph: testutil.BuildTestGraph(t),
 			rep:   graph.IndexStaleness{BuiltAt: built, SourceRoot: "/src", ModifiedSince: 0},
 			ok:    true,
 		})
@@ -77,7 +78,7 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 	})
 
 	t.Run("unknown omits both — unknown is not fresh", func(t *testing.T) {
-		ov := overviewFor(t, &stalenessGraph{Graph: buildTestGraph(t), ok: false})
+		ov := overviewFor(t, &stalenessGraph{Graph: testutil.BuildTestGraph(t), ok: false})
 		assert.NotContains(t, ov, "index")
 		assert.NotContains(t, ov, "index_warning")
 	})
@@ -85,7 +86,7 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 	t.Run("non-reporting graph omits both", func(t *testing.T) {
 		// MemoryStore does not implement StalenessReporter at all — the
 		// handler must not invent an answer for it.
-		ov := overviewFor(t, buildTestGraph(t))
+		ov := overviewFor(t, testutil.BuildTestGraph(t))
 		assert.NotContains(t, ov, "index")
 		assert.NotContains(t, ov, "index_warning")
 	})
@@ -98,7 +99,7 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 // inner graph answered fine.
 func TestLazyGraph_ForwardsIndexStaleness(t *testing.T) {
 	want := graph.IndexStaleness{SourceRoot: "/src", ModifiedSince: 7}
-	lg := &lazyGraph{inner: &stalenessGraph{Graph: buildTestGraph(t), rep: want, ok: true}}
+	lg := &lazyGraph{inner: &stalenessGraph{Graph: testutil.BuildTestGraph(t), rep: want, ok: true}}
 	lg.once.Do(func() {}) // consume init: serve a pre-set inner, don't build one
 
 	got, ok := lg.IndexStaleness()
@@ -107,7 +108,7 @@ func TestLazyGraph_ForwardsIndexStaleness(t *testing.T) {
 
 	// A non-reporting inner graph stays unknown — the wrapper must not
 	// answer on its own authority.
-	plain := &lazyGraph{inner: buildTestGraph(t)}
+	plain := &lazyGraph{inner: testutil.BuildTestGraph(t)}
 	plain.once.Do(func() {})
 	_, ok = plain.IndexStaleness()
 	assert.False(t, ok)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +42,7 @@ type crossLangDef struct {
 // every node_id below is a real `leyline parse` path and the file's own header
 // says so. The producer and the shape disagreed, and nothing in the test said
 // which one it meant (mache-7555da).
-func newCrossLangGraph(t *testing.T, defs []crossLangDef) *smellTestGraph {
+func newCrossLangGraph(t *testing.T, defs []crossLangDef) *testutil.SmellTestGraph {
 	t.Helper()
 	return newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
 		for _, d := range defs {
@@ -51,16 +52,16 @@ func newCrossLangGraph(t *testing.T, defs []crossLangDef) *smellTestGraph {
 	})
 }
 
-func findingsFor(t *testing.T, tg *smellTestGraph, rule string) []smellFinding {
+func findingsFor(t *testing.T, tg *testutil.SmellTestGraph, rule string) []smellFinding {
 	t.Helper()
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": rule, "limit": float64(1000)}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": rule, "limit": float64(1000)}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	return resp.Findings
 }
 

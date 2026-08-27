@@ -19,6 +19,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,12 +51,12 @@ func TestFindCallers_BackendErrorSurfacesAsMCPError(t *testing.T) {
 	g := errCallersGraph{Graph: graph.NewMemoryStore()}
 	handler := makeFindCallersHandler(g)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "Anything"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "Anything"}))
 	require.NoError(t, err, "handler must not return a Go error — the failure must be an MCP error")
 	require.NotNil(t, result)
 	assert.True(t, result.IsError, "backend error must surface as MCP error")
-	assert.Contains(t, resultText(t, result), "get callers:")
-	assert.Contains(t, resultText(t, result), "synthetic backend failure")
+	assert.Contains(t, testutil.ResultText(t, result), "get callers:")
+	assert.Contains(t, testutil.ResultText(t, result), "synthetic backend failure")
 }
 
 // TestFindCallers_ControlModeEmptyHasRetryHint pins the control-mode
@@ -70,13 +71,13 @@ func TestFindCallers_ControlModeEmptyHasRetryHint(t *testing.T) {
 	serveControl = "/tmp/synthetic-control.ctrl"
 	defer func() { serveControl = prev }()
 
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeFindCallersHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"token": "NonExistent"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "NonExistent"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	text := resultText(t, result)
+	text := testutil.ResultText(t, result)
 	assert.Contains(t, text, "daemon may still be parsing", "control-mode empty must surface retry hint")
 	assert.Contains(t, text, "[]", "hint must still include the literal empty-array opener")
 }
@@ -106,12 +107,12 @@ func TestGetSheafStatus_DialFailureReturnsUnavailable(t *testing.T) {
 	t.Setenv("LEYLINE_SOCKET", bogusSock)
 
 	handler := makeGetSheafStatusHandler(nil)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "dial failure must surface as structured unavailable, not MCP error")
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Equal(t, false, out["available"])
 	reason, _ := out["reason"].(string)
 	assert.Contains(t, reason, "dial", "reason must say why dialing failed")
@@ -139,12 +140,12 @@ func TestGetSheafStatus_DaemonErrorReturnsUnavailable(t *testing.T) {
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
 	handler := makeGetSheafStatusHandler(nil)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "daemon-side error must NOT surface as MCP error")
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Equal(t, false, out["available"], "daemon error must mark status unavailable")
 	reason, _ := out["reason"].(string)
 	assert.Contains(t, reason, "sheaf_status", "unavailable reason must name the daemon op for triage")
@@ -242,13 +243,13 @@ func TestSemanticSearch_DaemonReturnsError(t *testing.T) {
 	sockPath := startMockSemanticServer(t, nil, "embeddings not indexed")
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeSemanticSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"query": "Helper"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"query": "Helper"}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "does not support embeddings",
+	assert.Contains(t, testutil.ResultText(t, result), "does not support embeddings",
 		"daemon-side semantic_search error must surface as the embeddings-not-available message")
 }
 
@@ -262,13 +263,13 @@ func TestSemanticSearch_EmptyResults(t *testing.T) {
 	sockPath := startMockSemanticServer(t, nil, "")
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeSemanticSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"query": "Nothing"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"query": "Nothing"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "[]", resultText(t, result), "zero hits must serialize to the bare empty-array literal")
+	assert.Equal(t, "[]", testutil.ResultText(t, result), "zero hits must serialize to the bare empty-array literal")
 }
 
 // TestSemanticSearch_EnrichesFileResults pins the graph-enrichment
@@ -289,12 +290,12 @@ func TestSemanticSearch_EnrichesFileResults(t *testing.T) {
 	sockPath := startMockSemanticServer(t, canned, "")
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
-	store := buildTestGraph(t)
+	store := testutil.BuildTestGraph(t)
 	handler := makeSemanticSearchHandler(store)
 
-	result, err := handler(context.Background(), makeRequest(map[string]any{"query": "Helper", "k": float64(3)}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"query": "Helper", "k": float64(3)}))
 	require.NoError(t, err)
-	require.False(t, result.IsError, "valid daemon response must succeed: %s", resultText(t, result))
+	require.False(t, result.IsError, "valid daemon response must succeed: %s", testutil.ResultText(t, result))
 
 	type enriched struct {
 		Path     string  `json:"path"`
@@ -303,7 +304,7 @@ func TestSemanticSearch_EnrichesFileResults(t *testing.T) {
 		Snippet  string  `json:"snippet,omitempty"`
 	}
 	var out []enriched
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	require.Len(t, out, 3, "all daemon results must appear in the enriched response")
 
 	// File: type=file, snippet present (Helper source is "func Helper() {}")
@@ -344,15 +345,15 @@ func TestSemanticSearch_LongFileTruncatesSnippet(t *testing.T) {
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
 	handler := makeSemanticSearchHandler(store)
-	result, err := handler(context.Background(), makeRequest(map[string]any{"query": "anything"}))
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"query": "anything"}))
 	require.NoError(t, err)
-	require.False(t, result.IsError, "long-file enrichment must succeed: %s", resultText(t, result))
+	require.False(t, result.IsError, "long-file enrichment must succeed: %s", testutil.ResultText(t, result))
 
 	type enriched struct {
 		Snippet string `json:"snippet"`
 	}
 	var out []enriched
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	require.Len(t, out, 1)
 	assert.Equal(t, 200+len("..."), len(out[0].Snippet),
 		"snippet must be exactly the first 200 bytes plus the truncation marker")

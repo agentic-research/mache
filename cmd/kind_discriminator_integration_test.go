@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,38 +97,38 @@ func TestKindDiscriminator_AmbiguousName_FindDefinition(t *testing.T) {
 	handler := makeFindDefinitionHandler(store)
 
 	t.Run("no_kind_returns_both", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "Encoder"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "Encoder"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		dirs := extractDirIDs(t, resultText(t, result))
+		dirs := extractDirIDs(t, testutil.ResultText(t, result))
 		require.Len(t, dirs, 2, "without kind, both definitions should return; got %v", dirs)
 		require.Contains(t, dirs, "pkg/functions/Encoder/source")
 		require.Contains(t, dirs, "pkg/types/Encoder/source")
 	})
 
 	t.Run("kind_function_narrows_to_function", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "Encoder", "kind": "function"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "Encoder", "kind": "function"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		dirs := extractDirIDs(t, resultText(t, result))
+		dirs := extractDirIDs(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{"pkg/functions/Encoder/source"}, dirs,
 			"kind=function should narrow to the function-Encoder ONLY")
 	})
 
 	t.Run("kind_type_narrows_to_type", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "Encoder", "kind": "type"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "Encoder", "kind": "type"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		dirs := extractDirIDs(t, resultText(t, result))
+		dirs := extractDirIDs(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{"pkg/types/Encoder/source"}, dirs,
 			"kind=type should narrow to the type-Encoder ONLY")
 	})
 
 	t.Run("kind_method_returns_no_match_with_kind_hint", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "Encoder", "kind": "method"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "Encoder", "kind": "method"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		require.Contains(t, text, `no definition found for "Encoder"`,
 			"response should name the symbol")
 		require.Contains(t, text, "kind=method",
@@ -135,10 +136,10 @@ func TestKindDiscriminator_AmbiguousName_FindDefinition(t *testing.T) {
 	})
 
 	t.Run("kind_unknown_returns_structured_error", func(t *testing.T) {
-		req := makeRequest(map[string]any{"symbol": "Encoder", "kind": "wibble"})
+		req := testutil.MakeRequest(map[string]any{"symbol": "Encoder", "kind": "wibble"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		text := resultText(t, result)
+		text := testutil.ResultText(t, result)
 		require.Contains(t, text, "unknown kind",
 			"response should name the failure mode; got %q", text)
 		// Error should enumerate the accepted set — match against a
@@ -175,38 +176,38 @@ func TestKindDiscriminator_AmbiguousName_FindCallers(t *testing.T) {
 	}
 
 	t.Run("no_kind_returns_both", func(t *testing.T) {
-		req := makeRequest(map[string]any{"token": "Helper"})
+		req := testutil.MakeRequest(map[string]any{"token": "Helper"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		callers := extractCallers(t, resultText(t, result))
+		callers := extractCallers(t, testutil.ResultText(t, result))
 		require.Len(t, callers, 2)
 		require.Contains(t, callers, "pkg/functions/DecodeAll/source")
 		require.Contains(t, callers, "pkg/methods/Wrapper.Encode/source")
 	})
 
 	t.Run("kind_function_narrows_to_function_caller", func(t *testing.T) {
-		req := makeRequest(map[string]any{"token": "Helper", "kind": "function"})
+		req := testutil.MakeRequest(map[string]any{"token": "Helper", "kind": "function"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		callers := extractCallers(t, resultText(t, result))
+		callers := extractCallers(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{"pkg/functions/DecodeAll/source"}, callers,
 			"kind=function should keep ONLY function-callers")
 	})
 
 	t.Run("kind_method_narrows_to_method_caller", func(t *testing.T) {
-		req := makeRequest(map[string]any{"token": "Helper", "kind": "method"})
+		req := testutil.MakeRequest(map[string]any{"token": "Helper", "kind": "method"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		callers := extractCallers(t, resultText(t, result))
+		callers := extractCallers(t, testutil.ResultText(t, result))
 		require.Equal(t, []string{"pkg/methods/Wrapper.Encode/source"}, callers,
 			"kind=method should keep ONLY method-callers")
 	})
 
 	t.Run("kind_unknown_returns_structured_error", func(t *testing.T) {
-		req := makeRequest(map[string]any{"token": "Helper", "kind": "wibble"})
+		req := testutil.MakeRequest(map[string]any{"token": "Helper", "kind": "wibble"})
 		result, err := handler(context.Background(), req)
 		require.NoError(t, err)
-		require.True(t, strings.Contains(resultText(t, result), "unknown kind"),
+		require.True(t, strings.Contains(testutil.ResultText(t, result), "unknown kind"),
 			"unknown kind should fail loud")
 	})
 }

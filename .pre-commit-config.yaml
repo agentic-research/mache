@@ -23,7 +23,7 @@ repos:
         # rosary at SHA X" provenance and could change test results
         # for the doc-drift rules that read these files. Same rationale
         # as .beads/ — vendored content owned by another repo.
-        exclude: '^(\.beads/|testdata/snapshots/)'
+        exclude: '^(\.beads/|testdata/snapshots/|internal/testutil/testdata/)'
 
   # Basic file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -44,6 +44,11 @@ repos:
         # content owned by another process) — this hook was just missed.
         exclude: '^(\.beads/|testdata/snapshots/)'
       - id: check-yaml
+        # Language preset fixtures are deliberately idiomatic samples — the
+        # YAML one is a multi-document stream, which is valid YAML this hook's
+        # single-document default rejects. Fixture content is test input, not
+        # config to be linted.
+        exclude: '^internal/testutil/testdata/'
       - id: check-added-large-files
         args: ['--maxkb=1000']
         exclude: '^(\.beads/|internal/treesitter/.*/parser\.c$)'

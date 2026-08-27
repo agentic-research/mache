@@ -78,11 +78,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "cmd/schemas.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "cmd/serve_find_callers_bench_test.go",
       "count": 2
     },
@@ -104,7 +99,7 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "cmd/serve_find_smells_test.go",
-      "count": 30
+      "count": 29
     },
     {
       "rule_id": "duplicate_code",
@@ -403,6 +398,11 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "internal/testutil/smellgraph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/vfs/callees.go",
       "count": 1
     },
@@ -593,21 +593,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "cmd/testdata/preset_fixtures/bash/build.sh",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/testdata/preset_fixtures/rust/lib.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/testdata/preset_fixtures/sql/schema.sql",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "cmd/utils.go",
       "count": 1
     },
@@ -715,6 +700,21 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/registry.go",
       "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testutil/testdata/preset_fixtures/bash/build.sh",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testutil/testdata/preset_fixtures/rust/lib.rs",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testutil/testdata/preset_fixtures/sql/schema.sql",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1028,11 +1028,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/build.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/cache.go",
       "count": 7
     },
@@ -1288,6 +1283,11 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "internal/testutil/bindinglog.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/writeback/splice.go",
       "count": 1
     },
@@ -1433,6 +1433,11 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/harmony.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/parse.rs",
       "count": 1
     },
@@ -1459,6 +1464,11 @@
     {
       "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
       "count": 1
     },
     {
@@ -2074,11 +2084,6 @@
     {
       "rule_id": "untested_function",
       "source_id": "cmd/cache_oci.go",
-      "count": 1
-    },
-    {
-      "rule_id": "untested_function",
-      "source_id": "graph/nodes_table_reader.go",
       "count": 1
     },
     {

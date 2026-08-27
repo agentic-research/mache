@@ -18,6 +18,7 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lltest"
 	machetmpl "github.com/agentic-research/mache/internal/template"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/require"
 )
@@ -347,7 +348,7 @@ func profileTool(t *testing.T, name string, h server.ToolHandlerFunc, args map[s
 	runtime.ReadMemStats(&startMem)
 
 	start := time.Now()
-	res, err := h(context.Background(), makeRequest(args))
+	res, err := h(context.Background(), testutil.MakeRequest(args))
 	elapsed := time.Since(start)
 
 	runtime.ReadMemStats(&endMem)
@@ -376,13 +377,13 @@ func profileTool(t *testing.T, name string, h server.ToolHandlerFunc, args map[s
 		// failures by treating it as "skipped" — the tool's
 		// surface is alive, it just had nothing to do.
 		p.Status = "skipped"
-		p.Reason = resultText(t, res)
+		p.Reason = testutil.ResultText(t, res)
 		if len(p.Reason) > 200 {
 			p.Reason = p.Reason[:200] + "..."
 		}
 	default:
 		p.Status = "ok"
-		p.BodySize = len(resultText(t, res))
+		p.BodySize = len(testutil.ResultText(t, res))
 	}
 
 	// Phase 2: optional pprof capture. Skip on tools that errored
@@ -460,7 +461,7 @@ func capturePprof(t *testing.T, name string, h server.ToolHandlerFunc, args map[
 		// Ignore result/error: the canonical call above already
 		// recorded ok-status. Iterations exist to give the sampler
 		// enough work to record stacks.
-		_, _ = h(context.Background(), makeRequest(args))
+		_, _ = h(context.Background(), testutil.MakeRequest(args))
 	}
 	pprof.StopCPUProfile()
 	p.CPUProfile = cpuPath

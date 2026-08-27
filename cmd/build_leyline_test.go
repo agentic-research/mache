@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,20 +75,8 @@ func TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing(t *testing.T) {
 // available. When it is, parses a tiny Go tree and asserts the
 // output .db exists with non-zero size at the user-supplied path
 // (not the temp path autoInvokeLeylineParse uses internally).
-// requirePinnedLeyline skips the test unless the exact-pinned leyline
-// is already resolvable WITHOUT a network download (PATH or the
-// ~/.mache/bin cache). LookPath alone is the wrong gate since the
-// exact-version pin (mache-608a3c): a stale PATH leyline no longer
-// satisfies the pin, and we don't want tests fetching from GitHub.
-func requirePinnedLeyline(t *testing.T) {
-	t.Helper()
-	if _, err := leyline.ResolveBinary(false); err != nil {
-		t.Skipf("pinned leyline not available without download: %v", err)
-	}
-}
-
 func TestRunBuildViaLeyline_HappyPath(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	saved := saveBuildFlags()
 	defer saved.restore()
 
@@ -201,7 +189,7 @@ func TestRunBuildViaLeyline_SchemaProceedsToParse(t *testing.T) {
 // projection correctness is covered by `task test:ast` (the in-process
 // tree-sitter projector it was once parity-checked against is gone).
 func TestRunBuildViaLeylineSchema_ProducesSchemaShapedDB(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	saved := saveBuildFlags()
 	defer saved.restore()
 
