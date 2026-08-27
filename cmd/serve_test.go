@@ -1053,7 +1053,7 @@ func TestGraphRegistry_CodeHandlersPreserveUnavailableGraphError(t *testing.T) {
 	root := t.TempDir()
 	graphErr := errors.New("workspace root unavailable (sentinel)")
 	registry := newGraphRegistry(root, nil)
-	registry.graphs.Store(root, newErrorLazyGraph(graphErr))
+	registry.graphs.Store(graphCacheKey(root), newErrorLazyGraph(graphErr))
 
 	codeHandlers := []struct {
 		name    string
@@ -2256,9 +2256,9 @@ func TestGraphRegistry_WrapHandler_RoutesToSessionGraph(t *testing.T) {
 	storeDefault.AddRoot(&graph.Node{ID: "default-root", Mode: fs.ModeDir, Children: []string{}})
 
 	registry := newGraphRegistry("/default", nil)
-	registry.graphs.Store("/project/a", newTestLazyGraph(storeA, "/project/a"))
-	registry.graphs.Store("/project/b", newTestLazyGraph(storeB, "/project/b"))
-	registry.graphs.Store("/default", newTestLazyGraph(storeDefault, "/default"))
+	registry.graphs.Store(graphCacheKey("/project/a"), newTestLazyGraph(storeA, "/project/a"))
+	registry.graphs.Store(graphCacheKey("/project/b"), newTestLazyGraph(storeB, "/project/b"))
+	registry.graphs.Store(graphCacheKey("/default"), newTestLazyGraph(storeDefault, "/default"))
 	registry.registerSession("sess-a", "/project/a")
 	registry.registerSession("sess-b", "/project/b")
 

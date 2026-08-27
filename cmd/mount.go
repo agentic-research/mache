@@ -378,7 +378,15 @@ var rootCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("resolve data path: %w", err)
 				}
-				sum := sha256.Sum256([]byte(absDataPath))
+				// The cache name binds the index to WHO BUILT IT, not just what
+				// it was built from. Keyed on the path alone, an -index.db
+				// written by mache N-1 was silently reused by mache N — old
+				// projection logic serving under a new binary, masked by
+				// nothing (unlike the serve registry, which the restart
+				// flushes by accident). A version or pin change now misses
+				// the cache and rebuilds; the stale file is orphaned on disk,
+				// which is the cheap and honest failure (mache-6c9e1d).
+				sum := sha256.Sum256([]byte(absDataPath + "\x00" + Version + "\x00" + leyline.BinaryVersion))
 				hashSuffix := fmt.Sprintf("%x", sum[:8])
 				indexPath := filepath.Join(cacheDir, fmt.Sprintf("%s-%s-index.db", mountName, hashSuffix))
 
