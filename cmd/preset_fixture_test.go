@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -10,6 +9,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lltest"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +29,7 @@ import (
 // other tests (TestInferDirSchema_*, the integration test suite, the
 // dead_code rule's Go assertions). Authoring direct fixtures for them
 // is straightforward but high-volume — pick one off, add a fixture
-// under cmd/testdata/preset_fixtures/<name>/, append a case to
+// under internal/testutil/testdata/preset_fixtures/<name>/, append a case to
 // presetFixtureCases, remove it from this map.
 //
 // Format: preset name → reason. Empty string means "no reason
@@ -62,13 +62,13 @@ var pendingFixtureCoverage = map[string]string{
 // wrong nesting depth. Real-fixture tests catch that class of bug.
 //
 // Adding a new case:
-//  1. Drop fixture files under cmd/testdata/preset_fixtures/<name>/
+//  1. Drop fixture files under internal/testutil/testdata/preset_fixtures/<name>/
 //  2. Append an entry below with the expected node-path substrings
 //  3. Run `go test -run TestPresetSchemas_AgainstFixtures/<name>`
 type presetFixtureCase struct {
 	// preset is the registered preset name (matches loadPresetSchema).
 	preset string
-	// fixtureDir is the subdir under cmd/testdata/preset_fixtures/ that
+	// fixtureDir is the subdir under internal/testutil/testdata/preset_fixtures/ that
 	// holds the source files this case ingests.
 	fixtureDir string
 	// expectedSubstrings is a list of substrings that must appear in
@@ -91,17 +91,13 @@ func presetFixtureCases(t *testing.T) []presetFixtureCase {
 	// Fixture dir base lives next to this file. runtime.Caller picks
 	// the test file path so the lookup works regardless of `go test
 	// -C` or vendored paths.
-	_, thisFile, _, ok := runtime.Caller(0)
-	require.True(t, ok, "runtime.Caller(0) returned ok=false")
-	fixturesRoot := filepath.Join(filepath.Dir(thisFile), "testdata", "preset_fixtures")
+	fixturesRoot := testutil.PresetFixturesDir(t)
 
 	// Go: use a small, stable subdir of mache itself as the fixture.
 	// internal/lang has a single package with the language registry,
 	// init function, constants, and a couple of helpers — exercises
-	// imports/functions/types/constants/variables. Path is computed
-	// relative to this test file so the fixture moves with the repo.
-	repoRoot := filepath.Join(filepath.Dir(thisFile), "..")
-	goFixture := filepath.Join(repoRoot, "internal", "lang")
+	// imports/functions/types/constants/variables.
+	goFixture := filepath.Join(testutil.MacheRepoRoot(t), "internal", "lang")
 
 	return []presetFixtureCase{
 		{
@@ -375,7 +371,7 @@ func TestPresetSchemas_PendingFixtureCoverage(t *testing.T) {
 	if len(uncovered) > 0 {
 		t.Errorf("preset(s) registered in presetSchemas have no fixture coverage and aren't on the pending allowlist:\n"+
 			"  %s\n"+
-			"Either add a case to presetFixtureCases (with a fixture under cmd/testdata/preset_fixtures/<name>/) "+
+			"Either add a case to presetFixtureCases (with a fixture under internal/testutil/testdata/preset_fixtures/<name>/) "+
 			"or list the preset in pendingFixtureCoverage with a reason.",
 			strings.Join(uncovered, ", "))
 	}

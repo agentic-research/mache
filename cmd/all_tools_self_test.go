@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentic-research/mache/internal/testfixtures"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // TestE2E_BackendParity_MacheOnMache — the "rough edges" gate.
@@ -62,7 +62,7 @@ func TestE2E_BackendParity_MacheOnMache(t *testing.T) {
 	}
 
 	t.Setenv("MACHE_NO_LEYLINE", "1")
-	repoRoot := macheRepoRoot(t)
+	repoRoot := testutil.MacheRepoRoot(t)
 	schema, err := resolveSchema("go", ".")
 	require.NoError(t, err)
 	require.NotNil(t, schema, "go preset schema must resolve")
@@ -179,20 +179,6 @@ func TestE2E_MacheOnMache(t *testing.T) {
 			assertMacheOnMacheInvariants(t, profiles)
 		})
 	}
-}
-
-// macheRepoRoot returns the absolute path of mache's source root.
-// Derived from runtime.Caller so the test works regardless of which
-// checkout the developer has cd'd into (~/remotes/art/mache vs
-// ~/github/art/mache).
-func macheRepoRoot(t *testing.T) string {
-	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	require.True(t, ok, "runtime.Caller(0) must succeed")
-	// cmd/all_tools_self_test.go → ../.. → repo root
-	root := filepath.Clean(filepath.Join(filepath.Dir(here), ".."))
-	require.FileExists(t, filepath.Join(root, "go.mod"), "repo root must contain go.mod")
-	return root
 }
 
 // assertMacheOnMacheInvariants applies SB-06's per-tool reality

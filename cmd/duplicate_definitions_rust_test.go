@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,7 @@ import (
 // rustDupFixture mirrors leyline's Rust output. fixturedb.Leyline is what makes
 // "mirrors leyline" a fact rather than a claim — the DDL it produces is derived
 // from the pinned binary's own sqlite_master (mache-7555da).
-func rustDupFixture(t *testing.T) *smellTestGraph {
+func rustDupFixture(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	return newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
 		for _, d := range []struct {
@@ -59,10 +60,10 @@ func rustDupFixture(t *testing.T) *smellTestGraph {
 	})
 }
 
-func runDuplicateDefinitions(t *testing.T, tg *smellTestGraph) []smellFinding {
+func runDuplicateDefinitions(t *testing.T, tg *testutil.SmellTestGraph) []smellFinding {
 	t.Helper()
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "duplicate_definitions", "limit": float64(1000),
 	}))
 	require.NoError(t, err)
@@ -70,7 +71,7 @@ func runDuplicateDefinitions(t *testing.T, tg *smellTestGraph) []smellFinding {
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	return resp.Findings
 }
 

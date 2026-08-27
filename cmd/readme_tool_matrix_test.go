@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +28,7 @@ import (
 // server), not a grep over source, so a tool that is renamed or added
 // fails this test until the README's matrix is updated to match.
 func TestREADMEToolMatrixMatchesRegistry(t *testing.T) {
-	readme, err := os.ReadFile(filepath.Join(macheRepoRoot(t), "README.md"))
+	readme, err := os.ReadFile(filepath.Join(testutil.MacheRepoRoot(t), "README.md"))
 	require.NoError(t, err, "read README.md")
 	doc := string(readme)
 

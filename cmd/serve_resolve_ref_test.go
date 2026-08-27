@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -166,7 +167,7 @@ func TestMakeResolveRefHandler_ModSchemeMountsQueryableGraph(t *testing.T) {
 	lg := &lazyGraph{basePath: root}
 
 	handler := makeResolveRefHandler(lg)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"token":     "mod:./modules/vpc",
 		"base_path": basePath,
 	}))
@@ -195,7 +196,7 @@ func TestMakeResolveRefHandler_ModSchemeMountIsIdempotent(t *testing.T) {
 	handler := makeResolveRefHandler(lg)
 
 	call := func() resolveRefResponse {
-		result, err := handler(context.Background(), makeRequest(map[string]any{
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 			"token":     "mod:./modules/vpc",
 			"base_path": basePath,
 		}))
@@ -226,7 +227,7 @@ func TestMakeResolveRefHandler_GomodSchemeMountsQueryableGraph(t *testing.T) {
 	lg := &lazyGraph{basePath: repoRoot}
 
 	handler := makeResolveRefHandler(lg)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"token": "gomod:github.com/stretchr/testify/require",
 	}))
 	require.NoError(t, err)
@@ -257,7 +258,7 @@ func TestMakeResolveRefHandler_UnmountableGraphDegradesGracefully(t *testing.T) 
 	store := graph.NewMemoryStore()
 
 	handler := makeResolveRefHandler(store)
-	result, err := handler(context.Background(), makeRequest(map[string]any{
+	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"token":     "mod:./modules/vpc",
 		"base_path": basePath,
 	}))

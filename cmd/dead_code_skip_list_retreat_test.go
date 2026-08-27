@@ -4,88 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 
-	capnp "capnproto.org/go/capnp/v3"
-	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
-	"github.com/agentic-research/mache/internal/lsp"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
-
-// writeBindingLogForTest writes a single-record .bindings.capnp log
-// next to dbPath for the test. Mirrors LLO's wire format (back-to-back
-// capnp segment messages). Used by tests that need binding-fidelity
-// rows in v_refs after mache-6bd4d8 retired the SQL _lsp_refs UNION
-// arm.
-func writeBindingLogForTest(t *testing.T, dbPath, target, token, construct, refURI string) {
-	t.Helper()
-	logPath := lsp.SiblingBindingLogPath(dbPath)
-	f, err := os.Create(logPath)
-	require.NoError(t, err)
-	defer func() { _ = f.Close() }()
-	enc := capnp.NewEncoder(f)
-	msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
-	require.NoError(t, err)
-	rec, err := binding.NewRootBindingRecord(seg)
-	require.NoError(t, err)
-	require.NoError(t, rec.SetTargetNodeId(target))
-	require.NoError(t, rec.SetRefToken(token))
-	require.NoError(t, rec.SetConstructNodeId(construct))
-	require.NoError(t, rec.SetRefSiteNodeId(""))
-	require.NoError(t, rec.SetRefUri(refURI))
-	rng, err := rec.NewRefRange()
-	require.NoError(t, err)
-	_, err = rng.NewStart()
-	require.NoError(t, err)
-	_, err = rng.NewEnd()
-	require.NoError(t, err)
-	require.NoError(t, enc.Encode(msg))
-}
-
-// bindingRec describes one record for writeMultiBindingLogForTest.
-// Fields use the same vocabulary as the BindingRecord schema; empty
-// fields default per the schema-evolution invariant (qualifier="" is
-// the pre-T8.7 default and exercises the COALESCE fallback to token
-// in the qualifier-aware fan_out_skew metric).
-type bindingRec struct {
-	target, token, construct, qualifier string
-}
-
-// writeMultiBindingLogForTest writes N records to one .bindings.capnp
-// log next to dbPath. Used by tests that need the qualifier signal
-// across multiple referrers (mache-6c0d07 fan_out_skew), where the
-// single-record helper would overwrite each record.
-func writeMultiBindingLogForTest(t *testing.T, dbPath string, recs []bindingRec) {
-	t.Helper()
-	logPath := lsp.SiblingBindingLogPath(dbPath)
-	f, err := os.Create(logPath)
-	require.NoError(t, err)
-	defer func() { _ = f.Close() }()
-	enc := capnp.NewEncoder(f)
-	for _, r := range recs {
-		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
-		require.NoError(t, err)
-		rec, err := binding.NewRootBindingRecord(seg)
-		require.NoError(t, err)
-		require.NoError(t, rec.SetTargetNodeId(r.target))
-		require.NoError(t, rec.SetRefToken(r.token))
-		require.NoError(t, rec.SetConstructNodeId(r.construct))
-		require.NoError(t, rec.SetRefSiteNodeId(""))
-		require.NoError(t, rec.SetRefUri(""))
-		require.NoError(t, rec.SetQualifier(r.qualifier))
-		rng, err := rec.NewRefRange()
-		require.NoError(t, err)
-		_, err = rng.NewStart()
-		require.NoError(t, err)
-		_, err = rng.NewEnd()
-		require.NoError(t, err)
-		require.NoError(t, enc.Encode(msg))
-	}
-}
 
 // dead_code skip-list precise retreat — ADR-0013 follow-up after
 // Falsifiability A passed empirically. The skip-list now has two
@@ -130,17 +56,17 @@ func TestDeadCode_InterfaceMethodSkippedWithoutLSP(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	tg := &smellTestGraph{db: db}
+	tg := &testutil.SmellTestGraph{DB: db}
 	handler := makeFindSmellsHandler(tg)
 
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	for _, f := range resp.Findings {
 		assert.NotEqual(t, "pkg/methods/MyType.Read", f.NodeID,
@@ -211,17 +137,17 @@ func TestDeadCode_InterfaceMethodFlaggedWhenLSPSeesNoRefs(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	tg := &smellTestGraph{db: db}
+	tg := &testutil.SmellTestGraph{DB: db}
 	handler := makeFindSmellsHandler(tg)
 
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	flagged := map[string]bool{}
 	for _, f := range resp.Findings {
@@ -278,23 +204,23 @@ func TestDeadCode_InterfaceMethodAliveWhenLSPSeesRefs(t *testing.T) {
 	// Post-mache-6bd4d8: binding-fidelity refs come from the sibling
 	// .bindings.capnp event log, not the legacy _lsp_refs SQL table.
 	// Write the equivalent record there.
-	writeBindingLogForTest(t, dbPath,
+	testutil.WriteBindingLogForTest(t, dbPath,
 		"pkg/methods/MyType.Read", // targetNodeId
 		"Read",                    // refToken
 		"pkg/functions/Caller",    // constructNodeId (referrer)
 		"file:///pkg/caller.go")   // refUri
 
-	tg := &smellTestGraph{db: db, path: dbPath}
+	tg := &testutil.SmellTestGraph{DB: db, Path: dbPath}
 	handler := makeFindSmellsHandler(tg)
 
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	for _, f := range resp.Findings {
 		assert.NotEqual(t, "pkg/methods/MyType.Read", f.NodeID,
@@ -347,17 +273,17 @@ func TestDeadCode_TestPrefixAlwaysSkipped(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	tg := &smellTestGraph{db: db}
+	tg := &testutil.SmellTestGraph{DB: db}
 	handler := makeFindSmellsHandler(tg)
 
-	res, err := handler(context.Background(), makeRequest(map[string]any{"rule": "dead_code"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	for _, f := range resp.Findings {
 		assert.NotEqual(t, "pkg/functions/TestFoo", f.NodeID,

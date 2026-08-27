@@ -11,6 +11,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	machetmpl "github.com/agentic-research/mache/internal/template"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +22,7 @@ import (
 // extractor, leaving node_refs empty and making Mache's caller view lie by
 // omission.
 func TestLeylineProjection_TerraformAddressRefsReachFindCallers(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 
 	src := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(src, "main.tf"), []byte(`
@@ -66,12 +67,12 @@ resource "aws_s3_bucket" "main" {
 
 	handler := makeFindCallersHandler(sg)
 	for _, token := range tokens {
-		result, err := handler(context.Background(), makeRequest(map[string]any{"token": token}))
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": token}))
 		require.NoError(t, err)
-		require.False(t, result.IsError, resultText(t, result))
+		require.False(t, result.IsError, testutil.ResultText(t, result))
 
 		var callers []string
-		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &callers))
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &callers))
 		sort.Strings(callers)
 		assert.NotEmptyf(t, callers, "find_callers must expose the serialized %s ref", token)
 	}

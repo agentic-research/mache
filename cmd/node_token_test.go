@@ -13,6 +13,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
 	machetmpl "github.com/agentic-research/mache/internal/template"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,13 +23,13 @@ import (
 // That distinction is the entire bug (mache-cb4369), so the fixture has to
 // carry it — a mache-schema fixture, where the ID ends in the symbol, cannot
 // fail the way production did.
-func leylineShapedGraph(t *testing.T) *smellTestGraph {
+func leylineShapedGraph(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	_, f := fixturedb.New(t, fixturedb.Leyline).
 		Construct("a.go/function_declaration_0").
 		Def("Alpha", "a.go/function_declaration_0", fixturedb.Function).
 		Build()
-	return &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: f.DB()}
+	return &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: f.DB()}
 }
 
 // TestTokenForNode_ResolvesLeylineIDsToTheirSymbol is the regression. Before
@@ -66,7 +67,7 @@ func TestTokenForNode_FallsBackWithoutASQLHandle(t *testing.T) {
 // Mache-shaped IDs (ending in the symbol) and miss the production failure:
 // Leyline IDs end in tree-sitter kinds such as function_declaration_0.
 func TestLeylineProjection_CallersImpactAndDataflowAgree(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 
 	src := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(src, "sample.go"), []byte(`package sample
@@ -85,24 +86,24 @@ func Gamma() { Alpha() }
 	defer func() { require.NoError(t, sg.Close()) }()
 	require.NoError(t, sg.EagerScan())
 
-	callerResult, err := makeFindCallersHandler(sg)(context.Background(), makeRequest(map[string]any{
+	callerResult, err := makeFindCallersHandler(sg)(context.Background(), testutil.MakeRequest(map[string]any{
 		"token": "Alpha",
 	}))
 	require.NoError(t, err)
-	require.False(t, callerResult.IsError, resultText(t, callerResult))
+	require.False(t, callerResult.IsError, testutil.ResultText(t, callerResult))
 	var callers []string
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, callerResult)), &callers))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, callerResult)), &callers))
 	sort.Strings(callers)
 	require.NotEmpty(t, callers, "the real Leyline projection must contain Alpha call sites")
 
-	impactResult, err := makeGetImpactHandler(sg)(context.Background(), makeRequest(map[string]any{
+	impactResult, err := makeGetImpactHandler(sg)(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol":    "Alpha",
 		"kind":      "function",
 		"direction": "callers",
 		"depth":     1,
 	}))
 	require.NoError(t, err)
-	require.False(t, impactResult.IsError, resultText(t, impactResult))
+	require.False(t, impactResult.IsError, testutil.ResultText(t, impactResult))
 	var impact struct {
 		Nodes []struct {
 			Path      string `json:"path"`
@@ -110,7 +111,7 @@ func Gamma() { Alpha() }
 			Direction string `json:"direction"`
 		} `json:"nodes"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, impactResult)), &impact))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, impactResult)), &impact))
 	impactCallers := make([]string, 0)
 	for _, node := range impact.Nodes {
 		if node.Depth == 1 && node.Direction == "caller" {
@@ -119,16 +120,16 @@ func Gamma() { Alpha() }
 	}
 	sort.Strings(impactCallers)
 
-	dataflowCallResult, err := makeGetDataflowHandler(sg)(context.Background(), makeRequest(map[string]any{
+	dataflowCallResult, err := makeGetDataflowHandler(sg)(context.Background(), testutil.MakeRequest(map[string]any{
 		"symbol":    "Alpha",
 		"kind":      "function",
 		"direction": "callers",
 		"depth":     1,
 	}))
 	require.NoError(t, err)
-	require.False(t, dataflowCallResult.IsError, resultText(t, dataflowCallResult))
+	require.False(t, dataflowCallResult.IsError, testutil.ResultText(t, dataflowCallResult))
 	var flow dataflowResult
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, dataflowCallResult)), &flow))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, dataflowCallResult)), &flow))
 	flowCallers := make([]string, 0)
 	for _, node := range flow.Nodes {
 		if node.Depth == 1 {

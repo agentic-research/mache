@@ -1,4 +1,4 @@
-package cmd
+package testutil
 
 import (
 	"database/sql"
@@ -12,16 +12,26 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
-
-	_ "modernc.org/sqlite"
 )
 
-// attachLeylineASTWalkerForTest is the test-only sibling of the production
-// attachLeylineASTWalker: it resolves the PINNED leyline WITHOUT downloading
-// (ResolveBinary(false)) so offline CI skips instead of hanging, parses
-// dataSource into an `_ast` db, and wires an ASTWalker onto the engine.
+// RequirePinnedLeyline skips the test unless the exact-pinned leyline
+// is already resolvable WITHOUT a network download (PATH or the
+// ~/.mache/bin cache). LookPath alone is the wrong gate since the
+// exact-version pin (mache-608a3c): a stale PATH leyline no longer
+// satisfies the pin, and we don't want tests fetching from GitHub.
+func RequirePinnedLeyline(t testing.TB) {
+	t.Helper()
+	if _, err := leyline.ResolveBinary(false); err != nil {
+		t.Skipf("pinned leyline not available without download: %v", err)
+	}
+}
+
+// AttachLeylineASTWalkerForTest is the test-only sibling of the production
+// leyline-walker attachment: it resolves the PINNED leyline WITHOUT
+// downloading (ResolveBinary(false)) so offline CI skips instead of hanging,
+// parses dataSource into an `_ast` db, and wires an ASTWalker onto the engine.
 // Returns the open db, a cleanup, and an error (which callers turn into a Skip).
-func attachLeylineASTWalkerForTest(t *testing.T, dataSource string, engine *ingest.Engine) (*sql.DB, func(), error) {
+func AttachLeylineASTWalkerForTest(t testing.TB, dataSource string, engine *ingest.Engine) (*sql.DB, func(), error) {
 	t.Helper()
 	bin, err := leyline.ResolveBinary(false)
 	if err != nil {
@@ -44,16 +54,16 @@ func attachLeylineASTWalkerForTest(t *testing.T, dataSource string, engine *inge
 	return db, cleanup, nil
 }
 
-// testGoCallExtractor is a naive, pure-Go call extractor for tests that build
-// synthetic MemoryStores from raw Go source bytes (node Data). ADR-0012 step 4
-// removed the in-process CGO tree-sitter extractor (newCallExtractor), and the
-// production AST extractor (newASTCallExtractor) reads a ley-line `_ast` db by
-// source_id — it cannot parse ad-hoc Data byte slices. These composite/mount
-// annotation tests only need *some* identifier-call to flow through the callees
+// GoCallExtractorForTest is a naive, pure-Go call extractor for tests that
+// build synthetic MemoryStores from raw Go source bytes (node Data). ADR-0012
+// step 4 removed the in-process CGO tree-sitter extractor (newCallExtractor),
+// and the production AST extractor reads a ley-line `_ast` db by source_id —
+// it cannot parse ad-hoc Data byte slices. These composite/mount annotation
+// tests only need *some* identifier-call to flow through the callees
 // machinery, so a regex over `identifier(` suffices and keeps them CGO-free.
 //
-// It is deliberately not exported and not used in production wiring.
-func testGoCallExtractor() graph.CallExtractor {
+// It is deliberately test-only and never part of production wiring.
+func GoCallExtractorForTest() graph.CallExtractor {
 	callRe := regexp.MustCompile(`\b([A-Za-z_]\w*)\s*\(`)
 	// Go keywords that can precede '(' but are not calls.
 	keywords := map[string]bool{

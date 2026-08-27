@@ -12,6 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // seedDuplicateCodeAST builds an _ast fixture with three Go functions:
@@ -27,7 +28,7 @@ import (
 // The rule's signature is the ordered (relative_depth ':' node_kind)
 // sequence of every node in the function subtree, so fnA and fnB
 // collide and fnC does not.
-func seedDuplicateCodeAST(t *testing.T) *smellTestGraph {
+func seedDuplicateCodeAST(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "dup.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -80,7 +81,7 @@ func seedDuplicateCodeAST(t *testing.T) *smellTestGraph {
 		require.NoError(t, err)
 	}
 
-	return &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
+	return &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db}
 }
 
 // TestFindSmells_DuplicateCode pins the deterministic clone-detection
@@ -92,22 +93,22 @@ func seedDuplicateCodeAST(t *testing.T) *smellTestGraph {
 // small fixture functions surface.
 func TestFindSmells_DuplicateCode(t *testing.T) {
 	tg := seedDuplicateCodeAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "duplicate_code",
 		"min_metric": 0,
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", resultText(t, res))
+	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Rule     string         `json:"rule"`
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	assert.Equal(t, "duplicate_code", resp.Rule)
 	require.Equal(t, 2, resp.Total, "exactly the fnA/fnB clone pair; fnC is structurally unique")
@@ -130,10 +131,10 @@ func TestFindSmells_DuplicateCode(t *testing.T) {
 // the production pair from being detected on their own.
 func TestFindSmells_DuplicateCode_ExcludesGenerated(t *testing.T) {
 	tg := seedDuplicateCodeAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	// Add a third structural twin of fnA/fnB, but in a generated file.
-	_, err := tg.db.Exec("INSERT INTO _source VALUES ('z.gen.go', 'go', ?)", []byte("package main\n"))
+	_, err := tg.DB.Exec("INSERT INTO _source VALUES ('z.gen.go', 'go', ?)", []byte("package main\n"))
 	require.NoError(t, err)
 	// Same byte layout as fnA/fnB so z is a genuine structural twin —
 	// distinct start_bytes (10/20/25/30) reproduce the params-before-body
@@ -149,7 +150,7 @@ func TestFindSmells_DuplicateCode_ExcludesGenerated(t *testing.T) {
 		{"z/body/ret", "return_statement", 25},
 		{"z/body/ret/id", "identifier", 30},
 	} {
-		_, err = tg.db.Exec(
+		_, err = tg.DB.Exec(
 			"INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'z.gen.go', ?, ?, ?, 0, 0, 0, 0)",
 			r.id, r.kind, r.b, r.b+1,
 		)
@@ -157,18 +158,18 @@ func TestFindSmells_DuplicateCode_ExcludesGenerated(t *testing.T) {
 	}
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "duplicate_code",
 		"min_metric": 0,
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", resultText(t, res))
+	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	got := map[string]bool{}
 	for _, f := range resp.Findings {
@@ -226,22 +227,22 @@ func TestFindSmells_DuplicateCode_IgnoresComments(t *testing.T) {
 		)
 		require.NoError(t, err)
 	}
-	tg := &smellTestGraph{MemoryStore: graph.NewMemoryStore(), db: db}
+	tg := &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db}
 	defer func() { _ = db.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "duplicate_code",
 		"min_metric": 0,
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", resultText(t, res))
+	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	got := map[string]bool{}
 	for _, f := range resp.Findings {
@@ -260,19 +261,19 @@ func TestFindSmells_DuplicateCode_IgnoresComments(t *testing.T) {
 // keeps one-line accessors and matching stubs out of the default view.
 func TestFindSmells_DuplicateCode_DefaultFloorDropsTrivial(t *testing.T) {
 	tg := seedDuplicateCodeAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "duplicate_code", // no min_metric → DefaultMinMetric=24 applies
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", resultText(t, res))
+	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Total int `json:"total"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Equal(t, 0, resp.Total, "5-node clones are below the 24-node default floor")
 }
 
@@ -282,22 +283,22 @@ func TestFindSmells_DuplicateCode_DefaultFloorDropsTrivial(t *testing.T) {
 // clone (its pair lives in b.go) yet return only the a.go instance.
 func TestFindSmells_DuplicateCode_SourceIDScopes(t *testing.T) {
 	tg := seedDuplicateCodeAST(t)
-	defer func() { _ = tg.db.Close() }()
+	defer func() { _ = tg.DB.Close() }()
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule":       "duplicate_code",
 		"min_metric": 0,
 		"source_id":  "a.go",
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", resultText(t, res))
+	require.False(t, res.IsError, "duplicate_code should run cleanly: %s", testutil.ResultText(t, res))
 
 	var resp struct {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Equal(t, 1, resp.Total, "only the a.go instance is returned, but it was detected via its b.go pair")
 	assert.Equal(t, "a", resp.Findings[0].NodeID)
 	assert.Equal(t, "a.go", resp.Findings[0].SourceID)

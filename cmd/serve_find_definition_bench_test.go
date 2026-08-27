@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // buildFindDefBenchGraph seeds a MemoryStore with N defs spanning a
@@ -36,7 +37,7 @@ func BenchmarkFindDefinition_AnchoredExact(b *testing.B) {
 	for _, n := range []int{100, 1000, 10000} {
 		store := buildFindDefBenchGraph(b, n)
 		handler := makeFindDefinitionHandler(store)
-		req := makeRequest(map[string]any{"symbol": fmt.Sprintf("Func%04d", n/2)})
+		req := testutil.MakeRequest(map[string]any{"symbol": fmt.Sprintf("Func%04d", n/2)})
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -58,7 +59,7 @@ func BenchmarkFindDefinition_CaseInsensitive(b *testing.B) {
 		store := buildFindDefBenchGraph(b, n)
 		handler := makeFindDefinitionHandler(store)
 		// Lowercase to bypass the case-sensitive branch.
-		req := makeRequest(map[string]any{"symbol": fmt.Sprintf("func%04d", n/2)})
+		req := testutil.MakeRequest(map[string]any{"symbol": fmt.Sprintf("func%04d", n/2)})
 		b.Run(fmt.Sprintf("defs=%d", n), func(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -81,7 +82,7 @@ func BenchmarkFindDefinition_FuzzySubstring(b *testing.B) {
 		store := buildFindDefBenchGraph(b, n)
 		handler := makeFindDefinitionHandler(store)
 		// Substring that won't anchor-match (common substring shape).
-		req := makeRequest(map[string]any{
+		req := testutil.MakeRequest(map[string]any{
 			"symbol": "Func00",
 			"fuzzy":  true,
 		})
@@ -105,7 +106,7 @@ func BenchmarkFindDefinition_FuzzySubstring(b *testing.B) {
 func BenchmarkFindDefinition_NotFound(b *testing.B) {
 	store := buildFindDefBenchGraph(b, 1000)
 	handler := makeFindDefinitionHandler(store)
-	req := makeRequest(map[string]any{"symbol": "DefinitelyDoesNotExist"})
+	req := testutil.MakeRequest(map[string]any{"symbol": "DefinitelyDoesNotExist"})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {

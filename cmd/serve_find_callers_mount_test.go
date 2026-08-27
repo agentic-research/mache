@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,14 +49,14 @@ func TestFindCallers_AnnotatesMountOnComposite(t *testing.T) {
 	require.NoError(t, cg.Mount("billing", billing))
 
 	handler := makeFindCallersHandler(cg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "Validate"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Callers []scopedCallerRow `json:"callers"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Len(t, resp.Callers, 2)
 
 	byMount := make(map[string]string, len(resp.Callers))
@@ -74,13 +75,13 @@ func TestFindCallers_AnnotatesMountOnComposite(t *testing.T) {
 func TestFindCallers_NonCompositeKeepsLegacyShape(t *testing.T) {
 	auth, _ := twoMountStores(t)
 	handler := makeFindCallersHandler(auth)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "Validate"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	// Legacy shape: bare []string.
 	var paths []string
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &paths))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &paths))
 	assert.Equal(t, []string{"functions/AuthCaller/source"}, paths)
 }
 
@@ -94,10 +95,10 @@ func TestFindCallers_CompositeNoCallersKeepsLegacyShape(t *testing.T) {
 	require.NoError(t, cg.Mount("billing", billing))
 
 	handler := makeFindCallersHandler(cg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"token": "NeverReferenced"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "NeverReferenced"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
-	assert.Equal(t, "[]", resultText(t, res),
+	assert.Equal(t, "[]", testutil.ResultText(t, res),
 		"empty-result path keeps the bare-array response (backward-compat)")
 }
 
@@ -145,14 +146,14 @@ func TestFindCallers_AnnotatesMountThroughLazyGraph(t *testing.T) {
 	lg.once.Do(func() {})
 
 	handler := makeFindCallersHandler(lg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{"token": "Validate"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"token": "Validate"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
 		Callers []scopedCallerRow `json:"callers"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	require.Len(t, resp.Callers, 2,
 		"both auth and billing callers must surface — production wraps in lazyGraph")
 

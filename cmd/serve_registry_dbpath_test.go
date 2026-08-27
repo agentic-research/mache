@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +52,7 @@ func TestLazyGraph_DBPathEmptyWhenBackendHasNone(t *testing.T) {
 // can contribute nothing. Any result here must have come from the capnp log.
 func TestQueryLSPRefs_ThroughLazyGraph_ReadsSiblingCapnpLog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "project.db")
-	writeBindingLogForTest(t, dbPath,
+	testutil.WriteBindingLogForTest(t, dbPath,
 		"pkg/functions/Read", "Read", "pkg/functions/Caller", "file:///pkg/caller.go")
 
 	lg := newTestLazyGraph(&pathfulStore{MemoryStore: graph.NewMemoryStore(), dbPath: dbPath}, "")
@@ -82,22 +83,22 @@ func TestQueryLSPRefs_ThroughLazyGraph_ReadsSiblingCapnpLog(t *testing.T) {
 // block entirely, and this fails.
 func TestFindCallers_ReadsCapnpRefsThroughLazyGraph(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "project.db")
-	writeBindingLogForTest(t, dbPath,
+	testutil.WriteBindingLogForTest(t, dbPath,
 		"pkg/functions/Validate", "Validate", "pkg/functions/Caller", "file:///pkg/caller.go")
 
 	lg := newTestLazyGraph(&pathfulStore{MemoryStore: graph.NewMemoryStore(), dbPath: dbPath}, "")
 
-	res, err := makeFindCallersHandler(lg)(context.Background(), makeRequest(map[string]any{
+	res, err := makeFindCallersHandler(lg)(context.Background(), testutil.MakeRequest(map[string]any{
 		"token": "Validate",
 	}))
 	require.NoError(t, err)
-	require.False(t, res.IsError, "handler must succeed: %s", resultText(t, res))
+	require.False(t, res.IsError, "handler must succeed: %s", testutil.ResultText(t, res))
 
 	var out struct {
 		Callers []string         `json:"callers"`
 		LSPRefs []lspRefLocation `json:"lsp_refs"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &out))
 	require.Len(t, out.LSPRefs, 1,
 		"find_callers must supplement from the sibling capnp log through the lazyGraph; "+
 			"without the DBPath forwarder this block is absent entirely")

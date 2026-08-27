@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +17,7 @@ import (
 // module root.
 func actionYAMLPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(macheRepoRoot(t), ".github", "actions", "find-smells", "action.yml")
+	return filepath.Join(testutil.MacheRepoRoot(t), ".github", "actions", "find-smells", "action.yml")
 }
 
 // TestFindSmellsAction_Contract asserts the composite action exists, is a
@@ -72,7 +73,7 @@ func TestFindSmellsAction_Contract(t *testing.T) {
 // the note in .github/actions/find-smells/README.md ("Contract with
 // mache's own gate").
 func TestFindSmellsAction_TaskfileParity(t *testing.T) {
-	root := macheRepoRoot(t)
+	root := testutil.MacheRepoRoot(t)
 	actionRaw, err := os.ReadFile(actionYAMLPath(t))
 	require.NoError(t, err)
 	taskRaw, err := os.ReadFile(filepath.Join(root, "Taskfile.yml"))

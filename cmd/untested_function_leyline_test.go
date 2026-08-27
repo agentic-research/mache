@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +27,7 @@ import (
 //   - a testdata fixture function              → corpus exclusion
 //   - a method (canonical_kind='method')       → kind filter
 //   - a non-test caller ref (must NOT count as coverage)
-func buildLeylineGoProjectionFixture(t *testing.T) *smellTestGraph {
+func buildLeylineGoProjectionFixture(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 
 	// fixturedb.Leyline is what makes the comment above TRUE rather than
@@ -78,7 +79,7 @@ func TestFindSmells_UntestedFunctionLeylineProjection(t *testing.T) {
 	tg := buildLeylineGoProjectionFixture(t)
 
 	handler := makeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), makeRequest(map[string]any{
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "untested_function",
 	}))
 	require.NoError(t, err)
@@ -88,7 +89,7 @@ func TestFindSmells_UntestedFunctionLeylineProjection(t *testing.T) {
 		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &resp))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 
 	require.Equal(t, 1, resp.Total,
 		"only Orphan: Served is covered via its test CALLER (container_node_id join), "+

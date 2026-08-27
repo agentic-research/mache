@@ -15,6 +15,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -358,9 +359,9 @@ func TestGetCommunities_PopulatesInvalidator_WithDaemon(t *testing.T) {
 
 	pushDone := make(chan struct{})
 	handler := makeGetCommunitiesHandlerWithDone(g, pushDone)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
-	require.False(t, result.IsError, "handler returned error result: %s", resultText(t, result))
+	require.False(t, result.IsError, "handler returned error result: %s", testutil.ResultText(t, result))
 
 	select {
 	case <-pushDone:
@@ -400,7 +401,7 @@ func TestGetCommunities_NoDaemon_LeavesInvalidatorEmpty(t *testing.T) {
 
 	pushDone := make(chan struct{})
 	handler := makeGetCommunitiesHandlerWithDone(g, pushDone)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
@@ -434,7 +435,7 @@ func TestGetCommunities_NoInvalidatorWhenGraphDoesntProvide(t *testing.T) {
 	// sheafInvalidatorProvider. Handler must complete normally.
 	pushDone := make(chan struct{})
 	handler := makeGetCommunitiesHandlerWithDone(store, pushDone)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "handler must succeed even when graph has no invalidator")
 
@@ -523,12 +524,12 @@ func TestGetSheafStatus_ReturnsDaemonState(t *testing.T) {
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
 	handler := makeGetSheafStatusHandler(nil)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
-	require.False(t, result.IsError, "handler must succeed when daemon responds: %s", resultText(t, result))
+	require.False(t, result.IsError, "handler must succeed when daemon responds: %s", testutil.ResultText(t, result))
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Equal(t, true, out["available"])
 	assert.EqualValues(t, 42, out["generation"], "must parse quoted-string Int64 from the live wire format")
 	assert.EqualValues(t, 7, out["valid"])
@@ -550,12 +551,12 @@ func TestGetSheafStatus_NoDaemonReturnsUnavailable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	handler := makeGetSheafStatusHandler(nil)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError, "no-daemon path must not surface as an MCP error")
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Equal(t, false, out["available"])
 	assert.NotEmpty(t, out["reason"], "must explain why state is unavailable")
 }
@@ -588,12 +589,12 @@ func TestGetSheafStatus_IncludesSubscriberState(t *testing.T) {
 	}
 
 	handler := makeGetSheafStatusHandler(subAccessor)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	require.Contains(t, out, "subscriber", "must include subscriber sub-object when accessor reports ok")
 
 	sub := out["subscriber"].(map[string]any)
@@ -626,12 +627,12 @@ func TestGetSheafStatus_SubscriberDisconnectedSurfaced(t *testing.T) {
 	}
 
 	handler := makeGetSheafStatusHandler(subAccessor)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	assert.Equal(t, true, out["available"], "daemon-direct check still passes")
 
 	sub := out["subscriber"].(map[string]any)
@@ -650,12 +651,12 @@ func TestGetSheafStatus_NilSubscriberAccessor(t *testing.T) {
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 
 	handler := makeGetSheafStatusHandler(nil)
-	result, err := handler(context.Background(), makeRequest(nil))
+	result, err := handler(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &out))
 	_, hasSubscriber := out["subscriber"]
 	assert.False(t, hasSubscriber, "nil accessor → omit subscriber field (don't fake a state)")
 }

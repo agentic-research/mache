@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/internal/buildinfo"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +43,7 @@ func TestMacheProducerVersionIsRealNotPlaceholder(t *testing.T) {
 func TestREADMEImageTagsMatchBuildinfo(t *testing.T) {
 	version := buildinfo.Version
 
-	raw, err := os.ReadFile(filepath.Join(macheRepoRoot(t), "README.md"))
+	raw, err := os.ReadFile(filepath.Join(testutil.MacheRepoRoot(t), "README.md"))
 	require.NoError(t, err, "read README.md")
 	doc := string(raw)
 

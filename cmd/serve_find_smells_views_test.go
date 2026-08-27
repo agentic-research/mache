@@ -21,7 +21,7 @@ import (
 // fidelity rows. When missing or pre-Step-1 schema, the views fall
 // back to mention-only — same shape as PR #341.
 
-// sqlDBQuerier wraps a *sql.DB as a graph.RefsQuerier. The smellTestGraph
+// sqlDBQuerier wraps a *sql.DB as a graph.RefsQuerier. The testutil.SmellTestGraph
 // in serve_find_smells_test.go is heavier than these tests need
 // (full graph + AST plumbing); a thin wrapper is enough.
 type sqlDBQuerier struct {

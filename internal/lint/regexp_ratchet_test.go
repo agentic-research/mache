@@ -35,7 +35,7 @@ var regexpAllowlist = map[string]string{
 	"internal/lattice/date_parsing_test.go":   "date-format heuristics under test",
 	"cmd/find_smells_cli_test.go":             "asserts on CLI stdout text",
 	"cmd/find_smells_action_test.go":          "asserts on action output text",
-	"cmd/call_extractor_test_helper_test.go":  "test fixture text matching",
+	"internal/testutil/leyline.go":            "GoCallExtractorForTest: deliberate naive identifier-call regex for CGO-free synthetic-store tests (moved from cmd in mache-96c378 stage 1)",
 
 	// production code — each justified, NOT deferred work (mache-ceb776):
 	//

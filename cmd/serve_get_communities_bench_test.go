@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/testutil"
 )
 
 // buildCommunityBenchGraph seeds a MemoryStore with `nClusters`
@@ -51,7 +52,7 @@ func BenchmarkGetCommunities_Detect(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			store := buildCommunityBenchGraph(b, tc.clusters, tc.perSize)
 			handler := makeGetCommunitiesHandler(store)
-			req := makeRequest(map[string]any{"min_size": float64(2)})
+			req := testutil.MakeRequest(map[string]any{"min_size": float64(2)})
 			b.ResetTimer()
 			b.ReportAllocs()
 			for range b.N {
@@ -71,7 +72,7 @@ func BenchmarkGetCommunities_Detect(b *testing.B) {
 func BenchmarkGetCommunities_NoRefs(b *testing.B) {
 	store := graph.NewMemoryStore()
 	handler := makeGetCommunitiesHandler(store)
-	req := makeRequest(map[string]any{"min_size": float64(2)})
+	req := testutil.MakeRequest(map[string]any{"min_size": float64(2)})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
@@ -89,7 +90,7 @@ func BenchmarkGetCommunities_NoRefs(b *testing.B) {
 func BenchmarkGetCommunities_Summary(b *testing.B) {
 	store := buildCommunityBenchGraph(b, 10, 50)
 	handler := makeGetCommunitiesHandler(store)
-	req := makeRequest(map[string]any{"min_size": float64(2), "summary": true})
+	req := testutil.MakeRequest(map[string]any{"min_size": float64(2), "summary": true})
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {

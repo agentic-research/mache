@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,7 +14,7 @@ import (
 // delegation to the public build coverage guard. An explicit schema must not
 // emit a hollow database when the pinned leyline has no grammar for its source.
 func TestRunBuildViaLeylineSchema_UnparseableLanguageErrors(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	saved := saveBuildFlags()
 	defer saved.restore()
 
