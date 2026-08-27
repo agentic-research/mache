@@ -435,6 +435,9 @@ func DiscoverOrStart() (string, error) {
 			if err := recordArenaConfig(arenaPath, arenaCfg); err != nil {
 				log.Printf("leyline: could not record arena config (next spawn will cold-start): %v", err)
 			}
+			// Provenance beside the socket, same only-once-serving rationale
+			// as the arena config above (mache-967cff).
+			writeOwnerRecord(sockPath, cmd.Process.Pid)
 			return sockPath, nil
 		}
 		// If the daemon already exited, the socket will never appear — stop
