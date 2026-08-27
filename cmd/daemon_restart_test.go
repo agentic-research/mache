@@ -88,9 +88,9 @@ func TestRestartDaemonAgent_UsesRestartNotStart(t *testing.T) {
 		return "mache = {\n\tstate = running\n\tprogram = /x/mache\n}\n", nil
 	}
 
-	var got []string
+	var got [][]string
 	runSupervisorCmd = func(name string, args ...string) error {
-		got = append([]string{filepath.Base(name)}, args...)
+		got = append(got, append([]string{filepath.Base(name)}, args...))
 		return nil
 	}
 
@@ -101,17 +101,24 @@ func TestRestartDaemonAgent_UsesRestartNotStart(t *testing.T) {
 
 	switch runtime.GOOS {
 	case "darwin":
-		require.NotEmpty(t, got, "darwin must attempt a supervisor call")
-		assert.Equal(t, "launchctl", got[0])
-		assert.Contains(t, got, "kickstart", "must kickstart an existing job")
-		assert.Contains(t, got, "-k", "-k kills the running job first; without it the old process survives")
-		assert.NotContains(t, got, "bootstrap", "bootstrap would START a daemon the user did not ask for")
+		// A RELOAD, not `kickstart -k`. launchd pins the job's code identity
+		// at bootstrap, and mache's ad-hoc signature changes identity on every
+		// build — so kickstarting the old registration after the binary was
+		// replaced makes the kernel SIGKILL the new binary at exec
+		// (CODESIGNING "Launch Constraint Violation", from a live crash
+		// report; the 10s/43s/112s restart-gap family, mache-706d8f). The
+		// previous assertions here REQUIRED -k and FORBADE bootstrap —
+		// pinning the exact behaviour that caused the kills. The
+		// restart-if-running property they meant to protect lives in the
+		// !job.Running guard, covered by DoesNotStartAnIdleJob.
+		require.Len(t, got, 3, "darwin restart is bootout -> bootstrap -> kickstart")
+		assert.Contains(t, got[0], "bootout")
+		assert.Contains(t, got[1], "bootstrap")
+		assert.Contains(t, got[2], "kickstart")
 	case "linux":
-		require.NotEmpty(t, got, "linux must attempt a supervisor call")
-		assert.Equal(t, "systemctl", got[0])
-		assert.Contains(t, got, "try-restart", "try-restart is restart-if-running")
-		assert.NotContains(t, got, "enable", "enable --now would START a stopped service")
-		assert.NotContains(t, got, "start")
+		require.Len(t, got, 1)
+		assert.Contains(t, got[0], "try-restart", "try-restart is restart-if-running")
+		assert.NotContains(t, got[0], "enable", "enable --now would START a stopped service")
 	default:
 		assert.Empty(t, got, "unsupported platforms must not shell out")
 	}
@@ -142,8 +149,12 @@ func TestRestartDaemonAgent_SupervisorFailureIsSilent(t *testing.T) {
 	var buf bytes.Buffer
 	stubDaemonSettle(t, true)
 	require.NotPanics(t, func() { restartDaemonAgent(&buf) })
-	assert.Empty(t, buf.String(),
-		"a not-loaded supervisor is the benign common case; it must not claim a restart nor report an error")
+	assert.NotContains(t, buf.String(), "restarted the supervised daemon",
+		"must not claim a restart that did not happen")
+	// Since the reload change this is no longer fully silent on darwin: a
+	// bootstrap failure while a RUNNING job is being reloaded warns, because
+	// the reload tore the job down and could not bring it back — silence there
+	// would hide a daemon this command just removed.
 }
 
 // TestDaemonRestartCmd_Wired pins that `mache daemon restart` exists, takes no
@@ -236,9 +247,10 @@ func TestRestartDaemonAgent_RestartsARunningJob(t *testing.T) {
 	var buf bytes.Buffer
 	restartDaemonAgent(&buf)
 
-	require.Len(t, ran, 1, "a RUNNING job must be kickstarted")
-	assert.Contains(t, ran[0], "kickstart")
-	assert.Contains(t, ran[0], "-k")
+	require.Len(t, ran, 3, "a RUNNING job is RELOADED: bootout, bootstrap, kickstart (mache-706d8f)")
+	assert.Contains(t, ran[0], "bootout")
+	assert.Contains(t, ran[1], "bootstrap")
+	assert.Contains(t, ran[2], "kickstart")
 	assert.Contains(t, buf.String(), "restarted the supervised daemon")
 }
 
