@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -91,7 +93,7 @@ func (v supervisorVerb) String() string { return supervisorVerbNames[v] }
 // has no config to re-read without restarting — each session resolves its own
 // root and builds its own graph on connect. A `reload` verb could only alias
 // restart on one platform and fail on the other.
-func supervisorArgv(verb supervisorVerb, loaded bool) (string, []string, error) {
+func supervisorArgv(verb supervisorVerb, loaded bool) ([]supervisorStep, error) {
 	return supervisorArgvFor(runtime.GOOS, verb, loaded)
 }
 
@@ -100,33 +102,65 @@ func supervisorArgv(verb supervisorVerb, loaded bool) (string, []string, error) 
 // it could only skip on darwin and linux, and an always-skipped test is
 // indistinguishable from no test — verified by mutation, where returning a
 // bogus success from that branch survived.
-func supervisorArgvFor(goos string, verb supervisorVerb, loaded bool) (string, []string, error) {
+// supervisorArgvFor returns the COMMAND SEQUENCE for verb — several steps on
+// darwin, one on linux.
+//
+// darwin start/restart are a RELOAD (bootout → bootstrap → kickstart), never a
+// bare `kickstart -k`, because launchd pins the job's code identity at
+// bootstrap time. mache's binaries are ad-hoc signed — no Team ID, so identity
+// is effectively the CDHash, which changes on EVERY build — and kickstarting a
+// job whose binary was replaced relaunches it under the OLD pinned identity.
+// The kernel then SIGKILLs the new binary at exec: observed as a crash report
+// with `SIGKILL (Code Signature Invalid)`, termination namespace CODESIGNING
+// code 4 "Launch Constraint Violation", and launchd throttle-looping the
+// respawn — which is what the unexplained 10s/43s/112s restart gaps were
+// (mache-706d8f). Reloading re-reads the binary and re-pins.
+//
+// The trailing kickstart is required: RunAtLoad did NOT fire on bootstrap when
+// verified live — the job loaded as "not running, never exited" until kicked.
+//
+// bootout of an unloaded job fails; that step tolerates failure (okFail) since
+// "was not loaded" is exactly the state bootstrap wants.
+func supervisorArgvFor(goos string, verb supervisorVerb, loaded bool) ([]supervisorStep, error) {
 	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
 	switch goos {
 	case "darwin":
 		launchctl, err := exec.LookPath("launchctl")
 		if err != nil {
-			return "", nil, fmt.Errorf("launchctl not found: %w", err)
+			return nil, fmt.Errorf("launchctl not found: %w", err)
+		}
+		domain := fmt.Sprintf("gui/%d", os.Getuid())
+		plist := launchAgentPlistPath()
+		if plist == "" {
+			return nil, fmt.Errorf("cannot resolve the LaunchAgent plist path (no home directory)")
 		}
 		switch verb {
-		case verbStart:
-			if !loaded {
-				return launchctl, []string{"bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), launchAgentPlistPath()}, nil
-			}
-			return launchctl, []string{"kickstart", target}, nil
 		case verbStop:
-			return launchctl, []string{"kill", "SIGTERM", target}, nil
-		default:
-			return launchctl, []string{"kickstart", "-k", target}, nil
+			return []supervisorStep{{name: launchctl, args: []string{"kill", "SIGTERM", target}}}, nil
+		default: // start and restart: reload
+			return []supervisorStep{
+				{name: launchctl, args: []string{"bootout", target}, okFail: true},
+				{name: launchctl, args: []string{"bootstrap", domain, plist}},
+				{name: launchctl, args: []string{"kickstart", target}},
+			}, nil
 		}
 	case "linux":
 		systemctl, err := exec.LookPath("systemctl")
 		if err != nil {
-			return "", nil, fmt.Errorf("systemctl not found: %w", err)
+			return nil, fmt.Errorf("systemctl not found: %w", err)
 		}
-		return systemctl, []string{"--user", verb.String(), "mache.service"}, nil
+		return []supervisorStep{{name: systemctl, args: []string{"--user", verb.String(), "mache.service"}}}, nil
 	}
-	return "", nil, errUnsupportedSupervisor
+	return nil, errUnsupportedSupervisor
+}
+
+// supervisorStep is one supervisor invocation in a verb's sequence.
+type supervisorStep struct {
+	name string
+	args []string
+	// okFail marks a step whose failure is an acceptable state, not an error —
+	// bootout of a job that is not loaded.
+	okFail bool
 }
 
 // daemonEndpointUp reports whether the MCP endpoint answers right now.
@@ -213,18 +247,24 @@ func runDaemonVerb(w io.Writer, verb supervisorVerb) error {
 		}
 	}
 
-	name, args, err := supervisorArgv(verb, job.Loaded)
+	steps, err := supervisorArgv(verb, job.Loaded)
 	if err != nil {
 		return err
 	}
-	if runErr := runSupervisorCmd(name, args...); runErr != nil {
-		// launchctl kill returns ESRCH when nothing is running; that is the
-		// state stop wanted, not a failure.
-		if verb == verbStop && errors.Is(runErr, syscall.ESRCH) {
-			logf(w, "daemon was not running\n")
-			return nil
+	for _, st := range steps {
+		if runErr := runSupervisorCmd(st.name, st.args...); runErr != nil {
+			if st.okFail {
+				continue // e.g. bootout of a job that was not loaded
+			}
+			// launchctl kill returns ESRCH when nothing is running; that is
+			// the state stop wanted, not a failure.
+			if verb == verbStop && errors.Is(runErr, syscall.ESRCH) {
+				logf(w, "daemon was not running\n")
+				return nil
+			}
+			return fmt.Errorf("%s the supervised daemon (%s %s): %w",
+				verb, filepath.Base(st.name), strings.Join(st.args, " "), runErr)
 		}
-		return fmt.Errorf("%s the supervised daemon: %w", verb, runErr)
 	}
 
 	wantUp := verb != verbStop

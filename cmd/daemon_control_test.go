@@ -86,9 +86,7 @@ func TestRunDaemonVerb_StartSucceedsOnlyAfterTheEndpointAnswers(t *testing.T) {
 	require.NoError(t, runDaemonVerb(&buf, verbStart))
 
 	assert.Contains(t, buf.String(), "1.2.3-test", "must report the version actually served")
-	require.Len(t, *ran, 1, "exactly one supervisor command")
-	assert.NotContains(t, (*ran)[0], "bootout",
-		"start must never unload the job; a later start would then fail to find it")
+	require.Len(t, *ran, 3, "darwin start is a reload: bootout, bootstrap, kickstart")
 }
 
 // TestRunDaemonVerb_StopUsesSigtermNotBootout pins the choice that makes a stop
@@ -109,7 +107,48 @@ func TestRunDaemonVerb_StopUsesSigtermNotBootout(t *testing.T) {
 	require.Len(t, *ran, 1)
 	assert.Contains(t, (*ran)[0], "kill SIGTERM")
 	assert.NotContains(t, (*ran)[0], "bootout",
-		"bootout unloads the job, so `mache daemon start` could not bring it back")
+		"stop must leave the job LOADED — bootout without a following bootstrap "+
+			"would strand `mache daemon start`")
+}
+
+// TestRunDaemonVerb_StartAndRestartReloadTheJob pins the fix for the
+// CODESIGNING kill family (mache-706d8f).
+//
+// launchd pins the job's code identity at bootstrap. mache is ad-hoc signed, so
+// identity is effectively the CDHash — different for EVERY build — and a bare
+// `kickstart -k` after the binary is replaced relaunches under the OLD pinned
+// identity: the kernel SIGKILLs the new binary at exec ("Launch Constraint
+// Violation", from a live crash report), and launchd's respawn throttling turns
+// that into the unexplained 10s/43s/112s restart gaps. The sequence must
+// therefore be bootout -> bootstrap -> kickstart, and the trailing kickstart is
+// load-bearing: RunAtLoad does not fire on bootstrap (verified live).
+func TestRunDaemonVerb_StartAndRestartReloadTheJob(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchd identity pinning is darwin-specific")
+	}
+	for _, verb := range []supervisorVerb{verbStart, verbRestart} {
+		t.Run(verb.String(), func(t *testing.T) {
+			// restart requires a running job or it no-ops.
+			prev := querySupervisorCmd
+			querySupervisorCmd = func(string, ...string) (string, error) {
+				return "mache = {\n\tstate = running\n\tprogram = /x/mache\n}\n", nil
+			}
+			t.Cleanup(func() { querySupervisorCmd = prev })
+
+			ran := stubSupervisor(t)
+			stubEndpoint(t, true)
+
+			var buf bytes.Buffer
+			require.NoError(t, runDaemonVerb(&buf, verb))
+
+			require.Len(t, *ran, 3, "reload is three steps")
+			assert.Contains(t, (*ran)[0], "bootout")
+			assert.Contains(t, (*ran)[1], "bootstrap")
+			assert.Contains(t, (*ran)[2], "kickstart")
+			assert.NotContains(t, (*ran)[2], "-k",
+				"the job was just re-read; -k would be a no-op kill of nothing")
+		})
+	}
 }
 
 // TestSupervisorArgv_HasNoReloadVerb documents an absence on purpose.
@@ -135,7 +174,7 @@ func TestSupervisorArgv_HasNoReloadVerb(t *testing.T) {
 // branch survived, which is exactly what an always-skipped test buys you.
 func TestSupervisorArgv_UnsupportedPlatformErrors(t *testing.T) {
 	for _, goos := range []string{"windows", "plan9", "js"} {
-		_, _, err := supervisorArgvFor(goos, verbStart, false)
+		_, err := supervisorArgvFor(goos, verbStart, false)
 		require.ErrorIsf(t, err, errUnsupportedSupervisor, "goos %q", goos)
 		assert.Contains(t, err.Error(), "launchd",
 			"the error must name what mache DOES support, not just what it does not")
@@ -199,7 +238,7 @@ func TestRunDaemonVerb_StartStillActsWithNoSupervisedDaemon(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, runDaemonVerb(&buf, verbStart))
-	require.Len(t, *ran, 1, "start must still reach the supervisor")
+	require.NotEmpty(t, *ran, "start must still reach the supervisor")
 }
 
 // TestRunDaemonVerb_AnnouncesALongWait covers a failure that is not a crash:

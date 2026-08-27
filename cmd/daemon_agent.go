@@ -407,8 +407,26 @@ func restartDaemonAgent(w io.Writer) {
 			// exists to fix. Starting one is `mache init --global`'s decision.
 			return
 		}
+		// RELOAD, not `kickstart -k`. launchd pins the job's code identity at
+		// bootstrap; this restart runs precisely because the binary was just
+		// REPLACED, and mache's ad-hoc signature has no stable identity across
+		// builds — so kickstarting the old registration makes the kernel
+		// SIGKILL the new binary at exec (CODESIGNING "Launch Constraint
+		// Violation", caught in a live crash report). That kill plus launchd's
+		// respawn throttling was the unexplained 10s/43s/112s family of
+		// install-restart failures (mache-706d8f). bootout may fail if the job
+		// races to unloaded — bootstrap wants that state anyway.
 		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
-		if err := runSupervisorCmd(launchctl, "kickstart", "-k", target); err != nil {
+		_ = runSupervisorCmd(launchctl, "bootout", target)
+		if plist := launchAgentPlistPath(); plist != "" {
+			if err := runSupervisorCmd(launchctl, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plist); err != nil {
+				logf(w, "WARNING: could not reload the daemon job: %v\n", err)
+				return
+			}
+		}
+		// RunAtLoad does not fire on bootstrap (verified live: the job loads
+		// as "not running, never exited" until kicked).
+		if err := runSupervisorCmd(launchctl, "kickstart", target); err != nil {
 			return
 		}
 		confirmRestart(w, launchAgentLabel)

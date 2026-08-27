@@ -119,7 +119,18 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	registry := newGraphRegistry(servePath, args)
-	defer registry.Close()
+	// Timed for the same reason the drain is: registry.Close iterates every
+	// lazyGraph (worktree removal, hosted-clone cleanup, sheaf stop) with no
+	// deadline, making it the prime suspect for the unattributed 112s exit —
+	// and, unlogged, an unfalsifiable one (mache-706d8f). Deliberately timed
+	// rather than bounded: deadline-ing cleanup that removes worktrees has its
+	// own failure modes, and doing that before ANY phase has been measured
+	// guilty would be another unmeasured fix.
+	defer func() {
+		t := time.Now()
+		registry.Close()
+		log.Printf("shutdown: registry closed in %s", time.Since(t).Round(time.Millisecond))
+	}()
 	registry.repoCloneDir = repoCloneDir
 
 	// Resolve the external smell-rules dir ONCE at startup from
@@ -247,11 +258,24 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	defer sigStop()
 	go func() {
 		<-sigCtx.Done()
+		// Every phase below logs with a duration, because "shutting down…"
+		// used to be the LAST line this process ever wrote — the next line in
+		// the file was the replacement's "listening". A 112-second exit was
+		// observed and could not be attributed to drain, registry cleanup, or
+		// anything else, by construction (mache-706d8f). A shutdown that
+		// cannot say where its time went will be misdiagnosed; this one was,
+		// twice.
 		log.Println("shutting down…")
+		drainStart := time.Now()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := httpSrv.Shutdown(shutCtx); err != nil {
-			log.Printf("HTTP shutdown: %v", err)
+			// Deadline expiry here is not an anomaly: any genuinely in-flight
+			// request pays it. Both observed exact-10s restarts coincided with
+			// long-running tool calls that were later made fast.
+			log.Printf("shutdown: drain gave up after %s: %v", time.Since(drainStart).Round(time.Millisecond), err)
+		} else {
+			log.Printf("shutdown: drained in %s", time.Since(drainStart).Round(time.Millisecond))
 		}
 	}()
 
