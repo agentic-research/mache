@@ -39,7 +39,20 @@ import (
 //
 // The wait announces itself after daemonSettleAnnounceAfter, so a long budget
 // is not a silent one.
-var daemonSettleTimeout = 90 * time.Second
+var daemonSettleTimeout = envDurationOr("MACHE_DAEMON_SETTLE", 90*time.Second)
+
+// envDurationOr parses key as a Go duration, or returns fallback when unset
+// or unparseable. The E2E shrinks the settle window so a deliberate crash
+// loop fails in seconds instead of minutes; an operator can widen it on a
+// machine where first-boot graph builds are slow.
+func envDurationOr(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return fallback
+}
 
 // daemonSettlePoll is the gap between endpoint probes while settling.
 //
@@ -139,7 +152,7 @@ func supervisorArgvFor(goos string, verb supervisorVerb, loaded bool) ([]supervi
 			return []supervisorStep{{name: launchctl, args: []string{"kill", "SIGTERM", target}}}, nil
 		default: // start and restart: reload
 			return []supervisorStep{
-				{name: launchctl, args: []string{"bootout", target}, okFail: true},
+				{name: launchctl, args: []string{"bootout", target}, okFail: true, awaitGone: true},
 				{name: launchctl, args: []string{"bootstrap", domain, plist}},
 				{name: launchctl, args: []string{"kickstart", target}},
 			}, nil
@@ -161,6 +174,39 @@ type supervisorStep struct {
 	// okFail marks a step whose failure is an acceptable state, not an error —
 	// bootout of a job that is not loaded.
 	okFail bool
+	// awaitGone marks a step (bootout) whose EFFECT is asynchronous: launchctl
+	// returns once removal is INITIATED, while the outgoing process drains for
+	// up to ExitTimeOut. Bootstrapping while the label still exists fails with
+	// EIO — caught by the real-launchd E2E on its first run, after every
+	// stub-level test passed. The runner polls the job away before moving on.
+	awaitGone bool
+}
+
+// daemonDrainTimeout bounds how long a reload waits, after bootout, for the
+// outgoing job to actually leave the launchd domain. The plist's ExitTimeOut
+// is 45s (matching TimeoutStopSec on the systemd side), so a draining daemon
+// can legally take that long; beyond it launchd SIGKILLs, so gone-ness is
+// guaranteed shortly after — 50s covers the whole legal window.
+var (
+	daemonDrainTimeout = envDurationOr("MACHE_DAEMON_DRAIN", 50*time.Second)
+	daemonDrainPoll    = 100 * time.Millisecond
+)
+
+// awaitJobGone polls until the supervised job has left the domain. Read-side
+// verification, same philosophy as awaitDaemon: the state we need is "label
+// gone", so that is what we observe — not the exit status of the command that
+// merely requested it.
+func awaitJobGone() bool {
+	deadline := time.Now().Add(daemonDrainTimeout)
+	for {
+		if !querySupervisorJob().Loaded {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(daemonDrainPoll)
+	}
 }
 
 // daemonEndpointUp reports whether the MCP endpoint answers right now.
@@ -252,19 +298,26 @@ func runDaemonVerb(w io.Writer, verb supervisorVerb) error {
 		return err
 	}
 	for _, st := range steps {
-		if runErr := runSupervisorCmd(st.name, st.args...); runErr != nil {
-			if st.okFail {
-				continue // e.g. bootout of a job that was not loaded
+		runErr := runSupervisorCmd(st.name, st.args...)
+		if runErr == nil || st.okFail {
+			// The step's effect may lag its exit status: bootout returns once
+			// removal is initiated. Verify the state the NEXT step depends on.
+			if st.awaitGone && !awaitJobGone() {
+				return fmt.Errorf(
+					"asked the supervisor to remove the old daemon job and it accepted, "+
+						"but the job is still present after %s — the outgoing daemon did not drain; "+
+						"check the log: %s", daemonDrainTimeout, daemonLogHint())
 			}
-			// launchctl kill returns ESRCH when nothing is running; that is
-			// the state stop wanted, not a failure.
-			if verb == verbStop && errors.Is(runErr, syscall.ESRCH) {
-				logf(w, "daemon was not running\n")
-				return nil
-			}
-			return fmt.Errorf("%s the supervised daemon (%s %s): %w",
-				verb, filepath.Base(st.name), strings.Join(st.args, " "), runErr)
+			continue
 		}
+		// launchctl kill returns ESRCH when nothing is running; that is
+		// the state stop wanted, not a failure.
+		if verb == verbStop && errors.Is(runErr, syscall.ESRCH) {
+			logf(w, "daemon was not running\n")
+			return nil
+		}
+		return fmt.Errorf("%s the supervised daemon (%s %s): %w",
+			verb, filepath.Base(st.name), strings.Join(st.args, " "), runErr)
 	}
 
 	wantUp := verb != verbStop

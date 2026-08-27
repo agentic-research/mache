@@ -36,9 +36,16 @@ func stubDaemonSettle(t *testing.T, up bool) {
 	}
 	daemonSettleTimeout = 30 * time.Millisecond
 	daemonSettlePoll = 5 * time.Millisecond
+	// The post-bootout drain wait polls querySupervisorJob; these tests
+	// script static replies that never change state, so the drain must be
+	// short or every reload path sits out the full window.
+	prevDrain, prevDrainPoll := daemonDrainTimeout, daemonDrainPoll
+	daemonDrainTimeout = 30 * time.Millisecond
+	daemonDrainPoll = 5 * time.Millisecond
 	t.Cleanup(func() {
 		daemonEndpointUp = prevProbe
 		daemonSettleTimeout, daemonSettlePoll = prevTimeout, prevPoll
+		daemonDrainTimeout, daemonDrainPoll = prevDrain, prevDrainPoll
 	})
 }
 

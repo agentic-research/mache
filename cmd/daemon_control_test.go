@@ -137,15 +137,25 @@ func TestRunDaemonVerb_StartAndRestartReloadTheJob(t *testing.T) {
 	}
 	for _, verb := range []supervisorVerb{verbStart, verbRestart} {
 		t.Run(verb.String(), func(t *testing.T) {
-			// restart requires a running job or it no-ops.
+			ran := stubSupervisor(t)
+
+			// restart requires a running job or it no-ops — and once the
+			// reload's bootout has run, the job is GONE and the state query
+			// must say so, or awaitJobGone waits out the full drain window
+			// polling a stub frozen in the pre-verb world.
 			prev := querySupervisorCmd
 			querySupervisorCmd = func(string, ...string) (string, error) {
+				for _, step := range *ran {
+					if strings.Contains(step, "bootout") {
+						return "", errors.New("no such service")
+					}
+				}
 				return "mache = {\n\tstate = running\n\tprogram = /x/mache\n}\n", nil
 			}
 			t.Cleanup(func() { querySupervisorCmd = prev })
 
-			ran := stubSupervisor(t)
 			stubEndpoint(t, true)
+			shrinkSettle(t)
 
 			var buf bytes.Buffer
 			require.NoError(t, runDaemonVerb(&buf, verb))
@@ -195,10 +205,18 @@ func TestSupervisorArgv_UnsupportedPlatformErrors(t *testing.T) {
 func shrinkSettle(t *testing.T) {
 	t.Helper()
 	prevTimeout, prevPoll := daemonSettleTimeout, daemonSettlePoll
+	prevDrain, prevDrainPoll := daemonDrainTimeout, daemonDrainPoll
 	daemonSettleTimeout = 30 * time.Millisecond
 	daemonSettlePoll = 5 * time.Millisecond
+	// The drain wait polls querySupervisorJob after bootout. Tests whose
+	// scripted supervisor never changes state would otherwise sit out the
+	// full drain window on every restart path; the conformance table models
+	// the state change properly, and everything else just needs speed.
+	daemonDrainTimeout = 30 * time.Millisecond
+	daemonDrainPoll = 5 * time.Millisecond
 	t.Cleanup(func() {
 		daemonSettleTimeout, daemonSettlePoll = prevTimeout, prevPoll
+		daemonDrainTimeout, daemonDrainPoll = prevDrain, prevDrainPoll
 	})
 }
 

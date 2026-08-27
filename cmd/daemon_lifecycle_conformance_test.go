@@ -182,8 +182,23 @@ func lifecycleCells() []conformanceCell {
 // scriptCell wires a cell's state into the seams and returns the recorder.
 func scriptCell(t *testing.T, st lifecycleState, verb supervisorVerb) *[]string {
 	t.Helper()
+	ran := stubSupervisor(t)
+
 	prevQ := querySupervisorCmd
-	querySupervisorCmd = func(string, ...string) (string, error) { return st.supervisorReply() }
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		// The stub models the POST-VERB world, not a frozen snapshot: once
+		// the verb has issued a bootout, the job is GONE and state queries
+		// must say so — the reload's awaitJobGone polls exactly this, and a
+		// frozen "still loaded" reply would hang every restart cell for the
+		// full drain window (which is precisely how the drain fix announced
+		// itself to this table).
+		for _, step := range *ran {
+			if strings.Contains(step, "bootout") {
+				return "", errors.New("no such service")
+			}
+		}
+		return st.supervisorReply()
+	}
 	t.Cleanup(func() { querySupervisorCmd = prevQ })
 
 	// Fixture lie-detector: the scripted reply must parse, on THIS platform,
@@ -194,8 +209,6 @@ func scriptCell(t *testing.T, st lifecycleState, verb supervisorVerb) *[]string 
 		"fixture %q must parse as loaded=%v on %s", st.name, st.loaded, runtime.GOOS)
 	require.Equalf(t, st.running, job.Running,
 		"fixture %q must parse as running=%v on %s", st.name, st.running, runtime.GOOS)
-
-	ran := stubSupervisor(t)
 
 	// The endpoint script: stop-verbs want the endpoint to END down, so the
 	// scripted sequence inverts for them once the supervisor acts.
@@ -298,4 +311,38 @@ func TestLifecycleConformance_FailedVerifyNeverClaimsSuccess(t *testing.T) {
 				"no success claim may survive a failed verification")
 		})
 	}
+}
+
+// TestLifecycleRestart_StuckDrainFailsLoudly pins the drain guard the launchd
+// E2E discovered on its first run: `launchctl bootout` returns once removal is
+// INITIATED, and bootstrapping while the outgoing job still holds the label
+// fails with EIO. The reload must therefore observe the label actually leave
+// the domain before bootstrapping — and when the outgoing daemon never
+// drains, the verb must say so instead of racing bootstrap into a failure
+// that names the wrong step.
+func TestLifecycleRestart_StuckDrainFailsLoudly(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the bootout/bootstrap drain race is a launchd sequence")
+	}
+	// A supervisor whose job NEVER leaves the domain: state queries report
+	// running forever, even after bootout ran.
+	prevQ := querySupervisorCmd
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return stateRunning.supervisorReply()
+	}
+	t.Cleanup(func() { querySupervisorCmd = prevQ })
+	ran := stubSupervisor(t)
+	stubEndpoint(t, true)
+	shrinkSettle(t)
+
+	var buf bytes.Buffer
+	err := runDaemonVerb(&buf, verbRestart)
+
+	require.Error(t, err, "a reload that cannot clear the old job must fail")
+	assert.Contains(t, err.Error(), "did not drain")
+	for _, step := range *ran {
+		assert.NotContains(t, step, "bootstrap",
+			"bootstrap must not run while the old job still holds the label")
+	}
+	assertNoUnverifiedClaims(t, buf.String(), err)
 }
