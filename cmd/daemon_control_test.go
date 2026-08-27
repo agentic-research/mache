@@ -86,7 +86,16 @@ func TestRunDaemonVerb_StartSucceedsOnlyAfterTheEndpointAnswers(t *testing.T) {
 	require.NoError(t, runDaemonVerb(&buf, verbStart))
 
 	assert.Contains(t, buf.String(), "1.2.3-test", "must report the version actually served")
-	require.Len(t, *ran, 3, "darwin start is a reload: bootout, bootstrap, kickstart")
+	// Platform-conditional on purpose: darwin start is a three-step reload
+	// (bootout, bootstrap, kickstart — launchd pins code identity at
+	// bootstrap), linux is systemd's single `start`. The first version of this
+	// line asserted 3 unconditionally and failed on ubuntu CI — a
+	// platform-blind assertion whose own message said "darwin".
+	if runtime.GOOS == "darwin" {
+		require.Len(t, *ran, 3, "darwin start is a reload: bootout, bootstrap, kickstart")
+	} else {
+		require.Len(t, *ran, 1, "linux start is a single systemctl invocation")
+	}
 }
 
 // TestRunDaemonVerb_StopUsesSigtermNotBootout pins the choice that makes a stop
