@@ -384,8 +384,17 @@ func checkClientToken(root string) check {
 		return check{
 			Name:   "client-token",
 			Status: statusWarn,
-			Detail: fmt.Sprintf("no ?project= token in %s; tools resolve only if your client answers roots/list", strings.Join(without, ", ")),
-			Fix:    "mache init   # writes .claude/mcp.json with a ?project= token",
+			// Two costs, not one. Resolution: a bare URL depends on the client
+			// answering roots/list. Continuity: a ?project= session re-binds
+			// STATELESSLY after a daemon restart (the URL itself carries the
+			// binding; verified live in mache-956488), while a roots-bound
+			// session is severed by every upgrade and stalls or errors until
+			// the client reconnects. The token cannot be committed to a shared
+			// config — it is salted per machine — so this is a per-machine step.
+			Detail: fmt.Sprintf("no ?project= token in %s; tools resolve only if your client answers roots/list, "+
+				"and sessions will NOT survive daemon restarts/upgrades (a ?project= URL re-binds statelessly)",
+				strings.Join(without, ", ")),
+			Fix: "mache init   # writes .claude/mcp.json with a ?project= token (per-machine; do not commit the token)",
 		}
 	}
 }
