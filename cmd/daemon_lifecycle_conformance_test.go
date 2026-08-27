@@ -43,8 +43,37 @@ type lifecycleState struct {
 	// supervisorReply is what querySupervisorCmd returns (launchctl print /
 	// systemctl show shapes are parsed upstream; an error means "not loaded").
 	supervisorReply func() (string, error)
+	// loaded/running are what the reply must PARSE to on the platform running
+	// the test — asserted by scriptCell before any verb runs, so a fixture
+	// whose shape the local parser cannot read fails naming the fixture.
+	loaded, running bool
 	// endpointUp scripts daemonEndpointUp answers, held on the last value.
 	endpointUp []bool
+}
+
+// supervisorReplyFor scripts a reply in the shape the CURRENT platform's
+// parser expects. The first version returned launchctl-print shape
+// unconditionally; linux's parseSystemctlShow read that as not-loaded, so on
+// ubuntu every "running" cell silently became a not-loaded cell and the no-op
+// guards fired — the same platform-blind-test class that broke #641's first
+// CI run, now caught by the parse self-check in scriptCell instead of by a
+// confusing downstream cell failure.
+func supervisorReplyFor(running bool) func() (string, error) {
+	return func() (string, error) {
+		if runtime.GOOS == "linux" {
+			active := "inactive"
+			if running {
+				active = "active"
+			}
+			return "LoadState=loaded\nActiveState=" + active +
+				"\nExecStart={ path=/x/mache ; argv[]=/x/mache }\n", nil
+		}
+		st := "waiting"
+		if running {
+			st = "running"
+		}
+		return "mache = {\n\tstate = " + st + "\n\tprogram = /x/mache\n}\n", nil
+	}
 }
 
 var (
@@ -60,12 +89,15 @@ var (
 	}
 	stateLoadedIdle = lifecycleState{
 		name:            "loaded-idle",
-		supervisorReply: func() (string, error) { return "mache = {\n\tstate = waiting\n\tprogram = /x/mache\n}\n", nil },
+		supervisorReply: supervisorReplyFor(false),
+		loaded:          true,
 		endpointUp:      []bool{false, true}, // comes up once started
 	}
 	stateRunning = lifecycleState{
 		name:            "running",
-		supervisorReply: func() (string, error) { return "mache = {\n\tstate = running\n\tprogram = /x/mache\n}\n", nil },
+		supervisorReply: supervisorReplyFor(true),
+		loaded:          true,
+		running:         true,
 		endpointUp:      []bool{true},
 	}
 )
@@ -153,6 +185,15 @@ func scriptCell(t *testing.T, st lifecycleState, verb supervisorVerb) *[]string 
 	prevQ := querySupervisorCmd
 	querySupervisorCmd = func(string, ...string) (string, error) { return st.supervisorReply() }
 	t.Cleanup(func() { querySupervisorCmd = prevQ })
+
+	// Fixture lie-detector: the scripted reply must parse, on THIS platform,
+	// to the state the cell's name claims. Without it, a shape/parser
+	// mismatch surfaces as a wrong-cell-behaviour failure two layers away.
+	job := querySupervisorJob()
+	require.Equalf(t, st.loaded, job.Loaded,
+		"fixture %q must parse as loaded=%v on %s", st.name, st.loaded, runtime.GOOS)
+	require.Equalf(t, st.running, job.Running,
+		"fixture %q must parse as running=%v on %s", st.name, st.running, runtime.GOOS)
 
 	ran := stubSupervisor(t)
 
@@ -243,6 +284,8 @@ func TestLifecycleConformance_FailedVerifyNeverClaimsSuccess(t *testing.T) {
 			scriptCell(t, lifecycleState{
 				name:            "running-but-endpoint-dead",
 				supervisorReply: stateRunning.supervisorReply,
+				loaded:          true,
+				running:         true,
 				endpointUp:      []bool{false}, // never comes up
 			}, verb)
 
