@@ -90,3 +90,25 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 		assert.NotContains(t, ov, "index_warning")
 	})
 }
+
+// TestLazyGraph_ForwardsIndexStaleness pins the delegation that makes the
+// feature real on the primary serve path: handlers hold *lazyGraph, and a
+// capability the wrapper doesn't forward is a capability the daemon doesn't
+// have. Found live — get_overview returned index:null against a daemon whose
+// inner graph answered fine.
+func TestLazyGraph_ForwardsIndexStaleness(t *testing.T) {
+	want := graph.IndexStaleness{SourceRoot: "/src", ModifiedSince: 7}
+	lg := &lazyGraph{inner: &stalenessGraph{Graph: buildTestGraph(t), rep: want, ok: true}}
+	lg.once.Do(func() {}) // consume init: serve a pre-set inner, don't build one
+
+	got, ok := lg.IndexStaleness()
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+
+	// A non-reporting inner graph stays unknown — the wrapper must not
+	// answer on its own authority.
+	plain := &lazyGraph{inner: buildTestGraph(t)}
+	plain.once.Do(func() {})
+	_, ok = plain.IndexStaleness()
+	assert.False(t, ok)
+}

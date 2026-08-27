@@ -1058,6 +1058,23 @@ func (lg *lazyGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return nil, fmt.Errorf("backend does not support QueryRefs")
 }
 
+// IndexStaleness implements graph.StalenessReporter by delegating to the
+// inner graph, the same way RefsMap does. Without this the primary serve path
+// never reports staleness at all: handlers hold the *lazyGraph* wrapper, and a
+// capability the wrapper doesn't forward is a capability the daemon doesn't
+// have — found live when get_overview returned index:null against a daemon
+// whose inner SQLiteGraph answered fine.
+func (lg *lazyGraph) IndexStaleness() (graph.IndexStaleness, bool) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return graph.IndexStaleness{}, false
+	}
+	if sr, ok := g.(graph.StalenessReporter); ok {
+		return sr.IndexStaleness()
+	}
+	return graph.IndexStaleness{}, false
+}
+
 func (lg *lazyGraph) RefsMap() map[string][]string {
 	g, err := lg.get()
 	if err != nil || g == nil {
