@@ -205,6 +205,17 @@ func systemdQuote(s string) string {
 	return `"` + s + `"`
 }
 
+// ExitTimeOut 45 / TimeoutStopSec 45 (they are the same knob, spelled per
+// supervisor): how long a graceful stop may take before the supervisor
+// SIGKILLs. launchd's DEFAULT is 20 seconds, and mache's graceful exit is
+// drain (up to 10s) + registry.Close (unbounded: worktree and hosted-clone
+// cleanup) + StopManaged (~3s) — a slow registry close therefore got the
+// process SIGKILLed MID-CLEANUP under the default, orphaning the leyline
+// child and truncating the shutdown log. The observed 112s shutdown
+// (mache-706d8f) exceeded the default fivefold. 45s is deliberately above
+// the drain deadline plus a generous cleanup allowance and below "feels
+// hung"; the shutdown phase logging says where the time went.
+//
 // launchAgentPlist renders the macOS LaunchAgent plist that keepalives the
 // shared mache HTTP daemon, so the endpoint registered by `mache init` is
 // answerable without anyone running `mache serve` by hand.
@@ -235,6 +246,8 @@ func launchAgentPlist(binPath, logPath string) string {
 	</dict>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>45</integer>
 	<key>StandardOutPath</key>
 	<string>%s</string>
 	<key>StandardErrorPath</key>
@@ -255,6 +268,7 @@ After=network.target
 ExecStart=%s serve --http %s
 Restart=on-failure
 RestartSec=10
+TimeoutStopSec=45
 
 [Install]
 WantedBy=default.target
