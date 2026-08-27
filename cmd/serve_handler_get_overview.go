@@ -11,6 +11,31 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// overviewIndexReport derives the staleness block for graphs that can answer
+// (nil for the rest — omission means unknown, never fresh) plus a
+// human-readable warning when drift is nonzero. A capped count renders as a
+// floor ("500+"), never as an exact number.
+func overviewIndexReport(g graph.Graph) (*graph.IndexStaleness, string) {
+	sr, ok := g.(graph.StalenessReporter)
+	if !ok {
+		return nil, ""
+	}
+	rep, ok := sr.IndexStaleness()
+	if !ok {
+		return nil, ""
+	}
+	if rep.ModifiedSince == 0 {
+		return &rep, ""
+	}
+	n := fmt.Sprintf("%d", rep.ModifiedSince)
+	if rep.Capped {
+		n += "+"
+	}
+	return &rep, fmt.Sprintf(
+		"index built %s; %s source file(s) modified since — answers may not reflect current code (restart the session or rebuild to refresh)",
+		rep.BuiltAt.Format("2006-01-02 15:04:05"), n)
+}
+
 func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		type dirInfo struct {
@@ -19,15 +44,24 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 			Children int    `json:"children"`
 		}
 		type overview struct {
-			TopLevel   []dirInfo         `json:"top_level"`
-			TotalDirs  int               `json:"total_dirs"`
-			TotalFiles int               `json:"total_files"`
-			RefTokens  int               `json:"ref_tokens,omitempty"`
-			DefTokens  int               `json:"def_tokens,omitempty"`
-			Usage      map[string]string `json:"_usage,omitempty"`
+			TopLevel   []dirInfo `json:"top_level"`
+			TotalDirs  int       `json:"total_dirs"`
+			TotalFiles int       `json:"total_files"`
+			RefTokens  int       `json:"ref_tokens,omitempty"`
+			DefTokens  int       `json:"def_tokens,omitempty"`
+			// Index is the staleness report, present when the graph can
+			// answer. The default serve path serves a FROZEN snapshot — edits
+			// after session start are invisible to every tool — and until the
+			// live-reparse path exists (mache-6c9e1d), the floor is saying so
+			// where agents START: this tool's own description is "START HERE".
+			// Omission means unknown, never fresh.
+			Index        *graph.IndexStaleness `json:"index,omitempty"`
+			IndexWarning string                `json:"index_warning,omitempty"`
+			Usage        map[string]string     `json:"_usage,omitempty"`
 		}
 
 		ov := overview{}
+		ov.Index, ov.IndexWarning = overviewIndexReport(g)
 
 		// Top-level structure
 		children, err := g.ListChildren("")

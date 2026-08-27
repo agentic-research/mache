@@ -150,14 +150,34 @@ func (r *graphRegistry) Close() {
 	})
 }
 
+// graphCacheKey binds a graph to its full provenance: rootPath @ commit @
+// producer version @ leyline pin. ONE function on purpose — the registry
+// tests used to seed graphs under a hand-written key shape, which silently
+// pinned the old shape and broke when it changed; the key's shape now has
+// exactly one author and the tests call it.
+func graphCacheKey(rootPath string) string {
+	commit := getGitHead(rootPath) // "" outside a repo: the key still binds versions
+	return rootPath + "@" + commit + "@" + Version + "@" + leyline.BinaryVersion
+}
+
 // getOrCreateGraph returns an existing graph for rootPath or creates a new one.
 // The cache key includes the current git HEAD commit hash so that switching
 // branches at the same path produces a fresh graph instead of a stale one.
 func (r *graphRegistry) getOrCreateGraph(rootPath string) *lazyGraph {
-	cacheKey := rootPath
-	if commit := getGitHead(rootPath); commit != "" {
-		cacheKey = rootPath + "@" + commit
-	}
+	// The key binds the graph to its FULL provenance, not just its source:
+	// rootPath @ commit @ producer version @ leyline pin. The freshness of a
+	// graph is a triple — (source state, producer version, parser pin) — and
+	// the key previously carried only the first (mache-6c9e1d).
+	//
+	// The gap was MASKED, which is why it survived: upgrades restart the
+	// daemon, and the restart flushes this in-process registry as a side
+	// effect. Decoupling sessions from daemon restarts (mache-956488) removes
+	// that accidental flush — so this binding is that work's prerequisite,
+	// not a nicety: without it, a decoupled daemon would serve a graph built
+	// by an older mache indefinitely. cmd/cache.go already stamps
+	// MacheProducerVersion into the OCI cache for exactly this reason; this
+	// adopts the same fact into the key the serve path actually uses.
+	cacheKey := graphCacheKey(rootPath)
 	// Fast path: return an existing graph if present for this exact cache key.
 	if v, ok := r.graphs.Load(cacheKey); ok {
 		return v.(*lazyGraph)
@@ -1036,6 +1056,23 @@ func (lg *lazyGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 		return qg.QueryRefs(query, args...)
 	}
 	return nil, fmt.Errorf("backend does not support QueryRefs")
+}
+
+// IndexStaleness implements graph.StalenessReporter by delegating to the
+// inner graph, the same way RefsMap does. Without this the primary serve path
+// never reports staleness at all: handlers hold the *lazyGraph* wrapper, and a
+// capability the wrapper doesn't forward is a capability the daemon doesn't
+// have — found live when get_overview returned index:null against a daemon
+// whose inner SQLiteGraph answered fine.
+func (lg *lazyGraph) IndexStaleness() (graph.IndexStaleness, bool) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return graph.IndexStaleness{}, false
+	}
+	if sr, ok := g.(graph.StalenessReporter); ok {
+		return sr.IndexStaleness()
+	}
+	return graph.IndexStaleness{}, false
 }
 
 func (lg *lazyGraph) RefsMap() map[string][]string {

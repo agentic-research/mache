@@ -341,6 +341,9 @@ func TestCheckClientToken_SeparatesRegistrationFromReachability(t *testing.T) {
 		assert.Equal(t, statusWarn, got.Status,
 			"a client that answers roots/list works without a token, so this must not fail the exit code")
 		assert.Contains(t, got.Detail, "no ?project= token")
+		assert.Contains(t, got.Detail, "NOT survive daemon restarts",
+			"the warn must state the continuity cost: a bare-URL session is severed "+
+				"by every upgrade, while a ?project= URL re-binds statelessly (mache-956488)")
 		assert.Contains(t, got.Fix, "mache init")
 	})
 
