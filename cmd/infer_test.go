@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 )
 
 func TestDetectProjectLanguages_Mixed(t *testing.T) {
@@ -158,7 +159,7 @@ func TestInferLanguages_LeylineASTDB(t *testing.T) {
 	src := []byte("package sample\n\ntype Greeter struct{ Name string }\n\nfunc Hello() string { return \"hi\" }\n\nfunc (g Greeter) Greet() string { return g.Name }\n")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sample.go"), src, 0o644))
 
-	dbPath, cleanup, err := autoInvokeLeylineParse(dir)
+	dbPath, cleanup, err := leylinegraph.AutoInvokeLeylineParse(dir)
 	require.NoError(t, err)
 	defer cleanup()
 

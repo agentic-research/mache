@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"database/sql"
@@ -153,7 +153,7 @@ func dumpTree(t *testing.T, path string) []string {
 // TestMaterializeVirtuals_ParityAcrossParentIDShapes is the load-bearing
 // assertion for ley-line-open's projection-v4 (mache-bc6ca3).
 //
-// materializeVirtuals is handed whatever .db the caller points at — openDBGraph
+// MaterializeVirtuals is handed whatever .db the caller points at — openDBGraph
 // runs it on any source `mache serve` is given, which includes an arena built
 // by `mache build --backend leyline`. When parent_id became a GENERATED column
 // there, every INSERT naming it started failing at PREPARE time.
@@ -173,9 +173,9 @@ func TestMaterializeVirtuals_ParityAcrossParentIDShapes(t *testing.T) {
 	stored := buildLeylineFixture(t)
 	migrateNodesToStoredParent(t, stored)
 
-	require.NoError(t, materializeVirtuals(stored, schema, true),
+	require.NoError(t, MaterializeVirtuals(stored, schema, true),
 		"stored parent_id: the shape that already worked")
-	require.NoError(t, materializeVirtuals(derived, schema, true),
+	require.NoError(t, MaterializeVirtuals(derived, schema, true),
 		"derived parent_id: an INSERT naming a generated column fails at prepare time")
 
 	storedTree, derivedTree := dumpTree(t, stored), dumpTree(t, derived)

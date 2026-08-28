@@ -10,6 +10,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 )
 
 // inferFromSourceFile infers a topology schema for a single source file by
@@ -37,7 +38,7 @@ func inferFromSourceFile(inf *lattice.Inferrer, path string, l *lang.Language) (
 		return nil, fmt.Errorf("stage %s for leyline parse: %w", path, err)
 	}
 
-	astDB, cleanup, err := autoInvokeLeylineParse(tmpDir)
+	astDB, cleanup, err := leylinegraph.AutoInvokeLeylineParse(tmpDir)
 	if err != nil {
 		return nil, fmt.Errorf("leyline parse %s: %w", path, err)
 	}

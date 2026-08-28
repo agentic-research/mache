@@ -12,6 +12,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -77,7 +78,7 @@ func Beta() { Alpha() }
 func Gamma() { Alpha() }
 `), 0o644))
 
-	dbPath, cleanup, err := autoInvokeLeylineParse(src)
+	dbPath, cleanup, err := leylinegraph.AutoInvokeLeylineParse(src)
 	require.NoError(t, err)
 	defer cleanup()
 

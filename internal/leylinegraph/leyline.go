@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"database/sql"
@@ -15,7 +15,7 @@ import (
 // nodeTx is a write transaction that also knows the shape of the `nodes`
 // table it is writing to.
 //
-// materializeVirtuals is handed whatever .db the caller points at, which may be
+// MaterializeVirtuals is handed whatever .db the caller points at, which may be
 // a ley-line-open arena rather than a mache-built one. ley-line-open's
 // projection-v4 makes nodes.parent_id a GENERATED column (mache-bc6ca3): SQLite
 // rejects an INSERT that merely NAMES a generated column, and rejects it at
@@ -97,14 +97,14 @@ func checkParentDerivable(id, parentID, name string) error {
 	return nil
 }
 
-// materializeVirtuals adds virtual file nodes to the .db so that leyline's
+// MaterializeVirtuals adds virtual file nodes to the .db so that leyline's
 // NFS mount can serve them without mache-specific runtime logic.
 //
 // Materialized files:
 //   - _schema.json  (schema topology as JSON)
 //   - PROMPT.txt    (if agentMode)
 //   - callers/ dirs (from node_refs cross-references)
-func materializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) error {
+func MaterializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) error {
 	// Expand file_sets/include references before materialization.
 	schema.ResolveIncludes()
 

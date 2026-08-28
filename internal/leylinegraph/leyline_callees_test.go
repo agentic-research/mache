@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"database/sql"
@@ -24,7 +24,7 @@ func TestMaterializeCallees(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	// Create the schema that materializeVirtuals expects
+	// Create the schema that MaterializeVirtuals expects
 	_, err = db.Exec(`
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY,

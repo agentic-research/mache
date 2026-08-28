@@ -1,6 +1,6 @@
 //go:build unix
 
-package cmd
+package leylinegraph
 
 import (
 	"database/sql"
@@ -73,8 +73,8 @@ func TestMaterializeVirtuals_AgainstRealProducerArena(t *testing.T) {
 		Version: "v1",
 		Nodes:   []api.Node{{Name: "functions", Selector: "(function_declaration)"}},
 	}
-	require.NoError(t, materializeVirtuals(dbPath, schema, true),
-		"materializeVirtuals must succeed against a real %s arena (projection %s)",
+	require.NoError(t, MaterializeVirtuals(dbPath, schema, true),
+		"MaterializeVirtuals must succeed against a real %s arena (projection %s)",
 		ll.Version, projection)
 
 	// _schema.json is a root, so its derived parent is '' either way.

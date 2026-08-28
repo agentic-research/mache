@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"database/sql"
@@ -211,7 +211,7 @@ func TestMaterializeSchemaJSON(t *testing.T) {
 		},
 	}
 
-	// Use a temp file since materializeVirtuals opens by path
+	// Use a temp file since MaterializeVirtuals opens by path
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
@@ -221,7 +221,7 @@ func TestMaterializeSchemaJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,7 +275,7 @@ func TestMaterializePromptTxt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, true); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -378,7 +378,7 @@ func TestMaterializeContentSource_Hover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -438,7 +438,7 @@ func TestMaterializeContentSource_Diagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -499,7 +499,7 @@ func TestMaterializeContentSource_Defs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -553,7 +553,7 @@ func TestMaterializeContentSource_Refs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -608,7 +608,7 @@ func TestMaterializeContentSource_NoTable(t *testing.T) {
 	}
 
 	// Should not error
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -660,7 +660,7 @@ func TestMaterializeContentSource_NoSchemaDeclaration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -720,7 +720,7 @@ func TestMaterializeContentSource_WithInclude(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := MaterializeVirtuals(dbPath, schema, false); err != nil {
 		t.Fatal(err)
 	}
 

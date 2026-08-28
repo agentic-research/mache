@@ -18,6 +18,7 @@ import (
 	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/materialize"
 	"github.com/agentic-research/mache/internal/mountmeta"
 	machetmpl "github.com/agentic-research/mache/internal/template"
@@ -331,7 +332,7 @@ var rootCmd = &cobra.Command{
 					}
 					log.Printf("Ingestion complete in %v", time.Since(start))
 
-					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
+					if err := leylinegraph.MaterializeVirtuals(indexPath, schema, agentMode); err != nil {
 						return fmt.Errorf("materialize virtuals: %w", err)
 					}
 
@@ -354,8 +355,8 @@ var rootCmd = &cobra.Command{
 				}
 				defer func() { _ = sg.Close() }()
 
-				sg.SetCallExtractor(pickCallExtractor(sg.DB()))
-				sg.SetScopedCallExtractor(pickScopedCallExtractor(sg.DB()))
+				sg.SetCallExtractor(leylinegraph.PickCallExtractor(sg.DB()))
+				sg.SetScopedCallExtractor(leylinegraph.PickScopedCallExtractor(sg.DB()))
 
 				start := time.Now()
 				log.Print("Scanning records...")
@@ -418,7 +419,7 @@ var rootCmd = &cobra.Command{
 				// mount lifetime so callees/ resolve via the pure-Go AST
 				// extractor. ley-line is MANDATORY (guardrail 2): a resolution
 				// failure is a hard error, not a silent empty index.
-				astDB, astCleanup, ppErr := attachLeylineASTWalker(dataPath, eng)
+				astDB, astCleanup, ppErr := leylinegraph.AttachLeylineASTWalker(dataPath, eng)
 				if ppErr != nil {
 					_ = writer.Close()
 					return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
@@ -436,7 +437,7 @@ var rootCmd = &cobra.Command{
 
 				// --out: materialize virtuals, write to target format, exit (no mount)
 				if outPath != "" {
-					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
+					if err := leylinegraph.MaterializeVirtuals(indexPath, schema, agentMode); err != nil {
 						return fmt.Errorf("materialize virtuals: %w", err)
 					}
 					mat, err := materialize.ForFormat(outFormat)
@@ -465,8 +466,8 @@ var rootCmd = &cobra.Command{
 
 				// The projected index carries no `_ast` table, so callees/
 				// resolve through the ley-line `_ast` db kept open above.
-				sg.SetCallExtractor(newASTCallExtractor(astDB))
-				sg.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
+				sg.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
+				sg.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
 				g = sg
 			} else {
 				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
@@ -482,13 +483,13 @@ var rootCmd = &cobra.Command{
 				// schemas (JSON, .git records) don't. Wire the AST-backed
 				// call extractor only when there's an `_ast` db to read.
 				if ingest.SchemaUsesTreeSitter(schema) && filepath.Ext(dataPath) != ".git" {
-					astDB, astCleanup, ppErr := attachLeylineASTWalker(dataPath, engine)
+					astDB, astCleanup, ppErr := leylinegraph.AttachLeylineASTWalker(dataPath, engine)
 					if ppErr != nil {
 						return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
 					}
 					defer astCleanup()
-					store.SetCallExtractor(newASTCallExtractor(astDB))
-					store.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
+					store.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
+					store.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
 				}
 
 				if filepath.Ext(dataPath) == ".git" {

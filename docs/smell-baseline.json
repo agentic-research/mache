@@ -28,11 +28,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "cmd/call_extractor_ast_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "cmd/cli_test.go",
       "count": 4
     },
@@ -45,16 +40,6 @@
       "rule_id": "duplicate_code",
       "source_id": "cmd/kind_filter.go",
       "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/leyline.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/leyline_test.go",
-      "count": 2
     },
     {
       "rule_id": "duplicate_code",
@@ -119,11 +104,6 @@
     {
       "rule_id": "duplicate_code",
       "source_id": "cmd/sheaf_wire_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/uds_graph.go",
       "count": 1
     },
     {
@@ -333,6 +313,26 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/call_extractor_ast_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/leyline.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/leyline_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/uds_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/lint/tool_preflight_test.go",
       "count": 6
     },
@@ -518,11 +518,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "cmd/leyline_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "cmd/pack.go",
       "count": 2
     },
@@ -679,6 +674,11 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/leyline/sheaf.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/leylinegraph/leyline_test.go",
       "count": 1
     },
     {
@@ -1073,11 +1073,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/leyline.go",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/mount_control.go",
       "count": 1
     },
@@ -1094,7 +1089,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/serve.go",
-      "count": 2
+      "count": 3
     },
     {
       "rule_id": "fan_out_skew",
@@ -1274,6 +1269,11 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/leyline/socket.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/leylinegraph/leyline.go",
       "count": 2
     },
     {
@@ -1668,16 +1668,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "cmd/leyline.go",
-      "count": 2
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/leyline_callees_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "cmd/mount_control.go",
       "count": 1
     },
@@ -1939,6 +1929,16 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/leyline/trigger.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/leylinegraph/leyline.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/leylinegraph/leyline_callees_test.go",
       "count": 1
     },
     {

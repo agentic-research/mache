@@ -11,6 +11,7 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 )
 
 // inferSampleRecords bounds how many _ast records feed FCA inference per
@@ -123,7 +124,7 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 	// 2. FCA inference for remaining languages — leyline-parse the tree ONCE
 	// into an _ast database, then run pure-Go inference per language against it.
 	if len(inferLangs) > 0 {
-		astDB, cleanup, err := autoInvokeLeylineParse(dataPath)
+		astDB, cleanup, err := leylinegraph.AutoInvokeLeylineParse(dataPath)
 		if err != nil {
 			return nil, fmt.Errorf("leyline parse for inference: %w", err)
 		}
