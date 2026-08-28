@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/projcfg"
 )
 
 // doctorProbeTimeout bounds every network probe. A diagnostic that can hang is
@@ -110,14 +111,14 @@ func checkDaemon(version string, err error) check {
 		return check{
 			Name:   "daemon",
 			Status: statusWarn,
-			Detail: fmt.Sprintf("no MCP daemon answering at %s (%v)", macheHTTPURL, err),
+			Detail: fmt.Sprintf("no MCP daemon answering at %s (%v)", projcfg.MacheHTTPURL, err),
 			Fix:    "mache init --global   # installs and starts the shared HTTP daemon",
 		}
 	}
 	return check{
 		Name:   "daemon",
 		Status: statusOK,
-		Detail: fmt.Sprintf("answering at %s, reports version %s", macheHTTPURL, version),
+		Detail: fmt.Sprintf("answering at %s, reports version %s", projcfg.MacheHTTPURL, version),
 	}
 }
 
@@ -287,7 +288,7 @@ func checkArena(cwd string) check {
 // symptom (a timeout) rather than the cause (this directory was never
 // registered, so no token resolves to it).
 func checkProjectRegistration(cwd string) check {
-	reg, err := loadProjectRegistry()
+	reg, err := projcfg.LoadProjectRegistry()
 	if err != nil {
 		return check{
 			Name:   "project",
@@ -456,7 +457,7 @@ func newInitializeRequest(ctx context.Context) (*http.Request, error) {
 		`{"protocolVersion":"2025-06-18","capabilities":{},` +
 		`"clientInfo":{"name":"mache-doctor","version":"1"}}}`)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, macheHTTPURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, projcfg.MacheHTTPURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +513,7 @@ func probeDaemonVersion(parent context.Context) (string, error) {
 func releaseMCPSession(parent context.Context, sessionID string) {
 	ctx, cancel := context.WithTimeout(parent, doctorProbeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, macheHTTPURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, projcfg.MacheHTTPURL, nil)
 	if err != nil {
 		return
 	}

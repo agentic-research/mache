@@ -3,12 +3,12 @@
   "counts": [
     {
       "rule_id": "dead_code",
-      "source_id": "cmd/config.go",
+      "source_id": "internal/ingest/benchmark_test.go",
       "count": 1
     },
     {
       "rule_id": "dead_code",
-      "source_id": "internal/ingest/benchmark_test.go",
+      "source_id": "internal/projcfg/config.go",
       "count": 1
     },
     {
@@ -35,11 +35,6 @@
       "rule_id": "duplicate_code",
       "source_id": "cmd/cli_test.go",
       "count": 4
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/config_test.go",
-      "count": 10
     },
     {
       "rule_id": "duplicate_code",
@@ -398,6 +393,11 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "count": 10
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/testutil/smellgraph.go",
       "count": 1
     },
@@ -504,11 +504,6 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "cmd/all_tools_self_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/config.go",
       "count": 1
     },
     {
@@ -690,6 +685,11 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/nfsmount/server.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/projcfg/config.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",

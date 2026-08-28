@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -298,7 +299,7 @@ func TestRunDaemonVerb_AnnouncesALongWait(t *testing.T) {
 
 	assert.Contains(t, buf.String(), "waiting up to",
 		"a wait longer than a blink must say it is waiting")
-	assert.Contains(t, buf.String(), macheHTTPURL,
+	assert.Contains(t, buf.String(), projcfg.MacheHTTPURL,
 		"and say what it is waiting ON, so the reader can check it themselves")
 }
 

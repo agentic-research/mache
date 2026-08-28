@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/agentic-research/mache/internal/projcfg"
 )
 
 // resolveSmellRulesDir picks the external smell-rules directory for the
@@ -28,7 +30,7 @@ func resolveSmellRulesDir(flagVal, projectDir string) string {
 	}
 	// .mache.json is optional; any load error (missing file, empty
 	// sources, bad JSON) simply means "no configured rules dir".
-	cfg, err := loadProjectConfig(projectDir)
+	cfg, err := projcfg.LoadProjectConfig(projectDir)
 	if err != nil || cfg == nil {
 		return ""
 	}
@@ -40,8 +42,8 @@ func resolveSmellRulesDir(flagVal, projectDir string) string {
 		return dir
 	}
 	resolved := filepath.Join(projectDir, dir)
-	if err := checkPathContainment(resolved, projectDir); err != nil {
-		log.Printf("smell rules: ignoring smellRulesDir %q from %s: %v", dir, ConfigFileName, err)
+	if err := projcfg.CheckPathContainment(resolved, projectDir); err != nil {
+		log.Printf("smell rules: ignoring smellRulesDir %q from %s: %v", dir, projcfg.ConfigFileName, err)
 		return ""
 	}
 	return resolved

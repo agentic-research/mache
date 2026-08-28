@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/agentic-research/mache/internal/projcfg"
 )
 
 // Canonical MCP transport endpoint. mache serves Streamable HTTP on this
@@ -23,19 +25,10 @@ import (
 // a canary the same way. The plist/unit generator bakes the resolved values
 // into ProgramArguments, so the supervised daemon needs no environment of its
 // own.
-var (
-	macheHTTPListen  = envOr("MACHE_DAEMON_LISTEN", "localhost:7532")
-	macheHTTPURL     = "http://" + macheHTTPListen + "/mcp"
-	launchAgentLabel = envOr("MACHE_DAEMON_LABEL", "com.agentic-research.mache")
-)
-
-// envOr returns the environment value for key, or fallback when unset/empty.
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
+// launchAgentLabel names the supervised job; the endpoint it serves lives in
+// internal/projcfg (MacheHTTPListen/MacheHTTPURL) so onboarding and lifecycle
+// read one value. Env-overridable for the hermetic E2E and canary daemons.
+var launchAgentLabel = projcfg.EnvOr("MACHE_DAEMON_LABEL", "com.agentic-research.mache")
 
 // daemonAgentAutoload gates the launchctl/systemctl load step. Tests set it
 // false to exercise plist/unit writing without a real supervisor side effect.
@@ -280,7 +273,7 @@ func launchAgentPlist(binPath, homeDir, logPath string) string {
 	<string>%s</string>
 </dict>
 </plist>
-`, launchAgentLabel, xmlText(binPath), macheHTTPListen, xmlText(homeDir), xmlText(logPath), xmlText(logPath))
+`, launchAgentLabel, xmlText(binPath), projcfg.MacheHTTPListen, xmlText(homeDir), xmlText(logPath), xmlText(logPath))
 }
 
 // systemdUserUnit renders the Linux systemd --user service that keepalives the
@@ -298,7 +291,7 @@ TimeoutStopSec=45
 
 [Install]
 WantedBy=default.target
-`, macheHTTPListen, systemdQuote(binPath), macheHTTPListen)
+`, projcfg.MacheHTTPListen, systemdQuote(binPath), projcfg.MacheHTTPListen)
 }
 
 // installDaemonAgent writes and loads a per-user supervisor that keeps the
@@ -312,14 +305,14 @@ func installDaemonAgent(w io.Writer, binPath string) {
 	case "linux":
 		installSystemdUnit(w, binPath)
 	default:
-		logf(w, "  [daemon] no supervisor for %s — run `mache serve --http %s` to start the daemon.\n", runtime.GOOS, macheHTTPListen)
+		logf(w, "  [daemon] no supervisor for %s — run `mache serve --http %s` to start the daemon.\n", runtime.GOOS, projcfg.MacheHTTPListen)
 	}
 }
 
 func installLaunchAgent(w io.Writer, binPath string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, macheHTTPListen)
+		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, projcfg.MacheHTTPListen)
 		return
 	}
 	agentDir := filepath.Join(home, "Library", "LaunchAgents")
@@ -347,7 +340,7 @@ func installLaunchAgent(w io.Writer, binPath string) {
 			logf(w, "  [daemon] plist installed; load it with: launchctl bootstrap %s %s\n", target, plistPath)
 			return
 		}
-		logf(w, "  [daemon] loaded — mache HTTP daemon will keepalive on %s\n", macheHTTPListen)
+		logf(w, "  [daemon] loaded — mache HTTP daemon will keepalive on %s\n", projcfg.MacheHTTPListen)
 		return
 	}
 	logf(w, "  [daemon] plist installed; launchctl not found — load it after restart.\n")
@@ -356,7 +349,7 @@ func installLaunchAgent(w io.Writer, binPath string) {
 func installSystemdUnit(w io.Writer, binPath string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, macheHTTPListen)
+		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, projcfg.MacheHTTPListen)
 		return
 	}
 	unitDir := filepath.Join(home, ".config", "systemd", "user")
@@ -381,7 +374,7 @@ func installSystemdUnit(w io.Writer, binPath string) {
 			logf(w, "  [daemon] unit installed; enable it with: systemctl --user enable --now mache.service\n")
 			return
 		}
-		logf(w, "  [daemon] enabled — mache HTTP daemon will keepalive on %s\n", macheHTTPListen)
+		logf(w, "  [daemon] enabled — mache HTTP daemon will keepalive on %s\n", projcfg.MacheHTTPListen)
 		return
 	}
 	logf(w, "  [daemon] unit installed; systemctl not found — enable it manually.\n")
@@ -508,11 +501,11 @@ func confirmRestart(w io.Writer, label string) {
 		logf(w, "WARNING: asked %s to restart and it accepted, but nothing is answering at %s.\n"+
 			"         The binary is installed; the daemon is not serving it.\n"+
 			"         Try: mache daemon start   (then: mache doctor)\n"+
-			"         Log: %s\n", label, macheHTTPURL, daemonLogHint())
+			"         Log: %s\n", label, projcfg.MacheHTTPURL, daemonLogHint())
 		return
 	}
 	logf(w, "restarted the supervised daemon (%s); answering at %s, serving %s\n",
-		label, macheHTTPURL, version)
+		label, projcfg.MacheHTTPURL, version)
 }
 
 // launchAgentPlistPath is the one definition of where the LaunchAgent lives.

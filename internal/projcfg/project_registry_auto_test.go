@@ -1,4 +1,4 @@
-package cmd
+package projcfg
 
 import (
 	"encoding/json"
@@ -17,7 +17,7 @@ import (
 // TestEnsureProjectRegistered_RegistersAnUnknownRoot is the behaviour that
 // makes registration a byproduct of serving.
 //
-// Before this, registerProject had exactly one caller — `mache init` — so a
+// Before this, RegisterProject had exactly one caller — `mache init` — so a
 // daemon could serve a project indefinitely with ~/.mache/projects.json absent
 // entirely, and every ?project= lookup necessarily missed. Found live: a
 // shared daemon had been serving this repo for days with no registry at all.
@@ -25,14 +25,14 @@ func TestEnsureProjectRegistered_RegistersAnUnknownRoot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 
-	require.True(t, ensureProjectRegistered(root), "an unknown root must be registered")
+	require.True(t, EnsureProjectRegistered(root), "an unknown root must be registered")
 
 	// Compare against the CANONICAL path. t.TempDir() hands back
 	// /var/folders/... which on macOS is a symlink to /private/var/folders/...,
 	// so an equality check against the raw path fails — which is precisely the
 	// hazard mache-0e4773 is about, reproduced here by accident.
 	want := leyline.CanonicalSourceRoot(root)
-	reg, err := loadProjectRegistry()
+	reg, err := LoadProjectRegistry()
 	require.NoError(t, err)
 	found := false
 	for _, p := range reg {
@@ -65,11 +65,11 @@ func TestEnsureProjectRegistered_SymlinkAndRealPathShareOneToken(t *testing.T) {
 	link := filepath.Join(home, "link-to-project")
 	require.NoError(t, os.Symlink(real, link))
 
-	require.True(t, ensureProjectRegistered(real), "first registration writes")
-	assert.False(t, ensureProjectRegistered(link),
+	require.True(t, EnsureProjectRegistered(real), "first registration writes")
+	assert.False(t, EnsureProjectRegistered(link),
 		"the symlinked path is the SAME project — it must not mint a second entry")
 
-	reg, err := loadProjectRegistry()
+	reg, err := LoadProjectRegistry()
 	require.NoError(t, err)
 	assert.Len(t, reg, 1, "one tree must have exactly one token, however it is spelled")
 }
@@ -94,17 +94,17 @@ func TestRegisterProject_PreservesLegacyUncanonicalizedToken(t *testing.T) {
 	require.NoError(t, err)
 	legacyRegistry, err := json.Marshal(map[string]string{legacyToken: link})
 	require.NoError(t, err)
-	require.NoError(t, writeFileAtomic(registryPath, append(legacyRegistry, '\n')))
+	require.NoError(t, WriteFileAtomic(registryPath, append(legacyRegistry, '\n')))
 
-	canonicalToken, err := registerProject(link)
+	canonicalToken, err := RegisterProject(link)
 	require.NoError(t, err)
 	assert.NotEqual(t, legacyToken, canonicalToken,
 		"new registrations must converge on the canonical-path token")
 
-	gotLegacy, ok := resolveProjectToken(legacyToken)
+	gotLegacy, ok := ResolveProjectToken(legacyToken)
 	require.True(t, ok, "an existing client URL must survive the migration")
 	assert.Equal(t, link, gotLegacy)
-	gotCanonical, ok := resolveProjectToken(canonicalToken)
+	gotCanonical, ok := ResolveProjectToken(canonicalToken)
 	require.True(t, ok)
 	assert.Equal(t, leyline.CanonicalSourceRoot(real), gotCanonical)
 }
@@ -118,7 +118,7 @@ func TestRegisterProject_PreservesLegacyUncanonicalizedToken(t *testing.T) {
 // inserts, so all but the last are silently dropped. Measured on the unlocked
 // version: 50 concurrent roots left 1-3 registered, a 94-98% loss.
 //
-// Nothing crashed and nothing was corrupted — writeFileAtomic renames, so the
+// Nothing crashed and nothing was corrupted — WriteFileAtomic renames, so the
 // file is never torn. It just quietly lost almost everything, which defeats
 // the entire point: the token a later ?project= lookup needs was never
 // written. That is why this test asserts an EXACT count rather than
@@ -138,11 +138,11 @@ func TestEnsureProjectRegistered_ConcurrentRootsAllSurvive(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, r := range roots {
 		wg.Add(1)
-		go func(p string) { defer wg.Done(); ensureProjectRegistered(p) }(r)
+		go func(p string) { defer wg.Done(); EnsureProjectRegistered(p) }(r)
 	}
 	wg.Wait()
 
-	reg, err := loadProjectRegistry()
+	reg, err := LoadProjectRegistry()
 	require.NoError(t, err)
 	assert.Len(t, reg, n,
 		"every concurrently-registered root must survive; a read-modify-write race silently drops all but the last")
@@ -150,7 +150,7 @@ func TestEnsureProjectRegistered_ConcurrentRootsAllSurvive(t *testing.T) {
 	// Each token must still resolve to its own root — a race could also leave
 	// the file self-consistent but with entries pointing at the wrong paths.
 	for tok, path := range reg {
-		got, ok := resolveProjectToken(tok)
+		got, ok := ResolveProjectToken(tok)
 		require.True(t, ok)
 		assert.Equal(t, path, got)
 	}
@@ -164,8 +164,8 @@ func TestEnsureProjectRegistered_IsReadOnlyWhenAlreadyKnown(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 
-	require.True(t, ensureProjectRegistered(root))
-	assert.False(t, ensureProjectRegistered(root),
+	require.True(t, EnsureProjectRegistered(root))
+	assert.False(t, EnsureProjectRegistered(root),
 		"a root already in the registry must not be rewritten")
 }
 
@@ -175,9 +175,9 @@ func TestEnsureProjectRegistered_IsReadOnlyWhenAlreadyKnown(t *testing.T) {
 func TestEnsureProjectRegistered_TokenResolvesBackToTheRoot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
-	require.True(t, ensureProjectRegistered(root))
+	require.True(t, EnsureProjectRegistered(root))
 
-	reg, err := loadProjectRegistry()
+	reg, err := LoadProjectRegistry()
 	require.NoError(t, err)
 	require.Len(t, reg, 1)
 	var token string
@@ -185,7 +185,7 @@ func TestEnsureProjectRegistered_TokenResolvesBackToTheRoot(t *testing.T) {
 		token = tok
 	}
 
-	got, ok := resolveProjectToken(token)
+	got, ok := ResolveProjectToken(token)
 	require.True(t, ok, "the token the daemon just registered must resolve")
 	assert.Equal(t, leyline.CanonicalSourceRoot(root), got,
 		"the registry stores canonical paths, so every layer comparing them agrees")
@@ -209,7 +209,7 @@ func TestEnsureProjectRegistered_SurvivesAnUnwritableRegistry(t *testing.T) {
 	// the directory earlier. The claim is "degrades to not-registered", so
 	// pin both halves: the return value AND that nothing was written.
 	root := t.TempDir()
-	assert.False(t, ensureProjectRegistered(root),
+	assert.False(t, EnsureProjectRegistered(root),
 		"an unwritable registry must report that it did NOT register")
 
 	entries, err := os.ReadDir(macheDir)
@@ -224,5 +224,5 @@ func TestEnsureProjectRegistered_SurvivesAnUnwritableRegistry(t *testing.T) {
 // path-less shared daemon has no root to register, and must not write one.
 func TestEnsureProjectRegistered_IgnoresEmptyRoot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	assert.False(t, ensureProjectRegistered(""))
+	assert.False(t, EnsureProjectRegistered(""))
 }

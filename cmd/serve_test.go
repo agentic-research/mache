@@ -20,6 +20,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/projcfg"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -1870,7 +1871,7 @@ func TestLazyGraph_BasePath_ProjectConfig(t *testing.T) {
 	dir := t.TempDir()
 	// Write a .mache.json config in the target dir
 	cfg := `{"sources": [{"path": ".", "schema": "go"}]}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(cfg), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName), []byte(cfg), 0o644))
 
 	lg := &lazyGraph{args: []string{}, basePath: dir}
 	lg.init()
@@ -2089,7 +2090,7 @@ func TestGraphRegistry_RootDiscoveryFailureWithExplicitStdioSourceUsesSource(t *
 func TestGraphRegistry_ProjectTokenResolvesWithoutListRoots(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	projectDir := t.TempDir()
-	token, err := registerProject(projectDir)
+	token, err := projcfg.RegisterProject(projectDir)
 	require.NoError(t, err)
 
 	registry := newGraphRegistry("", nil)
@@ -2681,8 +2682,8 @@ func TestArena_AllTools(t *testing.T) {
 	require.True(t, info.IsDir())
 
 	// Load the Go schema preset.
-	schema, err := resolveSchema("go", repoRoot)
-	require.NoError(t, err, "resolveSchema(go) failed")
+	schema, err := projcfg.ResolveSchema("go", repoRoot)
+	require.NoError(t, err, "projcfg.ResolveSchema(go) failed")
 	require.NotNil(t, schema)
 
 	// Build a real MemoryStore via the engine ingestion pipeline. ADR-0012

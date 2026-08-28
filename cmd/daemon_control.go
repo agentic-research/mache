@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/agentic-research/mache/internal/projcfg"
 )
 
 // daemonSettleTimeout bounds how long a start/restart waits for the daemon to
@@ -257,7 +259,7 @@ func awaitDaemon(w io.Writer, up bool) (string, bool) {
 				what = "to stop"
 			}
 			logf(w, "waiting up to %s for the daemon %s at %s…\n",
-				daemonSettleTimeout, what, macheHTTPURL)
+				daemonSettleTimeout, what, projcfg.MacheHTTPURL)
 		}
 		time.Sleep(daemonSettlePoll)
 	}
@@ -327,17 +329,17 @@ func runDaemonVerb(w io.Writer, verb supervisorVerb) error {
 			return fmt.Errorf(
 				"asked the supervisor to %s the daemon and it accepted, but nothing is answering at %s after %s.\n"+
 					"Check the log for why it exited: %s",
-				verb, macheHTTPURL, daemonSettleTimeout, daemonLogHint())
+				verb, projcfg.MacheHTTPURL, daemonSettleTimeout, daemonLogHint())
 		}
 		return fmt.Errorf("asked the supervisor to stop the daemon and it accepted, but %s is still answering after %s",
-			macheHTTPURL, daemonSettleTimeout)
+			projcfg.MacheHTTPURL, daemonSettleTimeout)
 	}
 
 	if wantUp {
-		logf(w, "daemon %sed: answering at %s, serving %s\n", verb, macheHTTPURL, version)
+		logf(w, "daemon %sed: answering at %s, serving %s\n", verb, projcfg.MacheHTTPURL, version)
 		return nil
 	}
-	logf(w, "daemon stopped: nothing answering at %s\n", macheHTTPURL)
+	logf(w, "daemon stopped: nothing answering at %s\n", projcfg.MacheHTTPURL)
 	return nil
 }
 
@@ -357,10 +359,10 @@ func reportDaemonStatus(w io.Writer) error {
 
 	version, up := daemonEndpointUp()
 	if up {
-		logf(w, "endpoint:   answering at %s, serving %s\n", macheHTTPURL, version)
+		logf(w, "endpoint:   answering at %s, serving %s\n", projcfg.MacheHTTPURL, version)
 		return nil
 	}
-	logf(w, "endpoint:   not answering at %s\n", macheHTTPURL)
+	logf(w, "endpoint:   not answering at %s\n", projcfg.MacheHTTPURL)
 	if job.Loaded && !job.Running {
 		logf(w, "            → mache daemon start\n")
 	}

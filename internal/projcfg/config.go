@@ -1,4 +1,4 @@
-package cmd
+package projcfg
 
 import (
 	"encoding/json"
@@ -36,8 +36,8 @@ type SourceConfig struct {
 	Schema string `json:"schema,omitempty"`
 }
 
-// loadProjectConfig reads .mache.json from the given directory.
-func loadProjectConfig(dir string) (*ProjectConfig, error) {
+// LoadProjectConfig reads .mache.json from the given directory.
+func LoadProjectConfig(dir string) (*ProjectConfig, error) {
 	path := filepath.Join(dir, ConfigFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -53,14 +53,14 @@ func loadProjectConfig(dir string) (*ProjectConfig, error) {
 	return &cfg, nil
 }
 
-// resolveSchema resolves a schema reference to a Topology.
+// ResolveSchema resolves a schema reference to a Topology.
 // It handles three forms:
 //   - Preset name: "go", "python", etc.
 //   - Relative path: "./custom-schema.json" (resolved against configDir)
 //   - Absolute path: "/path/to/schema.json"
 //
 // Returns nil if schemaRef is empty (caller should use inference or default).
-func resolveSchema(schemaRef, configDir string) (*api.Topology, error) {
+func ResolveSchema(schemaRef, configDir string) (*api.Topology, error) {
 	resolved, err := publicschema.Resolve(schemaRef, configDir)
 	if err != nil {
 		return nil, err
@@ -68,21 +68,21 @@ func resolveSchema(schemaRef, configDir string) (*api.Topology, error) {
 	return resolved.Topology, nil
 }
 
-// resolveDataSource resolves a data source path relative to configDir.
+// ResolveDataSource resolves a data source path relative to configDir.
 // Absolute paths are returned as-is. Relative paths are checked for
 // containment within configDir to prevent path traversal.
-func resolveDataSource(sourcePath, configDir string) (string, error) {
+func ResolveDataSource(sourcePath, configDir string) (string, error) {
 	if filepath.IsAbs(sourcePath) {
 		return sourcePath, nil
 	}
 	resolved := filepath.Join(configDir, sourcePath)
-	if err := checkPathContainment(resolved, configDir); err != nil {
+	if err := CheckPathContainment(resolved, configDir); err != nil {
 		return "", err
 	}
 	return resolved, nil
 }
 
-// checkPathContainment verifies that resolved is within or equal to base.
+// CheckPathContainment verifies that resolved is within or equal to base.
 // Prevents path traversal attacks from untrusted .mache.json files.
 //
 // Resolves symlinks via filepath.EvalSymlinks before comparison so a target
@@ -90,7 +90,7 @@ func resolveDataSource(sourcePath, configDir string) (string, error) {
 // if the symlink itself sits inside the project. If the target does not
 // exist yet (EvalSymlinks errors), falls back to filepath.Abs since
 // nonexistent paths cannot point anywhere malicious until they are created.
-func checkPathContainment(resolved, base string) error {
+func CheckPathContainment(resolved, base string) error {
 	return pathguard.RequireContained(resolved, base)
 }
 
@@ -102,21 +102,21 @@ func checkPathContainment(resolved, base string) error {
 // projectToken, when non-empty, is appended as ?project=<token> so the
 // session resolves its root from the local project registry instead of
 // depending on the client answering ListRoots (mache-6ec106) — see
-// registerProject/resolveProjectToken in project_registry.go. Machine-wide
+// RegisterProject/ResolveProjectToken in project_registry.go. Machine-wide
 // editor registrations (detectEditors, registerClaudeCodeCLI) aren't tied to
 // a single project and pass "".
 func httpServerEntry(projectToken string) map[string]any {
-	url := macheHTTPURL
+	url := MacheHTTPURL
 	if projectToken != "" {
 		url += "?project=" + projectToken
 	}
 	return map[string]any{"type": "http", "url": url}
 }
 
-// writeClaudeMCPConfig writes or merges a mache entry into .claude/mcp.json.
+// WriteClaudeMCPConfig writes or merges a mache entry into .claude/mcp.json.
 // Uses map[string]any as root type to preserve unknown top-level keys.
 // projectToken is forwarded to httpServerEntry — see its doc comment.
-func writeClaudeMCPConfig(projectDir, projectToken string) error {
+func WriteClaudeMCPConfig(projectDir, projectToken string) error {
 	claudeDir := filepath.Join(projectDir, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		return fmt.Errorf("create .claude dir: %w", err)
@@ -151,9 +151,9 @@ func writeClaudeMCPConfig(projectDir, projectToken string) error {
 	return nil
 }
 
-// writeClaudeMD writes a .claude/CLAUDE.md that describes the mache MCP tools
+// WriteClaudeMD writes a .claude/CLAUDE.md that describes the mache MCP tools
 // so Claude Code automatically knows how to use them.
-func writeClaudeMD(projectDir, schemaPreset string) error {
+func WriteClaudeMD(projectDir, schemaPreset string) error {
 	claudeDir := filepath.Join(projectDir, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		return fmt.Errorf("create .claude dir: %w", err)
@@ -313,16 +313,11 @@ func registerEditorMCP(ec editorConfig, binaryPath string) (ok bool, warning str
 	return true, ""
 }
 
-// claudeCLIRegister is the function that performs Claude Code CLI registration.
-// Replaced in tests to avoid real side effects.
-var claudeCLIRegister = registerClaudeCodeCLIImpl
-
-// registerClaudeCodeCLI registers mache via `claude mcp add` if the CLI is available.
-func registerClaudeCodeCLI(binaryPath string) bool {
-	return claudeCLIRegister(binaryPath)
-}
-
-func registerClaudeCodeCLIImpl(binaryPath string) bool {
+// RegisterClaudeCodeCLI registers mache via `claude mcp add` if the CLI is
+// available. Callers pass it (or a stub) to RegisterAllEditors — a parameter,
+// not a package var, so tests in different packages can never race on one
+// shared global (B14/B19 in the decomposition review).
+func RegisterClaudeCodeCLI(binaryPath string) bool {
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		return false
@@ -332,15 +327,16 @@ func registerClaudeCodeCLIImpl(binaryPath string) bool {
 	// Register the canonical Streamable HTTP endpoint (ADR-0022), not a stdio
 	// command. binaryPath is unused now — the daemon is shared, not spawned
 	// per client.
-	err = exec.Command(claudePath, "mcp", "add", "--scope", "user", "--transport", "http", "mache", macheHTTPURL).Run()
+	err = exec.Command(claudePath, "mcp", "add", "--scope", "user", "--transport", "http", "mache", MacheHTTPURL).Run()
 	return err == nil
 }
 
-// registerAllEditors registers mache with all detected editors.
-// Returns the names of editors that were successfully registered.
-func registerAllEditors(w io.Writer, binaryPath string) {
+// RegisterAllEditors registers mache with all detected editors.
+// claudeRegister performs the Claude Code CLI registration — production
+// callers pass RegisterClaudeCodeCLI; tests pass a stub.
+func RegisterAllEditors(w io.Writer, binaryPath string, claudeRegister func(string) bool) {
 	// Claude Code via CLI
-	if registerClaudeCodeCLI(binaryPath) {
+	if claudeRegister(binaryPath) {
 		_, _ = fmt.Fprintln(w, "  [Claude Code] registered via CLI (scope: user)")
 	}
 
@@ -370,11 +366,11 @@ func init() {
 	}
 }
 
-// detectProjectType scans a directory and returns the best-fit schema preset name.
+// DetectProjectType scans a directory and returns the best-fit schema preset name.
 // Checks sentinel files first (go.mod, pyproject.toml, etc.), then falls back
 // to counting file extensions in the top-level directory.
 // Returns empty string if no preset matches (caller should omit schema).
-func detectProjectType(dir string) string {
+func DetectProjectType(dir string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""

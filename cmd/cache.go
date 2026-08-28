@@ -31,6 +31,7 @@ import (
 	capnp "capnproto.org/go/capnp/v3"
 	"github.com/BurntSushi/toml"
 	cache "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/cache"
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/spf13/cobra"
 	"github.com/zeebo/blake3"
 	_ "modernc.org/sqlite"
@@ -331,7 +332,7 @@ func runCachePush(out io.Writer, dbPath, outDir string) error {
 			}
 			continue
 		}
-		if err := writeFileAtomic(path, e.chunkBytes); err != nil {
+		if err := projcfg.WriteFileAtomic(path, e.chunkBytes); err != nil {
 			return fmt.Errorf("write chunk %s: %w", path, err)
 		}
 	}
@@ -346,7 +347,7 @@ func runCachePush(out io.Writer, dbPath, outDir string) error {
 	// Write both renderings: canonical .bin (authoritative) + TOML
 	// (diff-friendly). Producer commits both; consumers can pick.
 	binPath := filepath.Join(outDir, "mache.lock.bin")
-	if err := writeFileAtomic(binPath, lfBytes); err != nil {
+	if err := projcfg.WriteFileAtomic(binPath, lfBytes); err != nil {
 		return fmt.Errorf("write lockfile bin: %w", err)
 	}
 	tomlPath := filepath.Join(outDir, "mache.lock.toml")
@@ -589,30 +590,6 @@ func writeLockfileTOML(path string, entries []chunkEntry, root [32]byte) error {
 	tmpName := f.Name()
 	enc := toml.NewEncoder(f)
 	if err := enc.Encode(&lf); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return os.Rename(tmpName, path)
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := f.Name()
-	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmpName)
 		return err
@@ -967,7 +944,7 @@ func runCacheRemotePull(ctx context.Context, out io.Writer, baseURL, producer, s
 	if err := os.MkdirAll(filepath.Join(localDir, "objects"), 0o755); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(filepath.Join(localDir, "mache.lock.bin"), configBytes); err != nil {
+	if err := projcfg.WriteFileAtomic(filepath.Join(localDir, "mache.lock.bin"), configBytes); err != nil {
 		return fmt.Errorf("write lockfile: %w", err)
 	}
 	for _, layer := range manifest.Layers {
@@ -993,7 +970,7 @@ func runCacheRemotePull(ctx context.Context, out io.Writer, baseURL, producer, s
 			}
 			continue
 		}
-		if err := writeFileAtomic(chunkPath, body); err != nil {
+		if err := projcfg.WriteFileAtomic(chunkPath, body); err != nil {
 			return fmt.Errorf("write chunk %s: %w", chunkPath, err)
 		}
 	}
