@@ -35,7 +35,7 @@
 // trailing whitespace, single newline at EOF). The canonicalization
 // is mache-internal — the cache substrate doesn't dictate it.
 
-package cmd
+package buildcache
 
 import (
 	"bytes"

@@ -14,7 +14,7 @@
 //   - restoreFromASTChunk error propagation (already covered by the
 //     happy path; explicit negative cases live here for documentation)
 
-package cmd
+package buildcache
 
 import (
 	"bytes"

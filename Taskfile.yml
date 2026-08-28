@@ -884,7 +884,7 @@ tasks:
   cache:test:
     desc: Run the cache push/pull/OCI test suite
     cmds:
-      - go test -v -count=1 ./cmd/ -run "TestCache|TestOCI"
+      - go test -v -count=1 ./internal/buildcache/ -run "TestCache|TestOCI"
 
   cache:roundtrip:
     desc: End-to-end self-test — build a tiny db, push, pull, diff
@@ -897,4 +897,4 @@ tasks:
       Used by .github/workflows/cache-roundtrip.yml as a CI smoke test
       that the cache feature still works end-to-end.
     cmds:
-      - go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./cmd/
+      - go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./internal/buildcache/

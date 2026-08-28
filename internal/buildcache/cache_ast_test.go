@@ -8,7 +8,7 @@
 // existing cache_test.go tests, which don't create `_ast`. These
 // tests explicitly create `_ast` so the AST path runs.
 
-package cmd
+package buildcache
 
 import (
 	"bytes"

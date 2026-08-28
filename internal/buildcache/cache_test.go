@@ -5,7 +5,7 @@
 // `mache cache pull` to restore into a fresh db. Assert the restored
 // _source rows are byte-equal to the originals.
 
-package cmd
+package buildcache
 
 import (
 	"bytes"
