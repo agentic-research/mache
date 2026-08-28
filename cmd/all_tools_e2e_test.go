@@ -17,6 +17,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lltest"
+	"github.com/agentic-research/mache/internal/projcfg"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/server"
@@ -224,7 +225,7 @@ func TestE2E_AllMCPTools(t *testing.T) {
 	// reference. Empty topology builds a degenerate graph where
 	// most tools have nothing to do (uncovered by the harness's
 	// previous bare-topology run).
-	schema, err := resolveSchema("go", ".")
+	schema, err := projcfg.ResolveSchema("go", ".")
 	require.NoError(t, err)
 	require.NotNil(t, schema, "go preset schema must resolve")
 

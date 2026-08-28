@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,9 +15,9 @@ import (
 func TestProjectConfig_ParsesSmellRulesDir(t *testing.T) {
 	dir := t.TempDir()
 	cfg := `{"sources": [{"path": ".", "schema": "go"}], "smellRulesDir": "./smell-rules"}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(cfg), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName), []byte(cfg), 0o644))
 
-	got, err := loadProjectConfig(dir)
+	got, err := projcfg.LoadProjectConfig(dir)
 	require.NoError(t, err)
 	assert.Equal(t, "./smell-rules", got.SmellRulesDir)
 }
@@ -25,10 +26,10 @@ func TestProjectConfig_ParsesSmellRulesDir(t *testing.T) {
 // zero-value: a config without the field leaves SmellRulesDir "".
 func TestProjectConfig_SmellRulesDirOmittedIsEmpty(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName),
 		[]byte(`{"sources": [{"path": "."}]}`), 0o644))
 
-	got, err := loadProjectConfig(dir)
+	got, err := projcfg.LoadProjectConfig(dir)
 	require.NoError(t, err)
 	assert.Equal(t, "", got.SmellRulesDir)
 }
@@ -37,7 +38,7 @@ func TestProjectConfig_SmellRulesDirOmittedIsEmpty(t *testing.T) {
 // chain: an explicit flag value beats env and config.
 func TestResolveSmellRulesDir_FlagWins(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName),
 		[]byte(`{"sources": [{"path": "."}], "smellRulesDir": "/from/config"}`), 0o644))
 	t.Setenv(SmellRulesEnvVar, "/from/env")
 
@@ -48,7 +49,7 @@ func TestResolveSmellRulesDir_FlagWins(t *testing.T) {
 // TestResolveSmellRulesDir_EnvBeatsConfig pins env > config when no flag.
 func TestResolveSmellRulesDir_EnvBeatsConfig(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName),
 		[]byte(`{"sources": [{"path": "."}], "smellRulesDir": "/from/config"}`), 0o644))
 	t.Setenv(SmellRulesEnvVar, "/from/env")
 
@@ -61,7 +62,7 @@ func TestResolveSmellRulesDir_EnvBeatsConfig(t *testing.T) {
 // directory (portability) — not the process CWD.
 func TestResolveSmellRulesDir_ConfigRelativeResolvesAgainstProjectDir(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName),
 		[]byte(`{"sources": [{"path": "."}], "smellRulesDir": "rules"}`), 0o644))
 	t.Setenv(SmellRulesEnvVar, "") // ensure env doesn't shadow config
 
@@ -73,7 +74,7 @@ func TestResolveSmellRulesDir_ConfigRelativeResolvesAgainstProjectDir(t *testing
 // absolute config value is returned as-is.
 func TestResolveSmellRulesDir_ConfigAbsoluteUsedVerbatim(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName),
 		[]byte(`{"sources": [{"path": "."}], "smellRulesDir": "/abs/rules"}`), 0o644))
 	t.Setenv(SmellRulesEnvVar, "")
 
@@ -86,7 +87,7 @@ func TestResolveSmellRulesDir_ConfigAbsoluteUsedVerbatim(t *testing.T) {
 // (resolves to "") rather than escaping the project tree.
 func TestResolveSmellRulesDir_ConfigTraversalRejected(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName),
 		[]byte(`{"sources": [{"path": "."}], "smellRulesDir": "../escape"}`), 0o644))
 	t.Setenv(SmellRulesEnvVar, "")
 
@@ -108,7 +109,7 @@ func TestResolveSmellRulesDir_NoneReturnsEmpty(t *testing.T) {
 // .mache.json present but WITHOUT smellRulesDir yields "".
 func TestResolveSmellRulesDir_EmptyConfigFieldFallsThrough(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName),
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName),
 		[]byte(`{"sources": [{"path": "."}]}`), 0o644))
 	t.Setenv(SmellRulesEnvVar, "")
 

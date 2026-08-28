@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/agentic-research/mache/internal/testfixtures"
 	"github.com/agentic-research/mache/internal/testutil"
 )
@@ -63,7 +64,7 @@ func TestE2E_BackendParity_MacheOnMache(t *testing.T) {
 
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 	repoRoot := testutil.MacheRepoRoot(t)
-	schema, err := resolveSchema("go", ".")
+	schema, err := projcfg.ResolveSchema("go", ".")
 	require.NoError(t, err)
 	require.NotNil(t, schema, "go preset schema must resolve")
 
@@ -336,7 +337,7 @@ func runRealCorporaFromEnv(t *testing.T, corpora string, opts pprofOpts) {
 			continue
 		}
 
-		schema, err := resolveSchema(schemaName, path)
+		schema, err := projcfg.ResolveSchema(schemaName, path)
 		require.NoError(t, err, "resolve schema %q for %s", schemaName, name)
 		require.NotNil(t, schema, "schema %q for %s", schemaName, name)
 

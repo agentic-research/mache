@@ -19,6 +19,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/agentic-research/mache/resolve"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -456,7 +457,7 @@ func (r *graphRegistry) resolveProjectSession(ctx context.Context, sid string) (
 	if !ok {
 		return nil, false
 	}
-	rootPath, found := resolveProjectToken(token)
+	rootPath, found := projcfg.ResolveProjectToken(token)
 	if !found {
 		errGraph := newErrorLazyGraph(fmt.Errorf(
 			"?project= token not recognized; re-run `mache init` in this project to re-register it"))
@@ -491,7 +492,7 @@ func (r *graphRegistry) resolveProjectSession(ctx context.Context, sid string) (
 // not take down a session that is otherwise resolving fine — serving the graph
 // is the job; registration is an optimization for the next client.
 func rememberResolvedRoot(rootPath, how string) {
-	if ensureProjectRegistered(rootPath) {
+	if projcfg.EnsureProjectRegistered(rootPath) {
 		log.Printf("registered project %s (discovered via %s)", rootPath, how)
 	}
 }
@@ -827,7 +828,7 @@ func (lg *lazyGraph) init() {
 			// If a schema preset was provided (e.g., from ?schema= query param),
 			// use it directly — skip config loading and auto-detection.
 			if lg.schemaPreset != "" {
-				resolved, err := resolveSchema(lg.schemaPreset, base)
+				resolved, err := projcfg.ResolveSchema(lg.schemaPreset, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve schema preset %q: %w", lg.schemaPreset, err)
 					return
@@ -835,12 +836,12 @@ func (lg *lazyGraph) init() {
 				schema = resolved
 				dataSource = base
 				log.Printf("using schema preset %q (from query param)", lg.schemaPreset)
-			} else if cfg, err := loadProjectConfig(base); err != nil {
+			} else if cfg, err := projcfg.LoadProjectConfig(base); err != nil {
 				if !os.IsNotExist(err) {
 					lg.err = err
 					return
 				}
-				log.Printf("No %s found; auto-detecting project languages...", ConfigFileName)
+				log.Printf("No %s found; auto-detecting project languages...", projcfg.ConfigFileName)
 				dataSource = base
 				schema, err = inferDirSchema(base)
 				if err != nil {
@@ -849,15 +850,15 @@ func (lg *lazyGraph) init() {
 				}
 			} else {
 				if len(cfg.Sources) > 1 {
-					log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", ConfigFileName, len(cfg.Sources))
+					log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", projcfg.ConfigFileName, len(cfg.Sources))
 				}
 				src := cfg.Sources[0]
-				dataSource, err = resolveDataSource(src.Path, base)
+				dataSource, err = projcfg.ResolveDataSource(src.Path, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve data source: %w", err)
 					return
 				}
-				schema, err = resolveSchema(src.Schema, base)
+				schema, err = projcfg.ResolveSchema(src.Schema, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve schema: %w", err)
 					return
@@ -865,13 +866,13 @@ func (lg *lazyGraph) init() {
 				if schema == nil {
 					schema = &api.Topology{Version: api.SchemaVersion}
 				}
-				log.Printf("Loaded config from %s (source: %s)", ConfigFileName, dataSource)
+				log.Printf("Loaded config from %s (source: %s)", projcfg.ConfigFileName, dataSource)
 			}
 		} else {
 			dataSource = lg.args[0]
 
 			if serveSchema != "" {
-				resolved, err := resolveSchema(serveSchema, base)
+				resolved, err := projcfg.ResolveSchema(serveSchema, base)
 				if err != nil {
 					lg.err = fmt.Errorf("resolve schema: %w", err)
 					return

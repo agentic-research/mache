@@ -1,4 +1,4 @@
-package cmd
+package projcfg
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ import (
 // goroutine per request through wrapHandler — so many sessions can each learn
 // a different root at the same time. Measured without a lock: 50 goroutines
 // registering 50 distinct roots left 1-3 of them in the file. Not corruption
-// (writeFileAtomic renames, so the file is never torn) but near-total silent
+// (WriteFileAtomic renames, so the file is never torn) but near-total silent
 // LOSS, which defeats the point of registering at all: the token a later
 // ?project= lookup needs was simply never written.
 //
@@ -31,7 +31,7 @@ var registryMu sync.Mutex
 
 // registryLockPath is a dedicated lock file, never the registry itself.
 // Locking the registry would mean holding a descriptor to a file that
-// writeFileAtomic replaces by rename — the lock would end up held on an
+// WriteFileAtomic replaces by rename — the lock would end up held on an
 // unlinked inode while a new one took its place, protecting nothing.
 func registryLockPath() (string, error) {
 	dir, err := macheHomeDir()

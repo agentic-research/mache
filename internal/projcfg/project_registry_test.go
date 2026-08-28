@@ -1,4 +1,4 @@
-package cmd
+package projcfg
 
 import (
 	"os"
@@ -80,11 +80,11 @@ func TestRegisterProject_RoundTripsThroughResolveProjectToken(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	absPath := "/Users/x/some-project"
-	token, err := registerProject(absPath)
+	token, err := RegisterProject(absPath)
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 
-	got, ok := resolveProjectToken(token)
+	got, ok := ResolveProjectToken(token)
 	require.True(t, ok)
 	assert.Equal(t, absPath, got)
 }
@@ -93,9 +93,9 @@ func TestRegisterProject_IsIdempotentForTheSamePath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	absPath := "/Users/x/some-project"
-	tokenA, err := registerProject(absPath)
+	tokenA, err := RegisterProject(absPath)
 	require.NoError(t, err)
-	tokenB, err := registerProject(absPath)
+	tokenB, err := RegisterProject(absPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, tokenA, tokenB, "re-running mache init in the same directory must reproduce the same token, not orphan the URL already written into client configs")
@@ -104,13 +104,13 @@ func TestRegisterProject_IsIdempotentForTheSamePath(t *testing.T) {
 func TestRegisterProject_PreservesOtherEntries(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	tokenA, err := registerProject("/Users/x/project-a")
+	tokenA, err := RegisterProject("/Users/x/project-a")
 	require.NoError(t, err)
-	_, err = registerProject("/Users/x/project-b")
+	_, err = RegisterProject("/Users/x/project-b")
 	require.NoError(t, err)
 
 	// project-a must still resolve after project-b was registered.
-	got, ok := resolveProjectToken(tokenA)
+	got, ok := ResolveProjectToken(tokenA)
 	require.True(t, ok)
 	assert.Equal(t, "/Users/x/project-a", got)
 }
@@ -118,14 +118,14 @@ func TestRegisterProject_PreservesOtherEntries(t *testing.T) {
 func TestResolveProjectToken_UnknownTokenMisses(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	_, ok := resolveProjectToken("not-a-real-token")
+	_, ok := ResolveProjectToken("not-a-real-token")
 	assert.False(t, ok, "a guessed or stale token must miss, not fall back to any path")
 }
 
 func TestResolveProjectToken_EmptyRegistryMisses(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	// No registerProject call at all — the registry file doesn't exist yet.
-	_, ok := resolveProjectToken("anything")
+	// No RegisterProject call at all — the registry file doesn't exist yet.
+	_, ok := ResolveProjectToken("anything")
 	assert.False(t, ok)
 }

@@ -1,4 +1,4 @@
-package cmd
+package projcfg
 
 import (
 	"crypto/rand"
@@ -82,7 +82,7 @@ func loadOrCreateProjectSalt() ([]byte, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("generate project salt: %w", err)
 	}
-	if err := writeFileAtomic(path, salt); err != nil {
+	if err := WriteFileAtomic(path, salt); err != nil {
 		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
 	return salt, nil
@@ -109,9 +109,9 @@ func projectRegistryPath() (string, error) {
 	return filepath.Join(dir, projectRegistryFile), nil
 }
 
-// loadProjectRegistry reads the token -> path map, returning an empty map
+// LoadProjectRegistry reads the token -> path map, returning an empty map
 // (not an error) when the registry has not been created yet.
-func loadProjectRegistry() (map[string]string, error) {
+func LoadProjectRegistry() (map[string]string, error) {
 	path, err := projectRegistryPath()
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func loadProjectRegistry() (map[string]string, error) {
 	return reg, nil
 }
 
-// registerProject records absPath in the local registry under its derived
+// RegisterProject records absPath in the local registry under its derived
 // token and returns the token. Idempotent: re-registering the same path
 // (e.g. re-running `mache init`) reproduces the same token and simply
 // overwrites its own entry — every other project's entry is preserved.
@@ -138,7 +138,7 @@ func loadProjectRegistry() (map[string]string, error) {
 // path canonicalization: adding the canonical token does not delete the old
 // spelling, so already-written client URLs keep resolving during the grace
 // period. New registrations converge on the canonical token.
-func registerProject(absPath string) (string, error) {
+func RegisterProject(absPath string) (string, error) {
 	// Canonicalize BEFORE hashing. Every other layer already does — leyline's
 	// verify_source_root_matches compares Rust-canonicalized paths, ingest
 	// canonicalizes, and arena_config's CanonicalSourceRoot exists with a
@@ -165,7 +165,7 @@ func registerProject(absPath string) (string, error) {
 	// so all but the last are silently dropped — measured at 47-49 losses out
 	// of 50 concurrent roots. See withRegistryLock.
 	err = withRegistryLock(func() error {
-		reg, lerr := loadProjectRegistry()
+		reg, lerr := LoadProjectRegistry()
 		if lerr != nil {
 			return lerr
 		}
@@ -179,7 +179,7 @@ func registerProject(absPath string) (string, error) {
 		if perr != nil {
 			return perr
 		}
-		if werr := writeFileAtomic(path, append(data, '\n')); werr != nil {
+		if werr := WriteFileAtomic(path, append(data, '\n')); werr != nil {
 			return fmt.Errorf("write %s: %w", path, werr)
 		}
 		return nil
@@ -190,11 +190,11 @@ func registerProject(absPath string) (string, error) {
 	return token, nil
 }
 
-// ensureProjectRegistered records rootPath in the local registry if it is not
+// EnsureProjectRegistered records rootPath in the local registry if it is not
 // already there, and reports whether a write happened.
 //
 // This is what makes registration a BYPRODUCT of serving rather than a
-// separate setup step. Before it, registerProject had exactly one caller —
+// separate setup step. Before it, RegisterProject had exactly one caller —
 // `mache init` — so a daemon could serve a project a hundred times and
 // ~/.mache/projects.json would still not exist. That is not hypothetical: a
 // long-running shared daemon was found serving this repo with an empty
@@ -211,14 +211,14 @@ func registerProject(absPath string) (string, error) {
 // serving the graph is the job; registration is an optimization for later.
 // The existence check keeps the steady state read-only: re-registering on
 // every tool call would rewrite the file constantly for no gain.
-func ensureProjectRegistered(rootPath string) bool {
+func EnsureProjectRegistered(rootPath string) bool {
 	if rootPath == "" {
 		return false
 	}
 	rootPath = leyline.CanonicalSourceRoot(rootPath)
 	registered := false
 	err := withRegistryLock(func() error {
-		reg, lerr := loadProjectRegistry()
+		reg, lerr := LoadProjectRegistry()
 		if lerr != nil {
 			return lerr
 		}
@@ -227,7 +227,7 @@ func ensureProjectRegistered(rootPath string) bool {
 				return nil // already known; stay read-only
 			}
 		}
-		// registerProject takes the same lock, which is why it must be
+		// RegisterProject takes the same lock, which is why it must be
 		// reentrant-safe: withRegistryLock is NOT reentrant (flock on a second
 		// descriptor from the same process would deadlock against itself on
 		// Linux), so the write is inlined here rather than delegated.
@@ -245,7 +245,7 @@ func ensureProjectRegistered(rootPath string) bool {
 		if perr != nil {
 			return perr
 		}
-		if werr := writeFileAtomic(path, append(data, '\n')); werr != nil {
+		if werr := WriteFileAtomic(path, append(data, '\n')); werr != nil {
 			return werr
 		}
 		registered = true
@@ -257,12 +257,12 @@ func ensureProjectRegistered(rootPath string) bool {
 	return registered
 }
 
-// resolveProjectToken looks up token in the local registry, returning the
+// ResolveProjectToken looks up token in the local registry, returning the
 // absolute path it was registered against. ok is false when the token is
 // unknown — whether guessed, stale, or from a registry that was wiped after
 // the client's config was written.
-func resolveProjectToken(token string) (string, bool) {
-	reg, err := loadProjectRegistry()
+func ResolveProjectToken(token string) (string, bool) {
+	reg, err := LoadProjectRegistry()
 	if err != nil {
 		return "", false
 	}

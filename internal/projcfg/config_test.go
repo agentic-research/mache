@@ -1,4 +1,4 @@
-package cmd
+package projcfg
 
 import (
 	"bytes"
@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/lang"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +16,7 @@ func TestLoadProjectConfig_Valid(t *testing.T) {
 	cfg := `{"sources": [{"path": ".", "schema": "go"}]}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(cfg), 0o644))
 
-	got, err := loadProjectConfig(dir)
+	got, err := LoadProjectConfig(dir)
 	require.NoError(t, err)
 	require.Len(t, got.Sources, 1)
 	assert.Equal(t, ".", got.Sources[0].Path)
@@ -30,14 +28,14 @@ func TestLoadProjectConfig_MultipleSources(t *testing.T) {
 	cfg := `{"sources": [{"path": ".", "schema": "go"}, {"path": "./data.db"}]}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(cfg), 0o644))
 
-	got, err := loadProjectConfig(dir)
+	got, err := LoadProjectConfig(dir)
 	require.NoError(t, err)
 	require.Len(t, got.Sources, 2)
 	assert.Equal(t, "", got.Sources[1].Schema)
 }
 
 func TestLoadProjectConfig_NotFound(t *testing.T) {
-	_, err := loadProjectConfig(t.TempDir())
+	_, err := LoadProjectConfig(t.TempDir())
 	assert.True(t, os.IsNotExist(err))
 }
 
@@ -45,7 +43,7 @@ func TestLoadProjectConfig_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("{bad"), 0o644))
 
-	_, err := loadProjectConfig(dir)
+	_, err := LoadProjectConfig(dir)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parse")
 }
@@ -54,106 +52,17 @@ func TestLoadProjectConfig_EmptySources(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(`{"sources": []}`), 0o644))
 
-	_, err := loadProjectConfig(dir)
+	_, err := LoadProjectConfig(dir)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty")
 }
 
 func TestResolveSchema_Preset(t *testing.T) {
-	topo, err := resolveSchema("go", ".")
+	topo, err := ResolveSchema("go", ".")
 	require.NoError(t, err)
 	require.NotNil(t, topo)
 	assert.Equal(t, "v1", topo.Version)
 	assert.NotEmpty(t, topo.Nodes)
-}
-
-func TestResolveSchema_AllPresets(t *testing.T) {
-	for name := range presetSchemas {
-		t.Run(name, func(t *testing.T) {
-			topo, err := resolveSchema(name, ".")
-			require.NoError(t, err)
-			require.NotNil(t, topo)
-			assert.Equal(t, "v1", topo.Version)
-		})
-	}
-}
-
-// knownBrokenPresets maps preset name → tracking bead for selectors that
-// don't compile against their tree-sitter grammar. The test skips these
-// so CI stays green while the schemas are being repaired. Each bead lists
-// the specific selector(s) involved.
-//
-// Remove an entry when the corresponding bead is closed and the selector
-// compiles cleanly.
-var knownBrokenPresets = map[string]string{}
-
-// TestPresetSchemas_SelectorsCompile loads every preset schema whose key
-// matches a registered tree-sitter language and verifies that each
-// selector in the schema tree compiles as a tree-sitter query against
-// that language. Bead mache-a21b69 — `TestResolveSchema_AllPresets`
-// only validates JSON parsing, so a broken selector silently routes
-// files to `_project_files/` instead of failing loudly.
-//
-// Data-format presets (cli, mcp, mcp-registry) use JSONPath selectors
-// rather than tree-sitter and are skipped. Presets in
-// knownBrokenPresets are skipped pending the linked beads.
-// TestPresetSchemas_SelectorsCompile checks preset S-expression selectors are
-// structurally well-formed. In-process CGO tree-sitter grammar compilation was
-// removed (ADR-0012 step 4), so this can no longer compile each selector
-// against a live grammar — that end-to-end validation now lives in the
-// leyline-gated preset projection tests (preset_fixture_test.go). This remaining
-// check catches gross breakage (empty, non-S-expression, unbalanced parens).
-func TestPresetSchemas_SelectorsCompile(t *testing.T) {
-	dataPresets := map[string]bool{"cli": true, "mcp": true, "mcp-registry": true}
-
-	for name := range presetSchemas {
-		if dataPresets[name] {
-			continue
-		}
-		if lang.ForName(name) == nil {
-			continue
-		}
-		t.Run(name, func(t *testing.T) {
-			if bead, broken := knownBrokenPresets[name]; broken {
-				t.Skipf("known-broken selectors — see %s", bead)
-			}
-			topo, err := loadPresetSchema(name)
-			require.NoError(t, err)
-			require.NotNil(t, topo)
-
-			walkPresetNodes(t, topo.Nodes, name, func(node api.Node, path string) {
-				sel := node.Selector
-				if sel == "" || sel == "$" {
-					return
-				}
-				assert.Equal(t, byte('('), sel[0],
-					"preset %q selector at %s must be a tree-sitter S-expression (start with '('): %s", name, path, sel)
-				depth := 0
-				for _, r := range sel {
-					switch r {
-					case '(':
-						depth++
-					case ')':
-						depth--
-					}
-					if depth < 0 {
-						break
-					}
-				}
-				assert.Equal(t, 0, depth,
-					"preset %q selector at %s has unbalanced parentheses: %s", name, path, sel)
-			})
-		})
-	}
-}
-
-func walkPresetNodes(t *testing.T, nodes []api.Node, parentPath string, fn func(api.Node, string)) {
-	t.Helper()
-	for i := range nodes {
-		path := parentPath + "/" + nodes[i].Name
-		fn(nodes[i], path)
-		walkPresetNodes(t, nodes[i].Children, path, fn)
-	}
 }
 
 func TestResolveSchema_RelativePath(t *testing.T) {
@@ -161,7 +70,7 @@ func TestResolveSchema_RelativePath(t *testing.T) {
 	schema := `{"version": "v1", "nodes": []}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom.json"), []byte(schema), 0o644))
 
-	topo, err := resolveSchema("./custom.json", dir)
+	topo, err := ResolveSchema("./custom.json", dir)
 	require.NoError(t, err)
 	require.NotNil(t, topo)
 	assert.Equal(t, "v1", topo.Version)
@@ -172,49 +81,49 @@ func TestResolveSchema_AbsolutePath(t *testing.T) {
 	schemaPath := filepath.Join(dir, "abs-schema.json")
 	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"version": "v1", "nodes": []}`), 0o644))
 
-	topo, err := resolveSchema(schemaPath, "/other/dir")
+	topo, err := ResolveSchema(schemaPath, "/other/dir")
 	require.NoError(t, err)
 	require.NotNil(t, topo)
 }
 
 func TestResolveSchema_Empty(t *testing.T) {
-	topo, err := resolveSchema("", ".")
+	topo, err := ResolveSchema("", ".")
 	require.NoError(t, err)
 	assert.Nil(t, topo)
 }
 
 func TestResolveSchema_UnknownPreset(t *testing.T) {
-	_, err := resolveSchema("fortran", ".")
+	_, err := ResolveSchema("fortran", ".")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "fortran")
 }
 
 func TestResolveDataSource_Relative(t *testing.T) {
-	got, err := resolveDataSource(".", "/home/user/project")
+	got, err := ResolveDataSource(".", "/home/user/project")
 	require.NoError(t, err)
 	assert.Equal(t, "/home/user/project", got)
 }
 
 func TestResolveDataSource_RelativeSubdir(t *testing.T) {
-	got, err := resolveDataSource("./data", "/home/user/project")
+	got, err := ResolveDataSource("./data", "/home/user/project")
 	require.NoError(t, err)
 	assert.Equal(t, "/home/user/project/data", got)
 }
 
 func TestResolveDataSource_Absolute(t *testing.T) {
-	got, err := resolveDataSource("/opt/data.db", "/home/user/project")
+	got, err := ResolveDataSource("/opt/data.db", "/home/user/project")
 	require.NoError(t, err)
 	assert.Equal(t, "/opt/data.db", got)
 }
 
 func TestResolveDataSource_Traversal(t *testing.T) {
-	_, err := resolveDataSource("../../etc/passwd", "/home/user/project")
+	_, err := ResolveDataSource("../../etc/passwd", "/home/user/project")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "escapes")
 }
 
 func TestResolveSchema_Traversal(t *testing.T) {
-	_, err := resolveSchema("../../etc/passwd", "/home/user/project")
+	_, err := ResolveSchema("../../etc/passwd", "/home/user/project")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "escapes")
 }
@@ -224,7 +133,7 @@ func TestDetectProjectType_GoProject(t *testing.T) {
 	for _, name := range []string{"main.go", "util.go", "README.md"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(""), 0o644))
 	}
-	assert.Equal(t, "go", detectProjectType(dir))
+	assert.Equal(t, "go", DetectProjectType(dir))
 }
 
 func TestDetectProjectType_PythonProject(t *testing.T) {
@@ -232,7 +141,7 @@ func TestDetectProjectType_PythonProject(t *testing.T) {
 	for _, name := range []string{"app.py", "utils.py", "setup.cfg"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(""), 0o644))
 	}
-	assert.Equal(t, "python", detectProjectType(dir))
+	assert.Equal(t, "python", DetectProjectType(dir))
 }
 
 func TestDetectProjectType_DBProject(t *testing.T) {
@@ -240,7 +149,7 @@ func TestDetectProjectType_DBProject(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.db"), []byte(""), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(""), 0o644))
 	// .db takes priority — returns empty (no preset)
-	assert.Equal(t, "", detectProjectType(dir))
+	assert.Equal(t, "", DetectProjectType(dir))
 }
 
 func TestDetectProjectType_TieBreaking(t *testing.T) {
@@ -248,13 +157,13 @@ func TestDetectProjectType_TieBreaking(t *testing.T) {
 	// 1 .go + 1 .py → tied count → deterministic alphabetical pick ("go" < "python")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(""), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.py"), []byte(""), 0o644))
-	assert.Equal(t, "go", detectProjectType(dir))
+	assert.Equal(t, "go", DetectProjectType(dir))
 }
 
 func TestDetectProjectType_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.csv"), []byte(""), 0o644))
-	assert.Equal(t, "", detectProjectType(dir))
+	assert.Equal(t, "", DetectProjectType(dir))
 }
 
 func TestDetectProjectType_GoMod(t *testing.T) {
@@ -262,24 +171,24 @@ func TestDetectProjectType_GoMod(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte(""), 0o644))
-	assert.Equal(t, "go", detectProjectType(dir))
+	assert.Equal(t, "go", DetectProjectType(dir))
 }
 
 func TestDetectProjectType_PyprojectToml(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]"), 0o644))
-	assert.Equal(t, "python", detectProjectType(dir))
+	assert.Equal(t, "python", DetectProjectType(dir))
 }
 
 func TestDetectProjectType_RequirementsTxt(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask"), 0o644))
-	assert.Equal(t, "python", detectProjectType(dir))
+	assert.Equal(t, "python", DetectProjectType(dir))
 }
 
 func TestWriteClaudeMCPConfig_Fresh(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, writeClaudeMCPConfig(dir, ""))
+	require.NoError(t, WriteClaudeMCPConfig(dir, ""))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
 	require.NoError(t, err)
@@ -290,7 +199,7 @@ func TestWriteClaudeMCPConfig_Fresh(t *testing.T) {
 	mache := servers["mache"].(map[string]any)
 	// Canonical: HTTP endpoint, not a stdio command (ADR-0022).
 	assert.Equal(t, "http", mache["type"])
-	assert.Equal(t, macheHTTPURL, mache["url"])
+	assert.Equal(t, MacheHTTPURL, mache["url"])
 	assert.NotContains(t, mache, "command")
 }
 
@@ -302,7 +211,7 @@ func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
 	existing := `{"mcpServers": {"github": {"command": "gh", "args": ["mcp"]}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "mcp.json"), []byte(existing), 0o644))
 
-	require.NoError(t, writeClaudeMCPConfig(dir, ""))
+	require.NoError(t, WriteClaudeMCPConfig(dir, ""))
 
 	data, err := os.ReadFile(filepath.Join(claudeDir, "mcp.json"))
 	require.NoError(t, err)
@@ -316,7 +225,7 @@ func TestWriteClaudeMCPConfig_MergeExisting(t *testing.T) {
 	assert.Contains(t, servers, "mache")
 
 	mache := servers["mache"].(map[string]any)
-	assert.Equal(t, macheHTTPURL, mache["url"])
+	assert.Equal(t, MacheHTTPURL, mache["url"])
 }
 
 func TestWriteClaudeMCPConfig_PreservesUnknownKeys(t *testing.T) {
@@ -328,7 +237,7 @@ func TestWriteClaudeMCPConfig_PreservesUnknownKeys(t *testing.T) {
 	existing := `{"mcpServers": {}, "customSetting": true, "version": 2}`
 	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "mcp.json"), []byte(existing), 0o644))
 
-	require.NoError(t, writeClaudeMCPConfig(dir, ""))
+	require.NoError(t, WriteClaudeMCPConfig(dir, ""))
 
 	data, err := os.ReadFile(filepath.Join(claudeDir, "mcp.json"))
 	require.NoError(t, err)
@@ -345,7 +254,7 @@ func TestWriteClaudeMCPConfig_PreservesUnknownKeys(t *testing.T) {
 // root from the local registry without depending on MCP roots.
 func TestWriteClaudeMCPConfig_EmbedsProjectToken(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, writeClaudeMCPConfig(dir, "deadbeef1234"))
+	require.NoError(t, WriteClaudeMCPConfig(dir, "deadbeef1234"))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
 	require.NoError(t, err)
@@ -354,12 +263,12 @@ func TestWriteClaudeMCPConfig_EmbedsProjectToken(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &root))
 	servers := root["mcpServers"].(map[string]any)
 	mache := servers["mache"].(map[string]any)
-	assert.Equal(t, macheHTTPURL+"?project=deadbeef1234", mache["url"])
+	assert.Equal(t, MacheHTTPURL+"?project=deadbeef1234", mache["url"])
 }
 
 func TestWriteClaudeMD_Fresh(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, writeClaudeMD(dir, "go"))
+	require.NoError(t, WriteClaudeMD(dir, "go"))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
 	require.NoError(t, err)
@@ -373,21 +282,11 @@ func TestWriteClaudeMD_Fresh(t *testing.T) {
 
 func TestWriteClaudeMD_NoSchema(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, writeClaudeMD(dir, ""))
+	require.NoError(t, WriteClaudeMD(dir, ""))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "Schema preset:")
-}
-
-func TestPresetNames(t *testing.T) {
-	names := PresetNames()
-	assert.Contains(t, names, "go")
-	assert.Contains(t, names, "python")
-	assert.Contains(t, names, "sql")
-	assert.Len(t, names, len(presetSchemas))
-	// Must be sorted (doc contract)
-	assert.IsNonDecreasing(t, names)
 }
 
 func TestRegisterEditorMCP_Fresh(t *testing.T) {
@@ -412,7 +311,7 @@ func TestRegisterEditorMCP_Fresh(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &root))
 	servers := root["mcpServers"].(map[string]any)
 	mache := servers["mache"].(map[string]any)
-	assert.Equal(t, macheHTTPURL, mache["url"])
+	assert.Equal(t, MacheHTTPURL, mache["url"])
 }
 
 func TestRegisterEditorMCP_MergeExisting(t *testing.T) {
@@ -543,16 +442,13 @@ func TestRegisterAllEditors_Output(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
-	// Mock Claude CLI to avoid real exec side effects
-	orig := claudeCLIRegister
-	claudeCLIRegister = func(string) bool { return false }
-	t.Cleanup(func() { claudeCLIRegister = orig })
-
 	// Create a fake Cursor dir
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".cursor"), 0o755))
 
 	var buf bytes.Buffer
-	registerAllEditors(&buf, "/usr/local/bin/mache")
+	// Stub the Claude CLI registrar — a parameter, not a global, so this
+	// test cannot race any other package's tests (B14/B19).
+	RegisterAllEditors(&buf, "/usr/local/bin/mache", func(string) bool { return false })
 
 	output := buf.String()
 	assert.Contains(t, output, "[Cursor]")
@@ -584,7 +480,7 @@ func TestCheckPathContainment_SymlinkEscape(t *testing.T) {
 	// which IS contained in /<parent>/project — so the old code passed.
 	// With EvalSymlinks the link resolves to /<parent>/outside/secret.json
 	// which is correctly rejected.
-	err := checkPathContainment(link, project)
+	err := CheckPathContainment(link, project)
 	require.Error(t, err, "symlink escape must be rejected")
 	assert.Contains(t, err.Error(), "escapes")
 }
@@ -596,7 +492,7 @@ func TestCheckPathContainment_NonexistentTargetIsAllowed(t *testing.T) {
 	project := t.TempDir()
 	// Target that doesn't exist yet but is lexically inside the project.
 	target := filepath.Join(project, "future", "file.json")
-	require.NoError(t, checkPathContainment(target, project))
+	require.NoError(t, CheckPathContainment(target, project))
 }
 
 // TestCheckPathContainment_PlainEscapeStillRejected verifies a non-symlink
@@ -607,7 +503,7 @@ func TestCheckPathContainment_PlainEscapeStillRejected(t *testing.T) {
 	require.NoError(t, os.MkdirAll(project, 0o755))
 
 	bad := filepath.Join(project, "..", "outside.json")
-	err := checkPathContainment(bad, project)
+	err := CheckPathContainment(bad, project)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "escapes")
 }
