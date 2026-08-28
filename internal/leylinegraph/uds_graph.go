@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"errors"
@@ -10,22 +10,22 @@ import (
 	"github.com/agentic-research/mache/internal/leyline"
 )
 
-// udsGraph implements graph.Graph by sending structured ops over a UDS socket
+// UDSGraph implements graph.Graph by sending structured ops over a UDS socket
 // to the ley-line daemon. The daemon runs queries against the arena buffer
 // (zero-copy via sqlite3_deserialize). Mache never opens SQLite directly.
-type udsGraph struct {
+type UDSGraph struct {
 	sock *leyline.SocketClient
 }
 
-func newUDSGraph(sockPath string) (*udsGraph, error) {
+func NewUDSGraph(sockPath string) (*UDSGraph, error) {
 	sock, err := leyline.DialSocket(sockPath)
 	if err != nil {
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
-	return &udsGraph{sock: sock}, nil
+	return &UDSGraph{sock: sock}, nil
 }
 
-func (g *udsGraph) GetNode(id string) (*graph.Node, error) {
+func (g *UDSGraph) GetNode(id string) (*graph.Node, error) {
 	id = graph.NormalizeID(id)
 	if id == "" {
 		return &graph.Node{ID: "", Mode: os.ModeDir | 0o555}, nil
@@ -73,7 +73,7 @@ func (g *udsGraph) GetNode(id string) (*graph.Node, error) {
 // strings. ListChildren and ListChildStats both consume the same payload;
 // this helper centralizes the JSON decode + error envelope so the two stay
 // in lock-step and don't misread a daemon error as an empty directory.
-func (g *udsGraph) listChildren(id string) ([]leyline.Node, error) {
+func (g *UDSGraph) listChildren(id string) ([]leyline.Node, error) {
 	var resp leyline.ListChildrenResponse
 	if err := g.sock.SendOpInto(map[string]any{
 		"op": "list_children",
@@ -94,7 +94,7 @@ func (g *udsGraph) listChildren(id string) ([]leyline.Node, error) {
 	return resp.Children, nil
 }
 
-func (g *udsGraph) ListChildren(id string) ([]string, error) {
+func (g *UDSGraph) ListChildren(id string) ([]string, error) {
 	id = graph.NormalizeID(id)
 	children, err := g.listChildren(id)
 	if err != nil {
@@ -109,7 +109,7 @@ func (g *udsGraph) ListChildren(id string) ([]string, error) {
 	return out, nil
 }
 
-func (g *udsGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
+func (g *UDSGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
 	id = graph.NormalizeID(id)
 	children, err := g.listChildren(id)
 	if err != nil {
@@ -130,7 +130,7 @@ func (g *udsGraph) ListChildStats(id string) ([]graph.NodeStat, error) {
 	return stats, nil
 }
 
-func (g *udsGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
+func (g *UDSGraph) ReadContent(id string, buf []byte, offset int64) (int, error) {
 	id = graph.NormalizeID(id)
 
 	var resp leyline.ReadContentResponse
@@ -150,7 +150,7 @@ func (g *udsGraph) ReadContent(id string, buf []byte, offset int64) (int, error)
 	return graph.SliceContent([]byte(strVal(resp.Content)), buf, offset), nil
 }
 
-func (g *udsGraph) GetCallers(token string) ([]*graph.Node, error) {
+func (g *UDSGraph) GetCallers(token string) ([]*graph.Node, error) {
 	var resp leyline.FindCallersResponse
 	if err := g.sock.SendOpInto(map[string]any{
 		"op":    "find_callers",
@@ -183,7 +183,7 @@ func (g *udsGraph) GetCallers(token string) ([]*graph.Node, error) {
 // and returns `{callees: [{node_id, source_id}, ...]}`. Unlike
 // SQLiteGraph's client-side extractor (tree-sitter on source bytes),
 // this path is purely SQL — no CGO grammar walk required.
-func (g *udsGraph) GetCallees(id string) ([]*graph.Node, error) {
+func (g *UDSGraph) GetCallees(id string) ([]*graph.Node, error) {
 	id = graph.NormalizeID(id)
 	if id == "" {
 		return nil, nil
@@ -229,17 +229,17 @@ func (g *udsGraph) GetCallees(id string) ([]*graph.Node, error) {
 	return nodes, nil
 }
 
-func (g *udsGraph) Invalidate(id string) {}
+func (g *UDSGraph) Invalidate(id string) {}
 
-func (g *udsGraph) Act(id, action, payload string) (*graph.ActionResult, error) {
+func (g *UDSGraph) Act(id, action, payload string) (*graph.ActionResult, error) {
 	return nil, graph.ErrActNotSupported
 }
 
-func (g *udsGraph) Close() error {
+func (g *UDSGraph) Close() error {
 	return g.sock.Close()
 }
 
-var _ graph.Graph = (*udsGraph)(nil)
+var _ graph.Graph = (*UDSGraph)(nil)
 
 // --- pointer-deref helpers ---
 //

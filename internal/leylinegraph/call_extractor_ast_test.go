@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"database/sql"
@@ -66,7 +66,7 @@ func TestNewASTCallExtractor_ResolvesGoCall(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := newASTCallExtractor(db)
+	extract := NewASTCallExtractor(db)
 	calls, err := extract(nil, sourcePath, "go")
 	require.NoError(t, err)
 	require.Len(t, calls, 1, "synthetic call_expression(identifier=Bar) must surface")
@@ -82,7 +82,7 @@ func TestNewASTCallExtractor_UnknownLanguageReturnsNil(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := newASTCallExtractor(db)
+	extract := NewASTCallExtractor(db)
 	calls, err := extract(nil, sourcePath, "esperanto")
 	require.NoError(t, err)
 	assert.Empty(t, calls)
@@ -97,7 +97,7 @@ func TestNewASTCallExtractor_ContentArgIgnored(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := newASTCallExtractor(db)
+	extract := NewASTCallExtractor(db)
 	// Pass garbage as content; the extractor must ignore it.
 	calls, err := extract([]byte("not Go at all — totally bogus bytes"), sourcePath, "go")
 	require.NoError(t, err)
@@ -114,7 +114,7 @@ func TestNewASTCallExtractor_NonexistentSourcePathReturnsEmpty(t *testing.T) {
 	db, _ := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := newASTCallExtractor(db)
+	extract := NewASTCallExtractor(db)
 	calls, err := extract(nil, "does/not/exist.go", "go")
 	require.NoError(t, err)
 	assert.Empty(t, calls)
@@ -133,7 +133,7 @@ func TestPickCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := pickCallExtractor(db)
+	extract := PickCallExtractor(db)
 	calls, err := extract([]byte("garbage that wouldn't parse as Go"), sourcePath, "go")
 	require.NoError(t, err)
 	require.Len(t, calls, 1, "AST extractor must surface 'Bar' from the pre-parsed _ast")
@@ -161,7 +161,7 @@ func TestPickCallExtractor_FallsBackWhenASTAbsent(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	extract := pickCallExtractor(db)
+	extract := PickCallExtractor(db)
 	require.NotNil(t, extract, "fallback extractor must not be nil")
 	// We can't easily verify it's the CGO closure without invoking
 	// it (which exercises CGO). The dispatch contract — _ast
@@ -173,20 +173,20 @@ func TestPickCallExtractor_FallsBackWhenASTAbsent(t *testing.T) {
 // callers that might pass a nil DB handle (not a current call site
 // but a contract worth preserving as wiring evolves).
 func TestPickCallExtractor_HandlesNilDB(t *testing.T) {
-	extract := pickCallExtractor(nil)
+	extract := PickCallExtractor(nil)
 	assert.NotNil(t, extract, "nil DB must yield the CGO fallback, not a nil closure")
 }
 
 // TestNewASTScopedCallExtractor_ResolvesGoCall pins the scoped-extractor
-// wiring (bead mache-fd9982): unlike newASTCallExtractor, sourceID/scopeID
+// wiring (bead mache-fd9982): unlike NewASTCallExtractor, sourceID/scopeID
 // here are the REAL `_ast` source_id + scope node id, not a graph node id.
 // With an empty scopeID (whole-file match, mirroring the unscoped fixture),
-// it must still resolve the same call newASTCallExtractor finds.
+// it must still resolve the same call NewASTCallExtractor finds.
 func TestNewASTScopedCallExtractor_ResolvesGoCall(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := newASTScopedCallExtractor(db)
+	extract := NewASTScopedCallExtractor(db)
 	calls, err := extract(sourcePath, "", "go")
 	require.NoError(t, err)
 	require.Len(t, calls, 1, "synthetic call_expression(identifier=Bar) must surface")
@@ -202,7 +202,7 @@ func TestNewASTScopedCallExtractor_NonexistentScopeReturnsEmpty(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := newASTScopedCallExtractor(db)
+	extract := NewASTScopedCallExtractor(db)
 	calls, err := extract(sourcePath, "no/such/scope", "go")
 	require.NoError(t, err)
 	assert.Empty(t, calls)
@@ -215,7 +215,7 @@ func TestPickScopedCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
 	defer func() { _ = db.Close() }()
 
-	extract := pickScopedCallExtractor(db)
+	extract := PickScopedCallExtractor(db)
 	require.NotNil(t, extract)
 	calls, err := extract(sourcePath, "", "go")
 	require.NoError(t, err)
@@ -229,7 +229,7 @@ func TestPickScopedCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
 // that would silently no-op. Callers (GetCallees) already treat a nil
 // scopedExtractor as "fall back to the legacy path".
 func TestPickScopedCallExtractor_NilWhenASTAbsentOrDBNil(t *testing.T) {
-	assert.Nil(t, pickScopedCallExtractor(nil))
+	assert.Nil(t, PickScopedCallExtractor(nil))
 
 	dbPath := filepath.Join(t.TempDir(), "noast.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -238,5 +238,5 @@ func TestPickScopedCallExtractor_NilWhenASTAbsentOrDBNil(t *testing.T) {
 	_, err = db.Exec(`CREATE TABLE nodes (id TEXT, parent_id TEXT, name TEXT, kind INTEGER, mtime INTEGER, source_file TEXT, record TEXT);`)
 	require.NoError(t, err)
 
-	assert.Nil(t, pickScopedCallExtractor(db))
+	assert.Nil(t, PickScopedCallExtractor(db))
 }

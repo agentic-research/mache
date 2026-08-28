@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -43,7 +44,7 @@ resource "aws_s3_bucket" "main" {
 }
 `), 0o644))
 
-	dbPath, cleanup, err := autoInvokeLeylineParse(src)
+	dbPath, cleanup, err := leylinegraph.AutoInvokeLeylineParse(src)
 	require.NoError(t, err)
 	defer cleanup()
 

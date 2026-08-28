@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"bufio"
@@ -60,7 +60,7 @@ func stubDaemon(t *testing.T, handler func(map[string]any) map[string]any) strin
 }
 
 // TestListChildren_ParsesObjectsNotStrings is a regression guard for the
-// bug where udsGraph treated each `children` entry as a string ID rather
+// bug where UDSGraph treated each `children` entry as a string ID rather
 // than the `{id, name, kind, size}` object the LLO daemon actually
 // returns (rs/ll-open/cli-lib/src/daemon/ops.rs::op_list_children). The
 // old code did `c.(string)` on each entry, so every non-empty directory
@@ -82,7 +82,7 @@ func TestListChildren_ParsesObjectsNotStrings(t *testing.T) {
 		}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -114,7 +114,7 @@ func TestListChildStats_SingleShotFromListChildrenResponse(t *testing.T) {
 		return map[string]any{"ok": false}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -135,7 +135,7 @@ func TestListChildStats_SingleShotFromListChildrenResponse(t *testing.T) {
 }
 
 func TestGetCallees_ResolvesViaDaemonFindCalleesOp(t *testing.T) {
-	// LLO 0.2.2 added the `find_callees` daemon op. Mache's udsGraph
+	// LLO 0.2.2 added the `find_callees` daemon op. Mache's UDSGraph
 	// consumes it directly — no client-side tree-sitter extraction
 	// (unlike SQLiteGraph). This test pins the wire shape and
 	// asserts dedup + self-edge skipping.
@@ -163,7 +163,7 @@ func TestGetCallees_ResolvesViaDaemonFindCalleesOp(t *testing.T) {
 		return map[string]any{"ok": false}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -196,7 +196,7 @@ func TestGetNode_DirKindNoContentRef(t *testing.T) {
 		}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -225,7 +225,7 @@ func TestGetNode_RecordPopulatesData(t *testing.T) {
 		}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -243,7 +243,7 @@ func TestGetNode_MissingNodeIsNotFound(t *testing.T) {
 		return map[string]any{"ok": true} // no `node` key
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -269,7 +269,7 @@ func TestReadContent_DecodesContentField(t *testing.T) {
 		}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -288,7 +288,7 @@ func TestReadContent_ErrorEnvelopeIsNotFound(t *testing.T) {
 		return map[string]any{"ok": false, "error": "node not found"}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -317,7 +317,7 @@ func TestGetCallers_DecodesNodeIDs(t *testing.T) {
 		}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -342,7 +342,7 @@ func TestListChildren_ErrorNotFoundMapping(t *testing.T) {
 		return map[string]any{"ok": false, "error": "Node Not Found in arena"}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -360,7 +360,7 @@ func TestListChildren_GenericErrorPropagates(t *testing.T) {
 		return map[string]any{"ok": false, "error": "arena read failed: io/timeout"}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -399,7 +399,7 @@ func TestGetNode_DecodesSizeAsJSONString(t *testing.T) {
 		}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -427,7 +427,7 @@ func TestGetNode_RejectsBareNumericSize(t *testing.T) {
 		}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 
@@ -443,7 +443,7 @@ func TestGetCallees_EmptyResultIsNotAnError(t *testing.T) {
 		return map[string]any{"ok": false, "error": "node not found"}
 	})
 
-	g, err := newUDSGraph(sock)
+	g, err := NewUDSGraph(sock)
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 

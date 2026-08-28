@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,7 +109,7 @@ func TestBuild_RegisteredGoImportRefsReachNodeRefs(t *testing.T) {
 // Shared fixture step for the FCA regression tests below.
 func inferGoFCASchema(t *testing.T, srcDir string, goFiles int) *api.Topology {
 	t.Helper()
-	astDB, cleanup, err := autoInvokeLeylineParse(srcDir)
+	astDB, cleanup, err := leylinegraph.AutoInvokeLeylineParse(srcDir)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 

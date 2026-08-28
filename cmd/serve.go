@@ -2,13 +2,11 @@ package cmd
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -20,6 +18,7 @@ import (
 	"github.com/agentic-research/mache/internal/gitutil"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/agentic-research/mache/internal/smells"
 	machetmpl "github.com/agentic-research/mache/internal/template"
@@ -502,7 +501,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	// stale results after edits until the daemon-mode rewrite ships.
 	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() &&
 		os.Getenv("MACHE_NO_LEYLINE") == "" {
-		if dbPath, dbCleanup, err := autoInvokeLeylineParse(dataSource); err == nil {
+		if dbPath, dbCleanup, err := leylinegraph.AutoInvokeLeylineParse(dataSource); err == nil {
 			g, si, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
 			if gerr == nil {
 				// The MACHE_NO_LEYLINE hint carries a precondition worth
@@ -540,14 +539,14 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	// can't be resolved this is a hard error, not a silent empty graph.
 	astCleanup := noop
 	if ingest.SchemaUsesTreeSitter(schema) {
-		astDB, cleanup, ppErr := attachLeylineASTWalker(dataSource, engine)
+		astDB, cleanup, ppErr := leylinegraph.AttachLeylineASTWalker(dataSource, engine)
 		if ppErr != nil {
 			resolver.Close()
 			return nil, nil, noop, fmt.Errorf("ley-line parse for source projection: %w", ppErr)
 		}
 		astCleanup = cleanup
-		store.SetCallExtractor(newASTCallExtractor(astDB))
-		store.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
+		store.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
+		store.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
 	}
 
 	if err := engine.Ingest(dataSource); err != nil {
@@ -637,30 +636,6 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	}, nil
 }
 
-// attachLeylineASTWalker parses dataSource with ley-line into a temporary
-// `_ast` db, opens it, and wires an ASTWalker onto the engine so a source
-// (tree-sitter S-expression) schema projects with zero in-process CGO
-// (ADR-0012 step 4). Returns the open db (for a call extractor) and a cleanup
-// that closes the db and removes the temp file. ley-line is mandatory: a
-// resolution failure is returned as an error (guardrail 2), never swallowed.
-func attachLeylineASTWalker(dataSource string, engine *ingest.Engine) (*sql.DB, func(), error) {
-	dbPath, parseCleanup, err := autoInvokeLeylineParse(dataSource)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		parseCleanup()
-		return nil, nil, fmt.Errorf("open ley-line parse output %s: %w", dbPath, err)
-	}
-	engine.SetASTWalker(ingest.NewASTWalker(db))
-	cleanup := func() {
-		_ = db.Close()
-		parseCleanup()
-	}
-	return db, cleanup, nil
-}
-
 // unionStringSlices returns the deduped union of a and b. Order
 // within the result is undefined. Used by the watcher's onChange to
 // build the union of pre- and post-edit node IDs so the cascade
@@ -720,7 +695,7 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 	// in-process CGO tree-sitter, the fallback is a no-op — cross-mount
 	// callees resolve through the per-mount picker below (which reads each
 	// mount's `_ast`); a mount with no AST simply contributes no calls.
-	composite.SetCallExtractor(noopCallExtractor())
+	composite.SetCallExtractor(leylinegraph.NoopCallExtractor())
 
 	// Wire the per-mount picker (ADR-0012): for SQLiteGraph mounts that carry
 	// `_ast`, use the pure-Go ASTWalker extractor; the picker returns nil for
@@ -732,7 +707,7 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 		if !ok {
 			return nil
 		}
-		return pickCallExtractor(sg.DB())
+		return leylinegraph.PickCallExtractor(sg.DB())
 	})
 
 	var cleanups []func()
@@ -776,7 +751,7 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 	if extraCleanup == nil {
 		extraCleanup = func() {}
 	}
-	if err := materializeVirtuals(dbPath, schema, false); err != nil {
+	if err := leylinegraph.MaterializeVirtuals(dbPath, schema, false); err != nil {
 		extraCleanup()
 		return nil, nil, func() {}, fmt.Errorf("materialize virtuals: %w", err)
 	}
@@ -785,8 +760,8 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 		extraCleanup()
 		return nil, nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)
 	}
-	sg.SetCallExtractor(pickCallExtractor(sg.DB()))
-	sg.SetScopedCallExtractor(pickScopedCallExtractor(sg.DB()))
+	sg.SetCallExtractor(leylinegraph.PickCallExtractor(sg.DB()))
+	sg.SetScopedCallExtractor(leylinegraph.PickScopedCallExtractor(sg.DB()))
 	if err := sg.EagerScan(); err != nil {
 		_ = sg.Close()
 		extraCleanup()
@@ -830,51 +805,6 @@ func configureManagedLeylineRuntime(args []string, basePath string, baseIsSource
 	leyline.SetDaemonCDC(sourceDir != "" && !externalDaemon && cdcRequested)
 }
 
-// autoInvokeLeylineParse runs `leyline parse <sourceDir> -o <tmpdb>` and
-// returns the path to the produced .db plus a cleanup function that removes
-// it. Returns an error if leyline is not available on PATH or in the bundled
-// location, or if parsing fails. The caller should fall back to the
-// in-process ingest path on any error.
-func autoInvokeLeylineParse(sourceDir string) (string, func(), error) {
-	// Resolve — and if absent, auto-download — the leyline binary via the same
-	// provisioning path mache serve uses, so `mache build` no longer silently
-	// degrades to tree-sitter merely because leyline isn't installed.
-	// MACHE_NO_LEYLINE opts out (returns an error the auto caller treats as
-	// "fall back to tree-sitter").
-	leylineBin, err := leyline.ResolveBinary(true)
-	if err != nil {
-		return "", nil, err
-	}
-	// Publish which binary this is. Without it Provenance() reports "no binary
-	// resolved" even though we are about to run one, and writeBuildMetadata has
-	// nothing to stamp into the .db — leaving artifacts whose producing leyline
-	// is unknowable (mache-438104).
-	leyline.RecordResolved(leylineBin, "resolved")
-
-	tmpFile, err := os.CreateTemp("", "mache-leyline-*.db")
-	if err != nil {
-		return "", nil, fmt.Errorf("create temp .db: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	_ = tmpFile.Close()
-
-	cleanup := func() {
-		_ = os.Remove(tmpPath)
-		_ = os.Remove(tmpPath + "-wal")
-		_ = os.Remove(tmpPath + "-shm")
-	}
-
-	log.Printf("auto-leyline: parsing %s -> %s", sourceDir, tmpPath)
-	cmd := exec.Command(leylineBin, "parse", sourceDir, "-o", tmpPath)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("leyline parse: %w", err)
-	}
-	return tmpPath, cleanup, nil
-}
-
 // buildControlGraph connects to the ley-line daemon over UDS.
 // The daemon owns SQLite (zero-copy via sqlite3_deserialize on the arena).
 // Mache sends structured ops, never opens SQLite directly.
@@ -901,7 +831,7 @@ func buildControlGraph(ctrlPath string, _ *api.Topology) (graph.Graph, *graph.Sh
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	g, err := newUDSGraph(sockPath)
+	g, err := leylinegraph.NewUDSGraph(sockPath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("connect to daemon: %w", err)
 	}

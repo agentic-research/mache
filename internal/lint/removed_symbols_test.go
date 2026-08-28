@@ -34,7 +34,7 @@ var removedSymbols = map[string]string{
 // Every entry here is a comment about history, not a claim about live code. If
 // you are adding to this map, that is the thing to double-check.
 var removedSymbolBaseline = map[string]int{
-	"cmd/call_extractor_ast.go":              1,
+	"internal/leylinegraph/call_extractor_ast.go": 1,
 	"cmd/serve.go":                           1,
 	"graph/composite.go":                     1,
 	"internal/ingest/ast_walker.go":          7,

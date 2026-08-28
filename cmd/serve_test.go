@@ -20,6 +20,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/agentic-research/mache/internal/smells"
@@ -2704,7 +2705,7 @@ func TestArena_AllTools(t *testing.T) {
 		t.Skipf("pinned leyline unavailable for source projection: %v", ppErr)
 	}
 	defer astCleanup()
-	store.SetCallExtractor(newASTCallExtractor(astDB))
+	store.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
 	require.NoError(t, engine.Ingest(graphDir), "ingestion of graph failed")
 
 	// Initialize the refs database (needed by search, get_type_info, get_diagnostics).

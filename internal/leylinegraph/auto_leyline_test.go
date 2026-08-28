@@ -1,4 +1,4 @@
-package cmd
+package leylinegraph
 
 import (
 	"os"
@@ -21,7 +21,7 @@ func TestAutoInvokeLeylineParse_NoBinary(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 
-	_, _, err := autoInvokeLeylineParse(t.TempDir())
+	_, _, err := AutoInvokeLeylineParse(t.TempDir())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MACHE_NO_LEYLINE")
 }
@@ -39,7 +39,7 @@ func TestAutoInvokeLeylineParse_Success(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dbPath, cleanup, err := autoInvokeLeylineParse(src)
+	dbPath, cleanup, err := AutoInvokeLeylineParse(src)
 	require.NoError(t, err)
 	require.NotEmpty(t, dbPath)
 	defer cleanup()
