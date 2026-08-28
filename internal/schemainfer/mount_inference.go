@@ -1,4 +1,4 @@
-package cmd
+package schemainfer
 
 import (
 	"fmt"
@@ -13,14 +13,14 @@ import (
 	"github.com/agentic-research/mache/internal/leylinegraph"
 )
 
-// inferFromSourceFile infers a topology schema for a single source file by
+// InferFromSourceFile infers a topology schema for a single source file by
 // leyline-parsing it into an _ast database and running pure-Go FCA inference
 // over that — no in-process tree-sitter (CGO-free inference path).
 //
 // leyline parse only accepts directories, so the file is copied into a
 // throwaway temp dir first. Inference consumes only AST shape, never file
 // paths, so the copy is lossless for this purpose.
-func inferFromSourceFile(inf *lattice.Inferrer, path string, l *lang.Language) (*api.Topology, error) {
+func InferFromSourceFile(inf *lattice.Inferrer, path string, l *lang.Language) (*api.Topology, error) {
 	log.Printf("Inferring schema from %s source via leyline _ast...", l.DisplayName)
 	start := time.Now()
 	defer func() { log.Printf("Schema inference done in %v", time.Since(start)) }()

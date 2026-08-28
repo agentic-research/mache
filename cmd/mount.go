@@ -21,6 +21,7 @@ import (
 	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/materialize"
 	"github.com/agentic-research/mache/internal/mountmeta"
+	"github.com/agentic-research/mache/internal/schemainfer"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/spf13/cobra"
 )
@@ -199,14 +200,14 @@ var rootCmd = &cobra.Command{
 			default:
 				// Try tree-sitter language lookup from the registry
 				if l := lang.ForExt(ext); l != nil {
-					inferred, err = inferFromSourceFile(inf, dataPath, l)
+					inferred, err = schemainfer.InferFromSourceFile(inf, dataPath, l)
 				} else {
 					// Check if it's a directory
 					info, errStat := os.Stat(dataPath)
 					if errStat == nil && info.IsDir() {
 						log.Printf("Inferring schema from directory %s...", dataPath)
 						start := time.Now()
-						inferred, err = inferDirSchema(dataPath)
+						inferred, err = schemainfer.InferDirSchema(dataPath)
 						if err == nil {
 							log.Printf("Schema inferred in %v", time.Since(start))
 						}

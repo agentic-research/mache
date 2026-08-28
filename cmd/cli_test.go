@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/leylinegraph"
+	"github.com/agentic-research/mache/internal/schemainfer"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,7 +114,7 @@ func inferGoFCASchema(t *testing.T, srcDir string, goFiles int) *api.Topology {
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 
-	nodes, err := inferLanguages(astDB, []string{"go"}, map[string]int{"go": goFiles})
+	nodes, err := schemainfer.InferLanguages(astDB, []string{"go"}, map[string]int{"go": goFiles})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1, "FCA over the go _ast rows must produce a schema")
 	// Single-language unwrap, mirroring inferDirSchema's return shape.

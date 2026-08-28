@@ -1683,11 +1683,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "cmd/preset_fixture_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "cmd/serve.go",
       "count": 2
     },
@@ -1944,6 +1939,11 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/lint/llo_boundary_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/schemainfer/preset_fixture_test.go",
       "count": 1
     },
     {

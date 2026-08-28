@@ -1,4 +1,4 @@
-package cmd
+package schemainfer
 
 import (
 	"fmt"
@@ -59,7 +59,7 @@ func detectProjectLanguages(dir string) (map[string]int, error) {
 	return counts, err
 }
 
-// inferDirSchema detects languages in a directory and produces a unified
+// InferDirSchema detects languages in a directory and produces a unified
 // Topology using preset schemas where available and FCA inference for the rest.
 //
 // Hybrid strategy:
@@ -67,7 +67,7 @@ func detectProjectLanguages(dir string) (map[string]int, error) {
 //  2. Languages with presets (go, python, sql) → load embedded preset schema
 //  3. Remaining languages → sample files + FCA inference
 //  4. Merge into one multi-language topology (with namespace nodes if >1 language)
-func inferDirSchema(dataPath string) (*api.Topology, error) {
+func InferDirSchema(dataPath string) (*api.Topology, error) {
 	languageCounts, err := detectProjectLanguages(dataPath)
 	if err != nil {
 		return nil, fmt.Errorf("language scan: %w", err)
@@ -103,7 +103,7 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 	// 1. Load preset schemas
 	for _, l := range presetLangs {
 		presetKey := sourceCodePresets[l]
-		topo, err := loadPresetSchema(presetKey)
+		topo, err := LoadPresetSchema(presetKey)
 		if err != nil {
 			return nil, fmt.Errorf("load preset %q: %w", presetKey, err)
 		}
@@ -130,7 +130,7 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 		}
 		defer cleanup()
 
-		inferredNodes, err := inferLanguages(astDB, inferLangs, languageCounts)
+		inferredNodes, err := InferLanguages(astDB, inferLangs, languageCounts)
 		if err != nil {
 			return nil, fmt.Errorf("inference: %w", err)
 		}
@@ -144,11 +144,11 @@ func inferDirSchema(dataPath string) (*api.Topology, error) {
 	return &api.Topology{Version: api.SchemaVersion, Nodes: allNodes}, nil
 }
 
-// inferLanguages runs pure-Go FCA inference for the given languages against
+// InferLanguages runs pure-Go FCA inference for the given languages against
 // a leyline-parsed _ast database (no in-process tree-sitter). Returns
 // namespace-wrapped nodes for each language, mirroring the shape
 // lattice.InferMultiLanguage produces.
-func inferLanguages(astDBPath string, langs []string, languageCounts map[string]int) ([]api.Node, error) {
+func InferLanguages(astDBPath string, langs []string, languageCounts map[string]int) ([]api.Node, error) {
 	var nodes []api.Node
 	for _, targetLang := range langs {
 		inf := &lattice.Inferrer{

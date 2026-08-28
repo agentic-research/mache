@@ -1,4 +1,4 @@
-package cmd
+package schemainfer
 
 import (
 	"errors"
@@ -32,7 +32,7 @@ func TestInferFromSourceFile_GoSource(t *testing.T) {
 	require.NotNil(t, goLang, "Go language must be registered")
 
 	inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
-	topo, err := inferFromSourceFile(inf, path, goLang)
+	topo, err := InferFromSourceFile(inf, path, goLang)
 	require.NoError(t, err)
 	require.NotNil(t, topo)
 	// We do not assert on schema shape — that belongs to the inferrer's own
@@ -52,7 +52,7 @@ func TestInferFromSourceFile_MissingFile(t *testing.T) {
 	inf := &lattice.Inferrer{Config: lattice.DefaultInferConfig()}
 
 	missing := filepath.Join(t.TempDir(), "does-not-exist.go")
-	_, err := inferFromSourceFile(inf, missing, goLang)
+	_, err := InferFromSourceFile(inf, missing, goLang)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, fs.ErrNotExist), "expected fs.ErrNotExist, got %v", err)
 }

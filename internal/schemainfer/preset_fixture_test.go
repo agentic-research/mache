@@ -1,4 +1,4 @@
-package cmd
+package schemainfer
 
 import (
 	"path/filepath"
@@ -53,7 +53,7 @@ var pendingFixtureCoverage = map[string]string{
 // the node-path substrings that must appear in the resulting graph.
 // TestPresetSchemas_AgainstFixtures runs each case end-to-end:
 //
-//	loadPresetSchema → ingest.NewEngine → engine.Ingest → walk the
+//	LoadPresetSchema → ingest.NewEngine → engine.Ingest → walk the
 //	resulting MemoryStore and grep for expected substrings.
 //
 // This complements TestPresetSchemas_SelectorsCompile, which only
@@ -66,7 +66,7 @@ var pendingFixtureCoverage = map[string]string{
 //  2. Append an entry below with the expected node-path substrings
 //  3. Run `go test -run TestPresetSchemas_AgainstFixtures/<name>`
 type presetFixtureCase struct {
-	// preset is the registered preset name (matches loadPresetSchema).
+	// preset is the registered preset name (matches LoadPresetSchema).
 	preset string
 	// fixtureDir is the subdir under internal/testutil/testdata/preset_fixtures/ that
 	// holds the source files this case ingests.
@@ -279,7 +279,7 @@ func TestPresetSchemas_AgainstFixtures(t *testing.T) {
 			if tc.skip != "" {
 				t.Skip(tc.skip)
 			}
-			schema, err := loadPresetSchema(tc.preset)
+			schema, err := LoadPresetSchema(tc.preset)
 			require.NoError(t, err, "load preset %q", tc.preset)
 
 			store := graph.NewMemoryStore()
