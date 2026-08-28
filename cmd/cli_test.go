@@ -394,7 +394,11 @@ func TestInit_AutoDetectsPython(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServe_HelpOutput(t *testing.T) {
-	out := serveCmd.UsageString()
+	// serve registers via hook #3 (cmd/register.go); resolve it through the
+	// root command rather than reaching into mcpserve for the var (B15/B22).
+	serve, _, err := rootCmd.Find([]string{"serve"})
+	require.NoError(t, err)
+	out := serve.UsageString()
 	assert.Contains(t, out, "schema")
 	assert.Contains(t, out, "http")
 }

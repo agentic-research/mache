@@ -18,88 +18,8 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "cmd/all_tools_self_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "cmd/cli_test.go",
       "count": 4
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/escape_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/kind_filter.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_find_callers_bench_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_find_definition_bench_test.go",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_hosted.go",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_hosted_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_listdir_bench_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_lsp.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_lsp_step5_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_registry.go",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_search_bench_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_test.go",
-      "count": 31
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_write_test.go",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/sheaf_subscribe_test.go",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/sheaf_wire_test.go",
-      "count": 1
     },
     {
       "rule_id": "duplicate_code",
@@ -318,6 +238,11 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/fixturedb_installer_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/leylinegraph/leyline.go",
       "count": 2
     },
@@ -348,6 +273,96 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/all_tools_self_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/escape_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/fixturedb_installer_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/kind_filter.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_api_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_find_callers_bench_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_find_definition_bench_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_hosted.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_hosted_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_listdir_bench_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_lsp.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_lsp_step5_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_registry.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_search_bench_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "count": 31
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_write_test.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/sheaf_wire_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/mountmeta/mountmeta_test.go",
       "count": 1
     },
@@ -370,6 +385,11 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/dead_code_skip_list_retreat_test.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/find_smells_api_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
@@ -508,73 +528,8 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "cmd/all_tools_self_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "cmd/pack.go",
       "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_architecture.go",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_backfill_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_find_callees.go",
-      "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_find_callers.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_find_definition.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_get_communities.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_get_overview.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_read_file.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_handler_search.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_lsp.go",
-      "count": 4
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_lsp_step5_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_test.go",
-      "count": 10
     },
     {
       "rule_id": "duplicate_definitions",
@@ -685,6 +640,71 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/materialize/materialize_test.go",
       "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/all_tools_self_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_architecture.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_backfill_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_find_callees.go",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_find_callers.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_find_definition.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_get_communities.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_get_overview.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_read_file.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_lsp.go",
+      "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_lsp_step5_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "count": 10
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1078,76 +1098,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve.go",
-      "count": 3
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_architecture.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_find_callees.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_find_definition.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_get_communities.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_list_directory.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_read_file.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_search.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handler_semantic_search.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_handlers.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_impact.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_lsp.go",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_registry.go",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_write.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "ext/boltdb/boltdb.go",
       "count": 1
     },
@@ -1284,6 +1234,76 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/materialize/json.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve.go",
+      "count": 3
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_architecture.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handler_find_callees.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handler_find_definition.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handler_get_communities.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handler_list_directory.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handler_read_file.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handler_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handler_semantic_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_handlers.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_impact.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_lsp.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_registry.go",
+      "count": 2
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_write.go",
       "count": 1
     },
     {
@@ -1453,7 +1473,7 @@
     },
     {
       "rule_id": "god_file",
-      "source_id": "cmd/serve_registry.go",
+      "source_id": "internal/mcpserve/serve_registry.go",
       "count": 1
     },
     {
@@ -1603,12 +1623,12 @@
     },
     {
       "rule_id": "long_file",
-      "source_id": "cmd/serve_test.go",
+      "source_id": "internal/leyline/socket_test.go",
       "count": 1
     },
     {
       "rule_id": "long_file",
-      "source_id": "internal/leyline/socket_test.go",
+      "source_id": "internal/mcpserve/serve_test.go",
       "count": 1
     },
     {
@@ -1643,21 +1663,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "cmd/all_tools_e2e_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/falsifiability_lsp_projection_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/kind_discriminator_leyline_ast_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "cmd/mount_control.go",
       "count": 1
     },
@@ -1669,71 +1674,6 @@
     {
       "rule_id": "long_function",
       "source_id": "cmd/pack.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve.go",
-      "count": 2
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_architecture.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_handler_find_definition.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_handler_get_communities.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_handler_get_overview.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_handler_list_directory.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_handler_search.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_handlers.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_impact.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_lsp.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_registry.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_write.go",
       "count": 1
     },
     {
@@ -1943,6 +1883,86 @@
     },
     {
       "rule_id": "long_function",
+      "source_id": "internal/mcpserve/all_tools_e2e_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/falsifiability_lsp_projection_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/kind_discriminator_leyline_ast_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_architecture.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_handler_find_definition.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_handler_get_communities.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_handler_get_overview.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_handler_list_directory.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_handler_search.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_handlers.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_impact.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_lsp.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_registry.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_write.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
       "source_id": "internal/schemainfer/preset_fixture_test.go",
       "count": 1
     },
@@ -2038,21 +2058,6 @@
     },
     {
       "rule_id": "sleep_in_test",
-      "source_id": "cmd/serve_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "cmd/sheaf_subscribe_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "cmd/sheaf_wire_test.go",
-      "count": 5
-    },
-    {
-      "rule_id": "sleep_in_test",
       "source_id": "graph/arena_writer_test.go",
       "count": 1
     },
@@ -2110,6 +2115,21 @@
       "rule_id": "sleep_in_test",
       "source_id": "internal/leyline/socket_test.go",
       "count": 9
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/mcpserve/sheaf_wire_test.go",
+      "count": 5
     },
     {
       "rule_id": "sleep_in_test",

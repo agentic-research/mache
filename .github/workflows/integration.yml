@@ -79,7 +79,7 @@ jobs:
           MACHE_E2E_LARGE: '1'
         run: |
           set -o pipefail
-          go test -tags boltdb -timeout 25m -run '^TestE2E_MacheOnMache$' -v ./cmd/ 2>&1 \
+          go test -tags boltdb -timeout 25m -run '^TestE2E_MacheOnMache$' -v ./internal/mcpserve/ 2>&1 \
             | sed '/\[WARN\] duplicate construct name/d'
 
       - name: Large-tier E2E (distinct real corpora, no -race)
@@ -87,7 +87,7 @@ jobs:
           MACHE_E2E_LARGE: '1'
         run: |
           set -o pipefail
-          go test -tags boltdb -timeout 25m -run '^TestE2E_RealCorpora$' -v ./cmd/ 2>&1 \
+          go test -tags boltdb -timeout 25m -run '^TestE2E_RealCorpora$' -v ./internal/mcpserve/ 2>&1 \
             | sed '/\[WARN\] duplicate construct name/d'
 
   required:
