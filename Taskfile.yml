@@ -140,9 +140,8 @@ tasks:
       # rule-only edit, which the smell gate (deps:[build]) then ran against —
       # producing phantom "NEW findings" and masking an incomplete rule fix
       # (mache-46af85). Keep this list in sync with the //go:embed directives.
-      - "cmd/rules/*.json"
-      - "cmd/schemas/*.json"
-      - "cmd/schemas/sarif.tmpl"
+      - "internal/smells/rules/*.json"
+      - "internal/smells/schemas/sarif.tmpl"
       - "internal/buildinfo/version.txt"
     generates:
       - "{{.BINARY_NAME}}"

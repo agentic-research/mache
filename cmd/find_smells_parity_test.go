@@ -8,35 +8,46 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/smells"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// runSmellCLIJSON runs one rule through the find-smells CLI and returns its
+// runSmellCLIJSON runs one rule through the find-smells CLI engine
+// (smells.RunFindSmells — the same code path the flags drive) and returns its
 // JSON payload. The Encoder's trailing newline is stream framing, not payload,
 // so it is trimmed — everything else must match the MCP bytes exactly.
 func runSmellCLIJSON(t *testing.T, dbPath, rule string) string {
 	t.Helper()
-	saved := saveCLIFlags()
-	t.Cleanup(saved.restore)
-	findSmellsRule = rule
-	findSmellsDBPath = dbPath
-	findSmellsFormat = "json"
-	findSmellsSourceID = ""
-	findSmellsTags = ""
-	findSmellsBaseline = ""
-	findSmellsWriteBaseline = ""
-	findSmellsBaselineRoot = ""
-	findSmellsLimit = 200
-
 	var buf bytes.Buffer
-	findSmellsCmd.SetOut(&buf)
-	findSmellsCmd.SetErr(&buf)
-	code, err := runFindSmells(findSmellsCmd, nil)
+	code, err := smells.RunFindSmells(smells.FindSmellsOptions{
+		DB: dbPath, Rule: rule, Format: "json", Limit: 200,
+		Out: &buf, Err: &buf,
+	})
 	require.NoError(t, err)
 	require.Equal(t, 0, code, "CLI run must succeed: %s", buf.String())
 	return strings.TrimRight(buf.String(), "\n")
+}
+
+// writeSmellParityFixture builds the dead-code parity fixture with
+// internal/fixturedb (Standalone = mache's projection shape): Live defined
+// and referenced, Dead defined and unreferenced. fixturedb, not hand-written
+// DDL — the LLO boundary gate rejects hand-built node_defs/node_refs because
+// the DDL a fixture happens to type silently selects which v_refs arm the
+// rule under test runs (mache-7555da).
+func writeSmellParityFixture(t *testing.T) string {
+	t.Helper()
+	path, _ := fixturedb.New(t, fixturedb.Standalone).
+		Construct("pkg/Live", fixturedb.Where{Source: "live.go"}).
+		Construct("pkg/Caller", fixturedb.Where{Source: "caller.go"}).
+		Construct("pkg/Dead", fixturedb.Where{Source: "dead.go"}).
+		Def("Live", "pkg/Live", "").
+		Def("Dead", "pkg/Dead", "").
+		Ref("Live", "pkg/Caller", "", "").
+		Build()
+	return path
 }
 
 // runSmellMCPJSON runs the same rule through the find_smells MCP handler,
@@ -60,7 +71,7 @@ func runSmellMCPJSON(t *testing.T, dbPath, rule string) string {
 		MemoryStore: graph.NewMemoryStore(), DB: db, Path: dbPath,
 	}, "")
 
-	res, err := makeFindSmellsHandler(lg)(context.Background(), testutil.MakeRequest(map[string]any{
+	res, err := smells.MakeFindSmellsHandler(lg)(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": rule, "limit": float64(200),
 	}))
 	require.NoError(t, err)
@@ -79,7 +90,7 @@ func runSmellMCPJSON(t *testing.T, dbPath, rule string) string {
 func TestFindSmells_MCPAndCLI_ByteForByteParity(t *testing.T) {
 	// A rule with findings: the shared path must agree on content AND shape.
 	t.Run("with findings", func(t *testing.T) {
-		dbPath := writeSmellCLIFixture(t)
+		dbPath := writeSmellParityFixture(t)
 
 		cliOut := runSmellCLIJSON(t, dbPath, "dead_code")
 		mcpOut := runSmellMCPJSON(t, dbPath, "dead_code")
@@ -94,7 +105,7 @@ func TestFindSmells_MCPAndCLI_ByteForByteParity(t *testing.T) {
 	// lazyGraph forwarded DBPath, the CLI saw this record and the MCP handler
 	// did not, so the two paths disagreed about whether pkg/Dead was dead.
 	t.Run("capnp binding is visible to both paths", func(t *testing.T) {
-		dbPath := writeSmellCLIFixture(t)
+		dbPath := writeSmellParityFixture(t)
 		testutil.WriteBindingLogForTest(t, dbPath,
 			"pkg/Dead", "Dead", "pkg/Caller", "file:///pkg/caller.go")
 
@@ -110,7 +121,7 @@ func TestFindSmells_MCPAndCLI_ByteForByteParity(t *testing.T) {
 	// A clean run is where the envelope divergence lived: a nil finding set
 	// marshals to `null`, and only the CLI normalized it to `[]`.
 	t.Run("clean run emits the same empty shape", func(t *testing.T) {
-		dbPath := writeSmellCLIFixture(t)
+		dbPath := writeSmellParityFixture(t)
 
 		cliOut := runSmellCLIJSON(t, dbPath, "duplicate_definitions")
 		mcpOut := runSmellMCPJSON(t, dbPath, "duplicate_definitions")

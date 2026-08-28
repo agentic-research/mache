@@ -38,22 +38,7 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "cmd/dead_code_skip_list_retreat_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "cmd/escape_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/find_smells_cli.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/find_smells_cli_test.go",
       "count": 2
     },
     {
@@ -83,26 +68,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_find_smells_bench_test.go",
-      "count": 5
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_find_smells_load_test.go",
-      "count": 9
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_find_smells_test.go",
-      "count": 29
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "cmd/serve_find_smells_views_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "cmd/serve_hosted.go",
       "count": 3
     },
@@ -120,6 +85,11 @@
       "rule_id": "duplicate_code",
       "source_id": "cmd/serve_lsp.go",
       "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/serve_lsp_step5_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
@@ -398,6 +368,41 @@
     },
     {
       "rule_id": "duplicate_code",
+      "source_id": "internal/smells/dead_code_skip_list_retreat_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/find_smells_cli_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_bench_test.go",
+      "count": 5
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "count": 9
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "count": 29
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_views_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
       "source_id": "internal/testutil/smellgraph.go",
       "count": 1
     },
@@ -508,8 +513,8 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "cmd/find_smells_duplicate_code_test.go",
-      "count": 2
+      "source_id": "cmd/cache_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -525,16 +530,6 @@
       "rule_id": "duplicate_definitions",
       "source_id": "cmd/serve_architecture.go",
       "count": 3
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_find_smells_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "cmd/serve_find_smells_views_test.go",
-      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -580,6 +575,11 @@
       "rule_id": "duplicate_definitions",
       "source_id": "cmd/serve_lsp.go",
       "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/serve_lsp_step5_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -643,6 +643,11 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/sqlite_writer_test.go",
       "count": 1
     },
@@ -689,6 +694,31 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/projcfg/config.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/smells/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/smells/find_smells_duplicate_code_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/smells/serve_find_smells_views_test.go",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/smells/smell_refs_views.go",
       "count": 1
     },
     {
@@ -1043,11 +1073,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/find_smells_cli.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/leyline.go",
       "count": 2
     },
@@ -1074,16 +1099,6 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/serve_architecture.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_find_smells.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/serve_find_smells_load.go",
       "count": 1
     },
     {
@@ -1278,6 +1293,21 @@
     },
     {
       "rule_id": "fan_out_skew",
+      "source_id": "internal/smells/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/smells/serve_find_smells.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/smells/serve_find_smells_load.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
       "source_id": "internal/testfixtures/curate.go",
       "count": 1
     },
@@ -1463,6 +1493,11 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_dolt.rs",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_sqlite.rs",
       "count": 1
     },
@@ -1568,17 +1603,17 @@
     },
     {
       "rule_id": "long_file",
-      "source_id": "cmd/serve_find_smells_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_file",
       "source_id": "cmd/serve_test.go",
       "count": 1
     },
     {
       "rule_id": "long_file",
       "source_id": "internal/leyline/socket_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_file",
+      "source_id": "internal/smells/serve_find_smells_test.go",
       "count": 1
     },
     {
@@ -1623,22 +1658,7 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "cmd/dead_code_skip_list_retreat_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "cmd/falsifiability_lsp_projection_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/falsifiability_skip_list_ablation_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/find_smells_cli.go",
       "count": 1
     },
     {
@@ -1684,26 +1704,6 @@
     {
       "rule_id": "long_function",
       "source_id": "cmd/serve_architecture.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_find_smells.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_find_smells_bench_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_find_smells_test.go",
-      "count": 3
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/serve_find_smells_views_test.go",
       "count": 1
     },
     {
@@ -1759,21 +1759,6 @@
     {
       "rule_id": "long_function",
       "source_id": "cmd/serve_write.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/smell_findings.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/smell_incremental.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/smell_refs_views.go",
       "count": 1
     },
     {
@@ -1959,6 +1944,56 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/lint/llo_boundary_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/dead_code_skip_list_retreat_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/falsifiability_skip_list_ablation_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/find_smells_cli.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/serve_find_smells.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/serve_find_smells_bench_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "count": 3
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/serve_find_smells_views_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/smell_findings.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/smell_incremental.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/smell_refs_views.go",
       "count": 1
     },
     {
