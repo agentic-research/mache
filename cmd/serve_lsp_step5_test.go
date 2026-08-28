@@ -10,6 +10,22 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// sqlDBQuerier adapts a *sql.DB (+ optional .db path for capnp readthrough)
+// to the refs-querier shape handlers expect. Deliberately duplicated from
+// internal/smells' test double (12 lines, stage-boundary duplication the
+// decomposition plan accepts); the serve-side tests carry it to mcpserve in
+// stage 8.
+type sqlDBQuerier struct {
+	db   *sql.DB
+	path string
+}
+
+func (q *sqlDBQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
+	return q.db.Query(query, args...)
+}
+
+func (q *sqlDBQuerier) DBPath() string { return q.path }
+
 // queryLSPDefs / queryLSPRefs — ADR-0013 Step 5 (mache-346d2b).
 // Tests pin the dispatch: when ley-line-open's post-Step-1 columns
 // (def_token / ref_token) are present, the queries use direct token

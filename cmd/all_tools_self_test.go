@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentic-research/mache/internal/projcfg"
+	"github.com/agentic-research/mache/internal/smells"
 	"github.com/agentic-research/mache/internal/testfixtures"
 	"github.com/agentic-research/mache/internal/testutil"
 )
@@ -425,10 +426,11 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	g := testfixtures.Get(t, "mache-self")
 	qg := graph.RefsQuerier(g) // *SQLiteGraph implements graph.RefsQuerier directly.
 
-	rule := findRegisteredRule(t, "dead_code")
+	rule := smells.RegisteredRule("dead_code")
+	require.NotNil(t, rule, "dead_code must be a registered rule")
 
 	start := time.Now()
-	findings, err := runSmellRule(qg, rule, "" /*sourceID*/, 5000 /*limit*/)
+	findings, err := smells.RunSmellRule(qg, rule, "" /*sourceID*/, 5000 /*limit*/)
 	elapsed := time.Since(start)
 	require.NoError(t, err, "dead_code rule must execute without error on mache-on-mache")
 

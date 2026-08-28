@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/smells"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -265,7 +266,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 		r.wrapHandler(func(g graph.Graph) server.ToolHandlerFunc {
 			// Bind the startup-resolved rules dir; the handler rescans it
 			// per request for live rule reload (mache smell-rules config).
-			return makeFindSmellsHandler(g, r.smellRulesDir)
+			return smells.MakeFindSmellsHandler(g, r.smellRulesDir)
 		}),
 	)
 }

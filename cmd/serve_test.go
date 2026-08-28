@@ -22,6 +22,7 @@ import (
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/agentic-research/mache/internal/projcfg"
+	"github.com/agentic-research/mache/internal/smells"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -988,7 +989,7 @@ func TestGraphRegistry_CodeHandlersPreserveUnavailableGraphError(t *testing.T) {
 		{name: "get_diagram", factory: makeGetDiagramHandler},
 		{name: "write_file", factory: makeWriteFileHandler},
 		{name: "find_smells", factory: func(g graph.Graph) server.ToolHandlerFunc {
-			return makeFindSmellsHandler(g, registry.smellRulesDir)
+			return smells.MakeFindSmellsHandler(g, registry.smellRulesDir)
 		}},
 	}
 

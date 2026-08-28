@@ -14,6 +14,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/lsp"
+	"github.com/agentic-research/mache/internal/smells"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -560,7 +561,7 @@ type lspRefLocation struct {
 // for pre-Step-1 .dbs that still have only the (node_id, def_uri,
 // ...) columns.
 func queryLSPDefs(qg graph.RefsQuerier, symbol string) ([]lspDefLocation, error) {
-	hasDefToken, err := tableHasColumn(qg, "_lsp_defs", "def_token")
+	hasDefToken, err := smells.TableHasColumn(qg, "_lsp_defs", "def_token")
 	if err != nil {
 		return nil, fmt.Errorf("probe _lsp_defs schema: %w", err)
 	}
@@ -785,7 +786,7 @@ func queryLSPRefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspRefLocation, 
 // the table doesn't exist (consistent with the original "(nil, nil)
 // = no table" contract).
 func refsTableExists(qg graph.RefsQuerier, name string) (bool, error) {
-	if !isSimpleIdent(name) {
+	if !smells.IsSimpleIdent(name) {
 		return false, fmt.Errorf("invalid table name: %q", name)
 	}
 	rows, err := qg.QueryRefs(

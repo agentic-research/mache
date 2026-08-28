@@ -21,6 +21,7 @@ import (
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/mountmeta"
+	"github.com/agentic-research/mache/internal/smells"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
@@ -140,7 +141,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// rescans this fixed dir per request, so dropping a new rule file
 	// into it is picked up live — no restart, no reconnect. Changing
 	// the dir itself still needs a restart, which is fine.
-	registry.smellRulesDir = resolveSmellRulesDir("", registry.resolvedBasePath())
+	registry.smellRulesDir = smells.ResolveSmellRulesDir("", registry.resolvedBasePath())
 	if registry.smellRulesDir != "" {
 		log.Printf("find_smells: external rules dir = %s (rescanned per request)", registry.smellRulesDir)
 	}
