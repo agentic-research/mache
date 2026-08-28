@@ -20,6 +20,7 @@ import (
 	"github.com/agentic-research/mache/internal/gitutil"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/mountmeta"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
@@ -369,8 +370,8 @@ func requestScheme(r *http.Request) string {
 
 // registerServeSidecar writes a sidecar metadata file so `mache list` can discover
 // running MCP servers alongside FUSE/NFS mounts.
-func registerServeSidecar(source, typ, addr string) *MountMetadata {
-	mountsDir, err := getAgentMountsDir()
+func registerServeSidecar(source, typ, addr string) *mountmeta.MountMetadata {
+	mountsDir, err := mountmeta.AgentMountsDir()
 	if err != nil {
 		log.Printf("Warning: could not register serve instance: %v", err)
 		return nil
@@ -379,7 +380,7 @@ func registerServeSidecar(source, typ, addr string) *MountMetadata {
 	name := fmt.Sprintf("serve-%d", os.Getpid())
 	mountPoint := filepath.Join(mountsDir, name)
 
-	meta := &MountMetadata{
+	meta := &mountmeta.MountMetadata{
 		PID:        os.Getpid(),
 		Source:     source,
 		MountPoint: mountPoint,
@@ -387,7 +388,7 @@ func registerServeSidecar(source, typ, addr string) *MountMetadata {
 		Addr:       addr,
 		Timestamp:  time.Now(),
 	}
-	if err := saveMountMetadata(mountPoint, meta); err != nil {
+	if err := mountmeta.SaveMountMetadata(mountPoint, meta); err != nil {
 		log.Printf("Warning: could not save serve metadata: %v", err)
 		return nil
 	}
@@ -413,11 +414,11 @@ func validateHTTPAddr(addr string) error {
 }
 
 // removeServeSidecar cleans up the sidecar file on shutdown.
-func removeServeSidecar(meta *MountMetadata) {
+func removeServeSidecar(meta *mountmeta.MountMetadata) {
 	if meta == nil {
 		return
 	}
-	_ = os.Remove(sidecarPath(meta.MountPoint))
+	_ = os.Remove(mountmeta.SidecarPath(meta.MountPoint))
 }
 
 // cloneRepo clones a git repo to a temp directory for ephemeral serving.
