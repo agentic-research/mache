@@ -14,7 +14,7 @@
 // Concurrency-safe: mutexed maps for blobs + manifests so the
 // parallel-upload tests don't race.
 
-package cmd
+package buildcache
 
 import (
 	"bytes"

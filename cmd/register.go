@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/agentic-research/mache/internal/buildcache"
 	"github.com/agentic-research/mache/internal/smells"
 )
 
@@ -10,4 +11,9 @@ import (
 // packages never import cmd — the arrow points only downward.
 func init() {
 	rootCmd.AddCommand(smells.FindSmellsCmd())
+	rootCmd.AddCommand(buildcache.CacheCmd())
+	// The ldflags-stamped build version becomes the producer identity in
+	// lockfiles/cache metadata. Pull-based on the buildcache side, so init
+	// order is irrelevant (B24).
+	buildcache.SetProducerVersion(Version)
 }

@@ -6,7 +6,7 @@
 // isolation; this file tests the full glue that runCacheRemotePush
 // / runCacheRemotePull provide on top of it.
 
-package cmd
+package buildcache
 
 import (
 	"bytes"

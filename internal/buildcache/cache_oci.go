@@ -34,7 +34,7 @@
 // Single-flight discipline: every method takes context.Context; the
 // caller decides timeouts + cancellation. No package-global state.
 
-package cmd
+package buildcache
 
 import (
 	"bytes"

@@ -16,7 +16,7 @@
 // Kind vocabulary: `"go-source"`, `"rust-source"`, etc. — one per
 // language. Matches mache's existing `_source.language` column.
 
-package cmd
+package buildcache
 
 import (
 	"context"
@@ -44,12 +44,6 @@ const CacheVersion = "0.1.0"
 // MacheProducerName is the producer field per ADR-0020. Short-name
 // convention for v1; reverse-DNS reserved for v2 if collisions.
 const MacheProducerName = "mache"
-
-// MacheProducerVersion is the mache version recorded in the lockfile.
-// Sourced from the embedded internal/buildinfo via the package-level
-// Version (same value as the binary's `mache version`), so the lockfile
-// producer field, server.json, and the binary never disagree.
-var MacheProducerVersion = Version
 
 // Flag values (subcommand-scoped) — package-level so test code can
 // override + restore cleanly.
@@ -219,8 +213,11 @@ func init() {
 		"read bearer token from a file (first line trimmed); overrides --token + MACHE_CACHE_TOKEN")
 	cacheVerifyCmd.Flags().StringVar(&cacheVerifyTokenFile, "token-file", "",
 		"read bearer token from a file (first line trimmed); overrides --token + MACHE_CACHE_TOKEN")
-	rootCmd.AddCommand(cacheCmd)
 }
+
+// CacheCmd returns the cache command group for registration on the root
+// command — registration hook #2 (mache-96c378); buildcache never imports cmd.
+func CacheCmd() *cobra.Command { return cacheCmd }
 
 // ─────────────────────────────────────────────────────────────────────
 // Push (Phase 1): db → lockfile + chunks
@@ -438,7 +435,7 @@ func buildLockfile(entries []chunkEntry, root [32]byte) ([]byte, error) {
 	if err := m.SetProducer(MacheProducerName); err != nil {
 		return nil, err
 	}
-	if err := m.SetProducerVersion(MacheProducerVersion); err != nil {
+	if err := m.SetProducerVersion(ProducerVersion()); err != nil {
 		return nil, err
 	}
 	if err := m.SetSchemaVersion(CacheVersion); err != nil {
@@ -558,7 +555,7 @@ func writeLockfileTOML(path string, entries []chunkEntry, root [32]byte) error {
 	lf := tomlLockfile{
 		Meta: tomlMeta{
 			Producer:        MacheProducerName,
-			ProducerVersion: MacheProducerVersion,
+			ProducerVersion: ProducerVersion(),
 			SchemaVersion:   CacheVersion,
 			GeneratedAtMs:   uint64(time.Now().UnixMilli()),
 			InputProcessors: []tomlProcessor{
@@ -896,7 +893,7 @@ func runCacheRemotePush(ctx context.Context, out io.Writer, localDir, baseURL, p
 		Layers: chunkLayers,
 		Annotations: map[string]string{
 			"org.cloister.build-cache.producer":         producer,
-			"org.cloister.build-cache.producer_version": MacheProducerVersion,
+			"org.cloister.build-cache.producer_version": ProducerVersion(),
 			"org.cloister.build-cache.schema_version":   CacheVersion,
 		},
 	}

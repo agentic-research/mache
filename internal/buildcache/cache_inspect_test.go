@@ -1,6 +1,6 @@
 // Tests for `mache cache inspect` + --token-file resolution.
 
-package cmd
+package buildcache
 
 import (
 	"bytes"

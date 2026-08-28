@@ -23,11 +23,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "cmd/cache_oci.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "cmd/cli_test.go",
       "count": 4
     },
@@ -190,6 +185,11 @@
       "rule_id": "duplicate_code",
       "source_id": "graph/writable_graph.go",
       "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/buildcache/cache_oci.go",
+      "count": 2
     },
     {
       "rule_id": "duplicate_code",
@@ -513,11 +513,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "cmd/cache_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "cmd/pack.go",
       "count": 2
     },
@@ -610,6 +605,11 @@
       "rule_id": "duplicate_definitions",
       "source_id": "graph/sqlite_graph_test.go",
       "count": 4
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/buildcache/cache_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
@@ -1063,16 +1063,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/cache.go",
-      "count": 7
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/cache_oci.go",
-      "count": 4
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/mount_control.go",
       "count": 1
     },
@@ -1210,6 +1200,16 @@
       "rule_id": "fan_out_skew",
       "source_id": "graph/store_local.go",
       "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/buildcache/cache.go",
+      "count": 7
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/buildcache/cache_oci.go",
+      "count": 4
     },
     {
       "rule_id": "fan_out_skew",
@@ -1648,16 +1648,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "cmd/cache.go",
-      "count": 5
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "cmd/cache_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "cmd/falsifiability_lsp_projection_test.go",
       "count": 1
     },
@@ -1814,6 +1804,16 @@
     {
       "rule_id": "long_function",
       "source_id": "graph/sqlite_test.go",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/buildcache/cache.go",
+      "count": 5
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/buildcache/cache_test.go",
       "count": 1
     },
     {
@@ -2123,7 +2123,7 @@
     },
     {
       "rule_id": "untested_function",
-      "source_id": "cmd/cache_oci.go",
+      "source_id": "internal/buildcache/cache_oci.go",
       "count": 1
     },
     {

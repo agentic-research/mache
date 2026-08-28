@@ -112,7 +112,7 @@ var lloWriterAllowlist = map[string]string{
 	// than obtaining it from LLO. Under the role split this is the clearest
 	// data-plane work left in mache, and it is exactly what delegating to the
 	// arena removes. Tracked by mache-e64f36; do not re-justify, delete.
-	"cmd/cache.go": "materialises _source/_ast when hydrating a pulled cache entry — data-plane work pending delegation (mache-e64f36)",
+	"internal/buildcache/cache.go": "materialises _source/_ast when hydrating a pulled cache entry — data-plane work pending delegation (mache-e64f36)",
 
 	// TOOLING — generates .db fixtures shaped like LLO output so tests can run
 	// without a leyline binary. Defensible today (fixtures must exist before
@@ -162,8 +162,8 @@ var lloWriterAllowlist = map[string]string{
 // while production runs the full arm, and neither side notices. See
 // internal/fixturedb's package doc for the measurement (mache-7555da).
 var lloTestFixtureAllowlist = []string{
-	"cmd/cache_ast_test.go",
-	"cmd/cache_test.go",
+	"internal/buildcache/cache_ast_test.go",
+	"internal/buildcache/cache_test.go",
 	"internal/leylinegraph/call_extractor_ast_test.go",
 	"internal/smells/dead_code_skip_list_retreat_test.go",
 	"cmd/falsifiability_lsp_projection_test.go",
