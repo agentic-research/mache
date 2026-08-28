@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"testing"
 
 	"github.com/agentic-research/mache/internal/leyline"
 
@@ -45,11 +46,29 @@ const (
 	projectRegistryFile = "projects.json"
 )
 
+// realHomeAtInit is the home directory as resolved when the process started —
+// before any test's t.Setenv("HOME", ...) can have run. Used only by the
+// test-hermeticity guard below; in production it simply equals the home every
+// call resolves.
+var realHomeAtInit, _ = os.UserHomeDir()
+
 // macheHomeDir returns ~/.mache, creating it if necessary.
+//
+// Test-hermeticity guard (mache-3e78d2): under `go test`, writing to the REAL
+// ~/.mache is always a bug — it was how 106 test-run temp dirs ended up in a
+// developer's actual projects.json. A test that reaches this path must have
+// pointed HOME at a t.TempDir(); one that didn't fails here, loudly, naming
+// the fix — instead of silently growing the user's config. testing.Testing()
+// is false in production binaries, so the branch is dead outside tests.
 func macheHomeDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	if testing.Testing() && home == realHomeAtInit && realHomeAtInit != "" {
+		return "", fmt.Errorf(
+			"test would touch the REAL %s/.mache — point HOME at a t.TempDir() "+
+				"(t.Setenv) before exercising the project registry", home)
 	}
 	dir := filepath.Join(home, ".mache")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
