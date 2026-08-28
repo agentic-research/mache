@@ -19,6 +19,7 @@ import (
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/materialize"
+	"github.com/agentic-research/mache/internal/mountmeta"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/spf13/cobra"
 )
@@ -537,7 +538,7 @@ var rootCmd = &cobra.Command{
 		// Agent mode: save metadata sidecar and generate prompt content
 		var promptContent []byte
 		if agentMode && agentMetadata != nil {
-			if err := saveMountMetadata(mountPoint, agentMetadata); err != nil {
+			if err := mountmeta.SaveMountMetadata(mountPoint, agentMetadata); err != nil {
 				log.Printf("Warning: failed to save mount metadata: %v", err)
 			}
 			promptContent = generatePromptContent(agentMetadata)

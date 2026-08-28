@@ -158,11 +158,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "cmd/unmount_test.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "graph/arena_test.go",
       "count": 2
     },
@@ -380,6 +375,11 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/materialize/materialize_test.go",
       "count": 6
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mountmeta/mountmeta_test.go",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
@@ -1024,6 +1024,11 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/notion-fetch/main.go",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "cmd/agent.go",
       "count": 1
     },
     {

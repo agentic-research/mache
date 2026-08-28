@@ -20,6 +20,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/agentic-research/mache/internal/projcfg"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
@@ -1944,10 +1945,10 @@ func TestRegisterServeSidecar_CreatesMetaJSON(t *testing.T) {
 	assert.Equal(t, os.Getpid(), meta.PID)
 
 	// Verify sidecar file exists and is valid JSON
-	data, err := os.ReadFile(sidecarPath(meta.MountPoint))
+	data, err := os.ReadFile(mountmeta.SidecarPath(meta.MountPoint))
 	require.NoError(t, err)
 
-	var loaded MountMetadata
+	var loaded mountmeta.MountMetadata
 	require.NoError(t, json.Unmarshal(data, &loaded))
 	assert.Equal(t, "mcp-http", loaded.Type)
 	assert.Equal(t, "localhost:7532", loaded.Addr)
@@ -1972,7 +1973,7 @@ func TestRemoveServeSidecar_CleansUp(t *testing.T) {
 	meta := registerServeSidecar("/proj", "mcp-http", ":9000")
 	require.NotNil(t, meta)
 
-	sidecar := sidecarPath(meta.MountPoint)
+	sidecar := mountmeta.SidecarPath(meta.MountPoint)
 	_, err := os.Stat(sidecar)
 	require.NoError(t, err, "sidecar should exist before removal")
 
@@ -1995,7 +1996,7 @@ func TestListActiveMounts_IncludesMCPServers(t *testing.T) {
 	require.NotNil(t, meta)
 	defer removeServeSidecar(meta)
 
-	mounts, err := listActiveMounts()
+	mounts, err := mountmeta.ListActiveMounts()
 	require.NoError(t, err)
 	require.Len(t, mounts, 1)
 	assert.Equal(t, "mcp-http", mounts[0].Type)

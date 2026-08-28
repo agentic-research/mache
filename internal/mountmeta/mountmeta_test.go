@@ -1,8 +1,9 @@
-package cmd
+package mountmeta
 
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -18,9 +19,9 @@ func TestUnmount_MissingMetaJSON(t *testing.T) {
 	mountPoint := filepath.Join(tmpDir, "test-mount")
 	require.NoError(t, os.MkdirAll(mountPoint, 0o755))
 
-	// No meta.json sidecar exists — loadMountMetadata should fail
-	_, err := loadMountMetadata(mountPoint)
-	assert.Error(t, err, "loadMountMetadata should fail when sidecar missing")
+	// No meta.json sidecar exists — LoadMountMetadata should fail
+	_, err := LoadMountMetadata(mountPoint)
+	assert.Error(t, err, "LoadMountMetadata should fail when sidecar missing")
 
 	// The error should be identifiable as "not found" so unmount can fall back
 	assert.True(t, os.IsNotExist(err),
@@ -28,7 +29,7 @@ func TestUnmount_MissingMetaJSON(t *testing.T) {
 }
 
 func TestSidecarPath(t *testing.T) {
-	assert.Equal(t, "/tmp/mache/test.meta.json", sidecarPath("/tmp/mache/test"))
+	assert.Equal(t, "/tmp/mache/test.meta.json", SidecarPath("/tmp/mache/test"))
 }
 
 func TestSaveThenLoadMetadata(t *testing.T) {
@@ -42,10 +43,10 @@ func TestSaveThenLoadMetadata(t *testing.T) {
 		PID:        12345,
 	}
 
-	err := saveMountMetadata(mountPoint, meta)
+	err := SaveMountMetadata(mountPoint, meta)
 	require.NoError(t, err)
 
-	loaded, err := loadMountMetadata(mountPoint)
+	loaded, err := LoadMountMetadata(mountPoint)
 	require.NoError(t, err)
 	assert.Equal(t, mountPoint, loaded.MountPoint)
 	assert.Equal(t, "/some/source", loaded.Source)
@@ -68,7 +69,33 @@ func TestListActiveMounts_WithSidecar(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test sidecar parsing directly
-	loaded, err := loadMountMetadata(filepath.Join(tmpDir, "my-mount"))
+	loaded, err := LoadMountMetadata(filepath.Join(tmpDir, "my-mount"))
 	require.NoError(t, err)
 	assert.Equal(t, "/some/source", loaded.Source)
+}
+
+// TestAgentMountsDir pins the contract ListActiveMounts depends on: the dir
+// is created on demand and stable across calls (TMPDIR-scoped, so tests
+// isolate via t.Setenv).
+func TestAgentMountsDir(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	dir, err := AgentMountsDir()
+	require.NoError(t, err)
+	require.DirExists(t, dir)
+
+	again, err := AgentMountsDir()
+	require.NoError(t, err)
+	assert.Equal(t, dir, again, "the mounts dir must be stable across calls")
+}
+
+// TestIsProcessRunning pins both directions: our own live pid, and a freshly
+// reaped child whose pid is guaranteed dead — not a made-up number that some
+// other process could be recycled onto.
+func TestIsProcessRunning(t *testing.T) {
+	assert.True(t, IsProcessRunning(os.Getpid()), "our own process is running")
+
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Run())
+	assert.False(t, IsProcessRunning(cmd.Process.Pid),
+		"a reaped child must read as not running")
 }
