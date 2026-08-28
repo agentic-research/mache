@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -24,16 +25,26 @@ func overviewIndexReport(g graph.Graph) (*graph.IndexStaleness, string) {
 	if !ok {
 		return nil, ""
 	}
-	if rep.ModifiedSince == 0 {
+	if rep.ModifiedSince == 0 && rep.DeletedSince == 0 {
 		return &rep, ""
 	}
-	n := fmt.Sprintf("%d", rep.ModifiedSince)
+	plus := ""
 	if rep.Capped {
-		n += "+"
+		plus = "+"
+	}
+	var drift []string
+	if rep.ModifiedSince > 0 {
+		drift = append(drift, fmt.Sprintf("%d%s source file(s) modified", rep.ModifiedSince, plus))
+	}
+	if rep.DeletedSince > 0 {
+		// Deleted files are the worse half of drift: the index still SERVES
+		// their nodes, so search/find_definition return results for code that
+		// no longer exists — not merely miss new code.
+		drift = append(drift, fmt.Sprintf("%d%s indexed file(s) deleted or renamed", rep.DeletedSince, plus))
 	}
 	return &rep, fmt.Sprintf(
-		"index built %s; %s source file(s) modified since — answers may not reflect current code (restart the session or rebuild to refresh)",
-		rep.BuiltAt.Format("2006-01-02 15:04:05"), n)
+		"index built %s; %s since — answers may not reflect current code (restart the session or rebuild to refresh)",
+		rep.BuiltAt.Format("2006-01-02 15:04:05"), strings.Join(drift, " and "))
 }
 
 func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {

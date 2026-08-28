@@ -55,6 +55,19 @@ func TestGetOverview_SurfacesIndexStaleness(t *testing.T) {
 		assert.Contains(t, warning, built.Format("2006-01-02 15:04:05"))
 	})
 
+	t.Run("deletions warn even when nothing was modified", func(t *testing.T) {
+		ov := overviewFor(t, &stalenessGraph{
+			Graph: testutil.BuildTestGraph(t),
+			rep:   graph.IndexStaleness{BuiltAt: built, SourceRoot: "/src", DeletedSince: 2},
+			ok:    true,
+		})
+		warning, _ := ov["index_warning"].(string)
+		assert.Contains(t, warning, "2 indexed file(s) deleted or renamed",
+			"deletion is the worse half of drift — the index still serves nodes for code that no longer exists")
+		assert.NotContains(t, warning, "modified",
+			"a deletion-only report must not claim modifications it did not see")
+	})
+
 	t.Run("capped drift says the number is a floor", func(t *testing.T) {
 		ov := overviewFor(t, &stalenessGraph{
 			Graph: testutil.BuildTestGraph(t),

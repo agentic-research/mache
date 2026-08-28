@@ -25,7 +25,14 @@ type IndexStaleness struct {
 	// ModifiedSince is how many source files changed after BuiltAt, capped at
 	// staleScanCap — the point is "should I care", not a manifest.
 	ModifiedSince int `json:"modified_since"`
-	// Capped reports that the count hit the cap and the true number is larger.
+	// DeletedSince counts indexed source files that no longer exist on disk.
+	// Exact, not heuristic: the .db records every file it indexed
+	// (nodes.source_file), so a missing path is a fact. A rename counts here
+	// too — the indexed path IS gone, and the mtime walk cannot see it
+	// (mv preserves mtimes, so the new path does not read as modified
+	// either; without this field a rename was doubly invisible).
+	DeletedSince int `json:"deleted_since,omitempty"`
+	// Capped reports that a count hit the cap and the true number is larger.
 	Capped bool `json:"capped,omitempty"`
 }
 
@@ -46,12 +53,10 @@ func (g *SQLiteGraph) IndexStaleness() (IndexStaleness, bool) {
 	if g.dbPath == "" {
 		return IndexStaleness{}, false
 	}
-	st, err := os.Stat(g.dbPath)
-	if err != nil {
+	builtAt, ok := g.staleBuiltAt()
+	if !ok {
 		return IndexStaleness{}, false
 	}
-	builtAt := st.ModTime()
-
 	var root string
 	if err := g.db.QueryRow(`SELECT value FROM _meta WHERE key = 'source_root'`).Scan(&root); err != nil || root == "" {
 		return IndexStaleness{}, false
@@ -61,6 +66,31 @@ func (g *SQLiteGraph) IndexStaleness() (IndexStaleness, bool) {
 	}
 
 	report := IndexStaleness{BuiltAt: builtAt, SourceRoot: root}
+	g.countModified(&report, root, builtAt)
+	g.countDeleted(&report, root)
+	return report, true
+}
+
+// staleBuiltAt resolves when the index was produced: the producer's own
+// _meta.parse_time stamp when present (survives file copies and
+// mtime-mangling transports), else the .db file's mtime.
+func (g *SQLiteGraph) staleBuiltAt() (time.Time, bool) {
+	st, err := os.Stat(g.dbPath)
+	if err != nil {
+		return time.Time{}, false
+	}
+	builtAt := st.ModTime()
+	var parseTime int64
+	if err := g.db.QueryRow(`SELECT value FROM _meta WHERE key = 'parse_time'`).Scan(&parseTime); err == nil && parseTime > 0 {
+		builtAt = time.Unix(parseTime, 0)
+	}
+	return builtAt, true
+}
+
+// countModified walks the source tree counting files whose mtime postdates
+// the build, capped — the point is "should I care", not a manifest. Noise
+// directories and dotfiles are excluded so churn cannot cry wolf.
+func (g *SQLiteGraph) countModified(report *IndexStaleness, root string, builtAt time.Time) {
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable subtree: skip, do not fail the report
@@ -90,7 +120,40 @@ func (g *SQLiteGraph) IndexStaleness() (IndexStaleness, bool) {
 		}
 		return nil
 	})
-	return report, true
+}
+
+// countDeleted checks every file the index knows against the disk. Exact and
+// bounded — the query is capped like the walk, and a db without the
+// source_file column (older projections) simply reports no deletions rather
+// than failing the whole report. The mtime walk is structurally blind to
+// this half of drift: a deleted file is not in the walk, and a rename
+// preserves mtimes, so without this a rename was doubly invisible.
+func (g *SQLiteGraph) countDeleted(report *IndexStaleness, root string) {
+	rows, err := g.db.Query(
+		`SELECT DISTINCT source_file FROM nodes
+		 WHERE source_file IS NOT NULL AND source_file != ''
+		 LIMIT ?`, staleScanCap*4)
+	if err != nil {
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var rel string
+		if rows.Scan(&rel) != nil {
+			continue
+		}
+		p := rel
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, rel)
+		}
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			report.DeletedSince++
+			if report.DeletedSince >= staleScanCap {
+				report.Capped = true
+				return
+			}
+		}
+	}
 }
 
 // StalenessReporter is the capability get_overview probes for. On graphs that
