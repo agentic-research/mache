@@ -1,4 +1,4 @@
-package cmd
+package schemainfer
 
 import (
 	"github.com/agentic-research/mache/api"
@@ -21,8 +21,8 @@ func PresetNames() []string {
 	return publicschema.AvailablePresets()
 }
 
-// loadPresetSchema loads a bundled schema by preset name.
-func loadPresetSchema(name string) (*api.Topology, error) {
+// LoadPresetSchema loads a bundled schema by preset name.
+func LoadPresetSchema(name string) (*api.Topology, error) {
 	resolved, err := publicschema.LoadPreset(name)
 	if err != nil {
 		return nil, err

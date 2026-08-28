@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/internal/gitutil"
+	"github.com/agentic-research/mache/internal/schemainfer"
 )
 
 // repoClone tracks a shared base clone for a repo URL in hosted mode.
@@ -96,7 +97,7 @@ func validateRepoURL(repoURL string) error {
 // isValidSchemaPreset returns true if the schema name is a known preset.
 // Prevents arbitrary file reads via ?schema=/etc/passwd.
 func isValidSchemaPreset(schema string) bool {
-	return slices.Contains(PresetNames(), schema)
+	return slices.Contains(schemainfer.PresetNames(), schema)
 }
 
 // contextString extracts a string value stored under key from ctx, if

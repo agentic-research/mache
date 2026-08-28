@@ -20,6 +20,7 @@ import (
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/projcfg"
+	"github.com/agentic-research/mache/internal/schemainfer"
 	"github.com/agentic-research/mache/resolve"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -843,7 +844,7 @@ func (lg *lazyGraph) init() {
 				}
 				log.Printf("No %s found; auto-detecting project languages...", projcfg.ConfigFileName)
 				dataSource = base
-				schema, err = inferDirSchema(base)
+				schema, err = schemainfer.InferDirSchema(base)
 				if err != nil {
 					lg.err = fmt.Errorf("auto-detect schema: %w", err)
 					return
@@ -881,7 +882,7 @@ func (lg *lazyGraph) init() {
 			} else if filepath.Ext(dataSource) != ".db" {
 				info, err := os.Stat(dataSource)
 				if err == nil && info.IsDir() {
-					schema, err = inferDirSchema(dataSource)
+					schema, err = schemainfer.InferDirSchema(dataSource)
 					if err != nil {
 						lg.err = fmt.Errorf("auto-detect schema: %w", err)
 						return

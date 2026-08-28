@@ -1,4 +1,4 @@
-package cmd
+package schemainfer
 
 // Preset-schema coverage stays with the presets themselves (schemas.go /
 // infer.go, still cmd-resident until stage 6 of mache-96c378). The rest of
@@ -64,7 +64,7 @@ func TestPresetSchemas_SelectorsCompile(t *testing.T) {
 			if bead, broken := knownBrokenPresets[name]; broken {
 				t.Skipf("known-broken selectors — see %s", bead)
 			}
-			topo, err := loadPresetSchema(name)
+			topo, err := LoadPresetSchema(name)
 			require.NoError(t, err)
 			require.NotNil(t, topo)
 
