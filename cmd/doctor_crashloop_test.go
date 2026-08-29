@@ -33,8 +33,12 @@ func TestCheckCrashLoop_DistinguishesQuietFromLoopingFromTripped(t *testing.T) {
 		got := checkCrashLoop(now.Add(time.Minute))
 		assert.Equal(t, statusWarn, got.Status,
 			"restarting more than it should is a warning, not a failure — something IS serving")
-		assert.Contains(t, got.Fix, "mache.log",
-			"the fix must name the actual log path, not a generic phrase to go hunt for")
+		// Assert the RELATIONSHIP, not a literal: daemonLogHint is a file path
+		// on darwin and a journalctl invocation on linux, so hardcoding either
+		// makes this test pass on the author's machine and fail on the other
+		// platform — which is exactly what it did.
+		assert.Contains(t, got.Fix, daemonLogHint(),
+			"the fix must name this platform's actual log locator, not a generic phrase to go hunt for")
 	})
 
 	t.Run("tripped fails and names the way out", func(t *testing.T) {
