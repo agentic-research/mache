@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentic-research/mache/internal/daemonguard"
 	"github.com/agentic-research/mache/internal/projcfg"
 )
 
@@ -41,20 +42,7 @@ import (
 //
 // The wait announces itself after daemonSettleAnnounceAfter, so a long budget
 // is not a silent one.
-var daemonSettleTimeout = envDurationOr("MACHE_DAEMON_SETTLE", 90*time.Second)
-
-// envDurationOr parses key as a Go duration, or returns fallback when unset
-// or unparseable. The E2E shrinks the settle window so a deliberate crash
-// loop fails in seconds instead of minutes; an operator can widen it on a
-// machine where first-boot graph builds are slow.
-func envDurationOr(key string, fallback time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	return fallback
-}
+var daemonSettleTimeout = projcfg.EnvDurationOr("MACHE_DAEMON_SETTLE", 90*time.Second)
 
 // daemonSettlePoll is the gap between endpoint probes while settling.
 //
@@ -190,7 +178,7 @@ type supervisorStep struct {
 // can legally take that long; beyond it launchd SIGKILLs, so gone-ness is
 // guaranteed shortly after — 50s covers the whole legal window.
 var (
-	daemonDrainTimeout = envDurationOr("MACHE_DAEMON_DRAIN", 50*time.Second)
+	daemonDrainTimeout = projcfg.EnvDurationOr("MACHE_DAEMON_DRAIN", 50*time.Second)
 	daemonDrainPoll    = 100 * time.Millisecond
 )
 
@@ -293,6 +281,15 @@ func runDaemonVerb(w io.Writer, verb supervisorVerb) error {
 			logf(w, "daemon is already stopped\n")
 			return nil
 		}
+	}
+
+	// A human asking for start/restart is the signal that someone has looked
+	// at the problem, so it clears the crash-loop breaker (mache-956488). A
+	// tripped breaker must never be an unrecoverable state: without this, a
+	// daemon that tripped would refuse every subsequent start and report the
+	// refusal as a failed verb.
+	if verb != verbStop {
+		daemonguard.Reset()
 	}
 
 	steps, err := supervisorArgv(verb, job.Loaded)

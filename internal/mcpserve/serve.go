@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/daemonguard"
 	"github.com/agentic-research/mache/internal/gitutil"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
@@ -77,6 +78,18 @@ func init() {
 func ServeCmd() *cobra.Command { return serveCmd }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	// Crash-loop breaker (mache-956488). Armed ONLY under mache's own
+	// supervisor definition: a hand-run `mache serve` that keeps failing is
+	// the operator's business and must never be refused. Exiting ZERO is how
+	// both supervisors are told to stop respawning.
+	if daemonguard.Supervised() {
+		trip, unclean := daemonguard.RecordStart(time.Now())
+		if trip {
+			log.Print(daemonguard.TripMessage(unclean))
+			return nil
+		}
+	}
+
 	// When spawned by the daemon (--control), auto-assign port if --http wasn't
 	// explicitly set. Avoids "address already in use" when port 7532 is taken.
 	if serveControl != "" && !cmd.Flags().Changed("http") {
@@ -286,6 +299,13 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
 	if err := httpSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	// Reached only via graceful shutdown (ErrServerClosed): this run does not
+	// count toward the crash-loop breaker. Anything that kills the daemon
+	// before here — bind failure, panic, SIGKILL — correctly leaves the start
+	// recorded as unclean.
+	if daemonguard.Supervised() {
+		daemonguard.MarkCleanExit()
 	}
 	return nil
 }

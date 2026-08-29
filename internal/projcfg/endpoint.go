@@ -1,6 +1,10 @@
 package projcfg
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"time"
+)
 
 // Canonical MCP transport endpoint. mache serves Streamable HTTP on this
 // address, and onboarding registers clients against it. Re-homed here from
@@ -20,6 +24,30 @@ var (
 func EnvOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+// EnvDurationOr parses key as a Go duration, or returns fallback when unset,
+// unparseable, or non-positive. Lives here beside EnvOr because the daemon
+// lifecycle's tunables (settle, drain, breaker window) are read from three
+// different packages, and three copies of this parser is exactly what the
+// duplicate-code gate exists to prevent.
+func EnvDurationOr(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return fallback
+}
+
+// EnvIntOr parses key as a positive integer, or returns fallback.
+func EnvIntOr(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
 	}
 	return fallback
 }

@@ -46,6 +46,19 @@ func stubSupervisor(t *testing.T) *[]string {
 		return nil
 	}
 	t.Cleanup(func() { runSupervisorCmd = prev })
+
+	// Stub the READ seam too, defaulting to not-loaded. Stubbing only the
+	// write side left every verb test consulting the REAL launchctl for job
+	// state, so they passed on CI (no daemon installed) and hung out to the
+	// full drain timeout on any developer machine that had one — an
+	// ambient-state dependency that made the suite's greenness a property of
+	// the machine rather than the code. Tests that need a different scripted
+	// state override this AFTER calling stubSupervisor.
+	prevQ := querySupervisorCmd
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return "", errors.New("stubbed: no supervised job")
+	}
+	t.Cleanup(func() { querySupervisorCmd = prevQ })
 	return &ran
 }
 
