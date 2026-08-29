@@ -29,9 +29,13 @@ var decompPackages = map[string][]string{
 	"internal/schemainfer":  {"internal/leylinegraph"},
 	"internal/leylinegraph": {},
 	"internal/buildcache":   {"internal/projcfg"},
+	// daemonguard keeps per-machine daemon state under ~/.mache, resolved
+	// through projcfg's home seam so it inherits the test-hermeticity guard
+	// (mache-956488 / mache-3e78d2).
+	"internal/daemonguard": {"internal/projcfg"},
 	"internal/mcpserve": {
 		"internal/projcfg", "internal/mountmeta", "internal/smells",
-		"internal/schemainfer", "internal/leylinegraph",
+		"internal/schemainfer", "internal/leylinegraph", "internal/daemonguard",
 	},
 }
 

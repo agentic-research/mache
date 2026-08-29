@@ -52,6 +52,13 @@ const (
 // call resolves.
 var realHomeAtInit, _ = os.UserHomeDir()
 
+// MacheHomeDir returns ~/.mache, creating it if necessary. Exported so other
+// packages that keep per-machine daemon state (internal/daemonguard) resolve
+// it through the SAME seam — which means they inherit the test-hermeticity
+// guard below for free, rather than each re-deriving a path that tests can
+// pollute (mache-3e78d2).
+func MacheHomeDir() (string, error) { return macheHomeDir() }
+
 // macheHomeDir returns ~/.mache, creating it if necessary.
 //
 // Test-hermeticity guard (mache-3e78d2): under `go test`, writing to the REAL

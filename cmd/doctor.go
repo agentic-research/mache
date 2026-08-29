@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/agentic-research/mache/internal/daemonguard"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/projcfg"
 )
@@ -83,6 +84,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	checks := []check{
 		checkLocalBinary(),
 		checkDaemon(daemonVersion, daemonErr),
+		checkCrashLoop(time.Now()),
 		checkVersionSkew(daemonVersion, daemonErr),
 		checkPinnedLeyline(),
 		checkArena(root),
@@ -119,6 +121,40 @@ func checkDaemon(version string, err error) check {
 		Name:   "daemon",
 		Status: statusOK,
 		Detail: fmt.Sprintf("answering at %s, reports version %s", projcfg.MacheHTTPURL, version),
+	}
+}
+
+// checkCrashLoop surfaces the crash-loop breaker (mache-956488). A breaker
+// that stops the loop silently is only half the fix: "no daemon answering"
+// and "the daemon gave up after five crashes" call for completely different
+// actions, and before this the operator saw the same warning for both.
+func checkCrashLoop(now time.Time) check {
+	rep, ok := daemonguard.Status(now)
+	if !ok || rep.UncleanStarts == 0 {
+		return check{
+			Name:   "crash-loop",
+			Status: statusOK,
+			Detail: "no unclean daemon starts recorded in the breaker window",
+		}
+	}
+	if rep.Tripped {
+		return check{
+			Name:   "crash-loop",
+			Status: statusFail,
+			Detail: fmt.Sprintf(
+				"crash-loop breaker TRIPPED: %d unclean daemon starts within %s (limit %d) — "+
+					"the supervisor was told to stop respawning, so nothing is serving",
+				rep.UncleanStarts, rep.Window, rep.Burst),
+			Fix: "check " + daemonLogHint() + " for why it exited, then: mache daemon start   # clears the breaker",
+		}
+	}
+	return check{
+		Name:   "crash-loop",
+		Status: statusWarn,
+		Detail: fmt.Sprintf(
+			"%d unclean daemon start(s) within %s (breaker trips at %d) — the daemon is restarting more than it should",
+			rep.UncleanStarts, rep.Window, rep.Burst),
+		Fix: "check " + daemonLogHint() + " for why it keeps exiting",
 	}
 }
 

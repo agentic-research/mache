@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -78,15 +79,18 @@ func TestLaunchdLifecycleE2E(t *testing.T) {
 		hold, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", crashPort))
 		require.NoError(t, err)
 		defer func() { _ = hold.Close() }()
-		t.Cleanup(func() {
-			_ = exec.Command("launchctl", "bootout",
-				fmt.Sprintf("gui/%d/%s", os.Getuid(), crashLabel)).Run()
-		})
+		t.Cleanup(func() { bootoutAndWait(t, crashLabel) })
 
+		// Tight breaker bounds so the loop can be watched to its END inside a
+		// test: production trips after 5 crashes / 2min, which at launchd's
+		// 10s ThrottleInterval is ~50s of waiting. The bounds are baked into
+		// the generated plist, so setting them here reaches the daemon.
 		crashEnv := []string{
 			"MACHE_DAEMON_LABEL=" + crashLabel,
 			"MACHE_DAEMON_LISTEN=" + fmt.Sprintf("localhost:%d", crashPort),
 			"MACHE_DAEMON_SETTLE=8s",
+			"MACHE_DAEMON_BREAKER_BURST=2",
+			"MACHE_DAEMON_BREAKER_WINDOW=10m",
 		}
 		out, err := w.run(t, crashEnv, "init", "--global")
 		require.NoError(t, err, "installing the doomed agent must itself succeed:\n%s", out)
@@ -94,6 +98,24 @@ func TestLaunchdLifecycleE2E(t *testing.T) {
 		out, err = w.run(t, crashEnv, "daemon", "start")
 		require.Error(t, err, "a crash-looping daemon must fail the start verb:\n%s", out)
 		assertNoUnverifiedClaims(t, out, err)
+
+		// The loop must END. Without the breaker (mache-956488) launchd
+		// relaunches a doomed binary every ThrottleInterval forever; with it,
+		// the daemon observes its own unclean starts and exits ZERO, which is
+		// how both supervisors are told to stop.
+		startsFile := filepath.Join(w.home, ".mache", "daemon-starts.json")
+		recorded := awaitRecordedStartsQuiet(t, startsFile)
+		require.GreaterOrEqual(t, recorded, 2,
+			"the daemon must have actually attempted to start (and crashed) before the breaker could bound it")
+		// With BURST=2 the breaker trips on the third start. An UNBOUNDED loop
+		// would have recorded ~16 by now (measured), so this separates
+		// bounded from still-running by a wide margin.
+		assert.Lessf(t, recorded, 6,
+			"the respawn loop must be BOUNDED by the breaker, not still running: %d starts recorded", recorded)
+
+		// And it stays stopped: launchd must not be holding a live process.
+		assert.Zero(t, launchdPID(t, crashLabel),
+			"after the breaker trips, no supervised process may remain")
 	})
 }
 
@@ -138,9 +160,9 @@ func newE2EWorld(t *testing.T) *e2eWorld {
 	buildMache(t, moduleRoot, w.stagedB, "e2e-generation-B")
 
 	t.Cleanup(func() {
-		// Best-effort teardown: the job must not outlive the test.
-		_ = exec.Command("launchctl", "bootout",
-			fmt.Sprintf("gui/%d/%s", os.Getuid(), w.label)).Run()
+		// The job must not outlive the test — and must be GONE before the
+		// sandbox HOME is removed underneath it.
+		bootoutAndWait(t, w.label)
 	})
 	return w
 }
@@ -204,6 +226,70 @@ func e2eStopThenStart(t *testing.T, w *e2eWorld) {
 	out, err = w.run(t, nil, "daemon", "start")
 	require.NoError(t, err, "start from loaded-idle must succeed:\n%s", out)
 	require.True(t, mcpUp(w.mcpURL), "daemon must answer initialize after re-start")
+}
+
+// bootoutAndWait removes a launchd job and waits for it to actually leave the
+// domain before returning.
+//
+// Fire-and-forget bootout is not enough in teardown for the same reason it is
+// not enough in the reload sequence: it returns once removal is INITIATED. A
+// still-terminating daemon kept writing its breaker state into the sandbox
+// HOME while t.TempDir's RemoveAll was deleting it, failing the whole test
+// with "directory not empty" AFTER every assertion had passed.
+func bootoutAndWait(t *testing.T, label string) {
+	t.Helper()
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
+	_ = exec.Command("launchctl", "bootout", target).Run()
+	assert.Eventuallyf(t, func() bool {
+		return exec.Command("launchctl", "print", target).Run() != nil
+	}, 30*time.Second, 200*time.Millisecond,
+		"%s did not leave the launchd domain after bootout — a daemon that outlives its test "+
+			"will keep writing into the sandbox as it is deleted", label)
+}
+
+// awaitRecordedStartsQuiet watches the breaker's start log until it stops
+// growing, and returns the final count.
+//
+// "Quiet" must outlast the supervisor's own retry interval, or the GAP
+// BETWEEN RESPAWNS reads as the loop having ended. The plist sets
+// ThrottleInterval=10, so quiet is measured over 25s. Getting this wrong is
+// not hypothetical: the first version polled for 6s of no-change and passed
+// happily against a still-looping daemon — caught only by mutating the trip
+// verdict to always-false.
+func awaitRecordedStartsQuiet(t *testing.T, startsFile string) int {
+	t.Helper()
+	const quietFor = 25 * time.Second
+	count := 0
+	lastChange := time.Now()
+	require.Eventually(t, func() bool {
+		if n := countRecordedStarts(t, startsFile); n != count {
+			count = n
+			lastChange = time.Now()
+		}
+		return count > 0 && time.Since(lastChange) > quietFor
+	}, 150*time.Second, 2*time.Second,
+		"the daemon never recorded a start, or never stopped respawning")
+	return count
+}
+
+// countRecordedStarts reads the crash-loop breaker's state file. A missing or
+// half-written file counts as zero — the caller watches for the count to go
+// QUIET, so a transient read error must not read as "loop ended".
+func countRecordedStarts(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var st struct {
+		Starts []struct {
+			At int64 `json:"at"`
+		} `json:"starts"`
+	}
+	if json.Unmarshal(data, &st) != nil {
+		return 0
+	}
+	return len(st.Starts)
 }
 
 // buildMache produces a real mache binary with generation-stamped bytes.

@@ -568,6 +568,11 @@
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "internal/daemonguard/daemonguard.go",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "internal/fixturedb/types.go",
       "count": 1
     },
@@ -859,7 +864,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
-      "count": 1
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",

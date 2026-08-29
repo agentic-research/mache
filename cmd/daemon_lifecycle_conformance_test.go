@@ -324,6 +324,9 @@ func TestLifecycleRestart_StuckDrainFailsLoudly(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("the bootout/bootstrap drain race is a launchd sequence")
 	}
+	// stubSupervisor first — it defaults the read seam to not-loaded, and this
+	// cell needs the opposite. Order matters: the override must come after.
+	ran := stubSupervisor(t)
 	// A supervisor whose job NEVER leaves the domain: state queries report
 	// running forever, even after bootout ran.
 	prevQ := querySupervisorCmd
@@ -331,7 +334,6 @@ func TestLifecycleRestart_StuckDrainFailsLoudly(t *testing.T) {
 		return stateRunning.supervisorReply()
 	}
 	t.Cleanup(func() { querySupervisorCmd = prevQ })
-	ran := stubSupervisor(t)
 	stubEndpoint(t, true)
 	shrinkSettle(t)
 
