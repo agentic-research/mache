@@ -77,15 +77,15 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	daemonVersion, daemonErr := probeDaemonVersion(cmd.Context())
-
+	probe := probeDaemon(cmd.Context())
 	root := workspaceRootFor(cwd)
 
 	checks := []check{
 		checkLocalBinary(),
-		checkDaemon(daemonVersion, daemonErr),
+		checkDaemon(probe.version, probe.err),
 		checkCrashLoop(time.Now()),
-		checkVersionSkew(daemonVersion, daemonErr),
+		checkReadiness(probe.ready, probe.readyDetail),
+		checkVersionSkew(probe.version, probe.err),
 		checkPinnedLeyline(),
 		checkArena(root),
 		checkProjectRegistration(root),
@@ -541,6 +541,159 @@ func probeDaemonVersion(parent context.Context) (string, error) {
 		return "", err
 	}
 	return serverVersionFromMCPReply(raw)
+}
+
+// daemonProbe is everything one interrogation of the daemon learned. The two
+// questions travel together — readiness is only meaningful once liveness is
+// established — so they are asked and carried as one.
+type daemonProbe struct {
+	version     string
+	err         error
+	ready       readiness
+	readyDetail string
+}
+
+// probeDaemon asks both questions in the right order: nothing can be ready if
+// nothing is answering.
+func probeDaemon(ctx context.Context) daemonProbe {
+	version, err := probeDaemonVersion(ctx)
+	p := daemonProbe{version: version, err: err, ready: readyUnknown}
+	if err == nil {
+		p.ready, p.readyDetail = probeDaemonReadiness(ctx)
+	}
+	return p
+}
+
+// readiness is what a tool call actually found, as distinct from whether the
+// daemon answered a handshake.
+type readiness int
+
+const (
+	readyUnknown    readiness = iota // could not ask (daemon not answering)
+	readyServing                     // a real tool call returned real content
+	readyBuilding                    // answering, graph still being built — transient
+	readyNotServing                  // answering, but a tool call does not complete
+)
+
+// readinessProbeTimeout is deliberately longer than doctorProbeTimeout: the
+// handshake is a round trip, while a first tool call may legitimately be
+// building a graph. Past this, "still building" stops being an explanation.
+var readinessProbeTimeout = 10 * time.Second
+
+// probeDaemonReadiness answers the question `initialize` cannot: not "is
+// something listening" but "would a tool call actually return anything".
+//
+// Why the distinction is load-bearing (mache-956488): the MCP handshake is
+// served by the HTTP layer and answers immediately, while the per-session
+// graph is built lazily on first use. A daemon whose graph build is wedged
+// therefore answers `initialize` perfectly and serves nothing — and every
+// probe mache had, including the one gating `daemon start`, reported that
+// state as healthy. Liveness is not readiness.
+//
+// The probe runs a real get_overview on the session initialize allocated,
+// and classifies the reply rather than merely checking for an error, because
+// "graph is still loading" is a DIFFERENT state from "the call failed": one
+// resolves itself and one does not.
+func probeDaemonReadiness(parent context.Context) (readiness, string) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, readinessProbeTimeout)
+	defer cancel()
+
+	req, err := newInitializeRequest(ctx)
+	if err != nil {
+		return readyUnknown, err.Error()
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return readyUnknown, err.Error()
+	}
+	sid := resp.Header.Get("Mcp-Session-Id")
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return readyUnknown, fmt.Sprintf("initialize returned HTTP %d", resp.StatusCode)
+	}
+	if sid == "" {
+		return readyUnknown, "daemon issued no session id"
+	}
+	defer releaseMCPSession(parent, sid)
+
+	body, err := callOverview(ctx, sid)
+	if err != nil {
+		return readyNotServing, err.Error()
+	}
+	switch {
+	case strings.Contains(body, "still loading"), strings.Contains(body, "still be parsing"):
+		return readyBuilding, "the session graph is still being built"
+	case strings.Contains(body, `"result"`):
+		return readyServing, ""
+	default:
+		return readyNotServing, "a tool call returned neither a result nor a known building state"
+	}
+}
+
+// callOverview issues get_overview on an established session. get_overview is
+// the probe because it is the one tool that must touch the session's graph to
+// answer at all — a handshake-only daemon cannot fake it.
+func callOverview(ctx context.Context, sessionID string) (string, error) {
+	payload := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call",` +
+		`"params":{"name":"get_overview","arguments":{}}}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, projcfg.MacheHTTPURL, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", sessionID)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("tool call returned HTTP %d", resp.StatusCode)
+	}
+	return string(raw), nil
+}
+
+// checkReadiness reports whether the daemon can actually serve, separately
+// from whether it answers.
+func checkReadiness(state readiness, detail string) check {
+	switch state {
+	case readyServing:
+		return check{
+			Name:   "readiness",
+			Status: statusOK,
+			Detail: "a real tool call returns content — the daemon is serving, not merely answering",
+		}
+	case readyBuilding:
+		return check{
+			Name:   "readiness",
+			Status: statusWarn,
+			Detail: "answering, but " + detail + " — tool calls will be thin until it finishes",
+		}
+	case readyNotServing:
+		return check{
+			Name:   "readiness",
+			Status: statusFail,
+			Detail: fmt.Sprintf(
+				"the daemon answers the MCP handshake but does not serve tool calls (%s) — "+
+					"liveness probes cannot see this state", detail),
+			Fix: "mache daemon restart   # then check " + daemonLogHint(),
+		}
+	default:
+		return check{
+			Name:   "readiness",
+			Status: statusWarn,
+			Detail: "not asked: the daemon is not answering (see the daemon check)",
+		}
+	}
 }
 
 // releaseMCPSession terminates the session initialize allocated. Errors are
