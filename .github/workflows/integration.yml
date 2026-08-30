@@ -74,13 +74,32 @@ jobs:
       # because -race + pure-Go SQLite over the whole repo blows the 20m budget
       # (mache-4f3840). Keep the sentinel and distinct-corpora invocations
       # separate so each suite owns its timeout and verbose progress is visible.
-      - name: Large-tier E2E (mache-self sentinel, no -race)
+      # One `go test` invocation PER BACKEND, so each gets its own -timeout
+      # budget sized to the work it actually does (mache-f06138).
+      #
+      # It used to run both backends in one process against a single 25m
+      # budget, and the macOS runner finished in 22m53s on a re-run of the
+      # commit that had just timed out at 25m0s — under two minutes of
+      # headroom, so runner variance decided the outcome rather than the code.
+      # Measured locally: 102s for both, 40s memory, 70s sqlite. The budget
+      # was therefore sized against the SUM while the slowest single unit of
+      # work is ~70% of it. Splitting also names which backend hung instead of
+      # reporting "the test timed out", and removes the duplicate leyline
+      # parse of the same immutable tree that one shared process performed.
+      #
+      # Looped rather than written twice: two near-identical steps are how the
+      # flags drift apart.
+      - name: Large-tier E2E (mache-self sentinel, per backend, no -race)
         env:
           MACHE_E2E_LARGE: '1'
         run: |
-          set -o pipefail
-          go test -tags boltdb -timeout 25m -run '^TestE2E_MacheOnMache$' -v ./internal/mcpserve/ 2>&1 \
-            | sed '/\[WARN\] duplicate construct name/d'
+          set -euo pipefail
+          for backend in memory sqlite; do
+            echo "::group::mache-self sentinel — $backend backend"
+            go test -tags boltdb -timeout 25m -run "^TestE2E_MacheOnMache\$/$backend" -v ./internal/mcpserve/ 2>&1 \
+              | sed '/\[WARN\] duplicate construct name/d'
+            echo "::endgroup::"
+          done
 
       - name: Large-tier E2E (distinct real corpora, no -race)
         env:
