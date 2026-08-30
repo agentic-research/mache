@@ -1083,11 +1083,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/agent.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "cmd/mount_control.go",
       "count": 1
     },
@@ -1123,11 +1118,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "graph/memstore_refsdb.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "graph/memstore_write.go",
       "count": 1
     },
@@ -1153,28 +1143,13 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "graph/store_local.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/buildcache/cache.go",
-      "count": 7
+      "count": 5
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/buildcache/cache_oci.go",
-      "count": 4
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/ast_walker.go",
       "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/ast_walker_nodes.go",
-      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
@@ -1208,11 +1183,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/sqlite_writer.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/lattice/greedy.go",
       "count": 1
     },
@@ -1224,7 +1194,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/leyline/socket.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1244,16 +1214,11 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve.go",
-      "count": 3
+      "count": 2
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_architecture.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve_handler_find_callees.go",
       "count": 1
     },
     {
@@ -1283,11 +1248,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve_handler_semantic_search.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_handlers.go",
       "count": 1
     },
@@ -1304,16 +1264,11 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_registry.go",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve_write.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/refsvtab/refs_module.go",
+      "source_id": "internal/mcpserve/serve_write.go",
       "count": 1
     },
     {
@@ -1333,18 +1288,13 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/testfixtures/curate.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/testfixtures/registry.go",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/testutil/bindinglog.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1353,98 +1303,8 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
-      "count": 3
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/providers.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dolt/mod.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/linear.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/mod.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/orchestration.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/threading.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/triage.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/verify.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/workspace_ops.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
-      "count": 6
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/ipc.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
-      "count": 2
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/sync.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "testdata/snapshots/medium-rust-rosary/tests/cli_integration.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "tools/coverage-gate/main.go",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
@@ -1458,11 +1318,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "tools/fuzz-gen/main.go",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "tools/mcp-fetch/main.go",
       "count": 1
     },
@@ -1472,8 +1327,48 @@
       "count": 1
     },
     {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/server-json-gen/main.go",
+      "rule_id": "god_file",
+      "source_id": "graph/cache.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "graph/composite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "graph/sqlite_graph.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "graph/sqlite_graph_refs.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/buildcache/cache_oci.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/ingest/ast_walker.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/leyline/sheaf_subscriber.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/leyline/socket.go",
       "count": 1
     },
     {
@@ -1483,147 +1378,17 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "internal/nfsmount/file.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "internal/nfsmount/graphfs.go",
       "count": 1
     },
     {
       "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/decompose.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/harmony.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/crates/bdr/src/parse.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/acp.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/backend.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_dolt.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/bead_sqlite.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/config.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/mod.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dispatch/tests.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/dsse.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/epic.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/handoff.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/main.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/observation/mod.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/pipeline.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/plugin.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/queue.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/reconcile/tests.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/scope.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/handlers.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/serve/mod.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/store.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_dolt.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/store_sqlite.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/vcs.rs",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "testdata/snapshots/medium-rust-rosary/src/verify.rs",
+      "source_id": "internal/refsvtab/refs_module.go",
       "count": 1
     },
     {

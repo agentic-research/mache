@@ -251,6 +251,9 @@ func EnsureCanonicalViews(qg graph.RefsQuerier) error {
 	if err := ensureTestNodesView(qg, hasAST); err != nil {
 		return err
 	}
+	if err := ensureVendoredView(qg); err != nil {
+		return err
+	}
 
 	hasRefsSourceID, err := TableHasColumn(qg, "node_refs", "source_id")
 	if err != nil {
