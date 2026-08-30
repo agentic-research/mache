@@ -672,16 +672,45 @@ func readLSPRefsFromCapnp(dbPath, symbol string) ([]lspRefLocation, error) {
 	return results, nil
 }
 
-// queryLSPDefsLegacy is the pre-Step-1 query path: node_id suffix
-// match, then broader substring LIKE if that returns nothing. Kept
-// for .dbs that still have the legacy _lsp_defs schema (no def_token
-// column). New consumers should rely on queryLSPDefs which prefers
-// the direct token match when available.
-func queryLSPDefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspDefLocation, error) {
-	// First confirm the table exists at all — tableHasColumn returns
-	// false for both "no table" and "table without column", so we
-	// have to disambiguate here for the legacy code path.
-	exists, err := refsTableExists(qg, "_lsp_defs")
+// lspLegacyTable names one of the two legacy LSP tables and its column
+// prefix. Unexported with only two package-level instances, so the legacy
+// query builder cannot be handed a name from anywhere else — the identifier
+// splice is safe by construction rather than by a runtime check that no
+// reachable call site could ever trip.
+type lspLegacyTable struct{ table, colPrefix string }
+
+var (
+	lspLegacyDefs = lspLegacyTable{table: "_lsp_defs", colPrefix: "def"}
+	lspLegacyRefs = lspLegacyTable{table: "_lsp_refs", colPrefix: "ref"}
+)
+
+// lspLegacyLocation is the row shape both legacy tables produce. An ALIAS,
+// not a third struct: _lsp_defs and _lsp_refs are field-for-field identical,
+// and the shared query below should not invent a type to convert through.
+type lspLegacyLocation = lspDefLocation
+
+// queryLSPLocationsLegacy is the pre-Step-1 query path shared by both legacy
+// tables: node_id suffix match, then a broader substring LIKE if that returns
+// nothing. Kept for .dbs that still carry the legacy schema (no *_token
+// column); new consumers rely on queryLSPDefs/queryLSPRefs, which prefer the
+// direct token match when it is available.
+//
+// This exists because the defs and refs versions were the largest production
+// clone in the repo — a 284-signature pair differing only in table name,
+// column prefix, and row type, with the code itself saying so
+// ("mirrors queryLSPDefsLegacy for the refs table"). internal/leylinegraph
+// had already collapsed the same defs/refs mirroring behind loadLSPLocations;
+// this applies the answer the repo had already chosen (mache-4a92cf).
+//
+// The table and column prefix are interpolated, not bound — SQLite takes no
+// parameters for identifiers. Rather than validating a string at runtime, the
+// only two legal targets are values of an unexported type, so an arbitrary
+// name cannot reach the query builder at all.
+func queryLSPLocationsLegacy(qg graph.RefsQuerier, t lspLegacyTable, symbol string) ([]lspLegacyLocation, error) {
+	table, colPrefix := t.table, t.colPrefix
+	// tableHasColumn returns false for both "no table" and "table without
+	// column", so the legacy path has to disambiguate here.
+	exists, err := refsTableExists(qg, table)
 	if err != nil {
 		return nil, err
 	}
@@ -689,96 +718,73 @@ func queryLSPDefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspDefLocation, 
 		return nil, nil
 	}
 
+	query := fmt.Sprintf(
+		`SELECT node_id, %[1]s_uri, %[1]s_start_line, %[1]s_start_col, %[1]s_end_line, %[1]s_end_col
+		 FROM %[2]s WHERE node_id LIKE ? ESCAPE '\'`, colPrefix, table)
+
 	escaped := escapeLikeMeta(symbol)
-	rows, err := qg.QueryRefs(
-		`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
-		 FROM _lsp_defs WHERE node_id LIKE ? ESCAPE '\'`,
-		"%/"+escaped,
-	)
+	results, err := scanLSPLegacyRows(qg, query, "%/"+escaped)
 	if err != nil {
-		return nil, fmt.Errorf("query _lsp_defs (legacy suffix): %w", err)
+		return nil, fmt.Errorf("query %s (legacy suffix): %w", table, err)
+	}
+	if len(results) > 0 {
+		return results, nil
 	}
 
-	var results []lspDefLocation
-	for rows.Next() {
-		var r lspDefLocation
-		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	_ = rows.Close()
-
-	if len(results) == 0 {
-		rows, err = qg.QueryRefs(
-			`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
-			 FROM _lsp_defs WHERE node_id LIKE ? ESCAPE '\'`,
-			"%"+escaped+"%",
-		)
-		if err != nil {
-			return nil, fmt.Errorf("query _lsp_defs (legacy broad): %w", err)
-		}
-		for rows.Next() {
-			var r lspDefLocation
-			if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
-				continue
-			}
-			results = append(results, r)
-		}
-		_ = rows.Close()
+	results, err = scanLSPLegacyRows(qg, query, "%"+escaped+"%")
+	if err != nil {
+		return nil, fmt.Errorf("query %s (legacy broad): %w", table, err)
 	}
 	return results, nil
 }
 
-// queryLSPRefsLegacy mirrors queryLSPDefsLegacy for the refs table.
-func queryLSPRefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspRefLocation, error) {
-	exists, err := refsTableExists(qg, "_lsp_refs")
+// scanLSPLegacyRows runs one legacy lookup. A row that fails to scan is
+// skipped rather than failing the query, preserving the original behaviour:
+// a malformed row in a legacy table must not hide the rows around it.
+func scanLSPLegacyRows(qg graph.RefsQuerier, query, pattern string) ([]lspLegacyLocation, error) {
+	rows, err := qg.QueryRefs(query, pattern)
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
-		return nil, nil
-	}
+	defer func() { _ = rows.Close() }()
 
-	escaped := escapeLikeMeta(symbol)
-	rows, err := qg.QueryRefs(
-		`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
-		 FROM _lsp_refs WHERE node_id LIKE ? ESCAPE '\'`,
-		"%/"+escaped,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query _lsp_refs (legacy suffix): %w", err)
-	}
-
-	var results []lspRefLocation
+	var results []lspLegacyLocation
 	for rows.Next() {
-		var r lspRefLocation
+		var r lspLegacyLocation
 		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
 			continue
 		}
 		results = append(results, r)
 	}
-	_ = rows.Close()
+	return results, rows.Err()
+}
 
-	if len(results) == 0 {
-		rows, err = qg.QueryRefs(
-			`SELECT node_id, ref_uri, ref_start_line, ref_start_col, ref_end_line, ref_end_col
-			 FROM _lsp_refs WHERE node_id LIKE ? ESCAPE '\'`,
-			"%"+escaped+"%",
-		)
-		if err != nil {
-			return nil, fmt.Errorf("query _lsp_refs (legacy broad): %w", err)
-		}
-		for rows.Next() {
-			var r lspRefLocation
-			if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
-				continue
-			}
-			results = append(results, r)
-		}
-		_ = rows.Close()
+// queryLSPDefsLegacy is the defs half of the legacy path.
+func queryLSPDefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspDefLocation, error) {
+	return queryLSPLocationsLegacy(qg, lspLegacyDefs, symbol)
+}
+
+// queryLSPRefsLegacy is the refs half. The conversion is free — the two row
+// types are structurally identical — and keeping them DISTINCT is deliberate:
+// a definition and a reference are different facts, and the compiler should
+// keep refusing to pass one where the other belongs.
+func queryLSPRefsLegacy(qg graph.RefsQuerier, symbol string) ([]lspRefLocation, error) {
+	rows, err := queryLSPLocationsLegacy(qg, lspLegacyRefs, symbol)
+	if err != nil {
+		return nil, err
 	}
-	return results, nil
+	if len(rows) == 0 {
+		// Preserve the (nil, nil) contract: callers read a nil slice as "no
+		// legacy table / nothing to say". An empty non-nil slice would be a
+		// different claim, and a caught regression — allocating the result
+		// unconditionally broke TestQueryLSPDefs_TableMissing_StillReturnsNilNil.
+		return nil, nil
+	}
+	out := make([]lspRefLocation, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, lspRefLocation(r))
+	}
+	return out, nil
 }
 
 // refsTableExists returns true iff the named SQLite table is present in
