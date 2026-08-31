@@ -323,11 +323,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/mcpserve/serve_lsp.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_lsp_step5_test.go",
       "count": 1
     },
