@@ -2,6 +2,7 @@ package smells
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
@@ -88,4 +89,38 @@ func TestVendoredFixtures_CannotMoveTheThreshold(t *testing.T) {
 	assert.Equal(t, without, with,
 		"adding a vendored corpus changed the verdict on this project's OWN files — "+
 			"the fixtures are moving the threshold, which is the defect mache-f41b43 names")
+}
+
+// TestVendoredExclusionIsWiredIntoEveryRuleThatNeedsIt guards the set. The
+// behavioural tests above cover god_file, where the subtle half (the mean)
+// lives; this covers the rest by construction, because building a fixture
+// that makes each rule fire on vendored input is expensive and the failure
+// being guarded is trivial — someone edits a rule and drops the clause.
+//
+// A rule earns its place here by having been observed reporting vendored
+// files on mache's own repo (mache-f41b43): 24 god_file, plus fan_out_skew,
+// duplicate_definitions and long_file findings, all in
+// testdata/snapshots/medium-rust-rosary/**.
+func TestVendoredExclusionIsWiredIntoEveryRuleThatNeedsIt(t *testing.T) {
+	for _, id := range []string{"god_file", "fan_out_skew", "duplicate_definitions", "long_file"} {
+		rule := RegisteredRule(id)
+		require.NotNilf(t, rule, "%s must be registered", id)
+		assert.Containsf(t, rule.Query, "v_vendored_files",
+			"%s reported vendored fixtures before this exclusion existed; dropping it "+
+				"puts third-party code nobody owns back into the baseline", id)
+	}
+
+	// god_file and fan_out_skew are the mean-relative pair: they must exclude
+	// BEFORE computing mu, or a vendored tree moves the bar for this
+	// project's own code even while its own findings are hidden.
+	for _, id := range []string{"god_file", "fan_out_skew"} {
+		rule := RegisteredRule(id)
+		q := rule.Query
+		firstExclusion := strings.Index(q, "v_vendored_files")
+		avg := strings.Index(strings.ToUpper(q), "AVG(")
+		require.Positivef(t, avg, "%s is expected to compute a mean", id)
+		assert.Lessf(t, firstExclusion, avg,
+			"%s excludes vendored files only AFTER computing the mean — the findings would be "+
+				"clean while the threshold stayed distorted, which is the half-fix this bead rejects", id)
+	}
 }
