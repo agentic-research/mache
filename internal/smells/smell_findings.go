@@ -76,6 +76,7 @@ func runSmellRuleQuery(qg graph.RefsQuerier, rule *SmellRule, sourceID string, l
 		scope = "AND " + rule.ScopeColumn + " = ?"
 		args = append(args, sourceID)
 	}
+
 	query := fmt.Sprintf(rule.Query, scope) + fmt.Sprintf(" LIMIT %d", limit)
 
 	rows, err := qg.QueryRefs(query, args...)
