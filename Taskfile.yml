@@ -566,66 +566,12 @@ tasks:
             echo "no pprof artifacts in .e2e/pprof/ — run 'task profile-tools-pprof' first"
             exit 1
           fi
-      - cmd: |
-          cd {{.ROOT_DIR}}/.e2e/pprof
-          # CPU profiles: pprof -raw → stackcollapse-go.pl
-          # → flamegraph.pl. Some tools have 0 CPU samples (their
-          # 500-iteration loop completed under the 10ms sampler
-          # tick); skip those quietly with a placeholder note in
-          # the SVG so INDEX.md stays consistent.
-          for prof in *.cpu.pprof; do
-            [ -f "$prof" ] || continue
-            tool=$(basename "$prof" .cpu.pprof)
-            collapsed=$(go tool pprof -raw "$prof" 2>/dev/null | stackcollapse-go.pl 2>/dev/null)
-            if [ -z "$collapsed" ]; then
-              echo "<svg xmlns='http://www.w3.org/2000/svg'><text y='20'>$tool: no CPU samples (tool too fast for 100Hz sampler at this iteration count)</text></svg>" > "$tool.cpu.svg"
-              continue
-            fi
-            echo "$collapsed" \
-              | flamegraph.pl --title="$tool CPU" --colors=go \
-              > "$tool.cpu.svg"
-          done
-          # Heap profiles use a baseline + diff to filter out
-          # init-time allocation noise (jsonschema, sqlite,
-          # tree-sitter package init dominate the cumulative view
-          # otherwise — see Image #2 reading on PR #361). Each
-          # tool has two snapshots: <tool>.heap.baseline.pprof
-          # captured before the iteration loop, <tool>.heap.pprof
-          # captured after.
-          #
-          # Use `-alloc_space -base=baseline` to surface BYTES
-          # ALLOCATED DURING THE LOOP (column 2 of the 4-column
-          # heap raw format). `-inuse_space` would show "live at
-          # snapshot but not live at baseline" which is near-zero
-          # for short loops where allocs get GC'd before the
-          # second snapshot — the real signal is alloc_space.
-          #
-          # Pprof's raw still emits the 4-column format even with
-          # the -alloc_space filter; sed drops cols 3-4 so
-          # stackcollapse-go.pl's 2-column regex matches.
-          for prof in *.heap.pprof; do
-            [ -f "$prof" ] || continue
-            # Skip the baseline files — only iterate the AFTER snapshots.
-            case "$prof" in *.heap.baseline.pprof) continue ;; esac
-            tool=$(basename "$prof" .heap.pprof)
-            baseline="$tool.heap.baseline.pprof"
-            if [ ! -f "$baseline" ]; then
-              echo "<svg xmlns='http://www.w3.org/2000/svg'><text y='20'>$tool: missing baseline; cannot compute heap delta</text></svg>" > "$tool.heap.svg"
-              continue
-            fi
-            collapsed=$(
-              go tool pprof -alloc_space -base="$baseline" -raw "$prof" 2>/dev/null \
-                | sed -E 's/^( *[0-9]+ +[0-9]+) +[0-9]+ +[0-9]+:/\1:/' \
-                | stackcollapse-go.pl 2>/dev/null
-            )
-            if [ -z "$collapsed" ]; then
-              echo "<svg xmlns='http://www.w3.org/2000/svg'><text y='20'>$tool: no heap delta (loop allocations were fully GC'd)</text></svg>" > "$tool.heap.svg"
-              continue
-            fi
-            echo "$collapsed" \
-              | flamegraph.pl --title="$tool heap delta (alloc_space, baseline-subtracted)" --colors=mem --countname=bytes \
-              > "$tool.heap.svg"
-          done
+      # The render pipeline lives in scripts/flamegraphs.sh so its failure
+      # handling is testable (internal/lint/flamegraphs_test.go). It exits
+      # non-zero when pprof or stackcollapse actually fail, surfacing their
+      # stderr instead of writing an SVG that claims nothing was wrong
+      # (mache-77e389).
+      - cmd: bash {{.ROOT_DIR}}/scripts/flamegraphs.sh {{.ROOT_DIR}}/.e2e/pprof
       - cmd: |
           cd {{.ROOT_DIR}}/.e2e
           {
