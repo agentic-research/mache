@@ -1,1119 +1,2974 @@
 {
-  "version": 1,
+  "version": 2,
   "counts": [
     {
       "rule_id": "dead_code",
       "source_id": "internal/ingest/benchmark_test.go",
+      "node_hash": "4b1ae4ff6b98921df8e15f341b4d535c9823918e1ed166d1dbae588fe67f2078",
       "count": 1
     },
     {
       "rule_id": "dead_code",
       "source_id": "internal/projcfg/config.go",
+      "node_hash": "75d9f30aee29947b3a501aec0eaf1ccba49b18fad66dcdc7937d0906c2c93a9c",
       "count": 1
     },
     {
       "rule_id": "dead_code",
       "source_id": "mount/mount.go",
+      "node_hash": "62811eb3bde5dd587b7f80b735ae2c3dd13e9c3661b57cf75542e26898505b89",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "cmd/cli_test.go",
-      "count": 4
+      "node_hash": "113828dabfac00839f9337adaf09609d5b5e85163f73095ee79f9754b323206c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/cli_test.go",
+      "node_hash": "2eac325ca9ebdee9ab3d9b7821bedf52c85b29594e563ccd3597bca848a7d3a2",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/cli_test.go",
+      "node_hash": "684f94343dd6b4d413f328d5d4b93525fcd863d905d79fb2323d3d3812efa54f",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "cmd/cli_test.go",
+      "node_hash": "f8979458d7ac3876cbe671d8d81a8756ba17c62ffec7e331308d679aba7bfcc7",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/arena_test.go",
-      "count": 2
+      "node_hash": "206a13647954f5b9418b2469f1efe1627455f4dc11fd809169d3ef7f4fa1d6e9",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/arena_test.go",
+      "node_hash": "f092738f1f7b3a4765013c2cbb52c29ccf80bf470fa0903cf77c65f967d3169b",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/composite_defs_test.go",
+      "node_hash": "aa106e17d1859d3ae65ae4a995a6806456aca5d539b9bc3347ca226ff14e2bc0",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/composite_test.go",
-      "count": 2
+      "node_hash": "4231ac5cc1a472c993dfb10b905f1da89adfd6ebcfe00fa60a1e51b672c72bbb",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/composite_test.go",
+      "node_hash": "6511b149e7b78b81c233b2a7383e81d8b73ffb2e148667082cc7458edc5de06c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/delete_file_nodes_perf_test.go",
+      "node_hash": "0e2535bf82c857e2e0110d3f57862dde91966dc31a58c4400369fb00b900b051",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/graph_test.go",
-      "count": 2
+      "node_hash": "373532bca39e833ced7e2f16e80476d544898a087919e90114f0ec77b5aaf45a",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/graph_test.go",
+      "node_hash": "f43fdbee6abc3b16ec773b4ed9df0f17ddeeaedca162ffad44de0bd490949a92",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/hotswap.go",
-      "count": 4
+      "node_hash": "4b8d5f6eebd46fbef6f6b8a138d1891c62f6491fe17342aced3f51cf03a78557",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/hotswap.go",
+      "node_hash": "7764c065321f1ea0507a1aab62f069c4a6a4c0402d9e00b010130a96ec088752",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/hotswap.go",
+      "node_hash": "9f7e2e7646c9313fa7faba21df6084422b9341310024917e1a01a53a4a878ed1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/hotswap.go",
+      "node_hash": "eb9500f76b437fffb89e5c59d88a614210fe38b5d3d60613d3bb1b67eb9ddef0",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/memstore.go",
-      "count": 2
+      "node_hash": "b379b99633fd2b4c6490f965a6b5adb26520da9a05c99e20601ce5fd92a6bb48",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/memstore.go",
+      "node_hash": "fd57f322f6363eb302daabee50b821bb352c31aff1883fdf61ca55ea095a5b33",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/memstore_refs.go",
-      "count": 2
+      "node_hash": "46f2403c69c9de2af6f74cae551334eec62aa15df1365e56fab9e321e74952e0",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/memstore_refs.go",
+      "node_hash": "ee4f85a37cc04468423b528bb0098eb9982d383f4e3e6037cdfbd96c87d57a5c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/shared_test.go",
-      "count": 7
+      "node_hash": "19c5c579ef162e2df82abdca4473e11d520cdccc58e12e883319abfdf6ce466c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/shared_test.go",
+      "node_hash": "5d1dfddb52f15a2b8dd0903c900fe2ddb376ecb46774b1b0ed139b7333ea266b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/shared_test.go",
+      "node_hash": "77e00c2ce26038e78c2f398759dc4a81a0c8d6bc86350532cc3641d0a1ac9fdc",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/shared_test.go",
+      "node_hash": "7f6089d67189b05190d3c3bee80e16d51dd4e7d4f764e1b30488493d77b533ba",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/shared_test.go",
+      "node_hash": "a20993ef23393ebdaf951dd2c677f11c6c15ceae0d9fd4bcc13e1c1d6c294f2d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/shared_test.go",
+      "node_hash": "a22f791c80aef7c7ceae0aa246f22442618e67f331a30aa60953bd1673f176c5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/shared_test.go",
+      "node_hash": "bb5186cc5fa6ced473013f8b1e3f63e385e2241a0382a9ad6282435000886671",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/sheaf_invalidate_test.go",
-      "count": 7
+      "node_hash": "09f029a2ee569cce4a82a0e0857aa6a2ea9db70f0e09b6920df8105aa919cc88",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sheaf_invalidate_test.go",
+      "node_hash": "1fcba300572569af02e037c526941cb551051c07d49f78f6998343a099a20952",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sheaf_invalidate_test.go",
+      "node_hash": "5d9a86053f92f38ff343c8a87493c8925ad80245439a35ca86f84713464fc972",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sheaf_invalidate_test.go",
+      "node_hash": "6aba2bf2af0b8f678286401728d103175dc6b36fc5d3385087aca42dbe36b1e0",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sheaf_invalidate_test.go",
+      "node_hash": "7c93a0cd91a8c48339d3ad03f2b24780416d01023f9976790848f6ca4ab41ddb",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sheaf_invalidate_test.go",
+      "node_hash": "9394f5290f4baf5da729e01ee4e12a150733f9be5798a18553fca23342d61d0d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sheaf_invalidate_test.go",
+      "node_hash": "da13aec6cbefa602daf70780a3557c569b121e6af910fad59f0f18f9371ff857",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/sqlite_graph.go",
+      "node_hash": "13ead819ec42dd1576802933f5c31ad387f83fc649cd830526a47a27d1df00b3",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/sqlite_graph_refs.go",
+      "node_hash": "9cd99152acf7d1fc209d8b1e73741182c0849ecc4d8583596ac844f2b630280c",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/sqlite_resolver_test.go",
-      "count": 2
+      "node_hash": "9edc13cba9edec70e65d4af784356524eeb7a88f57538d6bfd230fd26b2df239",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/sqlite_resolver_test.go",
+      "node_hash": "bda33aa55a26a22a9337e506362cfd50da4ddc81a0c8af2ab208cc18994a949f",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/store_local.go",
-      "count": 2
+      "node_hash": "3cc184416e2db6e0471b8a6ae43b68851555b03e8e51022333b32ee5edad4e9b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/store_local.go",
+      "node_hash": "d66edf7bbaeb2835f53ad862f87d35d5695eb0315b8cc9bc2ea4f4348392c757",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/vdirpath.go",
-      "count": 2
+      "node_hash": "48310ad3688a75300e2a4edfeaaae6f82a1e83a6f897bc5710df967371cc46c7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/vdirpath.go",
+      "node_hash": "49e5fb213b8322c569f1499d19fab8539c38a4283d69b4c272ee9c2202d13c1c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/vdirpath_test.go",
-      "count": 2
+      "node_hash": "af50fb279b38daed8f48da7532a074f1025af43a9d6503d1d1905bc175ad342c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/vdirpath_test.go",
+      "node_hash": "e8fd12c54bab3928c30b50153aa1ebb609e8c1f3bd8997df9902f9817caea003",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "graph/writable_graph.go",
-      "count": 6
+      "node_hash": "048ee381f263bdc8167b5c532e5085c87dd0c7405247910addd68eba005311d2",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/writable_graph.go",
+      "node_hash": "3477302fb1d092fb2def9d28462492a364cde1503102302119fb435393b92b5f",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/writable_graph.go",
+      "node_hash": "a6871dd704159ec91a4ba90df331a25e82755eba9e76463f89125cd55b6ef155",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/writable_graph.go",
+      "node_hash": "eb10e2a9b52e5dbb2613b5260fefa17e53516ee3219a66051e292e004ad4ee96",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/writable_graph.go",
+      "node_hash": "ebd3b5ebd282e70f3e0ebf1f0e4e68e35ff3afdb91d14f37c0e8c2a56899102d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "graph/writable_graph.go",
+      "node_hash": "ecff228cd940b791121511e9d350c7b610ac304743884daf10c1afa933eb37c6",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/buildcache/cache_oci.go",
-      "count": 2
+      "node_hash": "1679bae3ac6145af8f8ced6f0e922b0d89367f74d8f5212dd7efad2230622eda",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/buildcache/cache_oci.go",
+      "node_hash": "fc124c6875ba51a31a20e97ce6d892aac8342bb6006b62a1b64775682f379565",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/control/control_test.go",
+      "node_hash": "38c3cf5cd9a8b03ef4423e7224572d07193e07fec70cf030d485ab64f077c344",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/fixturedb/build.go",
+      "node_hash": "730abf5a15fad0070ca6487f31cd0056a87e6377a99f4ddbe79d67e246495301",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/ast_walker.go",
-      "count": 2
+      "node_hash": "25723e6aa990d49ebc888fde542b7e037ed0ea55af3408affdda001836803af0",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker.go",
+      "node_hash": "8391d804d6088462f5c5935a571c100169503b8cf1d7bfc022cb4e13e61a68ea",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/ast_walker_bench_test.go",
-      "count": 2
+      "node_hash": "59c91c2349f4ddf252cc8ab049beffc0ef127fbbf9b297a48b8d83847a1705d9",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker_bench_test.go",
+      "node_hash": "efb00c026800feeeea4a8525867c4487bf4ab8d6b1b55b667974b3a271b36a71",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/ast_walker_core_test.go",
-      "count": 2
+      "node_hash": "51bf2566359fee94c8a2e4260004d150dc0df44cc3b5dc38206bc8aac529aaeb",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker_core_test.go",
+      "node_hash": "61938dc925f90679e4901641b2098ab423bd52c79b732298957c47a504212d16",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/ast_walker_test.go",
-      "count": 2
+      "node_hash": "a840bcafda2737a6321b07106a06d0ba8f454dc9b231943509f388b9c9cc0619",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/ast_walker_test.go",
+      "node_hash": "d52033d86cd42a6377e1866de0f8b4efcd566507375b9831aacf2baef8249e8e",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/diagram_test.go",
-      "count": 7
+      "node_hash": "03e7d3dc20d7a81569935a4c626500d4d5e03b048ed281039234e717b4c60bc9",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/diagram_test.go",
+      "node_hash": "2535ff1e6678c4dc578f5be7d06116c6a286c75b35c36be0909da3698a38760f",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/diagram_test.go",
+      "node_hash": "46f2c1b0d78846c3472eeb236a7d4f63a6b3620bb91fd67a41c9289db26f7948",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/diagram_test.go",
+      "node_hash": "8327767ac7187e2dc8195663b7415f92cd7390b6f7663869d772867791979f32",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/diagram_test.go",
+      "node_hash": "839fff3ee4f155d8bbe92f9c1ac024014c27870126bf411bb622deec595fb811",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/diagram_test.go",
+      "node_hash": "e57455c666e2cdb723447d3628d6322b60ac34dcb7562635ccc1cfde87dcd1f1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/diagram_test.go",
+      "node_hash": "ee3cb2a2e95e517c844b0ae8f3f54a053867a6dcae5dc9dea5ade21b31ca5341",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/error_surface_test.go",
-      "count": 2
+      "node_hash": "0d5ef40f7584d93ca5d5f6dbcd60ad65917d521af0634d79d5cf11ab7e9c2e45",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/error_surface_test.go",
+      "node_hash": "76bc1bb66aecb98522cdda61748662e47bc4974c91515b8b2f8c0b56f9413d95",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/leyline_ast_test_helper_test.go",
+      "node_hash": "4273f4d40b020898dfcc843db248d36ddbaeec3766b8e510c995083f6f1481be",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/parent_match.go",
-      "count": 6
+      "node_hash": "45a870ff22ba02b385efb53ef2b9c0ff65c8dab2a8c55059c15cff8f99fd7c05",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/parent_match.go",
+      "node_hash": "6aa6ac1a104ca8025925c0bc47d1a9dc964bf845e4ff046ee2d773309818af54",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/parent_match.go",
+      "node_hash": "6ac8d60ee3061af42192b200f7f460d1e7a29e79eab6b6a9eb4e207c4f50a995",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/parent_match.go",
+      "node_hash": "9d236eb8605c4712df0f2377303d006f96c8ca490d9c9caba95a75829b183ec5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/parent_match.go",
+      "node_hash": "a47a672049678b25dd755833c506bc896bf3f7ab5798d87d00cbd9623019970e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/parent_match.go",
+      "node_hash": "eacf452dd52ce89edc1818c6c57bffd8e018594158e36d84056a79aa8346c05e",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/sqlite_writer.go",
-      "count": 7
+      "node_hash": "01c963badb7e81f1b511288fb65c7c846042afa422a4dfaa40427b5584d73369",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "11c25298f61b9fded6f5e002c29b2f3bdac1745f5a896f0515d113ce7dc1e441",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "8e017d67ec88bb62bc213c63d57ffb6b6751115591fa9d88a0245b173aca4dbf",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "ab40868e3a9b78576598436b6d024d7b55677bce8db92d98b0cb0d2d98e6f07d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "b0a0007d55eb6f1627641c9e2825fe808a21ad23401c9de710307d211590621d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "e1250a25a3951da834fd70a820382ccfafb068affbed4b7f8837fc2de661057c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "e2a72c5d17c8d1aeb0393d277a0e5e1c06059183f1d71d7cf2874a015defc8e8",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/sqlite_writer_test.go",
-      "count": 2
+      "node_hash": "11dbf391250f8269a61ec0ea44d748cac258a66f408227e1391e01b111e67625",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/sqlite_writer_test.go",
+      "node_hash": "ccf3d4548ce522f1cbd38e1a7f5ec67cbdc75b64bfa71473e19a8204ece47e5d",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/template_funcs_test.go",
-      "count": 25
+      "node_hash": "01424312e580a319b5e33c3bc0fb83f687b4085c7a0da3dc0f050646485598d6",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "031967241cf61d670d33398542242ea0a1f5d319e4b1e4041232ad60957d446c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "063ab46d93311c0be3725e42e943ecdcd71569dcd5a1f3628b1b62ad5c7645cf",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "0bc98dbca2486b4b8360d1c54a994031fa28d2c9cea1c9b179f34bef853f6cd4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "2957c787e19ce8b30bc3c83b90565e10265915ecf7bddac64d1734bac48f5182",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "4df4b2392e22df1f782668603f0bd688fcfc5cdc519b9dc69d1c55622c97f951",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "564beefdf338aa650559f51c4157d34fecc0f653fef1263e50a1d688e52db4ea",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "64bf6d8761f73ebc019d48717340f29fea38fd434a8103dbdc84a3049ae417f1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "65e0bce768745d8fd168ce83da4076e903c7d964cb33a505a2ff238c18ffa920",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "6f076c338607fc85a867a4ae74d7c8e09e4cb97956559b36c8e6f6c42ecbd03b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "7f750d3c323cef81b850b5c71794f7ea29ce7d7f087fd3e5c206c6e82cc095ec",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "8270daab7b6721826fa236b7feeabe1112e68b73c426c9cd73b9fbd2053db6b1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "83331884210ee37f22dbf08d681adb0014f148b0ac4116ad08759b244d8dcc2d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "86072f9a766b7e5796d573d2d9452a240298d9c9a015218c1e3591e3e62f5948",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "a847922ed6b2672067ed9dd7c1873b62c3fb4f88f3480ac5d572d16ebf3c1f86",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "a8793c1e84449997672201ad951cb6d9dc6222ce786fbc16f284954607b0651f",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "a92b0428357e2d1bd3898c42dde4928257be30d9bd9469d9c8964fe01cd161e7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "b8e9450ea842443b36e9b7829e226e7cdec0c40e6e5d047ad6c6712fd0a8986e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "bc32b0e4e049799c4951ef96495f113d7f62195ee4fbe0ddaddd8041297ca2c8",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "c041d499c16ca9bc0ade005077dca88dd321dbbf0d3ba235cfd8248250b6ddda",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "cf5aa3e9ec8791734844e4624529091f3ce96490add33491f5f70f4bfed8c7f4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "d96b1de6274b16bdf19ca8257a53fb59961f7e2137d5812f42cc7d3148176bba",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "e15884a2a7c5b5bb8566f5dc9258cad43993b8ae24a8c7938004219a0ac1b9ca",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "eaa7324eaeed0412913002e0240219fa07c9597deab7fb82e25e29aad12b83a3",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/template_funcs_test.go",
+      "node_hash": "ef0daf28921c4dc47910cf5767eea964fe065c9d192c1241fbb80182ec75713c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/watcher_test.go",
-      "count": 2
+      "node_hash": "2a4bc4c97570bad9af0a8695f95cade4a7b71984e0393286178d394aa5c9c4d2",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/ingest/watcher_test.go",
+      "node_hash": "434fc73e38bdc68ca36ac04c7cd5dba2948c963488a8b126dedc9dc170b35256",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/lang/lang.go",
+      "node_hash": "99514a2aaf75395c0868a200c546d3de32a87012e7cf0ed438d033f5e51ec2a9",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/lattice/greedy.go",
-      "count": 2
+      "node_hash": "8d78d09fc13a85220f5b80a7e408e613f3ff123f513c2e6f2b048b1a9c60e94f",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lattice/greedy.go",
+      "node_hash": "a5a32001dab770f5a5f01c1640aa59e8c3a6305ed81c1c997f145dbc5d7f0e39",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/lattice/infer_astdb_parity_test.go",
+      "node_hash": "8962f2a1f64c4e8878254e3197ba4ffad1db31edbe36dc2e3411835687ad3d20",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/lattice/project.go",
-      "count": 2
+      "node_hash": "80d94860c0c4424da28412e2c1e0d4207fdc5accc3078026a41cd65600f404e0",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lattice/project.go",
+      "node_hash": "baa3dec60b5af5b187c6f0d50b8999c601fbe5821a6ecad9c43d9469f00bcd3e",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/sheaf_cascade_bench_test.go",
+      "node_hash": "85ebba25b6388e3d56f386d935db9b57b640cb35ea1ff1a16cd8fcba343775b2",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/sheaf_subscriber.go",
-      "count": 2
+      "node_hash": "740079438be9c743be94325df67f005df1178bf4a287ca3784ba6d4cd0b3be53",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/sheaf_subscriber.go",
+      "node_hash": "7c6a3125b7f2469f6307e482d450c87ce959e89835b17a57d71eebdb77281ac1",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/sheaf_subscriber_e2e_test.go",
+      "node_hash": "2bb52145548cf1e4fd382fa4115a62622942b9f15b4dcdf2f421cd9a17053535",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/sheaf_test.go",
-      "count": 2
+      "node_hash": "0384dd3939f934c5e7b60d2e3560afe1c13619c64980583909a4f54d72f450da",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/sheaf_test.go",
+      "node_hash": "14cd05a5b18f09379c4525ec909ce27a148f69a844ddd4a637e422fed5e155c4",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/socket_bench_test.go",
-      "count": 12
+      "node_hash": "0581589bc765e062258d6564b90439881b119d1c05b8ae6aa16d4b84984c80fd",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "118972bc25acec00fab3f0b744346d763c4e495c8828055a4cd04e7b57ecee66",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "2a1f1bbd77f707ecbb05e7d44e4126375d14941f3053d67f1ab2f862b58381ed",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "33249b33ce840195c26fbd9317f3d4b59a788751fba1346da4762e98869ba0b6",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "506b48c7ef8cd54de077b8f0adae44fb47be0b62d21093a757267b85357caf73",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "75c5149e3602cd94fe0e52320b28a83fef5e3d34211cfa3cab788bbabb304be2",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "9d4e94870674483c1cffb2c6d10bfb53ad7f63b170950df5e927019446c53ad9",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "b020c4eda9e1ebd178210ef636a8dafcbb03de5524df39eeba30e261d93f6191",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "c485719ece13e142d67f7ce5fd39cc1ce220f49b05ce7d9173a3aeade11abddc",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "d54fcebb8a974f0a1f621001a13d216c080b0277ae45a9935c87b78ae3f80b30",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "e2d51b0c99b5eb4ec277b0d780cf69c9a33aacf49c41caaf46b93f687381b207",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/socket_bench_test.go",
+      "node_hash": "e3d7d3fe982a0061794bd3a2bee2705989b0f829400f6d8403ce333c7f323f54",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/trigger_test.go",
-      "count": 4
+      "node_hash": "0fa03edccf38f75bcd73702c5126ca10298522f126e1c1738d447160499801aa",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/trigger_test.go",
+      "node_hash": "7ea8be527f08a71330fe9ec6d13e2c206f820d4c10bf5b0c81f3ce84852bd2e5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/trigger_test.go",
+      "node_hash": "a8e9a9613458582598b6bb158e1bc962331971221846525977e0fa03bb548f9b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leyline/trigger_test.go",
+      "node_hash": "c4fceec08b7f30920688f630d9bd6e127712392fe470036c3394c92b992e433b",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leylinegraph/call_extractor_ast_test.go",
-      "count": 2
+      "node_hash": "1de11520930e944bab6c0ed5a898bafb37c8159367588d3f0a4a30f1c2a2d7ae",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/call_extractor_ast_test.go",
+      "node_hash": "bb6184ecceb31a65b0a1af18f7595a06bedb5d474ef9951642e6783ef20a16bd",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leylinegraph/fixturedb_installer_test.go",
+      "node_hash": "0785a17c1abe98abcac31b22513cbbdcb24ddc1469247cdb48d2ed71b0b7e433",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/leyline.go",
+      "node_hash": "3816c0adafc214ba49dbac4ad43cf68ef4682e1206d08b8b520a57d472ee48aa",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leylinegraph/leyline.go",
-      "count": 2
+      "node_hash": "fb5f42df3839fffaa02f5856e8e5acfc59bdf617423661fa22027dd71fda6e8c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leylinegraph/leyline_test.go",
-      "count": 2
+      "node_hash": "336e18c471c338577d54f7971b41727b0c97b7a8c0608e4176a71ba8e4781362",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/leylinegraph/leyline_test.go",
+      "node_hash": "e9c01c419b0b74b2a62a672ec2a11d14bc6d5870e6d5c60cc157b18ee2dfdd17",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/leylinegraph/uds_graph.go",
+      "node_hash": "23c6b8654c90972512e21a22f79d657325bdcac8c3e7879b9e9065cec489d99b",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/lint/tool_preflight_test.go",
-      "count": 6
+      "node_hash": "16a56d772b2ec18ecaefe62a71a1fb91bb011b48a28a72e6b271eaadab666da9",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lint/tool_preflight_test.go",
+      "node_hash": "883f64ad48e8be1a1e25237342bcfeebe5a8aa96a86fec7f36c6fc20cba9fc24",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lint/tool_preflight_test.go",
+      "node_hash": "8b871d5d53169be1b52d57cff3134e7b31ac4c1dcf69b269967ac83122fdfae4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lint/tool_preflight_test.go",
+      "node_hash": "a1e653da5958815888031438b3d5f5243dddd73e0e44db46752137d31982855b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lint/tool_preflight_test.go",
+      "node_hash": "b68adddcc24e176f5ca669614efb917d5dd34decbf57df88a8e28a020d016c79",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/lint/tool_preflight_test.go",
+      "node_hash": "c87ad454c0b9ca7314b8d6cc40537ffbd9c0c03cf9929bc487ae5f1e59e76702",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/materialize/json_test.go",
-      "count": 2
+      "node_hash": "4fe0f6277f49a3eb05cd86aef6a7890d0ffe78b2c69ec3ed88af879f2c05db9c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/json_test.go",
+      "node_hash": "90060f8fbed3172c0f6135edebaae2b85b03fda7db18f14e06fbd2e8251ae889",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/materialize/materialize_test.go",
-      "count": 6
+      "node_hash": "6ae5208847fd7396aebda3af41d6ccb50470f58aaba06312e46a7d922ba4d0b1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/materialize_test.go",
+      "node_hash": "82a5694a6b46998417ec64e84c6f6c3b9d0ad4d69e6fbf0747a7363999f2b46c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/materialize_test.go",
+      "node_hash": "9afa8a270fde71401d842e6f7097127858218f422133f0b3d352187e4e215454",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/materialize_test.go",
+      "node_hash": "d37ec506fa52c5ebd6c8ec866aae19f6a63e03257c4a2543d2ade4c2a27b8bc9",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/materialize_test.go",
+      "node_hash": "e5b817fd38b16f3f610e2f248f67eeff7dfa33e6927c213d71fde1938138b727",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/materialize/materialize_test.go",
+      "node_hash": "e622719952a81f463c5f578c716e2b3d4d0db6230edb19dfbe24db63d35f88c9",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/all_tools_self_test.go",
+      "node_hash": "e7402bb9116b08e90096cdc9b20295071f79fbc85ae4a2076646b6f0132e2372",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/escape_test.go",
+      "node_hash": "6d85458850b9d383707523b37189b5d8c215d081665851ef5484cbc55e65cf13",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/escape_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/mcpserve/fixturedb_installer_test.go",
+      "node_hash": "cc1c8e6b811cbeb5b16b7cfca0eaf8bba2d75cc477712c0b0877feaed68fdf97",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/kind_filter.go",
+      "node_hash": "18d958a9a1fa932c4e60c5761e0aa0eab3b636e1dd86812fac96b805216552f2",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_api_test.go",
+      "node_hash": "83e217d316ed36b4cde04227cdfb1a8571989c7a995c0242bd5dcbe7ffe6848a",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_find_callers_bench_test.go",
-      "count": 2
+      "node_hash": "d21eb1be3a986b3f964ce110fc2d3423578282a00a4983cc20f61ff4cb934862",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_find_callers_bench_test.go",
+      "node_hash": "ecf2535a56c10cc5d5d638bdfaafb15f02cb127ac456d0d2749643614b0811ba",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_find_definition_bench_test.go",
-      "count": 4
+      "node_hash": "17e3bfe0cf781e2b815a4ad8a650c305281edac55ea02fdf8bd4ec9cef2b0c53",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_find_definition_bench_test.go",
+      "node_hash": "adfad20a2fc5efa7cdf8ba9db694c17822706036389968325b31a391693c1c4a",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_find_definition_bench_test.go",
+      "node_hash": "e06d726664d384bb946b7412a0e8f5a7534dfce20f410c2750e7ace089de6df1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_find_definition_bench_test.go",
+      "node_hash": "f851f3eb7a8fcef0e72ca6d8aab40fc260029b333e428788e1fc17c7df74a02c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_hosted.go",
-      "count": 3
+      "node_hash": "4e796d99db952a0e95d26ba157950259b796057f7f118df2548334afcb943fd7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_hosted.go",
+      "node_hash": "99da75d799a012e2deafa9125215d81410ddd20f367851fe1fcc75a55a22ad67",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_hosted.go",
+      "node_hash": "e523ae2cb116bb9a3832bc773a6f65f46d8b94f05950950eaea039b0d06084e7",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_hosted_test.go",
-      "count": 2
+      "node_hash": "5e8466535bbdb47ed7f9ccf974b0d27dd761a0797c247445a5096172a3cea8ba",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_hosted_test.go",
+      "node_hash": "ac66d8a8d3e7be4b45b8a8259320c2347d6c6e48b1e3675f2133b62275070588",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_listdir_bench_test.go",
+      "node_hash": "7a583a1202434aeba607f3a713ef182dbdf7042054ff5fce5cdf853731bfcc20",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_lsp_step5_test.go",
+      "node_hash": "c43b6683db194541a75e56fa547af1cfd19cac678d42b7ce470c341f84a1717c",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_registry.go",
+      "node_hash": "201fe839266271800216e6d396a15495191013aa624579ec5766192e8214a982",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_registry.go",
-      "count": 4
+      "node_hash": "5952f9d834363ea308351c0710fc1b564d36a89a8a2655a69b6b3d1e6e1e303a",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_registry.go",
+      "node_hash": "7cb4366619da99f31d43a840f5b0381daea80fa502838ec661a6c5704d3b7ec5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_registry.go",
+      "node_hash": "c8e872065286597ceb1f60ec10c45910dcc3ccddb7750ac4ee14f2ebb8ea4b27",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_search_bench_test.go",
+      "node_hash": "90881c5f3fa2c86748f0cee507ba1c921ac4de7a068511d7ac63f07f0ba54179",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_test.go",
-      "count": 31
+      "node_hash": "05556aae1915ba6f7119e73aaa7fadab89fb2cfe7a8838be61cad17dff212801",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "10ba3017f4615003e549194b71647b16249eb23e8ea2ef39129400362046dbfd",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "155e085b73ed6e5fe31dc482cbc185e205fac4d94d1279b0794ba29442e02f57",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "15cff641287f6ae5498c83613166a4dbf15f18764e0c99e980857077efbb41f5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "1c64e53bcea008912762102ee9d38535f7fba04e6f0414b2a3af6a7cddde473c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "2502b2d3b442ff900f86eda972ca5e3005db554f44ec8ab6573f560e149505ce",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "26ecc7210488d6d6541bcce90d25bbde2c997d0a5093babf3aab36b034736e11",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "3395c70d8f24ac0a828b110976e710bd78f87aa47b9ad7c60700dc01510454f6",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "3a2912484fe8189c6e318f64887b0c137d689a9c703f6d2579d4c0e6147a7285",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "444fe859f76abecac2db87bfd33a5bb38dfac456163f4ef26a6119bcf71b85a6",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "5b6de017b1e742562276bafd03f4eee3eccc12bb91212f4ec321ec02579b0f77",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "5e2aa464567359fa64ae67590f49edf2ea183073ce13a2ae1568b16e286a91f7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "6879ea9f57d2f34456bd7c5ed1e3e23a4c7160ca17f37905ddc34270ceb63349",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "7493c0e455340472851ed5be5d291c8dd8038f4feb885ffd60dd73fbe42c217d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "7c82b5b49d7bc666f3e3cfd7bf36497bf7df1f5cae3095f785fbab96c1fb9fb7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "7eb4bb5f36f7ffdc7500404335f29eab119af57d69eb63c0814b8d0d5527fe77",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "86c431fa09bdbb81da24ca07c9e40906c7df33dae1b2e1843a1b1be3aea8ff62",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "8cbec78209d4c268331f72699e5903bab30898cc39a2ddeabfd172d04455f3c8",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "92041599ec3febc43060f96d9da1d5daacb5e656a142fb6012d1d9f64bcd5690",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "942d857b8d90ad684370b0d180233a62f97a24f59bee2a27752b607fba1f5ee5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "94e1c167550049f606362df3cad0d2509d694840072ce46249b46abd9bb9f4ad",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "963af2821d32e0134c71bfe3930798dc5c0eff03ffcc0ac32236136552c915d4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "a8af96bde25802f1e4d00495f2dfbd2d2fea2370e954e7da3a6b545c6b522182",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "b6d3453480cf6ba4893b5d35628758feca46c9809437550f36772269ed43faf2",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "cfb6e76c0fcf224a68b74c8991fccc9b56f527a2ea7b59cbe61322227338c30e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "ded0ab0ad457b217c6c47635a00338bea0c5eb7bfa75c0e53c18183d956d8bd6",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "e5dc94ea715df0eb165c451fb4439047a28a6b2530df9901d7cde1fd95b983a4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "e64c904267dd00eb93455f376fabef336145d7b2e2065f82a69e5e4d1d6b3700",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "e73fa889838de5a02f807880fe9c9a21aa0896c701a549d521865de810dbc9b8",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "fa087e625832fcb03c2ae5ed30cacbc356ce42cfe95550e6ea43e245c08124fd",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "fc7351593ebd2bd3d1ac05332c8e23a6cbd421317ed7a2907bdcf34c6b19e2c5",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_write_test.go",
-      "count": 3
+      "node_hash": "309f996b7b90ad23e2b1d92d1adcfbdc030b6eda82b883f91a10b401996f1e78",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_write_test.go",
+      "node_hash": "5a818c4ae87b078608971383b3ac0dd53bdbf8bb304fd69ad4a038d0f655a874",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/serve_write_test.go",
+      "node_hash": "9ce9eb8923b0dec02a8e5da58578650c7ff97a2070a0de83e26cbcc469428cb0",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
-      "count": 4
+      "node_hash": "05efd21dc921d03a700541dc5ce31497488aedb8a4e9d3b2f211f81d1d00d0a4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
+      "node_hash": "38be6090b850d7fde3fa703a1c6f8112331504ba045fc6191173d1727d720ef9",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
+      "node_hash": "92379d6d02541a2845d7f4c2efd087271cd96bcbdfde99269e67e9c636f0b435",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
+      "node_hash": "d10fe07a4cc637baf5b0df7dcfe2c1927624b76ea8174be5a7bd9c14d62a0731",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/sheaf_wire_test.go",
+      "node_hash": "c823212ea404e7a895bf8f710929b0ac1626351b75eea8d98a6b4e1e362156d2",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/mountmeta/mountmeta_test.go",
+      "node_hash": "973aedb1eb22f70e2ce7eef8f24633dee698dbe5aad24dafb5a2f5f61c1a8ada",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/nfsmount/file.go",
-      "count": 6
+      "node_hash": "26be26191347a7d4e5cedd5ad6aea07df29d85313040b608e674eaabc7535b92",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/file.go",
+      "node_hash": "4b83f0a3ebf4b0ed4dc05cf363c54da773eb14cdf04a05ebedc5a09ac261b667",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/file.go",
+      "node_hash": "6ead2a84620267160886b524f1dc680a7ebd672d2471a9b2112a5539a6bcd273",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/file.go",
+      "node_hash": "9733ad67ce2b44c02fe5c5afef077defbf5504a0e16a544be61169968d34cc4a",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/file.go",
+      "node_hash": "cbf5537e2cce4ea91a18da1be8a29f34d420b40e9ecc9e47d90ebcd5f32706a1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/file.go",
+      "node_hash": "ec14c2c62396f5fe58dad47ebaae4135b6501ae420d6a9a006a0ebd60c67df40",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/nfsmount/graphfs_test.go",
-      "count": 14
+      "node_hash": "19775d5bfebc42b102aac8f06984af7e39f639374873a283fd233df3e9506b3e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "46d6628514bfc88adc07932362f9811f04ae17a3ea95419dffb762debc086e17",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "4fd43fc0a02313e8ca9d1c81404bec1ea9f2b1db40497ac0589afb32002af743",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "5684fd9a4afddf0669bf502b6df5e2658db2947801bb4c2d62356bc086fe753e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "5cb7d445b194366d34e87484eb9644f186cb59a6ba1e06c7d4604f0554247b04",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "617844551ea663bc2dbcbffbbf0cd06c878b1fb018887cd7ff928767374521f1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "7dddabac37490cfc1df60764dea8a061f9e6883b9855e5c927c836522c38fb8f",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "ad59ca4e9b73173de51abae43e1a8536e69912187b4eca15640abbdd703c9c71",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "bceaf147fa75dad3af567b11b00f4b5941faf1582fc7c053d0960779c4b93213",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "c37e8bd3ff16de62ac9a792ebbb18a25e1d0aaeab76e1019771f9222dffa61d8",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "d27ca6c1d68c2eaea4f9a30a1c84bff2fa93ec748b4d8e4c0365675c5d90ca9d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "d6e256692a92a3a08a5043caad81b2b184071a0745d248d455432342266e9a0a",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "ea066014b0cef27d0bba53c33849fc7b45708e6e0ad3e0a075777f9805d0064c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "fd825e134d8d041a1f7b0ffe0c9ea92ee4ec5e56a42b6894c2be4053cc6f6550",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/projcfg/config_test.go",
-      "count": 10
+      "node_hash": "06dcd89d2f3a9ea59c7eae44bfa42643a7208f5c52356cfbf27412ffdb6fe425",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "1750941a4b7875e0f16699525c035100d4ed4ebb0876e793a03fed72d9de69b2",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "71ca6c4c789751c8f02c4629617d43128fea27f2b8bbf115a0e02679b843eb29",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "73bd279162173a9570d2d349f15badb4cb4dec1c18cdeff8afe5543749de6a1b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "8df9c0793bddb7e065c474c400efdb5d586b39b9b33da212224b44849257dfbc",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "9f3224a79ad6656f480042441ec020fe2d9afae81b99af7fb9e9ce41c4b3a477",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "bb9e2ba14c83fa821c7c52ec71584926d1cdc74ee4a68591bbacef9dc64c7ed3",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "bdd9f0a1065482e30f232095e277c9eefc5289b965ad4dafceba1fb3769d69fc",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "c129e362c38a09e4ec701b8f47ff541b6e765bde364cfe250a72ef5f42a7ca4d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/projcfg/config_test.go",
+      "node_hash": "c691efdfd51cfb5a8b710fd45ff7431e0a605098913470b2aa898a328a359fbe",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/dead_code_skip_list_retreat_test.go",
-      "count": 2
+      "node_hash": "5badecf72f22d562b8a16ec5bfd8e7e7e2558ed7778952ad7d5445694c979844",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/dead_code_skip_list_retreat_test.go",
+      "node_hash": "81d1fec5f0ed821e282b881e2ac66924a7799ea967f873664a88049ed645ce28",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/find_smells_api_test.go",
+      "node_hash": "978c890c0ac087b7dda035af5aa9bc0aa20fe2fa0067ed6aa57737652c15a89f",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/find_smells_cli.go",
+      "node_hash": "ac2337a468b3a7a35512975364f96be980e2bb7b8437203ffa14ef865303aebf",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/find_smells_cli_test.go",
-      "count": 2
+      "node_hash": "0aecd7d8164f332db1314aaaf66eeb2249883cfac925d9e68863a70bae1be847",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/find_smells_cli_test.go",
+      "node_hash": "61ce85ba727f3f27ff5419c0ba4c8fdc519986b71912ce3fbb41504b0198f8a1",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/serve_find_smells_bench_test.go",
-      "count": 5
+      "node_hash": "49bf56b3952fab3f1220e46af42b2e35c55c2435a2020f9a5f0a9dedf78d1e62",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_bench_test.go",
+      "node_hash": "62e9a9712c3e33010f72a1cd55611f15b7248ad34ee797fe9115a5e7b072154d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_bench_test.go",
+      "node_hash": "8e5e1e835a1d8c2f4afb7ee154c845abf53823c369ddb85dc06c46859c5af1df",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_bench_test.go",
+      "node_hash": "b7f59b29c7d23007a49179642e7533acb5764adb0359bf289519a5497b56875b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_bench_test.go",
+      "node_hash": "d3579f0641b0cbc66c25afd076706122c7b5446a343e4c511c96fb804eaaa7e2",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/serve_find_smells_load_test.go",
-      "count": 9
+      "node_hash": "1b559abf3d770a9eee9d4c902427b1b7d9c14195a3876652ec6bccf77ed48e03",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "206fe5d043d35b5e7d805eeee4fee4142379566d9c24c0a3587e0bae92515e49",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "5c57571b2b72718df379b10e908309e4f00987e1fce9ace909c0f126478c7fcb",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "60a85477b8d598c1721a3aa5016cd52ba229b20d3620ff5e92b7d1dbbcbad332",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "7b74ad1bf7624559d8234c371cbb92731857ae1a9a2ff6cc1cbddd4436d951d3",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "813fc078936aa5ed050e1cba55a1db2f15c552396e4abe9f9162b70d026b68ae",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "b8d157fe8205ee1c553c3bb8782dd702b9a1e103372ed14a2e9d93230a38833f",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "bd000c9d18f6ee5ab0fb7b68824ea2c25259772de52604a92e09f012d8a7f427",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_load_test.go",
+      "node_hash": "d0a9f56a59ba4cecef104c99f9343bb381fbcec05323fc0ea3fec9ced844f39d",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/serve_find_smells_test.go",
-      "count": 29
+      "node_hash": "14c9166d36c0266abced4448433a4efb9e510cfbcc6a72ee8de67be5ae5d2fce",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "internal/smells/serve_find_smells_views_test.go",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "17c2db57263de0bbadaf6c749226f7d1b88df1bd1e82bd64470d5d0725914a0e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "2024c6cf9ccbf4e8801a8d94c01d1e1b0e636c07256af829e636df1af9bc5728",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "2288dff9e335a1730038f611c4ada9835babc5459408109f6a90ccde769ce525",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "23db8215fe89283da44a98614d7085812338a42bce5d2f6f9d0e695463a346e4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "48f38e03c6348f48c491c64ef2101310c5b2325159630ef390e87558dbb84323",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "52c3608f260e98d19b510bdc67b90d7b22bd398cf874e6e64362a31280240ee0",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "5c1bad2bc5c7b18c9c45692d5ba4b870d35ffdd0aee1f524c95dcf6af7617d4e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "6533ae30e32a96f514061b7beb9a16a0ad43eea09a18992fb386570ce1ea8289",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "6e2eb23779c7aa3551f4d292644eb693b9ec8cf708ff3af6756ea6aca5325aac",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "7cb97316eee55b3d7a1b5d3c37a962c8acc666014581e5c40d0fb55f3de319d5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "859d4d22967c9eaaace9f437e9a96c8864ca7b83f5fd5596c0dc32c3a8fd669c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "85b4cb7440cbd070c60850a16b09a85936b0cd98dc4d15a1c84af75209d35ce4",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "960ba1cb9a5c05d2bb2d80d803fbeb0d8257500afc4b077b978a8b688b533680",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "96c505a0b9259c5e7c14644327ac44a9a598934d295ef4a6628c29ad0c2b3d37",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "a665bfc0e6a49a85a962fd82bd2c1fa2680866287aea5740cbe280791b1e3c44",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "c47cfcf5208f9fa5fbaa7d03eadef0fbee8d797454328eec2bad87e91654bab7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "c5cafcb4e6028baea9b996a03d189ff2335a35f6c769b517a10e03b6462c2007",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "c75435b1e4ed0234f8a1172d1873834f17227afb57a0bf30af7b7190357c9e82",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "cf2d488e9bf7fda9c885e206c21024b7993a990988a436a7f91b196e2a0e4bdd",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "d1ba70146b48279e7c58fbee32837b0ed1b3558007c4178fb592b29ab5d64d2d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "d513965effdb9e7ed0922a9902758a8dc35534216b32b737f39743bbefd63c89",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "d7e270bda11a8ad9b3fec1747e60933567038fe1099b8211f8c28cdaedb56ce5",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "d901362e695730a14013b8fbb488ac70c06fd39ec18039c77be2b92441deeeac",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "dc9f1a04aeef3575c2ae913353efb2db02a047b33b3dd7e249585fca0167f496",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "e30424fb87713caa13e04bc9c0f9b54dc50a5bde8dea07295e890886efbf899b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "e6342035ce022300bc4cb9b3115e28bea854e58d1c20641f2e180cd996ee0ee7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "f65fe3c630bdf8844880d2357226d45d1c071a4ede2ffabb27b2b5096259b5d7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "fe919d837f677d128946a12de7b6fc5ab167f04816fc96605fb439e2e02f5289",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/testutil/smellgraph.go",
+      "node_hash": "dec684078299cb60e503bf909f70de533ff777e3e92b6401836409c069b5f3b0",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/vfs/callees.go",
+      "node_hash": "8d4bea0dd0340813b76fcc4303a3f5780fe5b00d20047758786765b0b4093060",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/vfs/callers.go",
+      "node_hash": "fd0b5a2d59ba6d46ad1b08206128b5bd9b8fc25c4aeed728130a4f305f689a17",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/vfs/context.go",
+      "node_hash": "d83384e41791a05db06ceefe2d72397b2044b138bc5d1c6043773abb68ca3351",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/vfs/location.go",
+      "node_hash": "fe26f4954be099960b999e3547a83f889e90893e4d1fb1c53d25d5cc7d073338",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/vfs/resolver.go",
-      "count": 2
+      "node_hash": "4f4c7a9268b066736ec09898c57c4beb1731afa2f7b0c4ade5c6999fb6bf3a78",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/resolver.go",
+      "node_hash": "d953691d0dfb5c4bed2eeae40c078afc66ce5dfe16e84ecfd711871d505d64e9",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/vfs/resolver_test.go",
-      "count": 2
+      "node_hash": "a44e3d5901e1a6f4425d134d0943791b103eb6470093c35568155f8d702de0f0",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/vfs/resolver_test.go",
+      "node_hash": "bebe8265eea929be590fded2937fdda0974b6652ff38737b83db08631c67262d",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/writeback/format_test.go",
-      "count": 2
+      "node_hash": "5af9f371f9655799dab95915ba467dc2b35ce217f7afbaea9dc5ef95cd915b9a",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/writeback/format_test.go",
+      "node_hash": "77435822106559af86c55db0532c808b4069925ab8eb027c79cf33e91fea27bf",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/writeback/splice_test.go",
-      "count": 2
+      "node_hash": "3a04ad5742354c9188cf0fed656ca168914ed56c1ca8c53343eecb0c204961fd",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/writeback/splice_test.go",
+      "node_hash": "ee89fa5486d9cc7f1a4598700bebfc22923b5b9616c1fc57cbee645a48092748",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "internal/writeback/validate_test.go",
-      "count": 2
+      "node_hash": "49254785737c79b5fa8dd19fcf96023a4c9c533cbf07522dc7da0c1e7f398c73",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "internal/writeback/validate_test.go",
+      "node_hash": "b8b5c05704b31c36141e6c9708057de238afaa4e7736aba0acbb8cd817ff4813",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "resolve/gomod_resolver_test.go",
+      "node_hash": "fa7e2fbc47dcb9f8ce58938dc9f3bc18437426560cbc019d2862ecf0af270c60",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "resolve/localpath_resolver.go",
+      "node_hash": "8880fc3d5c056ce239025655ee90292b972eceb0fd08ead63c1718a52299aa67",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "resolve/localpath_resolver_test.go",
+      "node_hash": "1e13d54366a3d6ce0e1f14fb7c47897233a4dc1387ef38810001556e916ae700",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "tools/coverage-gate/main.go",
-      "count": 2
+      "node_hash": "7bd9d0da6fb38e7dfcd4c21c98ce3d9a6c8e710bd96a171fb59474d76610585c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main.go",
+      "node_hash": "b2d8394d37f951c05cbdaebae15a07bffe7397a8311788c4b712132ce7b4fdc2",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "tools/coverage-gate/main_test.go",
-      "count": 6
+      "node_hash": "46c9abf61272989064e7f23ee980c8d15ff274a02eab4f158ac3fcfe28f6ccf6",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main_test.go",
+      "node_hash": "5daa9788d53bb0280a6ec2063472e5de88788b4971a20054da5f4e5720b92565",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main_test.go",
+      "node_hash": "62b42209432b33241b66ef3c495506f4a072f20e28bc60e203699da8831c2da7",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main_test.go",
+      "node_hash": "b80792594ab5a561773f9d26745382d17ab9c4e27590fb3b078845f8f8ee4274",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main_test.go",
+      "node_hash": "c74beaa7c3e8a28f5135a6655a7887f3ad56c3fb2a460a750f964340179d4c40",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "tools/coverage-gate/main_test.go",
+      "node_hash": "d08e509a06d87e32a8ed538f563667381ebc47b51ac9d5691ee9c9beb813c376",
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "tools/fixtures-rebaseline/main.go",
+      "node_hash": "32952c68cf7d3e2d24301c2b3c61b28bf3d7a0673dddee2390aee9cf0f2d7287",
       "count": 2
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "tools/fixtures-snapshot/main.go",
-      "count": 3
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "node_hash": "99270b6d31d0c61e6c8c1735ad515a7fc8524a37dd50aa5c5e95575b24027590",
+      "count": 2
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "tools/fuzz-gen/subject/parser.go",
+      "node_hash": "3aa3d68dd84b8de9f2db1e2555656f0eeb8c1436194fcd646c863746b2308481",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "tools/fuzz-gen/tasks/task_1771121798/parser.go",
+      "node_hash": "87204c5dbbf11326678b61627a1e46103a18e79a67f75993715bf2c985e70f20",
       "count": 1
     },
     {
       "rule_id": "duplicate_code",
       "source_id": "validate/validate_test.go",
-      "count": 2
+      "node_hash": "b8da35005178a29e1381052e72d6c31dd519df4f5c3d3f9a97f663695f9ff50b",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_code",
+      "source_id": "validate/validate_test.go",
+      "node_hash": "f02642a769c6d3321530249c5701f8ef0c229cfbf367846cb1f7b08fa932cb94",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "api/schema.go",
+      "node_hash": "58f904e7aab497464d7bc51e5770ea8982126c5e8892bcb6b059382031cbd8ec",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "cmd/pack.go",
+      "node_hash": "50eca1e991730ac498fb66900a2cea4685db2cf23a9f281002fef3b93f43f2cf",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "cmd/pack.go",
+      "node_hash": "65a2a3302b56082f29e8177962f5ac80773745845056ae6173d2ac31e17ccb21",
       "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "cmd/utils.go",
+      "node_hash": "cbb917052a97aae5e2c07d770680a9b0288a7952e6a083cea37b695bd8894297",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "examples/testdata/sql_sample.sql",
+      "node_hash": "7ba53e09abd35e3145015c887581535a006a12e189c751ea9747a6c2987b663b",
       "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "examples/testdata/sql_sample.sql",
+      "node_hash": "f2371c20d30a390dfb9d10a924e04c2ffdcd43eb1bda4895cea1d9651cb8cc20",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "graph/capabilities.go",
+      "node_hash": "13636aa51d3d058c225b267b9d3cbf0da1ccabfd84397d7f16a69bea88ff5e50",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "graph/graph.go",
+      "node_hash": "35151a1f17700edc98f274c2d8b44fa9d65476e85fc4e722e5629782a9382b23",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "graph/graph.go",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "graph/quotient.go",
+      "node_hash": "b8bbf5e3ab5e9fcbf8b478dc9969395cefb90c1ebded5c636a25b170d92edd01",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
+      "source_id": "graph/quotient.go",
+      "node_hash": "29f5ddb1e54afd61cd1108e98a21d80336858449c6ea4f3b81a6ada0cf6d62f2",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
       "source_id": "graph/sqlite_graph_test.go",
-      "count": 4
+      "node_hash": "ae27207b797386b1b3dddec1bd864fdf01ceefc2a19e5db5fa49f1e4e4b1aa26",
+      "count": 3
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "graph/sqlite_graph_test.go",
+      "node_hash": "cf223887040d927fe95725f7d62629c2df19100513999737d67acb221d17b9c7",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/buildcache/cache_test.go",
+      "node_hash": "6f34ce73d653c79d667a650d00d4268ed6a35bf4460cf758f1f0e1d4604eb730",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/daemonguard/daemonguard.go",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/fixturedb/types.go",
+      "node_hash": "bed96556794cc0350743e9409dad420c335ff433c6bb158e4a4ea3865c5ab882",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/ast_walker_callees_e2e_test.go",
+      "node_hash": "a193148b63e5b7e52c0f5ad9136f87204729740b2b74fcd2efb9b11e0d30db4a",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/ast_walker_calls_test.go",
-      "count": 2
+      "node_hash": "b928587340c55a85e39b4aa555059503e88d9616064ea0d37c5c0c9e12b34603",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/ingest/ast_walker_calls_test.go",
+      "node_hash": "fc5332f96ee5aa439fa9eab3c2066fd96a4c10cc35d6dafb1ed27da72215a169",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/interfaces.go",
+      "node_hash": "c3b025cbf8ab6151fa19b13919b291be8d51bdbb76658657a86a4411c4e0f443",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/sqlite_loader_test.go",
+      "node_hash": "eb6fcddf4daeee3d03f7ad4ef29d83b00e75e99e13c8778e82ac9f85ba45fd6a",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "e1b140a2d74911f63d046dc88bbadaf8248b2b470c05d2ea7f10468b4a5caf2e",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/sqlite_writer_test.go",
-      "count": 1
+      "node_hash": "f9cdfcb3a62ff54be5708d7ddba8e1702fee209bc08a0e103df633e12b4c9e4d",
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/lattice/project.go",
+      "node_hash": "d02701b45559bf501e4201a58d4d141ec07b51fb1e2ed3bcf91e20ae4734f762",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/leyline/owner_record_other.go",
+      "node_hash": "d85ffe4a8732fe8ccb19d731856966c40cfb2a8c85828e874db0250379797c55",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/leyline/owner_record_unix.go",
+      "node_hash": "1683442463a306f577b4c6593af6338b1c25e20825d2d18fbb9ac8fc27f99032",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/leyline/procgroup_other.go",
-      "count": 2
+      "node_hash": "080651400e575479328b44680b005a162c01f52233e278e07aee0b4de0b6f7c1",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/leyline/procgroup_other.go",
+      "node_hash": "df9a7733b69669f69c21461b703126896342af331fdcf3e8bbe518453a0b131a",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/leyline/procgroup_unix.go",
-      "count": 2
+      "node_hash": "bafb8055521dc9628113240896145699f220ef88b2f232742cbe1dae95f31165",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/leyline/sheaf.go",
+      "source_id": "internal/leyline/procgroup_unix.go",
+      "node_hash": "c0d95fc6d453a85d76221004105bee7443b0a4aa6eb044686688017186208a48",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/leylinegraph/leyline_test.go",
+      "node_hash": "7aca7774eeda3d39a636451d77bfaafab91a954b2fdd058a053c2511fccf9470",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/materialize/materialize_test.go",
+      "node_hash": "6ae5208847fd7396aebda3af41d6ccb50470f58aaba06312e46a7d922ba4d0b1",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/all_tools_self_test.go",
-      "count": 1
+      "node_hash": "e7402bb9116b08e90096cdc9b20295071f79fbc85ae4a2076646b6f0132e2372",
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_architecture.go",
-      "count": 3
+      "node_hash": "5d149a6b3a30e2b7f0e97d56a0175f246cdf7e212650341eddbc7d7b1ac52e3c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_backfill_test.go",
-      "count": 2
+      "node_hash": "ba4654baddf2c170a2ed482c0632b0f33ea8841c20189a9851a93bd4fd5cec83",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_backfill_test.go",
+      "node_hash": "d3a2667d8af5b712d36e314fce1c2d0b3b79a61a74bf333a86ec32ed7fb78ffc",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_find_callees.go",
-      "count": 3
+      "node_hash": "7988364ca161baf0e93fb6df98f72b89ee61232c9d5aa513c798a25106c66bab",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_find_callees.go",
+      "node_hash": "97b68458c5a12538242c3e9e8d7d0596c70bd5aaac5c7b0eeb17f878bff2d79c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_find_callees.go",
+      "node_hash": "f2d95a5021eb30309de79348ef0fbc443beaf9e893572e35b87deb36e96884a4",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_find_callers.go",
-      "count": 2
+      "node_hash": "7d41784d603e2c443d3cd3cbffc03de9f1e374e07ca135e6d8b2820dea6fe515",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_find_callers.go",
+      "node_hash": "d6b48e4d00349f097987b207d1be07dee25c506440e59ce67a757a0e2cbf3c46",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_find_definition.go",
-      "count": 2
+      "node_hash": "5044fed97848344c5765b26e38a2a006450c0e5e2c818b3eb02b24f48ebf1a1e",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_handler_find_definition.go",
+      "node_hash": "6b9e36e45553f0acab4560faa21f170a91f24cbec0e83c758fda0b6a22c31d0f",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_get_communities.go",
+      "node_hash": "f6803f0eed9da7534c0386d137f395241029df8c6f5b7f2093b9fedc4dd61822",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_get_overview.go",
+      "node_hash": "2345f7032c2d5c9c2cc2f9ff4160af428f9559755f7c090995377258b46b0c8a",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_read_file.go",
+      "node_hash": "461fe0bed4c857b74f7880738becb51b07ab173527f4612442480fc6d8534463",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_search.go",
+      "node_hash": "843f49b156459f50a407d228a788820cb888bebdb9a10f4596b358e02b47d1a9",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_lsp.go",
-      "count": 4
+      "node_hash": "3cb4ed253bb4a2b0c305f567920def273abe8dda3e18867d7cae5591b1995f58",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_lsp.go",
+      "node_hash": "b7cfb4ea2fd45771751875f81b585265f7433101645878dadf1852bea50654bf",
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_lsp_step5_test.go",
+      "node_hash": "3fcc520d51a449fc63bad85caa94c65d65803388941094932fc8d32f03aa933c",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "1d393ac0df2a10c99c6ac50a5364c3a7ac59e04fc61aa30b4ad59018ef3c6404",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_test.go",
-      "count": 10
+      "node_hash": "654d2d7dbcb65c7c8aa9a60256f2f2108f85e3c3e0c47a9ac6cb3135b7e977ef",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "a420ad1a76c224beb44ccf07f15f02b2bd8b9e9691cfa9a8e553ccb7fc02a071",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "f1d5d229ec894633a310928bfc52aae596c26de9c87b1ab1c9465b089e2c4ee6",
+      "count": 7
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/nfsmount/server.go",
-      "count": 2
+      "node_hash": "317fbb48951381dc7bda61cfff9817f204f7f2d5516353ddabd28cc977606702",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/nfsmount/server.go",
+      "node_hash": "f36916c0db9414b5281943aa3d141415030a8ad26c8159d5b68614b18fb0b05e",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/projcfg/config.go",
+      "node_hash": "25b5fa2e01a5851eac37d737c133183d7d872702d9514dfa7ed7ba57a22d936f",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/smells/find_smells_cli.go",
+      "node_hash": "e6f344cc2f37b3c00cdd80578cee53b4208ea51164e95405f0c3b3f5fd76398e",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/smells/find_smells_duplicate_code_test.go",
-      "count": 2
+      "node_hash": "2faa9d6455b9c1272515f732d991f5934947a5328f12648b51957a69142fb2ce",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/smells/find_smells_duplicate_code_test.go",
+      "node_hash": "c1f3ae0ae6315b9c3bb8ddaa68b3a67bc3537b4266e4eff734c612baa4b5d6f1",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/smells/serve_find_smells_test.go",
-      "count": 2
+      "node_hash": "ca881141cc6af7a1c8218073ff298e1afaa5193e7b09ec9a824ca33351887eb8",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/smells/serve_find_smells_views_test.go",
-      "count": 2
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "e842c5f569f14327205ee17291c15d1a4da809827b51b0fd1555db72ffb588e3",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/smells/smell_refs_views.go",
+      "node_hash": "3c6826a982e55c18974311e2d454f1ec3b2f20c9b37644c2be7651df213801d7",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/curate.go",
+      "node_hash": "4989f6f5a0b751edc6185b12e2282e1bd2a7fbf1e5f3686a2a8ec0f618a7bf67",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/registry.go",
-      "count": 3
+      "node_hash": "97c6b77e0b029efc3175f997380c93dd5fe2bb2efcc9514af36c42ce6c2ab288",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testfixtures/registry.go",
+      "node_hash": "bc54c204457aaa3a479ff88581996e4b27f04be75aa00e95be80f15f9ef27b41",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testfixtures/registry.go",
+      "node_hash": "bcf49daa83e24b1ad144198908e166d220acfd9750e538ea8d4ca85f0020efc5",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testutil/testdata/preset_fixtures/bash/build.sh",
+      "node_hash": "8eb85cec23a7ca368fb26176279dd600eb61ac130f84bb064a763c8071ca8496",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testutil/testdata/preset_fixtures/rust/lib.rs",
-      "count": 2
+      "node_hash": "607a826221d1f111d681c5ec4e417af62307b9bf747bef78bc25ecbeabc7a15c",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "internal/testutil/testdata/preset_fixtures/rust/lib.rs",
+      "node_hash": "c2f4e18396d9f13174d281c09e2534efd41124b8fe6504ce86ec77c3275a0d83",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testutil/testdata/preset_fixtures/sql/schema.sql",
+      "node_hash": "ce48fac9b8c1f6235605b0049cd1d2abd2f6c5555f9d796d2a021b56e61d3ee0",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/vfs/resolver.go",
+      "node_hash": "0086a8cf19badf0ff3d6afdc96116183ad183246b2a734d9e92a594beca633d7",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/vfs/types.go",
+      "node_hash": "34bbe71f7c72e613c7453a8bcce03f5df6e59b1b428a8ef148f9b924548625fc",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/writeback/splice_inode_other_test.go",
+      "node_hash": "a4cdbf68e0c03927b8e3484d66745c55711dbed24eec165fa29cef3c7a72adc8",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/writeback/splice_inode_unix_test.go",
+      "node_hash": "9ed7cb832db98452f0ea1afb0cc7e0d8370da32efd7a4d1992ab475fd6bba557",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "mount/mount.go",
-      "count": 2
+      "node_hash": "1f6dfddb3aeaa8931b4c1334b678afa5c3b61dee5e40eeccf40abd9476f3fd5d",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "mount/mount.go",
+      "node_hash": "2cff4d9b65a62d15fba8c9075495e2a854fa6d2bbc017fc85bbf97182ef7f26a",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "resolve/resolver.go",
+      "node_hash": "3a189f799e19baad69ed672c7be7b2a88b8ada1c72b8b7fc65888882f48f77c6",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "scripts/arena.sh",
-      "count": 2
+      "node_hash": "98c8e9bd6961bfd434147bd520f96e029bf4501d5e8f7f8a0837722c117b8e12",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "scripts/arena.sh",
+      "node_hash": "fc63cb57555283b2dd5940f09421aac364c2489ea3a8305fd34ba63f5b34901c",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "scripts/leyline-integration-test.sh",
+      "node_hash": "79371230d6f782ea5b2e0b982ee30dea89effc96d8b60bb717ef0f66ae9f70dd",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tests/llm_refactor_challenge.sh",
+      "node_hash": "f857fdc41d74b9c5120a2acb68490b007504a8110cd40819760b76159d95d2c0",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tests/test_data/sql/test.sql",
-      "count": 2
+      "node_hash": "fffc71567e6bd33b0e2deb464f6385f3965ec1abd8ac45886320a1aad332622d",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tests/torture_test.sh",
+      "node_hash": "531ad4fbd826bc1c93c8fc803fbd6777e5f84c6c46ffd13dba34bdc9eb3d3383",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tests/verify_git_projection.sh",
+      "node_hash": "36208a7931cc3a06e165afe4d7940aafc781b6d93bbd7bab1f92aa9c9cd5afbf",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/coverage-gate/main.go",
+      "node_hash": "aca05c87d8534e6878c3755661bec317c01031e2569e586f6cc3efd0ca996e5e",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/fixtures-rebaseline/main.go",
-      "count": 3
+      "node_hash": "32952c68cf7d3e2d24301c2b3c61b28bf3d7a0673dddee2390aee9cf0f2d7287",
+      "count": 2
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "node_hash": "7099b67fac9dfc8283f8f9b29c1b990e2e5b4f6099b9ac46a6c2c2d61c957838",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "node_hash": "99270b6d31d0c61e6c8c1735ad515a7fc8524a37dd50aa5c5e95575b24027590",
+      "count": 2
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/fixtures-snapshot/main.go",
-      "count": 6
+      "node_hash": "112ae973464f962cda851bc1aab23c0283e686ebf130f9a202b1e0281b9bbbdc",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fixtures-snapshot/main.go",
+      "node_hash": "991994fbee96592661ba0e1b8868fa5ebe6cf7c667215ff727536168f6adadcd",
+      "count": 1
+    },
+    {
+      "rule_id": "duplicate_definitions",
+      "source_id": "tools/fixtures-snapshot/main.go",
+      "node_hash": "c92e09a197b15069450ad2700ffe16fb91acde0e92d0052eee54f06353c764ae",
+      "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/fuzz-gen/subject/parser.go",
+      "node_hash": "3aa3d68dd84b8de9f2db1e2555656f0eeb8c1436194fcd646c863746b2308481",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/fuzz-gen/tasks/task_1771121798/parser.go",
+      "node_hash": "87204c5dbbf11326678b61627a1e46103a18e79a67f75993715bf2c985e70f20",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/gen-lsp-fixture/main.go",
+      "node_hash": "36160b8169682aaf6dcb82942c84b7b4e5c748db383b262525611e503c823d69",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/mcp-fetch/main.go",
+      "node_hash": "e0a90b6226bafe477da743b40752f9ef0c1f563c0881f34509af2fdc2629b67b",
       "count": 1
     },
     {
       "rule_id": "duplicate_definitions",
       "source_id": "tools/notion-fetch/main.go",
+      "node_hash": "10b2155d51990adb12bea05f8639ec888ad565a8f59abcd9d1c4e8f8846a1d98",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/mount_control.go",
+      "node_hash": "eb8b28d4658905783ef200af11878b02fb1e2636b84b41be0398670f50c25647",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/mount_nfs.go",
+      "node_hash": "b93b081aec80fc105b427a6119d7fd438426d359033dc39ffbbd6f14f91d1e11",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "cmd/pack.go",
+      "node_hash": "0d2daf511dc785467444900875ee1d5463d553a4f8d922914574bdae03d1805e",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "ext/boltdb/boltdb.go",
+      "node_hash": "e69ec28ecf987a05d4cf43fe825c93dd99faf888545be029ef42c0db62dd4a67",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/arena_writer.go",
+      "node_hash": "c1a3b2de7e62448add88c85418d7b753d5e62263ea006d16078ee799d93f922e",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/community.go",
+      "node_hash": "7cf17eb5d4abe41b3e8f11604f982a666d61e45f7160417010239eb9ebec3f0e",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/memstore_callees.go",
+      "node_hash": "cbd82bfe327472a216c9ccfdf42986f46470a378243d18c3a81d585084d42def",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/memstore_write.go",
+      "node_hash": "f1b5ef00878929c5470a265a7f88b7b559308e330ad8b43dfe1702baaaac5711",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/sqlite_graph.go",
+      "node_hash": "205ad20b4c353e0dd6d5e36118467b390c5f47963b15f5b9ccc0d5529ff577df",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/sqlite_graph_callees.go",
+      "node_hash": "111200ae23e7159387d86bf8946f8261c1fca35f79a99430c9d25cac804ef9a3",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/sqlite_graph_refs.go",
+      "node_hash": "f63745e3461f17b282a4d046819952055a97a99d4c221421ee6b668a15825577",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "graph/sqlite_graph_scan.go",
+      "node_hash": "610b070a3e17d42f6de67763403887a254f4d61d0f054db3f44434d7427e2daf",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/buildcache/cache.go",
-      "count": 5
+      "node_hash": "326ee192713381febae2587d2b9c291345f2d3ece4b200c6bc50fd5845cee1ce",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "99533d82ddaebd93ed9f32383f8b22b9aaedc5591145bd6e4edad0fcf0b2efcc",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "aa18ec093d5f456ce752b47fb033a5cfa346b52c77890392d40e1505d9ed96c2",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "ad69b4439b72e947f97d4a2de7eae150e85521171746f94a8127058a2d5709a9",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "eb347ea8fa3f19f9235ee8c9d40bb9a462aba3c0d7fd4b1439639257dac8c7b6",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/buildcache/cache_oci.go",
+      "node_hash": "b9c52685cbdb4bdafc3750de0354d883304062ae627f12bea9e3a36f9bf7efb4",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine.go",
+      "node_hash": "812e36775509d1b7e5bf9a1665e5d4740f14757a06904d486b56c11f983b5bdd",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_ingest.go",
+      "node_hash": "7a9416ba9eaba79249404fce39303899d49b8ea04ae0a4fd30dfdbb3b6412e52",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_sqlite.go",
+      "node_hash": "17293fc3cfd5019160af1529df3f72e92650ca0bc31422bc79b7c10c46ddffd3",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_treesitter.go",
-      "count": 2
+      "node_hash": "ad8f1d2f1c167ad9348509cfc4a6e02baa8895559bc6a04f6ba703fe6217074c",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_treesitter.go",
+      "node_hash": "f19f313b668730523fe6464579d93e6a89cc966837a5630994d507f2a71e5bc0",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "count": 2
+      "node_hash": "9246131536ba1eb09d5fcf898e29deb2af2026bbe5c8e5b7829eb8f9918ace74",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/ingest/engine_walk.go",
+      "node_hash": "c5fd7a9428c9a4f0508d88c9c739e37bb8c301061f02dd0ae5578ca139e02035",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/git.go",
+      "node_hash": "4670e6f63a95a4e178b3bcdce558f4dccae073ebe47a2273ac5e7989350ca42e",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/lattice/greedy.go",
+      "node_hash": "cfffa95998a47c49dd0ab7845e8e636277b40f427fdf6c9f2b97bff80a115fc5",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/lattice/project_ast.go",
+      "node_hash": "285eb818080ddd119ec31fefd1246419f7ce3904c38450aca69ea1f089188aa1",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/leyline/socket.go",
+      "node_hash": "f7d0cb848dc54b22a8f62b1e4305cc404b3dd5bf3d700f66c77f96af4bfff0b9",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/leylinegraph/leyline.go",
-      "count": 2
+      "node_hash": "52d40a8e16fea4787cb347f2251a9e92f7273be2f4a15bd79a15f09ed3443dba",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/leylinegraph/leyline.go",
+      "node_hash": "5d4322bf06fa5eb297df63e6a5c010a40da52ca8e95e0d37cdea89b1fbb5ea29",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/lltest/project.go",
+      "node_hash": "efa78a4cad1ac0a973d12b921d394520dd007c52e5a77fd45b49ef3ccaabbb23",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/materialize/json.go",
+      "node_hash": "d7b20cfa103d8422d3ee6e8234389d5c694712c06d188239185100c7c2dbd899",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve.go",
-      "count": 2
+      "node_hash": "20102c22a54790a1c78f26c4e61cb72f23682a2d683f99652cdc153d7129ff15",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve.go",
+      "node_hash": "b09362bc4335804947ddbbf2ce8c0bf41f1aaebff0920f0a95a41f6425e4da5c",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_architecture.go",
+      "node_hash": "ecb6c3b22bfa7dd2453ed4396339deaf52ce2cc227efcacf372d1f2609790133",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_handler_find_definition.go",
+      "node_hash": "838619f90a4abcb3ddbd5b69666ef72edf3b534deec5885c0ca39155a0f44df6",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_handler_get_communities.go",
+      "node_hash": "1ec15a9309e3bafc3e3a0560b4411f5b0c99adab2c82ebf7d93ee106d74a2abf",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_handler_list_directory.go",
+      "node_hash": "24aaf16b662d533c9a8911bfc8e65da0fd95da18ebd5a69119261a860ac3ab53",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_handler_read_file.go",
+      "node_hash": "22111293bb30165244ff99648c97036476de7887a0e5bb2f4479f5d08faaf511",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_handler_search.go",
+      "node_hash": "0498b47b0629e15bf84bebbb9795295a31ca694511ef988acd80a88c84a75445",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_handlers.go",
+      "node_hash": "4559147ce840364aebb9fc5616e6a8a8d364281cfe999df67fb554fc56c2da6c",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_impact.go",
+      "node_hash": "52cde2c08f9e9444483e24d565051bf99a7d108181bc0009dc42ea74a2333e2a",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_lsp.go",
-      "count": 2
+      "node_hash": "50d17d5f947c3b81bc49b0835b4a958945f97de62b99d1357a6915cf4b3e45ce",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "internal/mcpserve/serve_lsp.go",
+      "node_hash": "d0ad9aeef33eef7127461a6bb75f2e58d9c27fc9a3a7735217b6442929d02d15",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_registry.go",
+      "node_hash": "8abfccd20177078f936ea03a2e923939f3ace4a7b52bb944b09a9be98f0fea48",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/mcpserve/serve_write.go",
+      "node_hash": "a77c7889150685eba397917705be0a222cf18db2963a3f27ec11b55d8e8186c9",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/smells/find_smells_cli.go",
+      "node_hash": "4d070ac1886b522a9c2937bad2a7ce14725df7b39ee70f3bfc1e767ec403c701",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/smells/serve_find_smells.go",
+      "node_hash": "6a9417b3189a7a23081add3d9f05f6923804dfdddc0f11b1bea32f3c97c8a601",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/smells/serve_find_smells_load.go",
+      "node_hash": "000ac39edb867b8e79e626ecb37c907bbf40423003ed021a0ce51a4f0c00e904",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/testfixtures/registry.go",
+      "node_hash": "9ea9de51c072eb7f68b15c9bba7ea4c018d8fff805b7df4aea22dc0a11aa049d",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/testutil/bindinglog.go",
+      "node_hash": "1790199255586f203c754aef1d7ba4ac236dbb9890124e716d2f35a51b547c20",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/writeback/splice.go",
+      "node_hash": "d88323f5b57cbb48852ecf0e16741a04d67cb0813f3ac63d68ab903eaa0ba125",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "tools/coverage-gate/main.go",
+      "node_hash": "aca05c87d8534e6878c3755661bec317c01031e2569e586f6cc3efd0ca996e5e",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "tools/fixtures-rebaseline/main.go",
-      "count": 2
+      "node_hash": "4ce5525744686af2c69fa798be69343ee518c49bfddce8e54a10a7747242cc3c",
+      "count": 1
+    },
+    {
+      "rule_id": "fan_out_skew",
+      "source_id": "tools/fixtures-rebaseline/main.go",
+      "node_hash": "7099b67fac9dfc8283f8f9b29c1b990e2e5b4f6099b9ac46a6c2c2d61c957838",
+      "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "tools/fixtures-snapshot/main.go",
+      "node_hash": "991994fbee96592661ba0e1b8868fa5ebe6cf7c667215ff727536168f6adadcd",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "tools/mcp-fetch/main.go",
+      "node_hash": "e0a90b6226bafe477da743b40752f9ef0c1f563c0881f34509af2fdc2629b67b",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "tools/notion-fetch/main.go",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "cmd/doctor.go",
+      "node_hash": "10b2155d51990adb12bea05f8639ec888ad565a8f59abcd9d1c4e8f8846a1d98",
       "count": 1
     },
     {
@@ -1128,11 +2983,6 @@
     },
     {
       "rule_id": "god_file",
-      "source_id": "graph/nodes_table_reader.go",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
       "source_id": "graph/sqlite_graph.go",
       "count": 1
     },
@@ -1144,11 +2994,6 @@
     {
       "rule_id": "god_file",
       "source_id": "internal/buildcache/cache_oci.go",
-      "count": 1
-    },
-    {
-      "rule_id": "god_file",
-      "source_id": "internal/fixturedb/builder.go",
       "count": 1
     },
     {
@@ -1194,516 +3039,751 @@
     {
       "rule_id": "long_file",
       "source_id": "internal/leyline/socket_test.go",
+      "node_hash": "cbe7af9d8069f0c55c772ba718b8fd9943f35fe18e5fe30434570b929351f7ca",
       "count": 1
     },
     {
       "rule_id": "long_file",
       "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "70d1f6525228dac1fd6932276491b9130c70b2c0acc6d3f5d460cb2afc50d30e",
       "count": 1
     },
     {
       "rule_id": "long_file",
       "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "1ecb4779051e12035f92d3a4b057be90966e605fdfb02b7e0f5cd5700db0fc79",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "cmd/mount_control.go",
+      "node_hash": "eb8b28d4658905783ef200af11878b02fb1e2636b84b41be0398670f50c25647",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "cmd/mount_nfs.go",
+      "node_hash": "b93b081aec80fc105b427a6119d7fd438426d359033dc39ffbbd6f14f91d1e11",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "cmd/pack.go",
+      "node_hash": "0d2daf511dc785467444900875ee1d5463d553a4f8d922914574bdae03d1805e",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "ext/boltdb/boltdb.go",
+      "node_hash": "e69ec28ecf987a05d4cf43fe825c93dd99faf888545be029ef42c0db62dd4a67",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/arena_writer.go",
+      "node_hash": "c1a3b2de7e62448add88c85418d7b753d5e62263ea006d16078ee799d93f922e",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/community.go",
+      "node_hash": "7cf17eb5d4abe41b3e8f11604f982a666d61e45f7160417010239eb9ebec3f0e",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/graph_suite_test.go",
+      "node_hash": "3ecbc347ffbba7b58abd641c3a9decf11c6ab8c2208d85a494ee306516125293",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/memstore_callees.go",
+      "node_hash": "cbd82bfe327472a216c9ccfdf42986f46470a378243d18c3a81d585084d42def",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/memstore_write.go",
+      "node_hash": "f1b5ef00878929c5470a265a7f88b7b559308e330ad8b43dfe1702baaaac5711",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/quotient.go",
-      "count": 2
+      "node_hash": "4851956721e3b7d25374fb7a2466dbf51c2f5d3754ad5762165606d7353fb2d7",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/quotient.go",
+      "node_hash": "4991f5051e5774e2e18462d302e2d35e45976ac7518e129055470c21c97eee59",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/quotient_test.go",
-      "count": 2
+      "node_hash": "213cde9e786a2ac2216dffe1460daa5850664072db76c00a485adc445ef8f174",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/quotient_test.go",
+      "node_hash": "72463221756c6f9047bf7474dcfca74a56744458a57c9466b54083ee7fc9ea16",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/sheaf_invalidate.go",
+      "node_hash": "95ce78bc3ad9e0b1c35e40d8321f9b5b75ee28cce8671062439101d1897431f7",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/sqlite_graph.go",
+      "node_hash": "205ad20b4c353e0dd6d5e36118467b390c5f47963b15f5b9ccc0d5529ff577df",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/sqlite_graph_callees.go",
+      "node_hash": "111200ae23e7159387d86bf8946f8261c1fca35f79a99430c9d25cac804ef9a3",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/sqlite_graph_scan.go",
+      "node_hash": "610b070a3e17d42f6de67763403887a254f4d61d0f054db3f44434d7427e2daf",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/sqlite_graph_test.go",
-      "count": 2
+      "node_hash": "4e8c8f3238765688fed4d132a78c1efd28804389eb5239a7e160d8b82b678e34",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "graph/sqlite_graph_test.go",
+      "node_hash": "e85c333a149a0c399ebf483c8d334f3c900d7bd455d6fefb4c0fea9db01f10c3",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "graph/sqlite_test.go",
+      "node_hash": "d761134da666d4ad3a97bc8ac7071d434de6eb70e22693d312015aeeb13e9031",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/buildcache/cache.go",
-      "count": 5
+      "node_hash": "326ee192713381febae2587d2b9c291345f2d3ece4b200c6bc50fd5845cee1ce",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "99533d82ddaebd93ed9f32383f8b22b9aaedc5591145bd6e4edad0fcf0b2efcc",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "aa18ec093d5f456ce752b47fb033a5cfa346b52c77890392d40e1505d9ed96c2",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "ad69b4439b72e947f97d4a2de7eae150e85521171746f94a8127058a2d5709a9",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/buildcache/cache.go",
+      "node_hash": "eb347ea8fa3f19f9235ee8c9d40bb9a462aba3c0d7fd4b1439639257dac8c7b6",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/buildcache/cache_test.go",
+      "node_hash": "ccd638eb26905a457a25eed97311528d4fe1ae90ff77baa39e3cc85e29804585",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/address_refs_test.go",
+      "node_hash": "974f6e31b0f67ea517eb33d232c1a9d9f69f331ce9435512da6f5f9764b91b12",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/ast_walker.go",
+      "node_hash": "93e47d063405a62ffbff353fe012abe535d8a22bf24cb332c6927affa8fb38cc",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/ast_walker_calls.go",
+      "node_hash": "928d8fde26adfc657571cde04575a7d0ca8e043aa057df5270f98e5ac83aac14",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/ast_walker_selector.go",
+      "node_hash": "0aed7a3fa396ecc0daee7de143d0b24475f2745a583d0d3e13535cfd52882f72",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/ast_walker_test.go",
-      "count": 2
+      "node_hash": "4cde04af136a6f28cd9517446ed023c9dc10cd8f287fd51e9d1c879f02f637b9",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/ast_walker_test.go",
+      "node_hash": "a109b1c321585cf399ffb7f1babfdbfd843e4233e4d177ab42f50a5ac127f491",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/callees_noast_e2e_test.go",
+      "node_hash": "0d4ed96b8c2d80b7c01d5f7d0570f839a873e68514e674fa1596f4f88626949d",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine.go",
+      "node_hash": "812e36775509d1b7e5bf9a1665e5d4740f14757a06904d486b56c11f983b5bdd",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_ingest.go",
+      "node_hash": "7a9416ba9eaba79249404fce39303899d49b8ea04ae0a4fd30dfdbb3b6412e52",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_languages.go",
+      "node_hash": "070912209690e402237fbf9b1c0f69d853abbd46150227771636eb9b7467f8ec",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_modtime_test.go",
+      "node_hash": "5afe803db78b1cc6a881f0ca3ef53a8e7652bad5e3e1a78bd89d8843248cf553",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_sqlite.go",
+      "node_hash": "17293fc3cfd5019160af1529df3f72e92650ca0bc31422bc79b7c10c46ddffd3",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_test.go",
+      "node_hash": "884402f7738352f79aeb5a6b64365164503e16ef7c42812bad1d60747d487abf",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_treesitter.go",
-      "count": 2
+      "node_hash": "ad8f1d2f1c167ad9348509cfc4a6e02baa8895559bc6a04f6ba703fe6217074c",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_treesitter.go",
+      "node_hash": "f19f313b668730523fe6464579d93e6a89cc966837a5630994d507f2a71e5bc0",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "count": 2
+      "node_hash": "9246131536ba1eb09d5fcf898e29deb2af2026bbe5c8e5b7829eb8f9918ace74",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/engine_walk.go",
+      "node_hash": "c5fd7a9428c9a4f0508d88c9c739e37bb8c301061f02dd0ae5578ca139e02035",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/git.go",
+      "node_hash": "4670e6f63a95a4e178b3bcdce558f4dccae073ebe47a2273ac5e7989350ca42e",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/sqlite_writer.go",
-      "count": 2
+      "node_hash": "645e500bb4b1c24bb5ba66ded902987f0e34d1677da6c34d66b00198c6f3b9f9",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/ingest/sqlite_writer.go",
+      "node_hash": "9dbbd8f19732398da58cde3011e60ffd8bfccaf2649bbafa1772f136ae93570f",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/lattice/greedy.go",
-      "count": 2
+      "node_hash": "cfffa95998a47c49dd0ab7845e8e636277b40f427fdf6c9f2b97bff80a115fc5",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/lattice/greedy.go",
+      "node_hash": "f30be24e3585e5155f841feb441f83c6bdb6f8f1d4ac87bb81729e083db442ab",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/lattice/project_ast.go",
+      "node_hash": "285eb818080ddd119ec31fefd1246419f7ce3904c38450aca69ea1f089188aa1",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/leyline/sheaf_e2e_test.go",
+      "node_hash": "bd4f24c85c3a8fcad5660ac2dbccd17b160b9e3b0d0ca08217b6bb17e80edf94",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/leyline/sheaf_subscriber_e2e_test.go",
+      "node_hash": "09c76a7d539830554b40d99f0ed168186ba24cc178f9d2d228ef2bfd0369a32b",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/leyline/socket.go",
+      "node_hash": "f7d0cb848dc54b22a8f62b1e4305cc404b3dd5bf3d700f66c77f96af4bfff0b9",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/leyline/trigger.go",
+      "node_hash": "a9f1d41b3177ea4ad17709a603463b83d548ba8f4153d2e3ac7d8bfbebeda3cd",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/leylinegraph/leyline.go",
-      "count": 2
+      "node_hash": "52d40a8e16fea4787cb347f2251a9e92f7273be2f4a15bd79a15f09ed3443dba",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/leylinegraph/leyline.go",
+      "node_hash": "5d4322bf06fa5eb297df63e6a5c010a40da52ca8e95e0d37cdea89b1fbb5ea29",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/leylinegraph/leyline_callees_test.go",
+      "node_hash": "09d25482b633b800bf105a8606b746a2c7f4a17793a9605e01eb1f0002c515e4",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/lint/llo_boundary_test.go",
+      "node_hash": "f923a0ad6f6b3ecf65b6530849c14ef639b9a7aaf50730d863883b358c13321a",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/all_tools_e2e_test.go",
+      "node_hash": "2b546959b975c5e71b307d68bf1bef0024830f2e62e7a182011797c75f684aa3",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/falsifiability_lsp_projection_test.go",
+      "node_hash": "1dc17b27c6a5a3e3c2979ac68f3eb18673843216c872491bef8f27d084fbbfaa",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/kind_discriminator_leyline_ast_test.go",
+      "node_hash": "24f7353444840c85f72fd591eba95af0eef4c569484c49e035d979c18a939ba1",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve.go",
-      "count": 2
+      "node_hash": "20102c22a54790a1c78f26c4e61cb72f23682a2d683f99652cdc153d7129ff15",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve.go",
+      "node_hash": "b09362bc4335804947ddbbf2ce8c0bf41f1aaebff0920f0a95a41f6425e4da5c",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_architecture.go",
+      "node_hash": "ecb6c3b22bfa7dd2453ed4396339deaf52ce2cc227efcacf372d1f2609790133",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_find_definition.go",
+      "node_hash": "838619f90a4abcb3ddbd5b69666ef72edf3b534deec5885c0ca39155a0f44df6",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_get_communities.go",
+      "node_hash": "1ec15a9309e3bafc3e3a0560b4411f5b0c99adab2c82ebf7d93ee106d74a2abf",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_get_overview.go",
+      "node_hash": "d56919943705cea8dd0f20ed14291c54aaff12a9231b73f03909102d685e9d70",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_list_directory.go",
+      "node_hash": "24aaf16b662d533c9a8911bfc8e65da0fd95da18ebd5a69119261a860ac3ab53",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_search.go",
+      "node_hash": "0498b47b0629e15bf84bebbb9795295a31ca694511ef988acd80a88c84a75445",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handlers.go",
+      "node_hash": "4559147ce840364aebb9fc5616e6a8a8d364281cfe999df67fb554fc56c2da6c",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_impact.go",
+      "node_hash": "52cde2c08f9e9444483e24d565051bf99a7d108181bc0009dc42ea74a2333e2a",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_lsp.go",
+      "node_hash": "d0ad9aeef33eef7127461a6bb75f2e58d9c27fc9a3a7735217b6442929d02d15",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_registry.go",
+      "node_hash": "83bf1183c69507053689f5f7d29d1171b047a1e008cbd9b54d2741308dc0e57c",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_test.go",
-      "count": 2
+      "node_hash": "5e2ef1db23f7f37388accfc7825b06b14866d910cd76fe6642d5754034f8ced6",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/mcpserve/serve_test.go",
+      "node_hash": "9109f2ab925fe44c09bdb2d085892295df75614d5e918f8861fa9a60fdb778ae",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_write.go",
+      "node_hash": "a77c7889150685eba397917705be0a222cf18db2963a3f27ec11b55d8e8186c9",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/schemainfer/preset_fixture_test.go",
+      "node_hash": "bd5f0a47a01cd5e2adb9ba5e15b5215ff23ce10461d1eca8ef937abc5cef5dd2",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/dead_code_skip_list_retreat_test.go",
+      "node_hash": "8e52d554dd693dcccb01b807ab40d16cdfc551126ecf34c552057f769b0264b2",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/falsifiability_skip_list_ablation_test.go",
+      "node_hash": "12d2cd3d28d65a49b7cbb0d55170927f534e8e7e6a13d362a1ece286fc076a81",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/find_smells_cli.go",
+      "node_hash": "4d070ac1886b522a9c2937bad2a7ce14725df7b39ee70f3bfc1e767ec403c701",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells.go",
+      "node_hash": "6a9417b3189a7a23081add3d9f05f6923804dfdddc0f11b1bea32f3c97c8a601",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells_bench_test.go",
+      "node_hash": "ceb4033041db2056fb1ac3de2bd0c259bdc476079927b72d0c7bc6369246e0e6",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells_test.go",
-      "count": 3
+      "node_hash": "2d1a8b1346f51afecfeed9cb0dde240dc5fce85f0e05d9d5c1423e0c20e1eb16",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "4e1b3ac407507a07f4d0f108ede9693e3a914d5cb6d11c64da9da76f155cd064",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "internal/smells/serve_find_smells_test.go",
+      "node_hash": "f54dc6c2b06b6eba02450d6a2f4f3ea0b39c0002264b80323fa3d2ea8d2b7f5d",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells_views_test.go",
+      "node_hash": "3463822016853469123cbef5b36247d8980aa5cda4f532293baed44426b10abd",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/smell_findings.go",
+      "node_hash": "ff4786ae882b24f4dfa883f6ca15a6b2d63a338dac53f0c1b29fa7a45321a15a",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/smell_incremental.go",
+      "node_hash": "eab46050c0f8a786a8f5e0a1c28ebfdff40518096406c4600f046ba4a6feaa40",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/smell_refs_views.go",
+      "node_hash": "3c6826a982e55c18974311e2d454f1ec3b2f20c9b37644c2be7651df213801d7",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/template/render_test.go",
+      "node_hash": "8b3bbd64728c18a53aeec71e7104e4e8e9ad67e9a48898bfe3965d61adaacfc7",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/writeback/splice.go",
+      "node_hash": "d88323f5b57cbb48852ecf0e16741a04d67cb0813f3ac63d68ab903eaa0ba125",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "tools/coverage-gate/main.go",
-      "count": 2
+      "node_hash": "aca05c87d8534e6878c3755661bec317c01031e2569e586f6cc3efd0ca996e5e",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/coverage-gate/main.go",
+      "node_hash": "c4f24500b971e5e692a93d2c93d8e73e22b36c7773d2db1c78303b4d48696704",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "tools/coverage-gate/main_test.go",
+      "node_hash": "92b4efd144b0b5827877cbfc230344a88bc8e742925f2bd5553851f93e42bb2b",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "tools/gen-lsp-fixture/main.go",
-      "count": 2
+      "node_hash": "395187f9b8342aeeb7d8b05e0b1cd52377646c927798de5d81ff015fbfd96383",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/gen-lsp-fixture/main.go",
+      "node_hash": "bd503b926642d1fc52e4ddef8800759ac621e1ba6a73c2bd38b984ffce981fe3",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "tools/mcp-fetch/main.go",
+      "node_hash": "e0a90b6226bafe477da743b40752f9ef0c1f563c0881f34509af2fdc2629b67b",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "tools/notion-fetch/main.go",
-      "count": 2
+      "node_hash": "10b2155d51990adb12bea05f8639ec888ad565a8f59abcd9d1c4e8f8846a1d98",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
+      "source_id": "tools/notion-fetch/main.go",
+      "node_hash": "f0f41503150202580bf857b84b7d22cf907e9020a442a571e1a5e2862f7935ff",
+      "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "tools/server-json-gen/main.go",
+      "node_hash": "a43bebdf933f92a87db2f4c6f1cf9279cf8259ff841c0ebb674f5957f778c2f6",
       "count": 1
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "graph/arena_writer_test.go",
+      "node_hash": "b62ba4b9049e9d8ad3c34fa31d191e6c73d9eaf5e0ba58759c09512c25e021dd",
       "count": 1
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "graph/live_graph_test.go",
-      "count": 2
+      "node_hash": "e0d9117ad3de15f5036b697ccd8ec2d516fb7fc897320055c0e6122eabf034d3",
+      "count": 6
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "graph/writable_graph_test.go",
+      "node_hash": "e038a0c4d84d1ca051a21c080ba795fd4e1a5dcc83c41bcb29909270a115c42a",
       "count": 1
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/ingest/engine_modtime_test.go",
-      "count": 3
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "internal/ingest/reingest_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "internal/ingest/watcher_test.go",
-      "count": 14
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "internal/leyline/procgroup_unix_test.go",
+      "node_hash": "28ba282e7420ffa34e549970c3434bd27f9b3f00d844f36d5c25fb5ddd62737a",
       "count": 1
     },
     {
       "rule_id": "sleep_in_test",
-      "source_id": "internal/leyline/sheaf_cascade_bench_test.go",
+      "source_id": "internal/ingest/engine_modtime_test.go",
+      "node_hash": "5855ded037eda3aa847a08ef2ffe2b1d7e1810446f57cf3e16aa8d1762ae7c64",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/ingest/watcher_test.go",
+      "node_hash": "0350d78ec1d348a99cd619c284ff45db1d2e761349a7d45b4185b495f69f2aca",
+      "count": 9
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/ingest/watcher_test.go",
+      "node_hash": "67159a4ef90abdd2684d396d98b14ad8326e4e3021e2c96510cd5974f5081afc",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/ingest/watcher_test.go",
+      "node_hash": "87bee8bf983f52cc3497b6bbf388a8e11beb45fbbf60553b08192e236c2a5d8b",
+      "count": 9
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/procgroup_unix_test.go",
+      "node_hash": "4dd27fee80b746f89d3930a2ca99d4207b45623c16ef1cdda306562679505de5",
       "count": 2
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/sheaf_cascade_bench_test.go",
+      "node_hash": "4cc4e702ea141be3e9d29920594090ec99d9049f6211d0d8a6552b30643a9eac",
+      "count": 11
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/leyline/sheaf_e2e_test.go",
-      "count": 2
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "internal/leyline/sheaf_subscriber_e2e_test.go",
+      "node_hash": "44c9021472e5caee71d82147c0158150667d2a423925cba199f7b15fbd3013c4",
       "count": 2
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/leyline/sheaf_subscriber_test.go",
-      "count": 5
+      "node_hash": "c581ba50edd01289b7e32d89cf2558152b772bf2456ec186a283088eddfbb9d0",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/sheaf_subscriber_test.go",
+      "node_hash": "c7eed3a1a15e2c61e8e8e7ec4bb3ab4ab8e79d7bbd79ee2fdbf6de60cdfa2d5d",
+      "count": 1
+    },
+    {
+      "rule_id": "sleep_in_test",
+      "source_id": "internal/leyline/sheaf_subscriber_test.go",
+      "node_hash": "e836393bb51df7468abda47ba75323bf40dbdb2fdf46e2d8e3e20b67bae86539",
+      "count": 2
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/leyline/socket_test.go",
-      "count": 9
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "internal/mcpserve/serve_test.go",
-      "count": 2
+      "node_hash": "19c880531b510741453e76ab4606014cd9e412663868c1dc0c80e890a0a61ab2",
+      "count": 1
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
-      "count": 2
+      "node_hash": "aeb36d859e01d1442bac69f6117c8104eb67c8e0912d9d0e012503ced3ab3fe2",
+      "count": 1
     },
     {
       "rule_id": "sleep_in_test",
-      "source_id": "internal/mcpserve/sheaf_wire_test.go",
-      "count": 5
+      "source_id": "internal/mcpserve/sheaf_subscribe_test.go",
+      "node_hash": "d147400f62330c6d22b35e504b6dd574cf8e2f74951f4d2e9a3afd44bca28e6c",
+      "count": 1
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/nfsmount/graphfs_test.go",
+      "node_hash": "54d7126bb5e8bfc9fa7161136f2b3e2b493008d5bb08febaa5bb1f30c7e1ff16",
       "count": 1
     },
     {
       "rule_id": "sleep_in_test",
       "source_id": "internal/writeback/splice_test.go",
+      "node_hash": "1c0c8861dce90f285e92282fbe76295e730132471558001af7dd52aa1578ad69",
       "count": 1
     },
     {
       "rule_id": "untested_function",
       "source_id": "internal/buildcache/cache_oci.go",
+      "node_hash": "fb0acb822ef6a58e8b6a4ff5912966ded5cc0894840b078cb5aa98a6a7859ecb",
       "count": 1
     },
     {
       "rule_id": "untested_function",
       "source_id": "internal/ingest/benchmark_test.go",
+      "node_hash": "4b1ae4ff6b98921df8e15f341b4d535c9823918e1ed166d1dbae588fe67f2078",
       "count": 1
     },
     {
       "rule_id": "untested_function",
       "source_id": "internal/leyline/version_check.go",
+      "node_hash": "6051666c6b431db84efde1fe76f3c8602041d07e05f39dc170b7865aff2c3ae1",
       "count": 1
     },
     {
       "rule_id": "untested_function",
       "source_id": "mount/mount.go",
+      "node_hash": "62811eb3bde5dd587b7f80b735ae2c3dd13e9c3661b57cf75542e26898505b89",
       "count": 1
     }
   ]
