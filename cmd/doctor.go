@@ -189,7 +189,17 @@ func checkVersionSkew(daemonVersion string, err error) check {
 		Name:   "version-skew",
 		Status: statusFail,
 		Detail: fmt.Sprintf("daemon is %s but this binary is %s — the running daemon is serving OLD code", daemonVersion, Version),
-		Fix:    "launchctl kickstart -k gui/$(id -u)/com.agentic-research.mache",
+		// NOT `launchctl kickstart -k`, which this check used to recommend.
+		// That is the one command guaranteed to fail in the exact situation
+		// this check fires: launchd pins a job's code identity at bootstrap,
+		// mache is ad-hoc signed, so kickstarting the old registration after
+		// the binary was REPLACED makes the kernel SIGKILL the new binary at
+		// exec — CODESIGNING "Launch Constraint Violation" (mache-706d8f).
+		// Version skew means the binary was replaced, so the advice was
+		// wrong every time it was shown. `mache daemon restart` performs the
+		// bootout -> bootstrap -> kickstart reload and then VERIFIES the
+		// daemon answers, and it is platform-neutral.
+		Fix: "mache daemon restart",
 	}
 }
 
