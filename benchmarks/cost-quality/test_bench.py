@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
-import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 
 BENCH_PATH = Path(__file__).with_name("bench.py")
@@ -40,8 +39,8 @@ trailing log
 
 
 class RunClaudeTests(unittest.TestCase):
-    @mock.patch.object(bench.subprocess, "run")
-    def test_invalid_success_output_becomes_an_error_result(self, run: mock.Mock) -> None:
+    @unittest.mock.patch.object(bench.subprocess, "run")
+    def test_invalid_success_output_becomes_an_error_result(self, run: unittest.mock.Mock) -> None:
         run.return_value = subprocess.CompletedProcess(
             args=["claude"], returncode=0, stdout="not JSON", stderr=""
         )
