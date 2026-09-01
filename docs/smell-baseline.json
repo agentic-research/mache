@@ -1113,12 +1113,22 @@
     },
     {
       "rule_id": "god_file",
+      "source_id": "cmd/doctor.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
       "source_id": "graph/cache.go",
       "count": 1
     },
     {
       "rule_id": "god_file",
       "source_id": "graph/composite.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "graph/nodes_table_reader.go",
       "count": 1
     },
     {
@@ -1134,6 +1144,11 @@
     {
       "rule_id": "god_file",
       "source_id": "internal/buildcache/cache_oci.go",
+      "count": 1
+    },
+    {
+      "rule_id": "god_file",
+      "source_id": "internal/fixturedb/builder.go",
       "count": 1
     },
     {
