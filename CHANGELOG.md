@@ -65,6 +65,13 @@ bumps may include breaking changes.
   A migration that invalidated existing entries would have failed the gate on
   the first refactor after upgrading — the very bug being fixed.
 
+  One direction does not work, and cannot be made to: a mache older than this
+  release reading a v2 baseline. Unknown fields unmarshal to nothing, so it
+  collapses hash-keyed entries onto their path and invents failures on
+  grandfathered debt. Regenerate and upgrade together. Going forward a binary
+  now refuses a baseline newer than it understands, with a message saying so,
+  so the next schema bump cannot repeat this.
+
 - **Nested source files retain registered address references**
   (`mache-498bc3`). Mache previously computed leyline's correct root-relative
   source ID and then reduced the address-ref lookup to a basename, so

@@ -1,7 +1,9 @@
 package smells
 
 import (
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -206,4 +208,32 @@ func TestComputeBaseline_PooledKeyPicksSmallestSourceID(t *testing.T) {
 	// Any input order yields the same committed bytes.
 	shuffled := []smellFinding{findings[1], findings[2], findings[0]}
 	assert.Equal(t, base, computeBaseline(shuffled))
+}
+
+// TestLoadBaseline_RefusesFutureVersion covers the skew this bead's own schema
+// bump could inflict on an older binary and could not prevent, because v1
+// readers never checked the version: unknown fields unmarshal to nothing, so a
+// v1 reader collapses v2's hash-keyed entries onto source_id, where a pooled
+// entry carries a whole group's count on one path and the group's other files
+// have no entry at all — failing the gate on fully-grandfathered debt.
+//
+// A wrong answer, not a degraded one. This makes the NEXT bump stop loudly.
+func TestLoadBaseline_RefusesFutureVersion(t *testing.T) {
+	dir := t.TempDir()
+	future := filepath.Join(dir, "future.json")
+	require.NoError(t, os.WriteFile(future, []byte(
+		`{"version":`+strconv.Itoa(baselineVersion+1)+`,"counts":[]}`), 0o644))
+
+	_, err := loadBaseline(future)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "understands up to version",
+		"the error must say what to do, not just that something is wrong")
+
+	// Older and version-less files stay readable: both mean path keying.
+	for _, body := range []string{`{"version":1,"counts":[]}`, `{"counts":[]}`} {
+		old := filepath.Join(dir, "old.json")
+		require.NoError(t, os.WriteFile(old, []byte(body), 0o644))
+		_, err := loadBaseline(old)
+		assert.NoError(t, err, "a baseline this binary predates must still load: %s", body)
+	}
 }

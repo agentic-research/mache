@@ -183,6 +183,21 @@ func sortByTriple[T any, K cmp.Ordered](s []T, key func(T) (K, K, K)) {
 }
 
 // loadBaseline reads a committed smellBaseline JSON file.
+//
+// A baseline NEWER than this binary understands is refused rather than read
+// on a best-effort basis. Unknown fields unmarshal to nothing, so an older
+// binary silently keys a newer file by whatever it does recognise — which is
+// not a degraded answer but a WRONG one: reading v2 without node_hash awareness
+// collapses hash-keyed entries onto their source_id, where a pooled entry
+// carries the whole group's count on one path and the group's other files have
+// no entry at all. The gate then fails on debt that is fully grandfathered.
+//
+// That is exactly the skew the v1 -> v2 bump could inflict on an older binary,
+// and it could not be prevented from this side, because v1 readers never
+// checked the version. This check is what makes the NEXT bump safe: an old
+// binary meeting a v3 baseline stops with an actionable message instead of
+// inventing failures. Older files stay readable — v1 and an absent version
+// both path-key, which is what they meant.
 func loadBaseline(path string) (smellBaseline, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -191,6 +206,12 @@ func loadBaseline(path string) (smellBaseline, error) {
 	var b smellBaseline
 	if err := json.Unmarshal(data, &b); err != nil {
 		return smellBaseline{}, fmt.Errorf("parse baseline: %w", err)
+	}
+	if b.Version > baselineVersion {
+		return smellBaseline{}, fmt.Errorf(
+			"baseline %s is version %d, but this mache understands up to version %d — "+
+				"upgrade mache, or regenerate the baseline with this binary (task smells:baseline)",
+			path, b.Version, baselineVersion)
 	}
 	return b, nil
 }
