@@ -44,6 +44,27 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **The smell ratchet no longer launders debt through a file move**
+  (`mache-dd45a3`). The committed baseline was keyed `(rule_id, source_id)`,
+  and a path is not an identity: moving a file vacated its entry and re-filed
+  every finding under a path with no allowance, so a pure `git mv` failed the
+  gate on debt it did not add. Measured on a fixture — three grandfathered
+  `dead_code` findings moved between directories produced six NEW findings.
+
+  Baseline schema v2 keys construct-level findings on `_ast.node_hash`, the
+  BLAKE3 merkle address of the node's content, which is path-independent by
+  construction. The same move now produces zero new debt, while a genuinely
+  new function in the moved file still fails on exactly that function.
+
+  File-level rules (`god_file`, `long_file`) stay path-keyed deliberately: a
+  file's hash covers its whole content, so any edit changes it, and keying
+  them that way would drop grandfathering the moment anyone touched the file.
+
+  **Migration is automatic and needs no action.** v1 baselines still load and
+  still gate, path-keyed exactly as before; `task smells:baseline` writes v2.
+  A migration that invalidated existing entries would have failed the gate on
+  the first refactor after upgrading — the very bug being fixed.
+
 - **Nested source files retain registered address references**
   (`mache-498bc3`). Mache previously computed leyline's correct root-relative
   source ID and then reduced the address-ref lookup to a basename, so
