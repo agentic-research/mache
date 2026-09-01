@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,6 +46,19 @@ func stubSupervisor(t *testing.T) *[]string {
 		return nil
 	}
 	t.Cleanup(func() { runSupervisorCmd = prev })
+
+	// Stub the READ seam too, defaulting to not-loaded. Stubbing only the
+	// write side left every verb test consulting the REAL launchctl for job
+	// state, so they passed on CI (no daemon installed) and hung out to the
+	// full drain timeout on any developer machine that had one — an
+	// ambient-state dependency that made the suite's greenness a property of
+	// the machine rather than the code. Tests that need a different scripted
+	// state override this AFTER calling stubSupervisor.
+	prevQ := querySupervisorCmd
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return "", errors.New("stubbed: no supervised job")
+	}
+	t.Cleanup(func() { querySupervisorCmd = prevQ })
 	return &ran
 }
 
@@ -298,7 +312,7 @@ func TestRunDaemonVerb_AnnouncesALongWait(t *testing.T) {
 
 	assert.Contains(t, buf.String(), "waiting up to",
 		"a wait longer than a blink must say it is waiting")
-	assert.Contains(t, buf.String(), macheHTTPURL,
+	assert.Contains(t, buf.String(), projcfg.MacheHTTPURL,
 		"and say what it is waiting ON, so the reader can check it themselves")
 }
 

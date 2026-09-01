@@ -12,6 +12,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/agentic-research/mache/internal/daemonguard"
+	"github.com/agentic-research/mache/internal/projcfg"
 )
 
 // daemonSettleTimeout bounds how long a start/restart waits for the daemon to
@@ -39,20 +42,7 @@ import (
 //
 // The wait announces itself after daemonSettleAnnounceAfter, so a long budget
 // is not a silent one.
-var daemonSettleTimeout = envDurationOr("MACHE_DAEMON_SETTLE", 90*time.Second)
-
-// envDurationOr parses key as a Go duration, or returns fallback when unset
-// or unparseable. The E2E shrinks the settle window so a deliberate crash
-// loop fails in seconds instead of minutes; an operator can widen it on a
-// machine where first-boot graph builds are slow.
-func envDurationOr(key string, fallback time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	return fallback
-}
+var daemonSettleTimeout = projcfg.EnvDurationOr("MACHE_DAEMON_SETTLE", 90*time.Second)
 
 // daemonSettlePoll is the gap between endpoint probes while settling.
 //
@@ -188,7 +178,7 @@ type supervisorStep struct {
 // can legally take that long; beyond it launchd SIGKILLs, so gone-ness is
 // guaranteed shortly after — 50s covers the whole legal window.
 var (
-	daemonDrainTimeout = envDurationOr("MACHE_DAEMON_DRAIN", 50*time.Second)
+	daemonDrainTimeout = projcfg.EnvDurationOr("MACHE_DAEMON_DRAIN", 50*time.Second)
 	daemonDrainPoll    = 100 * time.Millisecond
 )
 
@@ -257,7 +247,7 @@ func awaitDaemon(w io.Writer, up bool) (string, bool) {
 				what = "to stop"
 			}
 			logf(w, "waiting up to %s for the daemon %s at %s…\n",
-				daemonSettleTimeout, what, macheHTTPURL)
+				daemonSettleTimeout, what, projcfg.MacheHTTPURL)
 		}
 		time.Sleep(daemonSettlePoll)
 	}
@@ -291,6 +281,15 @@ func runDaemonVerb(w io.Writer, verb supervisorVerb) error {
 			logf(w, "daemon is already stopped\n")
 			return nil
 		}
+	}
+
+	// A human asking for start/restart is the signal that someone has looked
+	// at the problem, so it clears the crash-loop breaker (mache-956488). A
+	// tripped breaker must never be an unrecoverable state: without this, a
+	// daemon that tripped would refuse every subsequent start and report the
+	// refusal as a failed verb.
+	if verb != verbStop {
+		daemonguard.Reset()
 	}
 
 	steps, err := supervisorArgv(verb, job.Loaded)
@@ -327,17 +326,17 @@ func runDaemonVerb(w io.Writer, verb supervisorVerb) error {
 			return fmt.Errorf(
 				"asked the supervisor to %s the daemon and it accepted, but nothing is answering at %s after %s.\n"+
 					"Check the log for why it exited: %s",
-				verb, macheHTTPURL, daemonSettleTimeout, daemonLogHint())
+				verb, projcfg.MacheHTTPURL, daemonSettleTimeout, daemonLogHint())
 		}
 		return fmt.Errorf("asked the supervisor to stop the daemon and it accepted, but %s is still answering after %s",
-			macheHTTPURL, daemonSettleTimeout)
+			projcfg.MacheHTTPURL, daemonSettleTimeout)
 	}
 
 	if wantUp {
-		logf(w, "daemon %sed: answering at %s, serving %s\n", verb, macheHTTPURL, version)
+		logf(w, "daemon %sed: answering at %s, serving %s\n", verb, projcfg.MacheHTTPURL, version)
 		return nil
 	}
-	logf(w, "daemon stopped: nothing answering at %s\n", macheHTTPURL)
+	logf(w, "daemon stopped: nothing answering at %s\n", projcfg.MacheHTTPURL)
 	return nil
 }
 
@@ -357,10 +356,10 @@ func reportDaemonStatus(w io.Writer) error {
 
 	version, up := daemonEndpointUp()
 	if up {
-		logf(w, "endpoint:   answering at %s, serving %s\n", macheHTTPURL, version)
+		logf(w, "endpoint:   answering at %s, serving %s\n", projcfg.MacheHTTPURL, version)
 		return nil
 	}
-	logf(w, "endpoint:   not answering at %s\n", macheHTTPURL)
+	logf(w, "endpoint:   not answering at %s\n", projcfg.MacheHTTPURL)
 	if job.Loaded && !job.Running {
 		logf(w, "            → mache daemon start\n")
 	}
