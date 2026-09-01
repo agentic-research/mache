@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	publicbuild "github.com/agentic-research/mache/build"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/spf13/cobra"
 )
 
@@ -72,7 +73,7 @@ func runBuildViaLeyline(source, output string) error {
 		warnIfEmptyBuild(output, source, "leyline")
 		return nil
 	}
-	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
+	tmpPath, cleanup, err := leylinegraph.AutoInvokeLeylineParse(source)
 	if err != nil {
 		return fmt.Errorf("leyline backend: %w", err)
 	}

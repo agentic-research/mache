@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +19,11 @@ registers mache as an MCP server for Claude Code.`,
 	Args: cobra.NoArgs,
 	RunE: runInit,
 }
+
+// claudeRegister is the Claude Code CLI registrar handed to
+// projcfg.RegisterAllEditors. A cmd-level var so init's own tests can stub
+// the side effect without sharing a global with projcfg's tests.
+var claudeRegister = projcfg.RegisterClaudeCodeCLI
 
 // initOpts holds all init configuration, avoiding package-level flag state.
 type initOpts struct {
@@ -65,10 +71,10 @@ func execInitGlobal(w io.Writer, macheCmd string) error {
 	_, _ = fmt.Fprintln(w, "Registering mache MCP server (Streamable HTTP) with detected editors...")
 	_, _ = fmt.Fprintln(w)
 
-	registerAllEditors(w, macheCmd)
+	projcfg.RegisterAllEditors(w, macheCmd, claudeRegister)
 
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintf(w, "mache is now available as an MCP server at %s. Restart your editor to activate.\n", macheHTTPURL)
+	_, _ = fmt.Fprintf(w, "mache is now available as an MCP server at %s. Restart your editor to activate.\n", projcfg.MacheHTTPURL)
 	_, _ = fmt.Fprintln(w, "Run 'mache init' (without --global) in a project to configure what it serves.")
 	return nil
 }
@@ -80,7 +86,7 @@ func execInitProject(w io.Writer, opts initOpts) error {
 	}
 
 	// Check for existing config
-	configPath := ConfigFileName
+	configPath := projcfg.ConfigFileName
 	if _, err := os.Stat(configPath); err == nil && !opts.Force {
 		return fmt.Errorf("%s already exists (use --force to overwrite)", configPath)
 	}
@@ -88,15 +94,15 @@ func execInitProject(w io.Writer, opts initOpts) error {
 	// Auto-detect schema if not provided
 	schema := opts.Schema
 	if schema == "" {
-		schema = detectProjectType(cwd)
+		schema = projcfg.DetectProjectType(cwd)
 	}
 
 	// Build config
-	src := SourceConfig{Path: opts.Source}
+	src := projcfg.SourceConfig{Path: opts.Source}
 	if schema != "" {
 		src.Schema = schema
 	}
-	cfg := ProjectConfig{Sources: []SourceConfig{src}}
+	cfg := projcfg.ProjectConfig{Sources: []projcfg.SourceConfig{src}}
 
 	// Write .mache.json
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -111,19 +117,19 @@ func execInitProject(w io.Writer, opts initOpts) error {
 	// Register this project locally so the shared daemon can resolve its
 	// session root from ?project=<token> instead of depending on the client
 	// answering MCP ListRoots (mache-6ec106) — see project_registry.go.
-	token, err := registerProject(cwd)
+	token, err := projcfg.RegisterProject(cwd)
 	if err != nil {
 		return fmt.Errorf("register project: %w", err)
 	}
 
 	// Write/merge .claude/mcp.json
-	if err := writeClaudeMCPConfig(cwd, token); err != nil {
+	if err := projcfg.WriteClaudeMCPConfig(cwd, token); err != nil {
 		return fmt.Errorf("write claude mcp config: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "Updated .claude/mcp.json\n")
 
 	// Write/merge .claude/CLAUDE.md
-	if err := writeClaudeMD(cwd, schema); err != nil {
+	if err := projcfg.WriteClaudeMD(cwd, schema); err != nil {
 		return fmt.Errorf("write CLAUDE.md: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "Updated .claude/CLAUDE.md\n")
@@ -137,7 +143,7 @@ func execInitProject(w io.Writer, opts initOpts) error {
 	}
 	_, _ = fmt.Fprintf(w, "  Source: %s\n", opts.Source)
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintf(w, "This project is registered against the shared mache HTTP daemon (%s).\n", macheHTTPURL)
+	_, _ = fmt.Fprintf(w, "This project is registered against the shared mache HTTP daemon (%s).\n", projcfg.MacheHTTPURL)
 	_, _ = fmt.Fprintln(w, "If you haven't already, run 'mache init --global' once to install and start it.")
 
 	return nil

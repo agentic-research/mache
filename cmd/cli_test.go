@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/leylinegraph"
+	"github.com/agentic-research/mache/internal/schemainfer"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,11 +110,11 @@ func TestBuild_RegisteredGoImportRefsReachNodeRefs(t *testing.T) {
 // Shared fixture step for the FCA regression tests below.
 func inferGoFCASchema(t *testing.T, srcDir string, goFiles int) *api.Topology {
 	t.Helper()
-	astDB, cleanup, err := autoInvokeLeylineParse(srcDir)
+	astDB, cleanup, err := leylinegraph.AutoInvokeLeylineParse(srcDir)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 
-	nodes, err := inferLanguages(astDB, []string{"go"}, map[string]int{"go": goFiles})
+	nodes, err := schemainfer.InferLanguages(astDB, []string{"go"}, map[string]int{"go": goFiles})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1, "FCA over the go _ast rows must produce a schema")
 	// Single-language unwrap, mirroring inferDirSchema's return shape.
@@ -392,7 +394,11 @@ func TestInit_AutoDetectsPython(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServe_HelpOutput(t *testing.T) {
-	out := serveCmd.UsageString()
+	// serve registers via hook #3 (cmd/register.go); resolve it through the
+	// root command rather than reaching into mcpserve for the var (B15/B22).
+	serve, _, err := rootCmd.Find([]string{"serve"})
+	require.NoError(t, err)
+	out := serve.UsageString()
 	assert.Contains(t, out, "schema")
 	assert.Contains(t, out, "http")
 }

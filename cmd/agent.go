@@ -3,35 +3,20 @@ package cmd
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/agentic-research/mache/internal/gitutil"
+	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/spf13/cobra"
 )
 
 // agentMetadata holds metadata for agent mode mounts (set by runAgentMode).
-var agentMetadata *MountMetadata
-
-// MountMetadata stores information about an agent-mode mount.
-type MountMetadata struct {
-	PID        int       `json:"pid"`
-	Source     string    `json:"source"`
-	MountPoint string    `json:"mount_point"`
-	Type       string    `json:"type,omitempty"`       // "nfs", "fuse", "mcp-http", "mcp-stdio"
-	GitRepo    string    `json:"git_repo,omitempty"`   // org/repo
-	GitBranch  string    `json:"git_branch,omitempty"` // branch name
-	GitRemote  string    `json:"git_remote,omitempty"` // full remote URL
-	Timestamp  time.Time `json:"timestamp"`
-	Writable   bool      `json:"writable"`
-	Addr       string    `json:"addr,omitempty"` // listen address for MCP HTTP servers
-}
+var agentMetadata *mountmeta.MountMetadata
 
 // agentPromptTemplate is the instruction file generated for LLM agents.
 const agentPromptTemplate = `# Mache — Semantic Filesystem
@@ -239,46 +224,8 @@ func detectGitInfo(path string) (string, string, string, error) {
 	return orgRepo, branch, remoteURL, nil
 }
 
-// getAgentMountsDir returns the directory where agent mounts are stored.
-func getAgentMountsDir() (string, error) {
-	tmpDir := os.TempDir()
-	macheMountsDir := filepath.Join(tmpDir, "mache")
-	if err := os.MkdirAll(macheMountsDir, 0o755); err != nil {
-		return "", err
-	}
-	return macheMountsDir, nil
-}
-
-// sidecarPath returns the metadata sidecar path for a mount point.
-// Stored beside the mount dir (not inside it) to avoid NFS conflicts.
-func sidecarPath(mountPoint string) string {
-	return mountPoint + ".meta.json"
-}
-
-// saveMountMetadata writes mount metadata to a sidecar file beside the mount point.
-func saveMountMetadata(mountPoint string, meta *MountMetadata) error {
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(sidecarPath(mountPoint), data, 0o644)
-}
-
-// loadMountMetadata reads mount metadata from the sidecar file.
-func loadMountMetadata(mountPoint string) (*MountMetadata, error) {
-	data, err := os.ReadFile(sidecarPath(mountPoint))
-	if err != nil {
-		return nil, err
-	}
-	var meta MountMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, err
-	}
-	return &meta, nil
-}
-
 // generatePromptContent creates the PROMPT.txt content for agents.
-func generatePromptContent(meta *MountMetadata) []byte {
+func generatePromptContent(meta *mountmeta.MountMetadata) []byte {
 	gitInfo := "Not a git repository"
 	if meta.GitRepo != "" {
 		gitInfo = fmt.Sprintf("%s (branch: %s)", meta.GitRepo, meta.GitBranch)
@@ -322,56 +269,6 @@ _diagnostics/ast-errors to see the parse error, fix it, and retry.`
 	return []byte(content)
 }
 
-// listActiveMounts finds all active mache mounts by scanning sidecar files in /tmp/mache.
-func listActiveMounts() ([]*MountMetadata, error) {
-	mountsDir, err := getAgentMountsDir()
-	if err != nil {
-		return nil, err
-	}
-
-	entries, err := os.ReadDir(mountsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var mounts []*MountMetadata
-	for _, entry := range entries {
-		name := entry.Name()
-		// Look for sidecar files: <name>.meta.json
-		if !strings.HasSuffix(name, ".meta.json") {
-			continue
-		}
-
-		metaPath := filepath.Join(mountsDir, name)
-		data, err := os.ReadFile(metaPath)
-		if err != nil {
-			continue
-		}
-		var meta MountMetadata
-		if err := json.Unmarshal(data, &meta); err != nil {
-			continue
-		}
-
-		mounts = append(mounts, &meta)
-	}
-
-	return mounts, nil
-}
-
-// isProcessRunning checks if a process with the given PID is running.
-func isProcessRunning(pid int) bool {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// On Unix, FindProcess always succeeds. Send signal 0 to check if alive.
-	err = process.Signal(syscall.Signal(0))
-	return err == nil
-}
-
 // runAgentMode handles the --agent flag workflow.
 // Returns the mount point and metadata that should be used.
 func runAgentMode(cmd *cobra.Command) error {
@@ -406,7 +303,7 @@ func runAgentMode(cmd *cobra.Command) error {
 	gitRepo, gitBranch, gitRemote, _ := detectGitInfo(absDataPath)
 
 	// Generate mount directory name
-	mountsDir, err := getAgentMountsDir()
+	mountsDir, err := mountmeta.AgentMountsDir()
 	if err != nil {
 		return err
 	}
@@ -414,7 +311,7 @@ func runAgentMode(cmd *cobra.Command) error {
 	agentMountPoint := filepath.Join(mountsDir, mountName)
 
 	// Create metadata that will be saved after mount succeeds
-	agentMetadata = &MountMetadata{
+	agentMetadata = &mountmeta.MountMetadata{
 		PID:        os.Getpid(),
 		Source:     absDataPath,
 		MountPoint: agentMountPoint,
