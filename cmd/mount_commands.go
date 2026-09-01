@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +18,7 @@ var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List active mache instances (mounts and MCP servers)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mounts, err := listActiveMounts()
+		mounts, err := mountmeta.ListActiveMounts()
 		if err != nil {
 			return err
 		}
@@ -33,7 +34,7 @@ var listCmd = &cobra.Command{
 		for _, meta := range mounts {
 			name := filepath.Base(meta.MountPoint)
 			status := "running"
-			if !isProcessRunning(meta.PID) {
+			if !mountmeta.IsProcessRunning(meta.PID) {
 				status = "stale"
 			}
 			typ := meta.Type
@@ -63,7 +64,7 @@ var unmountCmd = &cobra.Command{
 		if filepath.IsAbs(mountName) {
 			mountPoint = mountName
 		} else {
-			mountsDir, err := getAgentMountsDir()
+			mountsDir, err := mountmeta.AgentMountsDir()
 			if err != nil {
 				return err
 			}
@@ -75,7 +76,7 @@ var unmountCmd = &cobra.Command{
 		// mounts have no sidecar. Don't fail when it's missing —
 		// unmount the kernel-side NFS first regardless, then clean up
 		// what we can (mache-fsi: 'No agent metadata' case).
-		meta, metaErr := loadMountMetadata(mountPoint)
+		meta, metaErr := mountmeta.LoadMountMetadata(mountPoint)
 
 		isMCPServe := meta != nil && (meta.Type == "mcp-http" || meta.Type == "mcp-stdio")
 
@@ -95,7 +96,7 @@ var unmountCmd = &cobra.Command{
 		// Step 2: SIGTERM the owning process (only when we have its
 		// PID via the sidecar). For control / sidecar-less mounts
 		// the user is expected to stop the daemon separately.
-		if meta != nil && isProcessRunning(meta.PID) {
+		if meta != nil && mountmeta.IsProcessRunning(meta.PID) {
 			process, err := os.FindProcess(meta.PID)
 			if err == nil {
 				log.Printf("Stopping mache process (PID %d)...", meta.PID)
@@ -104,7 +105,7 @@ var unmountCmd = &cobra.Command{
 				// Wait briefly for graceful shutdown
 				time.Sleep(2 * time.Second)
 
-				if isProcessRunning(meta.PID) {
+				if mountmeta.IsProcessRunning(meta.PID) {
 					log.Printf("Process still running, sending SIGKILL...")
 					_ = process.Signal(syscall.SIGKILL)
 				}
@@ -118,7 +119,7 @@ var unmountCmd = &cobra.Command{
 		if err := os.RemoveAll(mountPoint); err != nil {
 			return fmt.Errorf("failed to remove mount directory: %w", err)
 		}
-		_ = os.Remove(sidecarPath(mountPoint))
+		_ = os.Remove(mountmeta.SidecarPath(mountPoint))
 
 		if metaErr != nil {
 			log.Printf("Mount stopped (no sidecar metadata; resolved by direct unmount).")
@@ -133,20 +134,20 @@ var cleanCmd = &cobra.Command{
 	Use:   "clean",
 	Short: "Remove stale mache mounts and orphaned snapshots",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mounts, err := listActiveMounts()
+		mounts, err := mountmeta.ListActiveMounts()
 		if err != nil {
 			return err
 		}
 
 		cleaned := 0
 		for _, meta := range mounts {
-			if !isProcessRunning(meta.PID) {
+			if !mountmeta.IsProcessRunning(meta.PID) {
 				log.Printf("Removing stale mount: %s (PID %d was not running)",
 					filepath.Base(meta.MountPoint), meta.PID)
 				if err := os.RemoveAll(meta.MountPoint); err != nil {
 					log.Printf("Warning: failed to remove %s: %v", meta.MountPoint, err)
 				} else {
-					_ = os.Remove(sidecarPath(meta.MountPoint))
+					_ = os.Remove(mountmeta.SidecarPath(meta.MountPoint))
 					cleaned++
 				}
 			}
@@ -169,7 +170,7 @@ var cleanCmd = &cobra.Command{
 				if _, err := fmt.Sscanf(parts[0], "%d", &pid); err != nil {
 					continue
 				}
-				if !isProcessRunning(pid) {
+				if !mountmeta.IsProcessRunning(pid) {
 					snapPath := filepath.Join(snapDir, name)
 					log.Printf("Removing orphaned snapshot: %s (PID %d was not running)", name, pid)
 					if err := os.RemoveAll(snapPath); err != nil {

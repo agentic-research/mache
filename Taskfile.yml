@@ -140,9 +140,8 @@ tasks:
       # rule-only edit, which the smell gate (deps:[build]) then ran against —
       # producing phantom "NEW findings" and masking an incomplete rule fix
       # (mache-46af85). Keep this list in sync with the //go:embed directives.
-      - "cmd/rules/*.json"
-      - "cmd/schemas/*.json"
-      - "cmd/schemas/sarif.tmpl"
+      - "internal/smells/rules/*.json"
+      - "internal/smells/schemas/sarif.tmpl"
       - "internal/buildinfo/version.txt"
     generates:
       - "{{.BINARY_NAME}}"
@@ -512,7 +511,7 @@ tasks:
       # set to cmd/, not the project root — relative paths land
       # under cmd/.e2e/ otherwise.
       - mkdir -p {{.ROOT_DIR}}/.e2e
-      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json go test -v -run 'TestE2E_AllMCPTools' ./cmd/
+      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json go test -v -run 'TestE2E_AllMCPTools' ./internal/mcpserve/
       - echo "manifest -> .e2e/tool-profile.json"
 
   profile-tools-pprof:
@@ -530,7 +529,7 @@ tasks:
       # brendangregg's FlameGraph scripts on PATH; the task checks
       # for them and prints install instructions if missing).
       - mkdir -p {{.ROOT_DIR}}/.e2e/pprof
-      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json E2E_CAPTURE_PPROF=1 go test -v -run 'TestE2E_AllMCPTools' ./cmd/
+      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json E2E_CAPTURE_PPROF=1 go test -v -run 'TestE2E_AllMCPTools' ./internal/mcpserve/
       - echo "manifest -> .e2e/tool-profile.json"
       - echo "pprof    -> .e2e/pprof/*.{cpu,heap}.pprof"
       - echo "next     -> task flamegraphs"
@@ -885,7 +884,7 @@ tasks:
   cache:test:
     desc: Run the cache push/pull/OCI test suite
     cmds:
-      - go test -v -count=1 ./cmd/ -run "TestCache|TestOCI"
+      - go test -v -count=1 ./internal/buildcache/ -run "TestCache|TestOCI"
 
   cache:roundtrip:
     desc: End-to-end self-test — build a tiny db, push, pull, diff
@@ -898,4 +897,4 @@ tasks:
       Used by .github/workflows/cache-roundtrip.yml as a CI smoke test
       that the cache feature still works end-to-end.
     cmds:
-      - go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./cmd/
+      - go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./internal/buildcache/

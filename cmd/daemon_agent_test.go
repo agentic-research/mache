@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,19 +30,31 @@ func TestLaunchAgentPlist_ShapeAndArgs(t *testing.T) {
 	// Canonical transport: serve --http localhost:7532, never --stdio.
 	assert.Contains(t, plist, "<string>serve</string>")
 	assert.Contains(t, plist, "<string>--http</string>")
-	assert.Contains(t, plist, macheHTTPListen)
+	assert.Contains(t, plist, projcfg.MacheHTTPListen)
 	assert.NotContains(t, plist, "--stdio")
-	// Crash-loop guard.
+	// Crash-loop guard, both layers: launchd's respawn throttle bounds the
+	// RATE, and MACHE_SUPERVISED arms mache's own breaker to bound the COUNT
+	// (launchd has no StartLimitBurst equivalent — mache-956488).
 	assert.Contains(t, plist, "ThrottleInterval")
+	assert.Contains(t, plist, "<key>MACHE_SUPERVISED</key>")
+	assert.Contains(t, plist, "<string>1</string>")
 }
 
 func TestSystemdUserUnit_ExecStart(t *testing.T) {
 	unit := systemdUserUnit("/usr/local/bin/mache")
 
 	// Path is double-quoted so systemd treats it as one argument.
-	assert.Contains(t, unit, `ExecStart="/usr/local/bin/mache" serve --http `+macheHTTPListen)
+	assert.Contains(t, unit, `ExecStart="/usr/local/bin/mache" serve --http `+projcfg.MacheHTTPListen)
 	assert.Contains(t, unit, "Restart=on-failure")
 	assert.NotContains(t, unit, "--stdio")
+
+	// Crash-loop bounding is two layers here too: systemd's native start
+	// limit catches a binary that never reaches main, and MACHE_SUPERVISED
+	// arms the in-process breaker for the far commoner "starts, then fails"
+	// (mache-956488).
+	assert.Contains(t, unit, "StartLimitIntervalSec=120")
+	assert.Contains(t, unit, "StartLimitBurst=5")
+	assert.Contains(t, unit, "Environment=MACHE_SUPERVISED=1")
 }
 
 // TestLaunchAgentPlist_EscapesSpecialChars guards against a nonstandard install
@@ -71,7 +84,7 @@ func TestLaunchAgentPlist_EscapesSpecialChars(t *testing.T) {
 
 func TestSystemdUserUnit_QuotesSpacedPath(t *testing.T) {
 	unit := systemdUserUnit("/Applications/Mache Tools/mache")
-	assert.Contains(t, unit, `ExecStart="/Applications/Mache Tools/mache" serve --http `+macheHTTPListen)
+	assert.Contains(t, unit, `ExecStart="/Applications/Mache Tools/mache" serve --http `+projcfg.MacheHTTPListen)
 }
 
 func TestInstallDaemonAgent_WritesSupervisorFile(t *testing.T) {
@@ -98,6 +111,6 @@ func TestInstallDaemonAgent_WritesSupervisorFile(t *testing.T) {
 	data, err := os.ReadFile(want)
 	require.NoError(t, err, "supervisor file should be written")
 	assert.Contains(t, string(data), "serve")
-	assert.Contains(t, string(data), macheHTTPListen)
+	assert.Contains(t, string(data), projcfg.MacheHTTPListen)
 	assert.True(t, strings.Contains(buf.String(), want), "output should mention the written path")
 }

@@ -33,7 +33,7 @@ var regexpAllowlist = map[string]string{
 	"internal/leyline/version_parity_test.go": "parses `--version` output text",
 	"internal/buildinfo/buildinfo_test.go":    "parses version string",
 	"internal/lattice/date_parsing_test.go":   "date-format heuristics under test",
-	"cmd/find_smells_cli_test.go":             "asserts on CLI stdout text",
+	"internal/smells/find_smells_cli_test.go": "asserts on CLI stdout text",
 	"cmd/find_smells_action_test.go":          "asserts on action output text",
 	"internal/testutil/leyline.go":            "GoCallExtractorForTest: deliberate naive identifier-call regex for CGO-free synthetic-store tests (moved from cmd in mache-96c378 stage 1)",
 

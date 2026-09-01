@@ -1,0 +1,15 @@
+{
+  "ID": "long_file",
+  "Languages": null,
+  "Description": "Source files sorted descending by total line count (end_row of the source_file root AST node). Default threshold is 1501 lines \u2014 matches the historical strict `> 1500` SQL floor exactly, so agents calling without min_metric see the same long-file set as before. Pass min_metric to adjust: 3000 for 'definitely review now', 800 for 'noteworthy', 0 to see everything sorted by length. Cross-language since the rule joins by node_kind = 'source_file' which most tree-sitter grammars use as the root kind.",
+  "Query": "\n\t\t\tSELECT src.source_id,\n\t\t\t       src.node_id,\n\t\t\t       src.start_byte,\n\t\t\t       src.end_byte,\n\t\t\t       src.start_row,\n\t\t\t       src.start_col,\n\t\t\t       src.end_row AS metric\n\t\t\tFROM _ast src\n\t\t\tWHERE src.node_kind = 'source_file'\n\t\t\t  -- Vendored corpus: a long third-party file is not this\n\t\t\t  -- project's debt (mache-f41b43). v_vendored_files unions the\n\t\t\t  -- _ast arm precisely because this rule never reads `nodes`.\n\t\t\t  AND src.source_id NOT IN (SELECT source_file FROM v_vendored_files)\n\t\t\t%s\n\t\t\tORDER BY metric DESC, src.source_id\n\t\t",
+  "ScopeColumn": "src.source_id",
+  "Requires": [
+    "_ast"
+  ],
+  "DefaultMinMetric": 1501,
+  "Severity": "",
+  "Tags": [
+    "gate"
+  ]
+}
