@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mache": {
+      "command": "${MACHE_BIN}",
+      "args": ["serve", "--stdio", "${MACHE_DB}"]
+    }
+  }
+}
