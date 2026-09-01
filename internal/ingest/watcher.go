@@ -26,9 +26,16 @@ type Watcher struct {
 	onDelete func(path string)
 
 	debounce time.Duration
+	// afterFunc constructs the debounce timer. A seam, in the same spirit as
+	// the daemon verbs' supervisor seams: without it the coalescing property
+	// can only be tested by racing real sleeps against a real debounce
+	// window, which is a wall-clock bet that CI eventually loses. It lost
+	// twice (PR #294, then again after the window was widened 50ms -> 250ms),
+	// each time reported as a code failure when it was scheduler jitter.
+	afterFunc func(time.Duration, func()) debounceTimer
 
 	mu     sync.Mutex
-	timers map[string]*time.Timer
+	timers map[string]debounceTimer
 
 	done     chan struct{}
 	stopOnce sync.Once
@@ -37,6 +44,16 @@ type Watcher struct {
 
 // WatcherOption configures a Watcher.
 type WatcherOption func(*Watcher)
+
+// debounceTimer is the only part of *time.Timer the watcher uses. Narrow on
+// purpose: a fake needs to implement one method, not a clock.
+type debounceTimer interface{ Stop() bool }
+
+// withAfterFunc replaces the debounce timer constructor. Unexported — this is
+// for this package's own tests, not a supported knob.
+func withAfterFunc(f func(time.Duration, func()) debounceTimer) WatcherOption {
+	return func(w *Watcher) { w.afterFunc = f }
+}
 
 // WithDebounce sets the quiet period before a change callback fires.
 // Defaults to 100ms.
@@ -67,13 +84,14 @@ func NewWatcher(rootDir string, onChange, onDelete func(path string), opts ...Wa
 	}
 
 	w := &Watcher{
-		watcher:  fsw,
-		rootDir:  abs,
-		onChange: onChange,
-		onDelete: onDelete,
-		debounce: 100 * time.Millisecond,
-		timers:   make(map[string]*time.Timer),
-		done:     make(chan struct{}),
+		watcher:   fsw,
+		rootDir:   abs,
+		onChange:  onChange,
+		onDelete:  onDelete,
+		debounce:  100 * time.Millisecond,
+		timers:    make(map[string]debounceTimer),
+		afterFunc: func(d time.Duration, f func()) debounceTimer { return time.AfterFunc(d, f) },
+		done:      make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -182,7 +200,7 @@ func (w *Watcher) debouncedOnChange(path string) {
 		t.Stop()
 	}
 
-	w.timers[path] = time.AfterFunc(w.debounce, func() {
+	w.timers[path] = w.afterFunc(w.debounce, func() {
 		w.mu.Lock()
 		// Guard against timer firing after Stop() has returned.
 		// Stop() sets w.timers = nil; if we see nil, the watcher
