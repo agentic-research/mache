@@ -145,6 +145,13 @@ func runCyclomaticComplexityMemo(qg graph.RefsQuerier, sourceID string, limit in
 			Line:      f.startRow + 1,
 			Column:    f.startCol + 1,
 			Metric:    m,
+			// The memo already knows each function's content address — it is
+			// the memo key. Carrying it here keeps this path byte-identical
+			// to the full scan (which enriches from _ast) and gives the
+			// ratchet the same refactor-invariant identity either way
+			// (mache-dd45a3). Empty on producers without node_hash, exactly
+			// as the enrichment leaves it.
+			NodeHash: f.hashHex,
 		})
 	}
 

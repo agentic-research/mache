@@ -20,11 +20,11 @@ func TestSmellBaseline_ComputeAndLookup(t *testing.T) {
 		rf("long_function", "b.go", 5),
 		rf("magic_int", "a.go", 3),
 	})
-	assert.Equal(t, 2, base.lookup("long_function", "a.go"))
-	assert.Equal(t, 1, base.lookup("long_function", "b.go"))
-	assert.Equal(t, 1, base.lookup("magic_int", "a.go"))
-	assert.Equal(t, 0, base.lookup("long_function", "c.go"), "unknown file → 0")
-	assert.Equal(t, 0, base.lookup("dead_code", "a.go"), "unknown rule → 0")
+	assert.Equal(t, 2, base.lookup(pathKey("long_function", "a.go")))
+	assert.Equal(t, 1, base.lookup(pathKey("long_function", "b.go")))
+	assert.Equal(t, 1, base.lookup(pathKey("magic_int", "a.go")))
+	assert.Equal(t, 0, base.lookup(pathKey("long_function", "c.go")), "unknown file → 0")
+	assert.Equal(t, 0, base.lookup(pathKey("dead_code", "a.go")), "unknown rule → 0")
 }
 
 func TestSmellBaseline_JSONRoundTrip_Deterministic(t *testing.T) {
@@ -38,8 +38,8 @@ func TestSmellBaseline_JSONRoundTrip_Deterministic(t *testing.T) {
 
 	var got smellBaseline
 	require.NoError(t, json.Unmarshal(blob, &got))
-	assert.Equal(t, 2, got.lookup("long_function", "a.go"))
-	assert.Equal(t, 1, got.lookup("magic_int", "z.go"))
+	assert.Equal(t, 2, got.lookup(pathKey("long_function", "a.go")))
+	assert.Equal(t, 1, got.lookup(pathKey("magic_int", "z.go")))
 
 	// Output must be order-independent so a committed baseline file doesn't
 	// churn on every regeneration.
@@ -98,4 +98,15 @@ func TestNewDebt(t *testing.T) {
 		assert.Equal(t, d1, d2)
 		assert.Len(t, d1, 2, "baseline 2, current 4 → 2 new")
 	})
+}
+
+// pathKey builds the path-keyed ratchet identity — what a finding with no
+// content address falls back to, and what every v1 baseline entry uses.
+func pathKey(ruleID, sourceID string) [2]string {
+	return ratchetKey(ruleID, "", sourceID, baselineVersion)
+}
+
+// hashKey builds the content-addressed ratchet identity.
+func hashKey(ruleID, nodeHash string) [2]string {
+	return ratchetKey(ruleID, nodeHash, "any-path", baselineVersion)
 }
