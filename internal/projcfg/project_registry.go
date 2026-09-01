@@ -1,0 +1,297 @@
+package projcfg
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/agentic-research/mache/internal/leyline"
+
+	"github.com/zeebo/blake3"
+)
+
+// The local project-identity registry lets `mache init` bake a working
+// per-project MCP URL without depending on the MCP roots protocol
+// (mache-6ec106). The shared HTTP daemon routes every session by asking the
+// connecting client for its workspace root over `roots/list` — a
+// server-initiated request that requires the client to keep a channel open
+// for server-pushed messages. Many real MCP HTTP clients are plain
+// request/response and never open that channel, so for them root discovery
+// isn't slow, it's structurally undeliverable.
+//
+// `mache init` (run once per project directory) registers that project's
+// absolute path here under a salted, deterministic token, and embeds
+// `?project=<token>` in the URL it writes to .claude/mcp.json. The daemon
+// resolves that query param by looking the token up in THIS SAME local file
+// — it never accepts or trusts a caller-supplied path directly. An attacker
+// who guesses or independently computes a token gets a registry miss, not a
+// disclosure, unless the exact path was already registered by a legitimate
+// local `mache init` run. The salt is what makes a token infeasible to guess
+// by hashing a candidate path: without it, a token would just be
+// BLAKE3(path), which anyone could compute for any path they suspect exists.
+//
+// Tokens are deterministic (same salt + same path -> same token) rather than
+// random, so re-running `mache init` in a directory reproduces the same
+// token instead of orphaning the URL already written into every client's
+// config — matching the hash-based identity mache already uses for content
+// (leyline's node_hash / merkle IR) rather than inventing a separate
+// random-UUID scheme.
+
+const (
+	projectSaltFile     = "project-salt"
+	projectRegistryFile = "projects.json"
+)
+
+// realHomeAtInit is the home directory as resolved when the process started —
+// before any test's t.Setenv("HOME", ...) can have run. Used only by the
+// test-hermeticity guard below; in production it simply equals the home every
+// call resolves.
+var realHomeAtInit, _ = os.UserHomeDir()
+
+// MacheHomeDir returns ~/.mache, creating it if necessary. Exported so other
+// packages that keep per-machine daemon state (internal/daemonguard) resolve
+// it through the SAME seam — which means they inherit the test-hermeticity
+// guard below for free, rather than each re-deriving a path that tests can
+// pollute (mache-3e78d2).
+func MacheHomeDir() (string, error) { return macheHomeDir() }
+
+// macheHomeDir returns ~/.mache, creating it if necessary.
+//
+// Test-hermeticity guard (mache-3e78d2): under `go test`, writing to the REAL
+// ~/.mache is always a bug — it was how 106 test-run temp dirs ended up in a
+// developer's actual projects.json. A test that reaches this path must have
+// pointed HOME at a t.TempDir(); one that didn't fails here, loudly, naming
+// the fix — instead of silently growing the user's config. testing.Testing()
+// is false in production binaries, so the branch is dead outside tests.
+func macheHomeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	if testing.Testing() && home == realHomeAtInit && realHomeAtInit != "" {
+		return "", fmt.Errorf(
+			"test would touch the REAL %s/.mache — point HOME at a t.TempDir() "+
+				"(t.Setenv) before exercising the project registry", home)
+	}
+	dir := filepath.Join(home, ".mache")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// loadOrCreateProjectSalt returns the per-machine salt used to derive
+// project tokens, generating and persisting a new 32-byte random salt on
+// first use.
+func loadOrCreateProjectSalt() ([]byte, error) {
+	dir, err := macheHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, projectSaltFile)
+
+	if data, err := os.ReadFile(path); err == nil {
+		if len(data) == 32 {
+			return data, nil
+		}
+		// Wrong length: a corrupt or foreign file. Fall through and
+		// regenerate rather than trusting partial/garbage salt bytes.
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	salt := make([]byte, 32)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("generate project salt: %w", err)
+	}
+	if err := WriteFileAtomic(path, salt); err != nil {
+		return nil, fmt.Errorf("write %s: %w", path, err)
+	}
+	return salt, nil
+}
+
+// projectToken derives a deterministic, salted token for absPath. Truncated
+// to 128 bits (32 hex chars) — plenty against guessing given the salt, short
+// enough to sit comfortably in a URL query parameter.
+func projectToken(salt []byte, absPath string) string {
+	h := blake3.New()
+	_, _ = h.Write(salt)
+	_, _ = h.Write([]byte(absPath))
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:16])
+}
+
+// projectRegistryPath is ~/.mache/projects.json, the token -> absolute-path
+// map.
+func projectRegistryPath() (string, error) {
+	dir, err := macheHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, projectRegistryFile), nil
+}
+
+// LoadProjectRegistry reads the token -> path map, returning an empty map
+// (not an error) when the registry has not been created yet.
+func LoadProjectRegistry() (map[string]string, error) {
+	path, err := projectRegistryPath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	reg := map[string]string{}
+	if err := json.Unmarshal(data, &reg); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return reg, nil
+}
+
+// RegisterProject records absPath in the local registry under its derived
+// token and returns the token. Idempotent: re-registering the same path
+// (e.g. re-running `mache init`) reproduces the same token and simply
+// overwrites its own entry — every other project's entry is preserved.
+// That preservation is also the migration policy for tokens minted before
+// path canonicalization: adding the canonical token does not delete the old
+// spelling, so already-written client URLs keep resolving during the grace
+// period. New registrations converge on the canonical token.
+func RegisterProject(absPath string) (string, error) {
+	// Canonicalize BEFORE hashing. Every other layer already does — leyline's
+	// verify_source_root_matches compares Rust-canonicalized paths, ingest
+	// canonicalizes, and arena_config's CanonicalSourceRoot exists with a
+	// comment naming this exact hazard: this repo is reachable through both
+	// ~/github/art/mache and ~/remotes/art/mache, the same tree behind a
+	// symlink. The registry was the ONE layer that did not, so `mache init`
+	// from the two paths minted two tokens for one project (mache-0e4773).
+	//
+	// The asymmetry is what makes this worth fixing at the choke point rather
+	// than at each caller: a too-COARSE identity is caught loudly by leyline's
+	// cross-source refusal, while a too-FINE one is caught by nothing — each
+	// side stays internally consistent and simply disagrees.
+	absPath = leyline.CanonicalSourceRoot(absPath)
+
+	salt, err := loadOrCreateProjectSalt()
+	if err != nil {
+		return "", err
+	}
+	token := projectToken(salt, absPath)
+
+	// The load/insert/write below is a read-modify-write over a file shared by
+	// every mache goroutine AND every mache process. Unserialized, concurrent
+	// registrations each write back a map they read BEFORE the others' inserts,
+	// so all but the last are silently dropped — measured at 47-49 losses out
+	// of 50 concurrent roots. See withRegistryLock.
+	err = withRegistryLock(func() error {
+		reg, lerr := LoadProjectRegistry()
+		if lerr != nil {
+			return lerr
+		}
+		reg[token] = absPath
+
+		data, merr := json.MarshalIndent(reg, "", "  ")
+		if merr != nil {
+			return fmt.Errorf("marshal project registry: %w", merr)
+		}
+		path, perr := projectRegistryPath()
+		if perr != nil {
+			return perr
+		}
+		if werr := WriteFileAtomic(path, append(data, '\n')); werr != nil {
+			return fmt.Errorf("write %s: %w", path, werr)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// EnsureProjectRegistered records rootPath in the local registry if it is not
+// already there, and reports whether a write happened.
+//
+// This is what makes registration a BYPRODUCT of serving rather than a
+// separate setup step. Before it, RegisterProject had exactly one caller —
+// `mache init` — so a daemon could serve a project a hundred times and
+// ~/.mache/projects.json would still not exist. That is not hypothetical: a
+// long-running shared daemon was found serving this repo with an empty
+// registry, so every ?project= lookup necessarily missed (mache-6ec106's
+// resolution path was in place but had nothing to resolve against).
+//
+// Now any session that resolves a workspace root by ANY means — client roots,
+// an explicit --path — registers it, so the token exists for the next client
+// that cannot answer roots/list. `mache init` keeps its distinct job: writing
+// the ?project= token into the client's config, which a server cannot do.
+//
+// Deliberately non-fatal and quiet on failure. A read-only HOME or a corrupt
+// registry must not take down a session that is otherwise resolving fine —
+// serving the graph is the job; registration is an optimization for later.
+// The existence check keeps the steady state read-only: re-registering on
+// every tool call would rewrite the file constantly for no gain.
+func EnsureProjectRegistered(rootPath string) bool {
+	if rootPath == "" {
+		return false
+	}
+	rootPath = leyline.CanonicalSourceRoot(rootPath)
+	registered := false
+	err := withRegistryLock(func() error {
+		reg, lerr := LoadProjectRegistry()
+		if lerr != nil {
+			return lerr
+		}
+		for _, p := range reg {
+			if p == rootPath {
+				return nil // already known; stay read-only
+			}
+		}
+		// RegisterProject takes the same lock, which is why it must be
+		// reentrant-safe: withRegistryLock is NOT reentrant (flock on a second
+		// descriptor from the same process would deadlock against itself on
+		// Linux), so the write is inlined here rather than delegated.
+		salt, serr := loadOrCreateProjectSalt()
+		if serr != nil {
+			return serr
+		}
+		reg[projectToken(salt, rootPath)] = rootPath
+
+		data, merr := json.MarshalIndent(reg, "", "  ")
+		if merr != nil {
+			return merr
+		}
+		path, perr := projectRegistryPath()
+		if perr != nil {
+			return perr
+		}
+		if werr := WriteFileAtomic(path, append(data, '\n')); werr != nil {
+			return werr
+		}
+		registered = true
+		return nil
+	})
+	if err != nil {
+		return false
+	}
+	return registered
+}
+
+// ResolveProjectToken looks up token in the local registry, returning the
+// absolute path it was registered against. ok is false when the token is
+// unknown — whether guessed, stale, or from a registry that was wiped after
+// the client's config was written.
+func ResolveProjectToken(token string) (string, bool) {
+	reg, err := LoadProjectRegistry()
+	if err != nil {
+		return "", false
+	}
+	path, ok := reg[token]
+	return path, ok
+}

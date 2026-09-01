@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/leylinegraph"
+	"github.com/agentic-research/mache/internal/schemainfer"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -57,6 +60,49 @@ func TestBuild_ProducesDB(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output DB should be non-empty")
 }
 
+// TestBuild_RegisteredGoImportRefsReachNodeRefs exercises the production
+// leyline-parse -> ASTWalker -> Engine path. The lower-level query tests prove
+// registration, but this guards the actual `mache build --schema go` output
+// consumed by graph callers: an import must survive as a typed gomod token in
+// node_refs, not merely exist in the temporary _ast database.
+func TestBuild_RegisteredGoImportRefsReachNodeRefs(t *testing.T) {
+	testutil.RequirePinnedLeyline(t)
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "go.mod"),
+		[]byte("module example.com/app\n\ngo 1.23\n\nrequire example.com/acme/dep v0.0.0\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "main.go"), []byte(
+		"package main\n\nimport dep \"example.com/acme/dep\"\n\nfunc main() { dep.Run() }\n",
+	), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(srcDir, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "sub", "nested.go"), []byte(
+		"package sub\n\nimport dep \"example.com/acme/nested\"\n\nfunc Nested() { dep.Run() }\n",
+	), 0o644))
+
+	outDB := filepath.Join(tmpDir, "out.db")
+	oldSchemaPath := schemaPath
+	schemaPath = "go"
+	defer func() { schemaPath = oldSchemaPath }()
+	require.NoError(t, buildCmd.RunE(buildCmd, []string{srcDir, outDB}))
+
+	db, err := sql.Open("sqlite", outDB)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var refs int
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM node_refs WHERE token = ?`, "gomod:example.com/acme/dep",
+	).Scan(&refs))
+	assert.GreaterOrEqual(t, refs, 1,
+		"mache build must project registered Go import refs into node_refs.token")
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM node_refs WHERE token = ?`, "gomod:example.com/acme/nested",
+	).Scan(&refs))
+	assert.GreaterOrEqual(t, refs, 1,
+		"mache build --schema go must preserve registered refs from nested files")
+}
+
 // inferGoFCASchema runs the SURVIVING source-code FCA inference path
 // (ADR-0012 step 4): leyline-parse the tree into an `_ast` db, run
 // pure-Go lattice.InferFromASTDB via inferLanguages, and unwrap the
@@ -64,11 +110,11 @@ func TestBuild_ProducesDB(t *testing.T) {
 // Shared fixture step for the FCA regression tests below.
 func inferGoFCASchema(t *testing.T, srcDir string, goFiles int) *api.Topology {
 	t.Helper()
-	astDB, cleanup, err := autoInvokeLeylineParse(srcDir)
+	astDB, cleanup, err := leylinegraph.AutoInvokeLeylineParse(srcDir)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 
-	nodes, err := inferLanguages(astDB, []string{"go"}, map[string]int{"go": goFiles})
+	nodes, err := schemainfer.InferLanguages(astDB, []string{"go"}, map[string]int{"go": goFiles})
 	require.NoError(t, err)
 	require.Len(t, nodes, 1, "FCA over the go _ast rows must produce a schema")
 	// Single-language unwrap, mirroring inferDirSchema's return shape.
@@ -93,7 +139,7 @@ func inferGoFCASchema(t *testing.T, srcDir string, goFiles int) *api.Topology {
 // (lattice.InferFromASTDB) → runBuildViaLeylineSchema projection —
 // the same composition the mount/serve --infer paths use.
 func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
@@ -112,7 +158,7 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 	schema := inferGoFCASchema(t, srcDir, 2)
 
 	outDB := filepath.Join(tmpDir, "out.db")
-	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema, false, nil))
+	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema))
 
 	db, err := sql.Open("sqlite", outDB)
 	require.NoError(t, err)
@@ -144,7 +190,7 @@ func TestBuild_FCAInferenceCoversMethods(t *testing.T) {
 // and stamps Language="go" on every generated node — the projection
 // must then route b.js to _project_files/ instead of matching it.
 func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "src")
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
@@ -167,7 +213,7 @@ func TestBuild_FCAInferenceTagsLanguage(t *testing.T) {
 	}
 
 	outDB := filepath.Join(tmpDir, "out.db")
-	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema, false, nil))
+	require.NoError(t, runBuildViaLeylineSchema(srcDir, outDB, schema))
 
 	db, err := sql.Open("sqlite", outDB)
 	require.NoError(t, err)
@@ -309,6 +355,7 @@ func TestClean_RunsWithoutError(t *testing.T) {
 
 func TestInit_AutoDetectsGo(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	oldCwd, _ := os.Getwd()
 	require.NoError(t, os.Chdir(tmpDir))
 	defer func() { _ = os.Chdir(oldCwd) }()
@@ -326,6 +373,7 @@ func TestInit_AutoDetectsGo(t *testing.T) {
 
 func TestInit_AutoDetectsPython(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	oldCwd, _ := os.Getwd()
 	require.NoError(t, os.Chdir(tmpDir))
 	defer func() { _ = os.Chdir(oldCwd) }()
@@ -346,7 +394,11 @@ func TestInit_AutoDetectsPython(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServe_HelpOutput(t *testing.T) {
-	out := serveCmd.UsageString()
+	// serve registers via hook #3 (cmd/register.go); resolve it through the
+	// root command rather than reaching into mcpserve for the var (B15/B22).
+	serve, _, err := rootCmd.Find([]string{"serve"})
+	require.NoError(t, err)
+	out := serve.UsageString()
 	assert.Contains(t, out, "schema")
 	assert.Contains(t, out, "http")
 }

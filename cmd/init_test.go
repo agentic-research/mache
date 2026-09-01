@@ -3,17 +3,20 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/projcfg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestInit_CreatesFiles(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	require.NoError(t, os.Chdir(dir))
 
 	// Create a Go file so auto-detect works
@@ -24,21 +27,38 @@ func TestInit_CreatesFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	// Check .mache.json
-	data, err := os.ReadFile(filepath.Join(dir, ConfigFileName))
+	data, err := os.ReadFile(filepath.Join(dir, projcfg.ConfigFileName))
 	require.NoError(t, err)
 
-	var cfg ProjectConfig
+	var cfg projcfg.ProjectConfig
 	require.NoError(t, json.Unmarshal(data, &cfg))
 	assert.Len(t, cfg.Sources, 1)
 	assert.Equal(t, ".", cfg.Sources[0].Path)
 	assert.Equal(t, "go", cfg.Sources[0].Schema)
 
-	// Check .claude/mcp.json
+	// Check .claude/mcp.json — mache-6ec106: a fresh project init must embed
+	// ?project=<token> so the session resolves without depending on the
+	// client answering MCP ListRoots.
 	mcpData, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(mcpData), "mache")
-	assert.Contains(t, string(mcpData), macheHTTPURL)
+	assert.Contains(t, string(mcpData), projcfg.MacheHTTPURL+"?project=")
 	assert.NotContains(t, string(mcpData), `"serve"`)
+
+	var mcpConfig struct {
+		McpServers map[string]struct {
+			URL string `json:"url"`
+		} `json:"mcpServers"`
+	}
+	require.NoError(t, json.Unmarshal(mcpData, &mcpConfig))
+	registeredURL, err := url.Parse(mcpConfig.McpServers["mache"].URL)
+	require.NoError(t, err)
+
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	resolved, ok := projcfg.ResolveProjectToken(registeredURL.Query().Get("project"))
+	require.True(t, ok, "the token embedded in mcp.json must resolve via the local registry")
+	assert.Equal(t, cwd, resolved)
 
 	// Check .claude/CLAUDE.md
 	claudeMD, err := os.ReadFile(filepath.Join(dir, ".claude", "CLAUDE.md"))
@@ -57,7 +77,7 @@ func TestInit_CreatesFiles(t *testing.T) {
 func TestInit_ExistingConfigNoForce(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Chdir(dir))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName), []byte("{}"), 0o644))
 
 	err := execInit(new(bytes.Buffer), "mache", initOpts{Source: "."})
 	assert.Error(t, err)
@@ -66,8 +86,9 @@ func TestInit_ExistingConfigNoForce(t *testing.T) {
 
 func TestInit_ExistingConfigWithForce(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	require.NoError(t, os.Chdir(dir))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, projcfg.ConfigFileName), []byte("{}"), 0o644))
 
 	err := execInit(new(bytes.Buffer), "mache", initOpts{Force: true, Source: "."})
 	require.NoError(t, err)
@@ -75,15 +96,16 @@ func TestInit_ExistingConfigWithForce(t *testing.T) {
 
 func TestInit_ExplicitSchema(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	require.NoError(t, os.Chdir(dir))
 
 	err := execInit(new(bytes.Buffer), "mache", initOpts{Schema: "python", Source: "."})
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(filepath.Join(dir, ConfigFileName))
+	data, err := os.ReadFile(filepath.Join(dir, projcfg.ConfigFileName))
 	require.NoError(t, err)
 
-	var cfg ProjectConfig
+	var cfg projcfg.ProjectConfig
 	require.NoError(t, json.Unmarshal(data, &cfg))
 	assert.Equal(t, "python", cfg.Sources[0].Schema)
 }
@@ -93,10 +115,12 @@ func TestInit_Global(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
-	// Mock Claude CLI to avoid real exec side effects
-	orig := claudeCLIRegister
-	claudeCLIRegister = func(string) bool { return false }
-	t.Cleanup(func() { claudeCLIRegister = orig })
+	// Mock Claude CLI to avoid real exec side effects. claudeRegister is
+	// cmd's OWN seam (handed to projcfg.RegisterAllEditors as a parameter),
+	// so stubbing it cannot race projcfg's tests.
+	orig := claudeRegister
+	claudeRegister = func(string) bool { return false }
+	t.Cleanup(func() { claudeRegister = orig })
 
 	// Don't load a real launchd/systemd agent during the test — just write files.
 	origAutoload := daemonAgentAutoload
@@ -114,11 +138,11 @@ func TestInit_Global(t *testing.T) {
 	mcpData, err := os.ReadFile(filepath.Join(dir, ".cursor", "mcp.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(mcpData), "mache")
-	assert.Contains(t, string(mcpData), macheHTTPURL)
+	assert.Contains(t, string(mcpData), projcfg.MacheHTTPURL)
 	assert.NotContains(t, string(mcpData), `"serve"`)
 
 	// No .mache.json should be created in global mode
-	_, err = os.Stat(filepath.Join(dir, ConfigFileName))
+	_, err = os.Stat(filepath.Join(dir, projcfg.ConfigFileName))
 	assert.True(t, os.IsNotExist(err))
 
 	assert.Contains(t, buf.String(), "Restart your editor")
@@ -126,6 +150,7 @@ func TestInit_Global(t *testing.T) {
 
 func TestInit_CLAUDEmd_AppendToExisting(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	require.NoError(t, os.Chdir(dir))
 
 	// Create existing CLAUDE.md with other content
@@ -149,6 +174,7 @@ func TestInit_CLAUDEmd_AppendToExisting(t *testing.T) {
 
 func TestInit_CLAUDEmd_NoDuplicate(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	require.NoError(t, os.Chdir(dir))
 
 	opts := initOpts{Force: true, Schema: "go", Source: "."}
@@ -163,17 +189,40 @@ func TestInit_CLAUDEmd_NoDuplicate(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(string(claudeMD), "## Mache"))
 }
 
+// TestInit_RerunReproducesTheSameProjectToken — mache-6ec106. Re-running
+// `mache init` in the same directory (e.g. after a fresh checkout, or after
+// `~/.mache` is wiped and the salt regenerates) must NOT mint a new token —
+// every client config already holding the old URL would otherwise be
+// silently orphaned until someone re-runs `mache init` in every one of them.
+func TestInit_RerunReproducesTheSameProjectToken(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, os.Chdir(dir))
+
+	opts := initOpts{Force: true, Schema: "go", Source: "."}
+	require.NoError(t, execInit(new(bytes.Buffer), "mache", opts))
+	firstMCP, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
+	require.NoError(t, err)
+
+	require.NoError(t, execInit(new(bytes.Buffer), "mache", opts))
+	secondMCP, err := os.ReadFile(filepath.Join(dir, ".claude", "mcp.json"))
+	require.NoError(t, err)
+
+	assert.Equal(t, string(firstMCP), string(secondMCP), "re-running init in the same directory must reproduce the identical URL, not mint a new token")
+}
+
 func TestInit_CustomSource(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir()) // registerProject writes under $HOME/.mache — never the real one
 	require.NoError(t, os.Chdir(dir))
 
 	err := execInit(new(bytes.Buffer), "mache", initOpts{Source: "./data/mydb.db"})
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(filepath.Join(dir, ConfigFileName))
+	data, err := os.ReadFile(filepath.Join(dir, projcfg.ConfigFileName))
 	require.NoError(t, err)
 
-	var cfg ProjectConfig
+	var cfg projcfg.ProjectConfig
 	require.NoError(t, json.Unmarshal(data, &cfg))
 	assert.Equal(t, "./data/mydb.db", cfg.Sources[0].Path)
 }

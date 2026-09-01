@@ -112,7 +112,7 @@ var lloWriterAllowlist = map[string]string{
 	// than obtaining it from LLO. Under the role split this is the clearest
 	// data-plane work left in mache, and it is exactly what delegating to the
 	// arena removes. Tracked by mache-e64f36; do not re-justify, delete.
-	"cmd/cache.go": "materialises _source/_ast when hydrating a pulled cache entry — data-plane work pending delegation (mache-e64f36)",
+	"internal/buildcache/cache.go": "materialises _source/_ast when hydrating a pulled cache entry — data-plane work pending delegation (mache-e64f36)",
 
 	// TOOLING — generates .db fixtures shaped like LLO output so tests can run
 	// without a leyline binary. Defensible today (fixtures must exist before
@@ -162,27 +162,26 @@ var lloWriterAllowlist = map[string]string{
 // while production runs the full arm, and neither side notices. See
 // internal/fixturedb's package doc for the measurement (mache-7555da).
 var lloTestFixtureAllowlist = []string{
-	"cmd/build_leyline_coverage_test.go",
-	"cmd/cache_ast_test.go",
-	"cmd/cache_test.go",
-	"cmd/call_extractor_ast_test.go",
-	"cmd/dead_code_skip_list_retreat_test.go",
-	"cmd/falsifiability_lsp_projection_test.go",
-	"cmd/falsifiability_skip_list_ablation_test.go",
-	"cmd/find_smells_cli_test.go",
-	"cmd/find_smells_duplicate_code_test.go",
-	"cmd/kind_discriminator_leyline_ast_test.go",
-	"cmd/leyline_callees_test.go",
-	"cmd/leyline_test.go",
-	"cmd/serve_find_smells_bench_test.go",
-	"cmd/serve_find_smells_test.go",
-	"cmd/serve_find_smells_views_test.go",
-	"cmd/serve_lsp_step5_test.go",
-	"cmd/smell_findings_incremental_test.go",
-	"internal/graph/graph_suite_test.go",
-	"internal/graph/props_sql_test.go",
-	"internal/graph/sqlite_graph_lookupdef_test.go",
-	"internal/graph/sqlite_graph_nodehash_test.go",
+	"internal/buildcache/cache_ast_test.go",
+	"internal/buildcache/cache_test.go",
+	"internal/leylinegraph/call_extractor_ast_test.go",
+	"internal/smells/dead_code_skip_list_retreat_test.go",
+	"internal/mcpserve/falsifiability_lsp_projection_test.go",
+	"internal/smells/falsifiability_skip_list_ablation_test.go",
+	"internal/smells/find_smells_cli_test.go",
+	"internal/smells/find_smells_duplicate_code_test.go",
+	"internal/mcpserve/kind_discriminator_leyline_ast_test.go",
+	"internal/leylinegraph/leyline_callees_test.go",
+	"internal/leylinegraph/leyline_test.go",
+	"internal/smells/serve_find_smells_bench_test.go",
+	"internal/smells/serve_find_smells_test.go",
+	"internal/smells/serve_find_smells_views_test.go",
+	"internal/mcpserve/serve_lsp_step5_test.go",
+	"internal/smells/smell_findings_incremental_test.go",
+	"graph/graph_suite_test.go",
+	"graph/props_sql_test.go",
+	"graph/sqlite_graph_lookupdef_test.go",
+	"graph/sqlite_graph_nodehash_test.go",
 	"internal/ingest/ast_flatten_db_test.go",
 	"internal/ingest/ast_walker_bench_test.go",
 	"internal/ingest/ast_walker_callees_e2e_test.go",

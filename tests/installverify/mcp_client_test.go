@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/internal/testport"
 	"github.com/stretchr/testify/require"
 )
 
@@ -190,19 +190,6 @@ func (c *mcpClient) callTool(ctx context.Context, name string, args map[string]a
 	return text, nil
 }
 
-// freePort reserves a port by binding and immediately releasing it. `mache
-// serve` rejects a bare ":0" and never reports the port it actually bound, so
-// the caller has to choose one. The window between release and bind is a
-// theoretical race, not a practical one on a test host.
-func freePort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "localhost:0")
-	require.NoError(t, err)
-	port := l.Addr().(*net.TCPAddr).Port
-	require.NoError(t, l.Close())
-	return port
-}
-
 // startServe launches `mache serve <db> --http localhost:<port> --path <dir>`
 // and blocks until the endpoint answers an initialize, returning a ready
 // client. The process is killed and its output dumped on failure.
@@ -212,7 +199,7 @@ func freePort(t *testing.T) int {
 // "workspace root unavailable" after a 5s stall.
 func startServe(t *testing.T, bin, dbPath, basePath string) *mcpClient {
 	t.Helper()
-	port := freePort(t)
+	port := testport.Free(t)
 	url := fmt.Sprintf("http://localhost:%d/mcp", port)
 
 	ctx, cancel := context.WithCancel(t.Context())

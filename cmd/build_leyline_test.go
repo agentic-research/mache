@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,7 +65,7 @@ func TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, true)
+	err := runBuildViaLeyline(src, output)
 	require.Error(t, err, "leyline missing must error, not silently fall back")
 	assert.Contains(t, err.Error(), "leyline backend",
 		"error must identify which backend failed (helps the user diagnose)")
@@ -75,20 +75,8 @@ func TestRunBuildViaLeyline_ReturnsClearErrorWhenLeylineMissing(t *testing.T) {
 // available. When it is, parses a tiny Go tree and asserts the
 // output .db exists with non-zero size at the user-supplied path
 // (not the temp path autoInvokeLeylineParse uses internally).
-// requirePinnedLeyline skips the test unless the exact-pinned leyline
-// is already resolvable WITHOUT a network download (PATH or the
-// ~/.mache/bin cache). LookPath alone is the wrong gate since the
-// exact-version pin (mache-608a3c): a stale PATH leyline no longer
-// satisfies the pin, and we don't want tests fetching from GitHub.
-func requirePinnedLeyline(t *testing.T) {
-	t.Helper()
-	if _, err := leyline.ResolveBinary(false); err != nil {
-		t.Skipf("pinned leyline not available without download: %v", err)
-	}
-}
-
 func TestRunBuildViaLeyline_HappyPath(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	saved := saveBuildFlags()
 	defer saved.restore()
 
@@ -97,7 +85,7 @@ func TestRunBuildViaLeyline_HappyPath(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	require.NoError(t, runBuildViaLeyline(src, output, true))
+	require.NoError(t, runBuildViaLeyline(src, output))
 
 	info, err := os.Stat(output)
 	require.NoError(t, err, "output .db must exist at the user-supplied path")
@@ -153,7 +141,7 @@ func TestRunBuildViaLeyline_SchemaLoadErrorSurfaces(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, true)
+	err := runBuildViaLeyline(src, output)
 	require.Error(t, err, "a missing schema file must fail the build")
 	assert.Contains(t, err.Error(), "load schema",
 		"error must come from the schema-load step, not a backend contradiction")
@@ -184,7 +172,7 @@ func TestRunBuildViaLeyline_SchemaProceedsToParse(t *testing.T) {
 		[]byte("package main\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	err := runBuildViaLeyline(src, output, false)
+	err := runBuildViaLeyline(src, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "leyline backend",
 		"a valid schema must proceed to the leyline parse step")
@@ -201,7 +189,7 @@ func TestRunBuildViaLeyline_SchemaProceedsToParse(t *testing.T) {
 // projection correctness is covered by `task test:ast` (the in-process
 // tree-sitter projector it was once parity-checked against is gone).
 func TestRunBuildViaLeylineSchema_ProducesSchemaShapedDB(t *testing.T) {
-	requirePinnedLeyline(t)
+	testutil.RequirePinnedLeyline(t)
 	saved := saveBuildFlags()
 	defer saved.restore()
 
@@ -220,7 +208,7 @@ func TestRunBuildViaLeylineSchema_ProducesSchemaShapedDB(t *testing.T) {
 		[]byte("package main\n\nfunc Exported() int { return 1 }\n\nfunc main() {}\n"), 0o644))
 
 	output := filepath.Join(t.TempDir(), "out.db")
-	require.NoError(t, runBuildViaLeyline(src, output, true))
+	require.NoError(t, runBuildViaLeyline(src, output))
 
 	db, err := sql.Open("sqlite", output)
 	require.NoError(t, err)

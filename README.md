@@ -115,6 +115,39 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
+## Public Go API
+
+Library callers can produce either a raw leyline database or a Mache
+schema-projected database without invoking the `mache` CLI:
+
+```go
+import (
+	"github.com/agentic-research/mache/build"
+	"github.com/agentic-research/mache/schema"
+)
+
+// Resolve a bundled preset or a schema file relative to the project.
+resolved, err := schema.Resolve("go", projectDir)
+if err != nil {
+	return err
+}
+
+// Use the resolved topology directly...
+if err := build.ParseWithSchema(projectDir, outputDB, resolved.Topology); err != nil {
+	return err
+}
+
+// ...or let build preserve preset metadata used by the grammar guard.
+return build.ParseWithSchemaRef(projectDir, outputDB, "go", projectDir)
+```
+
+`build.Parse` writes leyline's raw parse shape. `ParseWithSchema` and
+`ParseWithSchemaRef` additionally run Mache's `Engine` + `ASTWalker`
+projection, including the registered `env:`, `mod:`, and `gomod:` reference
+extractors. All paths invoke the pinned leyline executable and keep Mache
+CGO-free. Address-reference extraction uses leyline's root-relative source IDs,
+so files below the source root participate in the same graph as root files.
+
 ## Running the pinned leyline (mache-19326d)
 
 <details>
@@ -185,15 +218,15 @@ Mache has two supported deployment shapes:
 **Bundle / image (canonical production path).** Mache ships its own
 [apko](https://github.com/chainguard-dev/apko) +
 [melange](https://github.com/chainguard-dev/melange) configs to produce a
-distroless OCI image (`mache:0.21.0`, ~33MB, x86_64 + aarch64). This is the
+distroless OCI image (`mache:0.21.1`, ~33MB, x86_64 + aarch64). This is the
 unit that a cluster orchestrator (e.g. cloister) deploys; inside the
 bundle, mache speaks to a co-located ley-line daemon over a UDS socket
 and is unreachable except via the orchestrator-mediated wire.
 
 ```bash
-task image                          # → mache.tar (mache:0.21.0)
+task image                          # → mache.tar (mache:0.21.1)
 docker load -i mache.tar
-docker run --rm -i mache:0.21.0 serve --stdio /path/to/source
+docker run --rm -i mache:0.21.1 serve --stdio /path/to/source
 ```
 
 Given a fixed `melange.rsa` signing key and pinned toolchain, the build is
@@ -215,7 +248,7 @@ Its `ENTRYPOINT` is `["mache", "serve"]`, so `docker run` args append to
 `mache serve` — do **not** repeat `serve`, or you get `mache serve serve`:
 
 ```bash
-docker run --rm -i ghcr.io/agentic-research/mache:v0.21.0 --stdio /source
+docker run --rm -i ghcr.io/agentic-research/mache:v0.21.1 --stdio /source
 ```
 
 Mache declares its own source via `server.json`'s

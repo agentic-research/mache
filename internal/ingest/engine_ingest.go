@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 )
 
 // ingestFile dispatches to the appropriate ingestor based on the file's

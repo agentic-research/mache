@@ -952,12 +952,20 @@ func e2eHome(t *testing.T) string {
 	return dir
 }
 
-func TestDiscoverOrStart_CDCAddsDaemonFlag(t *testing.T) {
+// captureDaemonArgv drives DiscoverOrStart against a fake leyline that records
+// its argv and then sleeps, and returns the argv the daemon was actually
+// spawned with plus the HOME it ran under. beforeStart runs after HOME is
+// prepared but before the spawn, so a test can seed the ~/.mache state the
+// spawn path reads (an arena config record, for instance).
+//
+// Asserting on the real argv rather than on a mockable seam is deliberate: the
+// flags are the entire contract with leyline, and a unit test of the decision
+// function alone would not catch the flag being computed and then never
+// appended.
+func captureDaemonArgv(t *testing.T, beforeStart func(home string)) []string {
+	t.Helper()
 	resetManaged(t)
 	t.Cleanup(func() { resetManaged(t) })
-
-	SetDaemonCDC(true)
-	t.Cleanup(func() { SetDaemonCDC(false) })
 
 	home := e2eHome(t)
 	binDir := filepath.Join(home, ".mache", "bin")
@@ -972,6 +980,10 @@ func TestDiscoverOrStart_CDCAddsDaemonFlag(t *testing.T) {
 	t.Setenv("PATH", "/nonexistent-path-for-test")
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 	t.Setenv("MACHE_TEST_DAEMON_ARGV", argvPath)
+
+	if beforeStart != nil {
+		beforeStart(home)
+	}
 
 	// The fake daemon records argv then sleeps. Once its record appears,
 	// provide the socket that DiscoverOrStart waits for.
@@ -1003,7 +1015,92 @@ func TestDiscoverOrStart_CDCAddsDaemonFlag(t *testing.T) {
 
 	argv, err := os.ReadFile(argvPath)
 	require.NoError(t, err)
-	assert.Contains(t, strings.Fields(string(argv)), "--cdc")
+	return strings.Fields(string(argv))
+}
+
+// TestDiscoverOrStart_CDCSelectsSourceBlobsTarget pins the target, not just
+// the switch. Bare --cdc means leyline's `nodes` default, measured on mache's
+// own projection at +468MB/+21% index for 2.06MB of dedup because every one of
+// 421,424 nodes falls below the 8 KiB chunking floor (mache-abf404).
+// source-blobs chunks whole files and is cost-neutral (+0.35%).
+func TestDiscoverOrStart_CDCSelectsSourceBlobsTarget(t *testing.T) {
+	SetDaemonCDC(true)
+	t.Cleanup(func() { SetDaemonCDC(false) })
+
+	argv := captureDaemonArgv(t, nil)
+	assert.Contains(t, argv, "--cdc")
+	assert.Contains(t, argv, "--cdc-target")
+	assert.Contains(t, argv, "source-blobs",
+		"bare --cdc would silently take the nodes default and its +21% index")
+	assert.NotContains(t, argv, "nodes")
+}
+
+// TestDiscoverOrStart_ResetsArenaOnConfigChange pins the fix for mache serving
+// every project from one fixed ~/.mache/default.arena. leyline refuses to
+// warm-start an arena whose recorded source_root disagrees with --source —
+// reproduced against the pinned binary as
+//
+//	arena source_root=/private/tmp/lz/p1 disagrees with --source=/private/tmp/lz/p2.
+//	Refusing to warm-start ...
+//
+// which failed the spawn outright. Since every DiscoverOrStart caller degrades
+// rather than propagates, the user saw daemon-backed features silently go dark
+// on the second project. Cold-starting costs one reparse instead.
+func TestDiscoverOrStart_ResetsArenaOnConfigChange(t *testing.T) {
+	SetDaemonSource("/projects/beta")
+	t.Cleanup(func() { SetDaemonSource("") })
+
+	argv := captureDaemonArgv(t, func(home string) {
+		// An arena already built for a DIFFERENT project.
+		seedWarmArena(t, home, arenaSpawnConfig{SourceRoot: "/projects/alpha"})
+	})
+
+	assert.Contains(t, argv, "--reset-arena",
+		"a project switch must invalidate the arena; warm-starting it is the spawn failure this guards")
+}
+
+// TestDiscoverOrStart_NoResetWhenConfigUnchanged is the load-bearing negative:
+// without it, a mechanism that reset unconditionally would pass the test above
+// while reparsing the entire tree on every single spawn.
+func TestDiscoverOrStart_NoResetWhenConfigUnchanged(t *testing.T) {
+	source := t.TempDir()
+	SetDaemonSource(source)
+	t.Cleanup(func() { SetDaemonSource("") })
+
+	argv := captureDaemonArgv(t, func(home string) {
+		seedWarmArena(t, home, arenaSpawnConfig{SourceRoot: CanonicalSourceRoot(source)})
+	})
+
+	assert.NotContains(t, argv, "--reset-arena",
+		"an unchanged configuration must warm-start — invalidating every spawn reparses the whole tree")
+}
+
+// TestDiscoverOrStart_RecordsArenaConfigAfterSuccessfulSpawn closes the loop:
+// the reset decision is only self-limiting if a successful spawn records what
+// it started with. Without this write, every spawn would find no record,
+// invalidate, and cold-parse forever.
+func TestDiscoverOrStart_RecordsArenaConfigAfterSuccessfulSpawn(t *testing.T) {
+	source := t.TempDir()
+	SetDaemonSource(source)
+	t.Cleanup(func() { SetDaemonSource("") })
+
+	var arena string
+	argv := captureDaemonArgv(t, func(home string) {
+		arena = filepath.Join(home, ".mache", "default.arena")
+	})
+	assert.Contains(t, argv, "--reset-arena", "no prior record means this spawn cold-starts")
+
+	assert.False(t, arenaNeedsReset(arena, arenaSpawnConfig{SourceRoot: CanonicalSourceRoot(source)}),
+		"the spawn must record its configuration, or the next identical spawn invalidates again")
+}
+
+// seedWarmArena records the configuration a previously-served project left
+// behind, so a spawn has a prior state to either accept or invalidate.
+func seedWarmArena(t *testing.T, home string, cfg arenaSpawnConfig) {
+	t.Helper()
+	dataDir := filepath.Join(home, ".mache")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, recordArenaConfig(filepath.Join(dataDir, "default.arena"), cfg))
 }
 
 // TestDiscoverOrStart_LocalBinFallback_SocketTimeout covers two production

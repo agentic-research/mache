@@ -1,6 +1,6 @@
 package vfs
 
-import "github.com/agentic-research/mache/internal/graph"
+import "github.com/agentic-research/mache/graph"
 
 // PromptHandler serves the /PROMPT.txt virtual file (agent mode).
 // If Content is nil/empty, the handler reports no match.

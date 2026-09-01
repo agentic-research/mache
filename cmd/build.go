@@ -1,16 +1,14 @@
 package cmd
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/ingest"
-	"github.com/agentic-research/mache/internal/lang"
+	publicbuild "github.com/agentic-research/mache/build"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +34,7 @@ var buildCmd = &cobra.Command{
 		// if absent, auto-download — the pinned binary; a genuinely missing
 		// leyline (offline AND MACHE_NO_LEYLINE) is a HARD ERROR, not a
 		// silent fallback: in-process tree-sitter no longer exists.
-		return runBuildViaLeyline(source, output, schemaPath != "" /* schemaExplicit */)
+		return runBuildViaLeyline(source, output)
 	},
 }
 
@@ -50,10 +48,9 @@ func init() {
 	rootCmd.AddCommand(buildCmd)
 }
 
-// runBuildViaLeyline implements --backend=leyline: shells out to
-// `leyline parse <source> -o <tmp.db>` and copies the result to
-// `output`. The ADR-0012 step 3 path that future PRs will make
-// the default.
+// runBuildViaLeyline runs the sole parser backend. Without a schema it copies
+// leyline's raw database to output; with a schema it delegates to the public
+// build package's projection pipeline.
 //
 // Errors are surfaced as-is; callers shouldn't retry with the
 // in-process backend silently — that masks misconfiguration.
@@ -64,32 +61,19 @@ func init() {
 // Engine+ASTWalker projection over the leyline-parsed _ast db. In-process
 // tree-sitter was removed in ADR-0012 step 4 (mache-37ae8b), so this is now
 // the only projector; ASTWalker correctness is covered by `task test:ast`.
-//
-// schemaExplicit preserves a loudness contract for the one case leyline
-// genuinely can't serve: a schema language leyline has no grammar for (it
-// parses most of the 28 registry languages — all but cue today) would
-// otherwise project HOLLOW category dirs with zero warnings — the coverage
-// guard errors on the explicit backend and warns on auto.
-func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
+func runBuildViaLeyline(source, output string) error {
 	if schemaPath != "" {
-		schema, err := resolveSchema(schemaPath, ".")
-		if err != nil {
-			return fmt.Errorf("load schema: %w", err)
+		start := time.Now()
+		log.Printf("Building %s from %s (leyline parse + schema projection)...", output, source)
+		if err := publicbuild.ParseWithSchemaRef(source, output, schemaPath, "."); err != nil {
+			return fmt.Errorf("leyline backend: %w", err)
 		}
-		// A preset ref ("go", "sql", "terraform", ...) IS a language name,
-		// and the preset JSONs carry no Node.Language hints — feed the ref
-		// to the coverage guard so `--schema sql` fails loudly when the
-		// pinned leyline has no sql grammar (#524 re-review: the hint-based
-		// guard alone let the preset case project hollow).
-		var presetLangs []string
-		if _, ok := presetSchemas[schemaPath]; ok {
-			if l := lang.ForName(schemaPath); l != nil {
-				presetLangs = []string{l.Name}
-			}
-		}
-		return runBuildViaLeylineSchema(source, output, schema, schemaExplicit, presetLangs)
+		log.Printf("Done in %v.", time.Since(start))
+		_ = writeBuildMetadata(output, "leyline+schema")
+		warnIfEmptyBuild(output, source, "leyline")
+		return nil
 	}
-	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
+	tmpPath, cleanup, err := leylinegraph.AutoInvokeLeylineParse(source)
 	if err != nil {
 		return fmt.Errorf("leyline backend: %w", err)
 	}
@@ -118,68 +102,13 @@ func runBuildViaLeyline(source, output string, schemaExplicit bool) error {
 // output is the standard schema shape (nodes/node_defs/node_refs per the
 // schema; no _ast table — the temp db is discarded), so downstream consumers
 // see no shape change, only a CGO-free producer.
-func runBuildViaLeylineSchema(source, output string, schema *api.Topology, schemaExplicit bool, extraLangs []string) error {
-	tmpPath, cleanup, err := autoInvokeLeylineParse(source)
-	if err != nil {
-		return fmt.Errorf("leyline backend: %w", err)
-	}
-	defer cleanup()
-
-	db, err := sql.Open("sqlite", tmpPath)
-	if err != nil {
-		return fmt.Errorf("open leyline parse output %s: %w", tmpPath, err)
-	}
-	defer func() { _ = db.Close() }()
-	// One-shot build over a private temp _ast db mache exclusively owns — opt
-	// into the aggressive read tuning (single conn + EXCLUSIVE lock + mmap).
-	// Safe here precisely because nothing else touches tmpPath; the served
-	// path deliberately does NOT do this (mache-010123).
-	ingest.TuneReadConnForBuild(db)
-
-	// Coverage guard: a schema language leyline has no grammar for
-	// yields ZERO _ast rows while its source files silently land in
-	// _project_files — a hollow projection warnIfEmptyBuild can't see
-	// (empty category dirs still count as nodes). Keep the pre-73b885
-	// loudness split: hard error when the user explicitly picked this
-	// backend, loud warning on auto.
-	if gaps, gerr := leylineSchemaCoverageGaps(db, schema, source, extraLangs); gerr != nil {
-		return fmt.Errorf("leyline schema coverage probe: %w", gerr)
-	} else if len(gaps) > 0 {
-		if schemaExplicit {
-			return fmt.Errorf(
-				"cannot project schema language(s) %s: the pinned ley-line has no grammar for %s, so it "+
-					"parsed no such source. In-process tree-sitter was removed in ADR-0012 step 4, so there "+
-					"is no fallback parser — wait for ley-line to add these grammars, or drop them from the schema",
-				strings.Join(gaps, ", "), strings.Join(gaps, "/"))
-		}
-		log.Printf("WARNING: ley-line has no grammar for schema language(s) %s — "+
-			"their category dirs will be EMPTY and the files land in _project_files/. "+
-			"There is no in-process fallback (ADR-0012 step 4); wait for ley-line to add these grammars.",
-			strings.Join(gaps, ", "))
-	}
-
-	_ = os.Remove(output) // Overwrite, matching the in-process path.
-	writer, err := ingest.NewSQLiteWriter(output)
-	if err != nil {
-		return err
-	}
-	engine := ingest.NewEngine(schema, writer)
-	engine.SetASTWalker(ingest.NewASTWalker(db))
-
+func runBuildViaLeylineSchema(source, output string, schema *api.Topology) error {
 	start := time.Now()
 	log.Printf("Building %s from %s (leyline parse + schema projection)...", output, source)
-	if err := engine.Ingest(source); err != nil {
-		_ = writer.Close()
-		return err
+	if err := publicbuild.ParseWithSchema(source, output, schema); err != nil {
+		return fmt.Errorf("leyline backend: %w", err)
 	}
 	log.Printf("Done in %v.", time.Since(start))
-
-	// Close-before-stamp for the same reason as the in-process path:
-	// the writer's open transaction holds the schema lock, and a close
-	// failure can mean a truncated .db — fatal, not warnable.
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close sqlite writer: %w", err)
-	}
 	_ = writeBuildMetadata(output, "leyline+schema")
 	warnIfEmptyBuild(output, source, "leyline")
 	return nil

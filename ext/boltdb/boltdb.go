@@ -12,10 +12,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// nodeKindFile and nodeKindDir mirror internal/graph.NodeKindFile/Dir.
-// Duplicated here because this is a workspace module that can't import
-// the internal package — the values are part of mache's on-disk schema
-// and must stay in sync.
+// nodeKindFile and nodeKindDir mirror graph.NodeKindFile/NodeKindDir.
+//
+// The old justification ("can't import the internal package") stopped being
+// true when graph became public. The duplication stays anyway, for a different
+// and still-valid reason: this is a SEPARATE Go module, and importing mache to
+// obtain two integer constants would take on the whole module — CGO
+// tree-sitter, leyline resolution, the lot — as a dependency of a storage
+// adapter that needs none of it.
+//
+// The values are part of mache's on-disk schema and must stay in sync; nothing
+// enforces that mechanically across a module boundary, which is the price.
 const (
 	nodeKindFile = 0
 	nodeKindDir  = 1

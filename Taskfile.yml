@@ -16,20 +16,26 @@ tasks:
     desc: Build and install mache plus its exact published Leyline backend
     deps: [build, leyline:ensure]
     cmds:
-      - mkdir -p ~/.local/bin
-      - cp {{.BINARY_NAME}} ~/.local/bin/mache
-      - cmd: codesign -s - --force --deep --entitlements entitlements.plist ~/.local/bin/mache
-        platforms: [darwin]
-      # Replacing the file does NOT re-exec a supervisor that is already
-      # running — it holds the old process. Observed: installed binary at
-      # v0.20.0 while the daemon on :7532 still answered as 0.19.0-10, so
-      # every MCP session got pre-release code silently. `mache daemon
-      # restart` is restart-if-running (launchctl kickstart -k / systemctl
-      # try-restart), so this never starts a daemon on a machine whose owner
-      # did not run `mache init --global`. Uses the binary we just installed,
-      # so the restart logic is the installed version's, not the source
-      # tree's.
-      - ~/.local/bin/mache daemon restart
+      # Delegate to `mache install` rather than reimplementing it here. The
+      # binary already does this job, and did it MORE CORRECTLY: copyExecutable
+      # writes a temp file and os.Rename's it, because — in its own words —
+      # "the old inode survives for anyone holding it open, where writing in
+      # place would corrupt a live process". The `cp` this replaces overwrote
+      # ~/.local/bin/mache in place while the supervised daemon was executing
+      # it, and the kickstart that followed then failed to relaunch: observed
+      # as `task install` leaving the MCP daemon dead on :7532.
+      #
+      # It also drops a redundant codesign. `task build` already runs the
+      # identical `codesign -s - --force --deep --entitlements entitlements.plist`
+      # on the same bytes (identifiers and entitlements verified equal), so
+      # re-signing after the copy modified an already-correct binary — in
+      # place, after the daemon had been pointed at it.
+      #
+      # `mache install` additionally provisions the pinned leyline and restarts
+      # the supervised daemon restart-if-running, reporting honestly when the
+      # daemon does not come back without failing an install whose binary is
+      # correctly on disk.
+      - ./{{.BINARY_NAME}} install
 
   install:verify:
     desc: |
@@ -134,9 +140,8 @@ tasks:
       # rule-only edit, which the smell gate (deps:[build]) then ran against —
       # producing phantom "NEW findings" and masking an incomplete rule fix
       # (mache-46af85). Keep this list in sync with the //go:embed directives.
-      - "cmd/rules/*.json"
-      - "cmd/schemas/*.json"
-      - "cmd/schemas/sarif.tmpl"
+      - "internal/smells/rules/*.json"
+      - "internal/smells/schemas/sarif.tmpl"
       - "internal/buildinfo/version.txt"
     generates:
       - "{{.BINARY_NAME}}"
@@ -245,8 +250,9 @@ tasks:
       before `git add` and the commit-time hook is a no-op instead of
       reformatting your files out from under you and aborting the commit.
       Scoped to CHANGED files — not all tracked markdown — so it never
-      rewrites test fixtures (cmd/testdata/**) or vendored docs. Excludes
-      .beads/ and testdata/snapshots/, matching the hook's exclusion.
+      rewrites test fixtures (internal/testutil/testdata/**) or vendored
+      docs. Excludes .beads/, testdata/snapshots/, and the language preset
+      fixtures, matching the hook's exclusion.
     preconditions:
       - sh: command -v mdformat
         msg: "mdformat required — pip install mdformat mdformat-gfm mdformat-frontmatter"
@@ -257,7 +263,7 @@ tasks:
         { git ls-files -mo --exclude-standard '*.md'; \
           git diff --cached --name-only -- '*.md'; } \
           | sort -u \
-          | grep -vE '^(\.beads/|testdata/snapshots/)' \
+          | grep -vE '^(\.beads/|testdata/snapshots/|internal/testutil/testdata/)' \
           | while IFS= read -r f; do [ -f "$f" ] && mdformat "$f"; done
 
   fmt:check:
@@ -343,6 +349,11 @@ tasks:
     deps: [build]
     cmds:
       - go test -v -run 'TestEngine_IngestTreeSitter_Go' ./internal/ingest/
+
+  test:launchd-e2e:
+    desc: "Hermetic REAL-launchd lifecycle E2E (darwin only): private label + isolated HOME through install → serve → binary-swap restart → session continuity → stop → crash-loop visibility. The only layer that can see identity pinning, RunAtLoad, and the bootout drain race — stubs structurally cannot (mache-96465d layer 3)."
+    cmds:
+      - MACHE_TEST_LAUNCHD_E2E=1 go test -v -run TestLaunchdLifecycleE2E -count=1 -timeout 10m ./cmd/
 
   leyline:ensure:
     desc: "Provision the exact published ley-line pin into ~/.mache/bin so backend and daemon-conformance tests cannot skip or substitute an unverified PATH build. Idempotent when the exact cached release is already available."
@@ -500,7 +511,7 @@ tasks:
       # set to cmd/, not the project root — relative paths land
       # under cmd/.e2e/ otherwise.
       - mkdir -p {{.ROOT_DIR}}/.e2e
-      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json go test -v -run 'TestE2E_AllMCPTools' ./cmd/
+      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json go test -v -run 'TestE2E_AllMCPTools' ./internal/mcpserve/
       - echo "manifest -> .e2e/tool-profile.json"
 
   profile-tools-pprof:
@@ -518,7 +529,7 @@ tasks:
       # brendangregg's FlameGraph scripts on PATH; the task checks
       # for them and prints install instructions if missing).
       - mkdir -p {{.ROOT_DIR}}/.e2e/pprof
-      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json E2E_CAPTURE_PPROF=1 go test -v -run 'TestE2E_AllMCPTools' ./cmd/
+      - E2E_PROFILE_OUT={{.ROOT_DIR}}/.e2e/tool-profile.json E2E_CAPTURE_PPROF=1 go test -v -run 'TestE2E_AllMCPTools' ./internal/mcpserve/
       - echo "manifest -> .e2e/tool-profile.json"
       - echo "pprof    -> .e2e/pprof/*.{cpu,heap}.pprof"
       - echo "next     -> task flamegraphs"
@@ -873,7 +884,7 @@ tasks:
   cache:test:
     desc: Run the cache push/pull/OCI test suite
     cmds:
-      - go test -v -count=1 ./cmd/ -run "TestCache|TestOCI"
+      - go test -v -count=1 ./internal/buildcache/ -run "TestCache|TestOCI"
 
   cache:roundtrip:
     desc: End-to-end self-test — build a tiny db, push, pull, diff
@@ -886,4 +897,4 @@ tasks:
       Used by .github/workflows/cache-roundtrip.yml as a CI smoke test
       that the cache feature still works end-to-end.
     cmds:
-      - go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./cmd/
+      - go test -v -count=1 -run "TestCachePushPull_RoundTrip|TestCacheRemoteRoundTrip" ./internal/buildcache/

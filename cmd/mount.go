@@ -12,13 +12,16 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/buildinfo"
-	"github.com/agentic-research/mache/internal/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/materialize"
+	"github.com/agentic-research/mache/internal/mountmeta"
+	"github.com/agentic-research/mache/internal/schemainfer"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/spf13/cobra"
 )
@@ -197,14 +200,14 @@ var rootCmd = &cobra.Command{
 			default:
 				// Try tree-sitter language lookup from the registry
 				if l := lang.ForExt(ext); l != nil {
-					inferred, err = inferFromSourceFile(inf, dataPath, l)
+					inferred, err = schemainfer.InferFromSourceFile(inf, dataPath, l)
 				} else {
 					// Check if it's a directory
 					info, errStat := os.Stat(dataPath)
 					if errStat == nil && info.IsDir() {
 						log.Printf("Inferring schema from directory %s...", dataPath)
 						start := time.Now()
-						inferred, err = inferDirSchema(dataPath)
+						inferred, err = schemainfer.InferDirSchema(dataPath)
 						if err == nil {
 							log.Printf("Schema inferred in %v", time.Since(start))
 						}
@@ -330,7 +333,7 @@ var rootCmd = &cobra.Command{
 					}
 					log.Printf("Ingestion complete in %v", time.Since(start))
 
-					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
+					if err := leylinegraph.MaterializeVirtuals(indexPath, schema, agentMode); err != nil {
 						return fmt.Errorf("materialize virtuals: %w", err)
 					}
 
@@ -353,8 +356,8 @@ var rootCmd = &cobra.Command{
 				}
 				defer func() { _ = sg.Close() }()
 
-				sg.SetCallExtractor(pickCallExtractor(sg.DB()))
-				sg.SetScopedCallExtractor(pickScopedCallExtractor(sg.DB()))
+				sg.SetCallExtractor(leylinegraph.PickCallExtractor(sg.DB()))
+				sg.SetScopedCallExtractor(leylinegraph.PickScopedCallExtractor(sg.DB()))
 
 				start := time.Now()
 				log.Print("Scanning records...")
@@ -378,7 +381,15 @@ var rootCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("resolve data path: %w", err)
 				}
-				sum := sha256.Sum256([]byte(absDataPath))
+				// The cache name binds the index to WHO BUILT IT, not just what
+				// it was built from. Keyed on the path alone, an -index.db
+				// written by mache N-1 was silently reused by mache N — old
+				// projection logic serving under a new binary, masked by
+				// nothing (unlike the serve registry, which the restart
+				// flushes by accident). A version or pin change now misses
+				// the cache and rebuilds; the stale file is orphaned on disk,
+				// which is the cheap and honest failure (mache-6c9e1d).
+				sum := sha256.Sum256([]byte(absDataPath + "\x00" + Version + "\x00" + leyline.BinaryVersion))
 				hashSuffix := fmt.Sprintf("%x", sum[:8])
 				indexPath := filepath.Join(cacheDir, fmt.Sprintf("%s-%s-index.db", mountName, hashSuffix))
 
@@ -409,7 +420,7 @@ var rootCmd = &cobra.Command{
 				// mount lifetime so callees/ resolve via the pure-Go AST
 				// extractor. ley-line is MANDATORY (guardrail 2): a resolution
 				// failure is a hard error, not a silent empty index.
-				astDB, astCleanup, ppErr := attachLeylineASTWalker(dataPath, eng)
+				astDB, astCleanup, ppErr := leylinegraph.AttachLeylineASTWalker(dataPath, eng)
 				if ppErr != nil {
 					_ = writer.Close()
 					return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
@@ -427,7 +438,7 @@ var rootCmd = &cobra.Command{
 
 				// --out: materialize virtuals, write to target format, exit (no mount)
 				if outPath != "" {
-					if err := materializeVirtuals(indexPath, schema, agentMode); err != nil {
+					if err := leylinegraph.MaterializeVirtuals(indexPath, schema, agentMode); err != nil {
 						return fmt.Errorf("materialize virtuals: %w", err)
 					}
 					mat, err := materialize.ForFormat(outFormat)
@@ -456,8 +467,8 @@ var rootCmd = &cobra.Command{
 
 				// The projected index carries no `_ast` table, so callees/
 				// resolve through the ley-line `_ast` db kept open above.
-				sg.SetCallExtractor(newASTCallExtractor(astDB))
-				sg.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
+				sg.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
+				sg.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
 				g = sg
 			} else {
 				// Writable or non-tree-sitter: MemoryStore + ingestion pipeline
@@ -473,13 +484,13 @@ var rootCmd = &cobra.Command{
 				// schemas (JSON, .git records) don't. Wire the AST-backed
 				// call extractor only when there's an `_ast` db to read.
 				if ingest.SchemaUsesTreeSitter(schema) && filepath.Ext(dataPath) != ".git" {
-					astDB, astCleanup, ppErr := attachLeylineASTWalker(dataPath, engine)
+					astDB, astCleanup, ppErr := leylinegraph.AttachLeylineASTWalker(dataPath, engine)
 					if ppErr != nil {
 						return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
 					}
 					defer astCleanup()
-					store.SetCallExtractor(newASTCallExtractor(astDB))
-					store.SetScopedCallExtractor(newASTScopedCallExtractor(astDB))
+					store.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
+					store.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
 				}
 
 				if filepath.Ext(dataPath) == ".git" {
@@ -529,7 +540,7 @@ var rootCmd = &cobra.Command{
 		// Agent mode: save metadata sidecar and generate prompt content
 		var promptContent []byte
 		if agentMode && agentMetadata != nil {
-			if err := saveMountMetadata(mountPoint, agentMetadata); err != nil {
+			if err := mountmeta.SaveMountMetadata(mountPoint, agentMetadata); err != nil {
 				log.Printf("Warning: failed to save mount metadata: %v", err)
 			}
 			promptContent = generatePromptContent(agentMetadata)
@@ -557,7 +568,11 @@ var rootCmd = &cobra.Command{
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		// STDERR, not stdout: a command whose stdout is machine-readable
+		// (`mache doctor --json`) emitted valid JSON followed by this line,
+		// so a parser got "Extra data" exactly when a check failed — the
+		// moment the output matters most.
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

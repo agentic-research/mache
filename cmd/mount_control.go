@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/control"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 )
@@ -92,11 +93,11 @@ func mountControl(path string, schema *api.Topology, mountPoint string) error {
 	//     accepting connections (bind-then-listen race), so the first
 	//     dial often hits ECONNREFUSED even when subsequent ones work.
 	// 30s deadline matches the prior stat-based loop.
-	var g *udsGraph
+	var g *leylinegraph.UDSGraph
 	sockDeadline := time.Now().Add(30 * time.Second)
 	for {
 		var dialErr error
-		g, dialErr = newUDSGraph(sockPath)
+		g, dialErr = leylinegraph.NewUDSGraph(sockPath)
 		if dialErr == nil {
 			break
 		}

@@ -14,7 +14,6 @@ package testfixtures
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,10 +25,11 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/agentic-research/mache/api"
-	"github.com/agentic-research/mache/internal/graph"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
 	machetmpl "github.com/agentic-research/mache/internal/template"
+	publicschema "github.com/agentic-research/mache/schema"
 
 	_ "modernc.org/sqlite"
 )
@@ -176,9 +176,8 @@ func ResolvePath(id string) (string, error) {
 	return filepath.Join(root, "testdata", "snapshots", f.Path), nil
 }
 
-// LoadSchema loads the preset schema for a fixture by parsing the
-// embedded schema file from cmd/schemas/. Mirrors cmd.resolveSchema for
-// the preset case (this package can't import cmd/ — cyclical).
+// LoadSchema loads the preset schema for a fixture from the public schema
+// package, keeping the embedded preset registry as the single owner.
 func LoadSchema(id string) (*api.Topology, error) {
 	if err := loadManifest(); err != nil {
 		return nil, err
@@ -190,20 +189,11 @@ func LoadSchema(id string) (*api.Topology, error) {
 	if f.SchemaPreset == "" {
 		return nil, fmt.Errorf("fixture %q has no schema_preset", id)
 	}
-	root, err := findRepoRoot()
+	resolution, err := publicschema.LoadPreset(f.SchemaPreset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load preset schema %q: %w", f.SchemaPreset, err)
 	}
-	schemaPath := filepath.Join(root, "cmd", "schemas", f.SchemaPreset+".json")
-	data, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return nil, fmt.Errorf("read preset schema %q: %w", f.SchemaPreset, err)
-	}
-	var topo api.Topology
-	if err := json.Unmarshal(data, &topo); err != nil {
-		return nil, fmt.Errorf("parse preset schema %q: %w", f.SchemaPreset, err)
-	}
-	return &topo, nil
+	return resolution.Topology, nil
 }
 
 // cachedGraph holds a materialized SQLiteGraph plus its tempdir.

@@ -17,10 +17,19 @@ package fixturedb
 //
 // PATCH RELEASES CHANGE THIS SCHEMA. The pin must stay exact; see
 // reference_leyline_noderefs_parity_gap.
+//
+// SQL COMMENTS ARE STRIPPED when transcribing, and must be. As of v0.19.0
+// ley-line-open documents columns inline, and those comments contain BACKTICKS
+// (`ley-line-open-17c271`) — which cannot appear inside a Go raw string literal
+// at all, so the producer's sqlite_master text is not literally representable
+// here. Nothing is lost: normalizeDDL already discards `--` comments on both
+// sides before comparing, so the conformance test was never sensitive to them,
+// and a comment reword would otherwise fail the gate as if it were drift.
+// Re-derive with the comments removed line-wise, preserving structure.
 
 // leylineSchemaVersion is the ley-line-open release these statements were
 // derived from. The conformance test asserts the pinned binary still reports it.
-const leylineSchemaVersion = "v0.13.0"
+const leylineSchemaVersion = "v0.19.1"
 
 // leylineTables is the ley-line-owned subset fixtures model, keyed by table
 // name. Deliberately not every table ley-line writes — `capnp_blobs`,
@@ -32,7 +41,7 @@ const leylineSchemaVersion = "v0.13.0"
 var leylineTables = map[string]string{
 	"nodes": `CREATE TABLE nodes (
     id TEXT PRIMARY KEY,
-    parent_id TEXT,
+    parent_id TEXT GENERATED ALWAYS AS (CASE WHEN length(id) > length(name) THEN substr(id, 1, length(id) - length(name) - 1) ELSE '' END) VIRTUAL,
     name TEXT NOT NULL,
     kind INTEGER NOT NULL,
     size INTEGER DEFAULT 0,
@@ -52,6 +61,13 @@ var leylineTables = map[string]string{
     node_id TEXT NOT NULL,
     source_id TEXT NOT NULL,
     container_node_id TEXT,
+    node_kind TEXT,
+    start_byte INTEGER,
+    end_byte INTEGER,
+    start_row INTEGER,
+    start_col INTEGER,
+    end_row INTEGER,
+    end_col INTEGER,
     canonical_kind TEXT
 , node_hash BLOB REFERENCES node_content(node_hash))`,
 
@@ -60,6 +76,13 @@ var leylineTables = map[string]string{
     node_id TEXT NOT NULL,
     source_id TEXT NOT NULL,
     container_node_id TEXT,
+    node_kind TEXT,
+    start_byte INTEGER,
+    end_byte INTEGER,
+    start_row INTEGER,
+    start_col INTEGER,
+    end_row INTEGER,
+    end_col INTEGER,
     qualifier TEXT
 , node_hash BLOB REFERENCES node_content(node_hash))`,
 
@@ -73,7 +96,7 @@ var leylineTables = map[string]string{
     start_col INTEGER NOT NULL,
     end_row INTEGER NOT NULL,
     end_col INTEGER NOT NULL
-, node_hash BLOB REFERENCES node_content(node_hash))`,
+, node_hash BLOB REFERENCES node_content(node_hash), blob_ord INTEGER)`,
 
 	"_source": `CREATE TABLE _source (
     id TEXT PRIMARY KEY,

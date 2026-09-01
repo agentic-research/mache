@@ -6,6 +6,277 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Public schema resolution and schema-projected builds** (`mache-734971`).
+  The new `schema` package owns bundled presets and contained file references.
+  `build.ParseWithSchema` accepts a caller-provided topology, while
+  `build.ParseWithSchemaRef` accepts a preset or schema path and retains the
+  language metadata needed by the grammar-coverage guard. Both run the complete
+  pinned-leyline → `ASTWalker` → `Engine` → SQLite pipeline without CGO. The
+  CLI now delegates to this API instead of carrying a second projection recipe.
+
+- **Nodes carry a source location, completing the browse ladder**
+  (`mache-e57065`). `graph.Open` previously returned nodes whose `Origin` was
+  nil, so a consumer could FIND a symbol and not open it — no line, no column,
+  not even the byte range `SourceOrigin` is shaped to hold. `_ast` already had
+  everything needed, keyed by the same `node_id` `LookupDef` returns, so this
+  is mache-side plumbing with no ley-line-open change.
+
+  `SourceOrigin` now carries both units, and the distinction matters: byte
+  offsets pass through unchanged because write-back splices by byte, while
+  `StartLine`/`StartCol`/`EndLine`/`EndCol` add the +1 that turns tree-sitter's
+  0-based rows into what every editor, terminal and LLM context speaks. 1-based
+  means `0` unambiguously signals unknown. A projection without `_ast`
+  (standalone mache, no ley-line) yields a nil Origin rather than a
+  zero-valued one.
+
+- **`examples/publicapi` — an executable proof that the public API is
+  sufficient on its own** (`mache-77cf75`). Every other test in this repo may
+  import `internal/`, so none of them can answer "could an external consumer do
+  this?". This one imports only `mache/build` and `mache/graph`, enforced by a
+  lint that fails the build if that stops being true — and whose stated remedy
+  is to promote what the example needed into the public API rather than add the
+  import.
+
+  It found two defects on its first run, in an API that had just been
+  deliberately reviewed.
+
+### Fixed
+
+- **Nested source files retain registered address references**
+  (`mache-498bc3`). Mache previously computed leyline's correct root-relative
+  source ID and then reduced the address-ref lookup to a basename, so
+  `mache build --schema go` populated `gomod:` only for root files and nested
+  Terraform `mod:` / `env:` refs disappeared for the same reason. The exact
+  `_source.id` now flows through the registry. Production-path regressions
+  cover both nested Go and Terraform files; no ley-line-open change was needed.
+
+- **Terraform address references now reach Mache's caller graph**
+  (`mache-91beb0`). Mache pins the official ley-line-open `v0.18.2` binaries
+  and their four platform SHA-256 digests. That release repairs the HCL
+  extraction dispatcher, so `leyline parse` serializes `env:` variable and
+  `mod:` module-source tokens into `node_refs` instead of producing a complete
+  `_ast` with an empty reference table. The paired Apache-2.0 Go schema client
+  is `v0.18.1`, matching the binary's unchanged public-schema handshake; wire
+  major `1`, compatibility floor `v0.6.0`, and `merkle-ast-v2` lineage are
+  unchanged. A real released-binary regression now proves those rows survive
+  through `find_callers`.
+
+- **The root listed itself as its own child, so a recursive browse never
+  terminated** (`mache-77cf75`). ley-line writes a root node whose `id` and
+  `parent_id` are both empty, and `NodesTableReader`'s root query matched it —
+  `ListChildren("")` returned `""`, and listing that returned the root listing
+  again. `ListChildStats` carried the identical query and the identical bug,
+  which is worse than a duplicate: the two walks would have had to disagree for
+  anyone to notice. Both now exclude the root row.
+
+### Changed
+
+- **Leyline pin bumped v0.18.2 → v0.19.0, adopting `projection-v4`**
+  (`mache-bc6ca3`). `nodes.parent_id` is now a GENERATED column derived from the
+  row's own `id` and `name`; `node_defs`/`node_refs` carry their own
+  `node_kind` and span columns so a range no longer requires a join against
+  `_ast`; `_ast` gains `blob_ord`. Reads are unaffected and nothing was removed,
+  but an INSERT or UPDATE that merely NAMES a generated column is rejected at
+  PREPARE time — so mache probes the shape and adapts its column list rather
+  than assuming. The probe is deliberately at runtime rather than keyed on the
+  projection version, because ley-line-open plans to return `parent_id` to a
+  stored integer FK in a later break.
+
+  `internal/fixturedb`'s mirror was re-derived from the released binary, and
+  now stores the DDL with SQL comments stripped: upstream documents columns
+  inline and those comments contain backticks, which cannot appear in a Go raw
+  string literal. `normalizeDDL` already discarded comments on both sides, so
+  the conformance guarantee is unchanged.
+
+  `fixturedb` additionally refuses a `Where{Name}` or `Where{Parent}` that
+  contradicts the construct's id. Under a stored `parent_id` such a fixture was
+  merely odd; under a derived one it silently takes a parent nobody wrote, and
+  six smell rules join on `parent_id`.
+
+- **BREAKING: `internal/graph` and `internal/resolve` are now the public
+  `graph` and `resolve` packages, and the type-alias facades are gone**
+  (`mache-9a89cd`). The facades were curating the wrong axis. A
+  `type X = internal.X` alias is a TOTAL re-export — every exported method
+  comes with it — so they provided no encapsulation, while the interfaces a
+  consumer actually needs (defs lookup, refs query, db path, schema) stayed
+  unexported in `cmd/`. What they did cost was documentation: because the
+  real types lived in an `internal/` package that pkg.go.dev will not render,
+  `go doc ./graph Node` printed
+
+  ```
+  type Node = ig.Node
+  ```
+
+  and nothing else — no fields, no methods. `SQLiteGraph` was sharper still,
+  its doc comment advertising "LookupDef/QueryRefs/GetCallers query the db's
+  own tables directly" while hiding every one of those signatures. The public
+  API was undocumentable as built, which defeats the purpose of the `resolve/`
+  facade (ADR-0016), whose entire reason to exist is external consumption.
+
+  Migration is an import-path rewrite; no symbol names changed:
+
+  ```
+  github.com/agentic-research/mache/internal/graph   -> .../graph
+  github.com/agentic-research/mache/internal/resolve -> .../resolve
+  ```
+
+- **BREAKING: `graph.Build` moved to the new `build` package as
+  `build.Parse`.** Merging `internal/graph` into `graph` would otherwise close
+  an import cycle — `graph/build.go` imports `internal/leyline`, which imports
+  the graph package for `Node`/`CommunityResult`/`DetectCommunities`. `Build`
+  touches no graph types (it shells out to `leyline parse`), so it belongs
+  with build orchestration rather than the graph data structures. Breaking the
+  cycle by inverting leyline's dependency would have meant duplicating those
+  types, and by injecting the resolver through a package var would have meant
+  action at a distance.
+
+  ```
+  graph.Build(src, out)  ->  build.Parse(src, out)
+  ```
+
+### Added
+
+- **`resolve_ref` mounts resolved sub-graphs so other MCP tools can query
+  them, and gains a `gomod:` scheme** (`mache-bdcd2b`, `mache-be0b9f`,
+  ADR-0016 steps 2–3). Previously `makeResolveRefHandler` discarded its
+  `graph.Graph` parameter entirely and returned flat filesystem metadata; a
+  Terraform `mod:./modules/vpc` reference or a Go `gomod:` import path now
+  resolves via `internal/resolve`'s `Registry` (`LocalPathResolver` /
+  `GoModResolver`) and mounts the result under a `resolve/<hash>` prefix
+  returned as `graph_path` — `list_directory`, `find_definition`, and
+  `find_callers` on a `*lazyGraph` session route into it transparently
+  (`find_definition`/`find_callers` federate base graph + mounts; a
+  single-source serve's root identity is unchanged, since resolve mounts
+  live in a side `CompositeGraph`, not the served graph itself). Mounting
+  is idempotent and coalesced (`singleflight`) per resolved target.
+  `LocalPathResolver` reuses `graph.Build`/`graph.Open` exactly like
+  `GoModResolver` — no separate `ingest.Engine` ingestion path.
+
+- **`resolve/` — the public facade for `internal/resolve`**, mirroring
+  `graph.Open`/`graph.Build`'s pattern: `Registry`, `Resolver`,
+  `GoModResolver`, `LocalPathResolver` re-exported via type aliases so an
+  external Go consumer can resolve a `gomod:`/`mod:` locator to a queryable
+  `graph.Graph` without importing `internal/resolve` (which Go's `internal/`
+  visibility rule makes otherwise unreachable outside this module).
+
+- **`internal/resolve` — the first two beads of ADR-0016's cross-language
+  reference resolver, and a new companion ADR-0025 for how resolver
+  bodies work** (`mache-e6d582`). ADR-0016 (Proposed since May) defines an
+  open scheme registry for cross-language locators (`mod:`, `npm:`,
+  `gomod:`, ...) but nothing in its 5-bead implementation sequence had
+  landed. Ships `Resolver`/`Registry` (`mache-bd97d9`, exactly per its
+  spec) plus `GoModResolver` — a `gomod:` resolver that shells out to `go list -json` (Go's own module-resolution tool, not a hand-rolled
+  `go.mod`/semver parser) and, once it names the resolved package's
+  directory, indexes it with this session's own `graph.Build` +
+  `graph.Open` facades. ADR-0025 documents the general pattern this
+  establishes for future ecosystem schemes (`npm:`, `cargo:`, ...): shell
+  out to that ecosystem's own JSON-emitting resolution tool, don't
+  reimplement its manifest/lockfile semantics.
+
+- **`graph.Build` — produce a `.db` without shelling out to the `mache`
+  CLI** (`mache-3edd21`). `graph.Open` (below) fixed *querying* an
+  already-built `.db` as a library, but *producing* one still required the
+  CLI: `cmd/build.go`'s leyline resolution/auto-download and `leyline parse`
+  invocation weren't exposed anywhere in the public `graph`/`ingest`
+  packages. `graph.Build(source, output)` is the library equivalent of
+  `mache build <source> <output>` with no `--schema` flag — the common case,
+  and what `Open` expects (a raw leyline-parsed `.db`). It resolves the
+  pinned leyline binary the same way every mache entry point does
+  (PATH-if-pin-matching, else the version-namespaced cache, else
+  SHA-verified auto-download). Deliberately scoped to that: the `--schema`
+  re-projection path (`Engine`+`ASTWalker` over a custom `api.Topology`) and
+  the CLI's `_mache_meta` provenance stamping (which identifies the mache
+  *binary*, meaningless for a library caller) stay CLI-only.
+
+- **`graph.Open` — a facade that makes the public `graph` package actually
+  work as a library** (`mache-04972b`). Loading a mache `.db` via
+  `graph.MemoryStore` + `graph.ImportSQLite` left `LookupDef` returning `[]`
+  and `QueryRefs` erroring "refsDB not initialized": `ImportSQLite` only
+  replicates the plain node tree and never touches the `node_defs`/
+  `node_refs` tables a mache-produced `.db` carries. `graph.Open(dbPath)`
+  wraps the same `SQLiteGraph` backend mache's own CLI already uses for a
+  `.db` source — it reads `node_defs`/`node_refs` directly off the file, so
+  `LookupDef`/`QueryRefs`/`GetCallers` work immediately with no
+  import/populate step. `graph.SQLiteGraph` and the full-signature
+  `graph.OpenSQLiteGraph` are also now exported for callers who need a
+  custom schema or renderer. `ImportSQLite`'s doc comment now states its
+  limitation explicitly.
+
+- **`mache init` registers a per-project token so shared-daemon sessions
+  resolve without depending on MCP `roots/list`** (`mache-6ec106`). The
+  canonical setup — one shared HTTP daemon, `mache init` registering a bare
+  `http://localhost:7532/mcp` in every client — depends entirely on the
+  connecting client answering a server-initiated `roots/list` request.
+  `roots/list` requires the client to keep a channel open for server-pushed
+  messages; many real MCP HTTP clients are plain request/response and never
+  open one, so for them root discovery isn't slow, it's structurally
+  undeliverable — confirmed against `mache-76c919`'s history (~15
+  reproductions from Codex across ~10 repos, zero successful `ListRoots`
+  resolutions) and reproduced directly with a raw HTTP client that never
+  declares MCP roots support.
+
+  `mache init` now writes `?project=<token>` into the URL it registers,
+  where the token is `BLAKE3(local-machine-salt ‖ absolute-project-path)` —
+  deterministic (re-running `mache init` reproduces the same token instead
+  of orphaning already-registered client configs) but salted so a remote
+  attacker can't just hash a guessed path and get a hit. The daemon resolves
+  `?project=` by looking the token up in its own local registry
+  (`~/.mache/projects.json`, written only by `mache init`) — it never
+  accepts or trusts a caller-supplied path directly, so a guessed or stale
+  token produces a registry miss, not a disclosure. An unrecognized token
+  gets a distinct, actionable error naming `mache init` rather than the
+  generic "workspace root unavailable" diagnostic.
+
+### Fixed
+
+- **The `/health`/landing-page fallback told operators to fix root
+  resolution with `?repo=<repo-url>`, which cannot work for a local
+  checkout** (`mache-6ec106`). `?repo=` is a hosted-mode escape hatch that
+  clones a remote HTTPS URL — it doesn't accept a local path, and `mache init` itself never registers a `?repo=` URL. The message now leads with
+  the bare URL `mache init` actually writes and names the real recoveries:
+  `mache init` (automatic, per-project) or `--path <dir>` (manual,
+  single-project).
+
+### Changed
+
+- **Leyline pin bumped v0.13.0 → v0.15.1.** Adopts three upstream releases
+  (v0.14.0 "the signing train": DSSE/in-toto envelope, wasm32 artifacts,
+  `leyline self install/update`; v0.15.0 "execution/v1": tier ceilings, the
+  confinement manifest + attested digest; v0.15.1: fixes the v0.15.0
+  confinement digest so it actually commits to the policy). None of it
+  touches the \_ast/node_refs projection mache consumes — `ir_schema_version`
+  (merkle-ast-v2) and `wire_format_major` (1) are unchanged across the gap,
+  and the fixture DDL conformance test
+  (`TestLeylineSchema_MatchesPinnedBinary`) is byte-identical against the new
+  binary, so no `.db` rebuild is required. Two smell-baseline entries moved
+  in the safe direction (false positives removed): `duplicate_code` in
+  `cmd/serve_test.go` (33 → 31) and `untested_function` on
+  `internal/leyline/daemon_source.go` (1 → 0, since `SetDaemonSource`/
+  `DaemonSource` are in fact exercised by `cmd/serve_lsp_enrich_test.go` — a
+  cross-package test-linkage case v0.13.0 missed).
+
+## [v0.21.1] — 2026-08-03
+
+### Fixed
+
+- **`find-smells` re-materialized its canonical setup once per rule instead
+  of once per invocation, dominating runtime on large repos.**
+  `ensureCanonicalViews` builds `v_test_nodes` / `v_doc_refs` as real
+  `CREATE TEMP TABLE ... AS SELECT`, not lazy views, specifically so their
+  cost is paid once per `find-smells` invocation — but it ran from inside
+  `runSmellRule`, which both the CLI's `--rule '*'` loop and the MCP digest
+  builder called once *per matched rule*, silently re-paying the full
+  materialization cost 9-14x per run. Measured as a 5-8x regression in a
+  downstream repo's CI after adopting this find-smells action version (27
+  prior successful runs at 49-205s vs. 4 successful runs at 466-521s after);
+  reproduced locally (81s → 13.8s for one `--rule '*' --tags=gate` run on a
+  971MB leyline `.db`, SARIF output verified byte-identical before/after).
+  Setup now runs once via `ensureSmellQueryContext`, called before both
+  multi-rule loops; the single-rule-per-call MCP `find_smells` handler is
+  unaffected. (`mache-808b0b`)
+
 ## [v0.21.0] — 2026-07-31
 
 ### Added

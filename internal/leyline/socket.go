@@ -237,6 +237,13 @@ func DiscoverOrStart() (string, error) {
 	// long after this returned "found it!".
 	if sock, err := findExistingSocket(); err == nil {
 		if isSocketAlive(sock) {
+			// Adopting a daemon this process did not spawn, so the exact pin
+			// ResolveBinary enforces was never applied to it. Say so once if it
+			// drifts — every consumer of DiscoverOrStart inherits this, which
+			// is the point: the check previously ran only at `mache serve`
+			// startup, leaving `mache build` (the path that PRODUCES
+			// projections) unwarned (mache-233902).
+			warnIfAdoptedDaemonDrifts(sock)
 			return sock, nil
 		}
 		// Stale: file exists, no listener. Remove it so the spawn below
@@ -341,8 +348,45 @@ func DiscoverOrStart() (string, error) {
 	// CDC is opt-in for Mache-managed daemons only. Existing sockets and
 	// external --control daemons retain the configuration chosen by their
 	// operator; a live daemon cannot change startup arguments.
+	//
+	// source-blobs, not leyline's `nodes` default. Measured on mache's own
+	// projection (mache-abf404): `nodes` costs +468MB/+21% index for 2.06MB of
+	// dedup, because 421,424 of 421,424 nodes fall below CDC's 8 KiB chunking
+	// floor — construct-granular rows are simply smaller than a chunk.
+	// `source-blobs` chunks whole files instead and is cost-neutral
+	// (+7.5MB/+0.35%). The selector only reaches the daemon from v0.18.0
+	// (ley-line-open-c3d746, traced from this exact flip), which is why the
+	// pin bump and this flag must land together.
+	cdcTarget := ""
 	if DaemonCDC() {
-		daemonArgs = append(daemonArgs, "--cdc")
+		cdcTarget = "source-blobs"
+		daemonArgs = append(daemonArgs, "--cdc", "--cdc-target", cdcTarget)
+	}
+	// A warm arena is only reusable for the configuration it was built with.
+	// mache serves every project from this one fixed arena path, so serving a
+	// second tree would otherwise hit leyline's warm-start refusal and fail
+	// the spawn — see arenaSpawnConfig for the full failure mode. Cold-start
+	// instead: one reparse, versus a daemon that never comes up.
+	arenaCfg := arenaSpawnConfig{
+		SourceRoot: CanonicalSourceRoot(DaemonSource()),
+		CDCTarget:  cdcTarget,
+	}
+	//
+	// --reset-arena is leyline's own mechanism for this and is used in
+	// preference to mache deleting the files itself: the set of files a warm
+	// start can recover from is leyline's business and has grown across
+	// releases (arena, controller, live db + WAL/shm, capnp sidecars, the
+	// owner and lock sentinels). A hand-maintained list here would silently
+	// become incomplete the next time one is added, and an incomplete
+	// invalidation reproduces exactly the silent warm-start refusal this
+	// guards against.
+	//
+	// The flag was unusable before v0.18.0 — it failed even on a fresh arena
+	// (ley-line-open-e37e03, filed from here) — which is the second reason the
+	// pin bump and this call belong in one commit.
+	if arenaNeedsReset(arenaPath, arenaCfg) {
+		log.Printf("leyline: arena was built for a different configuration — cold-starting %s", arenaPath)
+		daemonArgs = append(daemonArgs, "--reset-arena")
 	}
 	cmd := exec.Command(leylineBin, daemonArgs...)
 	// Detach from our stdio so it doesn't interfere with MCP transport
@@ -385,6 +429,15 @@ func DiscoverOrStart() (string, error) {
 	for time.Now().Before(deadline) {
 		if isSocketAlive(sockPath) {
 			log.Printf("leyline daemon ready (pid=%d, socket=%s)", cmd.Process.Pid, sockPath)
+			// Record only now that the daemon is actually serving: a config
+			// written before the spawn would describe an arena state a crashed
+			// startup never produced, and the next run would warm-start onto it.
+			if err := recordArenaConfig(arenaPath, arenaCfg); err != nil {
+				log.Printf("leyline: could not record arena config (next spawn will cold-start): %v", err)
+			}
+			// Provenance beside the socket, same only-once-serving rationale
+			// as the arena config above (mache-967cff).
+			writeOwnerRecord(sockPath, cmd.Process.Pid)
 			return sockPath, nil
 		}
 		// If the daemon already exited, the socket will never appear — stop
@@ -809,17 +862,24 @@ func (c *SocketClient) Prioritize(files []string) error {
 // schema-client pin may sit on a newer pseudo-version that has no release).
 //
 // As of this pin, both the daemon binary and go.mod's leyline-schema module are
-// v0.13.0. The wire major (1) and compatibility floor (0.6.0) are unchanged
+// v0.15.1. The wire major (1) and compatibility floor (0.6.0) are unchanged
 // from the 0.10 line; the version-parity gate (mache-b8af69) enforces the
 // [floor, binary] range.
 //
-// v0.12.1 -> v0.13.0 DOES NOT CROSS AN IR LINEAGE BOUNDARY — checked by
-// measurement: _meta.ir_schema_version reads "merkle-ast-v2" on both,
-// extraction_epoch is unchanged (4 -> 4). injection_epoch DOES change
-// (markdown's inline grammar now runs where it previously didn't — see
-// below), which is the correctly-scoped signal: a narrower epoch moved
-// because the injection mechanism changed, not the whole IR. No .db rebuild
-// is required crossing this bump.
+// v0.13.0 -> v0.15.1 DOES NOT CROSS AN IR LINEAGE BOUNDARY — checked against
+// LLO's own compatibility.json at each tag: ir_schema_version reads
+// "merkle-ast-v2" and wire_format_major reads 1 at v0.13.0, v0.14.0, v0.15.0,
+// and v0.15.1 alike. No .db rebuild is required crossing this bump.
+//
+// The three intervening releases (v0.14.0 "the signing train": DSSE/in-toto
+// envelope, wasm32 artifacts, `leyline self install/update`; v0.15.0
+// "execution/v1": tier ceilings, the confinement manifest + attested digest;
+// v0.15.1: fixes the v0.15.0 confinement digest so it actually commits to the
+// policy) are all execution/confinement/signing surface. None of it touches
+// the _ast/node_refs/node_defs projection mache actually consumes — verified
+// by grepping each release's CHANGELOG entry for _ast/node_refs/schema
+// mentions (none) and by the unchanged ir_schema_version/wire_format_major
+// above, not by assuming "sounds orthogonal" is enough.
 //
 // MARKDOWN BACKTICK SPANS BECOME node_refs (ley-line-open-ea1e42, mache
 // bead mache-eb2bf3). Every markdown `inline` node now reparses under
@@ -899,11 +959,28 @@ func (c *SocketClient) Prioritize(files []string) error {
 // The go.mod leyline-schema pin only needs bumping when a schema module tag is
 // published. The parity gate enforces the [floor, binary] compatibility range.
 //
-// Doubles as this build's leyline schema-client version for the startup
+// v0.18.0 -> v0.18.2 DOES NOT CROSS AN IR LINEAGE BOUNDARY.
+// IR_SCHEMA_VERSION remains "merkle-ast-v2", so node addresses stay
+// comparable with artifacts built by the previous pin — unlike the v0.11.0
+// merkle-ast-v1 -> v2 bump (mache-438104). The wire major remains 1 and the
+// compatibility floor remains v0.6.0. The public schema client advances only
+// to v0.18.1: v0.18.2 is deliberately a binary-only release.
+//
+// The emitted FACTS do change. v0.18.2 runs the registered HCL address-ref
+// extractor, so Terraform variable blocks and literal module sources finally
+// populate node_refs with env: and mod: tokens. LLO raises its extraction
+// epoch from 4 to 5 so an existing arena is reprojected; Mache also namespaces
+// its downloaded binary and source-projection cache by this exact pin. A
+// caller supplying a pre-built v0.18.0 .db may continue to read it, but must
+// re-run `leyline parse` to gain the repaired Terraform refs (mache-91beb0,
+// ley-line-open-55c1cc).
+//
+// This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
-// mismatch.
-const leylineBinaryVersion = "v0.13.0"
+// mismatch. The actual client version is the independently tagged go.mod
+// dependency described below.
+const leylineBinaryVersion = "v0.19.1"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
@@ -950,7 +1027,7 @@ func ResolveBinary(allowDownload bool) (string, error) {
 	// Explicit developer override first (MACHE_LEYLINE_BINARY). Checked before
 	// every pinned tier so it is a decision, not a fallback: if it is set and
 	// broken we fail rather than quietly resolving something else.
-	if p, set, err := overrideBinary(); set {
+	if p, set, err := OverrideBinary(); set {
 		if err != nil {
 			return "", err
 		}

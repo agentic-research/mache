@@ -27,27 +27,45 @@ import (
 //
 // GATED, never downloads: skips when no cached binary matches the pin, matching
 // every other pinned gate in this repo.
+// Set leyline.BinaryOverrideEnv (MACHE_LEYLINE_BINARY) to run this against a release
+// candidate or an unmerged local build instead of the cached pin. Under an
+// override a DIFF IS THE POINT: it is the re-derivation worklist for that
+// candidate, enumerated before either side ships, rather than a regression.
+// See mache-cc1a70.
 func TestLeylineSchema_MatchesPinnedBinary(t *testing.T) {
-	bin := lltest.PinnedBinaryOrSkip(t)
+	ll := lltest.ResolveBinaryOrSkip(t)
 
-	require.Equal(t, leyline.PinnedBinaryVersion(), leylineSchemaVersion,
-		"the DDL in schema_leyline.go was derived from %s but the build now pins %s — "+
-			"re-derive it (leyline parse; SELECT sql FROM sqlite_master) rather than editing by hand",
-		leylineSchemaVersion, leyline.PinnedBinaryVersion())
+	if ll.Override {
+		// Asserting "the DDL was derived from the pin" is meaningless when the
+		// operator deliberately pointed us at something else. Report what
+		// actually answered, so no reader mistakes this run for a pinned one.
+		t.Logf("comparing schema_leyline.go (derived from %s) against OVERRIDE %s reporting %s — "+
+			"differences below are that candidate's re-derivation worklist, not drift from the pin",
+			leylineSchemaVersion, ll.Path, ll.Version)
+	} else {
+		require.Equal(t, leyline.PinnedBinaryVersion(), leylineSchemaVersion,
+			"the DDL in schema_leyline.go was derived from %s but the build now pins %s — "+
+				"re-derive it (leyline parse; SELECT sql FROM sqlite_master) rather than editing by hand",
+			leylineSchemaVersion, leyline.PinnedBinaryVersion())
+	}
 
-	got := derivePinnedSchema(t, bin)
+	got := derivePinnedSchema(t, ll.Path)
+	against := leylineSchemaVersion
+	if ll.Override {
+		against = ll.Version + " (override)"
+	}
 
 	for name, want := range leylineTables {
 		g, ok := got[name]
-		require.True(t, ok, "pinned leyline %s no longer creates table %s", leylineSchemaVersion, name)
+		require.True(t, ok, "leyline %s no longer creates table %s", against, name)
 		assert.Equal(t, normalizeDDL(want), normalizeDDL(g),
-			"table %s drifted from the pinned producer; re-derive schema_leyline.go", name)
+			"table %s drifted from producer %s; re-derive schema_leyline.go", name, against)
 	}
 	for name, want := range leylineIndexes {
 		g, ok := got[name]
-		require.True(t, ok, "pinned leyline %s no longer creates index %s", leylineSchemaVersion, name)
+		require.True(t, ok, "leyline %s no longer creates index %s", against, name)
 		assert.Equal(t, normalizeDDL(want), normalizeDDL(g),
-			"index %s drifted from the pinned producer; re-derive schema_leyline.go", name)
+			"index %s drifted from producer %s; re-derive schema_leyline.go", name, against)
 	}
 }
 

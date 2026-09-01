@@ -28,7 +28,7 @@ const shadowVersion = "0.10.3"
 // as "leyline 0.13.0 (open)", or "" when there is none.
 //
 // A field scan with a shape check, not a pattern: this mirrors
-// internal/leyline's own extractSemver, which is unexported, and keeps the gate
+// internal/leyline's own ExtractSemver, and keeps the gate
 // on the repo's structural-over-regex side (bead-documented preference, and the
 // regexp ratchet in internal/lint enforces it).
 func firstSemver(s string) string {

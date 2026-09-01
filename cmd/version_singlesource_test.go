@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/buildcache"
 	"github.com/agentic-research/mache/internal/buildinfo"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,13 +24,16 @@ func TestVersionDerivesFromBuildinfo(t *testing.T) {
 	}
 }
 
-func TestMacheProducerVersionIsRealNotPlaceholder(t *testing.T) {
-	if MacheProducerVersion == "0.x.y" {
-		t.Fatal("MacheProducerVersion is still the 0.x.y placeholder")
-	}
-	if MacheProducerVersion != buildinfo.Version {
-		t.Errorf("MacheProducerVersion %q != buildinfo.Version %q", MacheProducerVersion, buildinfo.Version)
-	}
+// TestProducerVersionInjectionHolds is the reworked producer-identity guard
+// (B3, mache-96c378 stage 7): the identity is now injected — cmd/register.go
+// calls buildcache.SetProducerVersion(Version) — so what must hold is the
+// WIRING: whatever cmd.Version resolved to is exactly what buildcache stamps
+// into lockfiles. An empty or placeholder identity means the injection broke.
+func TestProducerVersionInjectionHolds(t *testing.T) {
+	require.NotEmpty(t, Version)
+	assert.Equal(t, Version, buildcache.ProducerVersion(),
+		"cmd/register.go must have injected cmd.Version as the producer identity")
+	assert.NotEqual(t, "0.x.y", buildcache.ProducerVersion())
 }
 
 // TestREADMEImageTagsMatchBuildinfo catches copy-pasteable version rot in
@@ -42,7 +47,7 @@ func TestMacheProducerVersionIsRealNotPlaceholder(t *testing.T) {
 func TestREADMEImageTagsMatchBuildinfo(t *testing.T) {
 	version := buildinfo.Version
 
-	raw, err := os.ReadFile(filepath.Join(macheRepoRoot(t), "README.md"))
+	raw, err := os.ReadFile(filepath.Join(testutil.MacheRepoRoot(t), "README.md"))
 	require.NoError(t, err, "read README.md")
 	doc := string(raw)
 

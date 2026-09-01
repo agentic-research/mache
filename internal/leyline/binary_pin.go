@@ -31,12 +31,12 @@ const BinaryVersion = leylineBinaryVersion
 // Regenerate on a leylineBinaryVersion bump:
 //
 //	gh release view <tag> --repo agentic-research/ley-line-open --json assets \
-//	  --jq '.assets[]|select(.name|startswith("leyline-"))|"\(.name) \(.digest)"'
+//	  --jq '.assets[]|select(.name|test("^leyline-(darwin|linux)-(amd64|arm64)$"))|"\(.name) \(.digest)"'
 var leylinePinnedSHA256 = map[string]string{
-	"darwin-amd64": "04d75a2b1390f31046a835b3a2ddbf4622c366b6f19d8eff7d0f8dfbaea722fe",
-	"darwin-arm64": "526bb6a2f8a3c44fe289e02d3f7243d904645e7ceac9ca7045810bb4faf9ab9e",
-	"linux-amd64":  "f801f06e81b16db724538058ccd1b8a95c30d89178597c6643878b0b0eff5c46",
-	"linux-arm64":  "9a4696300008a4adc0cd5fc507c3724e5edbb9997b12c86ea037334d5369522f",
+	"darwin-amd64": "53ef069a7c9d5efa923a06c0cffe5f0462bb89a3bcfc062cad4c6b6c41950452",
+	"darwin-arm64": "5283b858b586bce8f18ee9b6fc3ed2e981d8de24481fd8052ac8633b6926b57b",
+	"linux-amd64":  "f22a719936b504acc98bc115174ad36355223395be5e9702a157b1c5626895e4",
+	"linux-arm64":  "9356a47d3483c98198a42a0f73dce21d70c42de17d41871ec9b75650d8b7fc37",
 }
 
 // leylineVersionMatchesPin runs `<path> --version` and reports whether the
@@ -59,7 +59,7 @@ func leylineVersionMatchesPin(path string) bool {
 	if err != nil {
 		return false
 	}
-	got := extractSemver(string(out))
+	got := ExtractSemver(string(out))
 	if got == "" {
 		return false
 	}
@@ -68,9 +68,13 @@ func leylineVersionMatchesPin(path string) bool {
 	return want == have
 }
 
-// extractSemver pulls the first "MAJOR.MINOR[.PATCH]" token from a version line
+// ExtractSemver pulls the first "MAJOR.MINOR[.PATCH]" token from a version line
 // such as "leyline 0.7.0 (open)". Returns "" when none is present.
-func extractSemver(s string) string {
+//
+// Exported because lltest must parse the same line when resolving an override
+// binary, and a second implementation of "read leyline's version" is exactly
+// the drift this repo keeps paying for elsewhere.
+func ExtractSemver(s string) string {
 	for tok := range strings.FieldsSeq(s) {
 		t := strings.TrimPrefix(tok, "v")
 		i := strings.IndexByte(t, '.')

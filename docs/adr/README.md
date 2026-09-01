@@ -32,7 +32,7 @@ is no duplicate `#` heading.
 | [0013](0013-refs-defs-canonical-schema.md)                      | Proposed    | Refs/Defs Canonical Schema (Fidelity Poset Over Producers)                        |
 | [0014](0014-mache-in-constellation.md)                          | Proposed    | Mache as observation producer in the constellation                                |
 | [0015](0015-syntax-aware-write-protection.md)                   | Accepted    | Syntax-Aware Write Protection                                                     |
-| [0016](0016-cross-language-reference-resolver.md)               | Proposed    | Cross-Language Reference Resolver                                                 |
+| [0016](0016-cross-language-reference-resolver.md)               | Accepted    | Cross-Language Reference Resolver                                                 |
 | [0017](0017-test-harness.md)                                    | Proposed    | Matrix-Coverage Test Harness — Invariants for "What 100% Means"                   |
 | [0018](0018-doc-drift-as-executable-specs.md)                   | Accepted    | Doc-Drift Detection as Executable Specs (find_smells First-Class Workflow)        |
 | [0019](0019-real-corpus-fixture-registry.md)                    | Proposed    | Real-Corpus Fixture Registry as First-Class Test Infrastructure                   |
@@ -41,6 +41,8 @@ is no duplicate `#` heading.
 | [0022](0022-mcp-transport-canonical.md)                         | Accepted    | Streamable HTTP is the canonical MCP transport; stdio is an escape hatch          |
 | [0023](0023-unified-code-fact-ir.md)                            | Superseded  | Unified Code-Fact IR — Property Graph over a Content-Addressed Symbol Set         |
 | [0024](0024-incremental-dataflow-taint-as-substrate-queries.md) | Proposed    | Incremental Dataflow & Taint as Substrate Queries                                 |
+| [0025](0025-resolver-body-native-ecosystem-tooling.md)          | Accepted    | Resolver bodies shell out to each ecosystem's own tool (go list, cargo metadata…) |
+| [0027](0027-one-startup-path-with-ablatable-capabilities.md)    | Proposed    | One startup path — Resolve → Plan → Open, with capabilities as ablatable axes     |
 
 ## Notes on the non-obvious statuses
 

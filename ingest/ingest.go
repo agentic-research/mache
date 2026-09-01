@@ -26,6 +26,22 @@ type Match = ii.Match
 // JsonWalker implements the Walker interface for JSON-like data using JSONPath.
 type JsonWalker = ii.JsonWalker
 
+// SQLiteWriter is the IngestionTarget that persists a projection to a SQLite
+// .db (nodes/node_defs/node_refs per the schema). It is exported for consumers
+// that need custom ingestion control; most callers should use
+// build.ParseWithSchema or build.ParseWithSchemaRef.
+type SQLiteWriter = ii.SQLiteWriter
+
+// ASTWalker projects an open, caller-owned leyline _ast SQLite database. Pair
+// it with an Engine via Engine.SetASTWalker for custom projection control.
+type ASTWalker = ii.ASTWalker
+
+// NewSQLiteWriter opens (creating/truncating) a SQLite projection target.
+var NewSQLiteWriter = ii.NewSQLiteWriter
+
+// NewASTWalker constructs a walker over an open, caller-owned leyline _ast DB.
+var NewASTWalker = ii.NewASTWalker
+
 // NewEngine creates a new ingestion engine for the given schema and store.
 var NewEngine = ii.NewEngine
 

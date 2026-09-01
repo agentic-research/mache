@@ -30,9 +30,15 @@ import (
 //     substituting another is worse than an error.
 const BinaryOverrideEnv = "MACHE_LEYLINE_BINARY"
 
-// overrideBinary returns the developer-specified leyline path when
+// OverrideBinary returns the developer-specified leyline path when
 // MACHE_LEYLINE_BINARY is set, and ("", false, nil) when it is not.
-func overrideBinary() (string, bool, error) {
+//
+// Exported so the gated test resolvers (internal/lltest) honour the SAME
+// override production does. They previously called CachedPinnedBinary directly
+// and so ignored it entirely — meaning `mache build` would run a candidate
+// while the conformance and parity gates silently kept testing the pin
+// (mache-cc1a70).
+func OverrideBinary() (string, bool, error) {
 	p := os.Getenv(BinaryOverrideEnv)
 	if p == "" {
 		return "", false, nil
@@ -59,7 +65,7 @@ func binaryVersionString(path string) string {
 	if err != nil {
 		return "unknown"
 	}
-	if v := extractSemver(string(out)); v != "" {
+	if v := ExtractSemver(string(out)); v != "" {
 		return v
 	}
 	return "unknown"

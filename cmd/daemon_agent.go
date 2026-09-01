@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -9,17 +10,26 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
+
+	"github.com/agentic-research/mache/internal/daemonguard"
+	"github.com/agentic-research/mache/internal/projcfg"
 )
 
 // Canonical MCP transport endpoint. mache serves Streamable HTTP on this
 // address (serve.go default), and onboarding (`mache init`) registers clients
 // against it. stdio is a deliberate escape hatch (`mache serve --stdio`) for
 // CI / sandbox / headless use — it is never registered. See ADR-0022.
-const (
-	macheHTTPListen  = "localhost:7532"
-	macheHTTPURL     = "http://localhost:7532/mcp"
-	launchAgentLabel = "com.agentic-research.mache"
-)
+// Overridable via environment so a second, isolated daemon can coexist with
+// the canonical one — the hermetic real-launchd E2E (mache-96465d layer 3)
+// runs a private label + port under a throwaway HOME, and an operator can run
+// a canary the same way. The plist/unit generator bakes the resolved values
+// into ProgramArguments, so the supervised daemon needs no environment of its
+// own.
+// launchAgentLabel names the supervised job; the endpoint it serves lives in
+// internal/projcfg (MacheHTTPListen/MacheHTTPURL) so onboarding and lifecycle
+// read one value. Env-overridable for the hermetic E2E and canary daemons.
+var launchAgentLabel = projcfg.EnvOr("MACHE_DAEMON_LABEL", "com.agentic-research.mache")
 
 // daemonAgentAutoload gates the launchctl/systemctl load step. Tests set it
 // false to exercise plist/unit writing without a real supervisor side effect.
@@ -33,7 +43,33 @@ var daemonAgentAutoload = true
 // inspecting the argv. Executing the real command in a test would also restart
 // the developer's own daemon as a side effect, which a test must never do.
 var runSupervisorCmd = func(name string, args ...string) error {
-	return exec.Command(name, args...).Run()
+	return runBounded(name, args...)
+}
+
+// supervisorCmdTimeout bounds every launchctl/systemctl invocation.
+//
+// These were unbounded `exec.Command(...).Run()`, and launchctl BLOCKS: a
+// `bootstrap` against a job in a bad state can wait forever, with no output,
+// which is indistinguishable from a hang. Reported from a real machine as
+// "mache daemon start appears to hang".
+//
+// A supervisor that has not answered in this long is not going to; reporting
+// that is strictly better than waiting on it, because the caller can act on an
+// error and cannot act on silence.
+var supervisorCmdTimeout = 15 * time.Second
+
+// runBounded runs a supervisor command under supervisorCmdTimeout and turns a
+// timeout into a NAMED error rather than an indefinite wait.
+func runBounded(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), supervisorCmdTimeout)
+	defer cancel()
+	err := exec.CommandContext(ctx, name, args...).Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s %s did not return within %s (the supervisor is wedged; "+
+			"inspect it with: launchctl print gui/$(id -u)/%s)",
+			filepath.Base(name), strings.Join(args, " "), supervisorCmdTimeout, launchAgentLabel)
+	}
+	return err
 }
 
 // querySupervisorCmd is the read-side seam: it returns a supervisor query's
@@ -41,7 +77,16 @@ var runSupervisorCmd = func(name string, args ...string) error {
 // exited 0. Separate from runSupervisorCmd because the two have different
 // contracts — one acts, one observes — and tests stub them independently.
 var querySupervisorCmd = func(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), supervisorCmdTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	if ctx.Err() != nil {
+		// A wedged query must not wedge the caller. Reporting "nothing loaded"
+		// is the safe reading: every caller already treats that as the benign
+		// case, and `mache daemon status` then says the endpoint is not
+		// answering rather than blocking forever on launchctl.
+		return "", fmt.Errorf("%s did not answer within %s", filepath.Base(name), supervisorCmdTimeout)
+	}
 	return string(out), err
 }
 
@@ -168,6 +213,17 @@ func systemdQuote(s string) string {
 	return `"` + s + `"`
 }
 
+// ExitTimeOut 45 / TimeoutStopSec 45 (they are the same knob, spelled per
+// supervisor): how long a graceful stop may take before the supervisor
+// SIGKILLs. launchd's DEFAULT is 20 seconds, and mache's graceful exit is
+// drain (up to 10s) + registry.Close (unbounded: worktree and hosted-clone
+// cleanup) + StopManaged (~3s) — a slow registry close therefore got the
+// process SIGKILLed MID-CLEANUP under the default, orphaning the leyline
+// child and truncating the shutdown log. The observed 112s shutdown
+// (mache-706d8f) exceeded the default fivefold. 45s is deliberately above
+// the drain deadline plus a generous cleanup allowance and below "feels
+// hung"; the shutdown phase logging says where the time went.
+//
 // launchAgentPlist renders the macOS LaunchAgent plist that keepalives the
 // shared mache HTTP daemon, so the endpoint registered by `mache init` is
 // answerable without anyone running `mache serve` by hand.
@@ -175,7 +231,19 @@ func systemdQuote(s string) string {
 // KeepAlive only restarts on failure (SuccessfulExit=false) and ThrottleInterval
 // guards against a tight crash-loop if the daemon can't start (e.g. stale
 // ~/.mache state — mache-823d91). Pure function so it can be unit-tested.
-func launchAgentPlist(binPath, logPath string) string {
+// launchAgentPlist renders the LaunchAgent definition. HOME is baked as an
+// EnvironmentVariables entry: the agent is installed FOR a specific home
+// (plist path, log path, arena, project registry all live under it), and
+// launchd's default environment must not be able to point the daemon at a
+// different one. In production the two agree and the entry is redundant; in
+// the hermetic E2E (isolated HOME) it is what keeps the supervised daemon
+// inside the sandbox instead of writing to the real ~/.mache.
+//
+// The crash-loop breaker's bounds are baked alongside it so the supervisor
+// definition STATES its own contract — reading the plist tells you exactly
+// when the daemon will stop respawning itself (mache-956488). Regenerated by
+// `mache init --global`, so a changed default lands on reinstall.
+func launchAgentPlist(binPath, homeDir, logPath string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -189,6 +257,17 @@ func launchAgentPlist(binPath, logPath string) string {
 		<string>--http</string>
 		<string>%s</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>%s</string>
+		<key>MACHE_SUPERVISED</key>
+		<string>1</string>
+		<key>MACHE_DAEMON_BREAKER_WINDOW</key>
+		<string>%s</string>
+		<key>MACHE_DAEMON_BREAKER_BURST</key>
+		<string>%d</string>
+	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -198,30 +277,46 @@ func launchAgentPlist(binPath, logPath string) string {
 	</dict>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>45</integer>
 	<key>StandardOutPath</key>
 	<string>%s</string>
 	<key>StandardErrorPath</key>
 	<string>%s</string>
 </dict>
 </plist>
-`, launchAgentLabel, xmlText(binPath), macheHTTPListen, xmlText(logPath), xmlText(logPath))
+`, launchAgentLabel, xmlText(binPath), projcfg.MacheHTTPListen, xmlText(homeDir),
+		daemonguard.Window, daemonguard.Burst, xmlText(logPath), xmlText(logPath))
 }
 
 // systemdUserUnit renders the Linux systemd --user service that keepalives the
 // shared mache HTTP daemon. Pure function so it can be unit-tested.
+// systemdUserUnit renders the user unit. Crash-loop bounding is TWO layers
+// (mache-956488): systemd's native StartLimit* catches a binary that cannot
+// even reach main, and MACHE_SUPERVISED arms mache's own breaker for the
+// common case of a daemon that starts and then fails. launchd has no
+// StartLimit equivalent at all, which is why the portable in-process breaker
+// exists rather than relying on the supervisor alone.
 func systemdUserUnit(binPath string) string {
 	return fmt.Sprintf(`[Unit]
 Description=mache MCP HTTP daemon (Streamable HTTP on %s)
 After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 ExecStart=%s serve --http %s
+Environment=MACHE_SUPERVISED=1
+Environment=MACHE_DAEMON_BREAKER_WINDOW=%s
+Environment=MACHE_DAEMON_BREAKER_BURST=%d
 Restart=on-failure
 RestartSec=10
+TimeoutStopSec=45
 
 [Install]
 WantedBy=default.target
-`, macheHTTPListen, systemdQuote(binPath), macheHTTPListen)
+`, projcfg.MacheHTTPListen, systemdQuote(binPath), projcfg.MacheHTTPListen,
+		daemonguard.Window, daemonguard.Burst)
 }
 
 // installDaemonAgent writes and loads a per-user supervisor that keeps the
@@ -235,25 +330,25 @@ func installDaemonAgent(w io.Writer, binPath string) {
 	case "linux":
 		installSystemdUnit(w, binPath)
 	default:
-		logf(w, "  [daemon] no supervisor for %s — run `mache serve --http %s` to start the daemon.\n", runtime.GOOS, macheHTTPListen)
+		logf(w, "  [daemon] no supervisor for %s — run `mache serve --http %s` to start the daemon.\n", runtime.GOOS, projcfg.MacheHTTPListen)
 	}
 }
 
 func installLaunchAgent(w io.Writer, binPath string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, macheHTTPListen)
+		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, projcfg.MacheHTTPListen)
 		return
 	}
 	agentDir := filepath.Join(home, "Library", "LaunchAgents")
-	logPath := filepath.Join(home, "Library", "Logs", "mache.log")
-	plistPath := filepath.Join(agentDir, launchAgentLabel+".plist")
+	logPath := daemonLogPath()
+	plistPath := launchAgentPlistPath()
 
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		logf(w, "  [daemon] could not create %s: %v\n", agentDir, err)
 		return
 	}
-	if err := os.WriteFile(plistPath, []byte(launchAgentPlist(binPath, logPath)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(launchAgentPlist(binPath, home, logPath)), 0o644); err != nil {
 		logf(w, "  [daemon] could not write %s: %v\n", plistPath, err)
 		return
 	}
@@ -270,7 +365,7 @@ func installLaunchAgent(w io.Writer, binPath string) {
 			logf(w, "  [daemon] plist installed; load it with: launchctl bootstrap %s %s\n", target, plistPath)
 			return
 		}
-		logf(w, "  [daemon] loaded — mache HTTP daemon will keepalive on %s\n", macheHTTPListen)
+		logf(w, "  [daemon] loaded — mache HTTP daemon will keepalive on %s\n", projcfg.MacheHTTPListen)
 		return
 	}
 	logf(w, "  [daemon] plist installed; launchctl not found — load it after restart.\n")
@@ -279,7 +374,7 @@ func installLaunchAgent(w io.Writer, binPath string) {
 func installSystemdUnit(w io.Writer, binPath string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, macheHTTPListen)
+		logf(w, "  [daemon] could not resolve home dir: %v — start manually: mache serve --http %s\n", err, projcfg.MacheHTTPListen)
 		return
 	}
 	unitDir := filepath.Join(home, ".config", "systemd", "user")
@@ -304,7 +399,7 @@ func installSystemdUnit(w io.Writer, binPath string) {
 			logf(w, "  [daemon] unit installed; enable it with: systemctl --user enable --now mache.service\n")
 			return
 		}
-		logf(w, "  [daemon] enabled — mache HTTP daemon will keepalive on %s\n", macheHTTPListen)
+		logf(w, "  [daemon] enabled — mache HTTP daemon will keepalive on %s\n", projcfg.MacheHTTPListen)
 		return
 	}
 	logf(w, "  [daemon] unit installed; systemctl not found — enable it manually.\n")
@@ -370,11 +465,36 @@ func restartDaemonAgent(w io.Writer) {
 			// exists to fix. Starting one is `mache init --global`'s decision.
 			return
 		}
+		// RELOAD, not `kickstart -k`. launchd pins the job's code identity at
+		// bootstrap; this restart runs precisely because the binary was just
+		// REPLACED, and mache's ad-hoc signature has no stable identity across
+		// builds — so kickstarting the old registration makes the kernel
+		// SIGKILL the new binary at exec (CODESIGNING "Launch Constraint
+		// Violation", caught in a live crash report). That kill plus launchd's
+		// respawn throttling was the unexplained 10s/43s/112s family of
+		// install-restart failures (mache-706d8f). bootout may fail if the job
+		// races to unloaded — bootstrap wants that state anyway.
 		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
-		if err := runSupervisorCmd(launchctl, "kickstart", "-k", target); err != nil {
+		_ = runSupervisorCmd(launchctl, "bootout", target)
+		// bootout's effect is asynchronous: bootstrapping while the outgoing
+		// job still holds the label fails with EIO (caught by the launchd
+		// E2E). Wait for the label to actually leave the domain.
+		if !awaitJobGone() {
+			logf(w, "WARNING: the outgoing daemon did not release its job within %s; reload may fail\n",
+				daemonDrainTimeout)
+		}
+		if plist := launchAgentPlistPath(); plist != "" {
+			if err := runSupervisorCmd(launchctl, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plist); err != nil {
+				logf(w, "WARNING: could not reload the daemon job: %v\n", err)
+				return
+			}
+		}
+		// RunAtLoad does not fire on bootstrap (verified live: the job loads
+		// as "not running, never exited" until kicked).
+		if err := runSupervisorCmd(launchctl, "kickstart", target); err != nil {
 			return
 		}
-		logf(w, "restarted the supervised daemon (%s) so it serves the new binary\n", launchAgentLabel)
+		confirmRestart(w, launchAgentLabel)
 	case "linux":
 		systemctl, err := exec.LookPath("systemctl")
 		if err != nil {
@@ -383,6 +503,74 @@ func restartDaemonAgent(w io.Writer) {
 		if err := runSupervisorCmd(systemctl, "--user", "try-restart", "mache.service"); err != nil {
 			return
 		}
-		logf(w, "restarted the supervised daemon (mache.service) so it serves the new binary\n")
+		confirmRestart(w, "mache.service")
 	}
+}
+
+// confirmRestart reports the restart HONESTLY: it waits for the endpoint to
+// answer and says so if it does not.
+//
+// The message used to print on the supervisor command's exit status alone,
+// which means the kill-and-relaunch REQUEST was accepted — not that anything
+// is listening. Observed after a real `task install`: "restarted the supervised
+// daemon" printed while `launchctl list` showed no PID and LastExitStatus 9,
+// and it stayed down. Every MCP client pointed at the endpoint was failing
+// while the install reported success (mache-609a10).
+//
+// Deliberately does not fail the install. A binary that is correctly on disk
+// IS installed, and turning a supervisor hiccup into a failed install would be
+// its own overreach — but it must not be reported as a restart that happened.
+func confirmRestart(w io.Writer, label string) {
+	version, ok := awaitDaemon(w, true)
+	if !ok {
+		logf(w, "WARNING: asked %s to restart and it accepted, but nothing is answering at %s.\n"+
+			"         The binary is installed; the daemon is not serving it.\n"+
+			"         Try: mache daemon start   (then: mache doctor)\n"+
+			"         Log: %s\n", label, projcfg.MacheHTTPURL, daemonLogHint())
+		return
+	}
+	logf(w, "restarted the supervised daemon (%s); answering at %s, serving %s\n",
+		label, projcfg.MacheHTTPURL, version)
+}
+
+// launchAgentPlistPath is the one definition of where the LaunchAgent lives.
+// Both the installer (which writes it) and `mache daemon start` (which
+// bootstraps it by path) need it, and two spellings of the same path is the
+// class of drift this repo keeps paying for elsewhere.
+//
+// Returns "" when the home dir cannot be resolved; callers surface that as a
+// supervisor error rather than bootstrapping a bare filename.
+func launchAgentPlistPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")
+}
+
+// daemonLogPath is where the supervisor sends the daemon's stdout/stderr.
+func daemonLogPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Logs", "mache.log")
+	default:
+		return ""
+	}
+}
+
+// daemonLogHint names where to look when a start or restart does not settle.
+// On systemd the log is not a file, so point at the reader instead of inventing
+// a path that does not exist.
+func daemonLogHint() string {
+	if p := daemonLogPath(); p != "" {
+		return p
+	}
+	if runtime.GOOS == "linux" {
+		return "journalctl --user -u mache.service -n 50"
+	}
+	return "the supervisor's log"
 }

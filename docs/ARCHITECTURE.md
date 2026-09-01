@@ -1,6 +1,6 @@
 ---
 status: current
-covers-version: v0.21.0
+covers-version: v0.21.1
 last-verified: 2026-07-31
 sources-of-truth:
   - internal/lang/lang.go
@@ -116,6 +116,13 @@ With `--infer`, the schema itself can be derived automatically: the `lattice` pa
   - **`MemoryStore`** — In-memory map for small datasets (JSON files, source code).
   - **`SQLiteGraph`** — Direct SQL backend for `.db` sources. One-pass scan builds the directory tree; content resolved on demand via primary key lookup and template rendering. No data copied.
 - **`Engine`** — Drives ingestion: walks files, dispatches to walkers, renders templates, builds the graph. Tracks source file paths for origin-aware nodes. Deduplicates same-name constructs (e.g. multiple `init()`) by appending `.from_<filename>` suffixes.
+- **Public schema projection** (`schema/`, `build/`) — `schema.Resolve` is the
+  single owner of bundled presets and contained file references.
+  `build.ParseWithSchema` accepts a caller-owned `*api.Topology`, while
+  `build.ParseWithSchemaRef` preserves preset language metadata. Both own the
+  pinned-leyline temp parse, grammar-coverage guard, AST connection tuning,
+  writer lifecycle, and cleanup. The CLI delegates to these functions and adds
+  only CLI provenance and warning output.
 - **`GraphFS`** — NFS filesystem via `go-nfs`/`billy`. Adapts the `Graph` interface to `billy.Filesystem`. The only mount backend (the earlier FUSE backend was removed in v0.7.0; see ADR-0006).
 - **`_project_files/`** — Non-AST files (READMEs, configs, docs) encountered during tree-sitter ingestion are routed into a separate `_project_files/` tree via `ingestRawFileUnder()`. This preserves access to supporting files without polluting the AST-derived structure.
 - **Friendly-name grouping** — `ProjectAST` in the lattice package maps raw tree-sitter node types to intuitive container directory names: `function_declaration` → `functions/`, `class_definition` → `classes/`, `type_declaration` → `types/`, etc. Language-specific containment rules nest methods inside classes for Python/TypeScript.
@@ -177,6 +184,13 @@ mache (Engine + ASTWalker, or SQLiteGraph — both pure Go) → MemoryStore/SQLi
 ```
 
 ley-line-open's `leyline parse` produces a `.db` containing the full AST (plus optional LSP enrichment). Every mache entry point — `build`, `serve`, `mount`, `infer`, and the test-fixture registry — invokes `leyline parse` on a source directory and then projects the `_ast` via the pure-Go `ASTWalker` (`SetASTWalker`); `SQLiteGraph` reads a pre-baked `.db` directly via `json_extract()` and lazy content resolution. No CGO, no in-memory tree-sitter AST. leyline is provisioned automatically (`ResolveBinary` — PATH → `~/.mache/bin/leyline-<pinned-version>` → SHA-verified download of the exact pin); when it is genuinely unavailable, source projection is a hard error rather than a silent degradation. The cache is namespaced BY PIN: it was one unversioned path, so every mache build on a machine treated that file as its own and they overwrote each other — and because LLO ships `_ast` schema changes in patch releases, the graph shape silently depended on which mache last touched it. Concurrent pins now coexist. Each `.db` also records the leyline that produced it in `_mache_meta` (`leyline_pin`, `leyline_version`, `leyline_source`), so "which producer built this artifact" is answerable from the artifact rather than inferred.
+
+The `_source.id` value is a root-relative, forward-slashed path such as
+`sub/nested.go`. That identity crosses the LLO/Mache seam unchanged:
+`Engine.sourceIDFor` supplies it to context, import, AST, and registered
+address-reference queries. Reducing it to a basename would make nested files
+hollow in the typed-ref graph and would collide for same-named files in
+different directories.
 
 The only registry language leyline can't parse is **cue** (no tree-sitter-0.26 cue grammar exists anywhere — so no path could parse it), which the schema coverage guard reports loudly. This is the [ADR-0006: Pure Go, MCP-First](adr/0006-pure-go-mcp-first.md) end state; ley-line-open is required for source projection. mache consumes leyline purely as a subprocess/daemon over its UDS socket — there is no CGO/FFI linkage into mache (the dev-only `leyline_fs` FFI binding, `internal/leyline/client.go`, was removed; libleyline_fs lives in and is published by ley-line-open).
 

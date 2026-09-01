@@ -170,14 +170,14 @@ jobs:
           docker run --rm --entrypoint /usr/local/bin/leyline mache-smoke:ci --version
 
       - name: Log in to ghcr
-        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Build and push
         id: push
@@ -242,6 +242,30 @@ jobs:
           merge-multiple: true
           path: dist/
 
+      # This job is `if: always()`, which is required for the tag gate above to
+      # evaluate at all — but it also means the job runs when `build` FAILED.
+      # With `fail-fast: false` on the matrix, one broken platform still leaves
+      # the other two artifacts downloadable, and `sha256sum mache-*` succeeds
+      # over whatever happens to be present. Without this gate the workflow
+      # would publish a release carrying 2 of 3 binaries and a checksum file
+      # that silently attests only those 2.
+      #
+      # That is the same defect class as the publish-ordering bug below —
+      # sealing a release that can never be corrected — just "some assets"
+      # rather than "no assets". Fail loudly instead.
+      - name: Assert every platform built
+        run: |
+          set -euo pipefail
+          missing=()
+          for a in mache-darwin-arm64 mache-linux-amd64 mache-linux-arm64; do
+            [ -f "dist/$a" ] || missing+=("$a")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::refusing to publish a partial release — missing: ${missing[*]}"
+            exit 1
+          fi
+          echo "all 3 platform binaries present"
+
       - name: Create checksums
         run: |
           cd dist
@@ -253,6 +277,43 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           generate_release_notes: true
+          # DRAFT, then publish as a separate step below.
+          #
+          # This action creates and PUBLISHES the release BEFORE uploading any
+          # asset. That ordering is merely untidy today and becomes
+          # unrecoverable the moment tag protection is enabled on this repo:
+          # protecting tags also makes GitHub treat releases on those tags as
+          # immutable, and an immutable release rejects new assets ("Cannot
+          # upload asset ... to an immutable release") and refuses to change
+          # state ("state cannot be changed when release is immutable").
+          # Because the tag is protected too, it cannot even be recut — the
+          # result is a published, permanently EMPTY release.
+          #
+          # That is not hypothetical: signet lost v0.3.0-rc.3 exactly this way
+          # (agentic-research/signet#170). Note there is no repo-level setting
+          # to check first — `gh api repos/O/R --jq .immutable_releases`
+          # returns null either way; only
+          # `gh release view <tag> --json isImmutable` reveals it.
+          #
+          # Draft-then-publish is worth doing regardless of tag protection: a
+          # partial upload failure leaves an unpublished draft instead of a
+          # half-populated release, and publication becomes a deliberate act
+          # rather than a side effect of upload ordering.
+          draft: true
           files: |
             dist/mache-*
             dist/checksums-sha256.txt
+
+      # Seals the release with every asset attached. If tag protection is ever
+      # enabled, immutability begins HERE — anything not uploaded above is not
+      # in this release, permanently.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.TAG }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "published $TAG with assets:"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name'

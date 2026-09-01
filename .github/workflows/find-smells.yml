@@ -24,7 +24,7 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
-      - 'cmd/rules/*.json'
+      - 'internal/smells/rules/*.json'
       - 'docs/smell-baseline.json'
       - '.github/workflows/find-smells.yml'
 
