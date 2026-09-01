@@ -13,61 +13,90 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWatcher_Debounce(t *testing.T) {
+// fakeTimer records whether it was stopped and lets the test fire it.
+type fakeTimer struct {
+	fn      func()
+	stopped bool
+}
+
+func (f *fakeTimer) Stop() bool { f.stopped = true; return true }
+
+// TestWatcher_DebounceCoalesces pins the coalescing property deterministically.
+//
+// It used to write five files with 25ms sleeps and assert exactly one callback
+// after 4x the debounce window — a wall-clock bet that a stall between two
+// writes never exceeds the window. CI lost that bet twice: once at 50ms/10ms
+// (PR #294) and again after the window was widened to 250ms/25ms, each time
+// surfacing as a code failure on an unrelated PR. Widening it a third time
+// would only lengthen the odds.
+//
+// Driving the timer seam removes the clock from the question entirely: N
+// events must leave exactly ONE pending timer, with each earlier one stopped,
+// and firing it must produce exactly one callback.
+func TestWatcher_DebounceCoalesces(t *testing.T) {
 	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "main.go")
+	require.NoError(t, os.WriteFile(goFile, []byte("package main"), 0o644))
 
 	var callCount atomic.Int32
-	var lastPath string
 	var mu sync.Mutex
-
+	var lastPath string
 	onChange := func(path string) {
 		callCount.Add(1)
 		mu.Lock()
 		lastPath = path
 		mu.Unlock()
 	}
-	onDelete := func(path string) {}
 
-	// Larger debounce window so the inter-write gap is reliably
-	// shorter than the debounce timer even on slow CI runners.
-	// Original 50ms / 10ms ratio (5x headroom) flaked when
-	// scheduler latency stretched a 10ms sleep past 50ms,
-	// causing the timer to fire mid-stream — see PR #294 retry.
-	// 250ms / 25ms keeps the same 10x ratio in absolute terms but
-	// gives ~5x more headroom for jittery runners.
-	const debounce = 250 * time.Millisecond
-	const interWriteGap = 25 * time.Millisecond
-
-	w, err := NewWatcher(tmpDir, onChange, onDelete, WithDebounce(debounce))
+	var timers []*fakeTimer
+	w, err := NewWatcher(tmpDir, onChange, func(string) {},
+		withAfterFunc(func(_ time.Duration, f func()) debounceTimer {
+			ft := &fakeTimer{fn: f}
+			timers = append(timers, ft)
+			return ft
+		}))
 	require.NoError(t, err)
 	defer w.Stop()
 
-	// Write rapid changes to a single Go file.
-	goFile := filepath.Join(tmpDir, "main.go")
-	for i := range 5 {
-		err := os.WriteFile(goFile, []byte("package main // v"+string(rune('0'+i))), 0o644)
-		require.NoError(t, err)
-		time.Sleep(interWriteGap)
+	const events = 5
+	for range events {
+		w.debouncedOnChange(goFile)
 	}
 
-	// Wait several debounce windows to be confident the timer
-	// fired AND no late callbacks are still pending. Using a
-	// fixed 4× window instead of polling because the post-condition
-	// is "no MORE callbacks fire after this point" — polling for
-	// "exactly 1" would race with a possible second callback.
-	time.Sleep(4 * debounce)
+	require.Len(t, timers, events, "each event must (re)arm the debounce timer")
+	for i, ft := range timers[:events-1] {
+		assert.Truef(t, ft.stopped, "timer %d must be stopped by the event that superseded it", i)
+	}
+	assert.False(t, timers[events-1].stopped, "the last timer must remain armed")
+	assert.Zero(t, callCount.Load(), "nothing may fire while events are still arriving")
 
-	// Should have coalesced into a single callback. Use LessOrEqual
-	// + GreaterOrEqual to give a clear failure message that
-	// distinguishes "0 fired" (timer leak) from "2+ fired"
-	// (debounce misconfigured / inter-write gap too long).
-	count := callCount.Load()
-	assert.GreaterOrEqual(t, count, int32(1), "at least one callback must fire")
-	assert.LessOrEqual(t, count, int32(1), "rapid writes within %v should coalesce to 1 callback (got %d) — inter-write gap %v too close to debounce window?", debounce, count, interWriteGap)
+	timers[events-1].fn() // the quiet period elapses
 
+	assert.Equal(t, int32(1), callCount.Load(), "%d rapid events must coalesce to one callback", events)
 	mu.Lock()
 	assert.Equal(t, goFile, lastPath)
 	mu.Unlock()
+}
+
+// TestWatcher_FiresOnRealFileWrite keeps the fsnotify wiring covered — the
+// half the deterministic test above deliberately bypasses. It asserts only
+// that a write eventually produces a callback, never how many, so runner
+// jitter cannot fail it.
+func TestWatcher_FiresOnRealFileWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	var callCount atomic.Int32
+	w, err := NewWatcher(tmpDir, func(string) { callCount.Add(1) }, func(string) {},
+		WithDebounce(20*time.Millisecond))
+	require.NoError(t, err)
+	defer w.Stop()
+
+	goFile := filepath.Join(tmpDir, "main.go")
+	require.NoError(t, os.WriteFile(goFile, []byte("package main"), 0o644))
+
+	require.Eventually(t, func() bool { return callCount.Load() >= 1 },
+		10*time.Second, 20*time.Millisecond,
+		"a real file write must reach onChange through fsnotify")
 }
 
 func TestWatcher_IgnoresGitDir(t *testing.T) {
