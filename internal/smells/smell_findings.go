@@ -23,6 +23,14 @@ type smellFinding struct {
 	Column    int    `json:"column"`            // 1-based
 	Metric    int64  `json:"metric,omitempty"`  // rule-specific score (0 omitted)
 	Snippet   string `json:"snippet,omitempty"` // short source preview
+	// NodeHash is the finding's CONTENT address (hex BLAKE3 of the merkle
+	// subtree), empty on producers that write no node_hash. It is what makes
+	// the ratchet survive a refactor: the same code carries the same hash at
+	// whatever path it lives (verified — an identical function at a/thing.go
+	// and b/deep/moved.go hashes identically), so moved debt stays
+	// grandfathered and a vacated path stops spending an allowance
+	// (mache-dd45a3).
+	NodeHash string `json:"node_hash,omitempty"`
 }
 
 // ensureSmellQueryContext installs the canonical views/tables (v_defs,
@@ -116,6 +124,11 @@ func runSmellRuleQuery(qg graph.RefsQuerier, rule *SmellRule, sourceID string, l
 	// Release the connection before the enrichment query so we don't hold
 	// two open cursors on a single-connection backend.
 	_ = rows.Close()
+	// Content addresses first: the ratchet keys on them, so a finding without
+	// one silently degrades to path keying (mache-dd45a3).
+	if err := enrichNodeHashes(qg, out); err != nil {
+		return nil, err
+	}
 	if err := enrichLocations(qg, out); err != nil {
 		return nil, err
 	}
@@ -136,6 +149,97 @@ var enrichLocChunk = 900
 // standalone tree-sitter backend) — the query errors and findings keep their
 // file-level location, an honest degradation. _ast-native rules (long_function,
 // cyclomatic, …) already compute a span in SQL and are left untouched.
+// enrichNodeHashes fills in each finding's content address from `_ast`.
+//
+// Only CONSTRUCT-level findings get one. File-level rules (god_file,
+// long_file) emit an empty node_id, and they are deliberately left
+// path-keyed.
+//
+// The tempting move is to key them on the file's own `_ast` row, which does
+// exist. Measured, that is a trap: a file's merkle hash covers its whole
+// content, so ANY edit changes it — verified, one appended function took
+// 6e1abfb0… to 15986e62…. A god_file entry keyed that way would stop matching
+// the moment anyone touched the file, so the next PR editing any of the
+// thirteen current god files would fail the gate on debt it did not add.
+// That is a worse failure than the one this fixes, and in the opposite
+// direction.
+//
+// For "this FILE is too big", the path IS the identity. Move-invariance is
+// what construct-level findings need, because a construct is what gets moved.
+//
+// A producer with no `_ast` leaves every hash empty, and the ratchet falls
+// back to path keying for those findings too. That degradation is deliberate
+// and documented rather than an error: a standalone backend genuinely has no
+// content address to offer.
+func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
+	ids := make([]string, 0, len(findings))
+	seen := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		if f.NodeID == "" || seen[f.NodeID] {
+			continue // file-level finding, or already queued
+		}
+		seen[f.NodeID] = true
+		ids = append(ids, f.NodeID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	hasHash, err := TableHasColumn(qg, "_ast", "node_hash")
+	if err != nil {
+		return fmt.Errorf("enrich node hashes: probe _ast.node_hash: %w", err)
+	}
+	if !hasHash {
+		return nil // standalone producer: path keying, by design
+	}
+
+	byNode := make(map[string]string, len(ids))
+	for start := 0; start < len(ids); start += enrichLocChunk {
+		end := min(start+enrichLocChunk, len(ids))
+		batch := ids[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		q := "SELECT node_id, hex(node_hash) FROM _ast WHERE node_id IN (" + placeholders + ")"
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := qg.QueryRefs(q, args...)
+		if err != nil {
+			return fmt.Errorf("enrich node hashes: _ast lookup: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			var hash sql.NullString
+			if err := rows.Scan(&id, &hash); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("enrich node hashes: scan: %w", err)
+			}
+			if hash.Valid && hash.String != "" {
+				// Normalize case: SQL hex() returns UPPERCASE while the
+				// incremental memo carries lowercase. Identical content
+				// reaching the ratchet under two spellings would key as two
+				// different findings — caught by the memo-vs-full-scan
+				// byte-equality test, which is exactly what it is for.
+				byNode[id] = strings.ToLower(hash.String)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("enrich node hashes: rows: %w", err)
+		}
+		_ = rows.Close()
+	}
+
+	for i := range findings {
+		if findings[i].NodeID == "" {
+			continue
+		}
+		if h, ok := byNode[findings[i].NodeID]; ok {
+			findings[i].NodeHash = h
+		}
+	}
+	return nil
+}
+
 func enrichLocations(qg graph.RefsQuerier, findings []smellFinding) error {
 	needsLoc := func(f smellFinding) bool { return f.StartByte == 0 && f.Line <= 1 }
 	ids := make([]string, 0)

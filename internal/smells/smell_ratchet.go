@@ -1,11 +1,12 @@
 package smells
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -41,31 +42,93 @@ type smellBaseline struct {
 	Counts  []baselineEntry `json:"counts"`
 }
 
+// baselineVersion is the current schema.
+//
+//	v1: keyed (rule_id, source_id) — the file PATH.
+//	v2: keyed (rule_id, node_hash) when the producer supplies a content
+//	    address, falling back to the path when it does not.
+//
+// v1 files still load and still gate, path-keyed exactly as before; a
+// regeneration produces v2. That matters because the whole point of v2 is to
+// survive moves, and a migration that made every existing entry miss would
+// fail the gate on the first refactor after upgrading — the very thing this
+// is fixing (mache-dd45a3).
+const baselineVersion = 2
+
 type baselineEntry struct {
-	RuleID   string `json:"rule_id"`
+	RuleID string `json:"rule_id"`
+	// SourceID is where the finding lived when the baseline was written. On
+	// v2 it is informational — it keeps the file human-reviewable — EXCEPT
+	// for entries with no NodeHash, where it is still the key.
 	SourceID string `json:"source_id"`
+	// NodeHash is the content address this entry is keyed on. Empty means the
+	// producer offered none, so the entry stays path-keyed.
+	NodeHash string `json:"node_hash,omitempty"`
 	Count    int    `json:"count"`
 }
 
-// computeBaseline counts findings per (rule, file). The output is sorted
+// ratchetKey is the identity a grandfathered count is filed under.
+//
+// Prefixed so the two key spaces can never collide: a content address and a
+// file path are different KINDS of claim, and silently letting one satisfy
+// the other is how a moved file would spend an allowance twice.
+func ratchetKey(ruleID, nodeHash, sourceID string, version int) [2]string {
+	if version >= 2 && nodeHash != "" {
+		return [2]string{ruleID, "h:" + nodeHash}
+	}
+	return [2]string{ruleID, "p:" + sourceID}
+}
+
+// computeBaseline counts findings per ratchet key. The output is sorted
 // deterministically so a committed baseline file doesn't churn on regeneration.
+//
+// A content-addressed key POOLS byte-identical debt across files: at the time
+// of writing, 21 of 624 hashed keys in this repo's own baseline span more than
+// one file — `time.Sleep(50 * time.Millisecond)` is the same content wherever
+// it appears, and a content address cannot tell two copies apart. That is the
+// same property that makes the key survive a move, so it is not separable from
+// the fix.
+//
+// The pooled allowance stays honest: N identical instances, allowance N.
+// Adding an (N+1)th still fails; relocating one is net-zero, which is exactly
+// what a move-invariant ratchet should permit.
+//
+// SourceID is then only a human pointer to ONE of the files involved, so it is
+// chosen as the smallest rather than the first encountered. First-encountered
+// would be scan-order dependent, and a committed file that reshuffles between
+// identical runs is a diff nobody can review.
 func computeBaseline(findings []smellFinding) smellBaseline {
+	type ident struct{ ruleID, nodeHash, sourceID string }
 	counts := map[[2]string]int{}
+	idents := map[[2]string]ident{}
 	for _, f := range findings {
-		counts[[2]string{f.RuleID, f.SourceID}]++
+		k := ratchetKey(f.RuleID, f.NodeHash, f.SourceID, baselineVersion)
+		counts[k]++
+		if prev, seen := idents[k]; !seen || f.SourceID < prev.sourceID {
+			idents[k] = ident{f.RuleID, f.NodeHash, f.SourceID}
+		}
 	}
-	out := smellBaseline{Version: 1, Counts: make([]baselineEntry, 0, len(counts))}
+	out := smellBaseline{Version: baselineVersion, Counts: make([]baselineEntry, 0, len(counts))}
 	for k, n := range counts {
-		out.Counts = append(out.Counts, baselineEntry{RuleID: k[0], SourceID: k[1], Count: n})
+		id := idents[k]
+		out.Counts = append(out.Counts, baselineEntry{
+			RuleID: id.ruleID, SourceID: id.sourceID, NodeHash: id.nodeHash, Count: n,
+		})
 	}
-	sortEntries(out.Counts)
+	sortByTriple(out.Counts, func(x baselineEntry) (string, string, string) {
+		return x.RuleID, x.SourceID, x.NodeHash
+	})
 	return out
 }
 
-// lookup returns the grandfathered count for (rule, file), or 0 if absent.
-func (b smellBaseline) lookup(ruleID, sourceID string) int {
+// lookup returns the grandfathered count for a ratchet key, or 0 if absent.
+//
+// Absent means NOT grandfathered, which is what closes the laundering hole:
+// an entry whose content address no longer exists in the tree matches nothing,
+// so a vacated file cannot keep spending an allowance it no longer needs.
+func (b smellBaseline) lookup(key [2]string) int {
 	for _, e := range b.Counts {
-		if e.RuleID == ruleID && e.SourceID == sourceID {
+		if ratchetKey(e.RuleID, e.NodeHash, e.SourceID, b.Version) == key {
 			return e.Count
 		}
 	}
@@ -80,54 +143,61 @@ func newDebt(current []smellFinding, base smellBaseline) []smellFinding {
 	groups := map[[2]string][]smellFinding{}
 	var order [][2]string
 	for _, f := range current {
-		k := [2]string{f.RuleID, f.SourceID}
+		// Group by the SAME key the baseline is filed under, so a moved
+		// finding lands in its grandfathered group rather than a new one.
+		k := ratchetKey(f.RuleID, f.NodeHash, f.SourceID, base.Version)
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
 		groups[k] = append(groups[k], f)
 	}
-	sort.Slice(order, func(i, j int) bool {
-		if order[i][0] != order[j][0] {
-			return order[i][0] < order[j][0]
-		}
-		return order[i][1] < order[j][1]
+	slices.SortFunc(order, func(a, b [2]string) int {
+		return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
 	})
 
 	var debt []smellFinding
 	for _, k := range order {
 		g := groups[k]
-		allowed := base.lookup(k[0], k[1])
+		allowed := base.lookup(k)
 		if len(g) <= allowed {
 			continue
 		}
-		sortFindingsByPosition(g)
+		sortByTriple(g, func(x smellFinding) (int, int, int) {
+			return x.Line, x.Column, x.StartByte
+		})
 		debt = append(debt, g[allowed:]...)
 	}
 	return debt
 }
 
-func sortEntries(e []baselineEntry) {
-	sort.Slice(e, func(i, j int) bool {
-		if e[i].RuleID != e[j].RuleID {
-			return e[i].RuleID < e[j].RuleID
-		}
-		return e[i].SourceID < e[j].SourceID
-	})
-}
-
-func sortFindingsByPosition(f []smellFinding) {
-	sort.Slice(f, func(i, j int) bool {
-		if f[i].Line != f[j].Line {
-			return f[i].Line < f[j].Line
-		}
-		if f[i].Column != f[j].Column {
-			return f[i].Column < f[j].Column
-		}
-		return f[i].StartByte < f[j].StartByte
+// sortByTriple sorts s by the cascading comparison of a three-part key. One
+// comparator serves both orderings below, so they cannot drift apart — and
+// two hand-rolled sort.Slice bodies that differ only in field names are
+// exactly the structural clone duplicate_code is built to catch.
+func sortByTriple[T any, K cmp.Ordered](s []T, key func(T) (K, K, K)) {
+	slices.SortFunc(s, func(a, b T) int {
+		a1, a2, a3 := key(a)
+		b1, b2, b3 := key(b)
+		return cmp.Or(cmp.Compare(a1, b1), cmp.Compare(a2, b2), cmp.Compare(a3, b3))
 	})
 }
 
 // loadBaseline reads a committed smellBaseline JSON file.
+//
+// A baseline NEWER than this binary understands is refused rather than read
+// on a best-effort basis. Unknown fields unmarshal to nothing, so an older
+// binary silently keys a newer file by whatever it does recognise — which is
+// not a degraded answer but a WRONG one: reading v2 without node_hash awareness
+// collapses hash-keyed entries onto their source_id, where a pooled entry
+// carries the whole group's count on one path and the group's other files have
+// no entry at all. The gate then fails on debt that is fully grandfathered.
+//
+// That is exactly the skew the v1 -> v2 bump could inflict on an older binary,
+// and it could not be prevented from this side, because v1 readers never
+// checked the version. This check is what makes the NEXT bump safe: an old
+// binary meeting a v3 baseline stops with an actionable message instead of
+// inventing failures. Older files stay readable — v1 and an absent version
+// both path-key, which is what they meant.
 func loadBaseline(path string) (smellBaseline, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -136,6 +206,12 @@ func loadBaseline(path string) (smellBaseline, error) {
 	var b smellBaseline
 	if err := json.Unmarshal(data, &b); err != nil {
 		return smellBaseline{}, fmt.Errorf("parse baseline: %w", err)
+	}
+	if b.Version > baselineVersion {
+		return smellBaseline{}, fmt.Errorf(
+			"baseline %s is version %d, but this mache understands up to version %d — "+
+				"upgrade mache, or regenerate the baseline with this binary (task smells:baseline)",
+			path, b.Version, baselineVersion)
 	}
 	return b, nil
 }

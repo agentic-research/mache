@@ -103,6 +103,6 @@ func TestBaseline_LoadWriteRoundTrip(t *testing.T) {
 
 	got, err := loadBaseline(path)
 	require.NoError(t, err)
-	assert.Equal(t, 2, got.lookup("long_function", "a.go"))
-	assert.Equal(t, 1, got.lookup("dead_code", "b.go"))
+	assert.Equal(t, 2, got.lookup(pathKey("long_function", "a.go")))
+	assert.Equal(t, 1, got.lookup(pathKey("dead_code", "b.go")))
 }
