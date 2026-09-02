@@ -1,13 +1,12 @@
 package smells
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/testutil"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -251,38 +250,37 @@ func TestLoadBaseline_RefusesFutureVersion(t *testing.T) {
 //
 // It surfaced the honest way: `task check` failing on a test file that had
 // only grown.
+//
+// The fixture is built by fixturedb rather than hand-written DDL, because the
+// shape of `_ast` decides which SQL ensureCanonicalViews generates — a
+// hand-typed CREATE TABLE is a hidden test parameter (mache-7555da).
 func TestEnrich_FileLevelNodeGetsNoHash(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ast.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	_, f := fixturedb.New(t, fixturedb.Leyline).
+		ASTNode("a/big.go", "source_file", "a/big.go",
+			fixturedb.Span{EndByte: 4000, EndRow: 400}).
+		ASTNode("a/big.go/func_1", "function_declaration", "a/big.go",
+			fixturedb.Span{EndByte: 200, EndRow: 20}).
+		Build()
 
-	_, err = db.Exec(`
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL,
-			start_byte INTEGER, end_byte INTEGER, start_row INTEGER, start_col INTEGER,
-			node_hash BLOB
-		);
-		INSERT INTO _ast VALUES
-		  ('a/big.go',        'a/big.go', 'source_file',          0, 9, 0, 0, X'AAAA'),
-		  ('a/big.go/func_1', 'a/big.go', 'function_declaration', 0, 4, 0, 0, X'BBBB');
-	`)
-	require.NoError(t, err)
+	// Read the construct's address out of the fixture rather than hard-coding
+	// one: the assertion is that enrichment carries THIS node's hash, not that
+	// fixturedb happens to derive a particular value.
+	var want string
+	require.NoError(t, f.DB().QueryRow(
+		`SELECT lower(hex(node_hash)) FROM _ast WHERE node_id = ?`,
+		"a/big.go/func_1").Scan(&want))
+	require.NotEmpty(t, want, "fixture must give the construct a content address")
 
-	tg := &testutil.SmellTestGraph{DB: db, Path: dbPath}
 	findings := []smellFinding{
-		// long_file's shape: the node IS the file.
-		{RuleID: "long_file", SourceID: "a/big.go", NodeID: "a/big.go"},
-		// long_function's shape: a construct inside it.
-		{RuleID: "long_function", SourceID: "a/big.go", NodeID: "a/big.go/func_1"},
-		// god_file's shape: no node at all.
-		{RuleID: "god_file", SourceID: "a/big.go"},
+		{RuleID: "long_file", SourceID: "a/big.go", NodeID: "a/big.go"},            // node IS the file
+		{RuleID: "long_function", SourceID: "a/big.go", NodeID: "a/big.go/func_1"}, // a construct in it
+		{RuleID: "god_file", SourceID: "a/big.go"},                                 // no node at all
 	}
-	require.NoError(t, enrichNodeHashes(tg, findings))
+	require.NoError(t, enrichNodeHashes(f, findings))
 
 	assert.Empty(t, findings[0].NodeHash,
 		"long_file is about the FILE — hashing it means any edit re-flags the file")
-	assert.Equal(t, "bbbb", findings[1].NodeHash,
+	assert.Equal(t, want, findings[1].NodeHash,
 		"a construct inside the file still gets its own content address")
 	assert.Empty(t, findings[2].NodeHash, "god_file has no node to address")
 }
