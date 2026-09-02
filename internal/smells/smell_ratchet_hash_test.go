@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,4 +237,50 @@ func TestLoadBaseline_RefusesFutureVersion(t *testing.T) {
 		_, err := loadBaseline(old)
 		assert.NoError(t, err, "a baseline this binary predates must still load: %s", body)
 	}
+}
+
+// TestEnrich_FileLevelNodeGetsNoHash pins the defect mache-dd45a3 shipped.
+//
+// "File-level" has two shapes and only one was handled. god_file emits an
+// empty node_id; long_file emits the file's OWN `_ast` row, whose node_id
+// equals the source_id. The empty-node_id guard let long_file through, so its
+// baseline entries were keyed on whole-file merkle hashes — and a file hash
+// covers all of its content, so any edit revoked the grandfathering and the
+// gate failed on debt the author did not add.
+//
+// It surfaced the honest way: `task check` failing on a test file that had
+// only grown.
+//
+// The fixture is built by fixturedb rather than hand-written DDL, because the
+// shape of `_ast` decides which SQL ensureCanonicalViews generates — a
+// hand-typed CREATE TABLE is a hidden test parameter (mache-7555da).
+func TestEnrich_FileLevelNodeGetsNoHash(t *testing.T) {
+	_, f := fixturedb.New(t, fixturedb.Leyline).
+		ASTNode("a/big.go", "source_file", "a/big.go",
+			fixturedb.Span{EndByte: 4000, EndRow: 400}).
+		ASTNode("a/big.go/func_1", "function_declaration", "a/big.go",
+			fixturedb.Span{EndByte: 200, EndRow: 20}).
+		Build()
+
+	// Read the construct's address out of the fixture rather than hard-coding
+	// one: the assertion is that enrichment carries THIS node's hash, not that
+	// fixturedb happens to derive a particular value.
+	var want string
+	require.NoError(t, f.DB().QueryRow(
+		`SELECT lower(hex(node_hash)) FROM _ast WHERE node_id = ?`,
+		"a/big.go/func_1").Scan(&want))
+	require.NotEmpty(t, want, "fixture must give the construct a content address")
+
+	findings := []smellFinding{
+		{RuleID: "long_file", SourceID: "a/big.go", NodeID: "a/big.go"},            // node IS the file
+		{RuleID: "long_function", SourceID: "a/big.go", NodeID: "a/big.go/func_1"}, // a construct in it
+		{RuleID: "god_file", SourceID: "a/big.go"},                                 // no node at all
+	}
+	require.NoError(t, enrichNodeHashes(f, findings))
+
+	assert.Empty(t, findings[0].NodeHash,
+		"long_file is about the FILE — hashing it means any edit re-flags the file")
+	assert.Equal(t, want, findings[1].NodeHash,
+		"a construct inside the file still gets its own content address")
+	assert.Empty(t, findings[2].NodeHash, "god_file has no node to address")
 }

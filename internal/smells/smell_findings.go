@@ -151,9 +151,20 @@ var enrichLocChunk = 900
 // cyclomatic, …) already compute a span in SQL and are left untouched.
 // enrichNodeHashes fills in each finding's content address from `_ast`.
 //
-// Only CONSTRUCT-level findings get one. File-level rules (god_file,
-// long_file) emit an empty node_id, and they are deliberately left
-// path-keyed.
+// Only CONSTRUCT-level findings get one. File-level findings are
+// deliberately left path-keyed.
+//
+// "File-level" is TWO shapes, and mache-dd45a3 shipped having handled only
+// the first. god_file emits an empty node_id. long_file emits a node_id
+// that IS the file — `src.node_id` on the file's own `_ast` row, where the
+// node id and the source id are the same string. Keying on "no node_id"
+// therefore let long_file through, and its three baseline entries were
+// hash-keyed on whole-file hashes: any edit to a long file re-flagged it
+// as new debt it did not add. Found by this gate failing on a test file
+// that only grew.
+//
+// The correct test is whether the finding's node IS the file, whatever
+// route the rule took to say so.
 //
 // The tempting move is to key them on the file's own `_ast` row, which does
 // exist. Measured, that is a trap: a file's merkle hash covers its whole
@@ -171,11 +182,27 @@ var enrichLocChunk = 900
 // back to path keying for those findings too. That degradation is deliberate
 // and documented rather than an error: a standalone backend genuinely has no
 // content address to offer.
+// isFileLevel reports whether a finding is about a whole FILE rather than a
+// construct inside one, and so must stay keyed on its path.
+//
+// A file's merkle hash covers all of its content, so it changes on any edit.
+// Content-keying a file-level finding would revoke its grandfathering the
+// moment anyone touched the file — a gate failure on debt the author did not
+// add, which is the same defect the content keying exists to fix, pointed the
+// other way.
+//
+// Two shapes qualify: no node at all (god_file emits `” AS node_id`), and a
+// node that IS the file (long_file emits the file's own `_ast` row, whose
+// node_id equals the source_id).
+func isFileLevel(f smellFinding) bool {
+	return f.NodeID == "" || f.NodeID == f.SourceID
+}
+
 func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
 	ids := make([]string, 0, len(findings))
 	seen := make(map[string]bool, len(findings))
 	for _, f := range findings {
-		if f.NodeID == "" || seen[f.NodeID] {
+		if isFileLevel(f) || seen[f.NodeID] {
 			continue // file-level finding, or already queued
 		}
 		seen[f.NodeID] = true
@@ -230,7 +257,7 @@ func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
 	}
 
 	for i := range findings {
-		if findings[i].NodeID == "" {
+		if isFileLevel(findings[i]) {
 			continue
 		}
 		if h, ok := byNode[findings[i].NodeID]; ok {

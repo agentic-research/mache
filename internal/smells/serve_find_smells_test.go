@@ -23,6 +23,96 @@ import (
 //
 // We don't represent the full AST — only the binary_expression and
 // int_literal rows that the rule needs, plus their parent_id wiring.
+
+// runSmellRule calls the find_smells handler and returns its findings.
+//
+// Sixty-odd tests hand-rolled this call/unmarshal/collect sequence. That was
+// survivable until a threshold change (mache-ce0bcd) edited several of them at
+// once, at which point five became structurally identical and duplicate_code
+// reported them — correctly. Extracted rather than baselined.
+func runSmellRule(t *testing.T, tg *testutil.SmellTestGraph, args map[string]any) []smellFinding {
+	t.Helper()
+	res, err := MakeFindSmellsHandler(tg)(context.Background(), testutil.MakeRequest(args))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	var resp struct {
+		Total    int            `json:"total"`
+		Findings []smellFinding `json:"findings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
+	return resp.Findings
+}
+
+// smellNodeIDs projects findings onto their node ids, in result order.
+func smellNodeIDs(findings []smellFinding) []string {
+	ids := make([]string, len(findings))
+	for i, f := range findings {
+		ids[i] = f.NodeID
+	}
+	return ids
+}
+
+// seedFanOutCaller inserts a construct with n distinct callees, in mache's
+// production write shape: a parent ctor node whose name the skip-list checks,
+// and a `source` child whose id is what node_refs points at.
+func seedFanOutCaller(t *testing.T, tg *testutil.SmellTestGraph, ctor, sourceFile string, n int) {
+	t.Helper()
+	_, err := tg.DB.Exec(
+		`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		   (?, 'functions', ?, 1, 0, ?, ''), (?, ?, 'source', 0, 0, ?, '')`,
+		"functions/"+ctor, ctor, sourceFile,
+		"functions/"+ctor+"/source", "functions/"+ctor, sourceFile)
+	require.NoError(t, err)
+	for i := range n {
+		_, err := tg.DB.Exec(`INSERT INTO node_refs VALUES (?, ?)`,
+			fmt.Sprintf("%s_callee%02d", ctor, i), "functions/"+ctor+"/source")
+		require.NoError(t, err)
+	}
+}
+
+// TestFindSmells_FanOutSkewSkipsNonProductionCallers replaces three tests that
+// differed only in WHICH caller had to be skipped. They were structural clones
+// — duplicate_code said so once an unrelated edit made them identical, and it
+// was right — so they are one table now.
+//
+// Each case gives the excluded caller and a production Dispatcher the same
+// fan-out, so a pass means the exclusion fired and not that the threshold did.
+func TestFindSmells_FanOutSkewSkipsNonProductionCallers(t *testing.T) {
+	for _, tc := range []struct{ name, ctor, sourceFile, why string }{
+		{
+			"Test-prefixed constructor", "TestRunner", "runner_test.go",
+			"skipped on the parent ctor.name LIKE 'Test%'",
+		},
+		{
+			"generated file", "CapnpStruct", "foo.capnp.go",
+			"skipped because *.capnp.go is generated, not written",
+		},
+		{
+			"test file", "setup", "foo_test.go",
+			"skipped because *_test.go is test code",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tg := seedSmellAST(t)
+			defer func() { _ = tg.DB.Close() }()
+			_, err := tg.DB.Exec(`
+				CREATE TABLE IF NOT EXISTS node_refs (
+					token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+				INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record)
+				VALUES ('functions', '', 'functions', 1, 0, '', '');`)
+			require.NoError(t, err)
+
+			seedFanOutCaller(t, tg, tc.ctor, tc.sourceFile, 12)
+			seedFanOutCaller(t, tg, "Dispatcher", "dispatcher.go", 12)
+
+			gotIDs := smellNodeIDs(runSmellRule(t, tg,
+				map[string]any{"rule": "fan_out_skew", "min_metric": float64(10)}))
+			assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs, tc.why)
+		})
+	}
+}
+
 func seedSmellAST(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "db")
@@ -1694,10 +1784,12 @@ func TestFindSmells_UntestedFunction(t *testing.T) {
 
 // TestFindSmells_GodFile seeds three source files: one with 15
 // definitions (the god file), six with 1 definition each (normal),
-// and one with 8 definitions (busy but under the floor). Project
-// mean is (15 + 6×1 + 8) / 8 ≈ 3.6, so 3× mean ≈ 10.9. Only the
-// god file's 15 defs clears both the 10-def floor AND the 3×-mean
-// threshold.
+// and one with 8 definitions (busy, under the threshold). Only the
+// god file is reported.
+//
+// The normal files no longer affect the verdict at all — they were
+// there to hold the project mean down when the threshold was
+// corpus-relative (mache-ce0bcd). They stay as realistic filler.
 func TestFindSmells_GodFile(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.DB.Close() }()
@@ -1729,7 +1821,7 @@ func TestFindSmells_GodFile(t *testing.T) {
 		  ('J','pkg/god/J'),('K','pkg/god/K'),('L','pkg/god/L'),
 		  ('M','pkg/god/M'),('N','pkg/god/N'),('O','pkg/god/O');
 
-		-- Borderline file: 8 defs — over 3×mean (~10.9) gate? No, 8 < 10 floor.
+		-- Borderline file: 8 defs — under the threshold, so silent.
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
 		  ('pkg/big/B1','pkg/big','B1',1,0,'pkg/big/big.go',''),
 		  ('pkg/big/B2','pkg/big','B2',1,0,'pkg/big/big.go',''),
@@ -1744,7 +1836,7 @@ func TestFindSmells_GodFile(t *testing.T) {
 		  ('B4','pkg/big/B4'),('B5','pkg/big/B5'),('B6','pkg/big/B6'),
 		  ('B7','pkg/big/B7'),('B8','pkg/big/B8');
 
-		-- Six normal files, 1 def each — dilutes the project mean.
+		-- Six normal files, 1 def each — realistic filler.
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
 		  ('pkg/ok/N1','pkg/ok','N1',1,0,'pkg/ok/n1.go',''),
 		  ('pkg/ok/N2','pkg/ok','N2',1,0,'pkg/ok/n2.go',''),
@@ -1761,6 +1853,10 @@ func TestFindSmells_GodFile(t *testing.T) {
 	handler := MakeFindSmellsHandler(tg)
 	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "god_file",
+		// Explicit, small: these fixtures exercise the rule's FILTERS, not
+		// the shipped threshold. Pinning them to the production default is
+		// what broke all seven at once when it changed (mache-ce0bcd).
+		"min_metric": float64(10),
 	}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
@@ -1770,7 +1866,7 @@ func TestFindSmells_GodFile(t *testing.T) {
 		Findings []smellFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-	require.Equal(t, 1, resp.Total, "only sprawl.go clears the 10-def floor AND 3×mean threshold")
+	require.Equal(t, 1, resp.Total, "only sprawl.go clears the definition threshold")
 	assert.Equal(t, "pkg/god/sprawl.go", resp.Findings[0].SourceID)
 	assert.Equal(t, int64(15), resp.Findings[0].Metric, "def count is the metric")
 }
@@ -1787,9 +1883,8 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 
 	_, err := tg.DB.Exec(`
 		-- 11 distinct defs all attributed (via leaf source_file) to
-		-- the same file. Project mean across the 5 normal files +
-		-- this one is (11 + 5) / 6 ≈ 2.7; 3× ≈ 8 — the god file
-		-- clears the 10-def floor and the 3× threshold.
+		-- the same file: over the threshold this test passes, which
+		-- is the point — the attribution works through the leaf.
 		INSERT INTO node_defs VALUES
 		  ('A','functions/A'),('B','functions/B'),('C','functions/C'),
 		  ('D','functions/D'),('E','functions/E'),('F','functions/F'),
@@ -1819,7 +1914,7 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 		  ('functions/K','functions','K',1,0,'',''),
 		  ('functions/K/source','functions/K','source',0,0,'pkg/god/sprawl.go','');
 
-		-- Five normal files (1 def each) to dilute the project mean.
+		-- Five normal files (1 def each) — realistic filler.
 		INSERT INTO node_defs VALUES
 		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3'),
 		  ('N4','functions/N4'),('N5','functions/N5');
@@ -1838,7 +1933,7 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
+	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file", "min_metric": float64(10)}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -1852,177 +1947,43 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 	assert.Equal(t, int64(11), resp.Findings[0].Metric)
 }
 
-// TestFindSmells_GodFileSkipsGeneratedFiles asserts that *.capnp.go,
-// *.pb.go, *_generated.go, and *.gen.go aren't flagged even with
-// hundreds of definitions — generators produce wide method sets by
-// design, not architectural sprawl.
-func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
+func TestFindSmells_GodFileExcludesTestAndGeneratedFiles(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.DB.Close() }()
 
-	_, err := tg.DB.Exec(`
-		-- 12 defs in a generated file — would normally trigger
-		-- god_file, but must be skipped by the *.capnp.go suffix.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/methods/A.x','pkg/methods','A.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/A.y','pkg/methods','A.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/B.x','pkg/methods','B.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/B.y','pkg/methods','B.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/C.x','pkg/methods','C.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/C.y','pkg/methods','C.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/D.x','pkg/methods','D.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/D.y','pkg/methods','D.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/E.x','pkg/methods','E.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/E.y','pkg/methods','E.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/F.x','pkg/methods','F.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/F.y','pkg/methods','F.y',1,0,'a.capnp.go','');
-		INSERT INTO node_defs VALUES
-		  ('A.x','pkg/methods/A.x'),('A.y','pkg/methods/A.y'),
-		  ('B.x','pkg/methods/B.x'),('B.y','pkg/methods/B.y'),
-		  ('C.x','pkg/methods/C.x'),('C.y','pkg/methods/C.y'),
-		  ('D.x','pkg/methods/D.x'),('D.y','pkg/methods/D.y'),
-		  ('E.x','pkg/methods/E.x'),('E.y','pkg/methods/E.y'),
-		  ('F.x','pkg/methods/F.x'),('F.y','pkg/methods/F.y');
-
-		-- A few normal files to populate the project mean.
-		INSERT INTO node_defs VALUES
-		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/N1','functions','N1',1,0,'a.go',''),
-		  ('functions/N2','functions','N2',1,0,'b.go',''),
-		  ('functions/N3','functions','N3',1,0,'c.go','');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
+	seed := func(file, pkg string, n int) {
+		t.Helper()
+		for i := range n {
+			id := fmt.Sprintf("pkg/%s/F%d", pkg, i)
+			tok := fmt.Sprintf("%s_F%d", pkg, i)
+			_, err := tg.DB.Exec(
+				`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record)
+				 VALUES (?, ?, ?, 1, 0, ?, '')`, id, "pkg/"+pkg, tok, file)
+			require.NoError(t, err)
+			_, err = tg.DB.Exec(`INSERT INTO node_defs VALUES (?, ?)`, tok, id)
+			require.NoError(t, err)
+		}
 	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-	assert.Empty(t, resp.Findings, "generated capnp.go file must be skipped despite high def count")
-}
 
-// TestFindSmells_GodFileSkipsTestFiles asserts that *_test.go files
-// aren't flagged even with hundreds of test functions — test files
-// accumulate TestXxx + setupXxx helpers without representing
-// architectural sprawl.
-//
-// Surfaced by dogfood: cmd/serve_test.go had 340 defs and topped
-// god_file. After this fix that finding is filtered.
-func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
+	// Both excluded files are well over the shipped threshold, so silence here
+	// is a real claim about the exclusions rather than about their size.
+	seed("pkg/helper_test.go", "tests", 40)
+	seed("pkg/wire.capnp.go", "generated", 40)
+	seed("pkg/core.go", "core", 10) // production, genuinely under the threshold
 
-	_, err := tg.DB.Exec(`
-		-- 12 defs in a *_test.go file — would normally trigger
-		-- god_file, but must be skipped by the *_test.go suffix.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/functions/TestA','pkg/functions','TestA',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestB','pkg/functions','TestB',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestC','pkg/functions','TestC',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestD','pkg/functions','TestD',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestE','pkg/functions','TestE',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestF','pkg/functions','TestF',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestG','pkg/functions','TestG',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestH','pkg/functions','TestH',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestI','pkg/functions','TestI',1,0,'foo_test.go',''),
-		  ('pkg/functions/setupX','pkg/functions','setupX',1,0,'foo_test.go',''),
-		  ('pkg/functions/setupY','pkg/functions','setupY',1,0,'foo_test.go',''),
-		  ('pkg/functions/setupZ','pkg/functions','setupZ',1,0,'foo_test.go','');
-		INSERT INTO node_defs VALUES
-		  ('TestA','pkg/functions/TestA'),('TestB','pkg/functions/TestB'),
-		  ('TestC','pkg/functions/TestC'),('TestD','pkg/functions/TestD'),
-		  ('TestE','pkg/functions/TestE'),('TestF','pkg/functions/TestF'),
-		  ('TestG','pkg/functions/TestG'),('TestH','pkg/functions/TestH'),
-		  ('TestI','pkg/functions/TestI'),
-		  ('setupX','pkg/functions/setupX'),('setupY','pkg/functions/setupY'),
-		  ('setupZ','pkg/functions/setupZ');
-
-		-- A few normal files to populate the project mean.
-		INSERT INTO node_defs VALUES
-		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/N1','functions','N1',1,0,'a.go',''),
-		  ('functions/N2','functions','N2',1,0,'b.go',''),
-		  ('functions/N3','functions','N3',1,0,'c.go','');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
+	res, err := MakeFindSmellsHandler(tg)(context.Background(),
+		testutil.MakeRequest(map[string]any{"rule": "god_file"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
 	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-	assert.Empty(t, resp.Findings, "*_test.go file must be skipped despite high def count")
-}
-
-// TestFindSmells_GodFileExcludedFilesDoNotDiluteMean pins the population
-// invariant behind mache-ce0bcd: files excluded from god_file findings must
-// also be excluded from the project mean. With the production files alone,
-// the mean is (10+1+1)/3 = 4 and core.go is not an outlier. If either the
-// one-def helper_test.go or generated wire.capnp.go is allowed to dilute the
-// mean, it becomes (10+1+1+1)/4 = 3.25 and core.go spuriously clears the 3x
-// threshold.
-func TestFindSmells_GodFileExcludedFilesDoNotDiluteMean(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		WITH RECURSIVE seq(n) AS (
-			SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10
-		)
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record)
-		SELECT printf('pkg/core/F%d', n), 'pkg/core', printf('F%d', n),
-		       1, 0, 'pkg/core.go', ''
-		FROM seq;
-		WITH RECURSIVE seq(n) AS (
-			SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10
-		)
-		INSERT INTO node_defs
-		SELECT printf('F%d', n), printf('pkg/core/F%d', n) FROM seq;
-
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/a/A', 'pkg/a', 'A', 1, 0, 'pkg/a.go', ''),
-		  ('pkg/b/B', 'pkg/b', 'B', 1, 0, 'pkg/b.go', ''),
-		  ('pkg/tests/helper', 'pkg/tests', 'helper', 1, 0, 'pkg/helper_test.go', ''),
-		  ('pkg/generated/wire', 'pkg/generated', 'wire', 1, 0, 'pkg/wire.capnp.go', '');
-		INSERT INTO node_defs VALUES
-		  ('A', 'pkg/a/A'),
-		  ('B', 'pkg/b/B'),
-		  ('helper', 'pkg/tests/helper'),
-		  ('wire', 'pkg/generated/wire');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
 		Findings []smellFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
 	assert.Empty(t, resp.Findings,
-		"excluded test/generated definitions must not change production god_file findings")
+		"test and generated files must never be reported, however large they are")
 }
 
-// TestFindSmells_FanOutSkew seeds a god-function and several normal
-// callers and asserts only the god-function is flagged. Mean fan-out
-// is (12 + 6×1) / 7 ≈ 2.57; 3×mean ≈ 7.7, well below the god's 12.
-// The 5-call floor would also gate out smaller outliers if they crept
-// past the mean check.
 func TestFindSmells_FanOutSkew(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.DB.Close() }()
@@ -2039,12 +2000,11 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 		  ('G','pkg/god/Dispatcher'),('H','pkg/god/Dispatcher'),('I','pkg/god/Dispatcher'),
 		  ('J','pkg/god/Dispatcher'),('K','pkg/god/Dispatcher'),('L','pkg/god/Dispatcher');
 
-		-- Six normal callers, 1 callee each — dilutes the project mean
-		-- so the god's fan-out exceeds 3× mean. The mean is now scoped
-		-- to real constructs (mache-50e939 — a markdown code-span ref
-		-- has no nodes row and must not count toward mu), so these
-		-- diluting callers need nodes rows too, matching every real
-		-- construct in production data.
+		-- Six normal callers, 1 callee each. They held the project mean
+		-- down when the threshold was corpus-relative (mache-ce0bcd);
+		-- they are realistic filler now. They keep their nodes rows
+		-- because the rule still JOINs nodes, which is what keeps a
+		-- markdown code-span ref out of the results (mache-50e939).
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
 		  ('pkg/ok/N1', 'pkg/ok', 'N1', 1, 0, 'n1.go', ''),
 		  ('pkg/ok/N2', 'pkg/ok', 'N2', 1, 0, 'n2.go', ''),
@@ -2070,6 +2030,10 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 	handler := MakeFindSmellsHandler(tg)
 	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"rule": "fan_out_skew",
+		// Explicit, small: these fixtures exercise the rule's FILTERS, not
+		// the shipped threshold. Pinning them to the production default is
+		// what broke all seven at once when it changed (mache-ce0bcd).
+		"min_metric": float64(10),
 	}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
@@ -2079,249 +2043,12 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 		Findings []smellFinding `json:"findings"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-	require.Equal(t, 1, resp.Total, "only Dispatcher exceeds 3×mean and the 5-call floor")
+	require.Equal(t, 1, resp.Total, "only Dispatcher clears the fan-out threshold")
 	assert.Equal(t, "pkg/god/Dispatcher", resp.Findings[0].NodeID)
 	assert.Equal(t, "dispatcher.go", resp.Findings[0].SourceID)
 	assert.Equal(t, int64(12), resp.Findings[0].Metric, "fan-out count is reported as metric")
 }
 
-// TestFindSmells_FanOutSkewSkipsTestPrefixes asserts that a Test-
-// prefixed construct with high fan-out is NOT flagged. Mirrors how
-// mache writes data: caller_id is a source-file node whose parent
-// is the construct directory, and ctor.name carries the function
-// name. The new skip-list joins through that parent.
-//
-// Surfaced by dogfooding: mache's own test runners
-// (TestArena_AllTools etc) topped fan_out_skew with 48 callees —
-// tests are *expected* to call many things; no signal there.
-func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		-- Construct hierarchy: parent dir → source-file node.
-		-- caller_id in node_refs is the source-file id (matches mache's
-		-- production write shape), and the parent dir's name is what
-		-- the skip-list checks.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                        '',          'functions',          1, 0, '',                        ''),
-		  ('functions/TestRunner',             'functions', 'TestRunner',         1, 0, 'runner_test.go',          ''),
-		  ('functions/TestRunner/source',      'functions/TestRunner', 'source',  0, 0, 'runner_test.go',          ''),
-		  ('functions/Dispatcher',             'functions', 'Dispatcher',         1, 0, 'dispatcher.go',           ''),
-		  ('functions/Dispatcher/source',      'functions/Dispatcher', 'source',  0, 0, 'dispatcher.go',           '');
-
-		-- TestRunner has 12 distinct callees — would normally trip
-		-- fan_out_skew. The new skip-list excludes it on the 'Test'
-		-- prefix of the parent ctor.name.
-		INSERT INTO node_refs VALUES
-		  ('A','functions/TestRunner/source'),('B','functions/TestRunner/source'),('C','functions/TestRunner/source'),
-		  ('D','functions/TestRunner/source'),('E','functions/TestRunner/source'),('F','functions/TestRunner/source'),
-		  ('G','functions/TestRunner/source'),('H','functions/TestRunner/source'),('I','functions/TestRunner/source'),
-		  ('J','functions/TestRunner/source'),('K','functions/TestRunner/source'),('L','functions/TestRunner/source');
-
-		-- Dispatcher also has 12 distinct callees — should be flagged.
-		-- (Production code, not test.)
-		INSERT INTO node_refs VALUES
-		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
-		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
-		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
-		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
-
-		-- Six tiny callers to dilute the project mean below 3× threshold.
-		-- Real nodes rows (mache-50e939): the mean is scoped to actual
-		-- constructs, and every real construct has a nodes row.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
-		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
-		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
-		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
-		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
-		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
-		INSERT INTO node_refs VALUES
-		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
-		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-
-	gotIDs := make([]string, len(resp.Findings))
-	for i, f := range resp.Findings {
-		gotIDs[i] = f.NodeID
-	}
-	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
-		"Dispatcher (production code) is flagged; TestRunner (test) is skipped via parent ctor.name LIKE 'Test%'")
-}
-
-// TestFindSmells_FanOutSkewSkipsGeneratedFiles asserts that a
-// generated-code dispatcher (capnp / pb / *_generated.go / *.gen.go)
-// with high fan-out is NOT flagged. Generated dispatchers naturally
-// touch many neighbors — flagging them buries real findings under
-// noise (capnp.go entries dominated mache's pre-filter top-N).
-func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                       '',                       'functions', 1, 0, '',                ''),
-		  ('functions/CapnpStruct',           'functions',              'CapnpStruct',1, 0, '',                ''),
-		  ('functions/CapnpStruct/source',    'functions/CapnpStruct',  'source',    0, 0, 'foo.capnp.go',    ''),
-		  ('functions/Dispatcher',            'functions',              'Dispatcher',1, 0, '',                ''),
-		  ('functions/Dispatcher/source',     'functions/Dispatcher',   'source',    0, 0, 'dispatcher.go',   '');
-
-		-- Both have 12 distinct callees. CapnpStruct is in *.capnp.go
-		-- so must be skipped; Dispatcher (production) must be flagged.
-		INSERT INTO node_refs VALUES
-		  ('A','functions/CapnpStruct/source'),('B','functions/CapnpStruct/source'),('C','functions/CapnpStruct/source'),
-		  ('D','functions/CapnpStruct/source'),('E','functions/CapnpStruct/source'),('F','functions/CapnpStruct/source'),
-		  ('G','functions/CapnpStruct/source'),('H','functions/CapnpStruct/source'),('I','functions/CapnpStruct/source'),
-		  ('J','functions/CapnpStruct/source'),('K','functions/CapnpStruct/source'),('L','functions/CapnpStruct/source');
-
-		INSERT INTO node_refs VALUES
-		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
-		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
-		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
-		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
-
-		-- Tiny callers to bring project mean down so 12 trips the
-		-- threshold. Real nodes rows (mache-50e939): the mean is scoped
-		-- to actual constructs, and every real construct has a nodes row.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
-		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
-		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
-		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
-		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
-		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
-		INSERT INTO node_refs VALUES
-		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
-		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-
-	gotIDs := make([]string, len(resp.Findings))
-	for i, f := range resp.Findings {
-		gotIDs[i] = f.NodeID
-	}
-	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
-		"Dispatcher (production) is flagged; CapnpStruct (generated) is skipped via source_file suffix")
-}
-
-// TestFindSmells_FanOutSkewSkipsTestFiles asserts that test helpers
-// in *_test.go files (e.g., setup, RunSuite, runParityTest) aren't
-// flagged. The Test*/Benchmark*/Example*/Fuzz* per-construct filter
-// catches actual test functions, but test helpers with non-test
-// names slip through — match god_file's per-file extension filter.
-//
-// Surfaced by dogfood: 4 of 50 fan_out_skew findings were test
-// helpers (RunGraphSuiteWithOpts, runParityTest, setup,
-// realWriteBack). After this fix: 46.
-func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                  '',                  'functions', 1, 0, '',              ''),
-		  ('functions/setup',            'functions',         'setup',     1, 0, '',              ''),
-		  ('functions/setup/source',     'functions/setup',   'source',    0, 0, 'foo_test.go',   ''),
-		  ('functions/Dispatcher',       'functions',         'Dispatcher',1, 0, '',              ''),
-		  ('functions/Dispatcher/source','functions/Dispatcher','source', 0, 0, 'dispatcher.go', '');
-
-		-- Both have 12 distinct callees. setup is in *_test.go (test
-		-- helper, non-test name) so must be skipped; Dispatcher is
-		-- production code and must be flagged.
-		INSERT INTO node_refs VALUES
-		  ('A','functions/setup/source'),('B','functions/setup/source'),('C','functions/setup/source'),
-		  ('D','functions/setup/source'),('E','functions/setup/source'),('F','functions/setup/source'),
-		  ('G','functions/setup/source'),('H','functions/setup/source'),('I','functions/setup/source'),
-		  ('J','functions/setup/source'),('K','functions/setup/source'),('L','functions/setup/source');
-
-		INSERT INTO node_refs VALUES
-		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
-		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
-		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
-		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
-
-		-- Tiny callers to bring project mean down so 12 trips the
-		-- threshold. Real nodes rows (mache-50e939): the mean is scoped
-		-- to actual constructs, and every real construct has a nodes row.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
-		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
-		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
-		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
-		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
-		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
-		INSERT INTO node_refs VALUES
-		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
-		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-
-	gotIDs := make([]string, len(resp.Findings))
-	for i, f := range resp.Findings {
-		gotIDs[i] = f.NodeID
-	}
-	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
-		"Dispatcher (production) is flagged; setup (test helper in *_test.go) is skipped")
-}
-
-// TestFindSmells_FanOutSkewQualifierAware asserts that the metric
-// counts distinct qualifiers (receiver/package origins) rather than
-// distinct tokens. Replaces the naming-pattern exemption from #355
-// with a structural signal: a function calling N methods on ONE
-// receiver scores 1 (one qualifier), while a function calling N
-// distinct things across N packages still scores N.
-//
-// Closes mache-6c0d07 — uses LLO BindingRecord.qualifier (T8.7) via
-// the _capnp_binding_refs TEMP table populated by LoadCapnpBindings
-// from a sibling .bindings.capnp event log written by the test.
-//
-// Surfaced by mache-190508 step 2 (PR #354): bindingFromRecord
-// projects the BindingRecord capnp struct's 7 fields + nested
-// Range's 6 fields onto Go-native types. Every method called shares
-// a single receiver (`rec` / `rng` / `start` / `end`); under the new
-// metric all 13 calls collapse to ~3-4 distinct qualifiers, well
-// below the threshold.
 func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "db")
@@ -2356,25 +2083,6 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	// Tiny callers via node_refs so the project mean stays low.
-	// These rows have empty qualifier (mention arm of v_refs), so
-	// they exercise the COALESCE fallback to token. Real nodes rows
-	// (mache-50e939): the mean is scoped to actual constructs, and
-	// every real construct has a nodes row.
-	for i := 1; i <= 15; i++ {
-		callerID := fmt.Sprintf("functions/n%02d", i)
-		_, err := db.Exec(
-			`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES (?, 'functions', ?, 1, 0, ?, '')`,
-			callerID, fmt.Sprintf("n%02d", i), fmt.Sprintf("n%02d.go", i),
-		)
-		require.NoError(t, err)
-		_, err = db.Exec(
-			`INSERT INTO node_refs VALUES (?, ?)`,
-			fmt.Sprintf("z%02d", i), callerID,
-		)
-		require.NoError(t, err)
-	}
-
 	// Write the sibling .bindings.capnp with 24 records: 12 projection-
 	// shaped (qualifier='rec'), 12 orchestrator-shaped (12 distinct
 	// qualifiers). LoadCapnpBindings reads this when RunSmellRule
@@ -2407,41 +2115,29 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	})
 
 	tg := &testutil.SmellTestGraph{DB: db, Path: dbPath}
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-
-	gotIDs := make([]string, len(resp.Findings))
-	for i, f := range resp.Findings {
-		gotIDs[i] = f.NodeID
-	}
+	gotIDs := smellNodeIDs(runSmellRule(t, tg, map[string]any{"rule": "fan_out_skew", "min_metric": float64(10)}))
 	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
 		"Only Dispatcher (12 distinct qualifiers) is flagged; bindingFromRecord (1 qualifier 'rec') is structurally exempt by the qualifier-aware metric")
 }
 
-// TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean pins mache-50e939:
-// markdown backtick spans (ley-line-open-ea1e42) land as node_refs rows
-// with container_node_id = NULL and no corresponding nodes row — a doc
-// citation has no enclosing "function". referrer_node_id then falls back
-// to the span's own unique node_id, so each becomes a singleton n=1
-// referrer group.
+// TestFindSmells_FanOutSkewIgnoresNonConstructRefs pins that a referrer with
+// no `nodes` row is never reported, however wide its fan-out.
 //
-// Left unscoped, thousands of those drag the corpus mean down (measured
-// on mache's own repo: 9.79 -> 5.08), which lowers the 3x threshold for
-// every real function and floods the gate with findings that reflect a
-// diluted mean, not an actual complexity change.
+// LLO emits a markdown code-span citation (ley-line-open-ea1e42) as a node_refs
+// row with an empty container_node_id and no nodes row — a doc citation has no
+// enclosing "function" — so referrer_node_id falls back to the span's own id.
 //
-// Fixture: 6 real callers with n=10 each (mean=10, threshold=30) plus 50
-// markdown-shaped singleton refs. Normal (n=10) must stay unflagged —
-// under the bug, the diluted mean (~1.96) drops the threshold (~5.89)
-// below Normal's fan-out and wrongly flags it.
-func TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean(t *testing.T) {
+// This test used to assert something else: that thousands of such singletons
+// could not drag the corpus mean down (measured on mache's own repo: 9.79 ->
+// 5.08) and wrongly flag real functions. mache-ce0bcd deleted the mean, and
+// with it that failure mode — but it also made the old fixture vacuous, since
+// its subject had a fan-out of 10 against an absolute threshold of 35 and could
+// not have been reported either way.
+//
+// The invariant that survives is the JOIN: a span is not a construct, so it
+// must not be reported even when it is the widest referrer in the projection.
+// The fixture therefore gives the span MORE than enough fan-out to qualify.
+func TestFindSmells_FanOutSkewIgnoresNonConstructRefs(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "mdpollution.db")
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
@@ -2457,45 +2153,33 @@ func TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean(t *testing.T) {
 		CREATE TABLE node_refs (token TEXT, node_id TEXT, container_node_id TEXT, qualifier TEXT);
 
 		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                '',          '',      1, 0, '',           ''),
-		  ('functions/Normal',         'functions', 'Normal',1, 0, 'normal.go',  ''),
-		  ('functions/Normal/source',  'functions/Normal', 'source', 0, 0, 'normal.go', '');
+		  ('functions',               '',          '',      1, 0, '',          ''),
+		  ('functions/Real',          'functions', 'Real',  1, 0, 'real.go',   ''),
+		  ('functions/Real/source',   'functions/Real', 'source', 0, 0, 'real.go', '');
 	`)
 	require.NoError(t, err)
 
-	// Normal: 10 distinct callees. Six other real callers, 10 each — real
-	// mean is 10, so Normal (n=10) never crosses 3×mean and must not fire.
-	for i := range 6 {
-		callerID := fmt.Sprintf("functions/Real%02d/source", i)
-		_, err := db.Exec(
-			`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES (?, 'functions', ?, 0, 0, ?, '')`,
-			callerID, fmt.Sprintf("Real%02d", i), fmt.Sprintf("real%02d.go", i),
-		)
-		require.NoError(t, err)
-		for j := range 10 {
-			_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, ?, '')`,
-				fmt.Sprintf("callee%02d", j), callerID, callerID)
-			require.NoError(t, err)
-		}
-	}
-	for j := range 10 {
+	// A real construct with a genuinely wide fan-out: the positive control,
+	// so an empty result cannot pass this test by accident.
+	for j := range 40 {
 		_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, ?, '')`,
-			fmt.Sprintf("callee%02d", j), "functions/Normal/source", "functions/Normal/source")
+			fmt.Sprintf("callee%02d", j), "functions/Real/source", "functions/Real/source")
 		require.NoError(t, err)
 	}
 
-	// 50 markdown-shaped refs: unique node_id per span, empty
-	// container_node_id, no nodes row — exactly LLO's ea1e42 shape.
-	for i := range 50 {
-		spanID := fmt.Sprintf("doc.md/section/paragraph_%d/inline#inj0/code_span_0", i)
+	// One markdown span citing 60 distinct symbols — LLO's ea1e42 shape:
+	// unique node_id, empty container_node_id, NO nodes row. Wider than the
+	// real caller, so only the missing nodes row can keep it out.
+	const spanID = "doc.md/section/paragraph_0/inline#inj0/code_span_0"
+	for i := range 60 {
 		_, err := db.Exec(`INSERT INTO node_refs (token, node_id, container_node_id, qualifier) VALUES (?, ?, '', '')`,
 			fmt.Sprintf("Symbol%d", i), spanID)
 		require.NoError(t, err)
 	}
 
 	tg := &testutil.SmellTestGraph{DB: db, Path: dbPath}
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
+	res, err := MakeFindSmellsHandler(tg)(context.Background(),
+		testutil.MakeRequest(map[string]any{"rule": "fan_out_skew"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
@@ -2508,17 +2192,11 @@ func TestFindSmells_FanOutSkewIgnoresMarkdownRefsInMean(t *testing.T) {
 	for i, f := range resp.Findings {
 		gotIDs[i] = f.NodeID
 	}
-	assert.Empty(t, gotIDs,
-		"50 markdown singleton refs must not dilute the mean and wrongly flag Normal (n=10, real mean=10, threshold=30)")
+	assert.Equal(t, []string{"functions/Real/source"}, gotIDs,
+		"the real construct must be reported and the wider markdown span must not — "+
+			"a code span is not a thing anyone can refactor")
 }
 
-// TestFindSmells_UntestedFunctionAcceptsTestCallCoverage asserts
-// that a function called from inside any Test*/Benchmark*/Example*/
-// Fuzz* construct's source is treated as covered, even without a
-// same-name TestFoo counterpart. ReadArenaHeader is called from
-// TestArenaFlusher_Coalesce / TestArenaFlusher_FlipBuffer /
-// TestCreateArena — that's coverage, even though there's no
-// TestReadArenaHeader.
 func TestFindSmells_UntestedFunctionAcceptsTestCallCoverage(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.DB.Close() }()
@@ -3943,4 +3621,89 @@ func TestFindSmells_DeadCode_CorrectnessParity_FixtureUnchanged(t *testing.T) {
 			"is a behavioral regression smuggled into a perf change.")
 	assert.Equal(t, 1, resp.Total,
 		"mache-68980e parity contract: Total must equal len(findings) AND match the pre-rewrite value (1).")
+}
+
+// TestFindSmells_ThresholdIsCorpusInvariant is the regression guard for
+// mache-ce0bcd: a file's verdict must depend on that file alone.
+//
+// god_file used to fire at `n >= 10 AND n > 3 * project_mean`, which made every
+// verdict a function of every OTHER file. The fixture below is sized to expose
+// exactly that. Six files — one with 30 definitions, one with 12, four with 1 —
+// give a mean of 46/6 ≈ 7.67 and a bar of ≈ 23.0, so busy.go (12) is SILENT.
+// Add twenty unrelated one-definition files and the mean falls to 66/26 ≈ 2.54,
+// the bar falls to ≈ 7.6, and busy.go starts failing the gate on a change that
+// did not touch it.
+//
+// min_metric has to sit at or below busy.go's own count for this to prove
+// anything: the rule's threshold is applied in SQL, min_metric filters the rows
+// afterwards in Go, so a larger min_metric hides the flip instead of catching
+// it. The first draft of this test used 20 and passed against the OLD rule —
+// vacuous, and only visible by restoring the relative bar and re-running.
+//
+// That is not hypothetical: measured on mache's own corpus, three files sat
+// 0.10 definitions under the bar, and two new five-definition files anywhere in
+// the repo flipped all three on. Deleting a god file, or splitting one into
+// five — the canonical fix — did the same, so the rule punished precisely the
+// behaviour it exists to encourage.
+//
+// With an absolute threshold the second run must be byte-identical to the first.
+func TestFindSmells_ThresholdIsCorpusInvariant(t *testing.T) {
+	tg := seedSmellAST(t)
+	defer func() { _ = tg.DB.Close() }()
+
+	_, err := tg.DB.Exec(`CREATE TABLE IF NOT EXISTS node_defs (
+		token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;`)
+	require.NoError(t, err)
+
+	// seed inserts n definitions attributed to one file.
+	seed := func(file string, n int) {
+		t.Helper()
+		for i := range n {
+			id := fmt.Sprintf("pkg/%s/D%d", file, i)
+			tok := fmt.Sprintf("%s_D%d", file, i)
+			_, err := tg.DB.Exec(
+				`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record)
+				 VALUES (?, 'pkg', ?, 1, 0, ?, '');
+				 `, id, tok, file+".go")
+			require.NoError(t, err)
+			_, err = tg.DB.Exec(`INSERT INTO node_defs VALUES (?, ?)`, tok, id)
+			require.NoError(t, err)
+		}
+	}
+
+	seed("sprawl", 30) // the god file
+	seed("busy", 12)   // the file whose verdict the old rule made unstable
+	for i := range 4 {
+		seed(fmt.Sprintf("normal%d", i), 1)
+	}
+
+	run := func() []smellFinding {
+		t.Helper()
+		res, err := MakeFindSmellsHandler(tg)(context.Background(), testutil.MakeRequest(
+			map[string]any{"rule": "god_file", "min_metric": float64(10)}))
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+		var resp struct {
+			Findings []smellFinding `json:"findings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
+		return resp.Findings
+	}
+
+	before := run()
+	require.Len(t, before, 2, "both files carry more definitions than the threshold")
+	assert.Equal(t, []string{"sprawl.go", "busy.go"},
+		[]string{before[0].SourceID, before[1].SourceID})
+
+	// Twenty new well-factored files. Under the old rule this halved the mean
+	// and busy.go went from silent to reported; the change touches nothing
+	// about busy.go, and its author would have no way to act on the failure.
+	for i := range 20 {
+		seed(fmt.Sprintf("newpkg%d", i), 1)
+	}
+
+	after := run()
+	assert.Equal(t, before, after,
+		"adding unrelated files changed an untouched file's verdict — the corpus-relative "+
+			"threshold is back, and with it a gate failure no PR author can act on")
 }
