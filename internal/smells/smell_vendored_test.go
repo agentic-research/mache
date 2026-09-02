@@ -110,17 +110,44 @@ func TestVendoredExclusionIsWiredIntoEveryRuleThatNeedsIt(t *testing.T) {
 				"puts third-party code nobody owns back into the baseline", id)
 	}
 
-	// god_file and fan_out_skew are the mean-relative pair: they must exclude
-	// BEFORE computing mu, or a vendored tree moves the bar for this
-	// project's own code even while its own findings are hidden.
+	// god_file and fan_out_skew USED to be the mean-relative pair, and this
+	// test used to require the vendored exclusion to happen before AVG — the
+	// bar had to be protected as well as the findings.
+	//
+	// mache-ce0bcd deleted the bar instead. A corpus-relative threshold makes
+	// one file's verdict a function of every other file, which inverts the
+	// incentive the rules exist to create: on mache's own corpus, splitting a
+	// god file into five (the canonical fix) lowered the mean and started
+	// failing the gate on three untouched files. Vendored trees were only the
+	// most visible way to distort that mean; markdown spans (mache-50e939) and
+	// test-code fan-out were others. The exclusions above survive because
+	// nobody refactors vendored code, not because a statistic needs defending.
+	//
+	// So the invariant is now the opposite one, and it is the regression guard:
+	// these rules must not go back to a corpus-relative threshold.
 	for _, id := range []string{"god_file", "fan_out_skew"} {
 		rule := RegisteredRule(id)
-		q := rule.Query
-		firstExclusion := strings.Index(q, "v_vendored_files")
-		avg := strings.Index(strings.ToUpper(q), "AVG(")
-		require.Positivef(t, avg, "%s is expected to compute a mean", id)
-		assert.Lessf(t, firstExclusion, avg,
-			"%s excludes vendored files only AFTER computing the mean — the findings would be "+
-				"clean while the threshold stayed distorted, which is the half-fix this bead rejects", id)
+		require.NotNilf(t, rule, "%s must be registered", id)
+		sql := stripSQLComments(rule.Query)
+		for _, banned := range []string{"AVG(", "3.0 *"} {
+			assert.NotContainsf(t, sql, banned,
+				"%s reintroduced a corpus-relative threshold (%q): a file's verdict must depend "+
+					"on that file alone, or fixing debt fails the gate on files nobody touched", id, banned)
+		}
+		assert.Positivef(t, rule.DefaultMinMetric,
+			"%s needs an absolute DefaultMinMetric — it is the whole threshold now, so a zero "+
+				"default silently reports every row above the rule's cheap SQL floor", id)
 	}
+}
+
+// stripSQLComments drops `--` lines so a prose mention of a mean in a rule's
+// commentary cannot fail (or pass) an assertion about its SQL.
+func stripSQLComments(q string) string {
+	var out []string
+	for _, line := range strings.Split(q, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }

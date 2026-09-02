@@ -44,6 +44,29 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`god_file` and `fan_out_skew` thresholds are absolute, not corpus-relative**
+  (`mache-ce0bcd`). Both fired at `n > 3 x the project mean`, which made every
+  file's verdict a function of every *other* file — and inverted the incentive
+  the rules exist to create. Measured on mache's own corpus: deleting the
+  biggest god file, **splitting one into five (the canonical fix)**, or adding a
+  well-factored 15-file package each lowered the mean, lowered the bar, and
+  started failing the gate on three files the change never touched. The only
+  action that behaved correctly was adding a *large* file. Three files sat 0.10
+  definitions under the bar, and two new five-definition files anywhere in the
+  repo flipped all three on.
+
+  A relative bar also cannot be held steady by a committed ratchet baseline:
+  every regeneration silently re-draws which files are grandfathered.
+
+  Both rules now use an absolute `DefaultMinMetric` (30 and 35), calibrated to
+  reproduce mache's existing findings **exactly** — 13 and 59, byte-identical
+  sets — so no baseline regeneration is needed. Tune per project with
+  `--min-metric` or a rules-dir override. This also retires two earlier patches
+  that existed only to keep the mean honest (markdown spans, `mache-50e939`;
+  vendored corpus, `mache-f41b43`) and a third defect nobody had caught:
+  `fan_out_skew` computed its mean over 5,039 callers while reporting on only
+  2,420, so test-code fan-out set the bar for production code.
+
 - **The smell ratchet no longer launders debt through a file move**
   (`mache-dd45a3`). The committed baseline was keyed `(rule_id, source_id)`,
   and a path is not an identity: moving a file vacated its entry and re-filed
