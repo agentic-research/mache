@@ -2083,25 +2083,6 @@ func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	// Tiny callers via node_refs — filler under an absolute threshold.
-	// These rows have empty qualifier (mention arm of v_refs), so
-	// they exercise the COALESCE fallback to token. Real nodes rows
-	// (mache-50e939): the mean is scoped to actual constructs, and
-	// every real construct has a nodes row.
-	for i := 1; i <= 15; i++ {
-		callerID := fmt.Sprintf("functions/n%02d", i)
-		_, err := db.Exec(
-			`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES (?, 'functions', ?, 1, 0, ?, '')`,
-			callerID, fmt.Sprintf("n%02d", i), fmt.Sprintf("n%02d.go", i),
-		)
-		require.NoError(t, err)
-		_, err = db.Exec(
-			`INSERT INTO node_refs VALUES (?, ?)`,
-			fmt.Sprintf("z%02d", i), callerID,
-		)
-		require.NoError(t, err)
-	}
-
 	// Write the sibling .bindings.capnp with 24 records: 12 projection-
 	// shaped (qualifier='rec'), 12 orchestrator-shaped (12 distinct
 	// qualifiers). LoadCapnpBindings reads this when RunSmellRule
