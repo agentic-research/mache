@@ -1,11 +1,13 @@
 package smells
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,4 +238,51 @@ func TestLoadBaseline_RefusesFutureVersion(t *testing.T) {
 		_, err := loadBaseline(old)
 		assert.NoError(t, err, "a baseline this binary predates must still load: %s", body)
 	}
+}
+
+// TestEnrich_FileLevelNodeGetsNoHash pins the defect mache-dd45a3 shipped.
+//
+// "File-level" has two shapes and only one was handled. god_file emits an
+// empty node_id; long_file emits the file's OWN `_ast` row, whose node_id
+// equals the source_id. The empty-node_id guard let long_file through, so its
+// baseline entries were keyed on whole-file merkle hashes — and a file hash
+// covers all of its content, so any edit revoked the grandfathering and the
+// gate failed on debt the author did not add.
+//
+// It surfaced the honest way: `task check` failing on a test file that had
+// only grown.
+func TestEnrich_FileLevelNodeGetsNoHash(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ast.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE _ast (
+			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL,
+			start_byte INTEGER, end_byte INTEGER, start_row INTEGER, start_col INTEGER,
+			node_hash BLOB
+		);
+		INSERT INTO _ast VALUES
+		  ('a/big.go',        'a/big.go', 'source_file',          0, 9, 0, 0, X'AAAA'),
+		  ('a/big.go/func_1', 'a/big.go', 'function_declaration', 0, 4, 0, 0, X'BBBB');
+	`)
+	require.NoError(t, err)
+
+	tg := &testutil.SmellTestGraph{DB: db, Path: dbPath}
+	findings := []smellFinding{
+		// long_file's shape: the node IS the file.
+		{RuleID: "long_file", SourceID: "a/big.go", NodeID: "a/big.go"},
+		// long_function's shape: a construct inside it.
+		{RuleID: "long_function", SourceID: "a/big.go", NodeID: "a/big.go/func_1"},
+		// god_file's shape: no node at all.
+		{RuleID: "god_file", SourceID: "a/big.go"},
+	}
+	require.NoError(t, enrichNodeHashes(tg, findings))
+
+	assert.Empty(t, findings[0].NodeHash,
+		"long_file is about the FILE — hashing it means any edit re-flags the file")
+	assert.Equal(t, "bbbb", findings[1].NodeHash,
+		"a construct inside the file still gets its own content address")
+	assert.Empty(t, findings[2].NodeHash, "god_file has no node to address")
 }

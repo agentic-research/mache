@@ -53,6 +53,66 @@ func smellNodeIDs(findings []smellFinding) []string {
 	return ids
 }
 
+// seedFanOutCaller inserts a construct with n distinct callees, in mache's
+// production write shape: a parent ctor node whose name the skip-list checks,
+// and a `source` child whose id is what node_refs points at.
+func seedFanOutCaller(t *testing.T, tg *testutil.SmellTestGraph, ctor, sourceFile string, n int) {
+	t.Helper()
+	_, err := tg.DB.Exec(
+		`INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+		   (?, 'functions', ?, 1, 0, ?, ''), (?, ?, 'source', 0, 0, ?, '')`,
+		"functions/"+ctor, ctor, sourceFile,
+		"functions/"+ctor+"/source", "functions/"+ctor, sourceFile)
+	require.NoError(t, err)
+	for i := range n {
+		_, err := tg.DB.Exec(`INSERT INTO node_refs VALUES (?, ?)`,
+			fmt.Sprintf("%s_callee%02d", ctor, i), "functions/"+ctor+"/source")
+		require.NoError(t, err)
+	}
+}
+
+// TestFindSmells_FanOutSkewSkipsNonProductionCallers replaces three tests that
+// differed only in WHICH caller had to be skipped. They were structural clones
+// — duplicate_code said so once an unrelated edit made them identical, and it
+// was right — so they are one table now.
+//
+// Each case gives the excluded caller and a production Dispatcher the same
+// fan-out, so a pass means the exclusion fired and not that the threshold did.
+func TestFindSmells_FanOutSkewSkipsNonProductionCallers(t *testing.T) {
+	for _, tc := range []struct{ name, ctor, sourceFile, why string }{
+		{
+			"Test-prefixed constructor", "TestRunner", "runner_test.go",
+			"skipped on the parent ctor.name LIKE 'Test%'",
+		},
+		{
+			"generated file", "CapnpStruct", "foo.capnp.go",
+			"skipped because *.capnp.go is generated, not written",
+		},
+		{
+			"test file", "setup", "foo_test.go",
+			"skipped because *_test.go is test code",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tg := seedSmellAST(t)
+			defer func() { _ = tg.DB.Close() }()
+			_, err := tg.DB.Exec(`
+				CREATE TABLE IF NOT EXISTS node_refs (
+					token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+				INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record)
+				VALUES ('functions', '', 'functions', 1, 0, '', '');`)
+			require.NoError(t, err)
+
+			seedFanOutCaller(t, tg, tc.ctor, tc.sourceFile, 12)
+			seedFanOutCaller(t, tg, "Dispatcher", "dispatcher.go", 12)
+
+			gotIDs := smellNodeIDs(runSmellRule(t, tg,
+				map[string]any{"rule": "fan_out_skew", "min_metric": float64(10)}))
+			assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs, tc.why)
+		})
+	}
+}
+
 func seedSmellAST(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "db")
@@ -1887,132 +1947,6 @@ func TestFindSmells_GodFileFallsBackToChildSource(t *testing.T) {
 	assert.Equal(t, int64(11), resp.Findings[0].Metric)
 }
 
-// TestFindSmells_GodFileSkipsGeneratedFiles asserts that *.capnp.go,
-// *.pb.go, *_generated.go, and *.gen.go aren't flagged even with
-// hundreds of definitions — generators produce wide method sets by
-// design, not architectural sprawl.
-func TestFindSmells_GodFileSkipsGeneratedFiles(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		-- 12 defs in a generated file — would normally trigger
-		-- god_file, but must be skipped by the *.capnp.go suffix.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/methods/A.x','pkg/methods','A.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/A.y','pkg/methods','A.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/B.x','pkg/methods','B.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/B.y','pkg/methods','B.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/C.x','pkg/methods','C.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/C.y','pkg/methods','C.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/D.x','pkg/methods','D.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/D.y','pkg/methods','D.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/E.x','pkg/methods','E.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/E.y','pkg/methods','E.y',1,0,'a.capnp.go',''),
-		  ('pkg/methods/F.x','pkg/methods','F.x',1,0,'a.capnp.go',''),
-		  ('pkg/methods/F.y','pkg/methods','F.y',1,0,'a.capnp.go','');
-		INSERT INTO node_defs VALUES
-		  ('A.x','pkg/methods/A.x'),('A.y','pkg/methods/A.y'),
-		  ('B.x','pkg/methods/B.x'),('B.y','pkg/methods/B.y'),
-		  ('C.x','pkg/methods/C.x'),('C.y','pkg/methods/C.y'),
-		  ('D.x','pkg/methods/D.x'),('D.y','pkg/methods/D.y'),
-		  ('E.x','pkg/methods/E.x'),('E.y','pkg/methods/E.y'),
-		  ('F.x','pkg/methods/F.x'),('F.y','pkg/methods/F.y');
-
-		-- A few normal files, as realistic filler.
-		INSERT INTO node_defs VALUES
-		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/N1','functions','N1',1,0,'a.go',''),
-		  ('functions/N2','functions','N2',1,0,'b.go',''),
-		  ('functions/N3','functions','N3',1,0,'c.go','');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-	assert.Empty(t, resp.Findings, "generated capnp.go file must be skipped despite high def count")
-}
-
-// TestFindSmells_GodFileSkipsTestFiles asserts that *_test.go files
-// aren't flagged even with hundreds of test functions — test files
-// accumulate TestXxx + setupXxx helpers without representing
-// architectural sprawl.
-//
-// Surfaced by dogfood: cmd/serve_test.go had 340 defs and topped
-// god_file. After this fix that finding is filtered.
-func TestFindSmells_GodFileSkipsTestFiles(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		-- 12 defs in a *_test.go file — would normally trigger
-		-- god_file, but must be skipped by the *_test.go suffix.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/functions/TestA','pkg/functions','TestA',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestB','pkg/functions','TestB',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestC','pkg/functions','TestC',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestD','pkg/functions','TestD',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestE','pkg/functions','TestE',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestF','pkg/functions','TestF',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestG','pkg/functions','TestG',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestH','pkg/functions','TestH',1,0,'foo_test.go',''),
-		  ('pkg/functions/TestI','pkg/functions','TestI',1,0,'foo_test.go',''),
-		  ('pkg/functions/setupX','pkg/functions','setupX',1,0,'foo_test.go',''),
-		  ('pkg/functions/setupY','pkg/functions','setupY',1,0,'foo_test.go',''),
-		  ('pkg/functions/setupZ','pkg/functions','setupZ',1,0,'foo_test.go','');
-		INSERT INTO node_defs VALUES
-		  ('TestA','pkg/functions/TestA'),('TestB','pkg/functions/TestB'),
-		  ('TestC','pkg/functions/TestC'),('TestD','pkg/functions/TestD'),
-		  ('TestE','pkg/functions/TestE'),('TestF','pkg/functions/TestF'),
-		  ('TestG','pkg/functions/TestG'),('TestH','pkg/functions/TestH'),
-		  ('TestI','pkg/functions/TestI'),
-		  ('setupX','pkg/functions/setupX'),('setupY','pkg/functions/setupY'),
-		  ('setupZ','pkg/functions/setupZ');
-
-		-- A few normal files, as realistic filler.
-		INSERT INTO node_defs VALUES
-		  ('N1','functions/N1'),('N2','functions/N2'),('N3','functions/N3');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/N1','functions','N1',1,0,'a.go',''),
-		  ('functions/N2','functions','N2',1,0,'b.go',''),
-		  ('functions/N3','functions','N3',1,0,'c.go','');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "god_file"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-	assert.Empty(t, resp.Findings, "*_test.go file must be skipped despite high def count")
-}
-
-// TestFindSmells_GodFileExcludesTestAndGeneratedFiles pins that test and
-// generated files are kept out of god_file's FINDINGS.
-//
-// This test used to pin something else: that those files were kept out of the
-// project MEAN, because god_file's threshold was corpus-relative and a diluted
-// mean lowered the bar for real code. mache-ce0bcd deleted the mean, which also
-// made the old test vacuous — its fixture put 10 definitions in core.go, and
-// against an absolute threshold of 30 that is silent no matter what the
-// exclusions do. It passed either way, which is worse than not having it.
-//
-// So the fixture now sizes the EXCLUDED files above the threshold: if either
-// exclusion were dropped, helper_test.go and wire.capnp.go would be reported.
 func TestFindSmells_GodFileExcludesTestAndGeneratedFiles(t *testing.T) {
 	tg := seedSmellAST(t)
 	defer func() { _ = tg.DB.Close() }()
@@ -2115,201 +2049,6 @@ func TestFindSmells_FanOutSkew(t *testing.T) {
 	assert.Equal(t, int64(12), resp.Findings[0].Metric, "fan-out count is reported as metric")
 }
 
-// TestFindSmells_FanOutSkewSkipsTestPrefixes asserts that a Test-
-// prefixed construct with high fan-out is NOT flagged. Mirrors how
-// mache writes data: caller_id is a source-file node whose parent
-// is the construct directory, and ctor.name carries the function
-// name. The new skip-list joins through that parent.
-//
-// Surfaced by dogfooding: mache's own test runners
-// (TestArena_AllTools etc) topped fan_out_skew with 48 callees —
-// tests are *expected* to call many things; no signal there.
-func TestFindSmells_FanOutSkewSkipsTestPrefixes(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		-- Construct hierarchy: parent dir → source-file node.
-		-- caller_id in node_refs is the source-file id (matches mache's
-		-- production write shape), and the parent dir's name is what
-		-- the skip-list checks.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                        '',          'functions',          1, 0, '',                        ''),
-		  ('functions/TestRunner',             'functions', 'TestRunner',         1, 0, 'runner_test.go',          ''),
-		  ('functions/TestRunner/source',      'functions/TestRunner', 'source',  0, 0, 'runner_test.go',          ''),
-		  ('functions/Dispatcher',             'functions', 'Dispatcher',         1, 0, 'dispatcher.go',           ''),
-		  ('functions/Dispatcher/source',      'functions/Dispatcher', 'source',  0, 0, 'dispatcher.go',           '');
-
-		-- TestRunner has 12 distinct callees — would normally trip
-		-- fan_out_skew. The new skip-list excludes it on the 'Test'
-		-- prefix of the parent ctor.name.
-		INSERT INTO node_refs VALUES
-		  ('A','functions/TestRunner/source'),('B','functions/TestRunner/source'),('C','functions/TestRunner/source'),
-		  ('D','functions/TestRunner/source'),('E','functions/TestRunner/source'),('F','functions/TestRunner/source'),
-		  ('G','functions/TestRunner/source'),('H','functions/TestRunner/source'),('I','functions/TestRunner/source'),
-		  ('J','functions/TestRunner/source'),('K','functions/TestRunner/source'),('L','functions/TestRunner/source');
-
-		-- Dispatcher also has 12 distinct callees — should be flagged.
-		-- (Production code, not test.)
-		INSERT INTO node_refs VALUES
-		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
-		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
-		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
-		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
-
-		-- Six tiny callers: filler since the threshold became absolute
-		-- (mache-ce0bcd). Real nodes rows because the rule JOINs nodes,
-		-- which is what excludes markdown spans (mache-50e939).
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
-		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
-		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
-		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
-		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
-		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
-		INSERT INTO node_refs VALUES
-		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
-		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
-	`)
-	require.NoError(t, err)
-
-	gotIDs := smellNodeIDs(runSmellRule(t, tg, map[string]any{"rule": "fan_out_skew", "min_metric": float64(10)}))
-	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
-		"Dispatcher (production code) is flagged; TestRunner (test) is skipped via parent ctor.name LIKE 'Test%'")
-}
-
-// TestFindSmells_FanOutSkewSkipsGeneratedFiles asserts that a
-// generated-code dispatcher (capnp / pb / *_generated.go / *.gen.go)
-// with high fan-out is NOT flagged. Generated dispatchers naturally
-// touch many neighbors — flagging them buries real findings under
-// noise (capnp.go entries dominated mache's pre-filter top-N).
-func TestFindSmells_FanOutSkewSkipsGeneratedFiles(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                       '',                       'functions', 1, 0, '',                ''),
-		  ('functions/CapnpStruct',           'functions',              'CapnpStruct',1, 0, '',                ''),
-		  ('functions/CapnpStruct/source',    'functions/CapnpStruct',  'source',    0, 0, 'foo.capnp.go',    ''),
-		  ('functions/Dispatcher',            'functions',              'Dispatcher',1, 0, '',                ''),
-		  ('functions/Dispatcher/source',     'functions/Dispatcher',   'source',    0, 0, 'dispatcher.go',   '');
-
-		-- Both have 12 distinct callees. CapnpStruct is in *.capnp.go
-		-- so must be skipped; Dispatcher (production) must be flagged.
-		INSERT INTO node_refs VALUES
-		  ('A','functions/CapnpStruct/source'),('B','functions/CapnpStruct/source'),('C','functions/CapnpStruct/source'),
-		  ('D','functions/CapnpStruct/source'),('E','functions/CapnpStruct/source'),('F','functions/CapnpStruct/source'),
-		  ('G','functions/CapnpStruct/source'),('H','functions/CapnpStruct/source'),('I','functions/CapnpStruct/source'),
-		  ('J','functions/CapnpStruct/source'),('K','functions/CapnpStruct/source'),('L','functions/CapnpStruct/source');
-
-		INSERT INTO node_refs VALUES
-		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
-		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
-		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
-		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
-
-		-- Tiny callers: filler since the threshold became absolute
-		-- (mache-ce0bcd). Real nodes rows because the rule JOINs nodes,
-		-- which is what excludes markdown spans (mache-50e939).
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
-		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
-		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
-		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
-		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
-		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
-		INSERT INTO node_refs VALUES
-		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
-		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
-	`)
-	require.NoError(t, err)
-
-	gotIDs := smellNodeIDs(runSmellRule(t, tg, map[string]any{"rule": "fan_out_skew", "min_metric": float64(10)}))
-	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
-		"Dispatcher (production) is flagged; CapnpStruct (generated) is skipped via source_file suffix")
-}
-
-// TestFindSmells_FanOutSkewSkipsTestFiles asserts that test helpers
-// in *_test.go files (e.g., setup, RunSuite, runParityTest) aren't
-// flagged. The Test*/Benchmark*/Example*/Fuzz* per-construct filter
-// catches actual test functions, but test helpers with non-test
-// names slip through — match god_file's per-file extension filter.
-//
-// Surfaced by dogfood: 4 of 50 fan_out_skew findings were test
-// helpers (RunGraphSuiteWithOpts, runParityTest, setup,
-// realWriteBack). After this fix: 46.
-func TestFindSmells_FanOutSkewSkipsTestFiles(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions',                  '',                  'functions', 1, 0, '',              ''),
-		  ('functions/setup',            'functions',         'setup',     1, 0, '',              ''),
-		  ('functions/setup/source',     'functions/setup',   'source',    0, 0, 'foo_test.go',   ''),
-		  ('functions/Dispatcher',       'functions',         'Dispatcher',1, 0, '',              ''),
-		  ('functions/Dispatcher/source','functions/Dispatcher','source', 0, 0, 'dispatcher.go', '');
-
-		-- Both have 12 distinct callees. setup is in *_test.go (test
-		-- helper, non-test name) so must be skipped; Dispatcher is
-		-- production code and must be flagged.
-		INSERT INTO node_refs VALUES
-		  ('A','functions/setup/source'),('B','functions/setup/source'),('C','functions/setup/source'),
-		  ('D','functions/setup/source'),('E','functions/setup/source'),('F','functions/setup/source'),
-		  ('G','functions/setup/source'),('H','functions/setup/source'),('I','functions/setup/source'),
-		  ('J','functions/setup/source'),('K','functions/setup/source'),('L','functions/setup/source');
-
-		INSERT INTO node_refs VALUES
-		  ('M','functions/Dispatcher/source'),('N','functions/Dispatcher/source'),('O','functions/Dispatcher/source'),
-		  ('P','functions/Dispatcher/source'),('Q','functions/Dispatcher/source'),('R','functions/Dispatcher/source'),
-		  ('S','functions/Dispatcher/source'),('T','functions/Dispatcher/source'),('U','functions/Dispatcher/source'),
-		  ('V','functions/Dispatcher/source'),('W','functions/Dispatcher/source'),('X','functions/Dispatcher/source');
-
-		-- Tiny callers: filler since the threshold became absolute
-		-- (mache-ce0bcd). Real nodes rows because the rule JOINs nodes,
-		-- which is what excludes markdown spans (mache-50e939).
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('functions/n1', 'functions', 'n1', 1, 0, 'n1.go', ''),
-		  ('functions/n2', 'functions', 'n2', 1, 0, 'n2.go', ''),
-		  ('functions/n3', 'functions', 'n3', 1, 0, 'n3.go', ''),
-		  ('functions/n4', 'functions', 'n4', 1, 0, 'n4.go', ''),
-		  ('functions/n5', 'functions', 'n5', 1, 0, 'n5.go', ''),
-		  ('functions/n6', 'functions', 'n6', 1, 0, 'n6.go', '');
-		INSERT INTO node_refs VALUES
-		  ('z1','functions/n1'),('z2','functions/n2'),('z3','functions/n3'),
-		  ('z4','functions/n4'),('z5','functions/n5'),('z6','functions/n6');
-	`)
-	require.NoError(t, err)
-
-	gotIDs := smellNodeIDs(runSmellRule(t, tg, map[string]any{"rule": "fan_out_skew", "min_metric": float64(10)}))
-	assert.Equal(t, []string{"functions/Dispatcher/source"}, gotIDs,
-		"Dispatcher (production) is flagged; setup (test helper in *_test.go) is skipped")
-}
-
-// TestFindSmells_FanOutSkewQualifierAware asserts that the metric
-// counts distinct qualifiers (receiver/package origins) rather than
-// distinct tokens. Replaces the naming-pattern exemption from #355
-// with a structural signal: a function calling N methods on ONE
-// receiver scores 1 (one qualifier), while a function calling N
-// distinct things across N packages still scores N.
-//
-// Closes mache-6c0d07 — uses LLO BindingRecord.qualifier (T8.7) via
-// the _capnp_binding_refs TEMP table populated by LoadCapnpBindings
-// from a sibling .bindings.capnp event log written by the test.
-//
-// Surfaced by mache-190508 step 2 (PR #354): bindingFromRecord
-// projects the BindingRecord capnp struct's 7 fields + nested
-// Range's 6 fields onto Go-native types. Every method called shares
-// a single receiver (`rec` / `rng` / `start` / `end`); under the new
-// metric all 13 calls collapse to ~3-4 distinct qualifiers, well
-// below the threshold.
 func TestFindSmells_FanOutSkewQualifierAware(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "db")
