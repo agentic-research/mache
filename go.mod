@@ -1,6 +1,6 @@
 module github.com/agentic-research/mache
 
-go 1.26
+go 1.26.0
 
 require (
 	capnproto.org/go/capnp/v3 v3.1.0-alpha.2
@@ -23,7 +23,7 @@ require (
 	golang.org/x/text v0.41.0
 	modernc.org/sqlite v1.57.0
 	mvdan.cc/gofumpt v0.11.0
-	mvdan.cc/sh/v3 v3.13.2-0.20260817215856-d6550df7ed8d
+	mvdan.cc/sh/v3 v3.14.0
 )
 
 require (
