@@ -143,6 +143,7 @@ tasks:
       - "internal/smells/rules/*.json"
       - "internal/smells/schemas/sarif.tmpl"
       - "internal/buildinfo/version.txt"
+      - "schema/presets/*.json"
     generates:
       - "{{.BINARY_NAME}}"
     # The ldflags above inject GIT_COMMIT / GIT_VERSION — real build INPUTS
