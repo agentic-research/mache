@@ -16,12 +16,7 @@ import (
 // machePropsDB builds a mache-shaped nodes table (context + props) holding one
 // construct that carries lang and imports.
 func machePropsDB(t *testing.T) string {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "serve.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`
+	return newSQLFixtureDB(t, "serve.db", `
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
 			kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL,
@@ -35,9 +30,6 @@ func machePropsDB(t *testing.T) string {
 		INSERT INTO nodes VALUES ('other', '', 'other', 1, 0, 1, NULL, NULL, NULL, NULL,
 			'{"lang":"python"}');
 	`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-	return dbPath
 }
 
 // TestServedNodeKeepsPropertiesAndSQLCanQueryThem closes the loop mache-90b89b

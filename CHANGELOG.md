@@ -44,6 +44,28 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Engine `_file_level:` sentinels no longer leak into consumer-facing
+  aggregations** (`mache-8f6abf`). `RefsMap()` feeds community detection,
+  architecture layering and `mache pack`, and it returned the engine's
+  file-level bookkeeping rows alongside real references. Those ids name no
+  construct anyone can open or refactor, and they carry an absolute path, so
+  they are not even portable.
+
+  Measured on a schema-projected build of mache's own `cmd/`: 1,939 of 15,073
+  reference rows were sentinels, and `mache pack` reported **1,026 unique
+  reference tokens where only 629 were real** — 39% of its headline number was
+  bookkeeping. They also crowded the top-refs list, displacing real module
+  dependencies with sentinel-backed tokens.
+
+  Worse, it depended on the producer: `leylinegraph` filtered them in SQL while
+  `SQLiteGraph` and `MemoryStore` did not, so the same API returned different
+  data depending on which backend wrote the `.db`. Filtering now happens once at
+  the `RefsMap` boundary on every backend, and a token left empty by the removal
+  is dropped rather than surviving as a real-looking node with no edges.
+
+  The rows stay in `node_refs` — `dead_code` reads them directly and needs them.
+  This is consumer-side only, exactly as scoped.
+
 - **A skipped smell rule is no longer invisible** (`mache-ddf14b`). A rule whose
   required tables are absent skips rather than aborting the run — correct, since
   it cannot invent `_ast`. But it then reported zero findings, and zero findings

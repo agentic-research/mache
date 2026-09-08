@@ -397,11 +397,26 @@ func (g *SQLiteGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 // RefsMap returns a token→nodeIDs map for community detection.
 // For the nodes-table path, queries node_refs (token, node_id).
 // For the legacy bitmap path, decodes bitmaps and resolves file IDs.
+//
+// Engine `_file_level:` sentinels are stripped here, for every path, because
+// this is a CONSUMER-facing aggregation: its output feeds community detection,
+// architecture layering and context packing, none of which can do anything with
+// a bookkeeping id that names no construct. Leaving them in is not a cosmetic
+// problem — measured on a schema-projected build of cmd/, 1,939 of 15,073 refs
+// were sentinels, and they cluster together because they co-occur by
+// construction, so they crowd out the real communities (mache-8f6abf).
+//
+// Filtered at this boundary rather than in each builder below, so the two
+// backends cannot disagree about it — leylinegraph already filtered in SQL
+// while these two did not, which is how the same API came to return different
+// data depending on which producer wrote the .db.
+//
+// The rows stay in node_refs. dead_code reads them directly and needs them.
 func (g *SQLiteGraph) RefsMap() map[string][]string {
 	if g.useNodesTable {
-		return g.refsMapFromNodesTable()
+		return filterSentinelRefs(g.refsMapFromNodesTable())
 	}
-	return g.refsMapFromBitmaps()
+	return filterSentinelRefs(g.refsMapFromBitmaps())
 }
 
 func (g *SQLiteGraph) refsMapFromNodesTable() map[string][]string {
