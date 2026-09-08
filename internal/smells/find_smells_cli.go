@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/agentic-research/mache/graph"
 	_ "modernc.org/sqlite"
 )
 
@@ -220,6 +222,9 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 		return printAndCode(4, fmt.Errorf("prepare smell query context: %w", err))
 	}
 	results := make([]ruleRunResult, 0, len(matched))
+	// Skips are collected, not just warned about: the ratchet and SARIF both
+	// need to say what this run did NOT assess (mache-ddf14b).
+	var skipped []skippedRule
 
 	for _, rule := range matched {
 		// Pre-flight required tables, same shape as the MCP handler.
@@ -235,6 +240,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
 					"find-smells: skipping rule %q — requires absent tables [%s]\n",
 					rule.ID, strings.Join(missing, ", "))
+				skipped = append(skipped, skippedRule{ID: rule.ID, Missing: missing})
 				continue
 			}
 			backendNote := ""
@@ -282,7 +288,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 			}
 		}
 	case "sarif":
-		if err := renderSARIF(cmd.OutOrStdout(), results, findSmellsBaselineRoot); err != nil {
+		if err := renderSARIF(cmd.OutOrStdout(), results, findSmellsBaselineRoot, skipped); err != nil {
 			return 0, err
 		}
 	default:
@@ -297,24 +303,8 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	// baseline (grandfathers current findings); --baseline gates on
 	// new-findings-vs-baseline, overriding --fail-on. Both operate on the
 	// flattened finding set.
-	scanned := relativizeFindings(allFindings(results), findSmellsBaselineRoot)
-	if findSmellsWriteBaseline != "" {
-		if err := writeBaseline(findSmellsWriteBaseline, computeBaseline(scanned)); err != nil {
-			return printAndCode(4, fmt.Errorf("write baseline %s: %w", findSmellsWriteBaseline, err))
-		}
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "wrote smell baseline: %s\n", findSmellsWriteBaseline)
-		return 0, nil
-	}
-	if findSmellsBaseline != "" {
-		base, err := loadBaseline(findSmellsBaseline)
-		if err != nil {
-			return printAndCode(4, fmt.Errorf("load baseline %s: %w", findSmellsBaseline, err))
-		}
-		if debt := newDebt(scanned, base); len(debt) > 0 {
-			renderNewDebt(cmd.ErrOrStderr(), debt)
-			return 1, nil
-		}
-		return 0, nil
+	if code, handled := runRatchetGate(qg, results, skipped, cmd.ErrOrStderr()); handled {
+		return code, nil
 	}
 
 	// Gate decision (ADR-0018). --fail-on=none preserves the legacy
@@ -324,6 +314,77 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	// effective default behavior with --fail-on=error is "exit 0".
 	exitCode := gateDecision(findSmellsFailOn, results)
 	return exitCode, nil
+}
+
+// runRatchetGate applies --write-baseline / --baseline to a completed scan and
+// reports whether it owned the outcome. handled is false when neither flag was
+// given, leaving the caller to fall through to the severity gate (ADR-0018).
+//
+// Extracted from runFindSmells because adding coverage reporting took that
+// function from 200 lines to 230 and past long_function's threshold — the
+// ratchet is a self-contained decision, scan in and exit code out, so it is
+// where the seam already was.
+func runRatchetGate(qg graph.RefsQuerier, results []ruleRunResult, skipped []skippedRule, errw io.Writer) (int, bool) {
+	scanned := relativizeFindings(allFindings(results), findSmellsBaselineRoot)
+
+	// A producer with no `_ast.node_hash` cannot give findings a content
+	// address, so the baseline silently falls back to path keying and a moved
+	// file reads as new debt. That degradation is as invisible as a skipped
+	// rule, and it lands on the same backends, so it is reported on the same
+	// lines (mache-ddf14b / mache-dd45a3).
+	pathKeyed := false
+	if hasHash, hErr := TableHasColumn(qg, "_ast", "node_hash"); hErr == nil && !hasHash {
+		pathKeyed = true
+	}
+
+	if findSmellsWriteBaseline != "" {
+		base := computeBaseline(scanned)
+		// Record what this backend could not assess, so a later gate run can
+		// tell a matching degradation from a newly-lost rule. sortedIDs is
+		// always non-nil, which this depends on: an empty list here means
+		// "recorded: nothing skipped", where absent means "not recorded".
+		//
+		// Inlined rather than wrapped — a one-line skippedIDs() helper was a
+		// structural clone of allRuleIDs(), which is what duplicate_code kept
+		// reporting.
+		base.RulesSkipped = sortedIDs(skipped, func(s skippedRule) string { return s.ID })
+		if err := writeBaseline(findSmellsWriteBaseline, base); err != nil {
+			return ratchetErr(4, fmt.Errorf("write baseline %s: %w", findSmellsWriteBaseline, err))
+		}
+		_, _ = fmt.Fprintf(errw, "wrote smell baseline: %s\n", findSmellsWriteBaseline)
+		renderCoverage(errw, len(results), skipped, pathKeyed)
+		return 0, true
+	}
+	if findSmellsBaseline != "" {
+		base, err := loadBaseline(findSmellsBaseline)
+		if err != nil {
+			return ratchetErr(4, fmt.Errorf("load baseline %s: %w", findSmellsBaseline, err))
+		}
+		// Coverage first: if a rule that contributed to this baseline did not
+		// run, "no new debt" is not a claim this run is entitled to make, and
+		// reporting it as a pass would be the exact lie being fixed.
+		if lost := coverageRegression(skipped, base); len(lost) > 0 {
+			renderCoverageRegression(errw, lost)
+			return 1, true
+		}
+		if debt := newDebt(scanned, base); len(debt) > 0 {
+			renderNewDebt(errw, debt)
+			renderCoverage(errw, len(results), skipped, pathKeyed)
+			return 1, true
+		}
+		_, _ = fmt.Fprintf(errw, "smell ratchet: 0 NEW finding(s) above baseline\n")
+		renderCoverage(errw, len(results), skipped, pathKeyed)
+		return 0, true
+	}
+
+	return 0, false
+}
+
+// ratchetErr mirrors printAndCode inside the ratchet, which returns
+// (code, handled) rather than (code, error).
+func ratchetErr(code int, err error) (int, bool) {
+	fmt.Fprintln(os.Stderr, err)
+	return code, true
 }
 
 // printAndCode mirrors the historical cliExit side effect (write the

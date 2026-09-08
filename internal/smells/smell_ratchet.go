@@ -38,8 +38,27 @@ func relativizeFindings(findings []smellFinding, root string) []smellFinding {
 // local-first gate, and the find-smells GHA (W6) wraps `task smells`.
 // Bead mache-491b9f (analysis-substrate/W5).
 type smellBaseline struct {
-	Version int             `json:"version"`
-	Counts  []baselineEntry `json:"counts"`
+	Version int `json:"version"`
+	// RulesSkipped records which rules could NOT run against the backend this
+	// baseline was generated from, so a later gate run can tell a matching
+	// degradation from a new one. A skipped rule contributes no findings, which
+	// is indistinguishable from a rule that ran clean — without this, a gate
+	// could lose a rule and still report "0 NEW" (mache-ddf14b).
+	//
+	// Deliberately NOT a version bump. v2 changed how existing entries are
+	// INTERPRETED, so an older reader got them wrong; this only adds
+	// information an older reader ignores, and nil means "not recorded" rather
+	// than "nothing was skipped". Bumping would have made every v2-era binary
+	// refuse the file for no benefit.
+	//
+	// Written WITHOUT omitempty, and as an empty list rather than nil when
+	// nothing was skipped, because the two states this must separate are
+	// "recorded: full coverage" and "not recorded at all" — and omitempty
+	// collapses exactly those into the same absent key, disarming the check in
+	// the case that matters most (a full-coverage baseline gated on a degraded
+	// backend).
+	RulesSkipped []string        `json:"rules_skipped"`
+	Counts       []baselineEntry `json:"counts"`
 }
 
 // baselineVersion is the current schema.
