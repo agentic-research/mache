@@ -54,6 +54,10 @@ func (s *MemoryStore) RefsMap() map[string][]string {
 	for k, v := range s.refs {
 		cp[k] = append([]string(nil), v...)
 	}
+	// Engine `_file_level:` sentinels are bookkeeping, not content, and this is
+	// a consumer-facing aggregation — see SQLiteGraph.RefsMap. s.refs keeps
+	// them; the snapshot handed out here does not (mache-8f6abf).
+	cp = filterSentinelRefs(cp)
 	s.refsSnap.Store(&cp)
 	return cp
 }

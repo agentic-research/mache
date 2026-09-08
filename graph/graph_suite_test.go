@@ -389,6 +389,23 @@ func stubRender(tmpl string, values map[string]any) (string, error) {
 
 // createNodesTableDB creates a temp SQLite DB with the canonical test graph
 // in the nodes table schema. Shared by sqliteGraphFactory and writableGraphFactory.
+
+// newSQLFixtureDB writes a .db from the given SQL and returns its path.
+//
+// Several fixtures had hand-rolled open/exec/close/return, and duplicate_code
+// reported them as clones once there were two close enough to match. The schema
+// a fixture types is the interesting part; the plumbing around it is not.
+func newSQLFixtureDB(t *testing.T, name, ddl string) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), name)
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(ddl)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	return dbPath
+}
+
 func createNodesTableDB(t *testing.T) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")

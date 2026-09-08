@@ -404,7 +404,7 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 	// recognise top-level cobra RunE callbacks without polluting
 	// the caller view. They aren't real callers.
 	rows, err := r.db.Query(
-		"SELECT node_id FROM node_refs WHERE token = ? AND node_id NOT LIKE '_file_level:%'",
+		"SELECT node_id FROM node_refs WHERE token = ? AND node_id NOT LIKE '"+sentinelSQLPattern+"'",
 		token,
 	)
 	if err != nil {
