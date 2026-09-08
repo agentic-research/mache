@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "rules_skipped": [],
   "counts": [
     {
       "rule_id": "dead_code",
@@ -2860,7 +2861,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/smells/find_smells_cli.go",
-      "node_hash": "4d070ac1886b522a9c2937bad2a7ce14725df7b39ee70f3bfc1e767ec403c701",
+      "node_hash": "85ceaa39de5f0063a9346c73672b76fbe951f68a94e028d2dbaa8cf0a3a5cb2d",
       "count": 1
     },
     {
@@ -3480,7 +3481,7 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/find_smells_cli.go",
-      "node_hash": "4d070ac1886b522a9c2937bad2a7ce14725df7b39ee70f3bfc1e767ec403c701",
+      "node_hash": "85ceaa39de5f0063a9346c73672b76fbe951f68a94e028d2dbaa8cf0a3a5cb2d",
       "count": 1
     },
     {

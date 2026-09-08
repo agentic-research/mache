@@ -44,6 +44,39 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A skipped smell rule is no longer invisible** (`mache-ddf14b`). A rule whose
+  required tables are absent skips rather than aborting the run — correct, since
+  it cannot invent `_ast`. But it then reported zero findings, and zero findings
+  is byte-identical to a rule that ran and found nothing: the ratchet printed
+  `0 NEW`, the gate went green, and it had assessed strictly less than it
+  claimed. A disabled linter, arrived at politely.
+
+  The gate now states what it did not assess, on both the pass and fail paths:
+
+  ```
+  smell ratchet: 0 NEW finding(s) above baseline
+    SKIPPED 5 of 14 rules — not assessed: duplicate_code (needs _ast); …
+    DEGRADED this producer emits no _ast.node_hash, so the baseline is keyed by
+             PATH: moving a file reads as new debt
+  ```
+
+  The second line is the compounding case: a backend without `_ast` loses
+  hash-keyed baselines *and* drops rules at the same time, and reporting only
+  one leaves the other unexplained. Observed live, that line is what accounts
+  for four "NEW findings" that are really a keying mismatch.
+
+  Baselines now record which rules could not run when they were written
+  (`rules_skipped`), so losing a rule that contributed to the baseline fails
+  with `COVERAGE REGRESSION` rather than passing green — the baseline's counts
+  include that rule's findings, so "no new debt" is not a claim such a run can
+  make. A baseline written before this records nothing; that is treated as
+  unknown coverage, reported but not failed, so no existing repo breaks on
+  upgrade. Regenerating restores the stronger check.
+
+  SARIF gained the same signal via
+  `runs[].invocations[].toolExecutionNotifications`, so code-scanning cannot
+  show a green run for an analysis that never happened.
+
 - **`god_file` and `fan_out_skew` thresholds are absolute, not corpus-relative**
   (`mache-ce0bcd`). Both fired at `n > 3 x the project mean`, which made every
   file's verdict a function of every *other* file — and inverted the incentive

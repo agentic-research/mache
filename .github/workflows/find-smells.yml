@@ -4,11 +4,21 @@ name: find_smells
 # Taskfile target (taskfile-ci-parity: CI calls the target, it does
 # NOT re-implement the command inline) — the same gate `task check`
 # and `task ci` run locally and the pre-push hook enforces. The target
-# builds mache (tree-sitter backend), indexes this repo, runs
-# `find-smells --rule '*' --baseline docs/smell-baseline.json`, and
-# exits non-zero on any NEW finding vs the committed baseline. The
-# `_ast`-dependent rules skip automatically on the standalone (no-LLO)
-# .db via `--rule '*'`; the cross-ref rules enforce.
+# builds mache, projects the TRACKED tree with `--backend leyline`, and
+# runs `find-smells --rule '*' --tags=gate --baseline
+# docs/smell-baseline.json`, exiting non-zero on any NEW finding.
+#
+# It used to say the `_ast`-dependent rules skip automatically here on a
+# standalone (no-LLO) .db. That stopped being true when mache-608a3c
+# consolidated the gate onto leyline: the projection carries `_ast`, so
+# every gate rule runs and nothing skips. The claim outlived the config
+# by months, which is the failure mache-ddf14b is about — a skipped rule
+# reports zero findings, indistinguishable from a rule that ran clean.
+#
+# That is now enforced rather than described. The baseline records which
+# rules could not run when it was written (`rules_skipped`), so if this
+# job ever loses a rule the gate fails with COVERAGE REGRESSION instead
+# of reporting green on an analysis that did not happen.
 #
 # This REPLACES the previous advisory comment-only workflow — a new
 # smell now fails the PR. To grandfather a deliberate structural
@@ -38,9 +48,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # LFS-tracked tree-sitter grammar fixtures are needed for the
-          # CGO tree-sitter build (`task smells` builds with
-          # --backend tree-sitter); parser.c is otherwise an LFS pointer.
+          # LFS-tracked tree-sitter grammar fixtures are needed to BUILD
+          # mache at all (the binary is CGO + tree-sitter); parser.c is
+          # otherwise an LFS pointer. Not for the backend — the gate
+          # projects with leyline (mache-608a3c).
           lfs: true
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

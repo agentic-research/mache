@@ -153,12 +153,22 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 // Takes the active rule set (built-ins + external) rather than reading
 // the smellRegistry global so external rules show up in the hint.
 func allRuleIDs(rules []SmellRule) []string {
-	ids := make([]string, 0, len(rules))
-	for _, r := range rules {
-		ids = append(ids, r.ID)
+	return sortedIDs(rules, func(r SmellRule) string { return r.ID })
+}
+
+// sortedIDs projects one string field out of each element and returns the
+// values sorted. Two call sites had hand-rolled the same collect-and-sort;
+// duplicate_code reported them as clones once the second one existed, and it
+// was right. Always non-nil, which the baseline's coverage record depends
+// on: an empty result there means "recorded: nothing skipped", not
+// "nothing recorded".
+func sortedIDs[T any](items []T, id func(T) string) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, id(it))
 	}
-	sort.Strings(ids)
-	return ids
+	sort.Strings(out)
+	return out
 }
 
 // rulesListing produces the JSON returned when find_smells is called

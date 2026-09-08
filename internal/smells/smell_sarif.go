@@ -2,7 +2,9 @@ package smells
 
 import (
 	_ "embed"
+	"fmt"
 	"io"
+	"strings"
 
 	machetmpl "github.com/agentic-research/mache/internal/template"
 )
@@ -27,7 +29,14 @@ func sarifLevel(r *SmellRule) string {
 // relativized against baselineRoot so URIs are repo-relative and GitHub
 // code-scanning resolves them against the checked-out tree. SARIF regions
 // are 1-based, so line/column are floored at 1.
-func buildSARIFDoc(results []ruleRunResult, baselineRoot string) map[string]any {
+//
+// invocations[].toolExecutionNotifications carries the rules that could NOT
+// run on this backend. A skipped rule emits no results, which in SARIF is
+// indistinguishable from a rule that ran clean — code-scanning would show a
+// green run for an analysis that never happened. SARIF 2.1.0 has the slot for
+// exactly this, so saying it costs nothing and staying silent is a coverage
+// lie (mache-ddf14b).
+func buildSARIFDoc(results []ruleRunResult, baselineRoot string, skipped []skippedRule) map[string]any {
 	rules := make([]map[string]any, 0, len(results))
 	out := make([]map[string]any, 0)
 	for _, rr := range results {
@@ -57,6 +66,24 @@ func buildSARIFDoc(results []ruleRunResult, baselineRoot string) map[string]any 
 			})
 		}
 	}
+	// executionSuccessful stays true: skipping an unsupported rule is a
+	// degraded run, not a failed one. The notifications are what say so.
+	invocation := map[string]any{"executionSuccessful": true}
+	if len(skipped) > 0 {
+		notes := make([]map[string]any, 0, len(skipped))
+		for _, sk := range skipped {
+			notes = append(notes, map[string]any{
+				"level":          "warning",
+				"associatedRule": map[string]any{"id": sk.ID},
+				"message": map[string]any{"text": fmt.Sprintf(
+					"rule %q did not run: this .db has no %s. Its findings are absent from this "+
+						"analysis, not known to be zero.",
+					sk.ID, strings.Join(sk.Missing, ", "))},
+			})
+		}
+		invocation["toolExecutionNotifications"] = notes
+	}
+
 	return map[string]any{
 		"runs": []map[string]any{{
 			"tool": map[string]any{
@@ -66,14 +93,15 @@ func buildSARIFDoc(results []ruleRunResult, baselineRoot string) map[string]any 
 					"rules":          rules,
 				},
 			},
-			"results": out,
+			"invocations": []map[string]any{invocation},
+			"results":     out,
 		}},
 	}
 }
 
 // renderSARIF writes the SARIF document for all rule results to w.
-func renderSARIF(w io.Writer, results []ruleRunResult, baselineRoot string) error {
-	rendered, err := machetmpl.Render(sarifTemplate, buildSARIFDoc(results, baselineRoot))
+func renderSARIF(w io.Writer, results []ruleRunResult, baselineRoot string, skipped []skippedRule) error {
+	rendered, err := machetmpl.Render(sarifTemplate, buildSARIFDoc(results, baselineRoot, skipped))
 	if err != nil {
 		return err
 	}
