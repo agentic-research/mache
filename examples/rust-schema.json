@@ -84,13 +84,7 @@
         {
           "name": "{{.name}}",
           "selector": "(impl_item type: (type_identifier) @name) @scope",
-          "include": ["lsp"],
-          "files": [
-            {
-              "name": "source",
-              "content_template": "{{.scope}}"
-            }
-          ]
+          "include": ["lsp"]
         }
       ]
     },

@@ -112,3 +112,40 @@ func TestPresetNames(t *testing.T) {
 	// Must be sorted (doc contract)
 	assert.IsNonDecreasing(t, names)
 }
+
+// TestRustPreset_ImplementationsIsAnIndexNotABlob pins a granularity
+// invariant, not a style preference.
+//
+// `implementations/<Type>` selected `impl_item` and emitted `{{.scope}}`, which
+// is the ENTIRE impl block. Measured on ley-line's rs/ (36 files): 43 such
+// nodes holding 95,249 bytes, the largest 12,670 bytes on its own. A 12KB
+// "construct" defeats the point of construct-granular retrieval — reading it
+// costs more than reading most whole files.
+//
+// It bought nothing, either: every method body inside those blocks is already
+// captured individually under `functions/`, so the blob was a second, coarser
+// copy of content the projection already had.
+//
+// The node stays as an index of which types have impls; only the body goes.
+func TestRustPreset_ImplementationsIsAnIndexNotABlob(t *testing.T) {
+	topo, err := LoadPresetSchema("rust")
+	require.NoError(t, err)
+
+	var impl *api.Node
+	for i := range topo.Nodes {
+		if topo.Nodes[i].Name == "implementations" {
+			impl = &topo.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, impl, "the rust preset must still expose an implementations index")
+	require.Len(t, impl.Children, 1)
+
+	child := impl.Children[0]
+	assert.Empty(t, child.Files,
+		"implementations/<Type> must not carry a source file: its selector matches the whole "+
+			"impl_item, so {{.scope}} is the entire block (95KB across 43 nodes on ley-line's rs/), "+
+			"duplicating method bodies already captured per-construct under functions/")
+	assert.Contains(t, child.Selector, "impl_item",
+		"the index itself must survive — this test is about the body, not the node")
+}

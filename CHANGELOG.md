@@ -44,6 +44,22 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Rust `implementations/<Type>` is an index, not a 12KB blob** (`mache-c777ef`).
+  The node selected `impl_item` and emitted `{{.scope}}` — the entire impl
+  block. Measured on ley-line's `rs/`: 43 such nodes holding **95,249 bytes**,
+  the largest 12,670 on its own. A 12KB "construct" defeats construct-granular
+  retrieval, since reading it costs more than reading most whole files, and it
+  bought nothing: every method body inside is already captured individually
+  under `functions/`. The index of which types have impls stays; the body goes.
+
+- **`task build` now rebuilds when a preset schema changes**. `sources:` listed
+  three of the four `//go:embed`ed assets, omitting `schema/presets/*.json`, so
+  editing a shipped schema left a **stale binary** that silently projected with
+  the old one — an edit that appears to do nothing. The Taskfile already carried
+  a comment asking for this list to be kept in sync after `mache-46af85` hit the
+  same failure with smell rules; it is now enforced by a test that fails when
+  any embed is unlisted.
+
 - **Engine `_file_level:` sentinels no longer leak into consumer-facing
   aggregations** (`mache-8f6abf`). `RefsMap()` feeds community detection,
   architecture layering and `mache pack`, and it returned the engine's
