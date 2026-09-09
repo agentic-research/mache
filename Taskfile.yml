@@ -618,6 +618,16 @@ tasks:
           ./{{.BINARY_NAME}} find-smells --db {{.DB}} --rule "$rule" --format md --limit 1000;
         done
 
+  gomod:workspace:
+    desc: Fail fast when go.work and go.mod disagree about the `go` directive
+    cmds:
+      # Detection lives in a script, not a Go test, because the condition it
+      # detects stops `go test` from running at all — a test could never
+      # observe it. Failure handling is covered by
+      # internal/lint/go_workspace_check_test.go, the same arrangement
+      # scripts/flamegraphs.sh uses (mache-49b87e).
+      - bash scripts/go-workspace-check.sh .
+
   docs:lint:
     desc: Sanity-check docs/*.md frontmatter against CHANGELOG and internal/lang/lang.go
     cmds:
@@ -789,6 +799,10 @@ tasks:
   check:
     desc: "Dev gate (mutating: `fmt` rewrites files with -w). For the non-mutating 1:1-with-CI gate use `task ci`."
     cmds:
+      # First: every task below needs a toolchain that can load the
+      # module, and a go.work/go.mod disagreement stops all of them
+      # with an error that looks nothing like its cause (mache-49b87e).
+      - task: gomod:workspace
       - task: fmt
       - task: vet
       - task: lint
@@ -813,6 +827,10 @@ tasks:
     # real leyline `_ast` (the sitter parity gate was retired with CGO removal).
     desc: Non-mutating CI-equivalent gate — run this (or let the pre-push hook) to be 1:1 with CI before pushing
     cmds:
+      # First: every task below needs a toolchain that can load the
+      # module, and a go.work/go.mod disagreement stops all of them
+      # with an error that looks nothing like its cause (mache-49b87e).
+      - task: gomod:workspace
       - task: fmt:check
       - task: vet
       - task: lint
