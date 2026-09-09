@@ -44,6 +44,24 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A `go.work`/`go.mod` directive mismatch now fails first, and says what it
+  is** (`mache-49b87e`). When the two disagree, every `go` command aborts before
+  doing anything, so the gate surfaced it as a wall of unrelated red checks —
+  lint, smells, install-verify, server-json-drift, test on both runners — none
+  of them the cause. The real message appeared once, in the first line of a log
+  behind an aggregator job, and read exactly like infrastructure flake. It was
+  misdiagnosed as leyline-provisioning flake before anyone read that far.
+
+  The mismatch arrives unassisted: a dependency requiring a patch-level Go
+  version raises ours when bumped, and dependabot edits `go.mod` and `go.sum`
+  only — it has no concept of a workspace file.
+
+  `task check` and `task ci` now run the check first. It is a script rather
+  than a test because the condition stops `go test` from running at all, and
+  detection is delegated to `go list -m` rather than reimplemented: Go orders
+  `1.26` *before* `1.26.0`, which is neither string nor `sort -V` ordering, and
+  the toolchain is the only authority on its own rule.
+
 - **Rust `implementations/<Type>` is an index, not a 12KB blob** (`mache-c777ef`).
   The node selected `impl_item` and emitted `{{.scope}}` — the entire impl
   block. Measured on ley-line's `rs/`: 43 such nodes holding **95,249 bytes**,
