@@ -72,6 +72,28 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A build no longer holds every file's walker cache, or the whole corpus,
+  until it finishes** (`mache-95a33d`). Projecting mache's own 929 files
+  peaked at 1.7 GB RSS; 650 MB of that was the `ASTWalker`'s per-file caches
+  (index, source, language, package, address-ref, call-token), retained for
+  the walker's lifetime although nothing reads them once a file is projected —
+  serve-time callee extraction builds its own walkers. `processSourceFileResult`
+  now evicts a file's caches as soon as its nodes are written; peak drops to
+  1.06 GB at no wall-clock cost with a byte-identical projection.
+
+  The second half was older: the parallel Phase 1 worker pool still read every
+  source file's bytes into memory, a vestige of in-process tree-sitter, and
+  after ADR-0012 nothing consumed them. The pool is gone — the walk resolves
+  paths, the results are sorted exactly as before, the projection runs
+  sequentially as it already did — and `parsedSourceFile` no longer has a
+  `content` field to fill. Two gates: one asserts zero retained cache entries
+  after `Ingest`; the other makes the source unreadable between ley-line parse
+  and mache projection and requires the projection to succeed anyway.
+
+  This is the mache half of the cold-path budget (`mache-93e84b` tracks the
+  leyline half, projection-v5). A laptop should not need a workstation's memory
+  to index a medium repo.
+
 - **`DeleteFileNodes` no longer scans the whole graph per file** (`mache-088304`).
   `node_refs` and `node_defs` are keyed `(token, node_id)`, so deleting a
   file's rows BY `node_id` had no index and planned as a full `SCAN` of a
