@@ -15,12 +15,16 @@ import (
 //
 // The shape is intentionally similar to what `leyline parse` produces for
 // real Go source: each call gets a unique id with the kind chain encoded.
-func seedManyCalls(b *testing.B, dir string, nCalls int) *sql.DB {
-	b.Helper()
+// Takes testing.TB so the growth-class GATE
+// (ast_walker_growth_test.go) can seed the same shape the benchmark
+// measures — one fixture, so the gate cannot drift from what is
+// benchmarked (mache-c0537f).
+func seedManyCalls(tb testing.TB, dir string, nCalls int) *sql.DB {
+	tb.Helper()
 	dbPath := filepath.Join(dir, "bench.db")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 
 	if _, err := db.Exec(`
@@ -44,17 +48,17 @@ func seedManyCalls(b *testing.B, dir string, nCalls int) *sql.DB {
 
 		INSERT INTO _source VALUES ('main.go', 'go', '');
 	`); err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 
 	tx, err := db.Begin()
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	run := func(query string, args ...any) {
-		b.Helper()
+		tb.Helper()
 		if _, err := tx.Exec(query, args...); err != nil {
-			b.Fatalf("seed: %v\nquery=%s\nargs=%v", err, query, args)
+			tb.Fatalf("seed: %v\nquery=%s\nargs=%v", err, query, args)
 		}
 	}
 	for i := range nCalls {
@@ -83,7 +87,7 @@ func seedManyCalls(b *testing.B, dir string, nCalls int) *sql.DB {
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	return db
 }
