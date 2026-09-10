@@ -15,7 +15,7 @@ func TestASTWalker_InvalidateSource_ReReadsAfterChange(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	w := NewASTWalker(db)
 
-	require.Equal(t, "go", w.fileLang("main.go")) // populates langCache
+	require.Equal(t, "go", w.fileLang("main.go")) // loads the file's section into indexCache
 
 	// Change the underlying row; the cache still serves the stale value.
 	_, err := db.Exec("UPDATE _source SET language='python' WHERE id='main.go'")

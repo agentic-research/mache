@@ -21,11 +21,15 @@ import (
 //
 //	pkg.go
 //	├── function_declaration    (scope A) -> calls helper.Do()  (qualified)
-//	└── function_declaration_1  (scope B) -> calls Other()      (bare)
+//	├── function_declaration_1  (scope B) -> calls Other()      (bare)
+//	└── functionXdeclaration    (scope C) -> calls Leak()       (bare)
 //
 // Node ids follow the LLO convention (parent-path + "/" + kind[_N]), so the
-// scope-prefix filter in queryCallPattern (`n_leaf.id LIKE scopeID||'/%'`)
-// behaves exactly as it would against a real ley-line-produced .db.
+// scope-prefix filter in callRows behaves exactly as it would against a real
+// ley-line-produced .db. Scope C differs from A only where A has a '_': the
+// SQL LIKE that once did this filtering read '_' as a one-character wildcard
+// and leaked C's call into A until the prefix was escaped (mache-702f9b);
+// the prefix must match literally whatever does the matching.
 func buildScopedCalleesASTFixture(t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "callees_ast.db")
@@ -59,6 +63,9 @@ func buildScopedCalleesASTFixture(t *testing.T) *sql.DB {
 		// Scope B: Other() — bare call. Must NOT leak into scope A's results.
 		{"pkg.go/function_declaration_1/call_expression", "pkg.go/function_declaration_1", "", "call_expression", 1},
 		{"pkg.go/function_declaration_1/call_expression/identifier", "pkg.go/function_declaration_1/call_expression", "Other", "identifier", 0},
+		// Scope C: Leak() — id differs from scope A only at A's '_'.
+		{"pkg.go/functionXdeclaration/call_expression", "pkg.go/functionXdeclaration", "", "call_expression", 1},
+		{"pkg.go/functionXdeclaration/call_expression/identifier", "pkg.go/functionXdeclaration/call_expression", "Leak", "identifier", 0},
 	}
 	for _, r := range rows {
 		_, err := db.Exec(
@@ -75,9 +82,10 @@ func buildScopedCalleesASTFixture(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestASTWalker_ExtractQualifiedCallsScoped_ScopesCorrectly pins the SQL
-// building block GetCallees now relies on: querying one scope must not see
-// the other scope's calls, and the qualifier must survive.
+// TestASTWalker_ExtractQualifiedCallsScoped_ScopesCorrectly pins the
+// building block GetCallees relies on: querying one scope must not see
+// another scope's calls — not scope B's, and not scope C's, whose id is one
+// wildcard away from A's — and the qualifier must survive.
 func TestASTWalker_ExtractQualifiedCallsScoped_ScopesCorrectly(t *testing.T) {
 	db := buildScopedCalleesASTFixture(t)
 	w := NewASTWalker(db)
@@ -93,6 +101,10 @@ func TestASTWalker_ExtractQualifiedCallsScoped_ScopesCorrectly(t *testing.T) {
 	require.Len(t, callsB, 1, "scope B must surface exactly its own call")
 	assert.Equal(t, "Other", callsB[0].Token)
 	assert.Empty(t, callsB[0].Qualifier, "bare call has no qualifier")
+
+	bare, err := w.ExtractCallsScoped("pkg.go", "pkg.go/function_declaration", "go")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Do"}, bare, "scope A must not see Leak() from scope C (mache-702f9b)")
 }
 
 // TestMemoryStore_GetCallees_ASTScoped is the REAL end-to-end regression test

@@ -300,6 +300,22 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **A source file is projected from its db section in three statements, not
+  fifty-five** (`mache-40ce82`). The cold path spent 90% of its SQLite time in
+  per-construct statements: every registered call pattern ran its own
+  `LIKE`-prefixed recursive query, every `extract` re-read `_source`, and every
+  file-level walk re-fetched the file's rows. `ASTWalker` now loads a file's
+  whole `nodes ⋈ _ast` section once (`fileIndex`, ordered by `start_byte`,
+  indexed by id/kind/parent) and evaluates every pattern, context extract,
+  doc-comment scan and package lookup against it in memory. Per Go file that
+  is one section load, one `_source` read and one `_imports` read — exactly
+  three statements, independent of how many constructs the file holds
+  (`TestProjectSourceFile_StatementCountIsTheSection`: 10 constructs and 500
+  are both 3; non-Go is 2; before, 55 / 1035 / 27). `queryCallPattern` and its
+  `LIKE` escape are gone; `ExtractCalls*` and `ExtractQualifiedCalls*` share
+  one evaluator, whose qualifier and value-position rules are pinned by unit
+  tests. The golden projection is byte-unchanged.
+
 - **Leyline pin bumped v0.18.2 → v0.19.0, adopting `projection-v4`**
   (`mache-bc6ca3`). `nodes.parent_id` is now a GENERATED column derived from the
   row's own `id` and `name`; `node_defs`/`node_refs` carry their own

@@ -59,9 +59,12 @@ func extractCallsStatements(t *testing.T, nCalls int) int64 {
 	db.SetMaxOpenConns(1)
 
 	w := NewASTWalker(db)
-	// Warm once: the first run may prepare statements or populate caches, and
-	// that one-time cost is not part of the growth question.
-	_, err = w.ExtractCalls("main.go", "go")
+	// Warm once on a DIFFERENT file: the first run may prepare statements or
+	// populate per-walker state, and that one-time cost is not part of the
+	// growth question — but warming on main.go itself would cache its section
+	// and leave nothing to count (the cold cost of the measured file is the
+	// question).
+	_, err = w.ExtractCalls("other.go", "go")
 	require.NoError(t, err)
 
 	count := sqlcount.Reset()
@@ -86,8 +89,9 @@ func TestExtractCalls_StatementCountDoesNotGrowWithFileSize(t *testing.T) {
 	require.Positive(t, atSmall, "no statements counted — the instrument is not wired to the walker")
 	assert.Equal(t, atSmall, atLarge, fmt.Sprintf(
 		"ExtractCalls issued %d statements for %d calls but %d for %d.\n\n"+
-			"The count must be independent of how many calls a file contains — it is one\n"+
-			"query per registered call pattern. Growth here means a per-scope or per-node\n"+
+			"The count must be independent of how many calls a file contains — it is the\n"+
+			"one statement that loads the file's node section (every registered pattern\n"+
+			"is then evaluated in memory). Growth here means a per-scope or per-node\n"+
 			"query loop is back, which is the shape of the O(nodes²) projection regression\n"+
 			"(mache-4f3840) that shipped through green CI once already.",
 		atSmall, small, atLarge, large))

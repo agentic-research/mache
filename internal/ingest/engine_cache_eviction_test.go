@@ -15,7 +15,7 @@ import (
 func (w *ASTWalker) cachedSources() int {
 	n := 0
 	for _, m := range []*sync.Map{
-		&w.indexCache, &w.sourceCache, &w.langCache, &w.pkgCache, &w.addrRefCache, &w.callTokenCache,
+		&w.indexCache, &w.addrRefCache, &w.callTokenCache,
 	} {
 		m.Range(func(_, _ any) bool { n++; return true })
 	}

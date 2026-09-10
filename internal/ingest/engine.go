@@ -216,7 +216,7 @@ func (e *Engine) ReIngestFile(path string) error {
 
 	// Drop the ASTWalker's per-file caches for this source before re-projecting
 	// — otherwise ReIngestFile would rebuild from the walker's immortal
-	// indexCache/sourceCache/etc. and never see even a refreshed _ast row
+	// indexCache/callTokenCache/etc. and never see even a refreshed _ast row
 	// (mache-018eee). NOTE: this makes the re-projection consistent with the
 	// current _ast, but the served _ast is still frozen at startup for a
 	// leyline-backed serve — reflecting a live SOURCE edit additionally

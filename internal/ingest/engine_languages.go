@@ -9,7 +9,7 @@ func init() {
 
 	// ASTWalker file-level ref patterns — the pure-Go mirror of the Go
 	// RegisterFileLevelRefQuery above. Each tree-sitter capture becomes a
-	// CallPattern kind-chain (queryCallPattern matches by parent_id):
+	// CallPattern kind-chain (callRows matches by parent_id):
 	//   (keyed_element (literal_element) (literal_element (identifier) @call))
 	//   (call_expression function: (identifier) @call)
 	//   (call_expression function: (selector_expression field: (field_identifier) @call))
@@ -23,12 +23,12 @@ func init() {
 		{OuterKind: "call_expression", Ancestors: []string{"argument_list"}, LeafKind: "identifier"},
 	})
 
-	// ASTWalker (pure-Go path): batched JOIN-style fast path. One CallPattern
-	// per shape; ExtractCalls/ExtractQualifiedCalls translate each into a
-	// single SQL query that returns all matches in one pass.
+	// ASTWalker (pure-Go path): one CallPattern per shape;
+	// ExtractCalls/ExtractQualifiedCalls evaluate each over the file's
+	// in-memory node section in one pass — no SQL per pattern.
 	// Mirrors the Go RefQuery above (which SitterWalker.ExtractCalls uses via
 	// getCallQuery) so the callers/ refs index matches across backends. Field
-	// labels (name:/type:) don't matter here — queryCallPattern matches the kind
+	// labels (name:/type:) don't matter here — callRows matches the kind
 	// chain by parent_id. Parity asserted by TestASTQueryParity callers check.
 	RegisterASTCallPatterns("go", []CallPattern{
 		// function calls (bare + qualified)
