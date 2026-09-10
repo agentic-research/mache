@@ -252,6 +252,13 @@ func (e *Engine) processSourceFileResult(result *parsedSourceFile) error {
 	// ley-line keys _ast/_source (mache-30edfa) — NOT filepath.Base,
 	// which would miss every file below the root.
 	sourceID := e.sourceIDFor(result.realPath)
+	// Every walker query below is keyed by this file's sourceID, and nothing
+	// reads the engine walker's caches after the file is projected (serve-time
+	// callee extraction builds its own walkers). Holding them for the whole
+	// build was 650 MB of a 1.7 GB peak on a 929-file repo (mache-95a33d).
+	// ReIngestFile invalidates before re-ingesting, so this adds no reload on
+	// the daemon path. Deferred so the _project_files early returns evict too.
+	defer w.InvalidateSource(sourceID)
 	root := ASTRoot{
 		DB:           w.db,
 		SourceID:     sourceID,

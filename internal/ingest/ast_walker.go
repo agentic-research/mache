@@ -176,12 +176,14 @@ func TuneReadConnForBuild(db *sql.DB) {
 // ReIngestFile would re-project from the walker's immortal caches and never see
 // the edit.
 //
-// It also bounds cache growth on long-lived daemons: the per-file caches
+// It also bounds cache growth: the per-file caches
 // (indexCache/sourceCache/langCache/pkgCache/addrRefCache/callTokenCache)
 // otherwise accumulate O(repo) node rows + source bytes for the walker's
-// lifetime. That ceiling is bounded by the projected repo's file count; a
-// one-shot `mache build` walker is short-lived so it needs no eviction, and a
-// serve/mount daemon evicts per-file on change here (mache-024e9c).
+// lifetime. A serve/mount daemon evicts per-file on change here
+// (mache-024e9c), and the engine evicts each file as soon as its projection
+// is written (processSourceFileResult) — a one-shot build walker is
+// short-lived, but for that lifetime it held every file's full index at once,
+// which was the build's peak RSS, not a rounding error (mache-95a33d).
 func (w *ASTWalker) InvalidateSource(sourceID string) {
 	w.indexCache.Delete(sourceID)
 	w.sourceCache.Delete(sourceID)
