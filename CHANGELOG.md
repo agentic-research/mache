@@ -72,6 +72,18 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`DeleteFileNodes` no longer scans the whole graph per file** (`mache-088304`).
+  `node_refs` and `node_defs` are keyed `(token, node_id)`, so deleting a
+  file's rows BY `node_id` had no index and planned as a full `SCAN` of a
+  table that grows with every file ingested — O(files × refs) on every build.
+  Measured on a fresh build of this repo (929 files), where every one of those
+  deletes was a no-op: 7.25 s, 34% of the whole schema projection, which drops
+  from 22.5 s to 15.4 s with `idx_refs_node` / `idx_defs_node` in place. The
+  same statements serve the incremental path, so re-parsing ONE changed file
+  in a large repo paid the same scan. A plan-shape test now asserts that no
+  statement `DeleteFileNodes` runs plans as a `SCAN` — the complexity class is
+  pinned machine-independently, where a timing gate would only have flaked.
+
 - **A `go.work`/`go.mod` directive mismatch now fails first, and says what it
   is** (`mache-49b87e`). When the two disagree, every `go` command aborts before
   doing anything, so the gate surfaced it as a wall of unrelated red checks —

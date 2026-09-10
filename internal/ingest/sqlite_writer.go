@@ -95,6 +95,17 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		PRIMARY KEY (token, node_id)
 	) WITHOUT ROWID;
 
+	-- node_id-leading indexes for DeleteFileNodes. The primary keys lead
+	-- with token, so a delete BY node_id has no index to use and plans as a
+	-- full SCAN of a table that grows with every file ingested — O(files x
+	-- refs) on every build, and 34% of the whole projection of this repo
+	-- measured on a fresh build where each delete was a no-op. The same
+	-- statements serve the incremental path, so re-parsing ONE changed file
+	-- in a big repo paid the same scan (mache-088304). Named as leyline
+	-- names its own copy of the first (internal/fixturedb/schema_leyline.go).
+	CREATE INDEX IF NOT EXISTS idx_refs_node ON node_refs(node_id);
+	CREATE INDEX IF NOT EXISTS idx_defs_node ON node_defs(node_id);
+
 	CREATE TABLE IF NOT EXISTS file_index (
 		path TEXT PRIMARY KEY,
 		mod_time INTEGER NOT NULL,
@@ -562,19 +573,31 @@ func (w *SQLiteWriter) AddFileChildren(parent *graph.Node, files []*graph.Node) 
 	w.AddNode(parent)
 }
 
+// deleteFileNodesSQL is the statement sequence DeleteFileNodes executes, in
+// order: refs and defs for the file's nodes, then the nodes. Package-level so
+// the plan-shape test asserts the plans of the statements that actually run
+// rather than of a copy that can drift (mache-088304).
+var deleteFileNodesSQL = [...]string{
+	`DELETE FROM node_refs WHERE node_id IN (
+		SELECT id FROM nodes WHERE source_file = ?
+	)`,
+	`DELETE FROM node_defs WHERE node_id IN (
+		SELECT id FROM nodes WHERE source_file = ?
+	)`,
+	`DELETE FROM nodes WHERE source_file = ?`,
+}
+
+// DeleteFileNodes removes every node that originated from filePath, with its
+// refs and defs. Every statement is index-driven (idx_source_file on the
+// subquery, idx_refs_node / idx_defs_node on the outer delete), so the cost
+// is proportional to the file's own rows, not to the size of the graph.
 func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Delete refs and defs for nodes originating from this file,
-	// then delete the nodes themselves using the indexed source_file column.
-	_, _ = w.tx.Exec(`DELETE FROM node_refs WHERE node_id IN (
-		SELECT id FROM nodes WHERE source_file = ?
-	)`, filePath)
-	_, _ = w.tx.Exec(`DELETE FROM node_defs WHERE node_id IN (
-		SELECT id FROM nodes WHERE source_file = ?
-	)`, filePath)
-	_, _ = w.tx.Exec(`DELETE FROM nodes WHERE source_file = ?`, filePath)
+	for _, q := range deleteFileNodesSQL {
+		_, _ = w.tx.Exec(q, filePath)
+	}
 }
 
 func (w *SQLiteWriter) Close() error {
