@@ -1,4 +1,4 @@
-## nodes (81 rows)
+## nodes (79 rows)
 _project_files		_project_files	1	0		NULL		NULL	
 _project_files/README.md	_project_files	README.md	0	78		"Golden-projection corpus; documented in testdata/golden/projection/README.md.\n"	$FIXTURE/README.md	NULL	
 _project_files/go.mod	_project_files	go.mod	0	23		"module golden\n\ngo 1.22\n"	$FIXTURE/go.mod	NULL	
@@ -64,8 +64,6 @@ store/methods/Store.Index	store/methods	Store.Index	1	0		NULL		"import (\n\t\"so
 store/methods/Store.Index/source	store/methods/Store.Index	source	0	173		"func (s *Store) Index() []string {\n\tkeys := make([]string, 0, len(s.items))\n\tfor _, it := range s.items {\n\t\tkeys = append(keys, it.Key)\n\t}\n\tsort.Strings(keys)\n\treturn keys\n}"	$FIXTURE/store/index.go	NULL	
 store/methods/Store.Len	store/methods	Store.Len	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/method_declaration_1","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:52:54","pkg":"store"}
 store/methods/Store.Len/source	store/methods/Store.Len	source	0	49		"func (s Store) Len() int {\n\treturn len(s.items)\n}"	$FIXTURE/store/store.go	NULL	
-store/methods/string.Add	store/methods	string.Add	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/method_declaration_0","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:43:49","pkg":"store"}
-store/methods/string.Add/source	store/methods/string.Add	source	0	167		"func (s *Store) Add(name string) error {\n\tif len(s.items) >= s.limit {\n\t\treturn ErrFull\n\t}\n\ts.items = append(s.items, Item{Key: keyOf(name), Name: name})\n\treturn nil\n}"	$FIXTURE/store/store.go	NULL	
 store/types	store	types	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","pkg":"store"}
 store/types/Adder	store/types	Adder	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/type_declaration_1/type_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:17:19","pkg":"store"}
 store/types/Adder/source	store/types/Adder	source	0	43		"Adder interface {\n\tAdd(name string) error\n}"	$FIXTURE/store/store.go	NULL	
@@ -80,7 +78,7 @@ store/variables/ErrFull	store/variables	ErrFull	1	0		NULL		"import \"errors\"\n\
 store/variables/ErrFull/source	store/variables/ErrFull	source	0	35		"ErrFull = errors.New(\"store: full\")"	$FIXTURE/store/store.go	NULL	
 store/variables/registry	store/variables	registry	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/var_declaration/var_spec","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:9:9","pkg":"store"}
 store/variables/registry/source	store/variables/registry	source	0	26		"registry map[string]*Store"	$FIXTURE/store/index.go	NULL	
-## node_refs (112 rows)
+## node_refs (105 rows)
 Add	_file_level:$FIXTURE/main.go
 Add	main/functions/main/source
 Config	main/variables/cfg/source
@@ -89,7 +87,6 @@ Config	store/functions/init/source
 Exit	_file_level:$FIXTURE/main.go
 Exit	main/functions/main/source
 Item	store/methods/Store.Add/source
-Item	store/methods/string.Add/source
 Len	_file_level:$FIXTURE/main.go
 Len	main/functions/main/source
 New	_file_level:$FIXTURE/main.go
@@ -106,7 +103,6 @@ Store	store/functions/New/source
 Store	store/methods/Store.Add/source
 Store	store/methods/Store.Index/source
 Store	store/methods/Store.Len/source
-Store	store/methods/string.Add/source
 Strings	_file_level:$FIXTURE/store/index.go
 Strings	store/methods/Store.Index/source
 ToLower	_file_level:$FIXTURE/store/index.go
@@ -118,7 +114,6 @@ append	_file_level:$FIXTURE/store/index.go
 append	_file_level:$FIXTURE/store/store.go
 append	store/methods/Store.Add/source
 append	store/methods/Store.Index/source
-append	store/methods/string.Add/source
 defaultName	_file_level:$FIXTURE/tool.go
 err	_file_level:$FIXTURE/main.go
 err	_file_level:$FIXTURE/tool.go
@@ -129,7 +124,6 @@ gomod:errors	store/functions/init.from_store_go/source
 gomod:errors	store/imports/"errors"/source
 gomod:errors	store/methods/Store.Add/source
 gomod:errors	store/methods/Store.Len/source
-gomod:errors	store/methods/string.Add/source
 gomod:errors	store/types/Adder/source
 gomod:errors	store/types/Config/source
 gomod:errors	store/types/Item/source
@@ -173,14 +167,12 @@ int	store/types/Config/source
 int	store/types/Store/source
 keyOf	_file_level:$FIXTURE/store/store.go
 keyOf	store/methods/Store.Add/source
-keyOf	store/methods/string.Add/source
 keys	_file_level:$FIXTURE/store/index.go
 len	_file_level:$FIXTURE/store/index.go
 len	_file_level:$FIXTURE/store/store.go
 len	store/methods/Store.Add/source
 len	store/methods/Store.Index/source
 len	store/methods/Store.Len/source
-len	store/methods/string.Add/source
 limit	_file_level:$FIXTURE/store/store.go
 make	_file_level:$FIXTURE/store/index.go
 make	store/methods/Store.Index/source
@@ -190,10 +182,9 @@ run	_file_level:$FIXTURE/tool/main.go
 run	main/functions/init.from_main_go/source
 string	store/functions/keyOf/source
 string	store/methods/Store.Add/source
-string	store/methods/string.Add/source
 string	store/types/Adder/source
 string	store/types/Item/source
-## node_defs (66 rows)
+## node_defs (63 rows)
 "errors"	store/imports/"errors"
 "fmt"	main/imports/"fmt"
 "fmt"	main/imports/"fmt".from_tool_go
@@ -202,7 +193,6 @@ string	store/types/Item/source
 "sort"	store/imports/"sort"
 "strings"	store/imports/"strings"
 Add	store/methods/Store.Add
-Add	store/methods/string.Add
 Adder	store/types/Adder
 Config	store/types/Config
 ErrFull	store/variables/ErrFull
@@ -258,8 +248,6 @@ store.init	store/functions/init.from_store_go
 store.keyOf	store/functions/keyOf
 store.maxItems	store/constants/maxItems
 store.registry	store/variables/registry
-store.string.Add	store/methods/string.Add
-string.Add	store/methods/string.Add
 ## file_index (5 rows)
 $FIXTURE/main.go	317
 $FIXTURE/store/index.go	626

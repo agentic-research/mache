@@ -10,6 +10,9 @@ type construct struct {
 	name    string
 	parent  ConstructID
 	dirKind bool
+	// record is `nodes.record`: the token text of a leaf `_ast` node, which
+	// ley-line writes there as well as into node_content. Empty otherwise.
+	record string
 }
 
 type defSpec struct {
@@ -35,6 +38,7 @@ type astSpec struct {
 	span    Span
 	token   string
 	subtree string
+	field   string
 }
 
 type sourceSpec struct {
@@ -47,4 +51,10 @@ type sourceSpec struct {
 type importSpec struct {
 	alias, importPath string
 	source            SourceID
+}
+
+type lspDefSpec struct {
+	nodeID, token, uri  string
+	startLine, startCol int
+	endLine, endCol     int
 }

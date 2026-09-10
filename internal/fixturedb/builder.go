@@ -16,7 +16,7 @@ import (
 //
 // Every method returns the receiver so calls chain.
 type Builder struct {
-	t        *testing.T
+	t        testing.TB
 	producer Producer
 
 	constructs map[ConstructID]*construct
@@ -33,17 +33,11 @@ type Builder struct {
 	subtree int
 }
 
-type lspDefSpec struct {
-	nodeID, token, uri  string
-	startLine, startCol int
-	endLine, endCol     int
-}
-
 // New starts a fixture for the given producer. p is MANDATORY and must be one
 // of [Leyline] / [Standalone]; the zero Producer fails the test immediately,
 // which is how "a fixture cannot exist without naming its producer" is enforced
 // at the one place a fixture can be created.
-func New(t *testing.T, p Producer) *Builder {
+func New(t testing.TB, p Producer) *Builder {
 	t.Helper()
 	if !p.valid() {
 		t.Fatal("fixturedb.New: producer is required — pass fixturedb.Leyline or fixturedb.Standalone")
@@ -145,63 +139,6 @@ func (b *Builder) nextSite(from ConstructID) SiteID {
 		"/block/statement_list/expression_statement/call_expression_" + strconv.Itoa(n))
 }
 
-// ASTNode declares one `_ast` row: a parse-tree node of tree-sitter kind `kind`
-// spanning `span` in source `in`.
-func (b *Builder) ASTNode(id, kind string, in SourceID, span Span, detail ...Detail) *Builder {
-	d := first(detail)
-	b.ast = append(b.ast, astSpec{
-		nodeID: id, kind: kind, source: in, span: span,
-		token: d.Token, subtree: d.label(b.nextSubtree()),
-	})
-	b.Source(in, "", "")
-	return b
-}
-
-// Source declares a source file. lang may be empty when the test does not care;
-// content may be empty, in which case `_source.content` is NULL — which is what
-// ley-line v0.13.0 writes (it stores bytes in source_blobs and only a path
-// here). Pass content when the test is about snippet extraction.
-//
-// Re-declaring a source fills in whichever of lang/content was previously empty
-// rather than replacing it, so ASTNode's implicit declaration never clobbers an
-// explicit one.
-func (b *Builder) Source(id SourceID, lang, content string) *Builder {
-	s, ok := b.sources[id]
-	if !ok {
-		s = &sourceSpec{id: id, path: "/synthetic/" + string(id)}
-		b.sources[id] = s
-		b.srcOrder = append(b.srcOrder, id)
-	}
-	if lang != "" {
-		s.lang = lang
-	}
-	if content != "" {
-		s.content = content
-	}
-	return b
-}
-
-// Import declares one `_imports` row: `alias` bound to module `importPath`
-// inside source `in`. Only [Leyline] has this table; on [Standalone] the call is
-// dropped.
-func (b *Builder) Import(alias, importPath string, in SourceID) *Builder {
-	b.imports = append(b.imports, importSpec{alias: alias, importPath: importPath, source: in})
-	b.Source(in, "", "")
-	return b
-}
-
-// LSPDef declares one `_lsp_defs` row — a binding-fidelity definition, which
-// ensureCanonicalViews unions into v_defs when `_lsp_defs.def_token` exists.
-// The table is LSP-enrichment output, not a producer table, so it is available
-// on both producers.
-func (b *Builder) LSPDef(token string, in ConstructID, uri string, startLine, startCol, endLine, endCol int) *Builder {
-	b.lspDefs = append(b.lspDefs, lspDefSpec{
-		nodeID: string(in), token: token, uri: uri,
-		startLine: startLine, startCol: startCol, endLine: endLine, endCol: endCol,
-	})
-	return b
-}
-
 func (b *Builder) nextSubtree() string {
 	b.subtree++
 	return "seq:" + strconv.Itoa(b.subtree)
@@ -241,7 +178,7 @@ func subtreeHash(label string) []byte {
 // garbage parent — and six smell rules join on parent_id. Before v4 the stored
 // column hid it. A symbol belongs on Def(token, ...), which every such call site
 // already makes.
-func requireNameMatchesID(t *testing.T, id ConstructID, name string) {
+func requireNameMatchesID(t testing.TB, id ConstructID, name string) {
 	t.Helper()
 	if want, ok := nameMatchesID(id, name); !ok {
 		t.Fatalf("fixturedb: Where{Name: %q} on construct %q — ley-line always writes "+
@@ -256,9 +193,9 @@ func requireNameMatchesID(t *testing.T, id ConstructID, name string) {
 // same reason: under a derived parent_id the stored value is not consulted, so a
 // fixture whose Parent disagrees with its id is describing a node that cannot
 // exist.
-func requireParentMatchesID(t *testing.T, id, parent ConstructID, name string) {
+func requireParentMatchesID(t testing.TB, id, parent ConstructID, name string) {
 	t.Helper()
-	if want := string(parent) + "/" + name; string(id) != want {
+	if want, ok := parentMatchesID(id, parent, name); !ok {
 		t.Fatalf("fixturedb: Where{Parent: %q} on construct %q with name %q — the id must "+
 			"be parent+\"/\"+name (%q), because projection-v4 DERIVES parent_id from the id "+
 			"and would ignore this value.", parent, id, name, want)
@@ -267,7 +204,7 @@ func requireParentMatchesID(t *testing.T, id, parent ConstructID, name string) {
 
 // nameMatchesID reports whether name is the id's last path segment, returning
 // the segment it should have been. Separated from the reporting so the rule can
-// be asserted directly, without a *testing.T whose Fatalf would terminate the
+// be asserted directly, without a testing.TB whose Fatalf would terminate the
 // test making the assertion.
 func nameMatchesID(id ConstructID, name string) (string, bool) {
 	want := path.Base(string(id))

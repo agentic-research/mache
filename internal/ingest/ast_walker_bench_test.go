@@ -1,146 +1,99 @@
 package ingest
 
 import (
-	"database/sql"
 	"fmt"
-	"path/filepath"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	"github.com/agentic-research/mache/internal/fixturedb"
 )
 
-// seedManyCalls populates a fresh _ast database with `nCalls` Go function
-// calls, half qualified (fmt.Println-style) and half bare (Helper-style).
-// Returns the *sql.DB and the source path to pass to ExtractCalls.
+// seedManyCalls builds the ley-line parse of a Go file whose one function
+// body holds `nCalls` calls, half qualified (fmt.Println-style) and half
+// bare (Helper-style), keyed as main.go. Returns the fixture; its DB() is
+// the handle to pass to the walker and its DBPath() the file to re-open
+// through another driver.
 //
-// The shape is intentionally similar to what `leyline parse` produces for
-// real Go source: each call gets a unique id with the kind chain encoded.
-// Takes testing.TB so the growth-class GATE
-// (ast_walker_growth_test.go) can seed the same shape the benchmark
-// measures — one fixture, so the gate cannot drift from what is
-// benchmarked (mache-c0537f).
-func seedManyCalls(tb testing.TB, dir string, nCalls int) *sql.DB {
+// Takes testing.TB so the growth-class GATE (ast_walker_growth_test.go) can
+// seed the same shape the benchmark measures — one fixture, so the gate
+// cannot drift from what is benchmarked (mache-c0537f).
+func seedManyCalls(tb testing.TB, nCalls int) *fixturedb.FixtureDB {
 	tb.Helper()
-	dbPath := filepath.Join(dir, "bench.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		tb.Fatal(err)
-	}
-
-	if _, err := db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL, record_id TEXT, record TEXT,
-			source_file TEXT
-		);
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
-			node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL,
-			end_byte INTEGER NOT NULL,
-			start_row INTEGER, start_col INTEGER,
-			end_row INTEGER, end_col INTEGER
-		);
-		CREATE INDEX idx_ast_source ON _ast(source_id);
-		CREATE INDEX idx_ast_kind_source ON _ast(node_kind, source_id);
-		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
-
-		INSERT INTO _source VALUES ('main.go', 'go', '');
-	`); err != nil {
-		tb.Fatal(err)
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		tb.Fatal(err)
-	}
-	run := func(query string, args ...any) {
-		tb.Helper()
-		if _, err := tx.Exec(query, args...); err != nil {
-			tb.Fatalf("seed: %v\nquery=%s\nargs=%v", err, query, args)
-		}
-	}
+	b := fixturedb.New(tb, fixturedb.Leyline)
+	b.Source("main.go", "go", "")
+	end := 100*nCalls + 20
+	b.ASTNode("main.go", "source_file", "main.go", fixturedb.Bytes(0, end))
+	fn := "main.go/function_declaration"
+	b.ASTNode(fn, "function_declaration", "main.go", fixturedb.Bytes(0, end))
+	b.ASTNode(fn+"/identifier", "identifier", "main.go", fixturedb.Bytes(5, 6),
+		fixturedb.Detail{Token: "A", Field: "name"})
+	b.ASTNode(fn+"/parameter_list", "parameter_list", "main.go", fixturedb.Bytes(6, 8),
+		fixturedb.Detail{Field: "parameters"})
+	b.ASTNode(fn+"/block", "block", "main.go", fixturedb.Bytes(9, end), fixturedb.Detail{Field: "body"})
 	for i := range nCalls {
-		callID := fmt.Sprintf("call_expression_%d", i)
+		at := 100 * (i + 1)
+		st := fmt.Sprintf("%s/block/expression_statement_%d", fn, i)
+		call := st + "/call_expression"
+		b.ASTNode(st, "expression_statement", "main.go", fixturedb.Bytes(at, at+20))
+		b.ASTNode(call, "call_expression", "main.go", fixturedb.Bytes(at, at+20))
 		if i%2 == 0 {
-			selID := callID + "/selector_expression"
-			pkgID := selID + "/identifier"
-			fldID := selID + "/field_identifier"
-			pkgName := fmt.Sprintf("pkg%d", i/2)
-			fnName := fmt.Sprintf("Func%d", i/2)
-			run("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, '', ?, 1, 0, '')", callID, callID)
-			run("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, ?, 'selector_expression', 1, 0, '')", selID, callID)
-			run("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, ?, 'identifier', 0, 0, ?)", pkgID, selID, pkgName)
-			run("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, ?, 'field_identifier', 0, 0, ?)", fldID, selID, fnName)
-			run("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', 'call_expression', ?, 0, 0, 0, 0, 0)", callID, i*100)
-			run("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', 'selector_expression', ?, 0, 0, 0, 0, 0)", selID, i*100)
-			run("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', 'identifier', ?, 0, 0, 0, 0, 0)", pkgID, i*100)
-			run("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', 'field_identifier', ?, 0, 0, 0, 0, 0)", fldID, i*100+5)
+			sel := call + "/selector_expression"
+			b.ASTNode(sel, "selector_expression", "main.go", fixturedb.Bytes(at, at+12),
+				fixturedb.Detail{Field: "function"})
+			b.ASTNode(sel+"/identifier", "identifier", "main.go", fixturedb.Bytes(at, at+4),
+				fixturedb.Detail{Token: fmt.Sprintf("pkg%d", i/2), Field: "operand"})
+			b.ASTNode(sel+"/field_identifier", "field_identifier", "main.go", fixturedb.Bytes(at+5, at+12),
+				fixturedb.Detail{Token: fmt.Sprintf("Func%d", i/2), Field: "field"})
 		} else {
-			identID := callID + "/identifier"
-			fnName := fmt.Sprintf("Bare%d", i/2)
-			run("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, '', ?, 1, 0, '')", callID, callID)
-			run("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, ?, 'identifier', 0, 0, ?)", identID, callID, fnName)
-			run("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', 'call_expression', ?, 0, 0, 0, 0, 0)", callID, i*100)
-			run("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', 'identifier', ?, 0, 0, 0, 0, 0)", identID, i*100)
+			b.ASTNode(call+"/identifier", "identifier", "main.go", fixturedb.Bytes(at, at+12),
+				fixturedb.Detail{Token: fmt.Sprintf("Bare%d", i/2), Field: "function"})
 		}
+		b.ASTNode(call+"/argument_list", "argument_list", "main.go", fixturedb.Bytes(at+12, at+14),
+			fixturedb.Detail{Field: "arguments"})
 	}
-	if err := tx.Commit(); err != nil {
-		tb.Fatal(err)
-	}
-	return db
+	_, f := b.Build()
+	return f
 }
 
-func BenchmarkASTWalker_ExtractCalls(b *testing.B) {
-	for _, n := range []int{10, 100, 500} {
-		b.Run(fmt.Sprintf("calls=%d", n), func(b *testing.B) {
-			db := seedManyCalls(b, b.TempDir(), n)
-			defer func() { _ = db.Close() }()
-
-			w := NewASTWalker(db)
-			// Warm-up to amortize one-time SQL planning.
-			if _, err := w.ExtractCalls("main.go", "go"); err != nil {
-				b.Fatal(err)
-			}
-
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				calls, err := w.ExtractCalls("main.go", "go")
-				if err != nil {
-					b.Fatal(err)
-				}
-				if len(calls) == 0 {
-					b.Fatal("no calls extracted")
-				}
-			}
-		})
+// BenchmarkASTWalker_Extract sweeps call counts through each extractor;
+// the per-call cost must stay flat as N grows (docs/reference/projection-performance.md).
+// Each extractor is benchmarked through the same body so the two numbers are
+// comparable: the only variable is the extractor.
+func BenchmarkASTWalker_Extract(b *testing.B) {
+	extractors := []struct {
+		name string
+		// extract runs one extraction and reports how many calls it found.
+		extract func(w *ASTWalker) (int, error)
+	}{
+		{"Calls", func(w *ASTWalker) (int, error) {
+			calls, err := w.ExtractCalls("main.go", "go")
+			return len(calls), err
+		}},
+		{"QualifiedCalls", func(w *ASTWalker) (int, error) {
+			calls, err := w.ExtractQualifiedCalls("main.go", "go")
+			return len(calls), err
+		}},
 	}
-}
-
-func BenchmarkASTWalker_ExtractQualifiedCalls(b *testing.B) {
-	for _, n := range []int{10, 100, 500} {
-		b.Run(fmt.Sprintf("calls=%d", n), func(b *testing.B) {
-			db := seedManyCalls(b, b.TempDir(), n)
-			defer func() { _ = db.Close() }()
-
-			w := NewASTWalker(db)
-			if _, err := w.ExtractQualifiedCalls("main.go", "go"); err != nil {
-				b.Fatal(err)
-			}
-
-			b.ResetTimer()
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				calls, err := w.ExtractQualifiedCalls("main.go", "go")
-				if err != nil {
+	for _, ex := range extractors {
+		for _, n := range []int{10, 100, 500} {
+			b.Run(fmt.Sprintf("%s/calls=%d", ex.name, n), func(b *testing.B) {
+				w := NewASTWalker(seedManyCalls(b, n).DB())
+				// Warm-up to amortize one-time SQL planning.
+				if _, err := ex.extract(w); err != nil {
 					b.Fatal(err)
 				}
-				if len(calls) == 0 {
-					b.Fatal("no calls extracted")
+
+				b.ResetTimer()
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					found, err := ex.extract(w)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if found == 0 {
+						b.Fatal("no calls extracted")
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }

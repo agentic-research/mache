@@ -2,19 +2,20 @@ package ingest
 
 import (
 	"database/sql"
-	"path/filepath"
+	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
-// seedCallExtractionAST creates a minimal _ast database modeling a Go file
-// shaped like the output of `leyline parse`, where node IDs encode the
-// kind chain (so matchAncestry compares correctly).
+// seedCallExtractionAST builds the ley-line parse of a Go file with one
+// qualified and one bare call — the nodes, _ast and node_child rows
+// `leyline parse` writes, under the ids it assigns:
 //
 //	package main
 //	func A() {
@@ -23,78 +24,59 @@ import (
 //	}
 func seedCallExtractionAST(t *testing.T) *sql.DB {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "calls.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
+	return seedCallsAST(t, 1)
+}
 
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL, record_id TEXT, record TEXT,
-			source_file TEXT
-		);
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
-			node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL,
-			end_byte INTEGER NOT NULL,
-			start_row INTEGER, start_col INTEGER,
-			end_row INTEGER, end_col INTEGER
-		);
-		CREATE INDEX idx_ast_source ON _ast(source_id);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
+// seedCallsAST is seedCallExtractionAST with the bare Helper() call repeated
+// helperCalls times, for the dedupe test.
+func seedCallsAST(t *testing.T, helperCalls int) *sql.DB {
+	t.Helper()
+	src := "package main\n\nfunc A() {\n\tfmt.Println(\"x\")\n" + strings.Repeat("\tHelper()\n", helperCalls) + "}\n"
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("main.go", "go", src)
+	b.ASTNode("main.go", "source_file", "main.go", fixturedb.Bytes(0, len(src)))
+	b.ASTNode("main.go/package_clause", "package_clause", "main.go", fixturedb.Bytes(0, 12))
+	b.ASTNode("main.go/package_clause/package_identifier", "package_identifier", "main.go",
+		fixturedb.Bytes(8, 12), fixturedb.Detail{Token: "main"})
+	fn := "main.go/function_declaration"
+	b.ASTNode(fn, "function_declaration", "main.go", fixturedb.Bytes(14, len(src)-1))
+	b.ASTNode(fn+"/identifier", "identifier", "main.go", fixturedb.Bytes(19, 20),
+		fixturedb.Detail{Token: "A", Field: "name"})
+	b.ASTNode(fn+"/parameter_list", "parameter_list", "main.go", fixturedb.Bytes(20, 22),
+		fixturedb.Detail{Field: "parameters"})
+	b.ASTNode(fn+"/block", "block", "main.go", fixturedb.Bytes(23, len(src)-1), fixturedb.Detail{Field: "body"})
 
-		INSERT INTO _source VALUES ('main.go', 'go', '');
-	`)
-	require.NoError(t, err)
+	// fmt.Println("x")
+	st := fn + "/block/expression_statement_0"
+	b.ASTNode(st, "expression_statement", "main.go", fixturedb.Bytes(26, 42))
+	b.ASTNode(st+"/call_expression", "call_expression", "main.go", fixturedb.Bytes(26, 42))
+	b.ASTNode(st+"/call_expression/selector_expression", "selector_expression", "main.go",
+		fixturedb.Bytes(26, 37), fixturedb.Detail{Field: "function"})
+	b.ASTNode(st+"/call_expression/selector_expression/identifier", "identifier", "main.go",
+		fixturedb.Bytes(26, 29), fixturedb.Detail{Token: "fmt", Field: "operand"})
+	b.ASTNode(st+"/call_expression/selector_expression/field_identifier", "field_identifier", "main.go",
+		fixturedb.Bytes(30, 37), fixturedb.Detail{Token: "Println", Field: "field"})
+	b.ASTNode(st+"/call_expression/argument_list", "argument_list", "main.go",
+		fixturedb.Bytes(37, 42), fixturedb.Detail{Field: "arguments"})
+	b.ASTNode(st+"/call_expression/argument_list/interpreted_string_literal", "interpreted_string_literal",
+		"main.go", fixturedb.Bytes(38, 41), fixturedb.Detail{Token: `"x"`})
 
-	type row struct {
-		id, parentID string
-		kind         int
-		record       string
+	// Helper(), helperCalls times: identical statements share one subtree
+	// hash, as ley-line's merkle ids give them.
+	for i := range helperCalls {
+		start := 44 + 10*i
+		st := fmt.Sprintf("%s/block/expression_statement_%d", fn, i+1)
+		b.ASTNode(st, "expression_statement", "main.go", fixturedb.Bytes(start, start+8),
+			fixturedb.Detail{Subtree: "helper-stmt"})
+		b.ASTNode(st+"/call_expression", "call_expression", "main.go", fixturedb.Bytes(start, start+8),
+			fixturedb.Detail{Subtree: "helper-call"})
+		b.ASTNode(st+"/call_expression/identifier", "identifier", "main.go", fixturedb.Bytes(start, start+6),
+			fixturedb.Detail{Token: "Helper", Field: "function", Subtree: "helper-ident"})
+		b.ASTNode(st+"/call_expression/argument_list", "argument_list", "main.go", fixturedb.Bytes(start+6, start+8),
+			fixturedb.Detail{Field: "arguments", Subtree: "helper-args"})
 	}
-	// Path scheme mirrors LLO output: each segment is the kind (with _N
-	// disambiguator when siblings repeat).
-	rows := []row{
-		// Qualified call: fmt.Println
-		{"call_expression", "", 1, ""},
-		{"call_expression/selector_expression", "call_expression", 1, ""},
-		{"call_expression/selector_expression/identifier", "call_expression/selector_expression", 0, "fmt"},
-		{"call_expression/selector_expression/field_identifier", "call_expression/selector_expression", 0, "Println"},
-		// Bare call: Helper
-		{"call_expression_1", "", 1, ""},
-		{"call_expression_1/identifier", "call_expression_1", 0, "Helper"},
-	}
-	for _, r := range rows {
-		_, err := db.Exec(
-			"INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, ?, ?, ?, 0, ?)",
-			r.id, r.parentID, filepath.Base(r.id), r.kind, r.record,
-		)
-		require.NoError(t, err)
-	}
-
-	type ast struct {
-		id, kind  string
-		startByte int
-	}
-	asts := []ast{
-		// Qualified: byte ranges chosen so start_byte sort is intuitive
-		{"call_expression", "call_expression", 0},
-		{"call_expression/selector_expression", "selector_expression", 0},
-		{"call_expression/selector_expression/identifier", "identifier", 0},
-		{"call_expression/selector_expression/field_identifier", "field_identifier", 4},
-		// Bare
-		{"call_expression_1", "call_expression", 100},
-		{"call_expression_1/identifier", "identifier", 100},
-	}
-	for _, a := range asts {
-		_, err := db.Exec(
-			"INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', ?, ?, 0, 0, 0, 0, 0)",
-			a.id, a.kind, a.startByte,
-		)
-		require.NoError(t, err)
-	}
-	return db
+	_, f := b.Build()
+	return f.DB()
 }
 
 func TestASTWalker_ExtractCalls_Go(t *testing.T) {
@@ -146,59 +128,16 @@ func TestASTWalker_ExtractCalls_UnknownLanguageReturnsNil(t *testing.T) {
 // declarations are concatenated into a context blob from _source byte
 // ranges. Bead mache-37926d.
 func TestASTWalker_ExtractContext(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ctx.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	const src = "package main\n\nimport \"fmt\"\n\nconst Pi = 3.14\n\ntype Greeter struct{}\n"
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("main.go", "go", src)
+	b.ASTNode("main.go", "source_file", "main.go", fixturedb.Bytes(0, len(src)))
+	b.ASTNode("main.go/import_declaration", "import_declaration", "main.go", fixturedb.Bytes(14, 26))
+	b.ASTNode("main.go/const_declaration", "const_declaration", "main.go", fixturedb.Bytes(28, 43))
+	b.ASTNode("main.go/type_declaration", "type_declaration", "main.go", fixturedb.Bytes(45, 66))
+	_, f := b.Build()
 
-	const src = `package main
-
-import "fmt"
-
-const Pi = 3.14
-
-type Greeter struct{}
-`
-	importStart, importEnd := 14, 26
-	constStart, constEnd := 28, 43
-	typeStart, typeEnd := 45, 67
-
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, mtime INTEGER NOT NULL, record TEXT
-		);
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
-			node_kind TEXT NOT NULL,
-			start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
-			start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER
-		);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL, path TEXT);
-	`)
-	require.NoError(t, err)
-
-	_, err = db.Exec("INSERT INTO _source (id, language, content) VALUES ('main.go', 'go', ?)", []byte(src))
-	require.NoError(t, err)
-
-	// Every _ast row has its nodes row, as in a leyline-parsed db.
-	for _, r := range []struct {
-		id, kind   string
-		start, end int
-	}{
-		{"src/import", "import_declaration", importStart, importEnd},
-		{"src/const", "const_declaration", constStart, constEnd},
-		{"src/type", "type_declaration", typeStart, typeEnd},
-	} {
-		_, err := db.Exec("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, 'src', ?, 1, 0, '')",
-			r.id, filepath.Base(r.id))
-		require.NoError(t, err)
-		_, err = db.Exec("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', ?, ?, ?, 0, 0, 0, 0)",
-			r.id, r.kind, r.start, r.end)
-		require.NoError(t, err)
-	}
-
-	w := NewASTWalker(db)
+	w := NewASTWalker(f.DB())
 	got, err := w.ExtractContext("main.go", "go")
 	require.NoError(t, err)
 	require.NotEmpty(t, got)
@@ -220,24 +159,9 @@ func TestASTWalker_ExtractContext_UnknownLanguageReturnsNil(t *testing.T) {
 }
 
 func TestASTWalker_ExtractCalls_Dedupes(t *testing.T) {
-	db := seedCallExtractionAST(t)
+	// Two bare calls to the same name "Helper".
+	db := seedCallsAST(t, 2)
 	defer func() { _ = db.Close() }()
-
-	// Add a second bare call to the same name "Helper" (call_expression_2).
-	_, err := db.Exec(`
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record)
-		VALUES
-		  ('call_expression_2', '', 'call_expression_2', 1, 0, ''),
-		  ('call_expression_2/identifier', 'call_expression_2', 'identifier', 0, 0, 'Helper')
-	`)
-	require.NoError(t, err)
-	_, err = db.Exec(`
-		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col)
-		VALUES
-		  ('call_expression_2', 'main.go', 'call_expression', 200, 0, 0, 0, 0, 0),
-		  ('call_expression_2/identifier', 'main.go', 'identifier', 200, 0, 0, 0, 0, 0)
-	`)
-	require.NoError(t, err)
 
 	w := NewASTWalker(db)
 	calls, err := w.ExtractCalls("main.go", "go")

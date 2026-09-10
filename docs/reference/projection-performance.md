@@ -85,9 +85,9 @@ CGO_ENABLED=0 go build -o /tmp/mache-after .
 ```
 
 The maintained in-tree proxy is `internal/ingest/ast_walker_bench_test.go`
-(`BenchmarkASTWalker_ExtractCalls` / `ExtractQualifiedCalls`), which sweeps call
-counts on the current code; run it with `-benchmem` to watch the per-call cost
-stay flat as N grows.
+(`BenchmarkASTWalker_Extract`, one sub-benchmark per extractor — `Calls` and
+`QualifiedCalls`), which sweeps call counts on the current code; run it with
+`-benchmem` to watch the per-call cost stay flat as N grows.
 
 ## Not covered here
 

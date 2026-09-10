@@ -3,7 +3,6 @@ package ingest
 import (
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/sqlcount"
@@ -44,16 +43,15 @@ import (
 // against a file seeded with nCalls calls.
 func extractCallsStatements(t *testing.T, nCalls int) int64 {
 	t.Helper()
-	dir := t.TempDir()
 
 	// Seed through the ordinary driver: seeding work is not under measurement.
-	seeded := seedManyCalls(t, dir, nCalls)
-	require.NoError(t, seeded.Close())
+	seeded := seedManyCalls(t, nCalls)
+	require.NoError(t, seeded.DB().Close())
 
 	// Re-open the same file through the counting driver, so the only statements
 	// recorded are the ones ExtractCalls itself issues.
 	sqlcount.RegisterDriver()
-	db, err := sql.Open(sqlcount.DriverName, filepath.Join(dir, "bench.db"))
+	db, err := sql.Open(sqlcount.DriverName, seeded.DBPath())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	db.SetMaxOpenConns(1)
@@ -104,10 +102,7 @@ func TestExtractCalls_StatementCountDoesNotGrowWithFileSize(t *testing.T) {
 // statement count does not.
 func TestExtractCalls_ResultIsUnchangedAcrossSizes(t *testing.T) {
 	countCalls := func(n int) int {
-		dir := t.TempDir()
-		db := seedManyCalls(t, dir, n)
-		t.Cleanup(func() { _ = db.Close() })
-		calls, err := NewASTWalker(db).ExtractCalls("main.go", "go")
+		calls, err := NewASTWalker(seedManyCalls(t, n).DB()).ExtractCalls("main.go", "go")
 		require.NoError(t, err)
 		return len(calls)
 	}

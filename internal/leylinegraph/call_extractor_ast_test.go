@@ -2,60 +2,43 @@ package leylinegraph
 
 import (
 	"database/sql"
-	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
-// seedASTCallFixture builds a minimal SQLite DB with the schema
-// ASTWalker expects (nodes + _ast tables) and inserts one Go-shaped
-// call: caller `pkg.Foo` invokes `Bar()`.
+// seedASTCallFixture builds a ley-line-shaped db holding one Go call:
+// `Bar()` in main.go.
 //
-// AST shape (matches Go's first call pattern: OuterKind=call_expression,
+// AST shape (matches Go's bare call pattern: OuterKind=call_expression,
 // LeafKind=identifier):
 //
-//	pkg/main.go
+//	main.go
 //	└── call_expression  (outer)
-//	    └── identifier   (leaf, record="Bar")
+//	    ├── identifier     (leaf, record="Bar")
+//	    └── argument_list
 func seedASTCallFixture(t *testing.T) (*sql.DB, string) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "ast.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.ASTNode("main.go", "source_file", "main.go", fixturedb.Bytes(0, 6))
+	b.ASTNode("main.go/call_expression", "call_expression", "main.go", fixturedb.Bytes(0, 5))
+	b.ASTNode("main.go/call_expression/identifier", "identifier", "main.go", fixturedb.Bytes(0, 3), fixturedb.Detail{Token: "Bar", Field: "function"})
+	b.ASTNode("main.go/call_expression/argument_list", "argument_list", "main.go", fixturedb.Bytes(3, 5), fixturedb.Detail{Field: "arguments"})
+	_, f := b.Build()
+	return f.DB(), "main.go"
+}
 
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY,
-			parent_id TEXT,
-			name TEXT,
-			kind INTEGER,
-			mtime INTEGER,
-			source_file TEXT,
-			record TEXT
-		);
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY,
-			source_id TEXT NOT NULL,
-			node_kind TEXT NOT NULL,
-			start_byte INTEGER, end_byte INTEGER,
-			start_row INTEGER, start_col INTEGER,
-			end_row INTEGER, end_col INTEGER
-		);
-
-		-- The call: a Go file containing 'Bar()'. Two AST nodes:
-		-- the call_expression and the identifier child it wraps.
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('call_outer', '',           'Bar()', 1, 0, 'main.go', 'Bar()'),
-		  ('call_leaf',  'call_outer', 'Bar',   0, 0, 'main.go', 'Bar');
-		INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES
-		  ('call_outer', 'main.go', 'call_expression', 0, 5, 1, 0, 1, 5),
-		  ('call_leaf',  'main.go', 'identifier',      0, 3, 1, 0, 1, 3);
-	`)
-	require.NoError(t, err)
-	return db, "main.go"
+// seedNoASTFixture builds a db with the mache projection's own schema and no
+// `_ast` table — what a non-source backend hands the pickers.
+func seedNoASTFixture(t *testing.T) *sql.DB {
+	t.Helper()
+	b := fixturedb.New(t, fixturedb.Standalone)
+	b.Def("Bar", "pkg/functions/Bar", fixturedb.Function)
+	_, f := b.Build()
+	return f.DB()
 }
 
 // TestNewASTCallExtractor_ResolvesGoCall pins the basic happy path:
@@ -64,7 +47,6 @@ func seedASTCallFixture(t *testing.T) (*sql.DB, string) {
 // for the same input shape, but via SQL — no tree-sitter, no parser.
 func TestNewASTCallExtractor_ResolvesGoCall(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
 
 	extract := NewASTCallExtractor(db)
 	calls, err := extract(nil, sourcePath, "go")
@@ -80,7 +62,6 @@ func TestNewASTCallExtractor_ResolvesGoCall(t *testing.T) {
 // than erroring. Callers treat empty as "no calls in this file."
 func TestNewASTCallExtractor_UnknownLanguageReturnsNil(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
 
 	extract := NewASTCallExtractor(db)
 	calls, err := extract(nil, sourcePath, "esperanto")
@@ -88,21 +69,31 @@ func TestNewASTCallExtractor_UnknownLanguageReturnsNil(t *testing.T) {
 	assert.Empty(t, calls)
 }
 
-// TestNewASTCallExtractor_ContentArgIgnored pins the contract that
-// the extractor's `content` parameter is unused — calls are resolved
-// from the pre-parsed _ast table keyed by `path`, not by re-parsing.
-// This is the central design difference vs newCallExtractor (CGO,
-// re-parses content via tree-sitter).
-func TestNewASTCallExtractor_ContentArgIgnored(t *testing.T) {
-	db, sourcePath := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
+// TestASTCallExtractor_ContentArgIgnored pins the contract that the AST
+// extractor's `content` parameter is unused — calls are resolved from the
+// pre-parsed _ast table keyed by `path`, not by re-parsing. That is the
+// central design difference from the CGO extractor it replaced, and it is
+// also how PickCallExtractor's dispatch is observed: CallExtractor is an
+// opaque closure, so the only evidence that a db carrying `_ast` got the AST
+// extractor is that garbage content still yields the AST-derived call.
+func TestASTCallExtractor_ContentArgIgnored(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func(*sql.DB) graph.CallExtractor
+	}{
+		{"NewASTCallExtractor", NewASTCallExtractor},
+		{"PickCallExtractor", PickCallExtractor},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, sourcePath := seedASTCallFixture(t)
 
-	extract := NewASTCallExtractor(db)
-	// Pass garbage as content; the extractor must ignore it.
-	calls, err := extract([]byte("not Go at all — totally bogus bytes"), sourcePath, "go")
-	require.NoError(t, err)
-	require.Len(t, calls, 1, "extractor must trust the AST, not the content arg")
-	assert.Equal(t, "Bar", calls[0].Token)
+			extract := tc.build(db)
+			calls, err := extract([]byte("not Go at all — totally bogus bytes"), sourcePath, "go")
+			require.NoError(t, err)
+			require.Len(t, calls, 1, "extractor must trust the AST, not the content arg")
+			assert.Equal(t, "Bar", calls[0].Token)
+		})
+	}
 }
 
 // TestNewASTCallExtractor_NonexistentSourcePathReturnsEmpty pins
@@ -112,7 +103,6 @@ func TestNewASTCallExtractor_ContentArgIgnored(t *testing.T) {
 // an empty content slice.
 func TestNewASTCallExtractor_NonexistentSourcePathReturnsEmpty(t *testing.T) {
 	db, _ := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
 
 	extract := NewASTCallExtractor(db)
 	calls, err := extract(nil, "does/not/exist.go", "go")
@@ -120,53 +110,15 @@ func TestNewASTCallExtractor_NonexistentSourcePathReturnsEmpty(t *testing.T) {
 	assert.Empty(t, calls)
 }
 
-// TestPickCallExtractor_PrefersASTWhenAvailable pins the dispatch
-// at the wiring sites: a SQLiteGraph whose .db carries `_ast`
-// gets the pure-Go extractor, not the CGO one. We can't directly
-// observe which closure was returned (CallExtractor is opaque),
-// so we observe via the central design difference — the AST
-// extractor ignores `content` and trusts the AST. Pass garbage
-// content with a path that resolves in `_ast`; if the result is
-// the AST-derived call, we know we got the AST extractor. If it
-// were the CGO one, parsing the garbage would yield no calls.
-func TestPickCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
-	db, sourcePath := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
-
-	extract := PickCallExtractor(db)
-	calls, err := extract([]byte("garbage that wouldn't parse as Go"), sourcePath, "go")
-	require.NoError(t, err)
-	require.Len(t, calls, 1, "AST extractor must surface 'Bar' from the pre-parsed _ast")
-	assert.Equal(t, "Bar", calls[0].Token)
-}
-
-// TestPickCallExtractor_FallsBackWhenASTAbsent pins the inverse:
-// a SQLiteGraph whose .db has no `_ast` table gets the CGO
-// extractor as fallback. We don't try to actually run the CGO
-// extractor in this test (CGO + tests is the mache-2y9w story);
-// we observe the dispatch by checking it doesn't return nil and
-// — since the closure can't be compared — by trusting the
-// detection logic that gated the dispatch.
+// TestPickCallExtractor_FallsBackWhenASTAbsent pins the inverse: a db
+// with no `_ast` table gets the no-op extractor — there is no CGO fallback
+// since ADR-0012 step 4 — which resolves nothing and never errors.
 func TestPickCallExtractor_FallsBackWhenASTAbsent(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "noast.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// Schema with no _ast table — only nodes/_source — to mirror
-	// what mache build (standalone CGO path) produces today.
-	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT, parent_id TEXT, name TEXT, kind INTEGER, mtime INTEGER, source_file TEXT, record TEXT);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT, content BLOB);
-	`)
-	require.NoError(t, err)
-
-	extract := PickCallExtractor(db)
+	extract := PickCallExtractor(seedNoASTFixture(t))
 	require.NotNil(t, extract, "fallback extractor must not be nil")
-	// We can't easily verify it's the CGO closure without invoking
-	// it (which exercises CGO). The dispatch contract — _ast
-	// absent → fall back — is enforced by the picker's SQL check;
-	// see TestPickCallExtractor_DetectsAST for that.
+	calls, err := extract([]byte("package main\n\nfunc A() { Bar() }\n"), "main.go", "go")
+	require.NoError(t, err)
+	assert.Empty(t, calls, "without _ast there is nothing to resolve calls from")
 }
 
 // TestPickCallExtractor_HandlesNilDB pins the safety contract for
@@ -174,7 +126,10 @@ func TestPickCallExtractor_FallsBackWhenASTAbsent(t *testing.T) {
 // but a contract worth preserving as wiring evolves).
 func TestPickCallExtractor_HandlesNilDB(t *testing.T) {
 	extract := PickCallExtractor(nil)
-	assert.NotNil(t, extract, "nil DB must yield the CGO fallback, not a nil closure")
+	require.NotNil(t, extract, "nil DB must yield the no-op extractor, not a nil closure")
+	calls, err := extract(nil, "main.go", "go")
+	require.NoError(t, err)
+	assert.Empty(t, calls)
 }
 
 // TestNewASTScopedCallExtractor_ResolvesGoCall pins the scoped-extractor
@@ -184,7 +139,6 @@ func TestPickCallExtractor_HandlesNilDB(t *testing.T) {
 // it must still resolve the same call NewASTCallExtractor finds.
 func TestNewASTScopedCallExtractor_ResolvesGoCall(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
 
 	extract := NewASTScopedCallExtractor(db)
 	calls, err := extract(sourcePath, "", "go")
@@ -200,7 +154,6 @@ func TestNewASTScopedCallExtractor_ResolvesGoCall(t *testing.T) {
 // shape as the unscoped extractor's nonexistent-source-path test.
 func TestNewASTScopedCallExtractor_NonexistentScopeReturnsEmpty(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
 
 	extract := NewASTScopedCallExtractor(db)
 	calls, err := extract(sourcePath, "no/such/scope", "go")
@@ -213,7 +166,6 @@ func TestNewASTScopedCallExtractor_NonexistentScopeReturnsEmpty(t *testing.T) {
 // .db carrying `_ast` yields a working scoped extractor.
 func TestPickScopedCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
 	db, sourcePath := seedASTCallFixture(t)
-	defer func() { _ = db.Close() }()
 
 	extract := PickScopedCallExtractor(db)
 	require.NotNil(t, extract)
@@ -230,13 +182,5 @@ func TestPickScopedCallExtractor_PrefersASTWhenAvailable(t *testing.T) {
 // scopedExtractor as "fall back to the legacy path".
 func TestPickScopedCallExtractor_NilWhenASTAbsentOrDBNil(t *testing.T) {
 	assert.Nil(t, PickScopedCallExtractor(nil))
-
-	dbPath := filepath.Join(t.TempDir(), "noast.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-	_, err = db.Exec(`CREATE TABLE nodes (id TEXT, parent_id TEXT, name TEXT, kind INTEGER, mtime INTEGER, source_file TEXT, record TEXT);`)
-	require.NoError(t, err)
-
-	assert.Nil(t, PickScopedCallExtractor(db))
+	assert.Nil(t, PickScopedCallExtractor(seedNoASTFixture(t)))
 }

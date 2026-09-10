@@ -2,6 +2,9 @@ package fixturedb
 
 import (
 	"database/sql"
+	"encoding/hex"
+	"path"
+	"slices"
 
 	"github.com/agentic-research/mache/internal/sqlintro"
 )
@@ -21,19 +24,26 @@ type emitter struct {
 	// exactly what this emitter would have written.
 	derivedParent bool
 	b             *Builder
-	db            *sql.DB
+	db            *sql.Tx
 	// hasNodeContent reports whether this fixture has a node_content table to
 	// point node_hash values at. Ley-line always does; a Standalone fixture only
 	// does when it modelled the cache-hydration path.
 	hasNodeContent bool
 }
 
+// insertRows writes every spec inside ONE transaction: a fixture is
+// all-or-nothing, and a benchmark-sized one (thousands of `_ast` rows) costs
+// a single fsync rather than one per row.
 func (b *Builder) insertRows(db *sql.DB) {
 	b.t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		b.t.Fatalf("fixturedb(%s): begin: %v", b.producer, err)
+	}
 	e := &emitter{
-		b: b, db: db,
+		b: b, db: tx,
 		hasNodeContent: b.producer == Leyline || len(b.ast) > 0,
-		derivedParent:  sqlintro.ColumnIsGenerated(db, "nodes", "parent_id"),
+		derivedParent:  sqlintro.ColumnIsGenerated(tx, "nodes", "parent_id"),
 	}
 	e.emitNodes()
 	e.emitDefs()
@@ -42,6 +52,9 @@ func (b *Builder) insertRows(db *sql.DB) {
 	e.emitSources()
 	e.emitImports()
 	e.emitLSPDefs()
+	if err := tx.Commit(); err != nil {
+		b.t.Fatalf("fixturedb(%s): commit: %v", b.producer, err)
+	}
 }
 
 func (e *emitter) exec(q string, args ...any) {
@@ -73,13 +86,13 @@ func (e *emitter) emitNodes() {
 		}
 		if e.derivedParent {
 			e.exec(`INSERT OR REPLACE INTO nodes (id, name, kind, size, mtime, record_id, record, source_file)
-				VALUES (?, ?, ?, 0, 0, '', '', ?)`,
-				string(c.id), c.name, kind, string(c.source))
+				VALUES (?, ?, ?, 0, 0, '', ?, ?)`,
+				string(c.id), c.name, kind, c.record, string(c.source))
 			continue
 		}
 		e.exec(`INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file)
-			VALUES (?, ?, ?, ?, 0, 0, '', '', ?)`,
-			string(c.id), string(c.parent), c.name, kind, string(c.source))
+			VALUES (?, ?, ?, ?, 0, 0, '', ?, ?)`,
+			string(c.id), string(c.parent), c.name, kind, c.record, string(c.source))
 	}
 }
 
@@ -120,8 +133,10 @@ func (e *emitter) emitRefs() {
 }
 
 func (e *emitter) emitAST() {
+	hashes := make(map[string][]byte, len(e.b.ast))
 	for _, a := range e.b.ast {
 		h := e.subtree(a.subtree, a.kind, a.token)
+		hashes[a.nodeID] = h
 		e.exec(`INSERT OR REPLACE INTO _ast
 			(node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col, node_hash)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -129,6 +144,66 @@ func (e *emitter) emitAST() {
 			a.span.StartByte, a.span.EndByte,
 			a.span.StartRow, a.span.StartCol, a.span.EndRow, a.span.EndCol, h)
 	}
+	if e.b.producer == Leyline {
+		e.emitNodeChildren(hashes)
+	}
+}
+
+// childRow is one `node_child` row as the fixture states it: the child's hash
+// and the field it sits under.
+type childRow struct {
+	hash  []byte
+	field string
+}
+
+// emitNodeChildren writes the merkle child list: for every `_ast` node whose
+// id's directory is itself an `_ast` node, one row under the parent's hash at
+// the child's start-byte position among its siblings. ley-line emits a parent's
+// list once per unique hash, so two ASTNodes sharing a [Detail.Subtree] label
+// share one list — and must therefore agree on it: identical content has
+// identical children, so a fixture whose labelled twins disagree is describing
+// a subtree that cannot exist.
+func (e *emitter) emitNodeChildren(hashes map[string][]byte) {
+	byParent := make(map[string][]astSpec)
+	for _, a := range e.b.ast {
+		parent := path.Dir(a.nodeID)
+		if _, ok := hashes[parent]; ok {
+			byParent[parent] = append(byParent[parent], a)
+		}
+	}
+	listed := make(map[string][]childRow)
+	for _, a := range e.b.ast {
+		kids, ok := byParent[a.nodeID]
+		if !ok {
+			continue
+		}
+		slices.SortStableFunc(kids, func(x, y astSpec) int { return x.span.StartByte - y.span.StartByte })
+		rows := make([]childRow, len(kids))
+		for i, k := range kids {
+			rows[i] = childRow{hash: hashes[k.nodeID], field: k.field}
+		}
+		key := hex.EncodeToString(hashes[a.nodeID])
+		if prior, seen := listed[key]; seen {
+			if !sameChildList(prior, rows) {
+				e.b.t.Fatalf("fixturedb: %s shares a Subtree label with an earlier ASTNode "+
+					"but declares different children — one subtree has one child list", a.nodeID)
+			}
+			continue
+		}
+		listed[key] = rows
+		for ord, r := range rows {
+			e.exec(`INSERT INTO node_child (parent_hash, ordinal, child_hash, field) VALUES (?, ?, ?, ?)`,
+				hashes[a.nodeID], ord, r.hash, nullIfEmpty(r.field))
+		}
+	}
+}
+
+// sameChildList reports whether two child lists are the same list: same
+// hashes in the same order under the same fields.
+func sameChildList(a, b []childRow) bool {
+	return slices.EqualFunc(a, b, func(x, y childRow) bool {
+		return slices.Equal(x.hash, y.hash) && x.field == y.field
+	})
 }
 
 func (e *emitter) emitSources() {
