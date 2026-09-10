@@ -20,14 +20,14 @@ func defsIn(b *fixturedb.Builder, file string, n int) {
 	}
 }
 
-// godFileFindings runs the real god_file rule over a fixture and returns the
+// ruleFindings runs the real registered rule over a fixture and returns the
 // flagged source_ids.
-func godFileFindings(t *testing.T, seed func(*fixturedb.Builder)) []string {
+func ruleFindings(t *testing.T, ruleID string, seed func(*fixturedb.Builder)) []string {
 	t.Helper()
 	g := newSmellFixture(t, fixturedb.Standalone, seed)
 
-	rule := RegisteredRule("god_file")
-	require.NotNil(t, rule, "god_file must be registered")
+	rule := RegisteredRule(ruleID)
+	require.NotNil(t, rule, "%s must be registered", ruleID)
 
 	require.NoError(t, ensureSmellQueryContext(g))
 	found, err := RunSmellRule(g, rule, "", 1000)
@@ -45,7 +45,7 @@ func godFileFindings(t *testing.T, seed func(*fixturedb.Builder)) []string {
 // that exists to be parsed. Nobody refactors it, so it is noise, and the
 // baseline was ~92% vendored fixtures.
 func TestVendoredFixtures_CannotProduceAFinding(t *testing.T) {
-	ids := godFileFindings(t, func(b *fixturedb.Builder) {
+	ids := ruleFindings(t, "god_file", func(b *fixturedb.Builder) {
 		// A vendored file far over the god_file floor, plus ordinary files
 		// to give the mean something to be.
 		defsIn(b, "testdata/snapshots/vendor-corpus/huge.rs", 60)
@@ -76,8 +76,8 @@ func TestVendoredFixtures_CannotMoveTheThreshold(t *testing.T) {
 		}
 	}
 
-	without := godFileFindings(t, owned)
-	with := godFileFindings(t, func(b *fixturedb.Builder) {
+	without := ruleFindings(t, "god_file", owned)
+	with := ruleFindings(t, "god_file", func(b *fixturedb.Builder) {
 		owned(b)
 		// A vendored corpus of many tiny files: the shape that drags mu down
 		// hardest, because each contributes a small n to the average.
@@ -89,6 +89,42 @@ func TestVendoredFixtures_CannotMoveTheThreshold(t *testing.T) {
 	assert.Equal(t, without, with,
 		"adding a vendored corpus changed the verdict on this project's OWN files — "+
 			"the fixtures are moving the threshold, which is the defect mache-f41b43 names")
+}
+
+// freeFunc seeds one free function definition — the only construct category
+// duplicate_definitions judges.
+func freeFunc(b *fixturedb.Builder, file, name string) {
+	id := fixturedb.ConstructID(file + "/functions/" + name)
+	b.Construct(id, fixturedb.Where{Source: fixturedb.SourceID(file)})
+	b.Def(name, id, fixturedb.Function)
+}
+
+// TestVendoredFixtures_CannotMakeAnOwnedDefinitionLookDuplicated is
+// mache-f41b43's defect in its third rule. duplicate_definitions filtered
+// vendored files from its OUTPUT but still counted them when deciding whether
+// a token is duplicated, so the golden corpus (mache-c0537f) adding a second
+// free `New` under testdata/snapshots/ made the ratchet report the one owned
+// `New` in internal/fixturedb as new debt. An excluded definition must not
+// change the verdict on an owned one.
+//
+// The positive control is the same owned file beside an owned duplicate,
+// which the rule must still report — otherwise an over-broad exclusion would
+// pass this test by never firing at all.
+func TestVendoredFixtures_CannotMakeAnOwnedDefinitionLookDuplicated(t *testing.T) {
+	besideVendored := ruleFindings(t, "duplicate_definitions", func(b *fixturedb.Builder) {
+		freeFunc(b, "internal/fixturedb/builder.go", "New")
+		freeFunc(b, "testdata/snapshots/small-go-golden/store/store.go", "New")
+	})
+	assert.Empty(t, besideVendored,
+		"a vendored definition raised an owned definition's copies count — the exclusion "+
+			"applies to the output but not to the population the rule judges")
+
+	besideOwned := ruleFindings(t, "duplicate_definitions", func(b *fixturedb.Builder) {
+		freeFunc(b, "internal/fixturedb/builder.go", "New")
+		freeFunc(b, "internal/other/new.go", "New")
+	})
+	assert.ElementsMatch(t, []string{"internal/fixturedb/builder.go", "internal/other/new.go"}, besideOwned,
+		"two owned free functions with the same name are exactly what the rule exists to report")
 }
 
 // TestVendoredExclusionIsWiredIntoEveryRuleThatNeedsIt guards the set. The

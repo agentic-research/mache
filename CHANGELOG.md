@@ -86,6 +86,17 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`duplicate_definitions` judges one population** (`mache-117c0a`). The rule
+  counted a token's copies over every definition in the db but only reported
+  the non-vendored, non-generated ones, so a vendored corpus that happened to
+  define `New` made the only owned `func New(` in the repo — `fixturedb.New` —
+  a "duplicate" with no visible second copy. The count and the report now share
+  a single `judged_defs` set, with the vendored/generated exclusions applied
+  once, before counting (the `mache-f41b43` principle: an exclusion applies to
+  the population a rule judges, not to its output). Pinned by
+  `TestVendoredFixtures_CannotMakeAnOwnedDefinitionLookDuplicated`; the old
+  query fails it. The baseline is unchanged.
+
 - **A build no longer holds every file's walker cache, or the whole corpus,
   until it finishes** (`mache-95a33d`). Projecting mache's own 929 files
   peaked at 1.7 GB RSS; 650 MB of that was the `ASTWalker`'s per-file caches
