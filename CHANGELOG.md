@@ -42,6 +42,34 @@ bumps may include breaking changes.
   It found two defects on its first run, in an API that had just been
   deliberately reviewed.
 
+### Added
+
+- **A growth-class gate on projection call extraction** (`mache-c0537f`). mache
+  shipped an `O(nodes²)` projection regression through green CI
+  (`mache-4f3840`); its fix was proven afterwards by a hand-built byte diff
+  between two binaries, and nothing has stood between that path and a repeat
+  since.
+
+  The gate asserts a **count of SQL statements**, not a duration.
+  `ExtractCalls` issues one query per registered call pattern, so the count is a
+  property of the language and must not vary with how many calls a file
+  contains — measured, it is **19 statements at 10, 100 and 500 calls**.
+  Reintroducing a per-scope query loop takes it to 519 at 500 calls, which the
+  gate reports with the numbers and the reason.
+
+  A count rather than a time because wall-clock cannot separate "slower runner"
+  from "wrong complexity class", and timing gates in this repo have receipts:
+  `baselines.toml` pins a `wall_ms` needing manual bumps, and `mache-434ecc` is
+  an open flake where a 50ms ticker missed an 80ms window under CI load.
+  `docs/reference/projection-performance.md` records the fix as `n^2.02` →
+  `n^0.92` and warns against quoting any single "N× faster" figure; a gate
+  pinning one wall-time would be that same mistake in gate form.
+
+  The sweep is per-**file** call count, not repo size — the quadratic was
+  per-file, so a large repo of small files barely exercises it. New package
+  `internal/sqlcount` provides the counter, calibrated by its own test against
+  known statement counts.
+
 ### Fixed
 
 - **A `go.work`/`go.mod` directive mismatch now fails first, and says what it
