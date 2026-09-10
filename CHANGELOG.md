@@ -8,6 +8,20 @@ bumps may include breaking changes.
 
 ### Added
 
+- **Golden projection-parity gate** (`mache-c0537f`). `TestGoldenProjection`
+  projects the hand-written `testdata/snapshots/small-go-golden` corpus through
+  the go preset and diffs every writer table (`nodes`, `node_refs`, `node_defs`,
+  `file_index`, `_index_coverage`) against
+  `testdata/golden/projection/small-go-golden.tsv`, row by row. Byte-identity
+  claims (`mache-95a33d`, the v4→v5 parity in `mache-3688da`) were checked by
+  hand before; now they are a failing test with a `- `/`+ ` row summary, and
+  `-update` prints exactly which rows a change added or removed.
+  `TestProjectionInvariants` pins the semantic claims underneath (methods root,
+  method→callee cross-ref, non-Go routing, lexical dedup order). The first run
+  surfaced two projection defects the golden now pins: phantom
+  `<paramtype>.<method>` nodes (`mache-91d903`) and orphan slashed-import nodes
+  (`mache-94f571`).
+
 - **Public schema resolution and schema-projected builds** (`mache-734971`).
   The new `schema` package owns bundled presets and contained file references.
   `build.ParseWithSchema` accepts a caller-provided topology, while

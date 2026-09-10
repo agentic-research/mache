@@ -11,6 +11,11 @@ schema = "mache-fixtures/v1"
 #   - medium-rust-rosary is a curated snapshot of agentic-research/rosary
 #     produced by `task fixtures:snapshot id=medium-rust-rosary
 #     source=~/remotes/art/rosary` (see ADR-0019 D.7 for the spec).
+#   - small-go-golden is HAND-WRITTEN (source = "handwritten", no sha):
+#     seven files chosen to exercise one projection path each. Its
+#     projection is pinned byte-for-byte in testdata/golden/projection/
+#     by internal/testfixtures/golden_test.go (mache-c0537f); see the
+#     corpus README for what each file pins.
 #
 # Baseline tracking is PR 3. See docs/adr/0019-real-corpus-fixture-registry.md.
 
@@ -32,4 +37,14 @@ source = "/Users/jamesgardner/remotes/art/rosary"
 sha = "4b1711a"
 path = "medium-rust-rosary"
 schema_preset = "rust"
+license = "own"
+
+[[fixture]]
+id = "small-go-golden"
+tier = "medium"
+language = "go"
+source = "handwritten"
+sha = ""
+path = "small-go-golden"
+schema_preset = "go"
 license = "own"
