@@ -70,6 +70,8 @@ var standaloneTables = map[string]string{
 var standaloneIndexes = map[string]string{
 	"idx_parent_name": `CREATE INDEX idx_parent_name ON nodes(parent_id, name)`,
 	"idx_source_file": `CREATE INDEX idx_source_file ON nodes(source_file)`,
+	"idx_refs_node":   `CREATE INDEX idx_refs_node ON node_refs(node_id)`,
+	"idx_defs_node":   `CREATE INDEX idx_defs_node ON node_defs(node_id)`,
 }
 
 // standaloneViews are the PERSISTENT v_defs / v_refs SQLiteWriter installs.

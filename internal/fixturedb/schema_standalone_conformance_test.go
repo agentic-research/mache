@@ -5,8 +5,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -17,9 +19,14 @@ import (
 // The other derivation, re-run — and unlike the ley-line one this needs no
 // binary, so it is UNGATED and runs on every `go test ./...`.
 //
-// It reads internal/ingest/sqlite_writer.go's own schema literal out of the Go
-// AST, executes it into a scratch database, and diffs sqlite_master against
-// [standaloneTables] / [standaloneIndexes] / [standaloneViews].
+// It reads the DDL NewSQLiteWriter executes out of internal/ingest/sqlite_writer.go's
+// Go AST — the non-literal `db.Exec(...)` argument, with each identifier resolved
+// to its package-level string constant — executes it into a scratch database,
+// and diffs sqlite_master against [standaloneTables] / [standaloneIndexes] /
+// [standaloneViews] in BOTH directions: every object the fixture models must
+// match the writer, and every object the writer creates must be modelled. The
+// second direction is what catches an index added to the writer and forgotten
+// here — a fixture missing it plans queries differently from a real .db.
 //
 // Reading the AST rather than importing internal/ingest is deliberate twice
 // over: internal/ingest pulls tree-sitter and therefore CGO, which fixtures must
@@ -27,6 +34,13 @@ import (
 // repo ratchets against (internal/lint's regexpAllowlist).
 func TestStandaloneSchema_MatchesSQLiteWriter(t *testing.T) {
 	got := deriveWriterSchema(t)
+
+	var modelled []string
+	for _, m := range []map[string]string{standaloneTables, standaloneIndexes, standaloneViews} {
+		modelled = append(modelled, slices.Sorted(maps.Keys(m))...)
+	}
+	assert.ElementsMatch(t, modelled, sortedNames(got),
+		"objects created by ingest.SQLiteWriter and objects modelled by the Standalone fixture differ")
 
 	for name, want := range standaloneTables {
 		g, ok := got[name]
@@ -67,7 +81,8 @@ func TestStandaloneSchema_HasNoProducerTables(t *testing.T) {
 	assert.Zero(t, n, "a Standalone fixture with no AST rows must have no _ast table")
 }
 
-// deriveWriterSchema pulls the schema literal out of NewSQLiteWriter and runs it.
+// deriveWriterSchema evaluates the DDL expression NewSQLiteWriter hands to
+// db.Exec and runs it.
 func deriveWriterSchema(t *testing.T) map[string]string {
 	t.Helper()
 
@@ -79,33 +94,57 @@ func deriveWriterSchema(t *testing.T) map[string]string {
 	file, err := parser.ParseFile(token.NewFileSet(), writerPath, nil, 0)
 	require.NoError(t, err, "parse %s", writerPath)
 
-	var ddl string
-	ast.Inspect(file, func(n ast.Node) bool {
-		asn, isAssign := n.(*ast.AssignStmt)
-		if !isAssign || len(asn.Lhs) != 1 || len(asn.Rhs) != 1 {
-			return true
+	consts := map[string]string{}
+	for _, decl := range file.Decls {
+		gd, isGen := decl.(*ast.GenDecl)
+		if !isGen || gd.Tok != token.CONST {
+			continue
 		}
-		ident, isIdent := asn.Lhs[0].(*ast.Ident)
-		if !isIdent || ident.Name != "schema" {
-			return true
+		for _, spec := range gd.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, name := range vs.Names {
+				if lit, isLit := vs.Values[i].(*ast.BasicLit); isLit && lit.Kind == token.STRING {
+					unquoted, uerr := strconv.Unquote(lit.Value)
+					require.NoError(t, uerr)
+					consts[name.Name] = unquoted
+				}
+			}
 		}
-		lit, isLit := asn.Rhs[0].(*ast.BasicLit)
-		if !isLit || lit.Kind != token.STRING {
-			return true
+	}
+
+	var ddl []string
+	for _, decl := range file.Decls {
+		fn, isFunc := decl.(*ast.FuncDecl)
+		if !isFunc || fn.Name.Name != "NewSQLiteWriter" {
+			continue
 		}
-		unquoted, uerr := strconv.Unquote(lit.Value)
-		require.NoError(t, uerr)
-		ddl = unquoted
-		return false
-	})
-	require.NotEmpty(t, ddl,
-		"could not find the `schema := ...` literal in %s — if the writer was "+
-			"restructured, update this derivation rather than snapshotting its output", writerPath)
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, isCall := n.(*ast.CallExpr)
+			if !isCall || len(call.Args) != 1 {
+				return true
+			}
+			sel, isSel := call.Fun.(*ast.SelectorExpr)
+			if !isSel || sel.Sel.Name != "Exec" {
+				return true
+			}
+			// PRAGMAs and the ALTERs are literals; the schema is the one
+			// expression built from named constants.
+			if _, isLit := call.Args[0].(*ast.BasicLit); isLit {
+				return true
+			}
+			ddl = append(ddl, evalStringExpr(t, call.Args[0], consts))
+			return true
+		})
+	}
+	require.Len(t, ddl, 1,
+		"expected exactly one non-literal db.Exec(...) in NewSQLiteWriter in %s — if the "+
+			"writer was restructured, update this derivation rather than snapshotting its output",
+		writerPath)
 
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "writer.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	_, err = db.Exec(ddl)
+	_, err = db.Exec(ddl[0])
 	require.NoError(t, err)
 
 	rows, err := db.Query(`SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL`)
@@ -120,4 +159,29 @@ func deriveWriterSchema(t *testing.T) map[string]string {
 	}
 	require.NoError(t, rows.Err())
 	return out
+}
+
+// evalStringExpr resolves a string expression made of literals, package-level
+// string constants and `+` concatenation — the grammar NewSQLiteWriter's
+// schema argument is written in.
+func evalStringExpr(t *testing.T, e ast.Expr, consts map[string]string) string {
+	t.Helper()
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		require.Equal(t, token.STRING, x.Kind)
+		v, err := strconv.Unquote(x.Value)
+		require.NoError(t, err)
+		return v
+	case *ast.Ident:
+		v, ok := consts[x.Name]
+		require.True(t, ok, "%s is not a package-level string constant", x.Name)
+		return v
+	case *ast.BinaryExpr:
+		require.Equal(t, token.ADD, x.Op)
+		return evalStringExpr(t, x.X, consts) + evalStringExpr(t, x.Y, consts)
+	case *ast.ParenExpr:
+		return evalStringExpr(t, x.X, consts)
+	}
+	require.Failf(t, "unsupported expression", "%T in NewSQLiteWriter's schema argument", e)
+	return ""
 }

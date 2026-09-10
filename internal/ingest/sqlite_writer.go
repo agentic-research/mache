@@ -33,6 +33,91 @@ type SQLiteWriter struct {
 	mu           sync.Mutex
 }
 
+// writerTablesDDL is the base table/index schema NewSQLiteWriter installs.
+// The canonical views live in CanonicalViewsDDL (one definition, executed
+// here and by EnsureCanonicalViews for databases some other producer wrote).
+const writerTablesDDL = `
+CREATE TABLE IF NOT EXISTS nodes (
+	id TEXT PRIMARY KEY,
+	parent_id TEXT,
+	name TEXT NOT NULL,
+	kind INTEGER NOT NULL,
+	size INTEGER DEFAULT 0,
+	mtime INTEGER NOT NULL,
+	record_id TEXT,
+	-- TEXT, not JSON. SQLite has no JSON storage class, and "JSON" contains
+	-- none of the substrings that select an affinity, so it falls through to
+	-- NUMERIC — which silently rewrites any TEXT value that parses as a
+	-- number ('007' -> 7, '1.10' -> 1.1). Ingest binds n.Data as []byte and
+	-- BLOBs bypass the conversion, which is why this stayed latent;
+	-- WritableGraph.UpdateRecord binds string(content) and does not
+	-- (mache-4b8a42).
+	record TEXT,
+	source_file TEXT,
+	-- context holds the imports/types visible to a construct scope,
+	-- served by the context virtual file (vfs.ContextHandler). Set at
+	-- ingest (engine_walk.go) and must survive the SQLite round-trip so
+	-- cat-context works on a mounted .db (mache-b8fe72).
+	context BLOB,
+	-- props holds the node's Properties (lang/pkg/imports/location/ast_*)
+	-- as real nested JSON, so json_extract(props,'$.lang') is queryable.
+	-- These were previously base64'd into the record column, which also
+	-- made that column mean three different things (mache-90b89b).
+	props JSON
+);
+CREATE INDEX IF NOT EXISTS idx_parent_name ON nodes(parent_id, name);
+CREATE INDEX IF NOT EXISTS idx_source_file ON nodes(source_file);
+
+CREATE TABLE IF NOT EXISTS node_refs (
+	token TEXT,
+	node_id TEXT,
+	PRIMARY KEY (token, node_id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS node_defs (
+	token TEXT,
+	node_id TEXT,
+	PRIMARY KEY (token, node_id)
+) WITHOUT ROWID;
+
+-- node_id-leading indexes for DeleteFileNodes. The primary keys lead
+-- with token, so a delete BY node_id has no index to use and plans as a
+-- full SCAN of a table that grows with every file ingested — O(files x
+-- refs) on every build, and 34% of the whole projection of this repo
+-- measured on a fresh build where each delete was a no-op. The same
+-- statements serve the incremental path, so re-parsing ONE changed file
+-- in a big repo paid the same scan (mache-088304). Named as leyline
+-- names its own copy of the first (internal/fixturedb/schema_leyline.go).
+CREATE INDEX IF NOT EXISTS idx_refs_node ON node_refs(node_id);
+CREATE INDEX IF NOT EXISTS idx_defs_node ON node_defs(node_id);
+
+CREATE TABLE IF NOT EXISTS file_index (
+	path TEXT PRIMARY KEY,
+	mod_time INTEGER NOT NULL,
+	size INTEGER NOT NULL
+);
+
+-- _index_coverage records which producer indexed each source file at
+-- which fidelity level, per ADR-0013. Consumers that need to
+-- distinguish "no binding row exists" from "no binding row was looked
+-- for" join against this. PRIMARY KEY (source_id, producer) means a
+-- re-index replaces the prior coverage row for that producer.
+--
+-- fidelity values: 'mention' (tree-sitter), 'binding' (LSP),
+-- 'reachability' (future SSA / call-graph).
+-- complete: 1 if the indexer claims full coverage of the source,
+-- 0 if it gave up partway (out-of-memory, timeout, parse errors
+-- prevented analysis, etc.).
+CREATE TABLE IF NOT EXISTS _index_coverage (
+	source_id TEXT NOT NULL,
+	producer TEXT NOT NULL,
+	fidelity TEXT NOT NULL,
+	indexed_at INTEGER NOT NULL,
+	complete INTEGER NOT NULL,
+	PRIMARY KEY (source_id, producer)
+) WITHOUT ROWID;
+`
+
 // NewSQLiteWriter creates a new writer and initializes the schema.
 func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 	db, err := sql.Open("sqlite", dbPath)
@@ -50,101 +135,7 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		return nil, err
 	}
 
-	// 1. Create Tables
-	schema := `
-	CREATE TABLE IF NOT EXISTS nodes (
-		id TEXT PRIMARY KEY,
-		parent_id TEXT,
-		name TEXT NOT NULL,
-		kind INTEGER NOT NULL,
-		size INTEGER DEFAULT 0,
-		mtime INTEGER NOT NULL,
-		record_id TEXT,
-		-- TEXT, not JSON. SQLite has no JSON storage class, and "JSON" contains
-		-- none of the substrings that select an affinity, so it falls through to
-		-- NUMERIC — which silently rewrites any TEXT value that parses as a
-		-- number ('007' -> 7, '1.10' -> 1.1). Ingest binds n.Data as []byte and
-		-- BLOBs bypass the conversion, which is why this stayed latent;
-		-- WritableGraph.UpdateRecord binds string(content) and does not
-		-- (mache-4b8a42).
-		record TEXT,
-		source_file TEXT,
-		-- context holds the imports/types visible to a construct scope,
-		-- served by the context virtual file (vfs.ContextHandler). Set at
-		-- ingest (engine_walk.go) and must survive the SQLite round-trip so
-		-- cat-context works on a mounted .db (mache-b8fe72).
-		context BLOB,
-		-- props holds the node's Properties (lang/pkg/imports/location/ast_*)
-		-- as real nested JSON, so json_extract(props,'$.lang') is queryable.
-		-- These were previously base64'd into the record column, which also
-		-- made that column mean three different things (mache-90b89b).
-		props JSON
-	);
-	CREATE INDEX IF NOT EXISTS idx_parent_name ON nodes(parent_id, name);
-	CREATE INDEX IF NOT EXISTS idx_source_file ON nodes(source_file);
-
-	CREATE TABLE IF NOT EXISTS node_refs (
-		token TEXT,
-		node_id TEXT,
-		PRIMARY KEY (token, node_id)
-	) WITHOUT ROWID;
-
-	CREATE TABLE IF NOT EXISTS node_defs (
-		token TEXT,
-		node_id TEXT,
-		PRIMARY KEY (token, node_id)
-	) WITHOUT ROWID;
-
-	CREATE TABLE IF NOT EXISTS file_index (
-		path TEXT PRIMARY KEY,
-		mod_time INTEGER NOT NULL,
-		size INTEGER NOT NULL
-	);
-
-	-- _index_coverage records which producer indexed each source file at
-	-- which fidelity level, per ADR-0013. Consumers that need to
-	-- distinguish "no binding row exists" from "no binding row was looked
-	-- for" join against this. PRIMARY KEY (source_id, producer) means a
-	-- re-index replaces the prior coverage row for that producer.
-	--
-	-- fidelity values: 'mention' (tree-sitter), 'binding' (LSP),
-	-- 'reachability' (future SSA / call-graph).
-	-- complete: 1 if the indexer claims full coverage of the source,
-	-- 0 if it gave up partway (out-of-memory, timeout, parse errors
-	-- prevented analysis, etc.).
-	CREATE TABLE IF NOT EXISTS _index_coverage (
-		source_id TEXT NOT NULL,
-		producer TEXT NOT NULL,
-		fidelity TEXT NOT NULL,
-		indexed_at INTEGER NOT NULL,
-		complete INTEGER NOT NULL,
-		PRIMARY KEY (source_id, producer)
-	) WITHOUT ROWID;
-
-	-- v_defs / v_refs: canonical views per ADR-0013 Step 3. Consumers
-	-- query these instead of node_defs / node_refs directly so they're
-	-- producer-agnostic — when LSP-resolved rows land (Step 1, sister
-	-- bead ley-line-453f7e), the view definition expands with a
-	-- UNION ALL and consumer SQL doesn't change.
-	--
-	-- Today the views surface mention-fidelity rows only; Step 1 adds
-	-- referrer_node_id + ref_token columns to _lsp_refs so the binding
-	-- rows can be unioned in trivially. The fidelity column is the
-	-- forward-looking marker — currently always 'mention' from these
-	-- producers.
-	CREATE VIEW IF NOT EXISTS v_defs AS
-		SELECT token, node_id, 'mention' AS fidelity FROM node_defs;
-
-	CREATE VIEW IF NOT EXISTS v_refs AS
-		SELECT node_id AS referrer_node_id,
-		       token,
-		       NULL  AS target_node_id,
-		       NULL  AS ref_uri,
-		       NULL  AS ref_line,
-		       'mention' AS fidelity
-		FROM node_refs;
-	`
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(writerTablesDDL + CanonicalViewsDDL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
@@ -562,19 +553,31 @@ func (w *SQLiteWriter) AddFileChildren(parent *graph.Node, files []*graph.Node) 
 	w.AddNode(parent)
 }
 
+// deleteFileNodesSQL is the statement sequence DeleteFileNodes executes, in
+// order: refs and defs for the file's nodes, then the nodes. Package-level so
+// the plan-shape test asserts the plans of the statements that actually run
+// rather than of a copy that can drift (mache-088304).
+var deleteFileNodesSQL = [...]string{
+	`DELETE FROM node_refs WHERE node_id IN (
+		SELECT id FROM nodes WHERE source_file = ?
+	)`,
+	`DELETE FROM node_defs WHERE node_id IN (
+		SELECT id FROM nodes WHERE source_file = ?
+	)`,
+	`DELETE FROM nodes WHERE source_file = ?`,
+}
+
+// DeleteFileNodes removes every node that originated from filePath, with its
+// refs and defs. Every statement is index-driven (idx_source_file on the
+// subquery, idx_refs_node / idx_defs_node on the outer delete), so the cost
+// is proportional to the file's own rows, not to the size of the graph.
 func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Delete refs and defs for nodes originating from this file,
-	// then delete the nodes themselves using the indexed source_file column.
-	_, _ = w.tx.Exec(`DELETE FROM node_refs WHERE node_id IN (
-		SELECT id FROM nodes WHERE source_file = ?
-	)`, filePath)
-	_, _ = w.tx.Exec(`DELETE FROM node_defs WHERE node_id IN (
-		SELECT id FROM nodes WHERE source_file = ?
-	)`, filePath)
-	_, _ = w.tx.Exec(`DELETE FROM nodes WHERE source_file = ?`, filePath)
+	for _, q := range deleteFileNodesSQL {
+		_, _ = w.tx.Exec(q, filePath)
+	}
 }
 
 func (w *SQLiteWriter) Close() error {

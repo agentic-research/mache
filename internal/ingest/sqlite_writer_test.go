@@ -3,8 +3,10 @@ package ingest
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -475,4 +477,90 @@ func TestEnsureCanonicalViews_Idempotent(t *testing.T) {
 	assert.Equal(t, "mention", defs[0].fidelity)
 
 	require.NoError(t, db.Close())
+}
+
+// newDeleteFixtureWriter opens a fresh writer holding nodes, refs and defs
+// from two source files, so a delete of one can be checked against the
+// survival of the other.
+func newDeleteFixtureWriter(t *testing.T) (*SQLiteWriter, string, string) {
+	t.Helper()
+	w, err := NewSQLiteWriter(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	fileA, fileB := "/src/a.go", "/src/b.go"
+	for i, f := range []string{fileA, fileB} {
+		id := fmt.Sprintf("pkg/functions/F%d", i)
+		w.AddNode(&graph.Node{
+			ID:      id,
+			ModTime: time.Unix(1700000000, 0),
+			Origin:  &graph.SourceOrigin{FilePath: f},
+		})
+		require.NoError(t, w.AddRef("callee", id))
+		require.NoError(t, w.AddDef(fmt.Sprintf("F%d", i), id))
+	}
+	return w, fileA, fileB
+}
+
+// countRows counts rows in table matching where, inside the writer's open
+// transaction so the test sees uncommitted state exactly as the engine does.
+func countRows(t *testing.T, w *SQLiteWriter, table, where string, args ...any) int {
+	t.Helper()
+	var n int
+	require.NoError(t, w.tx.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE "+where, args...).Scan(&n))
+	return n
+}
+
+// TestSQLiteWriter_DeleteFileNodes_RemovesOnlyThatFile is the behavioural
+// contract of the incremental "atomic swap" (engine_treesitter.go step 8): a
+// re-parsed file's old nodes, refs and defs go; every other file's stay. It
+// was previously untested on the SQLite path — the call sites were marked
+// coverage:ignore (mache-088304).
+func TestSQLiteWriter_DeleteFileNodes_RemovesOnlyThatFile(t *testing.T) {
+	w, fileA, fileB := newDeleteFixtureWriter(t)
+
+	w.DeleteFileNodes(fileA)
+
+	assert.Equal(t, 0, countRows(t, w, "nodes", "source_file = ?", fileA), "a.go's node must be gone")
+	assert.Equal(t, 0, countRows(t, w, "node_refs", "node_id = ?", "pkg/functions/F0"), "a.go's ref must be gone")
+	assert.Equal(t, 0, countRows(t, w, "node_defs", "node_id = ?", "pkg/functions/F0"), "a.go's def must be gone")
+
+	assert.Equal(t, 1, countRows(t, w, "nodes", "source_file = ?", fileB), "b.go's node must survive")
+	assert.Equal(t, 1, countRows(t, w, "node_refs", "node_id = ?", "pkg/functions/F1"), "b.go's ref must survive")
+	assert.Equal(t, 1, countRows(t, w, "node_defs", "node_id = ?", "pkg/functions/F1"), "b.go's def must survive")
+}
+
+// TestSQLiteWriter_DeleteFileNodes_EveryStatementIsIndexed pins the
+// complexity class of DeleteFileNodes, machine-independently: no statement
+// it runs may plan as a full table SCAN. Before idx_refs_node / idx_defs_node
+// existed, the ref and def deletes scanned tables that grow with every file
+// ingested — O(files x refs) on a fresh build, and the same cost to re-parse
+// one changed file (mache-088304). A timing test would have caught this only
+// on a big repo and only on a quiet machine; the plan is the same everywhere.
+//
+// The statements come from deleteFileNodesSQL — the array DeleteFileNodes
+// executes — so this cannot pass against a stale copy of the SQL.
+func TestSQLiteWriter_DeleteFileNodes_EveryStatementIsIndexed(t *testing.T) {
+	w, fileA, _ := newDeleteFixtureWriter(t)
+
+	for _, q := range deleteFileNodesSQL {
+		rows, err := w.tx.Query("EXPLAIN QUERY PLAN "+q, fileA)
+		require.NoError(t, err)
+		var plan []string
+		for rows.Next() {
+			var id, parent, notused int
+			var detail string
+			require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
+			plan = append(plan, detail)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.NotEmpty(t, plan, "EXPLAIN QUERY PLAN returned nothing for %q", q)
+
+		for _, step := range plan {
+			assert.NotRegexp(t, `^SCAN `, step,
+				"%q plans a full table scan — its cost grows with the graph, not the file:\n%s",
+				q, strings.Join(plan, "\n"))
+		}
+	}
 }
