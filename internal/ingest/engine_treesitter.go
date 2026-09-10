@@ -25,89 +25,29 @@ import (
 // results slice for the length of the projection (mache-95a33d).
 func (e *Engine) ingestSourceTree(rootPath string) error {
 	var results []parsedSourceFile
-	var rawFiles []struct {
-		path    string
-		modTime time.Time
-	}
-	walkErr := filepath.WalkDir(rootPath, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err // coverage:ignore
-		} // coverage:ignore
-		if d.IsDir() {
-			if p != rootPath && ShouldSkipDir(d.Name()) {
-				return filepath.SkipDir
-			}
-			if e.gitignore != nil && p != rootPath {
-				rel, relErr := filepath.Rel(rootPath, p)
-				if relErr == nil {
-					rel = filepath.ToSlash(rel)
-					if e.gitignore.Match(rel, true) {
-						return filepath.SkipDir
-					}
-				}
-			}
-			return nil
-		}
-		if e.gitignore != nil {
-			rel, relErr := filepath.Rel(rootPath, p)
-			if relErr == nil {
-				rel = filepath.ToSlash(rel)
-				if e.gitignore.Match(rel, false) {
-					return nil
-				}
-			}
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			target, err := os.Stat(p)         // coverage:ignore
-			if err == nil && target.IsDir() { // coverage:ignore
-				return nil // coverage:ignore
-			} // coverage:ignore
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err // coverage:ignore
-		} // coverage:ignore
-		if ShouldSkipFile(p, info.Size()) {
-			return nil
-		}
-
-		ext := filepath.Ext(p)
-		langName, ok := langForExt(ext)
+	var rawFiles []rawFile
+	walkErr := e.walkProjectFiles(rootPath, func(p string, info os.FileInfo) error {
+		langName, ok := langForExt(filepath.Ext(p))
 		if !ok {
 			if !isBinaryFile(p) {
-				rawFiles = append(rawFiles, struct {
-					path    string
-					modTime time.Time
-				}{p, info.ModTime()})
+				rawFiles = append(rawFiles, rawFile{p, info.ModTime()})
 			}
 			return nil
 		}
-
-		// Resolved (symlink-evaluated) path is the key RecordFile stores and
-		// the _ast source_id derives from, so resolve it once here.
-		absPath, err := filepath.Abs(p)
+		// The resolved path is the key RecordFile stores and the _ast
+		// source_id derives from, so resolve it once here.
+		realPath, err := realPathOf(p)
 		if err != nil {
 			return err // coverage:ignore
 		} // coverage:ignore
-		realPath, err := filepath.EvalSymlinks(absPath)
-		if err != nil {
-			realPath = absPath // coverage:ignore
-		} // coverage:ignore
-
 		// Skip unchanged files when an index is available.
-		if e.fileIndex != nil {
-			if entry, ok := e.fileIndex[realPath]; ok { // coverage:ignore
-				if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() { // coverage:ignore
-					return nil // unchanged, skip re-projecting // coverage:ignore
-				} // coverage:ignore
-			}
+		if entry, ok := e.fileIndex[realPath]; ok { // coverage:ignore
+			if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() { // coverage:ignore
+				return nil // unchanged, skip re-projecting // coverage:ignore
+			} // coverage:ignore
 		}
 		results = append(results, parsedSourceFile{
-			job: sourceFileJob{
-				path:     p,
-				langName: langName,
-				modTime:  info.ModTime(),
-			},
+			job:      sourceFileJob{path: p, langName: langName, modTime: info.ModTime()},
 			realPath: realPath,
 		})
 		return nil
@@ -207,8 +147,53 @@ func (e *Engine) processSourceFileResult(result *parsedSourceFile) error {
 		SourceID:     sourceID,
 		ParentPrefix: "",
 	}
-	// File-level extracts (context/imports/file-level-refs) are served from
-	// SQL — no CGO parse runs. Each mirrors the sitter extract it replaced.
+	extractFileLevel(w, sourceID, result)
+
+	// 1. Filter schema nodes by language.
+	applicableNodes := filterNodesByLanguage(e.Schema.Nodes, result.job.langName)
+
+	// 2. No applicable schema nodes → route to _project_files/.
+	if len(applicableNodes) == 0 {
+		return e.routeToProjectFiles(result) // coverage:ignore
+	} // coverage:ignore
+
+	// 3. Extract file-level address refs (e.g., HCL variable declarations)
+	// by querying the _ast table for the same patterns.
+	var fileAddrRefs []string
+	if addrRefs, err := w.ExtractAddressRefs(sourceID, result.job.langName); err == nil {
+		fileAddrRefs = addrRefs
+	}
+	bt := &bufferingTarget{IngestionTarget: e.Store}
+	addFileLevelRefs(bt, result.realPath, result.fileLevelRefs)
+
+	// 5. processNode for each applicable schema node.
+	sourceFile := filepath.Base(result.job.path)
+	for _, nodeSchema := range applicableNodes {
+		if err := e.processNode(nodeSchema, w, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil, result.imports); err != nil {
+			// 6. Invalid query → route to _project_files/.
+			if strings.Contains(err.Error(), "invalid query") {
+				e.mu.Lock()
+				e.routedFiles[result.job.langName]++
+				e.mu.Unlock()
+				return e.routeToProjectFiles(result)
+			}
+			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err) // coverage:ignore
+		}
+	}
+
+	// 7. No nodes produced → route to _project_files/.
+	if len(bt.bufferedNodes) == 0 {
+		return e.routeToProjectFiles(result) // coverage:ignore
+	} // coverage:ignore
+
+	e.commitFileNodes(result.realPath, bt.bufferedNodes)
+	return nil
+}
+
+// extractFileLevel fills result's file-level extracts (context, imports,
+// file-level refs) from SQL — no CGO parse runs. Each mirrors the sitter
+// extract it replaced; a failed extract leaves its field empty, as before.
+func extractFileLevel(w *ASTWalker, sourceID string, result *parsedSourceFile) {
 	if ctxBytes, err := w.ExtractContext(sourceID, result.job.langName); err == nil {
 		result.context = ctxBytes
 	}
@@ -220,87 +205,55 @@ func (e *Engine) processSourceFileResult(result *parsedSourceFile) error {
 	if refs, err := w.ExtractFileLevelRefs(sourceID, result.job.langName); err == nil {
 		result.fileLevelRefs = refs
 	}
+}
 
-	bt := &bufferingTarget{IngestionTarget: e.Store}
-	sourceFile := filepath.Base(result.job.path)
+// fileLevelSentinelPrefix marks the synthetic caller_id file-level refs are
+// filed under; fan_out_skew skips rows with this prefix.
+const fileLevelSentinelPrefix = "_file_level:"
 
-	// 1. Filter schema nodes by language.
-	applicableNodes := filterNodesByLanguage(e.Schema.Nodes, result.job.langName)
-
-	// 2. No applicable schema nodes → route to _project_files/.
-	if len(applicableNodes) == 0 {
-		return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime) // coverage:ignore
-	} // coverage:ignore
-
-	// 3. Extract file-level address refs (e.g., HCL variable declarations)
-	// by querying the _ast table for the same patterns.
-	var fileAddrRefs []string
-	if addrRefs, err := w.ExtractAddressRefs(sourceID, result.job.langName); err == nil {
-		fileAddrRefs = addrRefs
+// addFileLevelRefs records refs (mache-02r9: top-level cobra RunE etc.) under
+// a SENTINEL caller_id rather than merging them into every construct's calls.
+// Earlier iterations folded them into fileAddrRefs (per-construct merge),
+// which inflated fan_out_skew — every function in a cobra-using file picked
+// up the cobra callback as a 'callee' even though it doesn't actually call
+// it. The sentinel form keeps the alive set correct for dead_code (token-only
+// check) without polluting any rule that aggregates by caller.
+func addFileLevelRefs(bt *bufferingTarget, realPath string, refs []string) {
+	sentinel := fileLevelSentinelPrefix + realPath
+	for _, token := range refs {
+		if err := bt.AddRef(token, sentinel); err != nil {
+			log.Printf("file-level ref %q: %v", token, err) // coverage:ignore
+		} // coverage:ignore
 	}
-	// File-level refs (mache-02r9: top-level cobra RunE etc.) are
-	// emitted with a SENTINEL caller_id rather than merged into
-	// every construct's calls. Earlier iterations folded them into
-	// fileAddrRefs (per-construct merge), which inflated fan_out_skew
-	// — every function in a cobra-using file picked up the cobra
-	// callback as a 'callee' even though it doesn't actually call it.
-	//
-	// The sentinel form keeps the alive set correct for dead_code
-	// (token-only check) without polluting any rule that aggregates
-	// by caller. fan_out_skew explicitly skips sentinel rows.
-	const fileLevelSentinelPrefix = "_file_level:"
-	if len(result.fileLevelRefs) > 0 {
-		sentinel := fileLevelSentinelPrefix + result.realPath
-		for _, token := range result.fileLevelRefs {
-			if err := bt.AddRef(token, sentinel); err != nil {
-				log.Printf("file-level ref %q: %v", token, err) // coverage:ignore
-			} // coverage:ignore
-		}
-	}
+}
 
-	// 5. processNode for each applicable schema node.
-	for _, nodeSchema := range applicableNodes {
-		if err := e.processNode(nodeSchema, w, root, "", sourceFile, result.realPath, result.job.modTime, bt, result.context, fileAddrRefs, nil, result.imports); err != nil {
-			// 6. Invalid query → route to _project_files/.
-			if strings.Contains(err.Error(), "invalid query") {
-				e.mu.Lock()
-				e.routedFiles[result.job.langName]++
-				e.mu.Unlock()
-				return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
-			}
-			return fmt.Errorf("failed to process schema node %s: %w", nodeSchema.Name, err) // coverage:ignore
-		}
-	}
+// routeToProjectFiles lands a source file the schema could not project as a
+// raw file under _project_files/.
+func (e *Engine) routeToProjectFiles(result *parsedSourceFile) error {
+	return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime)
+}
 
-	// 7. No nodes produced → route to _project_files/.
-	if len(bt.bufferedNodes) == 0 {
-		return e.ingestRawFileUnder(result.job.path, "_project_files", result.job.modTime) // coverage:ignore
-	} // coverage:ignore
-
-	// 8. Atomic swap of file nodes.
+// commitFileNodes atomically replaces realPath's nodes in the store, then
+// records the file for incremental re-ingestion plus its coverage row for
+// ADR-0013's _index_coverage table (mention-fidelity, since tree-sitter is
+// the L_0 producer in the fidelity poset; LSP and SSA producers write their
+// own binding/reachability rows for the same source_id).
+func (e *Engine) commitFileNodes(realPath string, nodes []*graph.Node) {
 	if ms, ok := e.Store.(*graph.MemoryStore); ok {
-		ms.ReplaceFileNodes(result.realPath, bt.bufferedNodes)
+		ms.ReplaceFileNodes(realPath, nodes)
 	} else {
-		e.Store.DeleteFileNodes(result.realPath) // coverage:ignore
-		for _, n := range bt.bufferedNodes {     // coverage:ignore
+		e.Store.DeleteFileNodes(realPath) // coverage:ignore
+		for _, n := range nodes {         // coverage:ignore
 			e.Store.AddNode(n) // coverage:ignore
 		} // coverage:ignore
 	}
-
-	// 9. Record file metadata for incremental re-ingestion + coverage row
-	//    for ADR-0013's _index_coverage table (mention-fidelity, since
-	//    tree-sitter is the L_0 producer in the fidelity poset). LSP and
-	//    SSA producers will write their own (binding/reachability) rows
-	//    for the same source_id.
 	if sw, ok := e.Store.(*SQLiteWriter); ok {
-		info, err := os.Stat(result.realPath) // coverage:ignore
-		if err == nil {                       // coverage:ignore
-			sw.RecordFile(result.realPath, info.ModTime(), info.Size())                         // coverage:ignore
-			sw.RecordIndexCoverage(result.realPath, "tree-sitter", "mention", time.Now(), true) // coverage:ignore
+		info, err := os.Stat(realPath) // coverage:ignore
+		if err == nil {                // coverage:ignore
+			sw.RecordFile(realPath, info.ModTime(), info.Size())                         // coverage:ignore
+			sw.RecordIndexCoverage(realPath, "tree-sitter", "mention", time.Now(), true) // coverage:ignore
 		} // coverage:ignore
 	}
-
-	return nil
 }
 
 // ingestSourceFile projects a single source file via the ASTWalker. Used by
@@ -314,15 +267,10 @@ func (e *Engine) ingestSourceFile(path, langName string, modTime time.Time) erro
 			"was removed in ADR-0012 step 4", path)
 	}
 
-	absPath, err := filepath.Abs(path)
+	realPath, err := realPathOf(path)
 	if err != nil {
 		return err // coverage:ignore
 	} // coverage:ignore
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		realPath = absPath // coverage:ignore
-	} // coverage:ignore
-
 	if _, err := ensureFile(realPath, "a source file"); err != nil {
 		return err // coverage:ignore
 	} // coverage:ignore

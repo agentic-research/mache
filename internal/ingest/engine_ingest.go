@@ -49,10 +49,9 @@ func (e *Engine) ingestJSON(path string, modTime time.Time) error {
 	} // coverage:ignore
 
 	// Clear old nodes from this file (if any)
-	absPath, _ := filepath.Abs(path)
-	realPath, err := filepath.EvalSymlinks(absPath)
+	realPath, err := realPathOf(path)
 	if err != nil {
-		realPath = absPath // coverage:ignore
+		return err // coverage:ignore
 	} // coverage:ignore
 	e.Store.DeleteFileNodes(realPath)
 

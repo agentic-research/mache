@@ -61,6 +61,13 @@ type sourceFileJob struct {
 	modTime  time.Time
 }
 
+// rawFile is a non-source file the source-tree walk defers until every
+// source file is projected.
+type rawFile struct {
+	path    string
+	modTime time.Time
+}
+
 // parsedSourceFile is the per-file work item for processSourceFileResult.
 // The AST lives in the `_ast` db (queried by source_id); the fields here carry
 // the file's paths plus the file-level extracts the ASTWalker resolves from
@@ -124,13 +131,9 @@ func (e *Engine) Ingest(path string) error {
 	e.childSeen = make(map[string]map[string]bool)
 	e.claimedIDs = make(map[string]int)
 
-	absPath, err := filepath.Abs(path)
+	realPath, err := realPathOf(path)
 	if err != nil { // coverage:ignore
 		return err // coverage:ignore
-	} // coverage:ignore
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil { // coverage:ignore
-		realPath = absPath // coverage:ignore
 	} // coverage:ignore
 	e.RootPath = realPath
 
@@ -138,102 +141,52 @@ func (e *Engine) Ingest(path string) error {
 	if err != nil { // coverage:ignore
 		return err // coverage:ignore
 	} // coverage:ignore
-
-	if info.IsDir() {
-		// Load .gitignore patterns when enabled (default: true).
-		if e.RespectGitignore {
-			e.gitignore = LoadGitignore(realPath)
-		}
-
-		// Determine which file types this schema can process.
-		// Source (tree-sitter S-expression) schemas operate on source code
-		// (.go, .py); JSONPath schemas operate on data files (.json, .db).
-		// Ingesting the wrong type is harmless but wastes time and
-		// can produce confusing errors (e.g. S-expression as JSONPath).
-		if SchemaUsesTreeSitter(e.Schema) {
-			// Post-CGO-removal (ADR-0012 step 4): the ASTWalker is the sole
-			// walker for source schemas. Callers MUST wire one via
-			// SetASTWalker (leyline parses source into an `_ast` db first —
-			// see runBuildViaLeylineSchema and the serve/mount source paths).
-			// A missing ASTWalker means the caller skipped that step; fail
-			// loudly rather than silently projecting an empty graph.
-			if e.astWalker == nil {
-				return fmt.Errorf("engine: source schema requires an ASTWalker " +
-					"(call SetASTWalker with a ley-line-parsed _ast db before Ingest); " +
-					"in-process tree-sitter was removed in ADR-0012 step 4")
-			}
-			return e.ingestSourceTree(realPath)
-		}
-
-		return filepath.WalkDir(realPath, func(p string, d os.DirEntry, err error) error { // coverage:ignore
-			if err != nil { // coverage:ignore
-				return err // coverage:ignore
-			} // coverage:ignore
-			if d.IsDir() { // coverage:ignore
-				if p != realPath && ShouldSkipDir(d.Name()) { // coverage:ignore
-					return filepath.SkipDir // coverage:ignore
-				} // coverage:ignore
-				// Check gitignore for directories
-				if e.gitignore != nil && p != realPath { // coverage:ignore
-					rel, relErr := filepath.Rel(realPath, p) // coverage:ignore
-					if relErr == nil {                       // coverage:ignore
-						rel = filepath.ToSlash(rel)       // coverage:ignore
-						if e.gitignore.Match(rel, true) { // coverage:ignore
-							return filepath.SkipDir // coverage:ignore
-						} // coverage:ignore
-					} // coverage:ignore
-				} // coverage:ignore
-				return nil // coverage:ignore
-			} // coverage:ignore
-			// Check gitignore for files
-			if e.gitignore != nil { // coverage:ignore
-				rel, relErr := filepath.Rel(realPath, p) // coverage:ignore
-				if relErr == nil {                       // coverage:ignore
-					rel = filepath.ToSlash(rel)        // coverage:ignore
-					if e.gitignore.Match(rel, false) { // coverage:ignore
-						return nil // coverage:ignore
-					} // coverage:ignore
-				} // coverage:ignore
-			} // coverage:ignore
-			// Skip symlinks to directories (e.g., kodata/templates -> ../templates)
-			// WalkDir doesn't follow symlinks, so d.IsDir() is false for them,
-			// but os.ReadFile will follow and fail with "is a directory".
-			if d.Type()&os.ModeSymlink != 0 { // coverage:ignore
-				target, err := os.Stat(p)         // coverage:ignore
-				if err == nil && target.IsDir() { // coverage:ignore
-					return nil // coverage:ignore
-				} // coverage:ignore
-			} // coverage:ignore
-			// Determine if we should parse or treat as raw based on schema type
-			ext := filepath.Ext(p) // coverage:ignore
-			info, err := d.Info()  // coverage:ignore
-			if err != nil {        // coverage:ignore
-				return err // coverage:ignore
-			} // coverage:ignore
-			if ShouldSkipFile(p, info.Size()) { // coverage:ignore
-				return nil // coverage:ignore
-			} // coverage:ignore
-			shouldParse := false // coverage:ignore
-			switch ext {         // coverage:ignore
-			case ".json", ".db": // coverage:ignore
-				shouldParse = true // coverage:ignore
-			} // coverage:ignore
-
-			if shouldParse { // coverage:ignore
-				return e.ingestFile(p, info.ModTime()) // coverage:ignore
-			} // coverage:ignore
-			// Skip binary files (executables, object files, images, etc.)
-			if isBinaryFile(p) { // coverage:ignore
-				return nil // coverage:ignore
-			} // coverage:ignore
-			return e.ingestRawFile(p, info.ModTime()) // coverage:ignore
-		}) // coverage:ignore
+	if !info.IsDir() {
+		return e.ingestFile(path, info.ModTime())
 	}
-	info, err = os.Stat(realPath)
-	if err != nil { // coverage:ignore
-		return err // coverage:ignore
-	} // coverage:ignore
-	return e.ingestFile(path, info.ModTime())
+
+	// Load .gitignore patterns when enabled (default: true).
+	if e.RespectGitignore {
+		e.gitignore = LoadGitignore(realPath)
+	}
+
+	// Determine which file types this schema can process.
+	// Source (tree-sitter S-expression) schemas operate on source code
+	// (.go, .py); JSONPath schemas operate on data files (.json, .db).
+	// Ingesting the wrong type is harmless but wastes time and
+	// can produce confusing errors (e.g. S-expression as JSONPath).
+	if !SchemaUsesTreeSitter(e.Schema) {
+		return e.ingestDataTree(realPath)
+	}
+	// Post-CGO-removal (ADR-0012 step 4): the ASTWalker is the sole
+	// walker for source schemas. Callers MUST wire one via
+	// SetASTWalker (leyline parses source into an `_ast` db first —
+	// see runBuildViaLeylineSchema and the serve/mount source paths).
+	// A missing ASTWalker means the caller skipped that step; fail
+	// loudly rather than silently projecting an empty graph.
+	if e.astWalker == nil {
+		return fmt.Errorf("engine: source schema requires an ASTWalker " +
+			"(call SetASTWalker with a ley-line-parsed _ast db before Ingest); " +
+			"in-process tree-sitter was removed in ADR-0012 step 4")
+	}
+	return e.ingestSourceTree(realPath)
+}
+
+// ingestDataTree projects a directory under a data schema (JSONPath / SQL):
+// .json and .db files are parsed, every other non-binary file lands as a raw
+// file.
+func (e *Engine) ingestDataTree(root string) error {
+	return e.walkProjectFiles(root, func(p string, info os.FileInfo) error {
+		switch filepath.Ext(p) {
+		case ".json", ".db":
+			return e.ingestFile(p, info.ModTime())
+		}
+		// Skip binary files (executables, object files, images, etc.)
+		if isBinaryFile(p) {
+			return nil
+		}
+		return e.ingestRawFile(p, info.ModTime())
+	})
 }
 
 // RenderTemplate delegates to internal/template.Render.
@@ -251,13 +204,9 @@ func RenderTemplateWithFuncs(tmpl string, values map[string]any, extraFuncs temp
 // Used by the live graph refresher to update stale nodes without a full walk.
 // After re-ingestion, the store's file mtime is updated.
 func (e *Engine) ReIngestFile(path string) error {
-	absPath, err := filepath.Abs(path)
+	realPath, err := realPathOf(path)
 	if err != nil { // coverage:ignore
 		return err // coverage:ignore
-	} // coverage:ignore
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil { // coverage:ignore
-		realPath = absPath // coverage:ignore
 	} // coverage:ignore
 
 	info, err := os.Stat(realPath)

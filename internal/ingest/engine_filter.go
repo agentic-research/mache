@@ -83,6 +83,74 @@ func ShouldSkipFile(path string, size int64) bool {
 	return false
 }
 
+// realPathOf resolves path to its absolute, symlink-evaluated form — the
+// identity every store key, file_index row and _ast source_id derives from,
+// so the five call sites that used to inline this could not drift. A path
+// whose symlinks cannot be evaluated (a dangling link, a component that
+// vanished mid-walk) keeps its absolute form; the caller's own os.Stat then
+// reports the real error rather than this guessing at one.
+func realPathOf(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err // coverage:ignore
+	} // coverage:ignore
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return absPath, nil // coverage:ignore
+	} // coverage:ignore
+	return realPath, nil
+}
+
+// walkProjectFiles walks root in lexical order and calls visit for every
+// regular file the project skip rules admit: hidden and build directories
+// (ShouldSkipDir), .gitignore matches when Ingest loaded one, symlinks to
+// directories (WalkDir does not follow them, and a read would fail with "is
+// a directory"), and ShouldSkipFile's extension and size rules. The source
+// and data tree ingests both walk through here, so the rules cannot drift
+// between them.
+func (e *Engine) walkProjectFiles(root string, visit func(p string, info os.FileInfo) error) error {
+	return filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err // coverage:ignore
+		} // coverage:ignore
+		if d.IsDir() {
+			if p != root && (ShouldSkipDir(d.Name()) || e.gitignored(root, p, true)) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if e.gitignored(root, p, false) {
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			target, err := os.Stat(p)         // coverage:ignore
+			if err == nil && target.IsDir() { // coverage:ignore
+				return nil // coverage:ignore
+			} // coverage:ignore
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err // coverage:ignore
+		} // coverage:ignore
+		if ShouldSkipFile(p, info.Size()) {
+			return nil
+		}
+		return visit(p, info)
+	})
+}
+
+// gitignored reports whether p, under root, matches the loaded .gitignore.
+func (e *Engine) gitignored(root, p string, isDir bool) bool {
+	if e.gitignore == nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false // coverage:ignore
+	} // coverage:ignore
+	return e.gitignore.Match(filepath.ToSlash(rel), isDir)
+}
+
 // ensureFile returns an error if path does not exist or is a directory.
 func ensureFile(path, kind string) (os.FileInfo, error) {
 	info, err := os.Stat(path)
