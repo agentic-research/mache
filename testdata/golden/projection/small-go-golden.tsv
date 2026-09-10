@@ -1,0 +1,274 @@
+## nodes (81 rows)
+_project_files		_project_files	1	0		NULL		NULL	
+_project_files/README.md	_project_files	README.md	0	78		"Golden-projection corpus; documented in testdata/golden/projection/README.md.\n"	$FIXTURE/README.md	NULL	
+_project_files/go.mod	_project_files	go.mod	0	23		"module golden\n\ngo 1.22\n"	$FIXTURE/go.mod	NULL	
+_project_files/scripts	_project_files	scripts	1	0		NULL		NULL	
+_project_files/scripts/gen.py	_project_files/scripts	gen.py	0	197		"\"\"\"A non-Go source file: the Go preset has no python nodes, so this is\nrouted to _project_files rather than projected.\"\"\"\n\n\ndef gen(n: int) -> list[str]:\n    return [f\"item-{i}\" for i in range(n)]\n"	$FIXTURE/scripts/gen.py	NULL	
+main		main	1	0		NULL		NULL	{"imports":{},"lang":"go","location":"tool/main.go:1:12","pkg":"main"}
+main/constants	main	constants	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/constants/Version	main/constants	Version	1	0		NULL		"import \"fmt\"\n\nconst Version = \"0.0.1\"\n\nvar defaultName = \"golden\"\n\n"	{"ast_scope_id":"tool.go/const_declaration/const_spec","ast_source_id":"tool.go","imports":{"fmt":"fmt"},"lang":"go","location":"tool.go:6:6","pkg":"main"}
+main/constants/Version/source	main/constants/Version	source	0	17		"Version = \"0.0.1\""	$FIXTURE/tool.go	NULL	
+main/functions	main	functions	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/functions/helper	main/functions	helper	1	0		NULL		"import \"fmt\"\n\nconst Version = \"0.0.1\"\n\nvar defaultName = \"golden\"\n\n"	{"ast_scope_id":"tool.go/function_declaration_1","ast_source_id":"tool.go","imports":{"fmt":"fmt"},"lang":"go","location":"tool.go:16:18","pkg":"main"}
+main/functions/helper/source	main/functions/helper	source	0	81		"func helper(err error) string {\n\treturn fmt.Sprintf(\"%s: %v\", defaultName, err)\n}"	$FIXTURE/tool.go	NULL	
+main/functions/init	main/functions	init	1	0		NULL		"import \"fmt\"\n\nconst Version = \"0.0.1\"\n\nvar defaultName = \"golden\"\n\n"	{"ast_scope_id":"tool.go/function_declaration_0","ast_source_id":"tool.go","imports":{"fmt":"fmt"},"lang":"go","location":"tool.go:12:14","pkg":"main"}
+main/functions/init.from_main_go	main/functions	init.from_main_go	1	0		NULL		NULL	{"ast_scope_id":"tool/main.go/function_declaration_0","ast_source_id":"tool/main.go","imports":{},"lang":"go","location":"tool/main.go:5:7","pkg":"main"}
+main/functions/init.from_main_go/source	main/functions/init.from_main_go	source	0	22		"func init() {\n\trun()\n}"	$FIXTURE/tool/main.go	NULL	
+main/functions/init/source	main/functions/init	source	0	44		"func init() {\n\tdefaultName = \"golden-root\"\n}"	$FIXTURE/tool.go	NULL	
+main/functions/main	main/functions	main	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/function_declaration","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:13:20","pkg":"main"}
+main/functions/main.from_main_go	main/functions	main.from_main_go	1	0		NULL		NULL	{"ast_scope_id":"tool/main.go/function_declaration_2","ast_source_id":"tool/main.go","imports":{},"lang":"go","location":"tool/main.go:11:11","pkg":"main"}
+main/functions/main.from_main_go/source	main/functions/main.from_main_go	source	0	14		"func main() {}"	$FIXTURE/tool/main.go	NULL	
+main/functions/main/source	main/functions/main	source	0	151		"func main() {\n\ts := store.New(&cfg)\n\tif err := s.Add(\"alpha\"); err != nil {\n\t\tfmt.Println(helper(err))\n\t\tos.Exit(1)\n\t}\n\tfmt.Println(s.Len(), Version)\n}"	$FIXTURE/main.go	NULL	
+main/functions/run	main/functions	run	1	0		NULL		NULL	{"ast_scope_id":"tool/main.go/function_declaration_1","ast_source_id":"tool/main.go","imports":{},"lang":"go","location":"tool/main.go:9:9","pkg":"main"}
+main/functions/run/source	main/functions/run	source	0	13		"func run() {}"	$FIXTURE/tool/main.go	NULL	
+main/imports	main	imports	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/imports/"fmt"	main/imports	"fmt"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/import_declaration/import_spec_list/import_spec_0","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:4:4","pkg":"main"}
+main/imports/"fmt".from_tool_go	main/imports	"fmt".from_tool_go	1	0		NULL		"import \"fmt\"\n\nconst Version = \"0.0.1\"\n\nvar defaultName = \"golden\"\n\n"	{"ast_scope_id":"tool.go/import_declaration/import_spec","ast_source_id":"tool.go","imports":{"fmt":"fmt"},"lang":"go","location":"tool.go:3:3","pkg":"main"}
+main/imports/"fmt".from_tool_go/source	main/imports/"fmt".from_tool_go	source	0	5		"\"fmt\""	$FIXTURE/tool.go	NULL	
+main/imports/"fmt"/source	main/imports/"fmt"	source	0	5		"\"fmt\""	$FIXTURE/main.go	NULL	
+main/imports/"golden/store"	main/imports/"golden	store"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/import_declaration/import_spec_list/import_spec_2","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:7:7","pkg":"main"}
+main/imports/"golden/store"/source	main/imports/"golden/store"	source	0	14		"\"golden/store\""	$FIXTURE/main.go	NULL	
+main/imports/"os"	main/imports	"os"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/import_declaration/import_spec_list/import_spec_1","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:5:5","pkg":"main"}
+main/imports/"os"/source	main/imports/"os"	source	0	4		"\"os\""	$FIXTURE/main.go	NULL	
+main/methods	main	methods	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/types	main	types	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/variables	main	variables	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/variables/cfg	main/variables	cfg	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/var_declaration/var_spec","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:11:11","pkg":"main"}
+main/variables/cfg/source	main/variables/cfg	source	0	28		"cfg = store.Config{Limit: 2}"	$FIXTURE/main.go	NULL	
+main/variables/defaultName	main/variables	defaultName	1	0		NULL		"import \"fmt\"\n\nconst Version = \"0.0.1\"\n\nvar defaultName = \"golden\"\n\n"	{"ast_scope_id":"tool.go/var_declaration/var_spec","ast_source_id":"tool.go","imports":{"fmt":"fmt"},"lang":"go","location":"tool.go:9:9","pkg":"main"}
+main/variables/defaultName/source	main/variables/defaultName	source	0	22		"defaultName = \"golden\""	$FIXTURE/tool.go	NULL	
+store		store	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","location":"store/store.go:1:59","pkg":"store"}
+store/constants	store	constants	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","pkg":"store"}
+store/constants/maxItems	store/constants	maxItems	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/const_declaration/const_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:6:6","pkg":"store"}
+store/constants/maxItems/source	store/constants/maxItems	source	0	12		"maxItems = 8"	$FIXTURE/store/store.go	NULL	
+store/functions	store	functions	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","pkg":"store"}
+store/functions/New	store/functions	New	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/function_declaration_0","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:34:40","pkg":"store"}
+store/functions/New/source	store/functions/New	source	0	126		"func New(cfg *Config) *Store {\n\tlimit := cfg.Limit\n\tif limit > maxItems {\n\t\tlimit = maxItems\n\t}\n\treturn &Store{limit: limit}\n}"	$FIXTURE/store/store.go	NULL	
+store/functions/init	store/functions	init	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/function_declaration_1","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:27:29","pkg":"store"}
+store/functions/init.from_store_go	store/functions	init.from_store_go	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/function_declaration_1","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:56:58","pkg":"store"}
+store/functions/init.from_store_go/source	store/functions/init.from_store_go	source	0	47		"func init() {\n\tregistry = map[string]*Store{}\n}"	$FIXTURE/store/store.go	NULL	
+store/functions/init/source	store/functions/init	source	0	61		"func init() {\n\tregistry[\"default\"] = New(&Config{Limit: 1})\n}"	$FIXTURE/store/index.go	NULL	
+store/functions/keyOf	store/functions	keyOf	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/function_declaration_0","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:22:24","pkg":"store"}
+store/functions/keyOf/source	store/functions/keyOf	source	0	83		"func keyOf(name string) string {\n\treturn strings.ToLower(strings.TrimSpace(name))\n}"	$FIXTURE/store/index.go	NULL	
+store/imports	store	imports	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","pkg":"store"}
+store/imports/"errors"	store/imports	"errors"	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/import_declaration/import_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:3:3","pkg":"store"}
+store/imports/"errors"/source	store/imports/"errors"	source	0	8		"\"errors\""	$FIXTURE/store/store.go	NULL	
+store/imports/"sort"	store/imports	"sort"	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/import_declaration/import_spec_list/import_spec_0","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:4:4","pkg":"store"}
+store/imports/"sort"/source	store/imports/"sort"	source	0	6		"\"sort\""	$FIXTURE/store/index.go	NULL	
+store/imports/"strings"	store/imports	"strings"	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/import_declaration/import_spec_list/import_spec_1","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:5:5","pkg":"store"}
+store/imports/"strings"/source	store/imports/"strings"	source	0	9		"\"strings\""	$FIXTURE/store/index.go	NULL	
+store/methods	store	methods	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","pkg":"store"}
+store/methods/Store.Add	store/methods	Store.Add	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/method_declaration_0","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:43:49","pkg":"store"}
+store/methods/Store.Add/source	store/methods/Store.Add	source	0	167		"func (s *Store) Add(name string) error {\n\tif len(s.items) >= s.limit {\n\t\treturn ErrFull\n\t}\n\ts.items = append(s.items, Item{Key: keyOf(name), Name: name})\n\treturn nil\n}"	$FIXTURE/store/store.go	NULL	
+store/methods/Store.Index	store/methods	Store.Index	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/method_declaration","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:12:19","pkg":"store"}
+store/methods/Store.Index/source	store/methods/Store.Index	source	0	173		"func (s *Store) Index() []string {\n\tkeys := make([]string, 0, len(s.items))\n\tfor _, it := range s.items {\n\t\tkeys = append(keys, it.Key)\n\t}\n\tsort.Strings(keys)\n\treturn keys\n}"	$FIXTURE/store/index.go	NULL	
+store/methods/Store.Len	store/methods	Store.Len	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/method_declaration_1","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:52:54","pkg":"store"}
+store/methods/Store.Len/source	store/methods/Store.Len	source	0	49		"func (s Store) Len() int {\n\treturn len(s.items)\n}"	$FIXTURE/store/store.go	NULL	
+store/methods/string.Add	store/methods	string.Add	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/method_declaration_0","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:43:49","pkg":"store"}
+store/methods/string.Add/source	store/methods/string.Add	source	0	167		"func (s *Store) Add(name string) error {\n\tif len(s.items) >= s.limit {\n\t\treturn ErrFull\n\t}\n\ts.items = append(s.items, Item{Key: keyOf(name), Name: name})\n\treturn nil\n}"	$FIXTURE/store/store.go	NULL	
+store/types	store	types	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","pkg":"store"}
+store/types/Adder	store/types	Adder	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/type_declaration_1/type_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:17:19","pkg":"store"}
+store/types/Adder/source	store/types/Adder	source	0	43		"Adder interface {\n\tAdd(name string) error\n}"	$FIXTURE/store/store.go	NULL	
+store/types/Config	store/types	Config	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/type_declaration_0/type_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:12:14","pkg":"store"}
+store/types/Config/source	store/types/Config	source	0	28		"Config struct {\n\tLimit int\n}"	$FIXTURE/store/store.go	NULL	
+store/types/Item	store/types	Item	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/type_declaration_2/type_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:22:25","pkg":"store"}
+store/types/Item/source	store/types/Item	source	0	41		"Item struct {\n\tKey  string\n\tName string\n}"	$FIXTURE/store/store.go	NULL	
+store/types/Store	store/types	Store	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/type_declaration_3/type_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:28:31","pkg":"store"}
+store/types/Store/source	store/types/Store	source	0	41		"Store struct {\n\tlimit int\n\titems []Item\n}"	$FIXTURE/store/store.go	NULL	
+store/variables	store	variables	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"imports":{"errors":"errors"},"lang":"go","pkg":"store"}
+store/variables/ErrFull	store/variables	ErrFull	1	0		NULL		"import \"errors\"\n\nconst maxItems = 8\n\nvar ErrFull = errors.New(\"store: full\")\n\ntype Config struct {\n\tLimit int\n}\n\ntype Adder interface {\n\tAdd(name string) error\n}\n\ntype Item struct {\n\tKey  string\n\tName string\n}\n\ntype Store struct {\n\tlimit int\n\titems []Item\n}\n\n"	{"ast_scope_id":"store/store.go/var_declaration/var_spec","ast_source_id":"store/store.go","imports":{"errors":"errors"},"lang":"go","location":"store/store.go:9:9","pkg":"store"}
+store/variables/ErrFull/source	store/variables/ErrFull	source	0	35		"ErrFull = errors.New(\"store: full\")"	$FIXTURE/store/store.go	NULL	
+store/variables/registry	store/variables	registry	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/var_declaration/var_spec","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:9:9","pkg":"store"}
+store/variables/registry/source	store/variables/registry	source	0	26		"registry map[string]*Store"	$FIXTURE/store/index.go	NULL	
+## node_refs (112 rows)
+Add	_file_level:$FIXTURE/main.go
+Add	main/functions/main/source
+Config	main/variables/cfg/source
+Config	store/functions/New/source
+Config	store/functions/init/source
+Exit	_file_level:$FIXTURE/main.go
+Exit	main/functions/main/source
+Item	store/methods/Store.Add/source
+Item	store/methods/string.Add/source
+Len	_file_level:$FIXTURE/main.go
+Len	main/functions/main/source
+New	_file_level:$FIXTURE/main.go
+New	_file_level:$FIXTURE/store/index.go
+New	_file_level:$FIXTURE/store/store.go
+New	main/functions/main/source
+New	store/functions/init/source
+New	store/variables/ErrFull/source
+Println	_file_level:$FIXTURE/main.go
+Println	main/functions/main/source
+Sprintf	_file_level:$FIXTURE/tool.go
+Sprintf	main/functions/helper/source
+Store	store/functions/New/source
+Store	store/methods/Store.Add/source
+Store	store/methods/Store.Index/source
+Store	store/methods/Store.Len/source
+Store	store/methods/string.Add/source
+Strings	_file_level:$FIXTURE/store/index.go
+Strings	store/methods/Store.Index/source
+ToLower	_file_level:$FIXTURE/store/index.go
+ToLower	store/functions/keyOf/source
+TrimSpace	_file_level:$FIXTURE/store/index.go
+TrimSpace	store/functions/keyOf/source
+Version	_file_level:$FIXTURE/main.go
+append	_file_level:$FIXTURE/store/index.go
+append	_file_level:$FIXTURE/store/store.go
+append	store/methods/Store.Add/source
+append	store/methods/Store.Index/source
+append	store/methods/string.Add/source
+defaultName	_file_level:$FIXTURE/tool.go
+err	_file_level:$FIXTURE/main.go
+err	_file_level:$FIXTURE/tool.go
+error	main/functions/helper/source
+gomod:errors	store/constants/maxItems/source
+gomod:errors	store/functions/New/source
+gomod:errors	store/functions/init.from_store_go/source
+gomod:errors	store/imports/"errors"/source
+gomod:errors	store/methods/Store.Add/source
+gomod:errors	store/methods/Store.Len/source
+gomod:errors	store/methods/string.Add/source
+gomod:errors	store/types/Adder/source
+gomod:errors	store/types/Config/source
+gomod:errors	store/types/Item/source
+gomod:errors	store/types/Store/source
+gomod:errors	store/variables/ErrFull/source
+gomod:fmt	main/constants/Version/source
+gomod:fmt	main/functions/helper/source
+gomod:fmt	main/functions/init/source
+gomod:fmt	main/functions/main/source
+gomod:fmt	main/imports/"fmt".from_tool_go/source
+gomod:fmt	main/imports/"fmt"/source
+gomod:fmt	main/imports/"golden/store"/source
+gomod:fmt	main/imports/"os"/source
+gomod:fmt	main/variables/cfg/source
+gomod:fmt	main/variables/defaultName/source
+gomod:golden/store	main/functions/main/source
+gomod:golden/store	main/imports/"fmt"/source
+gomod:golden/store	main/imports/"golden/store"/source
+gomod:golden/store	main/imports/"os"/source
+gomod:golden/store	main/variables/cfg/source
+gomod:os	main/functions/main/source
+gomod:os	main/imports/"fmt"/source
+gomod:os	main/imports/"golden/store"/source
+gomod:os	main/imports/"os"/source
+gomod:os	main/variables/cfg/source
+gomod:sort	store/functions/init/source
+gomod:sort	store/functions/keyOf/source
+gomod:sort	store/imports/"sort"/source
+gomod:sort	store/imports/"strings"/source
+gomod:sort	store/methods/Store.Index/source
+gomod:sort	store/variables/registry/source
+gomod:strings	store/functions/init/source
+gomod:strings	store/functions/keyOf/source
+gomod:strings	store/imports/"sort"/source
+gomod:strings	store/imports/"strings"/source
+gomod:strings	store/methods/Store.Index/source
+gomod:strings	store/variables/registry/source
+helper	_file_level:$FIXTURE/main.go
+helper	main/functions/main/source
+int	store/types/Config/source
+int	store/types/Store/source
+keyOf	_file_level:$FIXTURE/store/store.go
+keyOf	store/methods/Store.Add/source
+keyOf	store/methods/string.Add/source
+keys	_file_level:$FIXTURE/store/index.go
+len	_file_level:$FIXTURE/store/index.go
+len	_file_level:$FIXTURE/store/store.go
+len	store/methods/Store.Add/source
+len	store/methods/Store.Index/source
+len	store/methods/Store.Len/source
+len	store/methods/string.Add/source
+limit	_file_level:$FIXTURE/store/store.go
+make	_file_level:$FIXTURE/store/index.go
+make	store/methods/Store.Index/source
+name	_file_level:$FIXTURE/store/index.go
+name	_file_level:$FIXTURE/store/store.go
+run	_file_level:$FIXTURE/tool/main.go
+run	main/functions/init.from_main_go/source
+string	store/functions/keyOf/source
+string	store/methods/Store.Add/source
+string	store/methods/string.Add/source
+string	store/types/Adder/source
+string	store/types/Item/source
+## node_defs (66 rows)
+"errors"	store/imports/"errors"
+"fmt"	main/imports/"fmt"
+"fmt"	main/imports/"fmt".from_tool_go
+"golden/store"	main/imports/"golden/store"
+"os"	main/imports/"os"
+"sort"	store/imports/"sort"
+"strings"	store/imports/"strings"
+Add	store/methods/Store.Add
+Add	store/methods/string.Add
+Adder	store/types/Adder
+Config	store/types/Config
+ErrFull	store/variables/ErrFull
+Index	store/methods/Store.Index
+Item	store/types/Item
+Len	store/methods/Store.Len
+New	store/functions/New
+Store	store/types/Store
+Store.Add	store/methods/Store.Add
+Store.Index	store/methods/Store.Index
+Store.Len	store/methods/Store.Len
+Version	main/constants/Version
+cfg	main/variables/cfg
+defaultName	main/variables/defaultName
+helper	main/functions/helper
+init	main/functions/init
+init	main/functions/init.from_main_go
+init	store/functions/init
+init	store/functions/init.from_store_go
+keyOf	store/functions/keyOf
+main	main/functions/main
+main	main/functions/main.from_main_go
+main."fmt"	main/imports/"fmt"
+main."fmt"	main/imports/"fmt".from_tool_go
+main."golden/store"	main/imports/"golden/store"
+main."os"	main/imports/"os"
+main.Version	main/constants/Version
+main.cfg	main/variables/cfg
+main.defaultName	main/variables/defaultName
+main.helper	main/functions/helper
+main.init	main/functions/init
+main.init	main/functions/init.from_main_go
+main.main	main/functions/main
+main.main	main/functions/main.from_main_go
+main.run	main/functions/run
+maxItems	store/constants/maxItems
+registry	store/variables/registry
+run	main/functions/run
+store."errors"	store/imports/"errors"
+store."sort"	store/imports/"sort"
+store."strings"	store/imports/"strings"
+store.Adder	store/types/Adder
+store.Config	store/types/Config
+store.ErrFull	store/variables/ErrFull
+store.Item	store/types/Item
+store.New	store/functions/New
+store.Store	store/types/Store
+store.Store.Add	store/methods/Store.Add
+store.Store.Index	store/methods/Store.Index
+store.Store.Len	store/methods/Store.Len
+store.init	store/functions/init
+store.init	store/functions/init.from_store_go
+store.keyOf	store/functions/keyOf
+store.maxItems	store/constants/maxItems
+store.registry	store/variables/registry
+store.string.Add	store/methods/string.Add
+string.Add	store/methods/string.Add
+## file_index (5 rows)
+$FIXTURE/main.go	317
+$FIXTURE/store/index.go	626
+$FIXTURE/store/store.go	1076
+$FIXTURE/tool.go	361
+$FIXTURE/tool/main.go	196
+## _index_coverage (5 rows)
+$FIXTURE/main.go	tree-sitter	mention	1
+$FIXTURE/store/index.go	tree-sitter	mention	1
+$FIXTURE/store/store.go	tree-sitter	mention	1
+$FIXTURE/tool.go	tree-sitter	mention	1
+$FIXTURE/tool/main.go	tree-sitter	mention	1

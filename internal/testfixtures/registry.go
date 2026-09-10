@@ -311,9 +311,11 @@ func Get(t *testing.T, id string) *graph.SQLiteGraph {
 // CGO-free — in-process tree-sitter was removed in ADR-0012 step 4
 // (mache-37ae8b). It mirrors cmd's autoInvokeLeylineParse but resolves the
 // binary with ResolveBinary(false) so the test never triggers a network
-// download; when the pinned ley-line isn't cached it SKIPS (source fixtures
-// can't project without it now). Returns the opened _ast db and a cleanup that
-// closes it and removes the temp file.
+// download. When the pinned ley-line isn't cached it SKIPS locally but FAILS
+// in CI (`task test` provisions it via leyline:ensure), the convention every
+// leyline-gated helper follows — otherwise the golden projection gate would
+// pass by skipping on the very machine it exists to guard. Returns the opened
+// _ast db and a cleanup that closes it and removes the temp file.
 //
 // KNOWN GAP (shared with the serve/mount leyline path): the _ast is a frozen
 // snapshot of srcPath at parse time; there is no in-process re-parse on edit.
@@ -322,6 +324,10 @@ func attachFixtureASTWalker(t *testing.T, id, srcPath string, engine *ingest.Eng
 	t.Helper()
 	bin, err := leyline.ResolveBinary(false) // never download in tests
 	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("testfixtures.Get(%q): pinned ley-line unavailable in CI (%v) — "+
+				"provision it (task leyline:ensure) before tests", id, err)
+		}
 		t.Skipf("testfixtures.Get(%q): pinned ley-line unavailable (%v) — "+
 			"source fixtures require it after in-process tree-sitter removal", id, err)
 	}
