@@ -40,6 +40,18 @@ func pinnedLeylineForIngest(t *testing.T) string {
 // leyline-parse step. Skips the test when the pinned leyline isn't available.
 func attachLeylineAST(t *testing.T, engine *Engine, target string) {
 	t.Helper()
+	db, err := sql.Open("sqlite", parseWithLeyline(t, target))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	engine.SetASTWalker(NewASTWalker(db))
+}
+
+// parseWithLeyline parses target (a source dir, or the parent dir of a source
+// file) with the pinned leyline and returns the path of the resulting `_ast`
+// db, unopened — so a caller can open it through whichever driver it needs
+// (the statement-count gate opens it through internal/sqlcount's).
+func parseWithLeyline(t *testing.T, target string) string {
+	t.Helper()
 	bin := pinnedLeylineForIngest(t)
 
 	parseDir := target
@@ -49,8 +61,5 @@ func attachLeylineAST(t *testing.T, engine *Engine, target string) {
 	dbPath := filepath.Join(t.TempDir(), "ast.db")
 	out, err := exec.Command(bin, "parse", parseDir, "-o", dbPath).CombinedOutput() //nolint:gosec // test-only, pinned binary
 	require.NoError(t, err, "leyline parse failed: %s", string(out))
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	engine.SetASTWalker(NewASTWalker(db))
+	return dbPath
 }

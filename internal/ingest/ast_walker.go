@@ -3,7 +3,6 @@ package ingest
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 
@@ -18,26 +17,27 @@ import (
 // See ADR-014 for the design rationale.
 type ASTWalker struct {
 	db *sql.DB
-	// langCache/pkgCache memoize per-file FileMeta keyed by source_id. The
-	// engine calls Lang()/PackageName() for every construct node, but both are
-	// file-level facts — caching avoids an N+1 SQL pattern on the ingest path.
-	langCache   sync.Map // sourceID -> string
-	pkgCache    sync.Map // sourceID -> string
-	sourceCache sync.Map // sourceID -> []byte
 	// addrRefCache memoizes the whole-file address-ref extraction keyed by
 	// sourceID+"\x00"+lang. Per-construct ExtractAddressRefsScoped filters these
 	// by node-id prefix instead of re-running the generic Query per construct —
 	// that per-construct storm was 84% of a whole-repo projection (mache-4f3840).
 	addrRefCache sync.Map // sourceID+"\x00"+lang -> []scopedAddrRef
-	// indexCache holds the per-file in-memory node index. Materializing every
-	// file's nodes/_ast rows ONCE and answering navigation from memory restores
-	// the O(nodes) tree walk that per-node SQL had turned into O(nodes²)
-	// (mache-4f3840). Keyed by sourceID.
+	// indexCache holds each file's section of the db (fileIndex): its nodes,
+	// lazily its source. Materializing a file's nodes/_ast rows ONCE and
+	// answering navigation from memory restores the O(nodes) tree walk that
+	// per-node SQL had turned into O(nodes²) (mache-4f3840); the language,
+	// package, doc comments, calls, context and imports read the same rows,
+	// so they come from here too (mache-40ce82). Keyed by sourceID.
 	indexCache sync.Map // sourceID -> *fileIndex
 	// callTokenCache memoizes the whole-file call extraction (leaf id + token)
 	// per (sourceID, lang) so ExtractCallsScoped attributes by node-id prefix
-	// instead of re-running queryCallPattern per construct.
+	// instead of re-evaluating every call pattern per construct.
 	callTokenCache sync.Map // sourceID+"\x00"+lang -> []scopedCallToken
+	// importsProbed/hasImports remember whether the db has an _imports table
+	// (see hasImportsTable) — a per-db fact, asked once, not once per file.
+	importsMu     sync.Mutex
+	importsProbed bool
+	hasImports    bool
 }
 
 // scopedAddrRef is one whole-file address-ref match: the token plus the id of
@@ -48,86 +48,54 @@ type scopedAddrRef struct {
 	token  string
 }
 
-// fileLang returns the source language for sourceID, computed once and cached.
+// fileLang returns the source language for sourceID — a file-level fact the
+// engine asks for on every construct, answered from the file's section.
 func (w *ASTWalker) fileLang(sourceID string) string {
-	if v, ok := w.langCache.Load(sourceID); ok {
-		return v.(string)
+	if idx := w.sectionOrNil(sourceID); idx != nil {
+		return idx.lang
 	}
-	var lang string
-	if sourceID != "" {
-		_ = w.db.QueryRow("SELECT language FROM _source WHERE id = ?", sourceID).Scan(&lang)
-	}
-	w.langCache.Store(sourceID, lang)
-	return lang
+	return ""
 }
 
-// filePkg returns the package name for sourceID (Go only), computed once and
-// cached. Non-Go files resolve to "" with no per-node SQL.
+// filePkg returns the package name for sourceID (Go only; "" otherwise).
 func (w *ASTWalker) filePkg(sourceID string) string {
-	if v, ok := w.pkgCache.Load(sourceID); ok {
-		return v.(string)
+	if idx := w.sectionOrNil(sourceID); idx != nil && idx.lang == "go" {
+		return idx.packageName()
 	}
-	pkg := ""
-	if w.fileLang(sourceID) == "go" && sourceID != "" {
-		// package_identifier under the package_clause — the SQL mirror of
-		// SitterWalker's extractGoPackageName. Text from nodes.record, else the
-		// _source byte range.
-		var rec string
-		var sb, eb int
-		err := w.db.QueryRow(`SELECT COALESCE(n.record, ''), a.start_byte, a.end_byte
-			FROM _ast a JOIN nodes n ON n.id = a.node_id
-			WHERE a.source_id = ? AND a.node_kind = 'package_identifier'
-			ORDER BY a.start_byte LIMIT 1`, sourceID).Scan(&rec, &sb, &eb)
-		switch {
-		case err != nil:
-			pkg = ""
-		case rec != "":
-			pkg = rec
-		default:
-			var content []byte
-			if e := w.db.QueryRow("SELECT content FROM _source WHERE id = ?", sourceID).Scan(&content); e == nil {
-				if sb >= 0 && sb < eb && eb <= len(content) {
-					pkg = string(content[sb:eb])
-				}
-			}
-		}
-	}
-	w.pkgCache.Store(sourceID, pkg)
-	return pkg
+	return ""
 }
 
-// fileSource returns the source bytes for sourceID, cached per file.
+// fileSource returns the source bytes for sourceID, nil when unavailable.
 func (w *ASTWalker) fileSource(sourceID string) []byte {
-	if v, ok := w.sourceCache.Load(sourceID); ok {
-		return v.([]byte)
+	if idx := w.sectionOrNil(sourceID); idx != nil {
+		return idx.source
 	}
-	src, _ := w.readSource(w.db, sourceID)
-	w.sourceCache.Store(sourceID, src)
-	return src
+	return nil
 }
 
-// docExtendStart walks backward from a scope node over contiguous preceding
-// comment siblings (same parent, <= 2 byte gap), returning the doc-extended
-// start byte. The SQL mirror of SitterWalker's PrevSibling comment scan.
+// sectionOrNil is fileSection for the FileMeta/DocScope accessors, whose
+// interfaces have no error to return: an empty sourceID (the whole-db serve
+// path) or a failed index load yields nil, and the accessors answer "" / nil
+// as they always have for a file the db does not hold.
+func (w *ASTWalker) sectionOrNil(sourceID string) *fileIndex {
+	if sourceID == "" {
+		return nil
+	}
+	idx, err := w.fileSection(sourceID)
+	if err != nil {
+		return nil
+	}
+	return idx
+}
+
+// docExtendStart is fileIndex.docExtendStart for the match's file; a file the
+// db does not hold extends nothing.
 func (w *ASTWalker) docExtendStart(sourceID, scopeID string, scopeStart uint32) uint32 {
-	var parentID string
-	if err := w.db.QueryRow("SELECT parent_id FROM nodes WHERE id = ?", scopeID).Scan(&parentID); err != nil {
+	idx, err := w.fileIndex(sourceID)
+	if err != nil {
 		return scopeStart
 	}
-	start := scopeStart
-	for {
-		// Closest preceding comment sibling (same parent), by end_byte.
-		var cs, ce int
-		err := w.db.QueryRow(`SELECT a.start_byte, a.end_byte
-			FROM _ast a JOIN nodes n ON n.id = a.node_id
-			WHERE n.parent_id = ? AND a.source_id = ? AND a.node_kind = 'comment' AND a.end_byte <= ?
-			ORDER BY a.end_byte DESC LIMIT 1`, parentID, sourceID, int(start)).Scan(&cs, &ce)
-		if err != nil || int(start)-ce > 2 {
-			break
-		}
-		start = uint32(cs)
-	}
-	return start
+	return idx.docExtendStart(scopeID, scopeStart)
 }
 
 // NewASTWalker creates a walker backed by a SQLite database containing
@@ -177,7 +145,7 @@ func TuneReadConnForBuild(db *sql.DB) {
 // the edit.
 //
 // It also bounds cache growth: the per-file caches
-// (indexCache/sourceCache/langCache/pkgCache/addrRefCache/callTokenCache)
+// (indexCache/addrRefCache/callTokenCache)
 // otherwise accumulate O(repo) node rows + source bytes for the walker's
 // lifetime. A serve/mount daemon evicts per-file on change here
 // (mache-024e9c), and the engine evicts each file as soon as its projection
@@ -186,9 +154,6 @@ func TuneReadConnForBuild(db *sql.DB) {
 // which was the build's peak RSS, not a rounding error (mache-95a33d).
 func (w *ASTWalker) InvalidateSource(sourceID string) {
 	w.indexCache.Delete(sourceID)
-	w.sourceCache.Delete(sourceID)
-	w.langCache.Delete(sourceID)
-	w.pkgCache.Delete(sourceID)
 	// addrRefCache/callTokenCache are keyed by sourceID+"\x00"+lang.
 	prefix := sourceID + "\x00"
 	for _, m := range []*sync.Map{&w.addrRefCache, &w.callTokenCache} {
@@ -253,8 +218,8 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		return nil, fmt.Errorf("find %s nodes: %w", pattern.outerKind, err)
 	}
 
-	// Read source content for byte-range extraction — via the per-file
-	// sourceCache (fileSource), NOT a raw readSource. Query runs once per
+	// Read source content for byte-range extraction — from the file's
+	// section (fileSource), NOT a raw readSource. Query runs once per
 	// schema selector per file, so an uncached read re-fetched+decompressed
 	// the full file content ~N-selectors times per file; on a whole-repo
 	// projection that was the dominant cost (mache-4f3840).
@@ -487,8 +452,8 @@ func (m *astMatch) Lang() string {
 	return m.w.fileLang(m.ctx.SourceID)
 }
 
-// PackageName implements FileMeta — the file's Go package (cached on the
-// walker; "" for non-Go). SQL mirror of SitterWalker's extractGoPackageName.
+// PackageName implements FileMeta — the file's Go package, read from the
+// file's section ("" for non-Go).
 func (m *astMatch) PackageName() string {
 	if m.w == nil {
 		return ""
@@ -551,25 +516,4 @@ type astNode struct {
 	record    string
 	startByte int
 	endByte   int
-}
-
-// readSource reads the source content for a given source ID.
-// Handles both inline BLOBs (content column) and file path references
-// (path column, used when LLO stores references instead of content).
-func (w *ASTWalker) readSource(db *sql.DB, sourceID string) ([]byte, error) {
-	var content []byte
-	var path sql.NullString
-	err := db.QueryRow("SELECT content, path FROM _source WHERE id = ?", sourceID).Scan(&content, &path)
-	if err != nil {
-		return nil, err
-	}
-	// If content is inline, use it directly
-	if len(content) > 0 {
-		return content, nil
-	}
-	// Fall back to reading from disk via path reference
-	if path.Valid && path.String != "" {
-		return os.ReadFile(path.String)
-	}
-	return nil, fmt.Errorf("_source %s: no content and no path", sourceID)
 }

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -124,10 +125,11 @@ func RegisterASTContextKinds(langName string, kinds []string) {
 // ExtractContext returns the concatenated source text of the top-level
 // context nodes for the given file (e.g. Go's import/const/var/type
 // declarations). Used by schema context fields. Mirrors
-// SitterWalker.ExtractContext but reads byte ranges from _ast and bytes
-// from _source.
+// SitterWalker.ExtractContext but slices the file's section: the node kinds
+// from its index, the bytes from its _source row.
 //
-// Returns (nil, nil) when no context kinds are registered for the language.
+// Returns (nil, nil) when no context kinds are registered for the language,
+// and (nil, err) when the file's source cannot be read.
 //
 // sourceID is the _source/_ast key (the path relative to the ingest root, as
 // ley-line produces it) — NOT a filesystem path. Callers that hold a path use
@@ -141,65 +143,29 @@ func (w *ASTWalker) ExtractContext(sourceID, langName string) ([]byte, error) {
 	if len(kinds) == 0 {
 		return nil, nil
 	}
-
-	source, err := w.readSource(w.db, sourceID)
-	if err != nil || source == nil {
-		return nil, err
-	}
-
-	// Build placeholders for IN (?, ?, ...).
-	placeholders := strings.Repeat("?,", len(kinds))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]any, 0, len(kinds)+1)
-	for _, k := range kinds {
-		args = append(args, k)
-	}
-	args = append(args, sourceID)
-
-	// Top-level nodes have no `/` in their id (or one segment after the
-	// source root, depending on schema). We pull all matching kinds for
-	// this source_id ordered by start_byte and slice the source bytes.
-	query := fmt.Sprintf(`
-		SELECT a.start_byte, a.end_byte
-		FROM _ast a
-		WHERE a.node_kind IN (%s) AND a.source_id = ?
-		ORDER BY a.start_byte ASC`, placeholders)
-	rows, err := w.db.Query(query, args...)
+	idx, err := w.fileSection(sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("extract context: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var buf []byte
-	seen := make(map[int]bool) // dedupe by start_byte
-	for rows.Next() {
-		var start, end int
-		if err := rows.Scan(&start, &end); err != nil {
-			continue
-		}
-		if seen[start] {
-			continue
-		}
-		seen[start] = true
-		if start < 0 || end > len(source) || start >= end {
-			continue
-		}
-		buf = append(buf, source[start:end]...)
-		buf = append(buf, '\n', '\n')
+	if idx.srcErr != nil {
+		return nil, idx.srcErr
 	}
-	return buf, rows.Err()
+	return idx.contextText(kinds), nil
 }
 
 // ExtractGoImports reads Go import aliases from the _imports table
 // (produced by ley-line-open's `leyline parse`). Returns alias → path map
 // for qualified call resolution (e.g., auth.Validate → github.com/foo/auth).
 // Mirrors SitterWalker.ExtractGoImports but uses SQL instead of CGO tree-sitter.
+//
+// Older .dbs produced before LLO grew _imports have no such table; that is
+// probed once per walker (not once per file), and resolves to no imports.
 func (w *ASTWalker) ExtractGoImports(sourceID string) (map[string]string, error) {
-	// Check if _imports table exists (older .dbs produced before LLO didn't have it)
-	var count int
-	if err := w.db.QueryRow(
-		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_imports'",
-	).Scan(&count); err != nil || count == 0 {
+	has, err := w.hasImportsTable()
+	if err != nil {
+		return nil, fmt.Errorf("probe _imports: %w", err)
+	}
+	if !has {
 		return nil, nil
 	}
 
@@ -220,4 +186,91 @@ func (w *ASTWalker) ExtractGoImports(sourceID string) (map[string]string, error)
 		imports[alias] = path
 	}
 	return imports, rows.Err()
+}
+
+// hasImportsTable reports whether the db has an _imports table, asking
+// sqlite_master once and remembering the answer; a failed probe is not
+// remembered, so a transient failure does not latch the walker into "no
+// imports" for its lifetime.
+func (w *ASTWalker) hasImportsTable() (bool, error) {
+	w.importsMu.Lock()
+	defer w.importsMu.Unlock()
+	if w.importsProbed {
+		return w.hasImports, nil
+	}
+	var count int
+	if err := w.db.QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_imports'",
+	).Scan(&count); err != nil {
+		return false, err
+	}
+	w.importsProbed, w.hasImports = true, count > 0
+	return w.hasImports, nil
+}
+
+// packageName is the Go package name: the first package_identifier's text
+// (nodes.record, else the _source byte range). "" when the file has none.
+func (idx *fileIndex) packageName() string {
+	ids := idx.byKind["package_identifier"]
+	if len(ids) == 0 {
+		return ""
+	}
+	n := idx.all[ids[0]]
+	if n.record != "" {
+		return n.record
+	}
+	if n.startByte >= 0 && n.startByte < n.endByte && n.endByte <= len(idx.source) {
+		return string(idx.source[n.startByte:n.endByte])
+	}
+	return ""
+}
+
+// docExtendStart walks backward from scopeID over contiguous preceding comment
+// siblings (same parent, <= 2 byte gap), returning the doc-extended start
+// byte. A scope the index does not hold (the "$" grouping match has none)
+// extends nothing. Note that leyline writes no comment rows (mache-a83451),
+// so against today's substrate this always returns scopeStart.
+func (idx *fileIndex) docExtendStart(scopeID string, scopeStart uint32) uint32 {
+	i, ok := idx.byID[scopeID]
+	if !ok {
+		return scopeStart
+	}
+	cs := idx.comments[idx.all[i].parentID]
+	start := int(scopeStart)
+	// Candidates end at or before start; end_byte is monotone along cs (see
+	// the field comment), so the closest one is the last of that prefix.
+	k := sort.Search(len(cs), func(j int) bool { return idx.all[cs[j]].endByte > start })
+	for ; k > 0; k-- {
+		c := idx.all[cs[k-1]]
+		if start-c.endByte > 2 {
+			break
+		}
+		start = c.startByte
+	}
+	return uint32(start)
+}
+
+// contextText concatenates the source text of every node whose kind is in
+// kinds, in start_byte order, one blank line after each — the context blob
+// (Go's import/const/var/type declarations). Nodes sharing a start byte
+// contribute once.
+func (idx *fileIndex) contextText(kinds []string) []byte {
+	want := make(map[string]bool, len(kinds))
+	for _, k := range kinds {
+		want[k] = true
+	}
+	var buf []byte
+	seen := make(map[int]bool)
+	for _, n := range idx.all {
+		if !want[n.astKind] || seen[n.startByte] {
+			continue
+		}
+		seen[n.startByte] = true
+		if n.startByte < 0 || n.endByte > len(idx.source) || n.startByte >= n.endByte {
+			continue
+		}
+		buf = append(buf, idx.source[n.startByte:n.endByte]...)
+		buf = append(buf, '\n', '\n')
+	}
+	return buf
 }

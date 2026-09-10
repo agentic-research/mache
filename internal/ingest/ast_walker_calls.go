@@ -9,10 +9,10 @@ import (
 	"github.com/agentic-research/mache/graph"
 )
 
-// CallPattern describes one shape of function call for a language.
-// The walker translates these into batched SQL JOINs against the _ast table —
-// one JOIN per ancestor — to avoid the N-queries-per-file pattern of the
-// generic selector path.
+// CallPattern describes one shape of function call for a language. The
+// walker evaluates these over the file's in-memory node section (one
+// ancestor-chain check per candidate leaf) — no SQL per pattern, and none of
+// the N-queries-per-file pattern of the generic selector path.
 //
 // Examples:
 //
@@ -45,8 +45,8 @@ func RegisterASTCallPatterns(langName string, patterns []CallPattern) {
 }
 
 // ExtractCalls returns deduplicated function-call tokens for the given
-// source file. Issues one JOIN-style SQL query per registered pattern,
-// avoiding the per-scope query loop of the generic Query path.
+// source file, evaluating every registered pattern over the file's node
+// section — one statement to load it, none per pattern or per scope.
 //
 // Returns (nil, nil) when the language has no registered patterns — the
 // caller treats that as "no calls" and falls through to other paths.
@@ -64,7 +64,7 @@ func (w *ASTWalker) ExtractCalls(sourcePath, langName string) ([]string, error) 
 	seen := make(map[string]bool)
 	var calls []string
 	for _, p := range patterns {
-		rows, err := w.queryCallPattern(sourceID, p, false, "")
+		rows, err := w.callRows(sourceID, p, false, "")
 		if err != nil {
 			continue
 		}
@@ -113,10 +113,10 @@ type scopedCallToken struct {
 }
 
 // fileCallTokens runs every registered call pattern against the WHOLE file
-// ONCE (queryCallPattern is already a batched JOIN, so this is O(nodes) per
-// pattern) and caches the (leaf id, token) pairs keyed by (sourceID, lang).
+// ONCE (callRows is O(nodes) per pattern over the in-memory section) and
+// caches the (leaf id, token) pairs keyed by (sourceID, lang).
 // ExtractCallsScoped then filters these by construct prefix in Go instead of
-// re-running queryCallPattern per construct — that per-construct path was 49%
+// re-evaluating every pattern per construct — that per-construct path was 49%
 // of a whole-repo projection after the node-index fix (mache-4f3840). Tokens
 // are kept undeduplicated here (the same token may live under several
 // constructs); the per-construct caller dedups within its scope.
@@ -130,11 +130,11 @@ func (w *ASTWalker) fileCallTokens(sourceID, langName string) ([]scopedCallToken
 	if raw, ok := callPatternRegistry.Load(langName); ok {
 		if patterns := raw.([]CallPattern); len(patterns) > 0 {
 			for _, p := range patterns {
-				rows, err := w.queryCallPattern(sourceID, p, false, "") // whole file
+				rows, err := w.callRows(sourceID, p, false, "") // whole file
 				if err != nil {
-					// queryCallPattern builds SQL from a STRUCTURED kind-chain,
-					// so an error is a real/transient DB failure, not an
-					// unsupported selector. Surface it and DON'T cache the
+					// callRows evaluates a STRUCTURED kind-chain, so an error
+					// is a real/transient DB failure, not an unsupported
+					// selector. Surface it and DON'T cache the
 					// partial set — caching an empty result forever would
 					// silently and permanently empty this file's callees on a
 					// long-lived serve (mache-015f5c).
@@ -187,13 +187,13 @@ func (w *ASTWalker) ExtractFileLevelRefs(sourceID, langName string) ([]string, e
 	var refs []string
 	for _, p := range patterns {
 		// Unlike the generic Query path (where a selector may legitimately
-		// be unsupported), queryCallPattern generates SQL from a structured
-		// kind-chain — an error here is a real bug (invalid pattern or a
-		// failed query), not an unsupported pattern. Surface it rather than
+		// be unsupported), callRows evaluates a structured kind-chain — an
+		// error here is a real bug (invalid pattern or a failed section
+		// load), not an unsupported pattern. Surface it rather than
 		// returning a silently-incomplete ref set: these tokens feed the
 		// _file_level: sentinel dead_code reads, so a short set with nil
 		// error would manifest as silent dead_code false positives.
-		rows, err := w.queryCallPattern(sourceID, p, false, "")
+		rows, err := w.callRows(sourceID, p, false, "")
 		if err != nil {
 			return nil, fmt.Errorf("file-level ref pattern %s/%s: %w", p.OuterKind, p.LeafKind, err)
 		}
@@ -221,11 +221,11 @@ func (w *ASTWalker) ExtractQualifiedCalls(sourcePath, langName string) ([]graph.
 	seen := make(map[string]bool)
 	var calls []graph.QualifiedCall
 	for _, p := range patterns {
-		rows, err := w.queryCallPattern(sourceID, p, true, "")
+		rows, err := w.callRows(sourceID, p, true, "")
 		if err != nil {
-			// queryCallPattern builds SQL from a structured kind-chain, so an
-			// error is a real/transient DB failure, not an unsupported
-			// selector. Surface it — a silent short list is indistinguishable
+			// callRows evaluates a structured kind-chain, so an error is a
+			// real/transient DB failure, not an unsupported selector.
+			// Surface it — a silent short list is indistinguishable
 			// from "calls nothing", the class mache-015f5c closes.
 			return nil, fmt.Errorf("extract qualified calls %s (%s/%s): %w",
 				sourceID, p.OuterKind, p.LeafKind, err)
@@ -266,7 +266,7 @@ func (w *ASTWalker) ExtractQualifiedCallsScoped(sourceID, scopeID, langName stri
 	seen := make(map[string]bool)
 	var calls []graph.QualifiedCall
 	for _, p := range patterns {
-		rows, err := w.queryCallPattern(sourceID, p, true, scopeID)
+		rows, err := w.callRows(sourceID, p, true, scopeID)
 		if err != nil {
 			// A DB failure must surface, not silently drop this pattern's
 			// calls (find_callees live path; mache-6ff371, matching
@@ -289,144 +289,102 @@ func (w *ASTWalker) ExtractQualifiedCallsScoped(sourceID, scopeID, langName stri
 	return calls, nil
 }
 
-// escapeLikePrefix escapes SQL LIKE metacharacters (\ % _) in a literal id
-// prefix so node ids containing '_' or '%' match literally, not as wildcards.
-// Use with `LIKE escapeLikePrefix(p)+"/%" ESCAPE '\'`.
-func escapeLikePrefix(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `%`, `\%`)
-	s = strings.ReplaceAll(s, `_`, `\_`)
-	return s
-}
-
-// callRow is one extracted call from a single SQL pattern query.
+// callRow is one extracted call from a single pattern evaluation.
 type callRow struct {
 	token     string
 	qualifier string
-	leafID    string // n_leaf.id — used to attribute the call to a construct
+	leafID    string // the leaf node's id — used to attribute the call to a construct
 }
 
-// queryCallPattern runs a single batched SQL query for the given CallPattern
-// and source file. The query JOINs the _ast/nodes tables once per ancestor
-// (LeafKind ↔ Ancestors[len-1] ↔ ... ↔ Ancestors[0] ↔ OuterKind) so the
-// result set contains one row per matched call, regardless of how many
-// scope nodes exist in the file.
-//
-// When wantQualifier is true and pattern.QualifierKind is non-empty, the
-// query also joins a sibling node (same parent as the leaf) of kind
-// QualifierKind to populate r.qualifier.
-func (w *ASTWalker) queryCallPattern(sourceID string, p CallPattern, wantQualifier bool, scopePrefix string) ([]callRow, error) {
+// callRows evaluates one CallPattern over a source file from the file's
+// in-memory section (fileIndex.callRows) — no SQL per pattern. The result
+// has one row per matched call regardless of how many scope nodes the file
+// has; scopePrefix restricts it to one construct's subtree ("" = whole file).
+// A pattern that cannot be evaluated and a failed section load are errors,
+// which every caller surfaces: a silent short list is indistinguishable
+// from "calls nothing" (mache-015f5c).
+func (w *ASTWalker) callRows(sourceID string, p CallPattern, wantQualifier bool, scopePrefix string) ([]callRow, error) {
 	if p.OuterKind == "" || p.LeafKind == "" {
 		return nil, fmt.Errorf("invalid CallPattern: OuterKind and LeafKind required")
 	}
-	// RequirePriorSibling references the immediate-ancestor alias (a_anc0),
-	// so it's meaningless without at least one ancestor. Reject rather than
-	// silently dropping the constraint, which would over-capture undetectably.
+	// RequirePriorSibling constrains the immediate ancestor, so it is
+	// meaningless without at least one. Reject rather than silently dropping
+	// the constraint, which would over-capture undetectably.
 	if p.RequirePriorSibling && len(p.Ancestors) == 0 {
 		return nil, fmt.Errorf("invalid CallPattern: RequirePriorSibling requires at least one ancestor")
 	}
-
-	// Build the ancestor JOIN chain.
-	//   leaf (LeafKind)
-	//     ↑ parent_id
-	//   ancestor[len-1]      (parent of leaf)
-	//     ↑
-	//   ...
-	//   ancestor[0]          (immediate child of outer)
-	//     ↑
-	//   outer (OuterKind)
-	//
-	// Each level requires: nodes table for parent_id chain, _ast for kind.
-	var sb strings.Builder
-	sb.WriteString(`SELECT n_leaf.record AS call_token, n_leaf.id AS leaf_id`)
-	if wantQualifier && p.QualifierKind != "" {
-		sb.WriteString(`, COALESCE(n_pkg.record, '') AS pkg`)
-	} else {
-		sb.WriteString(`, '' AS pkg`)
-	}
-	sb.WriteString(`
-		FROM nodes n_leaf
-		JOIN _ast a_leaf ON a_leaf.node_id = n_leaf.id`)
-	args := []any{}
-
-	// Walk up the ancestor chain (closest-to-leaf first → outer last).
-	prev := "n_leaf"
-	for i := len(p.Ancestors) - 1; i >= 0; i-- {
-		alias := fmt.Sprintf("n_anc%d", i)
-		astAlias := fmt.Sprintf("a_anc%d", i)
-		fmt.Fprintf(&sb, `
-		JOIN nodes %s ON %s.id = %s.parent_id
-		JOIN _ast %s ON %s.node_id = %s.id`,
-			alias, alias, prev, astAlias, astAlias, alias)
-		prev = alias
-	}
-	// Finally JOIN the outer scope.
-	fmt.Fprintf(&sb, `
-		JOIN nodes n_outer ON n_outer.id = %s.parent_id
-		JOIN _ast a_outer ON a_outer.node_id = n_outer.id`, prev)
-
-	// Optional qualifier sibling: same parent as the leaf, different kind.
-	if wantQualifier && p.QualifierKind != "" {
-		sb.WriteString(`
-		LEFT JOIN nodes n_pkg ON n_pkg.parent_id = n_leaf.parent_id AND n_pkg.id != n_leaf.id
-		LEFT JOIN _ast a_pkg ON a_pkg.node_id = n_pkg.id AND a_pkg.node_kind = ?`)
-		args = append(args, p.QualifierKind)
-	}
-
-	// WHERE: kind constraints + source_id.
-	sb.WriteString(`
-		WHERE a_leaf.node_kind = ? AND a_leaf.source_id = ?`)
-	args = append(args, p.LeafKind, sourceID)
-	// Scope to a single construct subtree (calls whose leaf node lives under the
-	// scope node's id path). Empty scopePrefix = whole file.
-	if scopePrefix != "" {
-		// Escape LIKE metacharacters in the literal id prefix: leyline node
-		// ids contain '_' (function_declaration_1), which SQL LIKE would treat
-		// as any-char wildcards, over-scoping (mache-702f9b). The trailing "/%"
-		// stays an unescaped wildcard — that's the descendant match we want.
-		sb.WriteString(` AND n_leaf.id LIKE ? ESCAPE '\'`)
-		args = append(args, escapeLikePrefix(scopePrefix)+"/%")
-	}
-	for i, anc := range p.Ancestors {
-		fmt.Fprintf(&sb, ` AND a_anc%d.node_kind = ?`, i)
-		args = append(args, anc)
-	}
-	sb.WriteString(` AND a_outer.node_kind = ?`)
-	args = append(args, p.OuterKind)
-	// Value-position constraint: require an earlier same-kind sibling of
-	// the immediate ancestor under the outer node (e.g. the key
-	// literal_element preceding the value literal_element in a
-	// keyed_element). Reproduces tree-sitter positional capture.
-	// len(Ancestors) >= 1 is guaranteed by the validation above.
-	if p.RequirePriorSibling {
-		sb.WriteString(`
-			AND EXISTS (
-				SELECT 1 FROM nodes sib
-				JOIN _ast a_sib ON a_sib.node_id = sib.id
-				WHERE sib.parent_id = n_outer.id
-				  AND a_sib.node_kind = ?
-				  AND a_sib.start_byte < a_anc0.start_byte
-			)`)
-		args = append(args, p.Ancestors[0])
-	}
-	if wantQualifier && p.QualifierKind != "" {
-		// Match only rows where the qualifier sibling actually exists.
-		sb.WriteString(` AND n_pkg.id IS NOT NULL`)
-	}
-
-	rows, err := w.db.Query(sb.String(), args...)
+	idx, err := w.fileIndex(sourceID)
 	if err != nil {
-		return nil, fmt.Errorf("call pattern query: %w", err)
+		return nil, fmt.Errorf("call pattern index: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	return idx.callRows(p, wantQualifier, scopePrefix), nil
+}
 
+// callRows evaluates one CallPattern over the file: every LeafKind node whose
+// ancestor chain reads Ancestors[len-1] … Ancestors[0] up to an OuterKind
+// node, in leaf start_byte order. scopePrefix restricts leaves to that node's
+// subtree (its id path plus "/"); "" is the whole file.
+//
+// With wantQualifier on a qualified pattern (QualifierKind non-empty), one
+// row is produced per sibling of the leaf, carrying that sibling's text as
+// the qualifier — "" when the sibling is not a leaf (the operand of `a.b.C()`
+// is a selector_expression) — and a leaf with no sibling produces none. The
+// sibling's kind is NOT matched against QualifierKind: the SQL this replaced
+// tested it only inside a LEFT JOIN's ON clause, which drops nothing, and a
+// strict match would lose `a.b.C()` as a call entirely rather than degrade
+// it to an unqualified one.
+func (idx *fileIndex) callRows(p CallPattern, wantQualifier bool, scopePrefix string) []callRow {
+	qualified := wantQualifier && p.QualifierKind != ""
+	prefix := scopePrefix + "/"
 	var out []callRow
-	for rows.Next() {
-		var token, leafID, pkg string
-		if err := rows.Scan(&token, &leafID, &pkg); err != nil {
+	for _, li := range idx.byKind[p.LeafKind] {
+		leaf := idx.all[li]
+		if scopePrefix != "" && !strings.HasPrefix(leaf.id, prefix) {
 			continue
 		}
-		out = append(out, callRow{token: token, qualifier: pkg, leafID: leafID})
+		// Walk up: the nearest ancestor is Ancestors[len-1], the child of the
+		// outer node is Ancestors[0].
+		cur, ok := li, true
+		for a := len(p.Ancestors) - 1; a >= 0 && ok; a-- {
+			cur, ok = idx.byID[idx.all[cur].parentID]
+			ok = ok && idx.all[cur].astKind == p.Ancestors[a]
+		}
+		if !ok {
+			continue
+		}
+		anc0 := idx.all[cur]
+		oi, ok := idx.byID[anc0.parentID]
+		if !ok || idx.all[oi].astKind != p.OuterKind {
+			continue
+		}
+		// Value-position constraint: an earlier same-kind sibling of the
+		// immediate ancestor under the outer node (the key literal_element
+		// before the value one in a keyed_element). len(Ancestors) >= 1 is
+		// guaranteed by the caller's validation.
+		if p.RequirePriorSibling && !idx.hasPriorSibling(anc0) {
+			continue
+		}
+		if !qualified {
+			out = append(out, callRow{token: leaf.record, leafID: leaf.id})
+			continue
+		}
+		for _, si := range idx.children[leaf.parentID] {
+			if si == li {
+				continue
+			}
+			out = append(out, callRow{token: leaf.record, qualifier: idx.all[si].record, leafID: leaf.id})
+		}
 	}
-	return out, rows.Err()
+	return out
+}
+
+// hasPriorSibling reports whether n has a same-kind sibling starting before it.
+func (idx *fileIndex) hasPriorSibling(n idxNode) bool {
+	for _, si := range idx.children[n.parentID] {
+		s := idx.all[si]
+		if s.astKind == n.astKind && s.startByte < n.startByte {
+			return true
+		}
+	}
+	return false
 }

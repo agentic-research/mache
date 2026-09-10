@@ -117,10 +117,10 @@ func TestASTWalker_Query_OptionalUnderscoreCaptureMissing(t *testing.T) {
 	assert.NotEmpty(t, matches, "match should survive missing optional capture")
 }
 
-// TestASTWalker_readSource_PathFallback verifies that when a _source row
-// has empty content but a non-empty path column, readSource falls back to
-// reading the file from disk.
-func TestASTWalker_readSource_PathFallback(t *testing.T) {
+// TestReadSource_PathFallback verifies that when a _source row has empty
+// content but a non-empty path column, readSource falls back to reading the
+// file from disk.
+func TestReadSource_PathFallback(t *testing.T) {
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "x.go")
 	body := []byte("package x\n")
@@ -143,9 +143,9 @@ func TestASTWalker_readSource_PathFallback(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	w := NewASTWalker(db)
-	got, err := w.readSource(db, "x.go")
+	lang, got, err := readSource(db, "x.go")
 	require.NoError(t, err)
+	assert.Equal(t, "go", lang)
 	assert.Equal(t, body, got)
 }
 
@@ -251,9 +251,9 @@ func TestASTWalker_Query_ByteRangeFallback(t *testing.T) {
 	assert.Equal(t, "Validate", got, "expected byte-range fallback to recover the identifier")
 }
 
-// TestASTWalker_readSource_NoContentNoPath verifies the error path when
-// _source has neither inline content nor a path reference.
-func TestASTWalker_readSource_NoContentNoPath(t *testing.T) {
+// TestReadSource_NoContentNoPath verifies the error path when _source has
+// neither inline content nor a path reference.
+func TestReadSource_NoContentNoPath(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
@@ -271,8 +271,7 @@ func TestASTWalker_readSource_NoContentNoPath(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	w := NewASTWalker(db)
-	_, err = w.readSource(db, "empty.go")
+	_, _, err = readSource(db, "empty.go")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no content")
 }

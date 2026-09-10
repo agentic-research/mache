@@ -164,6 +164,10 @@ type Greeter struct{}
 	typeStart, typeEnd := 45, 67
 
 	_, err = db.Exec(`
+		CREATE TABLE nodes (
+			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+			kind INTEGER NOT NULL, mtime INTEGER NOT NULL, record TEXT
+		);
 		CREATE TABLE _ast (
 			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
 			node_kind TEXT NOT NULL,
@@ -177,6 +181,7 @@ type Greeter struct{}
 	_, err = db.Exec("INSERT INTO _source (id, language, content) VALUES ('main.go', 'go', ?)", []byte(src))
 	require.NoError(t, err)
 
+	// Every _ast row has its nodes row, as in a leyline-parsed db.
 	for _, r := range []struct {
 		id, kind   string
 		start, end int
@@ -185,7 +190,10 @@ type Greeter struct{}
 		{"src/const", "const_declaration", constStart, constEnd},
 		{"src/type", "type_declaration", typeStart, typeEnd},
 	} {
-		_, err := db.Exec("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', ?, ?, ?, 0, 0, 0, 0)",
+		_, err := db.Exec("INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, 'src', ?, 1, 0, '')",
+			r.id, filepath.Base(r.id))
+		require.NoError(t, err)
+		_, err = db.Exec("INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', ?, ?, ?, 0, 0, 0, 0)",
 			r.id, r.kind, r.start, r.end)
 		require.NoError(t, err)
 	}
