@@ -55,3 +55,33 @@ func TestEngine_Ingest_EvictsWalkerCachesPerFile(t *testing.T) {
 	assert.Zero(t, engine.astWalker.cachedSources(),
 		"ASTWalker retained per-file cache entries after the build finished")
 }
+
+// TestEngine_Ingest_NeverReadsSourceBytes pins the contract that makes the
+// projection's memory footprint independent of the corpus size: after ley-line
+// has parsed a tree into the `_ast` db, mache projects from that db alone. The
+// old Phase 1 worker pool read every file into memory and held the whole
+// corpus for the length of the projection, for nothing to consume
+// (mache-95a33d). Here the bytes are made unreadable between parse and
+// projection; a projection that reads them fails, one that does not is
+// unaffected.
+func TestEngine_Ingest_NeverReadsSourceBytes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file modes; the unreadable-file probe cannot fire")
+	}
+	schema := loadGoSchema(t)
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "a.go")
+	require.NoError(t, os.WriteFile(src, []byte("package shared\n\nfunc FuncA() {}\n"), 0o644))
+
+	store := graph.NewMemoryStore()
+	engine := NewEngine(schema, store)
+	attachLeylineAST(t, engine, tmpDir)
+
+	require.NoError(t, os.Chmod(src, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(src, 0o644) })
+
+	require.NoError(t, engine.Ingest(tmpDir),
+		"projection must come from the _ast db, not from re-reading the file")
+	_, err := store.GetNode("shared/functions/FuncA/source")
+	require.NoError(t, err)
+}

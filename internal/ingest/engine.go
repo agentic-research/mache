@@ -63,15 +63,15 @@ type sourceFileJob struct {
 
 // parsedSourceFile is the per-file work item for processSourceFileResult.
 // The AST lives in the `_ast` db (queried by source_id); the fields here carry
-// file content plus the file-level extracts the ASTWalker resolves from SQL.
+// the file's paths plus the file-level extracts the ASTWalker resolves from
+// SQL. The file's bytes are deliberately absent: nothing on this path reads
+// them (mache-95a33d).
 type parsedSourceFile struct {
 	job           sourceFileJob
 	realPath      string
-	content       []byte
 	context       []byte            // extracted imports/globals context
 	imports       map[string]string // structured imports: alias → path (Go only, nil for others)
 	fileLevelRefs []string          // identifiers captured at the file root (Go: top-level cobra refs etc., mache-02r9)
-	readErr       error             // non-nil if file read failed
 }
 
 func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
@@ -162,7 +162,7 @@ func (e *Engine) Ingest(path string) error {
 					"(call SetASTWalker with a ley-line-parsed _ast db before Ingest); " +
 					"in-process tree-sitter was removed in ADR-0012 step 4")
 			}
-			return e.ingestSourceParallel(realPath)
+			return e.ingestSourceTree(realPath)
 		}
 
 		return filepath.WalkDir(realPath, func(p string, d os.DirEntry, err error) error { // coverage:ignore

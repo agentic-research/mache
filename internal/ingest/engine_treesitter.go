@@ -5,194 +5,137 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/agentic-research/mache/graph"
 )
 
-// ingestSourceParallel projects a source directory using parallel workers.
-// The AST was pre-parsed by ley-line into the engine's `_ast` db; mache runs
-// NO tree-sitter (ADR-0012 step 4). Phase 1 walks the directory and reads file
-// content in parallel; Phase 2 applies results sequentially (processNode + store
-// mutations) with the ASTWalker resolving every construct from SQL.
-func (e *Engine) ingestSourceParallel(rootPath string) error {
-	numWorkers := runtime.NumCPU()
-	jobs := make(chan sourceFileJob, numWorkers*4)
-	parsed := make(chan parsedSourceFile, numWorkers*4)
-
-	// Phase 1: Workers read file content in parallel. No CGO, no tree-sitter
-	// parser allocation, and no LockOSThread pin — the AST already lives in
-	// the `_ast` db, so there is no CGO bridge to keep on a stable OS thread
-	// (this is where the historical mache-2y9w SIGSEGV source disappears).
-	var workerWg sync.WaitGroup
-	for range numWorkers {
-		workerWg.Go(func() {
-			for job := range jobs {
-				result := parsedSourceFile{job: job}
-				absPath, err := filepath.Abs(job.path)
-				if err != nil {
-					result.readErr = err // coverage:ignore
-					parsed <- result     // coverage:ignore
-					continue             // coverage:ignore
-				}
-				result.realPath, err = filepath.EvalSymlinks(absPath)
-				if err != nil {
-					result.realPath = absPath // coverage:ignore
-				} // coverage:ignore
-
-				result.content, err = os.ReadFile(result.realPath)
-				if err != nil {
-					result.readErr = err // coverage:ignore
-					parsed <- result     // coverage:ignore
-					continue             // coverage:ignore
-				}
-				// context/imports/file-level-refs are resolved from SQL in
-				// Phase 2 (processSourceFileResult) via the ASTWalker.
-				parsed <- result
-			}
-		})
-	}
-
-	// Walk directory and send jobs. Non-tree-sitter files (raw files) are
-	// processed inline since they're cheap (just file copy, no parsing).
-	var walkErr error
+// ingestSourceTree projects a source directory. The AST was pre-parsed by
+// ley-line into the engine's `_ast` db; mache runs NO tree-sitter (ADR-0012
+// step 4) and never reads a source file's bytes — every construct and every
+// file-level extract comes from the ASTWalker querying that db. The walk
+// therefore only resolves paths; projection is sequential (processNode + store
+// mutations) in a deterministic order.
+//
+// This used to be a worker pool that read every file's content in parallel —
+// a vestige of the in-process tree-sitter era, when the bytes were the parser's
+// input. After ADR-0012 nothing consumed them, yet the whole corpus sat in the
+// results slice for the length of the projection (mache-95a33d).
+func (e *Engine) ingestSourceTree(rootPath string) error {
+	var results []parsedSourceFile
 	var rawFiles []struct {
 		path    string
 		modTime time.Time
 	}
-	var fileCount atomic.Int64
-	go func() {
-		defer close(jobs)
-		walkErr = filepath.WalkDir(rootPath, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err // coverage:ignore
-			} // coverage:ignore
-			if d.IsDir() {
-				if p != rootPath && ShouldSkipDir(d.Name()) {
-					return filepath.SkipDir
-				}
-				if e.gitignore != nil && p != rootPath {
-					rel, relErr := filepath.Rel(rootPath, p)
-					if relErr == nil {
-						rel = filepath.ToSlash(rel)
-						if e.gitignore.Match(rel, true) {
-							return filepath.SkipDir
-						}
-					}
-				}
-				return nil
+	walkErr := filepath.WalkDir(rootPath, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err // coverage:ignore
+		} // coverage:ignore
+		if d.IsDir() {
+			if p != rootPath && ShouldSkipDir(d.Name()) {
+				return filepath.SkipDir
 			}
-			if e.gitignore != nil {
+			if e.gitignore != nil && p != rootPath {
 				rel, relErr := filepath.Rel(rootPath, p)
 				if relErr == nil {
 					rel = filepath.ToSlash(rel)
-					if e.gitignore.Match(rel, false) {
-						return nil
+					if e.gitignore.Match(rel, true) {
+						return filepath.SkipDir
 					}
-				}
-			}
-			if d.Type()&os.ModeSymlink != 0 {
-				target, err := os.Stat(p)         // coverage:ignore
-				if err == nil && target.IsDir() { // coverage:ignore
-					return nil // coverage:ignore
-				} // coverage:ignore
-			}
-			info, err := d.Info()
-			if err != nil {
-				return err // coverage:ignore
-			} // coverage:ignore
-			if ShouldSkipFile(p, info.Size()) {
-				return nil
-			}
-
-			ext := filepath.Ext(p)
-			langName, ok := langForExt(ext)
-			if ok {
-				// Skip unchanged files when an index is available.
-				// Use resolved (symlink-evaluated) path for consistent cache key,
-				// matching RecordFile which stores result.realPath.
-				if e.fileIndex != nil {
-					lookupPath := p                                            // coverage:ignore
-					if resolved, err := filepath.EvalSymlinks(p); err == nil { // coverage:ignore
-						lookupPath = resolved // coverage:ignore
-					} // coverage:ignore
-					if entry, ok := e.fileIndex[lookupPath]; ok { // coverage:ignore
-						if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() { // coverage:ignore
-							return nil // unchanged, skip re-parsing // coverage:ignore
-						} // coverage:ignore
-					}
-				}
-				fileCount.Add(1)
-				jobs <- sourceFileJob{
-					path:     p,
-					langName: langName,
-					modTime:  info.ModTime(),
-				}
-			} else {
-				if !isBinaryFile(p) {
-					rawFiles = append(rawFiles, struct {
-						path    string
-						modTime time.Time
-					}{p, info.ModTime()})
 				}
 			}
 			return nil
+		}
+		if e.gitignore != nil {
+			rel, relErr := filepath.Rel(rootPath, p)
+			if relErr == nil {
+				rel = filepath.ToSlash(rel)
+				if e.gitignore.Match(rel, false) {
+					return nil
+				}
+			}
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			target, err := os.Stat(p)         // coverage:ignore
+			if err == nil && target.IsDir() { // coverage:ignore
+				return nil // coverage:ignore
+			} // coverage:ignore
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err // coverage:ignore
+		} // coverage:ignore
+		if ShouldSkipFile(p, info.Size()) {
+			return nil
+		}
+
+		ext := filepath.Ext(p)
+		langName, ok := langForExt(ext)
+		if !ok {
+			if !isBinaryFile(p) {
+				rawFiles = append(rawFiles, struct {
+					path    string
+					modTime time.Time
+				}{p, info.ModTime()})
+			}
+			return nil
+		}
+
+		// Resolved (symlink-evaluated) path is the key RecordFile stores and
+		// the _ast source_id derives from, so resolve it once here.
+		absPath, err := filepath.Abs(p)
+		if err != nil {
+			return err // coverage:ignore
+		} // coverage:ignore
+		realPath, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			realPath = absPath // coverage:ignore
+		} // coverage:ignore
+
+		// Skip unchanged files when an index is available.
+		if e.fileIndex != nil {
+			if entry, ok := e.fileIndex[realPath]; ok { // coverage:ignore
+				if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() { // coverage:ignore
+					return nil // unchanged, skip re-projecting // coverage:ignore
+				} // coverage:ignore
+			}
+		}
+		results = append(results, parsedSourceFile{
+			job: sourceFileJob{
+				path:     p,
+				langName: langName,
+				modTime:  info.ModTime(),
+			},
+			realPath: realPath,
 		})
-	}()
+		return nil
+	})
+	if walkErr != nil {
+		return walkErr // coverage:ignore
+	} // coverage:ignore
 
-	// Phase 2: Collect all parsed results, then sort by path for deterministic
-	// processing order. Dedup suffixes (e.g., init.from_b_go) depend on the
-	// order files are processed — alphabetical matches filepath.WalkDir behavior.
-	var firstErr error
-	var results []parsedSourceFile
-	// Wait for workers to finish in a separate goroutine so we can collect results.
-	doneCh := make(chan struct{})
-	go func() {
-		workerWg.Wait()
-		close(parsed)
-		close(doneCh)
-	}()
-
-	for result := range parsed {
-		results = append(results, result)
-	}
-
-	// Sort by walk path to match filepath.WalkDir's lexical order.
+	// Sort by walk path. Dedup suffixes (e.g., init.from_b_go) depend on the
+	// order files are projected, and this lexical order over the full path is
+	// the order every existing build has used — it is NOT WalkDir's order
+	// (which sorts per directory: "a/x.go" walks before "a-b.go"), so it stays
+	// an explicit sort rather than relying on walk order.
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].job.path < results[j].job.path
 	})
 
-	processed := 0
+	var firstErr error
 	for i := range results {
-		processed++
-		if processed%1000 == 0 {
-			log.Printf("Ingested %d/%d files...", processed, fileCount.Load()) // coverage:ignore
+		if (i+1)%1000 == 0 {
+			log.Printf("Ingested %d/%d files...", i+1, len(results)) // coverage:ignore
 		} // coverage:ignore
-
-		if results[i].readErr != nil {
-			if firstErr == nil { // coverage:ignore
-				firstErr = results[i].readErr // coverage:ignore
-			} // coverage:ignore
-			continue // coverage:ignore
-		}
-
 		if err := e.processSourceFileResult(&results[i]); err != nil {
 			if firstErr == nil { // coverage:ignore
 				firstErr = err // coverage:ignore
 			} // coverage:ignore
 		}
 	}
-
-	// Wait for walk to complete.
-	<-doneCh
-	if walkErr != nil {
-		return walkErr // coverage:ignore
-	} // coverage:ignore
 
 	// Process raw (non-tree-sitter) files sequentially (cheap, no parsing).
 	for _, rf := range rawFiles {
@@ -203,8 +146,8 @@ func (e *Engine) ingestSourceParallel(rootPath string) error {
 		}
 	}
 
-	if fileCount.Load() > 0 {
-		log.Printf("Ingested %d source files total (%d workers).", processed, numWorkers)
+	if len(results) > 0 {
+		log.Printf("Ingested %d source files total.", len(results))
 	}
 
 	return firstErr
@@ -230,10 +173,10 @@ func (e *Engine) sourceIDFor(realPath string) string {
 }
 
 // processSourceFileResult handles projection for a single source file. Both
-// ingestSourceFile (sequential) and ingestSourceParallel (phase 2) delegate here
-// to avoid divergent logic. The caller populates the parsedSourceFile struct
-// (path/content); construct resolution and every file-level extract come from
-// the ASTWalker querying the ley-line-parsed `_ast` db.
+// ingestSourceFile and ingestSourceTree delegate here to avoid divergent
+// logic. The caller populates the parsedSourceFile struct (path); construct
+// resolution and every file-level extract come from the ASTWalker querying
+// the ley-line-parsed `_ast` db — the file's bytes are never read.
 //
 // Steps:
 //  1. Filter schema nodes by language
@@ -384,11 +327,6 @@ func (e *Engine) ingestSourceFile(path, langName string, modTime time.Time) erro
 		return err // coverage:ignore
 	} // coverage:ignore
 
-	content, err := os.ReadFile(realPath)
-	if err != nil {
-		return err // coverage:ignore
-	} // coverage:ignore
-
 	result := &parsedSourceFile{
 		job: sourceFileJob{
 			path:     path,
@@ -396,7 +334,6 @@ func (e *Engine) ingestSourceFile(path, langName string, modTime time.Time) erro
 			modTime:  modTime,
 		},
 		realPath: realPath,
-		content:  content,
 	}
 
 	return e.processSourceFileResult(result)
