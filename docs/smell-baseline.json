@@ -3307,7 +3307,7 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/schemainfer/preset_fixture_test.go",
-      "node_hash": "bd5f0a47a01cd5e2adb9ba5e15b5215ff23ce10461d1eca8ef937abc5cef5dd2",
+      "node_hash": "a0309528c6dda27f9a8b50f9cc62a29bfe016a250b8274f9d2454ca42a3382a1",
       "count": 1
     },
     {

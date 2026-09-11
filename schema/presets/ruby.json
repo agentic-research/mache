@@ -84,6 +84,25 @@
               "name": "source",
               "content_template": "{{.scope}}"
             }
+          ],
+          "children": [
+            {
+              "name": "methods",
+              "selector": "$",
+              "children": [
+                {
+                  "name": "{{.name}}",
+                  "selector": "(method name: (identifier) @name) @scope",
+                  "include": ["lsp"],
+                  "files": [
+                    {
+                      "name": "source",
+                      "content_template": "{{.scope}}"
+                    }
+                  ]
+                }
+              ]
+            }
           ]
         }
       ]
@@ -94,7 +113,7 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(method name: (identifier) @name) @scope",
+          "selector": "(program (method name: (identifier) @name) @scope)",
           "include": ["lsp"],
           "files": [
             {

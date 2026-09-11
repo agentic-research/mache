@@ -43,7 +43,6 @@ var pendingFixtureCoverage = map[string]string{
 	"kotlin":     "",
 	"php":        "",
 	"python":     "",
-	"ruby":       "",
 	"scala":      "",
 	"swift":      "",
 	"typescript": "",
@@ -168,12 +167,36 @@ func presetFixtureCases(t *testing.T) []presetFixtureCase {
 			minNodes:           10,
 		},
 		{
+			preset:     "ruby",
+			fixtureDir: filepath.Join(fixturesRoot, "ruby"),
+			// Every method belongs to exactly one declarer, and the
+			// projection says which: two classes share `count`, a module
+			// declares `register`, and only `top_level_helper` is a
+			// top-level def. Before mache-34c926 the top-level methods/
+			// container also matched methods inside a class, so each one
+			// was projected twice and the two `count`s collided there.
+			expectedSubstrings: []string{
+				"classes/Catalog/methods/insert",
+				"classes/Catalog/methods/count",
+				"classes/Index/methods/count",
+				"modules/Registry/methods/register",
+				"methods/top_level_helper",
+				"requires/",
+			},
+			minNodes: 12,
+		},
+		{
 			preset:     "csharp",
 			fixtureDir: filepath.Join(fixturesRoot, "csharp"),
 			expectedSubstrings: []string{
 				"namespaces/", "classes/Catalog", "classes/Entry",
 				"structs/EntryStats", "interfaces/ILookup", "enums/EntryKind",
-				"methods/Insert", "methods/Lookup",
+				// Type-qualified: an interface method and its implementation
+				// are different methods, and the id has to say so
+				// (mache-34c926).
+				"methods/Catalog.Insert", "methods/Catalog.Lookup", "methods/ILookup.Lookup",
+				"methods/Point.Manhattan", "methods/Span.Width",
+				"properties/Catalog.Count", "properties/ILookup.Count",
 			},
 			minNodes: 10,
 		},
