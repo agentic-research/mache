@@ -102,6 +102,18 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **C# records are projected, positional parameters included** (`mache-daacc3`).
+  `record` has been a first-class C# type declaration since C# 9 and is
+  idiomatic for DTOs and value types, but the preset had no container for it. A
+  record's members projected while the record itself did not exist, so an agent
+  that found `methods/Point.Manhattan` and looked for the type declaring it
+  found nothing, and `get_overview` showed a codebase with no record types in
+  it. `records/` now holds both `record` and `record struct`. A record's
+  positional parameters are its properties — the compiler generates an
+  init-only property per parameter, and they carry no `property_declaration`
+  node — so `record Point(int X, int Y)` now yields `properties/Point.X` and
+  `properties/Point.Y` rather than nothing.
+
 - **A re-ingested file keeps its node IDs, and leaves no husks**
   (`mache-399c25`). Two defects compounded on the live-refresh path. `claimedIDs`
   was reset only in `Ingest`, so `ReIngestFile` found the file's OWN previous IDs
