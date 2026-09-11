@@ -102,6 +102,21 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **C# and Ruby methods say which type declares them** (`mache-34c926`). Every
+  class-based preset qualifies a method by its declaring type except these two.
+  C# projected `methods/<name>` flat, so an interface method and its
+  implementation collided: `ILookup.Lookup` and `Catalog.Lookup` became
+  `methods/Lookup` and `methods/Lookup.from_Catalog_cs`, a filename suffix that
+  distinguishes nothing when both are in one file. Properties collided the same
+  way. Both are now `<Type>.<name>`, matching the go and rust presets, for
+  classes, interfaces and structs alike. Ruby's top-level `methods/` container
+  matched `method` nodes ANYWHERE, including inside a class body, so every
+  class method was projected twice — once correctly under its class and once
+  colliding by bare name at the top level. Five methods produced seven nodes.
+  The top-level container is now scoped to program-level defs, and `modules/`
+  gained the `methods/` container that `classes/` already had, so a module's
+  methods are still reachable. Ruby also gains fixture coverage.
+
 - **Go methods on generic receivers are methods again** (`mache-51571b`). The
   go preset's `methods/` block had two receiver shapes,
   `(pointer_type (type_identifier))` and a bare `(type_identifier)`. A generic

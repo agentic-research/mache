@@ -96,8 +96,38 @@
       "selector": "$",
       "children": [
         {
-          "name": "{{.name}}",
-          "selector": "(method_declaration name: (identifier) @name) @scope",
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(class_declaration name: (identifier) @type body: (declaration_list (method_declaration name: (identifier) @name) @scope))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(interface_declaration name: (identifier) @type body: (declaration_list (method_declaration name: (identifier) @name) @scope))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(struct_declaration name: (identifier) @type body: (declaration_list (method_declaration name: (identifier) @name) @scope))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(record_declaration name: (identifier) @type body: (declaration_list (method_declaration name: (identifier) @name) @scope))",
           "files": [
             {
               "name": "source",
@@ -112,8 +142,38 @@
       "selector": "$",
       "children": [
         {
-          "name": "{{.name}}",
-          "selector": "(property_declaration name: (identifier) @name) @scope",
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(class_declaration name: (identifier) @type body: (declaration_list (property_declaration name: (identifier) @name) @scope))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(interface_declaration name: (identifier) @type body: (declaration_list (property_declaration name: (identifier) @name) @scope))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(struct_declaration name: (identifier) @type body: (declaration_list (property_declaration name: (identifier) @name) @scope))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(record_declaration name: (identifier) @type body: (declaration_list (property_declaration name: (identifier) @name) @scope))",
           "files": [
             {
               "name": "source",
