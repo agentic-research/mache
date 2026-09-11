@@ -86,6 +86,21 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A rendered name is one node-ID segment; slashed imports are reachable
+  again** (`mache-94f571`). A schema name template is free to render a `/` —
+  every non-stdlib Go import path, every relative JS import — and the ID was
+  joined without escaping it. `SQLiteWriter.AddNode` derives `parent_id` and
+  `name` from the LAST `/`, so `main/imports/"golden/store"` was written with
+  the parent `main/imports/"golden`, which is not a node: `ListChildren` is
+  `WHERE parent_id = ?`, so `list_directory` and a mount both skipped it while
+  `node_defs` still listed its token. 1 such node on the `small-go-golden`
+  corpus, 1967 on mache itself — every import of a slashed path. Names are now
+  percent-encoded into a single segment (`"golden%2Fstore"`), `%` first so the
+  mapping stays injective. The definition TOKEN is unchanged, so `search` and
+  the smell rules still match the import as it is written in the source.
+  `TestProjectionInvariant_EveryParentIsANode` pins reachability on both
+  corpora.
+
 - **Rust methods are receiver-qualified; `functions/` holds free functions
   only** (`mache-c777ef`). The rust preset selected every `function_item` in a
   file as `functions/<name>`, so `fn new` in twenty impls collapsed into one

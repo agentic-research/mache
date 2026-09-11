@@ -136,6 +136,49 @@ func TestDiffLines(t *testing.T) {
 	assert.Empty(t, added)
 }
 
+// TestProjectionInvariant_EveryParentIsANode is the reachability gate: a node
+// whose parent_id names no node is written to the db but is invisible to the
+// tree — ListChildren is `WHERE parent_id = ?`, so list_directory and a mount
+// both skip it while node_defs still lists its token.
+//
+// It caught the slashed-import defect (mache-94f571): SQLiteWriter.AddNode
+// derives parent_id from the LAST '/' of the ID, so a name that renders a '/'
+// split in the wrong place — `main/imports/"golden/store"` claimed the parent
+// `main/imports/"golden`, which does not exist. 1 orphan on small-go-golden,
+// 1939 on mache itself, every one of them an import of a slashed path.
+//
+// mache-self runs under the same opt-in as the other full-repo fixtures; it
+// is the only corpus wide enough to cover every preset shape mache projects.
+func TestProjectionInvariant_EveryParentIsANode(t *testing.T) {
+	for _, id := range []string{"small-go-golden", "mache-self"} {
+		t.Run(id, func(t *testing.T) {
+			if id == "mache-self" && os.Getenv("MACHE_E2E_LARGE") == "" {
+				t.Skip("full-repo fixture (~20s); set MACHE_E2E_LARGE=1 to run")
+			}
+			db := Get(t, id).DB()
+			const orphans = `SELECT n.id, n.parent_id FROM nodes n
+				WHERE n.parent_id IS NOT NULL AND n.parent_id != ''
+				  AND NOT EXISTS (SELECT 1 FROM nodes p WHERE p.id = n.parent_id)
+				ORDER BY n.id`
+			rows, err := db.Query(orphans)
+			require.NoError(t, err)
+			defer func() { _ = rows.Close() }()
+
+			var found []string
+			for rows.Next() {
+				var nodeID, parentID string
+				require.NoError(t, rows.Scan(&nodeID, &parentID))
+				found = append(found, nodeID+" -> "+parentID)
+			}
+			require.NoError(t, rows.Err())
+			assert.Empty(t, found,
+				"%d node(s) have a parent_id that is not a node id, so ListChildren can never "+
+					"return them; a rendered name reached the id with a '/' still in it "+
+					"(ingest.segmentEscape)", len(found))
+		})
+	}
+}
+
 // TestProjectionInvariants are the load-bearing intents behind rows in the
 // golden (mache-c0537f gate 3): a regeneration that silently dropped one of
 // these would still produce a self-consistent golden, so each is pinned by

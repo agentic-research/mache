@@ -30,6 +30,36 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
+// segmentEscape makes a rendered name usable as exactly ONE segment of a node
+// ID. A node ID is a '/'-joined path and every consumer splits it back on '/':
+// SQLiteWriter.AddNode derives parent_id and name from the LAST '/', GraphFS
+// walks it component by component, ListChildren is `WHERE parent_id = ?`. A
+// name template is free to render a '/' — every non-stdlib Go import path,
+// every relative JS import — and the ID then split in the wrong place:
+// `main/imports/"golden/store"` was written with parent_id `main/imports/"golden`,
+// which is not a node, so ListChildren never returned it and 1939 nodes were
+// unreachable on mache itself (mache-94f571).
+//
+// Percent-encoding, '%' FIRST so the mapping stays injective: escaping only
+// '/' would give the distinct names `a/b` and `a%2Fb` the same ID.
+//
+// Only the ID is escaped. The rendered name is still what AddDef registers as
+// the definition token, so `search` and the smell rules keep matching the
+// symbol as it is written in the source.
+func segmentEscape(name string) string {
+	if !strings.ContainsAny(name, "%/") {
+		return name
+	}
+	name = strings.ReplaceAll(name, "%", "%25")
+	return strings.ReplaceAll(name, "/", "%2F")
+}
+
+// joinSegment appends a rendered name to a node path as ONE segment. Every
+// construct and leaf-file name reaches a node ID through here.
+func joinSegment(base, name string) string {
+	return filepath.Join(base, segmentEscape(name))
+}
+
 // idToPath is the inverse of toNodeID for rebuilding a filesystem path from a
 // claimed node ID.
 func idToPath(id string) string {
@@ -77,7 +107,7 @@ func (e *Engine) claimConstructID(id, parentPath, name, sourceFile string) strin
 
 	candidate := id
 	if sourceFile != "" {
-		suffixed := toNodeID(filepath.Join(parentPath, name+dedupSuffix(sourceFile)))
+		suffixed := toNodeID(joinSegment(parentPath, name+dedupSuffix(sourceFile)))
 		if _, taken := e.claimedIDs[suffixed]; !taken {
 			e.claimedIDs[suffixed] = 1
 			log.Printf("[WARN] duplicate construct name %q under %q — emitting %q; "+
@@ -163,7 +193,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 			continue                                                                             // coverage:ignore
 		}
 
-		currentPath := filepath.Join(parentPath, name)
+		currentPath := joinSegment(parentPath, name)
 		id := toNodeID(currentPath)
 
 		node := &graph.Node{
@@ -190,7 +220,7 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 				log.Printf("collectNodes: skip file name render %q: %v", fileSchema.Name, err) // coverage:ignore
 				continue                                                                       // coverage:ignore
 			}
-			filePath := filepath.Join(currentPath, fileName)
+			filePath := joinSegment(currentPath, fileName)
 			fileId := toNodeID(filePath)
 
 			var content string
@@ -332,7 +362,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		}
 
 		// Normalize path
-		currentPath := filepath.Join(parentPath, name)
+		currentPath := joinSegment(parentPath, name)
 		id := toNodeID(currentPath)
 
 		// Dedup: two constructs whose schema name template renders the same
@@ -604,7 +634,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				log.Printf("processNode: skip file name render %q: %v", fileSchema.Name, err) // coverage:ignore
 				continue                                                                      // coverage:ignore
 			}
-			filePath := filepath.Join(currentPath, fileName)
+			filePath := joinSegment(currentPath, fileName)
 			fileId := toNodeID(filePath)
 
 			// Augment template values with doc comment text
