@@ -102,6 +102,18 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Go methods on generic receivers are methods again** (`mache-51571b`). The
+  go preset's `methods/` block had two receiver shapes,
+  `(pointer_type (type_identifier))` and a bare `(type_identifier)`. A generic
+  receiver parses as `pointer_type → generic_type → type_identifier`, which
+  neither shape reached, so every method on a generic type was projected
+  NOWHERE — not under `methods/`, not under `functions/`, with no routing
+  warning and no diagnostic. `dead_code`, `find_callers` and
+  `untested_function` could not see them at all. Two selectors now cover the
+  generic shapes, listed ahead of the bare ones because sibling schema nodes
+  are an ordered choice. The receiver is the type's name, not its
+  instantiation: `Stack.Push`, never `Stack[T].Push`.
+
 - **A rendered name is one node-ID segment; slashed imports are reachable
   again** (`mache-94f571`). A schema name template is free to render a `/` —
   every non-stdlib Go import path, every relative JS import — and the ID was

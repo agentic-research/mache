@@ -25,6 +25,7 @@ projection path:
 | File                  | Exercises                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------------- |
 | `main.go`             | package funcs, std + intra-module imports, cross-package calls, `&x` address refs                    |
+| `generics.go`         | methods on generic receivers, one with two type parameters (`mache-51571b`)                          |
 | `tool.go`             | `init()` contested with `tool/main.go` (see below), consts, vars, package-level helper               |
 | `tool/main.go`        | same package name in a subdirectory — dedup suffix depends on projection ORDER                       |
 | `store/store.go`      | struct + interface types, pointer- and value-receiver methods, `init()`                              |

@@ -52,6 +52,28 @@
           "children": [
             {
               "name": "{{.receiver}}.{{.name}}",
+              "selector": "(method_declaration receiver: (parameter_list (parameter_declaration type: (pointer_type (generic_type type: (type_identifier) @receiver)))) name: (field_identifier) @name) @scope",
+              "include": ["lsp"],
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            },
+            {
+              "name": "{{.receiver}}.{{.name}}",
+              "selector": "(method_declaration receiver: (parameter_list (parameter_declaration type: (generic_type type: (type_identifier) @receiver))) name: (field_identifier) @name) @scope",
+              "include": ["lsp"],
+              "files": [
+                {
+                  "name": "source",
+                  "content_template": "{{.scope}}"
+                }
+              ]
+            },
+            {
+              "name": "{{.receiver}}.{{.name}}",
               "selector": "(method_declaration receiver: (parameter_list (parameter_declaration type: (pointer_type (type_identifier) @receiver))) name: (field_identifier) @name) @scope",
               "include": ["lsp"],
               "files": [
