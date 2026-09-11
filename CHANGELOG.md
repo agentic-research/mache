@@ -8,6 +8,22 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`task bench:cold` — the cold-path budget, measured** (`mache-2de6c0`). The
+  question is someone who just downloaded mache pointing it at their code on a
+  4-core/16 GB laptop; until that is measured on a pinned corpus with the
+  numbers committed, "fast enough" is an opinion. The new target stages this
+  repo at HEAD with `git archive` (tracked files only, identified by SHA),
+  measures `leyline parse` and the schema-projected `mache build` separately —
+  wall, peak RSS via the child's rusage, and artifact bytes including SQLite
+  sidecars — and checks them against `testdata/snapshots/cold-budget.toml`.
+  The three byte limits are hard; wall time is advisory and can never fail a
+  run, because three runs on one machine in one hour spread 33-70 s while peak
+  RSS moved under 5%. **The gate is RED by construction** and says so: peak RSS
+  is 1.9x the budget and the leyline db 3.7x, both in the parse half that
+  `mache-3688da` addresses. The projection db is inside budget at 78 MB.
+  `internal/benchrun` is the shared measurement core the scale gate
+  (`mache-543943`) will reuse.
+
 - **Golden projection-parity gate** (`mache-c0537f`). `TestGoldenProjection`
   projects the hand-written `testdata/snapshots/small-go-golden` corpus through
   the go preset and diffs every writer table (`nodes`, `node_refs`, `node_defs`,

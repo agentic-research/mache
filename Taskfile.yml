@@ -597,6 +597,12 @@ tasks:
     cmds:
       - go run main.go -file subject/parser.go -target FuzzParseToken
 
+  bench:cold:
+    desc: "Cold-path budget — measure a first `mache build` (leyline parse + projection) on this repo at HEAD against testdata/snapshots/cold-budget.toml. RED by construction until mache-3688da; see the budget file's header before touching a number."
+    deps: [build, leyline:ensure]
+    cmds:
+      - go run ./tools/bench-cold {{.CLI_ARGS}}
+
   smells:dogfood:
     desc: "Dogfood — index this repo and PRINT all standalone find_smells findings (no gate; see `task smells` for the ratchet gate)"
     deps: [build]
