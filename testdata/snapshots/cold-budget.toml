@@ -1,0 +1,65 @@
+schema = "mache-cold-budget/v1"
+
+# The cold-path envelope (bead mache-2de6c0).
+#
+# The question this file answers: someone downloads mache and runs it on
+# their repo for the first time. Does that fit the machine they actually
+# have — 4 cores, 16 GB, an IDE already open — or does it page?
+#
+# The three byte limits are HARD; `task bench:cold` exits non-zero on any
+# of them. Wall time is advisory and can never fail a run: timing gates
+# flake on shared runners, and a gate that flakes gets disabled.
+#
+# THE GATE IS RED BY CONSTRUCTION and is meant to be. The measured cost
+# today is roughly 2x the memory budget and 4x the leyline-db budget; the
+# leyline half of the fix (projection-v5 integer node keys, mache-3688da)
+# is what turns it green. A red gate that states the target is the point —
+# it is the falsifiable form of "not good enough yet".
+#
+# Raising a limit is NOT how this goes green. Any change to a number here
+# must be accompanied by a comment on mache-2de6c0 stating the MEASURED
+# reason, and the measurement block below must be re-recorded. Swapping the
+# corpus, raising GOMAXPROCS, or disabling mmap to move a number does not
+# count as progress either.
+
+[budget]
+# 2.0 GB. Decimal GB throughout this file, matching how the envelope is
+# written in the bead; the harness prints decimal GB for the same reason.
+peak_rss_bytes = 2000000000
+# 0.5 GB for the intermediate parse artifact.
+leyline_db_bytes = 500000000
+# 0.1 GB for the artifact the user keeps.
+projection_db_bytes = 100000000
+# Advisory only. ~30 s for a ~1k-file repo on first init.
+wall_ms_advisory = 30000
+
+# The last recorded run. Every number is stamped with what produced it —
+# a memory figure without its machine class, core count, parser version
+# and corpus is not a measurement, it is an anecdote.
+[[measurement]]
+date = "2026-09-11"
+machine_class = "apple-m3-max-32gb"
+gomaxprocs = 4
+schema = "go"
+leyline_version = "v0.19.1"
+corpus = "mache-self"
+corpus_sha = "e419f4e4dd1ca8de01f2a027b07c2a84e5119f7e"
+files = 1011
+corpus_bytes = 13900000
+wall_ms = 33500
+peak_rss_bytes = 3560000000
+leyline_db_bytes = 1870000000
+projection_db_bytes = 79000000
+note = """
+First recorded run (mache-2de6c0). RED on peak RSS (1.8x the budget) and on
+the leyline db (3.7x); the projection db is inside budget at 79 MB. Both
+failures are the parse half, which is what mache-3688da (projection-v5
+integer node keys) is for — ~68% of the leyline db is the path-string
+node_id repeated across six b-trees.
+
+Four runs on this machine within one hour, same corpus: wall spread 33.5-70.0 s
+(2.1x) while peak RSS spread 3.56-3.84 GB (8%) and the db sizes moved only
+with the corpus. That spread is the evidence for gating on bytes and leaving
+wall advisory — an honest tolerance band on the timing number would have to be
+wider than the regressions it is meant to catch.
+"""
