@@ -102,6 +102,23 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A re-ingested file keeps its node IDs, and leaves no husks**
+  (`mache-399c25`). Two defects compounded on the live-refresh path. `claimedIDs`
+  was reset only in `Ingest`, so `ReIngestFile` found the file's OWN previous IDs
+  taken and suffixed around them: one no-op re-ingest turned `fns/alpha` into
+  `fns/alpha` plus `fns/alpha.from_lib_rs`, and after a rename the construct was
+  still projected under the name it had first — the new token appeared nowhere in
+  the graph. Meanwhile `ReplaceFileNodes` could not remove a construct DIRECTORY
+  at all: it finds nodes through the file index, which only carries nodes with an
+  `Origin`, and a directory has none. So the leaf was swapped out and the
+  directory it hung under was left behind, empty, one per edit. Claims are now
+  tracked per source file and released on re-ingest, `DeleteNodes` removes nodes
+  by ID for the cases the file index cannot reach, and everything a file had is
+  cleared BEFORE it is projected again rather than at commit time — with stable
+  IDs, deleting at commit would strip the children, defs and refs projection had
+  just written. `$` containers never claim an ID, so the directory shared by
+  every file in a package is untouched.
+
 - **C# and Ruby methods say which type declares them** (`mache-34c926`). Every
   class-based preset qualifies a method by its declaring type except these two.
   C# projected `methods/<name>` flat, so an interface method and its

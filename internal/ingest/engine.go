@@ -24,6 +24,10 @@ type IngestionTarget interface {
 	AddRef(token, nodeID string) error
 	AddDef(token, dirID string) error
 	DeleteFileNodes(filePath string)
+	// DeleteNodes removes specific nodes by ID. Needed because a construct
+	// DIRECTORY carries no file association — only its source leaf does — so
+	// DeleteFileNodes can never reach one (mache-399c25).
+	DeleteNodes(ids []string)
 	AddFileChildren(parent *graph.Node, files []*graph.Node)
 }
 
@@ -36,6 +40,7 @@ type Engine struct {
 	routedFiles      map[string]int
 	childSeen        map[string]map[string]bool // parentID → set of child IDs (O(1) dedup)
 	claimedIDs       map[string]int             // construct node ID → times claimed (collision dedup, mache-c725e9)
+	claimsByFile     map[string][]string        // source file → the construct IDs it claimed (per-file release, mache-399c25)
 	gitignore        *gitignoreMatcher          // loaded from .gitignore when RespectGitignore is true
 	astWalker        *ASTWalker                 // SQL-backed walker for ley-line pre-parsed .db files (sole walker post-CGO-removal)
 	fileIndex        map[string]FileIndexEntry  // cached file metadata for incremental re-ingestion
@@ -89,6 +94,7 @@ func NewEngine(schema *api.Topology, store IngestionTarget) *Engine {
 		routedFiles:      make(map[string]int),
 		childSeen:        make(map[string]map[string]bool),
 		claimedIDs:       make(map[string]int),
+		claimsByFile:     make(map[string][]string),
 	}
 }
 
@@ -130,6 +136,7 @@ func (e *Engine) Ingest(path string) error {
 	// Reset dedup state so stale entries from a prior Ingest don't persist.
 	e.childSeen = make(map[string]map[string]bool)
 	e.claimedIDs = make(map[string]int)
+	e.claimsByFile = make(map[string][]string)
 
 	realPath, err := realPathOf(path)
 	if err != nil { // coverage:ignore
@@ -224,6 +231,36 @@ func (e *Engine) ReIngestFile(path string) error {
 	// disclosed gap (see cmd/serve.go's "frozen .db" log), tracked separately.
 	if e.astWalker != nil {
 		e.astWalker.InvalidateSource(e.sourceIDFor(realPath))
+	}
+
+	// Give up the construct IDs this file claimed last time, and delete the
+	// nodes. Both halves are required and neither is sufficient.
+	//
+	// Without the release, the file's own previous IDs are still taken, so
+	// claimConstructID suffixes around them: `alpha` -> `alpha.from_lib_rs` ->
+	// `alpha.from_lib_rs.2`, and a function renamed to `beta` is still
+	// projected under the name `alpha` had. Without the delete, the previous
+	// construct DIRECTORIES survive as empty husks — ReplaceFileNodes only
+	// reaches nodes with an Origin, which a directory has not, so the leaf is
+	// swapped out and the directory it hung under is not (mache-399c25).
+	//
+	// Only constructs are released. `$` containers never claim an ID, so the
+	// shared directory every file in the package hangs under is untouched.
+	// Order matters. Everything this file had is removed BEFORE it is
+	// projected again, never after.
+	//
+	// commitFileNodes ends in ReplaceFileNodes, which deletes the file's nodes
+	// and then adds the new ones. That worked only because a re-ingested
+	// construct used to get a NEW id every time, so the delete set and the
+	// just-projected ids were disjoint. With ids now stable they are the SAME
+	// ids, and projection registers a construct's children, defs and refs on
+	// the real store as it goes (bufferingTarget buffers leaf nodes and passes
+	// everything else straight through) — so deleting at commit time would
+	// strip what projection had just written. Clearing up front leaves the
+	// commit-time delete with nothing to find.
+	e.Store.DeleteFileNodes(realPath)
+	if stale := e.releaseFileClaims(realPath); len(stale) > 0 {
+		e.Store.DeleteNodes(stale)
 	}
 
 	// Re-ingest the single file using the existing schema and store
