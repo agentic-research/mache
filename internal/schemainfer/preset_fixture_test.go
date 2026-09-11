@@ -196,6 +196,8 @@ func presetFixtureCases(t *testing.T) []presetFixtureCase {
 				// (mache-34c926).
 				"methods/Catalog.Insert", "methods/Catalog.Lookup", "methods/ILookup.Lookup",
 				"methods/Point.Manhattan", "methods/Span.Width",
+				"records/Point", "records/Span",
+				"properties/Point.X", "properties/Span.Lo",
 				"properties/Catalog.Count", "properties/ILookup.Count",
 			},
 			minNodes: 10,

@@ -44,6 +44,22 @@
       ]
     },
     {
+      "name": "records",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(record_declaration name: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "structs",
       "selector": "$",
       "children": [
@@ -174,6 +190,16 @@
         {
           "name": "{{.type}}.{{.name}}",
           "selector": "(record_declaration name: (identifier) @type body: (declaration_list (property_declaration name: (identifier) @name) @scope))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.type}}.{{.name}}",
+          "selector": "(record_declaration name: (identifier) @type (parameter_list (parameter name: (identifier) @name) @scope))",
           "files": [
             {
               "name": "source",
