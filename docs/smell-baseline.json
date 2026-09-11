@@ -2621,13 +2621,13 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "9246131536ba1eb09d5fcf898e29deb2af2026bbe5c8e5b7829eb8f9918ace74",
+      "node_hash": "15e6d23eb0ccf610b9d1df7707258ca495987fb56d748711a34a73f1fcee338d",
       "count": 1
     },
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "97d53d77010827d427cceaf37ec279bb08b6ef6a948d9673557cc33eacf59db6",
+      "node_hash": "5776764667f5ceb9d3bf5599acdfb793a02bcb3e6bb0398f7d28d04e8a924adb",
       "count": 1
     },
     {
@@ -3109,13 +3109,13 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "9246131536ba1eb09d5fcf898e29deb2af2026bbe5c8e5b7829eb8f9918ace74",
+      "node_hash": "15e6d23eb0ccf610b9d1df7707258ca495987fb56d748711a34a73f1fcee338d",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "97d53d77010827d427cceaf37ec279bb08b6ef6a948d9673557cc33eacf59db6",
+      "node_hash": "5776764667f5ceb9d3bf5599acdfb793a02bcb3e6bb0398f7d28d04e8a924adb",
       "count": 1
     },
     {

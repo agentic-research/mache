@@ -26,8 +26,8 @@ main/imports/"fmt"	main/imports	"fmt"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\
 main/imports/"fmt".from_tool_go	main/imports	"fmt".from_tool_go	1	0		NULL		"import \"fmt\"\n\nconst Version = \"0.0.1\"\n\nvar defaultName = \"golden\"\n\n"	{"ast_scope_id":"tool.go/import_declaration/import_spec","ast_source_id":"tool.go","imports":{"fmt":"fmt"},"lang":"go","location":"tool.go:3:3","pkg":"main"}
 main/imports/"fmt".from_tool_go/source	main/imports/"fmt".from_tool_go	source	0	5		"\"fmt\""	$FIXTURE/tool.go	NULL	
 main/imports/"fmt"/source	main/imports/"fmt"	source	0	5		"\"fmt\""	$FIXTURE/main.go	NULL	
-main/imports/"golden/store"	main/imports/"golden	store"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/import_declaration/import_spec_list/import_spec_2","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:7:7","pkg":"main"}
-main/imports/"golden/store"/source	main/imports/"golden/store"	source	0	14		"\"golden/store\""	$FIXTURE/main.go	NULL	
+main/imports/"golden%2Fstore"	main/imports	"golden%2Fstore"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/import_declaration/import_spec_list/import_spec_2","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:7:7","pkg":"main"}
+main/imports/"golden%2Fstore"/source	main/imports/"golden%2Fstore"	source	0	14		"\"golden/store\""	$FIXTURE/main.go	NULL	
 main/imports/"os"	main/imports	"os"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/import_declaration/import_spec_list/import_spec_1","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:5:5","pkg":"main"}
 main/imports/"os"/source	main/imports/"os"	source	0	4		"\"os\""	$FIXTURE/main.go	NULL	
 main/methods	main	methods	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
@@ -135,18 +135,18 @@ gomod:fmt	main/functions/init/source
 gomod:fmt	main/functions/main/source
 gomod:fmt	main/imports/"fmt".from_tool_go/source
 gomod:fmt	main/imports/"fmt"/source
-gomod:fmt	main/imports/"golden/store"/source
+gomod:fmt	main/imports/"golden%2Fstore"/source
 gomod:fmt	main/imports/"os"/source
 gomod:fmt	main/variables/cfg/source
 gomod:fmt	main/variables/defaultName/source
 gomod:golden/store	main/functions/main/source
 gomod:golden/store	main/imports/"fmt"/source
-gomod:golden/store	main/imports/"golden/store"/source
+gomod:golden/store	main/imports/"golden%2Fstore"/source
 gomod:golden/store	main/imports/"os"/source
 gomod:golden/store	main/variables/cfg/source
 gomod:os	main/functions/main/source
 gomod:os	main/imports/"fmt"/source
-gomod:os	main/imports/"golden/store"/source
+gomod:os	main/imports/"golden%2Fstore"/source
 gomod:os	main/imports/"os"/source
 gomod:os	main/variables/cfg/source
 gomod:sort	store/functions/init/source
@@ -188,7 +188,7 @@ string	store/types/Item/source
 "errors"	store/imports/"errors"
 "fmt"	main/imports/"fmt"
 "fmt"	main/imports/"fmt".from_tool_go
-"golden/store"	main/imports/"golden/store"
+"golden/store"	main/imports/"golden%2Fstore"
 "os"	main/imports/"os"
 "sort"	store/imports/"sort"
 "strings"	store/imports/"strings"
@@ -217,7 +217,7 @@ main	main/functions/main
 main	main/functions/main.from_main_go
 main."fmt"	main/imports/"fmt"
 main."fmt"	main/imports/"fmt".from_tool_go
-main."golden/store"	main/imports/"golden/store"
+main."golden/store"	main/imports/"golden%2Fstore"
 main."os"	main/imports/"os"
 main.Version	main/constants/Version
 main.cfg	main/variables/cfg
