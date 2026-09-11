@@ -9,9 +9,9 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "modernc.org/sqlite"
 )
 
 // buildScopedCalleesASTFixture builds a minimal `_ast` database (the schema
@@ -30,56 +30,39 @@ import (
 // SQL LIKE that once did this filtering read '_' as a one-character wildcard
 // and leaked C's call into A until the prefix was escaped (mache-702f9b);
 // the prefix must match literally whatever does the matching.
+//
+// Each scope owns a disjoint byte range so the file index (start-byte order)
+// lists the scopes and their calls in document order, as a real parse would.
 func buildScopedCalleesASTFixture(t *testing.T) *sql.DB {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "callees_ast.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.ASTNode("pkg.go", "source_file", "pkg.go", fixturedb.Bytes(0, 300))
 
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
-			kind INTEGER NOT NULL, mtime INTEGER NOT NULL, record TEXT
-		);
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
-			node_kind TEXT NOT NULL, start_byte INTEGER, end_byte INTEGER,
-			start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER
-		);
-	`)
-	require.NoError(t, err)
+	// Scope A: helper.Do() — qualified call (selector_expression shape).
+	fn := "pkg.go/function_declaration"
+	b.ASTNode(fn, "function_declaration", "pkg.go", fixturedb.Bytes(0, 100))
+	b.ASTNode(fn+"/call_expression", "call_expression", "pkg.go", fixturedb.Bytes(10, 30))
+	b.ASTNode(fn+"/call_expression/selector_expression", "selector_expression", "pkg.go", fixturedb.Bytes(10, 19), fixturedb.Detail{Field: "function"})
+	b.ASTNode(fn+"/call_expression/selector_expression/identifier", "identifier", "pkg.go", fixturedb.Bytes(10, 16), fixturedb.Detail{Token: "helper", Field: "operand"})
+	b.ASTNode(fn+"/call_expression/selector_expression/field_identifier", "field_identifier", "pkg.go", fixturedb.Bytes(17, 19), fixturedb.Detail{Token: "Do", Field: "field"})
+	b.ASTNode(fn+"/call_expression/argument_list", "argument_list", "pkg.go", fixturedb.Bytes(19, 21), fixturedb.Detail{Field: "arguments"})
 
-	type row struct {
-		id, parentID, record, kind string
-		nodeKind                   int
-	}
-	rows := []row{
-		// Scope A: helper.Do() — qualified call (selector_expression shape).
-		{"pkg.go/function_declaration/call_expression", "pkg.go/function_declaration", "", "call_expression", 1},
-		{"pkg.go/function_declaration/call_expression/selector_expression", "pkg.go/function_declaration/call_expression", "", "selector_expression", 1},
-		{"pkg.go/function_declaration/call_expression/selector_expression/identifier", "pkg.go/function_declaration/call_expression/selector_expression", "helper", "identifier", 0},
-		{"pkg.go/function_declaration/call_expression/selector_expression/field_identifier", "pkg.go/function_declaration/call_expression/selector_expression", "Do", "field_identifier", 0},
-		// Scope B: Other() — bare call. Must NOT leak into scope A's results.
-		{"pkg.go/function_declaration_1/call_expression", "pkg.go/function_declaration_1", "", "call_expression", 1},
-		{"pkg.go/function_declaration_1/call_expression/identifier", "pkg.go/function_declaration_1/call_expression", "Other", "identifier", 0},
-		// Scope C: Leak() — id differs from scope A only at A's '_'.
-		{"pkg.go/functionXdeclaration/call_expression", "pkg.go/functionXdeclaration", "", "call_expression", 1},
-		{"pkg.go/functionXdeclaration/call_expression/identifier", "pkg.go/functionXdeclaration/call_expression", "Leak", "identifier", 0},
-	}
-	for _, r := range rows {
-		_, err := db.Exec(
-			"INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES (?, ?, ?, ?, 0, ?)",
-			r.id, r.parentID, filepath.Base(r.id), r.nodeKind, r.record,
-		)
-		require.NoError(t, err)
-		_, err = db.Exec(
-			"INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte) VALUES (?, 'pkg.go', ?, 0, 0)",
-			r.id, r.kind,
-		)
-		require.NoError(t, err)
-	}
-	return db
+	// Scope B: Other() — bare call. Must NOT leak into scope A's results.
+	fn = "pkg.go/function_declaration_1"
+	b.ASTNode(fn, "function_declaration", "pkg.go", fixturedb.Bytes(100, 200))
+	b.ASTNode(fn+"/call_expression", "call_expression", "pkg.go", fixturedb.Bytes(110, 120))
+	b.ASTNode(fn+"/call_expression/identifier", "identifier", "pkg.go", fixturedb.Bytes(110, 115), fixturedb.Detail{Token: "Other", Field: "function"})
+	b.ASTNode(fn+"/call_expression/argument_list", "argument_list", "pkg.go", fixturedb.Bytes(115, 117), fixturedb.Detail{Field: "arguments"})
+
+	// Scope C: Leak() — id differs from scope A only at A's '_'.
+	fn = "pkg.go/functionXdeclaration"
+	b.ASTNode(fn, "function_declaration", "pkg.go", fixturedb.Bytes(200, 300))
+	b.ASTNode(fn+"/call_expression", "call_expression", "pkg.go", fixturedb.Bytes(210, 220))
+	b.ASTNode(fn+"/call_expression/identifier", "identifier", "pkg.go", fixturedb.Bytes(210, 214), fixturedb.Detail{Token: "Leak", Field: "function"})
+	b.ASTNode(fn+"/call_expression/argument_list", "argument_list", "pkg.go", fixturedb.Bytes(214, 216), fixturedb.Detail{Field: "arguments"})
+
+	_, f := b.Build()
+	return f.DB()
 }
 
 // TestASTWalker_ExtractQualifiedCallsScoped_ScopesCorrectly pins the

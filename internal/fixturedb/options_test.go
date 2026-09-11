@@ -2,6 +2,9 @@ package fixturedb
 
 import (
 	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,6 +143,111 @@ func TestASTNode_TokenLandsInNodeContent(t *testing.T) {
 	require.NoError(t, f.DB().QueryRow(
 		`SELECT COUNT(DISTINCT node_hash) FROM _ast WHERE node_id LIKE '%/id'`).Scan(&distinct))
 	assert.Equal(t, 2, distinct, "only the labelled pair would share; these are two labels")
+}
+
+// TestASTNode_FieldLandsInNodeChild covers Detail.Field and the merkle child
+// list it lands in. The projection resolves a selector's `field:` labels by
+// reading `node_child.field` off the parent's list (mache-91d903), so a fixture
+// that put the field anywhere else — or listed children in declaration order
+// rather than source order — would make a labelled selector match nodes the
+// real parse never would.
+func TestASTNode_FieldLandsInNodeChild(t *testing.T) {
+	b := New(t, Leyline)
+	b.ASTNode("m.go/method_declaration", "method_declaration", "m.go", Bytes(0, 40))
+	// Declared out of source order on purpose: ordinal follows the start
+	// byte, as tree-sitter orders children, not the declaration order.
+	b.ASTNode("m.go/method_declaration/field_identifier", "field_identifier", "m.go",
+		Bytes(16, 19), Detail{Token: "Put", Field: "name"})
+	b.ASTNode("m.go/method_declaration/parameter_list", "parameter_list", "m.go",
+		Bytes(5, 15), Detail{Field: "receiver", Subtree: "paren-store"})
+	b.ASTNode("m.go/method_declaration/parameter_list/parameter_declaration", "parameter_declaration", "m.go",
+		Bytes(6, 14), Detail{Subtree: "store-decl"})
+	// `func (Store) Put(Store)`: the receiver and parameter lists are the
+	// same subtree, so they share a hash and ley-line lists their children
+	// ONCE — the field on the parent's list is all that tells them apart.
+	b.ASTNode("m.go/method_declaration/parameter_list_1", "parameter_list", "m.go",
+		Bytes(19, 29), Detail{Field: "parameters", Subtree: "paren-store"})
+	b.ASTNode("m.go/method_declaration/parameter_list_1/parameter_declaration", "parameter_declaration", "m.go",
+		Bytes(20, 28), Detail{Subtree: "store-decl"})
+	_, f := b.Build()
+
+	rows, err := f.DB().Query(`
+		SELECT c.ordinal, k.kind, COALESCE(c.field, '')
+		  FROM node_child c
+		  JOIN _ast a ON a.node_hash = c.parent_hash
+		  JOIN node_content k ON k.node_hash = c.child_hash
+		 WHERE a.node_id = 'm.go/method_declaration'
+		 ORDER BY c.ordinal`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var ord int
+		var kind, field string
+		require.NoError(t, rows.Scan(&ord, &kind, &field))
+		got = append(got, fmt.Sprintf("%d %s %s", ord, kind, field))
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{
+		"0 parameter_list receiver",
+		"1 field_identifier name",
+		"2 parameter_list parameters",
+	}, got, "children in start-byte order, each under its field")
+
+	var lists int
+	require.NoError(t, f.DB().QueryRow(`
+		SELECT COUNT(*) FROM node_child WHERE parent_hash =
+		    (SELECT node_hash FROM _ast WHERE node_id = 'm.go/method_declaration/parameter_list')`).
+		Scan(&lists))
+	assert.Equal(t, 1, lists, "one shared subtree, one child list: a single unfielded parameter_declaration")
+
+	// Every _ast node has its nodes row — the projection JOINs the two — and a
+	// leaf's token is on nodes.record, as ley-line writes it.
+	var record string
+	require.NoError(t, f.DB().QueryRow(
+		`SELECT record FROM nodes WHERE id = 'm.go/method_declaration/field_identifier'`).Scan(&record))
+	assert.Equal(t, "Put", record)
+	var astWithoutNode int
+	require.NoError(t, f.DB().QueryRow(
+		`SELECT COUNT(*) FROM _ast a LEFT JOIN nodes n ON n.id = a.node_id WHERE n.id IS NULL`).
+		Scan(&astWithoutNode))
+	assert.Zero(t, astWithoutNode)
+}
+
+// TestSameChildList pins the twin check emitNodeChildren makes: two ASTNodes
+// under one Subtree label must list the same children, because one hash is
+// one subtree. Asserted on the comparison directly for the same reason
+// nameMatchesID is — the emitter's Fatalf would end the asserting test.
+func TestSameChildList(t *testing.T) {
+	h1, h2 := subtreeHash("one"), subtreeHash("two")
+	assert.True(t, sameChildList(
+		[]childRow{{h1, "name"}, {h2, ""}}, []childRow{{h1, "name"}, {h2, ""}}))
+	assert.False(t, sameChildList(
+		[]childRow{{h1, "name"}, {h2, ""}}, []childRow{{h2, ""}, {h1, "name"}}), "order is content")
+	assert.False(t, sameChildList(
+		[]childRow{{h1, "name"}}, []childRow{{h1, "type"}}), "the field is content")
+	assert.False(t, sameChildList([]childRow{{h1, ""}}, nil), "arity is content")
+}
+
+// TestSourceFile_IsPathMode: a path-mode row has no bytes and a real path,
+// which the projection reads from disk — the default shape ley-line writes.
+func TestSourceFile_IsPathMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.go")
+	require.NoError(t, os.WriteFile(path, []byte("package a\n"), 0o644))
+
+	b := New(t, Leyline)
+	b.ASTNode("a.go/fn_0", "function_declaration", "a.go", Bytes(0, 10))
+	b.SourceFile("a.go", "go", path)
+	_, f := b.Build()
+
+	var lang, got string
+	var content sql.NullString
+	require.NoError(t, f.DB().QueryRow(
+		`SELECT language, content, path FROM _source WHERE id='a.go'`).Scan(&lang, &content, &got))
+	assert.Equal(t, "go", lang)
+	assert.False(t, content.Valid, "path mode stores no bytes")
+	assert.Equal(t, path, got, "and overrides the synthetic path ASTNode gave the source")
 }
 
 // TestImport_OnlyExistsOnLeyline: _imports is producer output, and fatal_call's

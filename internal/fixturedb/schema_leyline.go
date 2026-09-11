@@ -121,6 +121,20 @@ var leylineTables = map[string]string{
     token     TEXT,
     arity     INTEGER NOT NULL
 )`,
+
+	// The merkle child list: one row per (parent subtree, child position),
+	// emitted ONCE per unique parent hash, over ALL non-extra children —
+	// anonymous tokens included, which is why `_ast` (named nodes only) is a
+	// subsequence of it. `field` is the tree-sitter field name the child sits
+	// under (`receiver`, `name`, `type`), NULL when it has none; the projection
+	// reads it to honour a selector's `field:` labels (mache-91d903).
+	"node_child": `CREATE TABLE node_child (
+    parent_hash BLOB    NOT NULL REFERENCES node_content(node_hash),
+    ordinal     INTEGER NOT NULL,
+    child_hash  BLOB    NOT NULL REFERENCES node_content(node_hash),
+    field       TEXT,
+    PRIMARY KEY (parent_hash, ordinal)
+)`,
 }
 
 // leylineIndexes are the indexes the pinned producer creates on the tables in
@@ -140,8 +154,8 @@ var leylineIndexes = map[string]string{
 	"idx_refs_token":          `CREATE INDEX idx_refs_token ON node_refs(token)`,
 }
 
-// leylineTableOrder is creation order: node_content first because node_defs /
-// node_refs / _ast carry REFERENCES into it.
+// leylineTableOrder is creation order: node_content first because node_child /
+// node_defs / node_refs / _ast carry REFERENCES into it.
 var leylineTableOrder = []string{
-	"node_content", "nodes", "node_defs", "node_refs", "_ast", "_source", "_imports",
+	"node_content", "node_child", "nodes", "node_defs", "node_refs", "_ast", "_source", "_imports",
 }

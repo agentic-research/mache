@@ -35,10 +35,12 @@ import (
 // one the walker has never seen — the count is the cold cost, not a cache hit.
 
 const (
-	// goStatementsPerFile is the whole section: nodes⋈_ast, _source, _imports.
-	goStatementsPerFile = 3
+	// goStatementsPerFile is the whole section: nodes⋈_ast, node_child (the
+	// file's child lists, from which each node's field is derived), _source,
+	// _imports.
+	goStatementsPerFile = 4
 	// nonGoStatementsPerFile drops _imports, which is Go-only.
-	nonGoStatementsPerFile = 2
+	nonGoStatementsPerFile = 3
 )
 
 // goCorpusFile writes a Go file with n functions, each documented, each

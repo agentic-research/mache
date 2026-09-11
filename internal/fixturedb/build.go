@@ -14,7 +14,7 @@ import (
 // It satisfies [RefsQuerier] and cmd's dbPathProvider, so it drops directly into
 // the production call path.
 type FixtureDB struct {
-	t    *testing.T
+	t    testing.TB
 	db   *sql.DB
 	path string
 }

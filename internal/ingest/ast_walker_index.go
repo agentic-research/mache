@@ -4,18 +4,18 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 )
 
 // fileIndex is one source file's whole section of the ley-line db, held in
-// memory: its nodes⋈_ast rows, its _source row and (for Go) its _imports rows.
-// Every question the projection asks about a file — which nodes have a kind,
-// who a node's parent and siblings are, the language, the package name, the
+// memory: its nodes⋈_ast rows, the node_child lists of those rows' subtrees,
+// its _source row and (for Go) its _imports rows. Every question the
+// projection asks about a file — which nodes have a kind, who a node's parent
+// and siblings are and under which field, the language, the package name, the
 // source bytes, the doc comment above a construct, the calls under it, the
 // context declarations, the imports — is answered from this section, so a
 // file costs the statements that load the section and no more (mache-40ce82:
-// three for Go, two otherwise; the gate is
+// four for Go, three otherwise; the gate is
 // TestProjectSourceFile_StatementCountIsTheSection).
 //
 // It began as a node index alone: the per-node SQL finders (findChildByKindAST
@@ -51,9 +51,11 @@ type fileIndex struct {
 	srcErr  error
 }
 
-// idxNode is a materialized nodes⋈_ast row. It carries both nodes.kind (the
-// int dir/file marker astNode.kind holds) and _ast.node_kind (the tree-sitter
-// kind), so toAST reproduces the finders' astNode exactly.
+// idxNode is a materialized nodes⋈_ast row, plus the field it sits under in
+// its parent — which is not a column of either table but a property of the
+// parent's node_child list (see loadFileIndex). It carries both nodes.kind
+// (the int dir/file marker astNode.kind holds) and _ast.node_kind (the
+// tree-sitter kind), so toAST reproduces the finders' astNode exactly.
 type idxNode struct {
 	id        string
 	parentID  string
@@ -63,6 +65,13 @@ type idxNode struct {
 	record    string
 	startByte int
 	endByte   int
+	// hash is _ast.node_hash — the subtree's content address, the key its
+	// node_child list is filed under.
+	hash string
+	// field is the tree-sitter field this node occupies in its parent
+	// ("name", "receiver", "type"); "" when it has none, or when the parent
+	// is not in the index (the file's root node).
+	field string
 }
 
 func (n idxNode) toAST() astNode {
@@ -94,11 +103,22 @@ func (w *ASTWalker) fileIndex(sourceID string) (*fileIndex, error) {
 }
 
 // loadFileIndex reads every node of one file in a single indexed query
-// (idx_ast_source drives the source_id lookup) and builds the lookups.
+// (idx_ast_source drives the source_id lookup), builds the lookups, then
+// reads the node_child lists of the file's subtrees in a second and derives
+// each node's field from them.
+//
+// The field is derived rather than read because ley-line records it on the
+// merkle child list, not on the node: node_child lists a parent HASH's
+// children in tree-sitter order — every child, anonymous tokens included —
+// while _ast holds the named nodes only. So a parent's indexed children, in
+// start-byte order, are a subsequence of its list in ordinal order, and one
+// forward pass through the list assigns each child the field of the first
+// unconsumed row carrying its hash. A child the list does not contain is a
+// db that contradicts itself and is an error, not a node without a field.
 func (w *ASTWalker) loadFileIndex(sourceID string) (*fileIndex, error) {
 	idx := newFileIndex()
 	rows, err := w.db.Query(`SELECT n.id, COALESCE(n.parent_id, ''), n.name, n.kind,
-	        COALESCE(n.record, ''), a.node_kind, a.start_byte, a.end_byte
+	        COALESCE(n.record, ''), a.node_kind, a.start_byte, a.end_byte, a.node_hash
 	 FROM nodes n
 	 JOIN _ast a ON a.node_id = n.id
 	 WHERE a.source_id = ?
@@ -109,16 +129,80 @@ func (w *ASTWalker) loadFileIndex(sourceID string) (*fileIndex, error) {
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var n idxNode
+		var hash []byte
 		if err := rows.Scan(&n.id, &n.parentID, &n.name, &n.nodeKind,
-			&n.record, &n.astKind, &n.startByte, &n.endByte); err != nil {
+			&n.record, &n.astKind, &n.startByte, &n.endByte, &hash); err != nil {
 			// Surface a scan failure rather than silently dropping the row —
 			// a partial index would under-populate navigation with no signal
 			// (mache-015f5c). The old SQL finders returned this error too.
 			return nil, fmt.Errorf("scan file index row for %s: %w", sourceID, err)
 		}
+		n.hash = string(hash)
 		idx.add(n)
 	}
-	return idx, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	lists, err := w.loadChildLists(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	if err := idx.assignFields(lists); err != nil {
+		return nil, fmt.Errorf("file index for %s: %w", sourceID, err)
+	}
+	return idx, nil
+}
+
+// childListRow is one node_child row: a child subtree's hash and its field.
+type childListRow struct {
+	hash  string
+	field string
+}
+
+// loadChildLists reads the node_child lists of every subtree in the file,
+// keyed by parent hash, each in ordinal order.
+func (w *ASTWalker) loadChildLists(sourceID string) (map[string][]childListRow, error) {
+	rows, err := w.db.Query(`SELECT parent_hash, child_hash, COALESCE(field, '')
+	 FROM node_child
+	 WHERE parent_hash IN (SELECT node_hash FROM _ast WHERE source_id = ?)
+	 ORDER BY parent_hash, ordinal`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	lists := make(map[string][]childListRow)
+	for rows.Next() {
+		var parent, child []byte
+		var field string
+		if err := rows.Scan(&parent, &child, &field); err != nil {
+			return nil, fmt.Errorf("scan node_child row for %s: %w", sourceID, err)
+		}
+		lists[string(parent)] = append(lists[string(parent)], childListRow{hash: string(child), field: field})
+	}
+	return lists, rows.Err()
+}
+
+// assignFields sets each node's field from its parent's child list, walking
+// the list forward once per parent (see loadFileIndex).
+func (idx *fileIndex) assignFields(lists map[string][]childListRow) error {
+	for pi := range idx.all {
+		parent := &idx.all[pi]
+		list := lists[parent.hash]
+		ri := 0
+		for _, ci := range idx.children[parent.id] {
+			child := &idx.all[ci]
+			for ri < len(list) && list[ri].hash != child.hash {
+				ri++
+			}
+			if ri == len(list) {
+				return fmt.Errorf("node_child list of %s (%x, %d rows) does not contain its child %s (%x)",
+					parent.id, parent.hash, len(list), child.id, child.hash)
+			}
+			child.field = list[ri].field
+			ri++
+		}
+	}
+	return nil
 }
 
 func newFileIndex() *fileIndex {
@@ -176,69 +260,4 @@ func readSource(db *sql.DB, sourceID string) (lang string, content []byte, err e
 		return lang, content, err
 	}
 	return lang, nil, fmt.Errorf("_source %s: no content and no path", sourceID)
-}
-
-// nodesByKind returns the in-memory nodes of a kind whose id lives under
-// parentPrefix (empty = whole file). Mirrors findNodesByKind's SQL semantics
-// (a.node_kind = kind AND n.id LIKE parentPrefix||'/%').
-func (idx *fileIndex) nodesByKind(parentPrefix, kind string) []astNode {
-	prefix := parentPrefix + "/"
-	var out []astNode
-	for _, i := range idx.byKind[kind] {
-		n := idx.all[i]
-		if parentPrefix != "" && !strings.HasPrefix(n.id, prefix) {
-			continue
-		}
-		out = append(out, n.toAST())
-	}
-	return out
-}
-
-// childByKind returns the first (by start_byte) descendant of parentID with the
-// given kind at the depth implied by ancestry, or nil. Mirrors
-// findChildByKindAST: direct child when ancestry is empty (depth 1), else
-// exactly len(ancestry)+1 path segments below parentID with the kind sequence
-// verified by matchAncestry.
-func (idx *fileIndex) childByKind(parentID, kind string, ancestry []string) *astNode {
-	if out := idx.descendantsByKind(parentID, kind, ancestry, 1); len(out) > 0 {
-		return &out[0]
-	}
-	return nil
-}
-
-// childrenByKind is the multi-result form of childByKind (all matching
-// descendants, ordered by start_byte). Mirrors findChildrenByKindAST.
-func (idx *fileIndex) childrenByKind(parentID, kind string, ancestry []string) []astNode {
-	return idx.descendantsByKind(parentID, kind, ancestry, 0)
-}
-
-// descendantsByKind returns up to limit (0 = all) descendants of parentID of
-// the given kind at depth len(ancestry)+1 whose id path matches ancestry.
-func (idx *fileIndex) descendantsByKind(parentID, kind string, ancestry []string, limit int) []astNode {
-	prefix := parentID + "/"
-	depth := len(ancestry) + 1
-	var out []astNode
-	for _, i := range idx.byKind[kind] {
-		n := idx.all[i]
-		if !strings.HasPrefix(n.id, prefix) {
-			continue
-		}
-		suffix := n.id[len(prefix):]
-		if segmentCount(suffix) != depth {
-			continue
-		}
-		if len(ancestry) > 0 && !matchAncestry(suffix, ancestry) {
-			continue
-		}
-		out = append(out, n.toAST())
-		if limit > 0 && len(out) == limit {
-			break
-		}
-	}
-	return out
-}
-
-// segmentCount counts '/'-separated path segments in a node-id suffix.
-func segmentCount(suffix string) int {
-	return strings.Count(suffix, "/") + 1
 }

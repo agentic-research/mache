@@ -3,265 +3,93 @@ package ingest
 import (
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
-// seedTestAST creates an in-memory SQLite database with the ley-line AST schema
-// and populates it with a Go-like AST structure:
+// testASTSource is the Go file the shared walker fixture describes. The
+// fixture's nodes and byte spans are the real parse of these bytes.
+const testASTSource = "package main\n\nfunc Validate(x int) error {\n\treturn nil\n}\n\n" +
+	"func Helper() string {\n\treturn \"ok\"\n}\n\ntype Config struct {\n\tName string\n}\n"
+
+// seedTestAST builds the ley-line parse of testASTSource as main.go — the
+// nodes, _ast, node_child and _source rows `leyline parse` writes, with the
+// ids it assigns (the root is the source id; repeated sibling kinds are
+// numbered) and the tree-sitter fields each child sits under:
 //
-//	source_file/
+//	main.go                              (source_file)
 //	  package_clause/
-//	    package_identifier  ("main")
-//	  function_declaration/
-//	    identifier          ("Validate")
-//	    parameter_list/     (dir)
-//	    block/              (dir)
+//	    package_identifier               "main"
+//	  function_declaration_0/
+//	    name: identifier                 "Validate"
+//	    parameters: parameter_list/
+//	      parameter_declaration/
+//	        name: identifier             "x"
+//	        type: type_identifier        "int"
+//	    result: type_identifier          "error"
+//	    body: block/
 //	  function_declaration_1/
-//	    identifier          ("Helper")
-//	    parameter_list/     (dir)
-//	    block/              (dir)
+//	    name: identifier                 "Helper"
+//	    parameters: parameter_list/
+//	    result: type_identifier          "string"
+//	    body: block/
 //	  type_declaration/
 //	    type_spec/
-//	      type_identifier   ("Config")
+//	      name: type_identifier          "Config"
+//	      type: struct_type/
+//
+// The database is file-backed with one connection, so the concurrency tests
+// share it too.
 func seedTestAST(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("main.go", "go", testASTSource)
+	b.ASTNode("main.go", "source_file", "main.go", fixturedb.Bytes(0, len(testASTSource)))
+	b.ASTNode("main.go/package_clause", "package_clause", "main.go", fixturedb.Bytes(0, 12))
+	b.ASTNode("main.go/package_clause/package_identifier", "package_identifier", "main.go",
+		fixturedb.Bytes(8, 12), fixturedb.Detail{Token: "main"})
 
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY,
-			parent_id TEXT,
-			name TEXT NOT NULL,
-			kind INTEGER NOT NULL,
-			size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL,
-			record_id TEXT,
-			record TEXT,
-			source_file TEXT
-		);
-		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
+	fn := "main.go/function_declaration_0"
+	b.ASTNode(fn, "function_declaration", "main.go", fixturedb.Bytes(14, 56))
+	b.ASTNode(fn+"/identifier", "identifier", "main.go", fixturedb.Bytes(19, 27),
+		fixturedb.Detail{Token: "Validate", Field: "name"})
+	b.ASTNode(fn+"/parameter_list", "parameter_list", "main.go", fixturedb.Bytes(27, 34),
+		fixturedb.Detail{Field: "parameters"})
+	b.ASTNode(fn+"/parameter_list/parameter_declaration", "parameter_declaration", "main.go",
+		fixturedb.Bytes(28, 33))
+	b.ASTNode(fn+"/parameter_list/parameter_declaration/identifier", "identifier", "main.go",
+		fixturedb.Bytes(28, 29), fixturedb.Detail{Token: "x", Field: "name"})
+	b.ASTNode(fn+"/parameter_list/parameter_declaration/type_identifier", "type_identifier", "main.go",
+		fixturedb.Bytes(30, 33), fixturedb.Detail{Token: "int", Field: "type"})
+	b.ASTNode(fn+"/type_identifier", "type_identifier", "main.go", fixturedb.Bytes(35, 40),
+		fixturedb.Detail{Token: "error", Field: "result"})
+	b.ASTNode(fn+"/block", "block", "main.go", fixturedb.Bytes(41, 56), fixturedb.Detail{Field: "body"})
 
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY,
-			source_id TEXT NOT NULL,
-			node_kind TEXT NOT NULL,
-			start_byte INTEGER NOT NULL,
-			end_byte INTEGER NOT NULL,
-			start_row INTEGER NOT NULL,
-			start_col INTEGER NOT NULL,
-			end_row INTEGER NOT NULL,
-			end_col INTEGER NOT NULL
-		);
-		CREATE INDEX idx_ast_source ON _ast(source_id);
+	fn = "main.go/function_declaration_1"
+	b.ASTNode(fn, "function_declaration", "main.go", fixturedb.Bytes(58, 95))
+	b.ASTNode(fn+"/identifier", "identifier", "main.go", fixturedb.Bytes(63, 69),
+		fixturedb.Detail{Token: "Helper", Field: "name"})
+	b.ASTNode(fn+"/parameter_list", "parameter_list", "main.go", fixturedb.Bytes(69, 71),
+		fixturedb.Detail{Field: "parameters"})
+	b.ASTNode(fn+"/type_identifier", "type_identifier", "main.go", fixturedb.Bytes(72, 78),
+		fixturedb.Detail{Token: "string", Field: "result"})
+	b.ASTNode(fn+"/block", "block", "main.go", fixturedb.Bytes(79, 95), fixturedb.Detail{Field: "body"})
 
-		CREATE TABLE _source (
-			id TEXT PRIMARY KEY,
-			language TEXT NOT NULL,
-			content BLOB,
-			path TEXT
-		);
-	`)
-	require.NoError(t, err)
-
-	// Source content
-	src := `package main
-
-func Validate(x int) error {
-	return nil
-}
-
-func Helper() string {
-	return "ok"
-}
-
-type Config struct {
-	Name string
-}
-`
-	_, err = db.Exec("INSERT INTO _source (id, language, content, path) VALUES (?, ?, ?, NULL)", "main.go", "go", []byte(src))
-	require.NoError(t, err)
-
-	// nodes table (ley-line projection format)
-	nodes := []struct {
-		id, parentID, name string
-		kind               int
-		record             string
-	}{
-		{"", "", "", 1, ""},
-		{"source_file", "", "source_file", 1, ""},
-		// First function
-		{"source_file/function_declaration", "source_file", "function_declaration", 1, ""},
-		{"source_file/function_declaration/identifier", "source_file/function_declaration", "identifier", 0, "Validate"},
-		{"source_file/function_declaration/parameter_list", "source_file/function_declaration", "parameter_list", 1, ""},
-		{"source_file/function_declaration/block", "source_file/function_declaration", "block", 1, ""},
-		// Second function (disambiguated name)
-		{"source_file/function_declaration_1", "source_file", "function_declaration_1", 1, ""},
-		{"source_file/function_declaration_1/identifier", "source_file/function_declaration_1", "identifier", 0, "Helper"},
-		{"source_file/function_declaration_1/parameter_list", "source_file/function_declaration_1", "parameter_list", 1, ""},
-		{"source_file/function_declaration_1/block", "source_file/function_declaration_1", "block", 1, ""},
-		// Type declaration
-		{"source_file/type_declaration", "source_file", "type_declaration", 1, ""},
-		{"source_file/type_declaration/type_spec", "source_file/type_declaration", "type_spec", 1, ""},
-		{"source_file/type_declaration/type_spec/type_identifier", "source_file/type_declaration/type_spec", "type_identifier", 0, "Config"},
-		// Package clause
-		{"source_file/package_clause", "source_file", "package_clause", 1, ""},
-		{"source_file/package_clause/package_identifier", "source_file/package_clause", "package_identifier", 0, "main"},
-	}
-
-	for _, n := range nodes {
-		_, err := db.Exec(
-			"INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, 0, 0, ?)",
-			n.id, n.parentID, n.name, n.kind, n.record,
-		)
-		require.NoError(t, err, "insert node %s", n.id)
-	}
-
-	// _ast table (byte ranges — approximate for test purposes)
-	astRows := []struct {
-		nodeID, kind string
-		startByte    int
-		endByte      int
-	}{
-		{"source_file/function_declaration", "function_declaration", 14, 64},
-		{"source_file/function_declaration/identifier", "identifier", 19, 27},
-		{"source_file/function_declaration_1", "function_declaration", 66, 104},
-		{"source_file/function_declaration_1/identifier", "identifier", 71, 77},
-		{"source_file/type_declaration", "type_declaration", 106, 141},
-		{"source_file/type_declaration/type_spec", "type_spec", 111, 141},
-		{"source_file/type_declaration/type_spec/type_identifier", "type_identifier", 116, 122},
-	}
-	for _, a := range astRows {
-		_, err := db.Exec(
-			"INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', ?, ?, ?, 0, 0, 0, 0)",
-			a.nodeID, a.kind, a.startByte, a.endByte,
-		)
-		require.NoError(t, err, "insert _ast %s", a.nodeID)
-	}
-
-	return db
-}
-
-// seedTestASTFile creates the same test data as seedTestAST but in a temp file
-// database. Required for concurrent tests — :memory: gives each pool connection
-// its own isolated database, so concurrent queries see "no such table".
-func seedTestASTFile(t *testing.T) *sql.DB {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test_ast.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`
-		CREATE TABLE nodes (
-			id TEXT PRIMARY KEY,
-			parent_id TEXT,
-			name TEXT NOT NULL,
-			kind INTEGER NOT NULL,
-			size INTEGER DEFAULT 0,
-			mtime INTEGER NOT NULL,
-			record_id TEXT,
-			record TEXT,
-			source_file TEXT
-		);
-		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
-
-		CREATE TABLE _ast (
-			node_id TEXT PRIMARY KEY,
-			source_id TEXT NOT NULL,
-			node_kind TEXT NOT NULL,
-			start_byte INTEGER NOT NULL,
-			end_byte INTEGER NOT NULL,
-			start_row INTEGER NOT NULL,
-			start_col INTEGER NOT NULL,
-			end_row INTEGER NOT NULL,
-			end_col INTEGER NOT NULL
-		);
-		CREATE INDEX idx_ast_source ON _ast(source_id);
-
-		CREATE TABLE _source (
-			id TEXT PRIMARY KEY,
-			language TEXT NOT NULL,
-			content BLOB,
-			path TEXT
-		);
-	`)
-	require.NoError(t, err)
-
-	src := `package main
-
-func Validate(x int) error {
-	return nil
-}
-
-func Helper() string {
-	return "ok"
-}
-
-type Config struct {
-	Name string
-}
-`
-	_, err = db.Exec("INSERT INTO _source (id, language, content, path) VALUES (?, ?, ?, NULL)", "main.go", "go", []byte(src))
-	require.NoError(t, err)
-
-	nodes := []struct {
-		id, parentID, name string
-		kind               int
-		record             string
-	}{
-		{"", "", "", 1, ""},
-		{"source_file", "", "source_file", 1, ""},
-		{"source_file/function_declaration", "source_file", "function_declaration", 1, ""},
-		{"source_file/function_declaration/identifier", "source_file/function_declaration", "identifier", 0, "Validate"},
-		{"source_file/function_declaration/parameter_list", "source_file/function_declaration", "parameter_list", 1, ""},
-		{"source_file/function_declaration/block", "source_file/function_declaration", "block", 1, ""},
-		{"source_file/function_declaration_1", "source_file", "function_declaration_1", 1, ""},
-		{"source_file/function_declaration_1/identifier", "source_file/function_declaration_1", "identifier", 0, "Helper"},
-		{"source_file/function_declaration_1/parameter_list", "source_file/function_declaration_1", "parameter_list", 1, ""},
-		{"source_file/function_declaration_1/block", "source_file/function_declaration_1", "block", 1, ""},
-		{"source_file/type_declaration", "source_file", "type_declaration", 1, ""},
-		{"source_file/type_declaration/type_spec", "source_file/type_declaration", "type_spec", 1, ""},
-		{"source_file/type_declaration/type_spec/type_identifier", "source_file/type_declaration/type_spec", "type_identifier", 0, "Config"},
-		{"source_file/package_clause", "source_file", "package_clause", 1, ""},
-		{"source_file/package_clause/package_identifier", "source_file/package_clause", "package_identifier", 0, "main"},
-	}
-	for _, n := range nodes {
-		_, err := db.Exec(
-			"INSERT INTO nodes (id, parent_id, name, kind, size, mtime, record) VALUES (?, ?, ?, ?, 0, 0, ?)",
-			n.id, n.parentID, n.name, n.kind, n.record,
-		)
-		require.NoError(t, err)
-	}
-
-	astRows := []struct {
-		nodeID, kind string
-		startByte    int
-		endByte      int
-	}{
-		{"source_file/function_declaration", "function_declaration", 14, 64},
-		{"source_file/function_declaration/identifier", "identifier", 19, 27},
-		{"source_file/function_declaration_1", "function_declaration", 66, 104},
-		{"source_file/function_declaration_1/identifier", "identifier", 71, 77},
-		{"source_file/type_declaration", "type_declaration", 106, 141},
-		{"source_file/type_declaration/type_spec", "type_spec", 111, 141},
-		{"source_file/type_declaration/type_spec/type_identifier", "type_identifier", 116, 122},
-	}
-	for _, a := range astRows {
-		_, err := db.Exec(
-			"INSERT INTO _ast (node_id, source_id, node_kind, start_byte, end_byte, start_row, start_col, end_row, end_col) VALUES (?, 'main.go', ?, ?, ?, 0, 0, 0, 0)",
-			a.nodeID, a.kind, a.startByte, a.endByte,
-		)
-		require.NoError(t, err)
-	}
-
-	return db
+	ty := "main.go/type_declaration"
+	b.ASTNode(ty, "type_declaration", "main.go", fixturedb.Bytes(97, 132))
+	b.ASTNode(ty+"/type_spec", "type_spec", "main.go", fixturedb.Bytes(102, 132))
+	b.ASTNode(ty+"/type_spec/type_identifier", "type_identifier", "main.go", fixturedb.Bytes(102, 108),
+		fixturedb.Detail{Token: "Config", Field: "name"})
+	b.ASTNode(ty+"/type_spec/struct_type", "struct_type", "main.go", fixturedb.Bytes(109, 132),
+		fixturedb.Detail{Field: "type"})
+	_, f := b.Build()
+	return f.DB()
 }
 
 func TestASTWalker_QueryFunctionDeclarations(t *testing.T) {
@@ -338,40 +166,49 @@ func TestASTWalker_CaptureOrigin(t *testing.T) {
 	assert.True(t, start < end, "scope should have valid byte range")
 }
 
+// hclBlocksSource is the HCL file the predicate tests query: two top-level
+// blocks whose type identifiers ("resource", "variable") the predicates
+// select between.
+const hclBlocksSource = "resource \"aws_instance\" {\n  ami = \"abc\"\n}\n\n" +
+	"variable \"region\" {\n  default = \"us\"\n}\n"
+
+// seedHCLBlocksAST builds the ley-line parse of hclBlocksSource as main.tf:
+//
+//	main.tf                      (config_file)
+//	  body/
+//	    block_0/
+//	      identifier             "resource"
+//	      string_lit             "\"aws_instance\""
+//	      body/
+//	    block_1/
+//	      identifier             "variable"
+//	      string_lit             "\"region\""
+//	      body/
+//
+// HCL's grammar names no fields, so no child carries one — a block's type,
+// labels and body are distinguished by kind and position alone.
+func seedHCLBlocksAST(t *testing.T) *sql.DB {
+	t.Helper()
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("main.tf", "hcl", hclBlocksSource)
+	b.ASTNode("main.tf", "config_file", "main.tf", fixturedb.Bytes(0, len(hclBlocksSource)))
+	b.ASTNode("main.tf/body", "body", "main.tf", fixturedb.Bytes(0, 81))
+	blk := "main.tf/body/block_0"
+	b.ASTNode(blk, "block", "main.tf", fixturedb.Bytes(0, 41))
+	b.ASTNode(blk+"/identifier", "identifier", "main.tf", fixturedb.Bytes(0, 8), fixturedb.Detail{Token: "resource"})
+	b.ASTNode(blk+"/string_lit", "string_lit", "main.tf", fixturedb.Bytes(9, 23), fixturedb.Detail{Token: `"aws_instance"`})
+	b.ASTNode(blk+"/body", "body", "main.tf", fixturedb.Bytes(28, 39))
+	blk = "main.tf/body/block_1"
+	b.ASTNode(blk, "block", "main.tf", fixturedb.Bytes(43, 81))
+	b.ASTNode(blk+"/identifier", "identifier", "main.tf", fixturedb.Bytes(43, 51), fixturedb.Detail{Token: "variable"})
+	b.ASTNode(blk+"/string_lit", "string_lit", "main.tf", fixturedb.Bytes(52, 60), fixturedb.Detail{Token: `"region"`})
+	b.ASTNode(blk+"/body", "body", "main.tf", fixturedb.Bytes(65, 79))
+	_, f := b.Build()
+	return f.DB()
+}
+
 func TestASTWalker_PredicateEqFilter(t *testing.T) {
-	// Build a DB with HCL-like block structure
-	db, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
-		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
-		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
-
-		INSERT INTO _source VALUES ('main.tf', 'hcl', '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('', '', '', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block', '', 'block', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/identifier', 'block', 'identifier', 0, 0, 'resource');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/string_lit', 'block', 'string_lit', 0, 0, '"aws_instance"');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/body', 'block', 'body', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1', '', 'block_1', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/identifier', 'block_1', 'identifier', 0, 0, 'variable');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/string_lit', 'block_1', 'string_lit', 0, 0, '"region"');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/body', 'block_1', 'body', 1, 0, '');
-
-		INSERT INTO _ast VALUES ('block', 'main.tf', 'block', 0, 50, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/identifier', 'main.tf', 'identifier', 0, 8, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/string_lit', 'main.tf', 'string_lit', 9, 23, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/body', 'main.tf', 'body', 24, 50, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1', 'main.tf', 'block', 52, 100, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1/identifier', 'main.tf', 'identifier', 52, 60, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1/string_lit', 'main.tf', 'string_lit', 61, 69, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1/body', 'main.tf', 'body', 70, 100, 0, 0, 0, 0);
-	`)
-	require.NoError(t, err)
-
+	db := seedHCLBlocksAST(t)
 	w := NewASTWalker(db)
 	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
 
@@ -389,40 +226,7 @@ func TestASTWalker_PredicateEqFilter(t *testing.T) {
 // filter captures using the capture's resolved text. Implements bead
 // mache-37646f — replaces the previous "rejects #match?" behavior.
 func TestASTWalker_MatchPredicate(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// Same HCL-like fixture as TestASTWalker_PredicateEqFilter, two blocks:
-	// "resource" and "variable".
-	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
-		CREATE INDEX idx_parent_name ON nodes(parent_id, name);
-		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
-
-		INSERT INTO _source VALUES ('main.tf', 'hcl', '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('', '', '', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block', '', 'block', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/identifier', 'block', 'identifier', 0, 0, 'resource');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/string_lit', 'block', 'string_lit', 0, 0, '"aws_instance"');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block/body', 'block', 'body', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1', '', 'block_1', 1, 0, '');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/identifier', 'block_1', 'identifier', 0, 0, 'variable');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/string_lit', 'block_1', 'string_lit', 0, 0, '"region"');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, record) VALUES ('block_1/body', 'block_1', 'body', 1, 0, '');
-
-		INSERT INTO _ast VALUES ('block', 'main.tf', 'block', 0, 50, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/identifier', 'main.tf', 'identifier', 0, 8, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/string_lit', 'main.tf', 'string_lit', 9, 23, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/body', 'main.tf', 'body', 24, 50, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1', 'main.tf', 'block', 52, 100, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1/identifier', 'main.tf', 'identifier', 52, 60, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1/string_lit', 'main.tf', 'string_lit', 61, 69, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block_1/body', 'main.tf', 'body', 70, 100, 0, 0, 0, 0);
-	`)
-	require.NoError(t, err)
-
+	db := seedHCLBlocksAST(t)
 	w := NewASTWalker(db)
 	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
 
@@ -513,7 +317,7 @@ func TestParseSelector_Nested(t *testing.T) {
 //
 //	(call target: (identifier) @_fn (arguments (call target: (identifier) @name)) ...)
 //
-// The @name capture's ancestry must be ["arguments", "call"] — not ["arguments"].
+// The @name capture's ancestry must be [arguments, call] — not [arguments].
 // Regression: the filter was removing ALL occurrences of outerKind from the
 // ancestor chain instead of just the first (the scope).
 func TestParseSelector_RepeatedOuterKind(t *testing.T) {
@@ -532,14 +336,16 @@ func TestParseSelector_RepeatedOuterKind(t *testing.T) {
 	}
 	require.NotNil(t, nameCap, "@name capture must exist")
 	assert.Equal(t, "identifier", nameCap.kind)
-	assert.Equal(t, []string{"arguments", "call"}, nameCap.ancestry,
+	assert.Equal(t, []pathStep{{kind: "arguments"}, {kind: "call"}}, nameCap.ancestry,
 		"ancestry must include inner 'call' — not strip it because outerKind is also 'call'")
+	assert.Equal(t, "target", nameCap.field, "the capture keeps the field label it was written under")
 }
 
 // TestParseSelector_DeepAncestry verifies that the Go pointer-receiver and
-// value-receiver selectors produce distinct ancestry chains. This is the
-// mechanism that lets matchAncestry distinguish (*Greeter).Greet from
-// (Greeter).String in the _ast ID path.
+// value-receiver selectors produce distinct ancestry chains, each step
+// carrying the field label the selector wrote it under. This is what lets
+// descendantsByKind distinguish (*Greeter).Greet from (Greeter).String — and
+// the receiver's type from a parameter's (mache-91d903).
 func TestParseSelector_DeepAncestry(t *testing.T) {
 	// Pointer receiver: 3-level ancestry
 	ptrSel := `(method_declaration receiver: (parameter_list (parameter_declaration type: (pointer_type (type_identifier) @receiver))) name: (field_identifier) @name) @scope`
@@ -559,8 +365,14 @@ func TestParseSelector_DeepAncestry(t *testing.T) {
 	require.NotNil(t, ptrReceiver)
 	require.NotNil(t, ptrName)
 	assert.Equal(t, "type_identifier", ptrReceiver.kind)
-	assert.Equal(t, []string{"parameter_list", "parameter_declaration", "pointer_type"}, ptrReceiver.ancestry)
+	assert.Equal(t, []pathStep{
+		{kind: "parameter_list", field: "receiver"},
+		{kind: "parameter_declaration"},
+		{kind: "pointer_type", field: "type"},
+	}, ptrReceiver.ancestry)
+	assert.Equal(t, "", ptrReceiver.field, "the type_identifier under pointer_type carries no field")
 	assert.Equal(t, "field_identifier", ptrName.kind)
+	assert.Equal(t, "name", ptrName.field)
 	assert.Empty(t, ptrName.ancestry, "name is a direct child of method_declaration")
 
 	// Value receiver: 2-level ancestry (no pointer_type)
@@ -575,8 +387,11 @@ func TestParseSelector_DeepAncestry(t *testing.T) {
 		}
 	}
 	require.NotNil(t, valReceiver)
-	assert.Equal(t, []string{"parameter_list", "parameter_declaration"}, valReceiver.ancestry,
-		"value receiver has shorter ancestry than pointer receiver")
+	assert.Equal(t, []pathStep{
+		{kind: "parameter_list", field: "receiver"},
+		{kind: "parameter_declaration"},
+	}, valReceiver.ancestry, "value receiver has shorter ancestry than pointer receiver")
+	assert.Equal(t, "type", valReceiver.field, "the value receiver's type_identifier is the declaration's type field")
 }
 
 // ---------------------------------------------------------------------------
@@ -634,29 +449,12 @@ func TestParseSelector_MatchPredicates(t *testing.T) {
 // predicates (#not-eq?, #any-eq?, #is?, #is-not?) are rejected with an
 // error rather than silently ignored.
 func TestASTWalker_NotEqPredicateSilentlyIgnored(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
-		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
-
-		INSERT INTO _source VALUES ('test.tf', 'hcl', '');
-		INSERT INTO nodes VALUES ('', '', '', 1, 0, 0, NULL, '', NULL);
-		INSERT INTO nodes VALUES ('block', '', 'block', 1, 0, 0, NULL, '', NULL);
-		INSERT INTO nodes VALUES ('block/identifier', 'block', 'identifier', 0, 0, 0, NULL, 'variable', NULL);
-		INSERT INTO _ast VALUES ('block', 'test.tf', 'block', 0, 50, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/identifier', 'test.tf', 'identifier', 0, 8, 0, 0, 0, 0);
-	`)
-	require.NoError(t, err)
-
+	db := seedHCLBlocksAST(t)
 	w := NewASTWalker(db)
-	root := ASTRoot{DB: db, SourceID: "test.tf", ParentPrefix: ""}
+	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
 
 	// #not-eq? should be rejected — ASTWalker only supports #eq?.
-	_, err = w.Query(root, `(block (identifier) @_type) @scope (#not-eq? @_type "variable")`)
+	_, err := w.Query(root, `(block (identifier) @_type) @scope (#not-eq? @_type "variable")`)
 	require.Error(t, err, "should reject #not-eq? predicate")
 	assert.Contains(t, err.Error(), "#not-eq?")
 	assert.Contains(t, err.Error(), "SitterWalker")
@@ -694,59 +492,38 @@ func TestASTWalker_CaptureOriginNamedCapture(t *testing.T) {
 	assert.False(t, unknownOK, "unknown capture should return false")
 }
 
-// TestASTWalker_MultipleChildrenSameKind documents the LIMIT 1 behavior in
-// findChildByKindAST. When a parent has multiple descendants of the same
-// node_kind (e.g., two string_lit children in an HCL block), only the first
-// by start_byte is returned. Tree-sitter distinguishes by field name;
-// ASTWalker only matches by node_kind.
+// TestASTWalker_MultipleChildrenSameKind pins what an UNLABELLED capture
+// selects when a parent has several children of its kind: the first in
+// document order. HCL's block labels carry no tree-sitter field (the grammar
+// names none), so `(string_lit) @name` cannot say which label it means, and
+// the second label is reachable only by position — which the selector
+// language has no syntax for. A labelled capture (`name: (identifier)`) is
+// constrained by field instead; see TestProjectSourceFile_FieldLabelsConstrainCaptures.
 func TestASTWalker_MultipleChildrenSameKind(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// Simulate: resource "aws_instance" "my_server" { ... }
-	// Two string_lit children under the same block.
-	_, err = db.Exec(`
-		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL, size INTEGER DEFAULT 0, mtime INTEGER NOT NULL, record_id TEXT, record TEXT, source_file TEXT);
-		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
-		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
-
-		INSERT INTO _source VALUES ('main.tf', 'hcl', 'resource "aws_instance" "my_server" {}');
-		INSERT INTO nodes VALUES ('', '', '', 1, 0, 0, NULL, '', NULL);
-		INSERT INTO nodes VALUES ('block', '', 'block', 1, 0, 0, NULL, '', NULL);
-		INSERT INTO nodes VALUES ('block/identifier', 'block', 'identifier', 0, 0, 0, NULL, 'resource', NULL);
-		INSERT INTO nodes VALUES ('block/string_lit', 'block', 'string_lit', 0, 0, 0, NULL, '"aws_instance"', NULL);
-		INSERT INTO nodes VALUES ('block/string_lit_1', 'block', 'string_lit_1', 0, 0, 0, NULL, '"my_server"', NULL);
-
-		INSERT INTO _ast VALUES ('block', 'main.tf', 'block', 0, 38, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/identifier', 'main.tf', 'identifier', 0, 8, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/string_lit', 'main.tf', 'string_lit', 9, 23, 0, 0, 0, 0);
-		INSERT INTO _ast VALUES ('block/string_lit_1', 'main.tf', 'string_lit', 24, 35, 0, 0, 0, 0);
-	`)
-	require.NoError(t, err)
+	// resource "aws_instance" "my_server" {} — two string_lit labels under one block.
+	const src = "resource \"aws_instance\" \"my_server\" {}\n"
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("main.tf", "hcl", src)
+	b.ASTNode("main.tf", "config_file", "main.tf", fixturedb.Bytes(0, len(src)))
+	b.ASTNode("main.tf/body", "body", "main.tf", fixturedb.Bytes(0, 38))
+	blk := "main.tf/body/block"
+	b.ASTNode(blk, "block", "main.tf", fixturedb.Bytes(0, 38))
+	b.ASTNode(blk+"/identifier", "identifier", "main.tf", fixturedb.Bytes(0, 8), fixturedb.Detail{Token: "resource"})
+	b.ASTNode(blk+"/string_lit_0", "string_lit", "main.tf", fixturedb.Bytes(9, 23), fixturedb.Detail{Token: `"aws_instance"`})
+	b.ASTNode(blk+"/string_lit_1", "string_lit", "main.tf", fixturedb.Bytes(24, 35), fixturedb.Detail{Token: `"my_server"`})
+	_, f := b.Build()
+	db := f.DB()
 
 	w := NewASTWalker(db)
 	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
 
-	// Schema captures two string_lit children with different capture names.
-	// But ASTWalker's parseSelector maps capture→kind, not capture→position.
-	// Both @res_type and @res_name look for kind=string_lit, and LIMIT 1
-	// means one gets the first row and the other... also gets the first row.
-	//
-	// This is a simplified reproduction. The real issue: if a schema has
-	// TWO captures of the same kind (uncommon but valid in tree-sitter),
-	// ASTWalker returns the same node for both.
 	matches, err := w.Query(root, `(block (identifier) @_type (string_lit) @name) @scope (#eq? @_type "resource")`)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
 
 	v := matches[0].Values()
 	name, _ := v["name"].(string)
-	// ORDER BY start_byte ASC ensures we get the first child deterministically.
-	assert.Equal(t, "\"aws_instance\"", name, "should capture first string_lit by document order")
-
-	// Second string_lit ("my_server") is not separately addressable —
-	// ASTWalker matches by node_kind, not by field name.
+	assert.Equal(t, "\"aws_instance\"", name, "an unlabelled capture takes the first child of its kind in document order")
 }
 
 // ---------------------------------------------------------------------------
@@ -813,7 +590,7 @@ func FuzzParseSelector(f *testing.F) {
 // Uses a temp file DB because :memory: gives each pool connection its own
 // isolated database — concurrent queries would fail with "no such table".
 func TestASTWalker_ConcurrentQueries(t *testing.T) {
-	db := seedTestASTFile(t)
+	db := seedTestAST(t)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -862,7 +639,7 @@ func TestASTWalker_ConcurrentQueries(t *testing.T) {
 // TestASTWalker_RaceSelectWalker runs SelectWalker concurrently — it queries
 // sqlite_master and creates walkers, so connection pool behavior matters.
 func TestASTWalker_RaceSelectWalker(t *testing.T) {
-	db := seedTestASTFile(t)
+	db := seedTestAST(t)
 	defer func() { _ = db.Close() }()
 
 	const goroutines = 10

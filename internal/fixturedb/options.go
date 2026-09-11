@@ -46,6 +46,15 @@ type Detail struct {
 	// `node_content` and points at from `_ast.node_hash` — the same indirection
 	// ley-line uses, and the one v_test_nodes' attribute detection walks.
 	Token string
+
+	// Field is the tree-sitter field an `_ast` node sits under in its parent
+	// — `receiver`, `name`, `type` — which lands in `node_child.field` on the
+	// parent's child list. Empty means the node has no field, which is what
+	// ley-line writes for a `type_spec` under its `type_declaration` or a
+	// `parameter_declaration` under its list. A selector's `field:` labels
+	// are matched against this, so a fixture for a labelled selector must
+	// state the fields the real parse would carry.
+	Field string
 }
 
 // first returns the single optional value, or the zero value when none was

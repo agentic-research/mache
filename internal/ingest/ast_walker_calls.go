@@ -336,6 +336,10 @@ func (w *ASTWalker) callRows(sourceID string, p CallPattern, wantQualifier bool,
 func (idx *fileIndex) callRows(p CallPattern, wantQualifier bool, scopePrefix string) []callRow {
 	qualified := wantQualifier && p.QualifierKind != ""
 	prefix := scopePrefix + "/"
+	ancestry := make([]pathStep, len(p.Ancestors))
+	for i, kind := range p.Ancestors {
+		ancestry[i] = pathStep{kind: kind}
+	}
 	var out []callRow
 	for _, li := range idx.byKind[p.LeafKind] {
 		leaf := idx.all[li]
@@ -343,12 +347,8 @@ func (idx *fileIndex) callRows(p CallPattern, wantQualifier bool, scopePrefix st
 			continue
 		}
 		// Walk up: the nearest ancestor is Ancestors[len-1], the child of the
-		// outer node is Ancestors[0].
-		cur, ok := li, true
-		for a := len(p.Ancestors) - 1; a >= 0 && ok; a-- {
-			cur, ok = idx.byID[idx.all[cur].parentID]
-			ok = ok && idx.all[cur].astKind == p.Ancestors[a]
-		}
+		// outer node is Ancestors[0]. Call patterns constrain kinds only.
+		cur, ok := idx.climb(li, ancestry)
 		if !ok {
 			continue
 		}

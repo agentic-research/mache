@@ -59,6 +59,7 @@ import (
 var lloOwnedTables = []string{
 	"_ast",
 	"_ast_pointer",
+	"node_child",
 	"_source",
 	"_lsp",
 	"_lsp_defs",
@@ -164,7 +165,6 @@ var lloWriterAllowlist = map[string]string{
 var lloTestFixtureAllowlist = []string{
 	"internal/buildcache/cache_ast_test.go",
 	"internal/buildcache/cache_test.go",
-	"internal/leylinegraph/call_extractor_ast_test.go",
 	"internal/smells/dead_code_skip_list_retreat_test.go",
 	"internal/mcpserve/falsifiability_lsp_projection_test.go",
 	"internal/smells/falsifiability_skip_list_ablation_test.go",
@@ -183,13 +183,6 @@ var lloTestFixtureAllowlist = []string{
 	"graph/sqlite_graph_lookupdef_test.go",
 	"graph/sqlite_graph_nodehash_test.go",
 	"internal/ingest/ast_flatten_db_test.go",
-	"internal/ingest/ast_walker_bench_test.go",
-	"internal/ingest/ast_walker_callees_e2e_test.go",
-	"internal/ingest/ast_walker_calls_test.go",
-	"internal/ingest/ast_walker_core_test.go",
-	"internal/ingest/ast_walker_test.go",
-	"internal/ingest/inner_scope_test.go",
-	"internal/ingest/invalidate_test.go",
 	"internal/ingest/sqlite_writer_test.go",
 }
 

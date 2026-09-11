@@ -184,15 +184,20 @@ type ASTRoot struct {
 	ParentPrefix string // scope queries to children under this prefix
 }
 
-// Query implements Walker. The selector is a tree-sitter S-expression pattern.
-// ASTWalker translates it to SQL queries against the nodes and _ast tables.
+// Query implements Walker. The selector is a tree-sitter S-expression pattern,
+// evaluated against the file's in-memory section of the nodes⋈_ast tables.
 //
-// Currently supports the common pattern: (node_kind field: (child_kind) @capture) @scope,
-// plus simple #eq? predicates over captured text. #match? requires SitterWalker.
+// Supports the common pattern: (node_kind field: (child_kind) @capture) @scope,
+// plus simple #eq? / #match? predicates over captured text. Field labels
+// constrain like tree-sitter's: a labelled step reaches only the child under
+// that field, an unlabelled step any child of the kind (mache-91d903).
 func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 	ar, ok := root.(ASTRoot)
 	if !ok {
 		return nil, fmt.Errorf("ASTWalker.Query: expected ASTRoot, got %T", root)
+	}
+	if ar.SourceID == "" {
+		return nil, fmt.Errorf("ASTWalker.Query: ASTRoot.SourceID is empty — a query is keyed by the file it runs in")
 	}
 
 	// "$" is the wildcard selector — returns a single match representing
@@ -212,164 +217,27 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 		return nil, fmt.Errorf("parse selector: %w", err)
 	}
 
-	// Find all nodes matching the outer kind under the current scope
-	scopeNodes, err := w.findNodesByKind(ar.DB, ar.ParentPrefix, pattern.outerKind, ar.SourceID)
+	// The file's section, loaded once (mache-4f3840): every node lookup below
+	// answers from it.
+	idx, err := w.fileIndex(ar.SourceID)
 	if err != nil {
 		return nil, fmt.Errorf("find %s nodes: %w", pattern.outerKind, err)
 	}
-
 	// Read source content for byte-range extraction — from the file's
 	// section (fileSource), NOT a raw readSource. Query runs once per
 	// schema selector per file, so an uncached read re-fetched+decompressed
 	// the full file content ~N-selectors times per file; on a whole-repo
 	// projection that was the dominant cost (mache-4f3840).
-	var source []byte
-	if ar.SourceID != "" {
-		source = w.fileSource(ar.SourceID)
-	}
+	source := w.fileSource(ar.SourceID)
 
-	// Identify required captures: any capture whose name doesn't start with "_"
-	// is required. If it fails to resolve, the entire match is skipped.
-	requiredCaptures := map[string]bool{}
-	for _, cap := range pattern.captures {
-		if cap.name != "scope" && !strings.HasPrefix(cap.name, "_") {
-			requiredCaptures[cap.name] = true
-		}
-	}
-
-	// Expand each outer node into scope units. When @scope is the outer node
-	// (the common case), there is one unit per outer node. When @scope is an
-	// INNER node kind (e.g. `(type_declaration (type_spec ...) @scope)`), a
-	// single outer node expands to one unit PER inner scope node — so grouped
-	// declarations like `type ( Alpha; Beta )` project each member, matching
-	// tree-sitter's one-match-per-inner-node semantics.
-	innerScope := pattern.scopeKind != "" && pattern.scopeKind != pattern.outerKind
-	var scopePrefix []string
-	if innerScope {
-		scopePrefix = append(append([]string{}, pattern.scopeAncestry...), pattern.scopeKind)
-	}
-
-	type scopeUnit struct {
-		outerID string  // capture base for captures NOT under the @scope
-		scope   astNode // the @scope node: text/range/ParentPrefix + capture base for captures under it
-	}
-	var units []scopeUnit
-	for _, scopeNode := range scopeNodes {
-		if !innerScope {
-			units = append(units, scopeUnit{outerID: scopeNode.id, scope: scopeNode})
-			continue
-		}
-		inners, err := w.findChildrenByKindAST(ar.DB, scopeNode.id, pattern.scopeKind, ar.SourceID, pattern.scopeAncestry)
-		if err != nil {
-			return nil, fmt.Errorf("find inner scope %s: %w", pattern.scopeKind, err)
-		}
-		if len(inners) == 0 {
-			// No inner scope resolved — fall back to the outer node as the scope
-			// (preserves the prior single-node behavior for odd shapes).
-			units = append(units, scopeUnit{outerID: scopeNode.id, scope: scopeNode})
-			continue
-		}
-		for _, in := range inners {
-			units = append(units, scopeUnit{outerID: scopeNode.id, scope: in})
-		}
-	}
-
+	scopePath := pattern.innerScopePath()
 	var matches []Match
-	for _, unit := range units {
-		values := make(map[string]any)
-		captureRanges := make(map[string][2]int)
-		missingRequired := false
-
-		scopeForText := unit.scope
-		// Inject the scope node's source text as "scope", mirroring SitterWalker —
-		// so leaf templates like {{.scope}} (the most common source-leaf template)
-		// render the construct's source instead of "<no value>".
-		if source != nil && scopeForText.startByte < scopeForText.endByte && scopeForText.endByte <= len(source) {
-			values["scope"] = string(source[scopeForText.startByte:scopeForText.endByte])
-		}
-
-		// Resolve captures from children (searches descendants, not just direct children).
-		// parseSelector strips @scope captures before they reach pattern.captures,
-		// so the explicit "scope" guard below is defensive — it can't be exercised
-		// from the public API today, but is kept in case the selector grammar evolves.
-		for _, cap := range pattern.captures {
-			if cap.name == "scope" { // coverage:ignore — see comment above; unreachable via public API
-				continue // coverage:ignore — same as above
-			}
-			// Captures nested under the @scope node resolve relative to the inner
-			// scope (with the scope prefix stripped from their ancestry); captures
-			// elsewhere resolve relative to the outer node with full ancestry.
-			base := unit.outerID
-			ancestry := cap.ancestry
-			if innerScope && ancestryHasPrefix(cap.ancestry, scopePrefix) {
-				base = unit.scope.id
-				ancestry = cap.ancestry[len(scopePrefix):]
-			}
-			child, err := w.findChildByKindAST(ar.DB, base, cap.kind, ar.SourceID, ancestry)
-			if err != nil || child == nil {
-				if requiredCaptures[cap.name] {
-					missingRequired = true
-					break
-				}
-				continue
-			}
-			// Record byte range for CaptureOrigin
-			if child.startByte < child.endByte {
-				captureRanges[cap.name] = [2]int{child.startByte, child.endByte}
-			}
-			// Leaf node: record column has the text
-			if child.record != "" {
-				values[cap.name] = child.record
-			} else if source != nil && child.startByte < child.endByte {
-				// Fall back to byte-range from source
-				values[cap.name] = string(source[child.startByte:child.endByte])
-			}
-		}
-
-		// Skip match if any required capture couldn't be resolved
-		if missingRequired {
+	for _, unit := range idx.scopeUnits(idx.nodesByKind(ar.ParentPrefix, pattern.outerKind), scopePath) {
+		values, captureRanges, ok := idx.resolveCaptures(pattern, scopePath, unit, source)
+		if !ok || !pattern.accepts(values) {
 			continue
 		}
-
-		// Apply #eq? predicate filters
-		skip := false
-		for _, pred := range pattern.predicates {
-			val, ok := values[pred.capture].(string)
-			if !ok || val != pred.literal {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			continue
-		}
-
-		// Apply #match? regex filters: capture text must match
-		for _, mp := range pattern.matchPreds {
-			val, ok := values[mp.capture].(string)
-			if !ok || !mp.regex.MatchString(val) {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			continue
-		}
-
-		// Apply #not-match? regex filters: capture text must NOT match
-		for _, mp := range pattern.notMatchPreds {
-			val, ok := values[mp.capture].(string)
-			if !ok || mp.regex.MatchString(val) {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			continue
-		}
-
-		// Build the match
-		m := &astMatch{
+		matches = append(matches, &astMatch{
 			values:        values,
 			captureRanges: captureRanges,
 			ctx: ASTRoot{
@@ -378,15 +246,13 @@ func (w *ASTWalker) Query(root any, selector string) ([]Match, error) {
 				// Scope nested schema-child queries to the resolved @scope node
 				// (which may be an inner node like type_spec), mirroring
 				// SitterWalker.Context() returning the captured scope node.
-				ParentPrefix: scopeForText.id,
+				ParentPrefix: unit.scope.id,
 			},
-			startByte: scopeForText.startByte,
-			endByte:   scopeForText.endByte,
+			startByte: unit.scope.startByte,
+			endByte:   unit.scope.endByte,
 			w:         w,
-		}
-		matches = append(matches, m)
+		})
 	}
-
 	return matches, nil
 }
 

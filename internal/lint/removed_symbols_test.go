@@ -37,10 +37,10 @@ var removedSymbolBaseline = map[string]int{
 	"internal/leylinegraph/call_extractor_ast.go": 1,
 	"internal/mcpserve/serve.go":                  1,
 	"graph/composite.go":                          1,
-	"internal/ingest/ast_walker.go":               4,
+	"internal/ingest/ast_walker.go":               2,
 	"internal/ingest/ast_walker_calls.go":         3,
 	"internal/ingest/ast_walker_extract.go":       3,
-	"internal/ingest/ast_walker_selector.go":      3,
+	"internal/ingest/ast_walker_selector.go":      1,
 	"internal/ingest/engine_languages.go":         2,
 	"internal/ingest/engine_walk.go":              1,
 }
