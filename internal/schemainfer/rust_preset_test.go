@@ -16,11 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// projectRust ingests parseDir, ley-line-parsed into astDB, with the rust
+// projectPreset ingests parseDir, ley-line-parsed into astDB, with the named
 // preset into a MemoryStore.
-func projectRust(t *testing.T, astDB *sql.DB, parseDir string) *graph.MemoryStore {
+func projectPreset(t *testing.T, preset string, astDB *sql.DB, parseDir string) *graph.MemoryStore {
 	t.Helper()
-	schema, err := LoadPresetSchema("rust")
+	schema, err := LoadPresetSchema(preset)
 	require.NoError(t, err)
 	store := graph.NewMemoryStore()
 	engine := ingest.NewEngine(schema, store)
@@ -71,7 +71,7 @@ func projectedSource(t *testing.T, store *graph.MemoryStore, id string) string {
 // child; lib.rs adds the plain-receiver impls.
 func TestRustPreset_MethodsAreReceiverQualified(t *testing.T) {
 	astDB, parseDir := lltest.ParseSourceViaLeyline(t, filepath.Join(testutil.PresetFixturesDir(t), "rust"))
-	store := projectRust(t, astDB, parseDir)
+	store := projectPreset(t, "rust", astDB, parseDir)
 
 	wantMethods := []string{
 		"Catalog.count", "Catalog.insert", "Catalog.lookup", "Catalog.new", // lib.rs
@@ -120,7 +120,7 @@ func TestRustPreset_EveryFunctionItemProjectedOnce(t *testing.T) {
 	srcPath, err := testfixtures.ResolvePath("medium-rust-rosary")
 	require.NoError(t, err)
 	astDB, parseDir := lltest.ParseSourceViaLeyline(t, srcPath)
-	store := projectRust(t, astDB, parseDir)
+	store := projectPreset(t, "rust", astDB, parseDir)
 
 	var functionItems int
 	require.NoError(t, astDB.QueryRow(`SELECT count(*) FROM _ast WHERE node_kind = 'function_item'`).Scan(&functionItems))

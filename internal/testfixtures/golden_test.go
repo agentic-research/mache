@@ -204,6 +204,19 @@ func TestProjectionInvariants(t *testing.T) {
 		assert.Equal(t, 1, count(t, `SELECT COUNT(*) FROM nodes WHERE id = 'store/methods/Store.Len/source'`), "value receiver")
 	})
 
+	// A method on a GENERIC receiver is still a method. The preset's two
+	// original receiver shapes stopped at pointer_type/type_identifier, so
+	// every method on a generic type was projected nowhere at all — no
+	// methods/ node, no functions/ node, no routing warning (mache-51571b).
+	// The receiver is the type's NAME, never its instantiation.
+	t.Run("generic receivers reach methods", func(t *testing.T) {
+		assert.Equal(t, 1, count(t, `SELECT COUNT(*) FROM nodes WHERE id = 'main/methods/Stack.Push/source'`), "pointer receiver, generic")
+		assert.Equal(t, 1, count(t, `SELECT COUNT(*) FROM nodes WHERE id = 'main/methods/Stack.Len/source'`), "value receiver, generic")
+		assert.Equal(t, 1, count(t, `SELECT COUNT(*) FROM nodes WHERE id = 'main/methods/Pair.Swap/source'`), "two type parameters")
+		assert.Zero(t, count(t, `SELECT COUNT(*) FROM nodes WHERE id LIKE 'main/methods/%[%'`),
+			"type arguments leaked into a receiver name")
+	})
+
 	// A method's call to a package function is a node_refs row on the
 	// method's source node — the cross-ref dead_code needs to see that keyOf
 	// is alive even though only a method calls it.

@@ -1,4 +1,4 @@
-## nodes (79 rows)
+## nodes (89 rows)
 _project_files		_project_files	1	0		NULL		NULL	
 _project_files/README.md	_project_files	README.md	0	78		"Golden-projection corpus; documented in testdata/golden/projection/README.md.\n"	$FIXTURE/README.md	NULL	
 _project_files/go.mod	_project_files	go.mod	0	23		"module golden\n\ngo 1.22\n"	$FIXTURE/go.mod	NULL	
@@ -31,7 +31,17 @@ main/imports/"golden%2Fstore"/source	main/imports/"golden%2Fstore"	source	0	14		
 main/imports/"os"	main/imports	"os"	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/import_declaration/import_spec_list/import_spec_1","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:5:5","pkg":"main"}
 main/imports/"os"/source	main/imports/"os"	source	0	4		"\"os\""	$FIXTURE/main.go	NULL	
 main/methods	main	methods	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/methods/Pair.Swap	main/methods	Pair.Swap	1	0		NULL		"type Stack[T any] struct{ items []T }\n\ntype Pair[K comparable, V any] struct {\n\tk K\n\tv V\n}\n\n"	{"ast_scope_id":"generics.go/method_declaration_2","ast_source_id":"generics.go","imports":{},"lang":"go","location":"generics.go:22:22","pkg":"main"}
+main/methods/Pair.Swap/source	main/methods/Pair.Swap	source	0	51		"func (p *Pair[K, V]) Swap() { p.k, p.v = p.k, p.v }"	$FIXTURE/generics.go	NULL	
+main/methods/Stack.Len	main/methods	Stack.Len	1	0		NULL		"type Stack[T any] struct{ items []T }\n\ntype Pair[K comparable, V any] struct {\n\tk K\n\tv V\n}\n\n"	{"ast_scope_id":"generics.go/method_declaration_1","ast_source_id":"generics.go","imports":{},"lang":"go","location":"generics.go:13:13","pkg":"main"}
+main/methods/Stack.Len/source	main/methods/Stack.Len	source	0	51		"func (s Stack[T]) Len() int { return len(s.items) }"	$FIXTURE/generics.go	NULL	
+main/methods/Stack.Push	main/methods	Stack.Push	1	0		NULL		"type Stack[T any] struct{ items []T }\n\ntype Pair[K comparable, V any] struct {\n\tk K\n\tv V\n}\n\n"	{"ast_scope_id":"generics.go/method_declaration_0","ast_source_id":"generics.go","imports":{},"lang":"go","location":"generics.go:11:11","pkg":"main"}
+main/methods/Stack.Push/source	main/methods/Stack.Push	source	0	61		"func (s *Stack[T]) Push(v T) { s.items = append(s.items, v) }"	$FIXTURE/generics.go	NULL	
 main/types	main	types	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
+main/types/Pair	main/types	Pair	1	0		NULL		"type Stack[T any] struct{ items []T }\n\ntype Pair[K comparable, V any] struct {\n\tk K\n\tv V\n}\n\n"	{"ast_scope_id":"generics.go/type_declaration_1/type_spec","ast_source_id":"generics.go","imports":{},"lang":"go","location":"generics.go:17:20","pkg":"main"}
+main/types/Pair/source	main/types/Pair	source	0	46		"Pair[K comparable, V any] struct {\n\tk K\n\tv V\n}"	$FIXTURE/generics.go	NULL	
+main/types/Stack	main/types	Stack	1	0		NULL		"type Stack[T any] struct{ items []T }\n\ntype Pair[K comparable, V any] struct {\n\tk K\n\tv V\n}\n\n"	{"ast_scope_id":"generics.go/type_declaration_0/type_spec","ast_source_id":"generics.go","imports":{},"lang":"go","location":"generics.go:9:9","pkg":"main"}
+main/types/Stack/source	main/types/Stack	source	0	32		"Stack[T any] struct{ items []T }"	$FIXTURE/generics.go	NULL	
 main/variables	main	variables	1	0		NULL		NULL	{"imports":{},"lang":"go","pkg":"main"}
 main/variables/cfg	main/variables	cfg	1	0		NULL		"import (\n\t\"fmt\"\n\t\"os\"\n\n\t\"golden/store\"\n)\n\nvar cfg = store.Config{Limit: 2}\n\n"	{"ast_scope_id":"main.go/var_declaration/var_spec","ast_source_id":"main.go","imports":{"fmt":"fmt","os":"os","store":"golden/store"},"lang":"go","location":"main.go:11:11","pkg":"main"}
 main/variables/cfg/source	main/variables/cfg	source	0	28		"cfg = store.Config{Limit: 2}"	$FIXTURE/main.go	NULL	
@@ -78,7 +88,7 @@ store/variables/ErrFull	store/variables	ErrFull	1	0		NULL		"import \"errors\"\n\
 store/variables/ErrFull/source	store/variables/ErrFull	source	0	35		"ErrFull = errors.New(\"store: full\")"	$FIXTURE/store/store.go	NULL	
 store/variables/registry	store/variables	registry	1	0		NULL		"import (\n\t\"sort\"\n\t\"strings\"\n)\n\nvar registry map[string]*Store\n\n"	{"ast_scope_id":"store/index.go/var_declaration/var_spec","ast_source_id":"store/index.go","imports":{"sort":"sort","strings":"strings"},"lang":"go","location":"store/index.go:9:9","pkg":"store"}
 store/variables/registry/source	store/variables/registry	source	0	26		"registry map[string]*Store"	$FIXTURE/store/index.go	NULL	
-## node_refs (105 rows)
+## node_refs (113 rows)
 Add	_file_level:$FIXTURE/main.go
 Add	main/functions/main/source
 Config	main/variables/cfg/source
@@ -87,6 +97,7 @@ Config	store/functions/init/source
 Exit	_file_level:$FIXTURE/main.go
 Exit	main/functions/main/source
 Item	store/methods/Store.Add/source
+K	main/types/Pair/source
 Len	_file_level:$FIXTURE/main.go
 Len	main/functions/main/source
 New	_file_level:$FIXTURE/main.go
@@ -105,13 +116,17 @@ Store	store/methods/Store.Index/source
 Store	store/methods/Store.Len/source
 Strings	_file_level:$FIXTURE/store/index.go
 Strings	store/methods/Store.Index/source
+T	main/methods/Stack.Push/source
 ToLower	_file_level:$FIXTURE/store/index.go
 ToLower	store/functions/keyOf/source
 TrimSpace	_file_level:$FIXTURE/store/index.go
 TrimSpace	store/functions/keyOf/source
+V	main/types/Pair/source
 Version	_file_level:$FIXTURE/main.go
+append	_file_level:$FIXTURE/generics.go
 append	_file_level:$FIXTURE/store/index.go
 append	_file_level:$FIXTURE/store/store.go
+append	main/methods/Stack.Push/source
 append	store/methods/Store.Add/source
 append	store/methods/Store.Index/source
 defaultName	_file_level:$FIXTURE/tool.go
@@ -168,8 +183,10 @@ int	store/types/Store/source
 keyOf	_file_level:$FIXTURE/store/store.go
 keyOf	store/methods/Store.Add/source
 keys	_file_level:$FIXTURE/store/index.go
+len	_file_level:$FIXTURE/generics.go
 len	_file_level:$FIXTURE/store/index.go
 len	_file_level:$FIXTURE/store/store.go
+len	main/methods/Stack.Len/source
 len	store/methods/Store.Add/source
 len	store/methods/Store.Index/source
 len	store/methods/Store.Len/source
@@ -184,7 +201,8 @@ string	store/functions/keyOf/source
 string	store/methods/Store.Add/source
 string	store/types/Adder/source
 string	store/types/Item/source
-## node_defs (63 rows)
+v	_file_level:$FIXTURE/generics.go
+## node_defs (76 rows)
 "errors"	store/imports/"errors"
 "fmt"	main/imports/"fmt"
 "fmt"	main/imports/"fmt".from_tool_go
@@ -198,12 +216,20 @@ Config	store/types/Config
 ErrFull	store/variables/ErrFull
 Index	store/methods/Store.Index
 Item	store/types/Item
+Len	main/methods/Stack.Len
 Len	store/methods/Store.Len
 New	store/functions/New
+Pair	main/types/Pair
+Pair.Swap	main/methods/Pair.Swap
+Push	main/methods/Stack.Push
+Stack	main/types/Stack
+Stack.Len	main/methods/Stack.Len
+Stack.Push	main/methods/Stack.Push
 Store	store/types/Store
 Store.Add	store/methods/Store.Add
 Store.Index	store/methods/Store.Index
 Store.Len	store/methods/Store.Len
+Swap	main/methods/Pair.Swap
 Version	main/constants/Version
 cfg	main/variables/cfg
 defaultName	main/variables/defaultName
@@ -219,6 +245,11 @@ main."fmt"	main/imports/"fmt"
 main."fmt"	main/imports/"fmt".from_tool_go
 main."golden/store"	main/imports/"golden%2Fstore"
 main."os"	main/imports/"os"
+main.Pair	main/types/Pair
+main.Pair.Swap	main/methods/Pair.Swap
+main.Stack	main/types/Stack
+main.Stack.Len	main/methods/Stack.Len
+main.Stack.Push	main/methods/Stack.Push
 main.Version	main/constants/Version
 main.cfg	main/variables/cfg
 main.defaultName	main/variables/defaultName
@@ -248,13 +279,15 @@ store.init	store/functions/init.from_store_go
 store.keyOf	store/functions/keyOf
 store.maxItems	store/constants/maxItems
 store.registry	store/variables/registry
-## file_index (5 rows)
+## file_index (6 rows)
+$FIXTURE/generics.go	810
 $FIXTURE/main.go	317
 $FIXTURE/store/index.go	626
 $FIXTURE/store/store.go	1076
 $FIXTURE/tool.go	361
 $FIXTURE/tool/main.go	196
-## _index_coverage (5 rows)
+## _index_coverage (6 rows)
+$FIXTURE/generics.go	tree-sitter	mention	1
 $FIXTURE/main.go	tree-sitter	mention	1
 $FIXTURE/store/index.go	tree-sitter	mention	1
 $FIXTURE/store/store.go	tree-sitter	mention	1
