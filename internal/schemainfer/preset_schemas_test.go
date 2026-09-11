@@ -123,10 +123,12 @@ func TestPresetNames(t *testing.T) {
 // costs more than reading most whole files.
 //
 // It bought nothing, either: every method body inside those blocks is already
-// captured individually under `functions/`, so the blob was a second, coarser
+// captured individually under `methods/`, so the blob was a second, coarser
 // copy of content the projection already had.
 //
 // The node stays as an index of which types have impls; only the body goes.
+// There is one child per receiver shape (mache-c777ef) and the rule holds for
+// each: an index entry, never a body.
 func TestRustPreset_ImplementationsIsAnIndexNotABlob(t *testing.T) {
 	topo, err := LoadPresetSchema("rust")
 	require.NoError(t, err)
@@ -139,13 +141,14 @@ func TestRustPreset_ImplementationsIsAnIndexNotABlob(t *testing.T) {
 		}
 	}
 	require.NotNil(t, impl, "the rust preset must still expose an implementations index")
-	require.Len(t, impl.Children, 1)
+	require.NotEmpty(t, impl.Children)
 
-	child := impl.Children[0]
-	assert.Empty(t, child.Files,
-		"implementations/<Type> must not carry a source file: its selector matches the whole "+
-			"impl_item, so {{.scope}} is the entire block (95KB across 43 nodes on ley-line's rs/), "+
-			"duplicating method bodies already captured per-construct under functions/")
-	assert.Contains(t, child.Selector, "impl_item",
-		"the index itself must survive — this test is about the body, not the node")
+	for _, child := range impl.Children {
+		assert.Empty(t, child.Files,
+			"implementations/<Type> (%s) must not carry a source file: its selector matches the whole "+
+				"impl_item, so {{.scope}} is the entire block (95KB across 43 nodes on ley-line's rs/), "+
+				"duplicating method bodies already captured per-construct under methods/", child.Selector)
+		assert.Contains(t, child.Selector, "impl_item",
+			"the index itself must survive — this test is about the body, not the node")
+	}
 }

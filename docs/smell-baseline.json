@@ -130,18 +130,6 @@
     },
     {
       "rule_id": "duplicate_code",
-      "source_id": "graph/memstore_refs.go",
-      "node_hash": "46f2403c69c9de2af6f74cae551334eec62aa15df1365e56fab9e321e74952e0",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "graph/memstore_refs.go",
-      "node_hash": "ee4f85a37cc04468423b528bb0098eb9982d383f4e3e6037cdfbd96c87d57a5c",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
       "source_id": "graph/shared_test.go",
       "node_hash": "19c5c579ef162e2df82abdca4473e11d520cdccc58e12e883319abfdf6ce466c",
       "count": 1
@@ -354,18 +342,6 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/ingest/ast_walker.go",
       "node_hash": "8391d804d6088462f5c5935a571c100169503b8cf1d7bfc022cb4e13e61a68ea",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/ast_walker_bench_test.go",
-      "node_hash": "59c91c2349f4ddf252cc8ab049beffc0ef127fbbf9b297a48b8d83847a1705d9",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/ingest/ast_walker_bench_test.go",
-      "node_hash": "efb00c026800feeeea4a8525867c4487bf4ab8d6b1b55b667974b3a271b36a71",
       "count": 1
     },
     {
@@ -870,18 +846,6 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/leyline/trigger_test.go",
       "node_hash": "c4fceec08b7f30920688f630d9bd6e127712392fe470036c3394c92b992e433b",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/leylinegraph/call_extractor_ast_test.go",
-      "node_hash": "1de11520930e944bab6c0ed5a898bafb37c8159367588d3f0a4a30f1c2a2d7ae",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/leylinegraph/call_extractor_ast_test.go",
-      "node_hash": "bb6184ecceb31a65b0a1af18f7595a06bedb5d474ef9951642e6783ef20a16bd",
       "count": 1
     },
     {
@@ -2086,30 +2050,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/daemonguard/daemonguard.go",
-      "node_hash": "bed96556794cc0350743e9409dad420c335ff433c6bb158e4a4ea3865c5ab882",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/ingest/ast_walker_callees_e2e_test.go",
-      "node_hash": "a193148b63e5b7e52c0f5ad9136f87204729740b2b74fcd2efb9b11e0d30db4a",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/ingest/ast_walker_calls_test.go",
-      "node_hash": "b928587340c55a85e39b4aa555059503e88d9616064ea0d37c5c0c9e12b34603",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/ingest/ast_walker_calls_test.go",
-      "node_hash": "fc5332f96ee5aa439fa9eab3c2066fd96a4c10cc35d6dafb1ed27da72215a169",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "internal/ingest/interfaces.go",
       "node_hash": "c3b025cbf8ab6151fa19b13919b291be8d51bdbb76658657a86a4411c4e0f443",
       "count": 1
@@ -2357,12 +2297,6 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/smells/serve_find_smells_test.go",
-      "node_hash": "ca881141cc6af7a1c8218073ff298e1afaa5193e7b09ec9a824ca33351887eb8",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/smells/serve_find_smells_test.go",
       "node_hash": "e842c5f569f14327205ee17291c15d1a4da809827b51b0fd1555db72ffb588e3",
       "count": 1
     },
@@ -2394,12 +2328,6 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/testfixtures/registry.go",
       "node_hash": "bcf49daa83e24b1ad144198908e166d220acfd9750e538ea8d4ca85f0020efc5",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/testutil/testdata/preset_fixtures/bash/build.sh",
-      "node_hash": "8eb85cec23a7ca368fb26176279dd600eb61ac130f84bb064a763c8071ca8496",
       "count": 1
     },
     {
@@ -2460,12 +2388,6 @@
       "rule_id": "duplicate_definitions",
       "source_id": "resolve/resolver.go",
       "node_hash": "3a189f799e19baad69ed672c7be7b2a88b8ada1c72b8b7fc65888882f48f77c6",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "scripts/arena.sh",
-      "node_hash": "98c8e9bd6961bfd434147bd520f96e029bf4501d5e8f7f8a0837722c117b8e12",
       "count": 1
     },
     {
@@ -2686,12 +2608,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/engine.go",
-      "node_hash": "812e36775509d1b7e5bf9a1665e5d4740f14757a06904d486b56c11f983b5bdd",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_ingest.go",
       "node_hash": "7a9416ba9eaba79249404fce39303899d49b8ea04ae0a4fd30dfdbb3b6412e52",
       "count": 1
@@ -2704,18 +2620,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/engine_treesitter.go",
-      "node_hash": "ad8f1d2f1c167ad9348509cfc4a6e02baa8895559bc6a04f6ba703fe6217074c",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/engine_treesitter.go",
-      "node_hash": "f19f313b668730523fe6464579d93e6a89cc966837a5630994d507f2a71e5bc0",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
       "node_hash": "9246131536ba1eb09d5fcf898e29deb2af2026bbe5c8e5b7829eb8f9918ace74",
       "count": 1
@@ -2723,7 +2627,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "c5fd7a9428c9a4f0508d88c9c739e37bb8c301061f02dd0ae5578ca139e02035",
+      "node_hash": "97d53d77010827d427cceaf37ec279bb08b6ef6a948d9673557cc33eacf59db6",
       "count": 1
     },
     {
@@ -2760,12 +2664,6 @@
       "rule_id": "fan_out_skew",
       "source_id": "internal/leylinegraph/leyline.go",
       "node_hash": "5d4322bf06fa5eb297df63e6a5c010a40da52ca8e95e0d37cdea89b1fbb5ea29",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/lltest/project.go",
-      "node_hash": "efa78a4cad1ac0a973d12b921d394520dd007c52e5a77fd45b49ef3ccaabbb23",
       "count": 1
     },
     {
@@ -3174,44 +3072,8 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "internal/ingest/ast_walker.go",
-      "node_hash": "93e47d063405a62ffbff353fe012abe535d8a22bf24cb332c6927affa8fb38cc",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/ingest/ast_walker_calls.go",
-      "node_hash": "928d8fde26adfc657571cde04575a7d0ca8e043aa057df5270f98e5ac83aac14",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/ingest/ast_walker_selector.go",
-      "node_hash": "0aed7a3fa396ecc0daee7de143d0b24475f2745a583d0d3e13535cfd52882f72",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/ingest/ast_walker_test.go",
-      "node_hash": "4cde04af136a6f28cd9517446ed023c9dc10cd8f287fd51e9d1c879f02f637b9",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/ingest/ast_walker_test.go",
-      "node_hash": "a109b1c321585cf399ffb7f1babfdbfd843e4233e4d177ab42f50a5ac127f491",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "internal/ingest/callees_noast_e2e_test.go",
       "node_hash": "0d4ed96b8c2d80b7c01d5f7d0570f839a873e68514e674fa1596f4f88626949d",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/ingest/engine.go",
-      "node_hash": "812e36775509d1b7e5bf9a1665e5d4740f14757a06904d486b56c11f983b5bdd",
       "count": 1
     },
     {
@@ -3246,18 +3108,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "internal/ingest/engine_treesitter.go",
-      "node_hash": "ad8f1d2f1c167ad9348509cfc4a6e02baa8895559bc6a04f6ba703fe6217074c",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/ingest/engine_treesitter.go",
-      "node_hash": "f19f313b668730523fe6464579d93e6a89cc966837a5630994d507f2a71e5bc0",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
       "node_hash": "9246131536ba1eb09d5fcf898e29deb2af2026bbe5c8e5b7829eb8f9918ace74",
       "count": 1
@@ -3265,19 +3115,13 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "c5fd7a9428c9a4f0508d88c9c739e37bb8c301061f02dd0ae5578ca139e02035",
+      "node_hash": "97d53d77010827d427cceaf37ec279bb08b6ef6a948d9673557cc33eacf59db6",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/git.go",
       "node_hash": "4670e6f63a95a4e178b3bcdce558f4dccae073ebe47a2273ac5e7989350ca42e",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/ingest/sqlite_writer.go",
-      "node_hash": "645e500bb4b1c24bb5ba66ded902987f0e34d1677da6c34d66b00198c6f3b9f9",
       "count": 1
     },
     {

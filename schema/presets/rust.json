@@ -51,7 +51,123 @@
       "children": [
         {
           "name": "{{.name}}",
-          "selector": "(function_item name: (identifier) @name) @scope",
+          "selector": "(source_file (function_item name: (identifier) @name) @scope)",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(mod_item body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(block (function_item name: (identifier) @name) @scope)",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "methods",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(impl_item type: (type_identifier) @receiver body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(impl_item type: (_ type: (type_identifier) @receiver) body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(impl_item type: (_ name: (type_identifier) @receiver) body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(impl_item type: (_ type: (_ type: (type_identifier) @receiver)) body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(impl_item type: (_ type: (_ name: (type_identifier) @receiver)) body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(impl_item type: (_ type: (_ type: (_ name: (type_identifier) @receiver))) body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(impl_item type: (_) @receiver body: (declaration_list (function_item name: (identifier) @name) @scope))",
+          "include": ["lsp"],
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.receiver}}.{{.name}}",
+          "selector": "(trait_item name: (type_identifier) @receiver body: (declaration_list (function_item name: (identifier) @name) @scope))",
           "include": ["lsp"],
           "files": [
             {
@@ -120,6 +236,36 @@
         {
           "name": "{{.name}}",
           "selector": "(impl_item type: (type_identifier) @name) @scope",
+          "include": ["lsp"]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(impl_item type: (_ type: (type_identifier) @name)) @scope",
+          "include": ["lsp"]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(impl_item type: (_ name: (type_identifier) @name)) @scope",
+          "include": ["lsp"]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(impl_item type: (_ type: (_ type: (type_identifier) @name))) @scope",
+          "include": ["lsp"]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(impl_item type: (_ type: (_ name: (type_identifier) @name))) @scope",
+          "include": ["lsp"]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(impl_item type: (_ type: (_ type: (_ name: (type_identifier) @name)))) @scope",
+          "include": ["lsp"]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(impl_item type: (_) @name) @scope",
           "include": ["lsp"]
         }
       ]

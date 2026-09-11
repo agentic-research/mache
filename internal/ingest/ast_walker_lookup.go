@@ -41,26 +41,39 @@ func (idx *fileIndex) childrenByKind(parentID string, leaf pathStep, ancestry []
 }
 
 // descendantsByKind returns up to limit (0 = all) descendants of parentID
-// matching leaf whose path up to parentID reads ancestry — kinds and fields
-// both, so `receiver: (parameter_list ...)` reaches the receiver's list and
-// never the parameters' (mache-91d903). Candidates are the file's nodes of
-// the leaf kind under parentID's id prefix, in start_byte order; each is
-// verified by climbing.
+// matching leaf whose path down from parentID reads ancestry — kinds and
+// fields both, so `receiver: (parameter_list ...)` reaches the receiver's
+// list and never the parameters' (mache-91d903). It walks DOWN the children
+// adjacency one step at a time: the frontier after each step is the nodes it
+// matched, in start_byte order, so the result is in document order and a
+// wildcard step (`(_)`) costs the same as a named one — there is no
+// per-kind candidate list to consult (mache-c777ef).
 func (idx *fileIndex) descendantsByKind(parentID string, leaf pathStep, ancestry []pathStep, limit int) []astNode {
-	prefix := parentID + "/"
+	frontier := []string{parentID}
+	for _, step := range ancestry {
+		var next []string
+		for _, p := range frontier {
+			for _, ci := range idx.children[p] {
+				if step.matches(idx.all[ci]) {
+					next = append(next, idx.all[ci].id)
+				}
+			}
+		}
+		if len(next) == 0 {
+			return nil
+		}
+		frontier = next
+	}
 	var out []astNode
-	for _, i := range idx.byKind[leaf.kind] {
-		n := idx.all[i]
-		if !strings.HasPrefix(n.id, prefix) || !leaf.matches(n) {
-			continue
-		}
-		top, ok := idx.climb(i, ancestry)
-		if !ok || idx.all[top].parentID != parentID {
-			continue
-		}
-		out = append(out, n.toAST())
-		if limit > 0 && len(out) == limit {
-			break
+	for _, p := range frontier {
+		for _, ci := range idx.children[p] {
+			if !leaf.matches(idx.all[ci]) {
+				continue
+			}
+			out = append(out, idx.all[ci].toAST())
+			if limit > 0 && len(out) == limit {
+				return out
+			}
 		}
 	}
 	return out
@@ -95,20 +108,19 @@ type scopeUnit struct {
 // single outer node expands to one unit PER inner scope node reached by
 // scopePath — so grouped declarations like `type ( Alpha; Beta )` project
 // each member, matching tree-sitter's one-match-per-inner-node semantics —
-// falling back to the outer node when none resolves, which preserves the
-// single-node behavior for odd shapes.
+// and to NONE when no inner node resolves: the pattern did not match. (It
+// used to fall back to the outer node, which turned `(mod_item body:
+// (declaration_list (function_item ...) @scope))` on a function-less module
+// into a match whose captures resolved against the module itself —
+// mache-c777ef.)
 func (idx *fileIndex) scopeUnits(outer []astNode, scopePath []pathStep) []scopeUnit {
 	units := make([]scopeUnit, 0, len(outer))
 	for _, o := range outer {
-		var inners []astNode
-		if len(scopePath) > 0 {
-			inners = idx.childrenByKind(o.id, scopePath[len(scopePath)-1], scopePath[:len(scopePath)-1])
-		}
-		if len(inners) == 0 {
+		if len(scopePath) == 0 {
 			units = append(units, scopeUnit{outerID: o.id, scope: o})
 			continue
 		}
-		for _, in := range inners {
+		for _, in := range idx.childrenByKind(o.id, scopePath[len(scopePath)-1], scopePath[:len(scopePath)-1]) {
 			units = append(units, scopeUnit{outerID: o.id, scope: in})
 		}
 	}

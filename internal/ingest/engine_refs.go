@@ -42,6 +42,23 @@ type bufferingTarget struct {
 	// a construct dir reports zero children until ReplaceFileNodes runs, which
 	// is the whole window ingest operates in.
 	bufferedChildren map[string][]string
+	// claimedScopes holds the (parentPath, scope node id) pairs a schema node
+	// has already projected in this file, for processNode's ordered choice
+	// between sibling schema nodes (scopeClaimer).
+	claimedScopes map[[2]string]struct{}
+}
+
+// claimScope implements scopeClaimer.
+func (b *bufferingTarget) claimScope(parentPath, scopeID string) bool {
+	key := [2]string{parentPath, scopeID}
+	if _, taken := b.claimedScopes[key]; taken {
+		return false
+	}
+	if b.claimedScopes == nil {
+		b.claimedScopes = make(map[[2]string]struct{})
+	}
+	b.claimedScopes[key] = struct{}{}
+	return true
 }
 
 // ListChildren unions the underlying store's answer with the file nodes this

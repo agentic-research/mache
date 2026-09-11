@@ -86,6 +86,33 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Rust methods are receiver-qualified; `functions/` holds free functions
+  only** (`mache-c777ef`). The rust preset selected every `function_item` in a
+  file as `functions/<name>`, so `fn new` in twenty impls collapsed into one
+  node plus `.from_<file>` suffixes, and an `impl` block's methods were only
+  reachable through the block. Impl and trait methods now project as
+  `methods/<Receiver>.<name>` with the method's own body — `Cell.new` for
+  `impl<T> Cell<T>`, `Point.new` for `impl geometry::Point`, `Grid.into_iter`
+  for `impl IntoIterator for &'a Grid`, `[u8].hash32` for an un-nameable
+  receiver — and `functions/` holds free, module-level and nested functions
+  only. `implementations/` stays an index by receiver, now with no generic
+  arguments in its names. On ley-line-open's rs/ (320 files) that is 77
+  distinct `methods/*.new` against 77 `fn new` in the parse (1 before); on the
+  `medium-rust-rosary` corpus every one of 2538 `function_item` nodes is
+  projected exactly once (1881 functions + 657 methods), which
+  `TestRustPreset_EveryFunctionItemProjectedOnce` now pins.
+
+  Two engine changes carry it. Selectors accept tree-sitter's `(_)` wildcard
+  step (`(impl_item type: (_ type: (type_identifier) @receiver))` reaches a
+  receiver through whatever wraps it), and an inner-`@scope` selector whose
+  scope path reaches nothing is no longer a match — it used to fall back to
+  the outer node, projecting a function-less module as `functions/<mod>`.
+  Sibling schema nodes are now an ordered choice per construct: the first to
+  match a scope node under a parent owns it, so a preset can list receiver
+  shapes most-specific-first with a `(_)` catch-all that never re-projects
+  what the specific shapes named. No shipped preset had overlapping siblings
+  before, so no other projection changes (the golden gate agrees).
+
 - **`duplicate_definitions` judges one population** (`mache-117c0a`). The rule
   counted a token's copies over every definition in the db but only reported
   the non-vendored, non-generated ones, so a vendored corpus that happened to
