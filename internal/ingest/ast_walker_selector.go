@@ -32,16 +32,23 @@ type selectorPattern struct {
 // the field it must sit under in its parent. An empty field is a wildcard —
 // `(parameter_list (parameter_declaration ...))` accepts a parameter_declaration
 // under any field, which is tree-sitter's own semantics for an unlabelled
-// child pattern.
+// child pattern. So is the kind wildcardKind: `(impl_item type: (_ type:
+// (type_identifier) @receiver))` reaches the receiver's type_identifier
+// through whatever wraps it — generic_type, reference_type, pointer_type —
+// which is tree-sitter's `(_)`, any named node.
 type pathStep struct {
 	kind  string
 	field string
 }
 
-// matches reports whether n is this step: its kind, and its field when the
-// step names one.
+// wildcardKind is tree-sitter's `_`: a step that matches a node of any kind.
+// Only named nodes are indexed, so `(_)` and bare `_` are the same here.
+const wildcardKind = "_"
+
+// matches reports whether n is this step: its kind (any, for the wildcard),
+// and its field when the step names one.
 func (p pathStep) matches(n idxNode) bool {
-	return n.astKind == p.kind && (p.field == "" || n.field == p.field)
+	return (p.kind == wildcardKind || n.astKind == p.kind) && (p.field == "" || n.field == p.field)
 }
 
 type selectorCapture struct {
@@ -144,6 +151,11 @@ func parseSelector(selector string) (*selectorPattern, error) {
 
 	if pattern.outerKind == "" {
 		return nil, fmt.Errorf("no node kind in selector: %s", selector)
+	}
+	// The outer node is looked up by kind across the file; a wildcard there
+	// would be every node.
+	if pattern.outerKind == wildcardKind {
+		return nil, fmt.Errorf("outer node of selector cannot be the wildcard (_): %s", selector)
 	}
 
 	return pattern, nil

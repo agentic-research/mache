@@ -267,6 +267,14 @@ func listChildrenTolerant(store IngestionTarget, id string) ([]string, error) {
 	return kids, nil
 }
 
+// scopeClaimer arbitrates sibling schema nodes that match the same construct:
+// claimScope reports whether the scope node scopeID under parentPath is still
+// unclaimed, claiming it. The per-file bufferingTarget implements it; the
+// JSON path's stores do not, and JSON matches carry no scope id anyway.
+type scopeClaimer interface {
+	claimScope(parentPath, scopeID string) bool
+}
+
 // processNode is the schema-driven recursion that walks a single Match through
 // the topology, mutating the store as it goes. Counterpart to collectNodes,
 // which is the pure (store-free) variant for parallel SQLite ingest.
@@ -295,6 +303,24 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 						parentRoot.ParentPrefix == childCtx.ParentPrefix { // coverage:ignore
 						continue // coverage:ignore
 					}
+				}
+			}
+		}
+
+		// Sibling schema nodes are an ORDERED CHOICE over the constructs
+		// they match: the first sibling (in schema order) to match a scope
+		// node under a parent owns it, and later siblings skip it. That is
+		// what lets a preset spell one construct as a list of shapes, most
+		// specific first — `impl Foo`, `impl Foo<T>`, `impl &Foo`, then a
+		// `(_)` catch-all — without the catch-all re-projecting every
+		// method the specific shapes already named (mache-c777ef). `$`
+		// containers are excluded: every one of them is the same scope by
+		// construction. The claim is per file (it lives on the file's
+		// bufferingTarget), so re-ingesting a file starts clean.
+		if schema.Selector != "$" {
+			if as, ok := match.(ASTScope); ok && as.ASTScopeID() != "" {
+				if sc, ok := store.(scopeClaimer); ok && !sc.claimScope(parentPath, as.ASTScopeID()) {
+					continue
 				}
 			}
 		}
