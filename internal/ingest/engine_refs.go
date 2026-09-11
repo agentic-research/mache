@@ -94,13 +94,22 @@ func (b *bufferingTarget) ListChildren(id string) ([]string, error) {
 
 // noteBuffered records a buffered node's parent so ListChildren can find it.
 func (b *bufferingTarget) noteBuffered(parentID, childID string) {
-	if parentID == "" {
-		return
+	b.bufferedChildren = appendUnderKey(b.bufferedChildren, parentID, childID)
+}
+
+// appendUnderKey appends value under key, creating the map if it is nil, and
+// returns it. An empty key is ignored: both callers index by something that
+// can legitimately be absent (a root node has no parent, a node projected
+// outside a source file has no file), and neither wants an "" bucket.
+func appendUnderKey(m map[string][]string, key, value string) map[string][]string {
+	if key == "" {
+		return m
 	}
-	if b.bufferedChildren == nil {
-		b.bufferedChildren = make(map[string][]string)
+	if m == nil {
+		m = make(map[string][]string)
 	}
-	b.bufferedChildren[parentID] = append(b.bufferedChildren[parentID], childID)
+	m[key] = append(m[key], value)
+	return m
 }
 
 func (b *bufferingTarget) AddNode(n *graph.Node) {
@@ -114,6 +123,13 @@ func (b *bufferingTarget) AddNode(n *graph.Node) {
 	if i := strings.LastIndex(n.ID, "/"); i > 0 {
 		b.noteBuffered(n.ID[:i], n.ID)
 	}
+}
+
+// DeleteNodes passes through: the buffer holds only this file's leaf nodes,
+// and the IDs being deleted are construct directories, which were written
+// straight to the real store.
+func (b *bufferingTarget) DeleteNodes(ids []string) {
+	b.IngestionTarget.DeleteNodes(ids)
 }
 
 func (b *bufferingTarget) AddDef(token, dirID string) error {

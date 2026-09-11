@@ -2542,12 +2542,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "graph/memstore_write.go",
-      "node_hash": "f1b5ef00878929c5470a265a7f88b7b559308e330ad8b43dfe1702baaaac5711",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "graph/sqlite_graph.go",
       "node_hash": "205ad20b4c353e0dd6d5e36118467b390c5f47963b15f5b9ccc0d5529ff577df",
       "count": 1
@@ -2621,7 +2615,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "15e6d23eb0ccf610b9d1df7707258ca495987fb56d748711a34a73f1fcee338d",
+      "node_hash": "52027b4fd2ad9805d3c5c1a0f930c7fef1333fe4c81d60fb75c80cdf668be00f",
       "count": 1
     },
     {
@@ -2958,12 +2952,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "graph/memstore_write.go",
-      "node_hash": "f1b5ef00878929c5470a265a7f88b7b559308e330ad8b43dfe1702baaaac5711",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "graph/quotient.go",
       "node_hash": "4851956721e3b7d25374fb7a2466dbf51c2f5d3754ad5762165606d7353fb2d7",
       "count": 1
@@ -3109,7 +3097,7 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "15e6d23eb0ccf610b9d1df7707258ca495987fb56d748711a34a73f1fcee338d",
+      "node_hash": "52027b4fd2ad9805d3c5c1a0f930c7fef1333fe4c81d60fb75c80cdf668be00f",
       "count": 1
     },
     {

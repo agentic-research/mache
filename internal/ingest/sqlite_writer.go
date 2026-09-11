@@ -567,6 +567,14 @@ var deleteFileNodesSQL = [...]string{
 	`DELETE FROM nodes WHERE source_file = ?`,
 }
 
+// deleteNodesSQL is the by-id counterpart of deleteFileNodesSQL, in the same
+// order: a node's refs and defs before the node itself.
+var deleteNodesSQL = [...]string{
+	`DELETE FROM node_refs WHERE node_id = ?`,
+	`DELETE FROM node_defs WHERE node_id = ?`,
+	`DELETE FROM nodes WHERE id = ?`,
+}
+
 // DeleteFileNodes removes every node that originated from filePath, with its
 // refs and defs. Every statement is index-driven (idx_source_file on the
 // subquery, idx_refs_node / idx_defs_node on the outer delete), so the cost
@@ -577,6 +585,29 @@ func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 
 	for _, q := range deleteFileNodesSQL {
 		_, _ = w.tx.Exec(q, filePath)
+	}
+}
+
+// DeleteNodes removes the named nodes with their refs and defs, whatever file
+// they came from.
+//
+// DeleteFileNodes keys on source_file, which a CONSTRUCT DIRECTORY does not
+// carry — only its source leaf does — so it cannot reach one (mache-399c25).
+// One statement per id rather than a generated IN-list: the caller passes the
+// construct IDs of a single re-ingested file, so the count is small and bounded
+// by that file's constructs, and a fixed statement keeps the query plan stable
+// the way deleteFileNodesSQL does.
+func (w *SQLiteWriter) DeleteNodes(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	for _, id := range ids {
+		for _, q := range deleteNodesSQL {
+			_, _ = w.tx.Exec(q, id)
+		}
 	}
 }
 

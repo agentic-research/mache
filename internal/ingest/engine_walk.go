@@ -93,7 +93,13 @@ func idToPath(id string) string {
 // no files — a package or category directory matched once per record — is
 // SUPPOSED to collapse so its children merge under one parent; suffixing those
 // would shatter every directory in the projection.
-func (e *Engine) claimConstructID(id, parentPath, name, sourceFile string) string {
+// Claims are filed under the source file that made them. Only constructs reach
+// here — claimConstructID runs just for schema nodes carrying Files — so a `$`
+// container, shared by every file in its scope, is never recorded and never
+// released. That distinction is what lets ReIngestFile drop one file's
+// constructs without taking the container and the other files' constructs with
+// them (mache-399c25).
+func (e *Engine) claimConstructID(id, parentPath, name, sourceFile, absSourceFile string) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -102,6 +108,7 @@ func (e *Engine) claimConstructID(id, parentPath, name, sourceFile string) strin
 	}
 	if _, taken := e.claimedIDs[id]; !taken {
 		e.claimedIDs[id] = 1
+		e.claimsByFile = appendUnderKey(e.claimsByFile, absSourceFile, id)
 		return id
 	}
 
@@ -110,6 +117,7 @@ func (e *Engine) claimConstructID(id, parentPath, name, sourceFile string) strin
 		suffixed := toNodeID(joinSegment(parentPath, name+dedupSuffix(sourceFile)))
 		if _, taken := e.claimedIDs[suffixed]; !taken {
 			e.claimedIDs[suffixed] = 1
+			e.claimsByFile = appendUnderKey(e.claimsByFile, absSourceFile, suffixed)
 			log.Printf("[WARN] duplicate construct name %q under %q — emitting %q; "+
 				"the schema's name template is not unique for this language (mache-c777ef)",
 				name, parentPath, suffixed)
@@ -124,12 +132,43 @@ func (e *Engine) claimConstructID(id, parentPath, name, sourceFile string) strin
 		numbered := fmt.Sprintf("%s.%d", candidate, n)
 		if _, taken := e.claimedIDs[numbered]; !taken {
 			e.claimedIDs[numbered] = 1
+			e.claimsByFile = appendUnderKey(e.claimsByFile, absSourceFile, numbered)
 			log.Printf("[WARN] duplicate construct name %q under %q in %s — emitting %q; "+
 				"same-file collision, so the name carries no distinguishing information "+
 				"(mache-c777ef)", name, parentPath, sourceFile, numbered)
 			return numbered
 		}
 	}
+}
+
+// releaseFileClaims gives up every construct ID absSourceFile claimed and
+// returns them, so the caller can delete the nodes before the file is
+// projected again.
+//
+// Without this a re-ingested file finds its OWN previous IDs taken and
+// suffixes around them: `alpha` became `alpha.from_lib_rs`, then
+// `alpha.from_lib_rs.2`, and a function renamed to `beta` was still projected
+// under the name `alpha` had (mache-399c25).
+func (e *Engine) releaseFileClaims(absSourceFile string) []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	claimed := e.claimsByFile[absSourceFile]
+	if len(claimed) == 0 {
+		return nil
+	}
+	for _, id := range claimed {
+		delete(e.claimedIDs, id)
+		// childSeen caches "this child is already in its parent's Children".
+		// Deleting the node drops it from the parent, so leaving the cache
+		// entry behind means the re-projected construct is never re-linked
+		// and its container ends up empty. The claim and the parent link are
+		// one piece of bookkeeping; they are released together.
+		if i := strings.LastIndex(id, "/"); i > 0 {
+			delete(e.childSeen[id[:i]], id)
+		}
+	}
+	delete(e.claimsByFile, absSourceFile)
+	return claimed
 }
 
 // processRecord is a pure function — parses one SQLite record through the schema
@@ -383,7 +422,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		// following the e.childSeen precedent below — collision detection must
 		// not depend on which backend is being written to.
 		if len(schema.Files) > 0 {
-			if claimed := e.claimConstructID(id, parentPath, name, sourceFile); claimed != id {
+			if claimed := e.claimConstructID(id, parentPath, name, sourceFile, absSourceFile); claimed != id {
 				id = claimed
 				currentPath = idToPath(claimed)
 			}
