@@ -4,12 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/agentic-research/mache/api"
 	internalingest "github.com/agentic-research/mache/internal/ingest"
-	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	publicschema "github.com/agentic-research/mache/schema"
 
 	_ "modernc.org/sqlite"
@@ -40,7 +39,13 @@ func parseWithSchema(source, output string, topology *api.Topology, extraLanguag
 		return fmt.Errorf("build with schema: topology is nil")
 	}
 
-	parsedDB, cleanup, err := parseToTemp(source)
+	// One parse implementation, not two. This used to be a local parseToTemp
+	// that was a near-verbatim copy of AutoInvokeLeylineParse: same
+	// os.CreateTemp("", "mache-leyline-*.db"), same -wal/-shm cleanup, same
+	// `leyline parse -o` shell-out. The copy is why the persistent parse cache
+	// did nothing for `mache build --schema` — the shared function grew the
+	// cache and this path never called it (mache-80a851).
+	parsedDB, cleanup, err := leylinegraph.AutoInvokeLeylineParse(source)
 	if err != nil {
 		return err
 	}
@@ -100,34 +105,4 @@ func projectTopology(db *sql.DB, topology *api.Topology, source, output string) 
 		return fmt.Errorf("close sqlite writer: %w", err)
 	}
 	return nil
-}
-
-func parseToTemp(source string) (string, func(), error) {
-	leylineBinary, err := leyline.ResolveBinary(true)
-	if err != nil {
-		return "", nil, fmt.Errorf("resolve leyline: %w", err)
-	}
-	leyline.RecordResolved(leylineBinary, "resolved")
-
-	tmpFile, err := os.CreateTemp("", "mache-leyline-*.db")
-	if err != nil {
-		return "", nil, fmt.Errorf("create temp .db: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", nil, fmt.Errorf("close temp .db: %w", err)
-	}
-	cleanup := func() {
-		_ = os.Remove(tmpPath)
-		_ = os.Remove(tmpPath + "-wal")
-		_ = os.Remove(tmpPath + "-shm")
-	}
-
-	command := exec.Command(leylineBinary, "parse", source, "-o", tmpPath)
-	if output, err := command.CombinedOutput(); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("leyline parse: %w\n%s", err, output)
-	}
-	return tmpPath, cleanup, nil
 }
