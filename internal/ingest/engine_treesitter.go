@@ -41,10 +41,18 @@ func (e *Engine) ingestSourceTree(rootPath string) error {
 			return err // coverage:ignore
 		} // coverage:ignore
 		// Skip unchanged files when an index is available.
-		if entry, ok := e.fileIndex[realPath]; ok { // coverage:ignore
-			if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() { // coverage:ignore
-				return nil // unchanged, skip re-projecting // coverage:ignore
-			} // coverage:ignore
+		//
+		// A skipped file's nodes stay in the output db, so its construct IDs
+		// are still TAKEN even though nothing re-claims them this pass. Seed
+		// them before returning, or a changed file rendering the same
+		// construct name takes the bare ID the skipped file holds and
+		// overwrites it — `fns/shared` silently becoming b.rs's function
+		// while a.rs still believes it owns it (mache-7a7919).
+		if entry, ok := e.fileIndex[realPath]; ok {
+			if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() {
+				e.retainClaims(realPath, entry.ClaimedIDs)
+				return nil // unchanged, skip re-projecting
+			}
 		}
 		results = append(results, parsedSourceFile{
 			job:      sourceFileJob{path: p, langName: langName, modTime: info.ModTime()},

@@ -102,6 +102,25 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **An incremental re-index can no longer overwrite a skipped file's construct**
+  (`mache-7a7919`). `claimConstructID` starts from an empty map on every
+  `Ingest`, so a file the incremental pass SKIPPED had no claims represented,
+  and a changed file rendering the same construct name took the bare ID the
+  skipped file still owned in the output db. Two files both declaring `shared`
+  projected as `fns/shared` and `fns/shared.from_b_rs` on a full build; on an
+  incremental pass that skipped the first, the second claimed `fns/shared` —
+  and merged into the existing index db that write REPLACED the first file's
+  function with the second's body, leaving `fns/shared.from_b_rs` pointing at
+  content that was no longer anywhere. After editing one file,
+  `find_definition` on the other's function returned the wrong body.
+  `cmd/mount.go` is the only production caller of the file-index skip and it
+  merges into the existing db, so it had this. `LoadFileIndex` now recovers
+  each file's claimed IDs from the previous projection — a construct directory
+  carries no `source_file`, so the owner is recovered through its leaf's parent
+  — and a skipped file's claims are seeded before anything projects. This is
+  the prerequisite for wiring the skip into build and serve (`mache-e7d9d0`),
+  which is where the remaining warm-path cost is.
+
 - **Rebuilds reuse the parse instead of redoing it** (`mache-80a851`). leyline
   re-parses an unchanged tree in 35 ms against 16.6 s cold, by diffing the tree
   against what its output db already holds. mache never got that path: it
