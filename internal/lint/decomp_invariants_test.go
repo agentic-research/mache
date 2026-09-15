@@ -22,12 +22,17 @@ const module = "github.com/agentic-research/mache"
 // dependencies among the eight (the declared DAG). Any new edge fails here
 // until this table is deliberately amended in review.
 var decompPackages = map[string][]string{
-	"internal/testutil":     {},
-	"internal/projcfg":      {},
-	"internal/mountmeta":    {},
-	"internal/smells":       {"internal/projcfg"},
-	"internal/schemainfer":  {"internal/leylinegraph"},
-	"internal/leylinegraph": {},
+	"internal/testutil":    {},
+	"internal/projcfg":     {},
+	"internal/mountmeta":   {},
+	"internal/smells":      {"internal/projcfg"},
+	"internal/schemainfer": {"internal/leylinegraph", "internal/projcfg"},
+	// leylinegraph keeps the persistent parse cache under ~/.mache, resolved
+	// through projcfg's home seam so it inherits the test-hermeticity guard —
+	// the same deliberate edge daemonguard has, for the same reason
+	// (mache-80a851 / mache-3e78d2). schemainfer carries it transitively
+	// through the leylinegraph edge above.
+	"internal/leylinegraph": {"internal/projcfg"},
 	"internal/buildcache":   {"internal/projcfg"},
 	// daemonguard keeps per-machine daemon state under ~/.mache, resolved
 	// through projcfg's home seam so it inherits the test-hermeticity guard

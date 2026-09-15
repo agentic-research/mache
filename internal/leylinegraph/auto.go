@@ -37,6 +37,25 @@ func AutoInvokeLeylineParse(sourceDir string) (string, func(), error) {
 	// is unknowable (mache-438104).
 	leyline.RecordResolved(leylineBin, "resolved")
 
+	// Prefer the persistent per-project db: pointed at the SAME path as last
+	// time, leyline re-parses only what changed. Pointed at a fresh temp file
+	// it has nothing to diff and re-parses everything (mache-80a851). A nil
+	// entry means the cache is unavailable — no home dir, another process
+	// holds the lock, under `go test` — and the temp path below is then
+	// exactly what mache did unconditionally before.
+	if entry := reserveParseCache(sourceDir); entry != nil {
+		log.Printf("auto-leyline: parsing %s -> %s (persistent; unchanged files are skipped)",
+			sourceDir, entry.path)
+		if err := runLeylineParse(leylineBin, sourceDir, entry.path); err != nil {
+			// A failed parse may have left the db half-written, and it would
+			// be the input to every later run. Drop it so the next run starts
+			// clean rather than inheriting the damage.
+			entry.discard()
+			return "", nil, err
+		}
+		return entry.path, entry.release, nil
+	}
+
 	tmpFile, err := os.CreateTemp("", "mache-leyline-*.db")
 	if err != nil {
 		return "", nil, fmt.Errorf("create temp .db: %w", err)
@@ -51,14 +70,22 @@ func AutoInvokeLeylineParse(sourceDir string) (string, func(), error) {
 	}
 
 	log.Printf("auto-leyline: parsing %s -> %s", sourceDir, tmpPath)
-	cmd := exec.Command(leylineBin, "parse", sourceDir, "-o", tmpPath)
+	if err := runLeylineParse(leylineBin, sourceDir, tmpPath); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return tmpPath, cleanup, nil
+}
+
+// runLeylineParse shells out to `leyline parse <sourceDir> -o <dbPath>`.
+func runLeylineParse(leylineBin, sourceDir, dbPath string) error {
+	cmd := exec.Command(leylineBin, "parse", sourceDir, "-o", dbPath)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("leyline parse: %w", err)
+		return fmt.Errorf("leyline parse: %w", err)
 	}
-	return tmpPath, cleanup, nil
+	return nil
 }
 
 // AttachLeylineASTWalker parses dataSource with ley-line into a temporary

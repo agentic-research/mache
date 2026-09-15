@@ -37,29 +37,33 @@ wall_ms_advisory = 30000
 # a memory figure without its machine class, core count, parser version
 # and corpus is not a measurement, it is an anecdote.
 [[measurement]]
-date = "2026-09-11"
+date = "2026-09-15"
 machine_class = "apple-m3-max-32gb"
 gomaxprocs = 4
 schema = "go"
 leyline_version = "v0.19.1"
 corpus = "mache-self"
-corpus_sha = "e419f4e4dd1ca8de01f2a027b07c2a84e5119f7e"
-files = 1011
-corpus_bytes = 13900000
-wall_ms = 33500
-peak_rss_bytes = 3560000000
+corpus_sha = "e3da154"
+files = 1019
+corpus_bytes = 14000000
+wall_ms = 36200
+peak_rss_bytes = 3620000000
 leyline_db_bytes = 1870000000
-projection_db_bytes = 79000000
+projection_db_bytes = 79200000
+warm_wall_ms = 13200
+warm_peak_rss_bytes = 1030000000
 note = """
-First recorded run (mache-2de6c0). RED on peak RSS (1.8x the budget) and on
-the leyline db (3.7x); the projection db is inside budget at 79 MB. Both
-failures are the parse half, which is what mache-3688da (projection-v5
-integer node keys) is for — ~68% of the leyline db is the path-string
-node_id repeated across six b-trees.
+First run with a persistent parse cache (mache-80a851). The COLD numbers are
+unchanged in kind — a first init on a fresh machine still writes the whole
+1.87 GB parse db and still blows the memory budget, which is mache-3688da's
+to fix.
 
-Four runs on this machine within one hour, same corpus: wall spread 33.5-70.0 s
-(2.1x) while peak RSS spread 3.56-3.84 GB (8%) and the db sizes moved only
-with the corpus. That spread is the evidence for gating on bytes and leaving
-wall advisory — an honest tolerance band on the timing number would have to be
-wider than the regressions it is meant to catch.
+What changed is the WARM path, which is what a rebuild or a daemon restart
+actually costs: 13.2 s against 36.2 s, and 1.03 GB peak against 3.62 GB.
+The warm peak is INSIDE the 2.0 GB envelope. The memory blowup is the
+1.87 GB SQLite insert, and on an unchanged tree that insert does not run at
+all — leyline reports `0 parsed, 967 unchanged` in 35 ms.
+
+Warm is reported, never gated. The budget is about whether a FIRST init fits
+the machine, and that question is unchanged.
 """

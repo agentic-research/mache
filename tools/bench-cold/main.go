@@ -38,6 +38,7 @@ import (
 
 	"github.com/agentic-research/mache/internal/benchrun"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/projcfg"
 )
 
@@ -64,6 +65,8 @@ type report struct {
 	BuildWallMs       int64    `json:"build_wall_ms"`
 	BuildPeakRSSBytes int64    `json:"build_peak_rss_bytes"`
 	ProjectionDBBytes int64    `json:"projection_db_bytes"`
+	WarmWallMs        int64    `json:"warm_wall_ms"`
+	WarmPeakRSSBytes  int64    `json:"warm_peak_rss_bytes"`
 	PeakRSSBytes      int64    `json:"peak_rss_bytes"`
 	Violations        []string `json:"violations"`
 }
@@ -179,10 +182,23 @@ func resolveCorpus(root, work string, o options) (corpusInfo, error) {
 // second one re-runs the parse internally: `mache build`'s wall INCLUDES the
 // first phase and the two are not additive. Peak RSS is the MAX of the two,
 // not the sum, because they are sequential.
-func measureColdPath(root, work string, c corpusInfo, o options) (report, benchrun.Observed, error) {
+// runPlan is what a bench run decided to execute, separated from executing it:
+// which binaries, which schema, what environment, where output goes.
+type runPlan struct {
+	leylineBin string
+	macheBin   string
+	schema     string
+	version    string
+	env        []string
+	out        io.Writer
+}
+
+// preparePlan resolves everything a run needs before anything is measured, so
+// a failure to find a binary or detect a schema is not reported as a slow run.
+func preparePlan(root, work string, c corpusInfo, o options) (runPlan, error) {
 	leylineBin, err := leyline.ResolveBinary(false)
 	if err != nil {
-		return report{}, benchrun.Observed{}, fmt.Errorf("pinned leyline unavailable (%v); run `task leyline:ensure` first — "+
+		return runPlan{}, fmt.Errorf("pinned leyline unavailable (%v); run `task leyline:ensure` first — "+
 			"a cold-path number measured with a different parser is not comparable to the committed one", err)
 	}
 	leyline.RecordResolved(leylineBin, "resolved")
@@ -190,25 +206,53 @@ func measureColdPath(root, work string, c corpusInfo, o options) (report, benchr
 
 	schema, err := resolveSchema(c.dir, o.schema)
 	if err != nil {
-		return report{}, benchrun.Observed{}, err
+		return runPlan{}, err
 	}
 	macheBin, err := resolveMacheBinary(root, o.mache)
 	if err != nil {
-		return report{}, benchrun.Observed{}, err
+		return runPlan{}, err
 	}
 
 	out := io.Writer(os.Stderr)
 	if o.quiet {
 		out = io.Discard
 	}
-	// GOMAXPROCS caps mache's Go parallelism. leyline is a separate binary and
-	// its thread pool is NOT capped by this — the number below is the envelope
-	// mache honours, not a simulated 4-core machine. Simulating one needs a
-	// cgroup (Linux) or a VM; it is not something an env var can claim.
-	env := []string{fmt.Sprintf("GOMAXPROCS=%d", o.gomaxprocs)}
+	return runPlan{
+		leylineBin: leylineBin,
+		macheBin:   macheBin,
+		schema:     schema,
+		version:    prov.Version,
+		env:        planEnv(work, o),
+		out:        out,
+	}, nil
+}
+
+// planEnv is the environment the measured commands run under.
+//
+// GOMAXPROCS caps mache's Go parallelism. leyline is a separate binary and its
+// thread pool is NOT capped by it — this is the envelope mache honours, not a
+// simulated 4-core machine. Simulating one needs a cgroup (Linux) or a VM; it
+// is not something an env var can claim.
+//
+// The parse cache is pointed at this run's work dir for two load-bearing
+// reasons: the COLD arm has to be genuinely cold, which it would not be if it
+// inherited the developer's warm ~/.mache/parse; and the WARM arm has to find
+// what the cold arm just wrote (mache-80a851).
+func planEnv(work string, o options) []string {
+	return []string{
+		fmt.Sprintf("GOMAXPROCS=%d", o.gomaxprocs),
+		leylinegraph.ParseCacheDirEnv + "=" + filepath.Join(work, "parse-cache"),
+	}
+}
+
+func measureColdPath(root, work string, c corpusInfo, o options) (report, benchrun.Observed, error) {
+	plan, err := preparePlan(root, work, c, o)
+	if err != nil {
+		return report{}, benchrun.Observed{}, err
+	}
 
 	leylineDB := filepath.Join(work, "leyline.db")
-	parse, err := benchrun.Run(out, env, leylineBin, "parse", c.dir, "-o", leylineDB)
+	parse, err := benchrun.Run(plan.out, plan.env, plan.leylineBin, "parse", c.dir, "-o", leylineDB)
 	if err != nil {
 		return report{}, benchrun.Observed{}, err
 	}
@@ -217,12 +261,7 @@ func measureColdPath(root, work string, c corpusInfo, o options) (report, benchr
 		return report{}, benchrun.Observed{}, err
 	}
 
-	projectionDB := filepath.Join(work, "projection.db")
-	build, err := benchrun.Run(out, env, macheBin, "build", "--schema", schema, c.dir, projectionDB)
-	if err != nil {
-		return report{}, benchrun.Observed{}, err
-	}
-	projectionBytes, err := benchrun.FileBytes(projectionDB)
+	build, warm, projectionBytes, err := measureBuilds(plan, c.dir, work)
 	if err != nil {
 		return report{}, benchrun.Observed{}, err
 	}
@@ -233,9 +272,10 @@ func measureColdPath(root, work string, c corpusInfo, o options) (report, benchr
 	}
 	r := report{
 		CorpusSHA: c.sha, Corpus: c.name, Files: c.files, CorpusBytes: c.bytes,
-		GOMAXPROCS: o.gomaxprocs, Schema: schema, LeylineVersion: prov.Version,
+		GOMAXPROCS: o.gomaxprocs, Schema: plan.schema, LeylineVersion: plan.version,
 		ParseWallMs: parse.Wall.Milliseconds(), ParsePeakRSSBytes: parse.PeakRSS, LeylineDBBytes: leylineBytes,
 		BuildWallMs: build.Wall.Milliseconds(), BuildPeakRSSBytes: build.PeakRSS, ProjectionDBBytes: projectionBytes,
+		WarmWallMs: warm.Wall.Milliseconds(), WarmPeakRSSBytes: warm.PeakRSS,
 		PeakRSSBytes: peak,
 	}
 	return r, benchrun.Observed{
@@ -277,6 +317,28 @@ func resolveMacheBinary(root, path string) (string, error) {
 	return path, nil
 }
 
+// measureBuilds runs `mache build` twice and returns the cold run, the warm
+// run, and the artifact size.
+//
+// The second run is the number a user actually lives with: the cold one
+// happens once per machine, the warm one on every rebuild and every daemon
+// restart. It is reported, never gated — the committed budget is about whether
+// a FIRST init fits the machine (mache-80a851).
+func measureBuilds(plan runPlan, corpusDir, work string) (
+	cold, warm benchrun.Measurement, projectionBytes int64, err error,
+) {
+	projectionDB := filepath.Join(work, "projection.db")
+	args := []string{"build", "--schema", plan.schema, corpusDir, projectionDB}
+	if cold, err = benchrun.Run(plan.out, plan.env, plan.macheBin, args...); err != nil {
+		return cold, warm, projectionBytes, err
+	}
+	if projectionBytes, err = benchrun.FileBytes(projectionDB); err != nil {
+		return cold, warm, projectionBytes, err
+	}
+	warm, err = benchrun.Run(plan.out, plan.env, plan.macheBin, args...)
+	return cold, warm, projectionBytes, err
+}
+
 func printTable(r report, budget benchrun.Budget, o benchrun.Observed) {
 	w := os.Stdout
 	_, _ = fmt.Fprintf(w, "\ncold path — %s @ %s, %d files / %s, schema %s, GOMAXPROCS=%d, leyline %s\n\n",
@@ -286,7 +348,10 @@ func printTable(r report, budget benchrun.Budget, o benchrun.Observed) {
 		roundSec(r.ParseWallMs), benchrun.HumanBytes(r.ParsePeakRSSBytes), benchrun.HumanBytes(r.LeylineDBBytes))
 	_, _ = fmt.Fprintf(w, "  %-16s %10s %12s %12s\n", "mache build",
 		roundSec(r.BuildWallMs), benchrun.HumanBytes(r.BuildPeakRSSBytes), benchrun.HumanBytes(r.ProjectionDBBytes))
-	_, _ = fmt.Fprintf(w, "\n  mache build re-runs the parse: its wall includes the row above, they are not additive.\n\n")
+	_, _ = fmt.Fprintf(w, "  %-16s %10s %12s %12s\n", "mache build (warm)",
+		roundSec(r.WarmWallMs), benchrun.HumanBytes(r.WarmPeakRSSBytes), "-")
+	_, _ = fmt.Fprintf(w, "\n  mache build re-runs the parse: its wall includes the row above, they are not additive.\n")
+	_, _ = fmt.Fprintf(w, "  warm is the same build with nothing changed — what a rebuild or daemon restart costs.\n\n")
 
 	_, _ = fmt.Fprintf(w, "  %-16s %12s %12s   %s\n", "metric", "measured", "budget", "verdict")
 	line := func(name string, got, limit int64) {
@@ -309,9 +374,11 @@ func printTable(r report, budget benchrun.Budget, o benchrun.Observed) {
 	_, _ = fmt.Fprintf(w, "  record this run by replacing the [[measurement]] block in cold-budget.toml:\n\n")
 	_, _ = fmt.Fprintf(w, "[[measurement]]\ndate = %q\nmachine_class = \"<fill in>\"\ngomaxprocs = %d\n"+
 		"schema = %q\nleyline_version = %q\ncorpus = %q\ncorpus_sha = %q\nfiles = %d\nwall_ms = %d\n"+
-		"peak_rss_bytes = %d\nleyline_db_bytes = %d\nprojection_db_bytes = %d\nnote = \"<what changed>\"\n\n",
+		"peak_rss_bytes = %d\nleyline_db_bytes = %d\nprojection_db_bytes = %d\n"+
+		"warm_wall_ms = %d\nwarm_peak_rss_bytes = %d\nnote = \"<what changed>\"\n\n",
 		time.Now().Format("2006-01-02"), r.GOMAXPROCS, r.Schema, r.LeylineVersion, r.Corpus, r.CorpusSHA,
-		r.Files, r.BuildWallMs, r.PeakRSSBytes, r.LeylineDBBytes, r.ProjectionDBBytes)
+		r.Files, r.BuildWallMs, r.PeakRSSBytes, r.LeylineDBBytes, r.ProjectionDBBytes,
+		r.WarmWallMs, r.WarmPeakRSSBytes)
 }
 
 func roundSec(ms int64) string { return fmt.Sprintf("%.1f s", float64(ms)/1000) }

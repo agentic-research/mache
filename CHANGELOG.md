@@ -102,6 +102,27 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Rebuilds reuse the parse instead of redoing it** (`mache-80a851`). leyline
+  re-parses an unchanged tree in 35 ms against 16.6 s cold, by diffing the tree
+  against what its output db already holds. mache never got that path: it
+  parsed into a fresh `os.CreateTemp` file on every invocation and deleted it
+  afterwards, so leyline had nothing to diff and re-parsed everything, every
+  time — every `mache build` and every `mache serve` start was a full cold
+  rebuild by construction. The parse db is now persistent, keyed by resolved
+  source root AND pinned leyline version, under `~/.mache/parse`. On mache
+  itself a rebuild of an unchanged tree drops from 36.2 s to 13.2 s and from
+  3.62 GB peak to 1.03 GB, which is inside the cold-path memory envelope —
+  the blowup is the 1.87 GB SQLite insert, and on an unchanged tree it does
+  not run. A second process on the same project fails the lock and takes the
+  old private-temp path, so it is never worse than before. `task bench:cold`
+  gains a warm arm reporting both.
+
+  This also removed a second parse implementation: `build/schema.go` had its
+  own `parseToTemp`, a near-verbatim copy of `AutoInvokeLeylineParse` down to
+  the temp-file pattern and the `-wal`/`-shm` cleanup. It was why the cache
+  did nothing for `mache build --schema` at first — the shared function grew
+  the cache and the copy never called it.
+
 - **C# records are projected, positional parameters included** (`mache-daacc3`).
   `record` has been a first-class C# type declaration since C# 9 and is
   idiomatic for DTOs and value types, but the preset had no container for it. A
