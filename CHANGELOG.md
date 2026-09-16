@@ -102,6 +102,20 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **An incremental re-index reaps a deleted file's constructs** (`mache-31abc0`).
+  An incremental pass walks the files that are PRESENT, so a deleted file was
+  never visited and nothing removed what it had projected. The graph kept
+  serving a function that was no longer in the source, `find_definition`
+  returned a construct for deleted code, and `dead_code` and
+  `duplicate_definitions` kept counting it. `cmd/mount.go` is the only
+  production caller of the file-index skip, so it had this. Any path the index
+  knows and the walk did not see is now removed: the leaves by path, the
+  construct DIRECTORIES by ID — they carry no `source_file`, so nothing can
+  reach them by path — and the `file_index` row too, or the path stays "known"
+  and every later build repeats the decision. A surviving file keeps the ID it
+  already has; the reap is not an excuse to re-derive the assignment, because
+  renaming would break every reference an agent already holds.
+
 - **An incremental re-index can no longer overwrite a skipped file's construct**
   (`mache-7a7919`). `claimConstructID` starts from an empty map on every
   `Ingest`, so a file the incremental pass SKIPPED had no claims represented,

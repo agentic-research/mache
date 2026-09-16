@@ -28,6 +28,10 @@ type IngestionTarget interface {
 	// DIRECTORY carries no file association — only its source leaf does — so
 	// DeleteFileNodes can never reach one (mache-399c25).
 	DeleteNodes(ids []string)
+	// ForgetFile drops a path from whatever index records "this build
+	// projected this file", so a deleted file stops being treated as
+	// unchanged (mache-31abc0).
+	ForgetFile(path string)
 	AddFileChildren(parent *graph.Node, files []*graph.Node)
 }
 

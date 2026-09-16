@@ -49,3 +49,13 @@ func (s *MemoryStore) IsFileStale(filePath string) bool {
 	}
 	return !info.ModTime().Equal(tracked)
 }
+
+// ForgetFile drops path's tracked mtime, so a later incremental pass does not
+// treat a file that is gone as merely unchanged. The counterpart of
+// RecordFileMtime; the nodes themselves come out through DeleteFileNodes and
+// DeleteNodes (mache-31abc0).
+func (s *MemoryStore) ForgetFile(filePath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.fileMtimes, filePath)
+}
