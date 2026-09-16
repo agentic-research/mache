@@ -141,6 +141,34 @@ func (e *Engine) claimConstructID(id, parentPath, name, sourceFile, absSourceFil
 	}
 }
 
+// retainClaims marks a skipped file's construct IDs as still owned.
+//
+// The counterpart of releaseFileClaims: that one hands IDs back when a file is
+// re-projected, this one holds them when a file is NOT. Both exist because
+// claimedIDs is per-Ingest state and an incremental pass is the case where
+// last run's claims are still load-bearing — the skipped file's nodes are
+// still in the output db (mache-7a7919).
+//
+// Recorded per file for the same reason releaseFileClaims is: a later
+// ReIngestFile of this exact file must be able to give these back.
+func (e *Engine) retainClaims(absSourceFile string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.claimedIDs == nil {
+		e.claimedIDs = make(map[string]int)
+	}
+	for _, id := range ids {
+		if _, taken := e.claimedIDs[id]; taken {
+			continue
+		}
+		e.claimedIDs[id] = 1
+		e.claimsByFile = appendUnderKey(e.claimsByFile, absSourceFile, id)
+	}
+}
+
 // releaseFileClaims gives up every construct ID absSourceFile claimed and
 // returns them, so the caller can delete the nodes before the file is
 // projected again.

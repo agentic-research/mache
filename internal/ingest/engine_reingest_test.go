@@ -11,9 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// reingestSchema is the smallest schema with the shape that matters: a shared
-// `$` container holding one construct per function, each with a source leaf.
-func reingestSchema() *api.Topology {
+// fnPerConstructSchema is the smallest schema with the shape that matters: a
+// shared `$` container holding one construct per function, each with a source
+// leaf. Shared by the re-ingest and incremental tests, which both need two
+// files able to render the same construct name.
+func fnPerConstructSchema() *api.Topology {
 	return &api.Topology{Version: "1", Nodes: []api.Node{{
 		Name:     "fns",
 		Selector: "$",
@@ -34,7 +36,7 @@ func reingestEngine(t *testing.T, files map[string]string) (*graph.MemoryStore, 
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
 	}
 	store := graph.NewMemoryStore()
-	engine := NewEngine(reingestSchema(), store)
+	engine := NewEngine(fnPerConstructSchema(), store)
 	attachLeylineAST(t, engine, dir)
 	require.NoError(t, engine.Ingest(dir))
 	return store, engine, dir

@@ -304,13 +304,73 @@ func LoadFileIndex(dbPath string) (map[string]FileIndexEntry, error) {
 			Size:    size,
 		}
 	}
-	return index, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := loadClaimedIDs(db, index); err != nil {
+		return nil, err
+	}
+	return index, nil
+}
+
+// loadClaimedIDs fills in each entry's ClaimedIDs from the projection the
+// previous build wrote.
+//
+// A construct DIRECTORY carries no source_file — only its leaf files do — so
+// the owning file is recovered through the leaf: a leaf's parent IS the
+// construct that claimed the ID. Reading it back beats recording it in
+// file_index because it needs no schema change and cannot drift from the
+// nodes actually present.
+func loadClaimedIDs(db *sql.DB, index map[string]FileIndexEntry) error {
+	// A db can carry a file_index and no projection — LoadFileIndex's own
+	// callers build such a thing. No nodes means no claims to recover, which
+	// leaves every entry's ClaimedIDs empty and degrades to the assignment a
+	// full build makes. Checked the same way the file_index table above is.
+	var name string
+	switch err := db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&name); {
+	case err == sql.ErrNoRows:
+		return nil
+	case err != nil:
+		return err
+	}
+
+	rows, err := db.Query(`SELECT DISTINCT source_file, parent_id FROM nodes
+		WHERE source_file IS NOT NULL AND source_file != ''
+		  AND parent_id IS NOT NULL AND parent_id != ''
+		ORDER BY source_file, parent_id`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var sourceFile, parentID string
+		if err := rows.Scan(&sourceFile, &parentID); err != nil {
+			return err
+		}
+		entry, ok := index[sourceFile]
+		if !ok {
+			continue
+		}
+		entry.ClaimedIDs = append(entry.ClaimedIDs, parentID)
+		index[sourceFile] = entry
+	}
+	return rows.Err()
 }
 
 // FileIndexEntry stores cached file metadata for incremental comparison.
 type FileIndexEntry struct {
 	ModTime time.Time
 	Size    int64
+	// ClaimedIDs are the construct node IDs this file owned in the previous
+	// build. An incremental pass SKIPS an unchanged file, so nothing
+	// re-claims its IDs — and claimConstructID starts from an empty map on
+	// every Ingest, so a CHANGED file rendering the same construct name would
+	// take the bare ID the skipped file still holds, overwriting it
+	// (mache-7a7919). Seeding from here is what keeps the assignment the
+	// same as a full ingest's.
+	ClaimedIDs []string
 }
 
 // CanonicalViewsDDL is the SQL that creates v_defs / v_refs.
