@@ -657,6 +657,16 @@ func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 // construct IDs of a single re-ingested file, so the count is small and bounded
 // by that file's constructs, and a fixed statement keeps the query plan stable
 // the way deleteFileNodesSQL does.
+// ForgetFile drops path's file_index row, so a later build does not treat a
+// file that is gone as merely unchanged. Without it the path stays "known"
+// forever and every subsequent build repeats the same decision about it
+// (mache-31abc0).
+func (w *SQLiteWriter) ForgetFile(path string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, _ = w.tx.Exec(`DELETE FROM file_index WHERE path = ?`, path)
+}
+
 func (w *SQLiteWriter) DeleteNodes(ids []string) {
 	if len(ids) == 0 {
 		return

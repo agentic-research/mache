@@ -132,6 +132,12 @@ func (b *bufferingTarget) DeleteNodes(ids []string) {
 	b.IngestionTarget.DeleteNodes(ids)
 }
 
+// ForgetFile passes through: the buffer holds this file's leaf nodes, not the
+// index of which files were projected.
+func (b *bufferingTarget) ForgetFile(path string) {
+	b.IngestionTarget.ForgetFile(path)
+}
+
 func (b *bufferingTarget) AddDef(token, dirID string) error {
 	return b.IngestionTarget.AddDef(token, dirID)
 }

@@ -23,14 +23,27 @@ import (
 // a vestige of the in-process tree-sitter era, when the bytes were the parser's
 // input. After ADR-0012 nothing consumed them, yet the whole corpus sat in the
 // results slice for the length of the projection (mache-95a33d).
-func (e *Engine) ingestSourceTree(rootPath string) error {
-	var results []parsedSourceFile
-	var rawFiles []rawFile
-	walkErr := e.walkProjectFiles(rootPath, func(p string, info os.FileInfo) error {
+// sourceWalk is what one pass over the tree decided: the files to project,
+// the ones to file raw, and every source path seen at all.
+type sourceWalk struct {
+	results  []parsedSourceFile
+	rawFiles []rawFile
+	// visited is every source path this walk saw, projected or skipped.
+	// Compared against the file index afterwards to find what has
+	// DISAPPEARED (reapDeleted).
+	visited map[string]struct{}
+}
+
+// planSourceWalk classifies every file under rootPath without projecting any
+// of them, so the decisions — project, file raw, skip as unchanged — are made
+// in one place and the projection loop below just executes them.
+func (e *Engine) planSourceWalk(rootPath string) (sourceWalk, error) {
+	w := sourceWalk{visited: make(map[string]struct{}, len(e.fileIndex))}
+	err := e.walkProjectFiles(rootPath, func(p string, info os.FileInfo) error {
 		langName, ok := langForExt(filepath.Ext(p))
 		if !ok {
 			if !isBinaryFile(p) {
-				rawFiles = append(rawFiles, rawFile{p, info.ModTime()})
+				w.rawFiles = append(w.rawFiles, rawFile{p, info.ModTime()})
 			}
 			return nil
 		}
@@ -40,6 +53,8 @@ func (e *Engine) ingestSourceTree(rootPath string) error {
 		if err != nil {
 			return err // coverage:ignore
 		} // coverage:ignore
+		w.visited[realPath] = struct{}{}
+
 		// Skip unchanged files when an index is available.
 		//
 		// A skipped file's nodes stay in the output db, so its construct IDs
@@ -54,15 +69,26 @@ func (e *Engine) ingestSourceTree(rootPath string) error {
 				return nil // unchanged, skip re-projecting
 			}
 		}
-		results = append(results, parsedSourceFile{
+		w.results = append(w.results, parsedSourceFile{
 			job:      sourceFileJob{path: p, langName: langName, modTime: info.ModTime()},
 			realPath: realPath,
 		})
 		return nil
 	})
+	return w, err
+}
+
+func (e *Engine) ingestSourceTree(rootPath string) error {
+	walk, walkErr := e.planSourceWalk(rootPath)
 	if walkErr != nil {
 		return walkErr // coverage:ignore
 	} // coverage:ignore
+	results, rawFiles := walk.results, walk.rawFiles
+
+	// Anything the index knows and this walk did not see is gone. Done before
+	// projecting so the reaped IDs are free for a surviving file to claim if
+	// one now renders that name.
+	e.reapDeleted(walk.visited)
 
 	// Sort by walk path. Dedup suffixes (e.g., init.from_b_go) depend on the
 	// order files are projected, and this lexical order over the full path is
@@ -293,4 +319,34 @@ func (e *Engine) ingestSourceFile(path, langName string, modTime time.Time) erro
 	}
 
 	return e.processSourceFileResult(result)
+}
+
+// reapDeleted removes the nodes of every indexed file the walk did not see.
+//
+// An incremental pass walks the files that are PRESENT, so a deleted file is
+// simply never visited and nothing removes what it projected: the graph keeps
+// serving a function that is no longer in the source, and dead_code and
+// duplicate_definitions keep counting it (mache-31abc0).
+//
+// Two deletions, because a file's nodes are reachable two different ways. The
+// leaves carry the source path and come out by path. The construct
+// DIRECTORIES carry none — only leaves do — so they come out by ID, which is
+// what LoadFileIndex recovered into ClaimedIDs (mache-7a7919 / mache-399c25).
+// The index row goes too, or the path stays "known" and every later build
+// repeats this decision.
+//
+// Only runs in incremental mode: with no file index there is nothing that
+// claims to know what the last build projected, and every present file is
+// about to be projected anyway.
+func (e *Engine) reapDeleted(visited map[string]struct{}) {
+	for path, entry := range e.fileIndex {
+		if _, seen := visited[path]; seen {
+			continue
+		}
+		log.Printf("reaping %s: indexed but no longer present", path)
+		e.Store.DeleteFileNodes(path)
+		e.Store.DeleteNodes(entry.ClaimedIDs)
+		e.Store.ForgetFile(path)
+		e.releaseFileClaims(path)
+	}
 }

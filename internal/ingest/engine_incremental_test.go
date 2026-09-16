@@ -146,3 +146,108 @@ func TestLoadFileIndex_RecoversClaimedIDs(t *testing.T) {
 			"claims for %s", path)
 	}
 }
+
+// defsFor lists the def tokens the built db holds for constructs under fns/.
+// Asserted separately from the node tree because dead_code and
+// duplicate_definitions judge node_defs, not ListChildren — a reap that left
+// these behind would still inflate every rule that counts definitions.
+func defsFor(t *testing.T, dbPath string) []string {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rows, err := db.Query(`SELECT token FROM node_defs WHERE node_id LIKE 'fns/%' ORDER BY token`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	var out []string
+	for rows.Next() {
+		var token string
+		require.NoError(t, rows.Scan(&token))
+		out = append(out, token)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+// indexedPaths is what the db believes the last build projected.
+func indexedPaths(t *testing.T, dbPath string) []string {
+	t.Helper()
+	index, err := LoadFileIndex(dbPath)
+	require.NoError(t, err)
+	return slices.Sorted(maps.Keys(index))
+}
+
+// TestIncremental_DeletedFileIsReaped pins mache-31abc0.
+//
+// An incremental pass walks the files that are PRESENT, so a deleted file is
+// never visited and nothing removed what it projected. The graph kept serving
+// a function that was no longer in the source.
+func TestIncremental_DeletedFileIsReaped(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	a := filepath.Join(dir, "a.rs")
+	b := filepath.Join(dir, "b.rs")
+	writeSource(t, a, "pub fn alpha() -> u8 { 1 }\n")
+	writeSource(t, b, "pub fn beta() -> u8 { 2 }\n")
+
+	buildInto(t, dir, dbPath, nil)
+	require.Equal(t, []string{"fns/alpha", "fns/beta"}, slices.Sorted(maps.Keys(constructs(t, dbPath))))
+	require.Equal(t, []string{"alpha", "beta"}, defsFor(t, dbPath))
+	require.Len(t, indexedPaths(t, dbPath), 2)
+
+	index, err := LoadFileIndex(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(b))
+	buildInto(t, dir, dbPath, index)
+
+	after := constructs(t, dbPath)
+	assert.Equal(t, []string{"fns/alpha"}, slices.Sorted(maps.Keys(after)),
+		"the deleted file's construct survived the re-index")
+	assert.Contains(t, after["fns/alpha"], "{ 1 }", "the surviving file's construct changed")
+	assert.Equal(t, []string{"alpha"}, defsFor(t, dbPath),
+		"node_defs still holds the deleted function; dead_code would keep counting it")
+
+	// The index row goes too, or the path stays known forever and every later
+	// build repeats the decision.
+	assert.Len(t, indexedPaths(t, dbPath), 1, "the deleted path is still in file_index")
+}
+
+// TestIncremental_DeletedFileOwnedTheBareName: the DELETED file held the bare
+// ID and the survivor holds the suffix. The survivor must keep the ID it has —
+// renaming it would break every reference an agent already holds — so the
+// reap must not be an excuse to re-derive the assignment.
+func TestIncremental_DeletedFileOwnedTheBareName(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	a := filepath.Join(dir, "a.rs")
+	b := filepath.Join(dir, "b.rs")
+	writeSource(t, a, "pub fn shared() -> u8 { 1 }\n")
+	writeSource(t, b, "pub fn shared() -> u8 { 2 }\n")
+
+	buildInto(t, dir, dbPath, nil)
+	require.Contains(t, constructs(t, dbPath)["fns/shared"], "{ 1 }", "a.rs owns the bare ID")
+
+	index, err := LoadFileIndex(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(a)) // the owner of the bare name is deleted
+	buildInto(t, dir, dbPath, index)
+
+	after := constructs(t, dbPath)
+	assert.Equal(t, []string{"fns/shared.from_b_rs"}, slices.Sorted(maps.Keys(after)),
+		"b.rs was renamed, or a.rs's construct survived")
+	assert.Contains(t, after["fns/shared.from_b_rs"], "{ 2 }")
+}
+
+// TestIncremental_FullBuildReapsNothing: with no file index there is nothing
+// claiming to know what the last build projected, so the reap must not run.
+func TestIncremental_FullBuildReapsNothing(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	writeSource(t, filepath.Join(dir, "a.rs"), "pub fn alpha() -> u8 { 1 }\n")
+
+	buildInto(t, dir, dbPath, nil)
+	buildInto(t, dir, dbPath, nil) // again, still no index
+	assert.Equal(t, []string{"fns/alpha"}, slices.Sorted(maps.Keys(constructs(t, dbPath))))
+}
