@@ -1,25 +1,13 @@
 package schemainfer
 
 import (
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/lltest"
+	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// goldenCorpus is the hand-written Go corpus the golden projection pins. It is
-// the go preset's fixture for the same reason preset_fixtures/ serves the
-// others: every construct in it exercises one projection path.
-func goldenCorpus(t *testing.T) string {
-	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	root := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
-	return filepath.Join(root, "testdata", "snapshots", "small-go-golden")
-}
 
 // TestGoPreset_GenericReceiversAreMethods pins mache-51571b: a method on a
 // generic receiver is a method.
@@ -36,7 +24,7 @@ func goldenCorpus(t *testing.T) string {
 // The receiver is the generic type's NAME, not its instantiation: Stack, not
 // Stack[T] — consistent with the rust preset's Cell.new (mache-c777ef).
 func TestGoPreset_GenericReceiversAreMethods(t *testing.T) {
-	astDB, parseDir := lltest.ParseSourceViaLeyline(t, goldenCorpus(t))
+	astDB, parseDir := lltest.ParseSourceViaLeyline(t, testutil.GoldenCorpusDir(t))
 	store := projectPreset(t, "go", astDB, parseDir)
 
 	methods := projectedNames(t, store, "main/methods")
@@ -67,7 +55,7 @@ func TestGoPreset_GenericReceiversAreMethods(t *testing.T) {
 // that no selector covers: every `method_declaration` ley-line parsed is
 // projected exactly once under some methods/ directory.
 func TestGoPreset_EveryMethodDeclarationProjectedOnce(t *testing.T) {
-	astDB, parseDir := lltest.ParseSourceViaLeyline(t, goldenCorpus(t))
+	astDB, parseDir := lltest.ParseSourceViaLeyline(t, testutil.GoldenCorpusDir(t))
 	store := projectPreset(t, "go", astDB, parseDir)
 
 	var declared int

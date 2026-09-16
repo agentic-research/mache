@@ -100,6 +100,33 @@ bumps may include breaking changes.
   `internal/sqlcount` provides the counter, calibrated by its own test against
   known statement counts.
 
+### Added
+
+- **`mache build` reuses the previous projection** (`mache-e7d9d0`). The parse
+  was already incremental (`mache-80a851`); the projection was not, so a
+  rebuild of an unchanged tree still re-projected every file. It now reuses the
+  output db when an identical build wrote it — same schema, same mache version,
+  same pinned leyline, checked against a fingerprint the build stamps — and
+  re-projects only what changed. On mache itself a rebuild drops from 21.4 s to
+  **2.35 s**, and touching one file costs 2.53 s.
+
+  The correctness bar is byte-identity: an incrementally rebuilt projection
+  must equal a cold build of the same tree, after an edit and after a delete.
+  Four things had to change to get there. Files sharing a container root are
+  re-projected together, because a container carries the context of whichever
+  file wrote it LAST and skipping a subset changes the winner. A re-projected
+  file is cleared BEFORE it projects, not at commit, because projection writes
+  through to the store as it goes and the commit-time delete keys on the same
+  ids — measured, a re-projected file kept 2 of its 24 refs. A file's previous
+  construct directories are removed using the claims recovered from the index,
+  not just this run's. And file-level refs, filed under a synthetic caller id
+  that is not a node, plus the `_index_coverage` row, are removed with the file.
+
+  **Behaviour change**: when a deleted file owned a bare construct id, the
+  surviving file now takes it, matching a cold build. `mache-31abc0` pinned the
+  opposite for reference stability. Determinism won — otherwise two people with
+  identical source get different graphs depending on their edit history.
+
 ### Fixed
 
 - **An incremental re-index reaps a deleted file's constructs** (`mache-31abc0`).

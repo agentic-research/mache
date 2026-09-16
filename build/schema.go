@@ -88,14 +88,33 @@ func requireSchemaCoverage(db *sql.DB, topology *api.Topology, source string, ex
 }
 
 func projectTopology(db *sql.DB, topology *api.Topology, source, output string) error {
-	if err := os.Remove(output); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove existing output %s: %w", output, err)
+	fingerprint, err := projectionFingerprint(topology)
+	if err != nil {
+		return err
 	}
+
+	// Reuse the previous projection when an identical build wrote it, so only
+	// the files that CHANGED are re-projected. Everything that makes that safe
+	// landed first: a skipped file's construct IDs are seeded rather than left
+	// free for a changed file to take (mache-7a7919), and a file that has since
+	// been deleted has its nodes reaped (mache-31abc0).
+	index := reusableIndex(output, fingerprint)
+	if index == nil {
+		// No reusable projection: start clean. A partial merge into a db some
+		// other build wrote is the one outcome worse than a slow build.
+		if err := os.Remove(output); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove existing output %s: %w", output, err)
+		}
+	}
+
 	writer, err := internalingest.NewSQLiteWriter(output)
 	if err != nil {
 		return fmt.Errorf("create projection output %s: %w", output, err)
 	}
 	engine := internalingest.NewEngine(topology, writer)
+	if index != nil {
+		engine.SetFileIndex(index)
+	}
 	engine.SetASTWalker(internalingest.NewASTWalker(db))
 	if err := engine.Ingest(source); err != nil {
 		_ = writer.Close()
@@ -104,5 +123,5 @@ func projectTopology(db *sql.DB, topology *api.Topology, source, output string) 
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close sqlite writer: %w", err)
 	}
-	return nil
+	return writeFingerprint(output, fingerprint)
 }

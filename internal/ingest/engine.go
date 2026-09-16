@@ -250,22 +250,7 @@ func (e *Engine) ReIngestFile(path string) error {
 	//
 	// Only constructs are released. `$` containers never claim an ID, so the
 	// shared directory every file in the package hangs under is untouched.
-	// Order matters. Everything this file had is removed BEFORE it is
-	// projected again, never after.
-	//
-	// commitFileNodes ends in ReplaceFileNodes, which deletes the file's nodes
-	// and then adds the new ones. That worked only because a re-ingested
-	// construct used to get a NEW id every time, so the delete set and the
-	// just-projected ids were disjoint. With ids now stable they are the SAME
-	// ids, and projection registers a construct's children, defs and refs on
-	// the real store as it goes (bufferingTarget buffers leaf nodes and passes
-	// everything else straight through) — so deleting at commit time would
-	// strip what projection had just written. Clearing up front leaves the
-	// commit-time delete with nothing to find.
-	e.Store.DeleteFileNodes(realPath)
-	if stale := e.releaseFileClaims(realPath); len(stale) > 0 {
-		e.Store.DeleteNodes(stale)
-	}
+	e.clearFileBeforeReprojecting(realPath, nil)
 
 	// Re-ingest the single file using the existing schema and store
 	if err := e.ingestFile(realPath, info.ModTime()); err != nil { // coverage:ignore
@@ -291,4 +276,40 @@ func (e *Engine) PrintRoutingSummary() { // coverage:ignore
 			log.Printf("  %s: %d files routed to _project_files/", lang, count) // coverage:ignore
 		} // coverage:ignore
 	} // coverage:ignore
+}
+
+// clearFileBeforeReprojecting removes everything absSourceFile left behind, so
+// the projection that follows starts from nothing.
+//
+// ORDER IS THE POINT. commitFileNodes ends in ReplaceFileNodes, which deletes
+// the file's nodes and then adds the new ones. That worked only while a
+// re-projected construct got a NEW id every time, so the delete set and the
+// just-projected ids were disjoint. With ids stable across runs they are the
+// SAME ids, and projection registers a construct's children, defs and refs on
+// the real store AS IT GOES (bufferingTarget buffers leaf nodes and passes
+// everything else straight through) — so deleting at commit time strips what
+// projection just wrote. Measured on the golden corpus: a re-projected file
+// kept 2 of its 24 refs. Clearing up front leaves the commit-time delete with
+// nothing to find.
+//
+// Shared by ReIngestFile (mache-399c25) and the incremental build path
+// (mache-e7d9d0), which hit the identical problem for the identical reason.
+// knownClaims are IDs this file owned according to a PREVIOUS build, recovered
+// from the file index. They are not in claimsByFile — nothing in this run
+// claimed them — so releaseFileClaims alone leaves the construct DIRECTORIES
+// behind as husks while their leaves are deleted, which is how a re-projected
+// file ended up with both `init` and `init.from_store_go` (mache-e7d9d0).
+// ReIngestFile passes nil: within one Ingest, claimsByFile has everything.
+func (e *Engine) clearFileBeforeReprojecting(absSourceFile string, knownClaims []string) {
+	e.Store.DeleteFileNodes(absSourceFile)
+	if stale := e.releaseFileClaims(absSourceFile); len(stale) > 0 {
+		e.Store.DeleteNodes(stale)
+	}
+	e.Store.DeleteNodes(knownClaims)
+	// File-level refs are filed under a SYNTHETIC caller id
+	// (`_file_level:<path>`, addFileLevelRefs) that is not a node, so
+	// DeleteFileNodes — which finds refs through nodes.source_file — cannot
+	// reach them. They outlive the file that produced them unless removed by
+	// that id directly (mache-e7d9d0).
+	e.Store.DeleteNodes([]string{fileLevelSentinelPrefix + absSourceFile})
 }

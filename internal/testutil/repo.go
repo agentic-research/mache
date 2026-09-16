@@ -31,3 +31,12 @@ func PresetFixturesDir(t testing.TB) string {
 	t.Helper()
 	return filepath.Join(MacheRepoRoot(t), "internal", "testutil", "testdata", "preset_fixtures")
 }
+
+// GoldenCorpusDir is the hand-written Go corpus whose projection is pinned
+// byte-for-byte by internal/testfixtures. Resolved through the one seam rather
+// than re-derived per package: two callers had each grown their own copy of
+// the same runtime.Caller walk before this existed.
+func GoldenCorpusDir(t testing.TB) string {
+	t.Helper()
+	return filepath.Join(MacheRepoRoot(t), "testdata", "snapshots", "small-go-golden")
+}
