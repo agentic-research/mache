@@ -36,9 +36,12 @@ type sourceWalk struct {
 
 // planSourceWalk classifies every file under rootPath without projecting any
 // of them, so the decisions — project, file raw, skip as unchanged — are made
-// in one place and the projection loop below just executes them.
+// in one place and the projection loop just executes them.
 func (e *Engine) planSourceWalk(rootPath string) (sourceWalk, error) {
 	w := sourceWalk{visited: make(map[string]struct{}, len(e.fileIndex))}
+	var candidates []parsedSourceFile
+	changed := make(map[string]struct{})
+
 	err := e.walkProjectFiles(rootPath, func(p string, info os.FileInfo) error {
 		langName, ok := langForExt(filepath.Ext(p))
 		if !ok {
@@ -54,28 +57,111 @@ func (e *Engine) planSourceWalk(rootPath string) (sourceWalk, error) {
 			return err // coverage:ignore
 		} // coverage:ignore
 		w.visited[realPath] = struct{}{}
-
-		// Skip unchanged files when an index is available.
-		//
-		// A skipped file's nodes stay in the output db, so its construct IDs
-		// are still TAKEN even though nothing re-claims them this pass. Seed
-		// them before returning, or a changed file rendering the same
-		// construct name takes the bare ID the skipped file holds and
-		// overwrites it — `fns/shared` silently becoming b.rs's function
-		// while a.rs still believes it owns it (mache-7a7919).
-		if entry, ok := e.fileIndex[realPath]; ok {
-			if entry.ModTime.Equal(info.ModTime()) && entry.Size == info.Size() {
-				e.retainClaims(realPath, entry.ClaimedIDs)
-				return nil // unchanged, skip re-projecting
-			}
-		}
-		w.results = append(w.results, parsedSourceFile{
+		candidates = append(candidates, parsedSourceFile{
 			job:      sourceFileJob{path: p, langName: langName, modTime: info.ModTime()},
 			realPath: realPath,
 		})
+		entry, known := e.fileIndex[realPath]
+		if !known || !entry.ModTime.Equal(info.ModTime()) || entry.Size != info.Size() {
+			changed[realPath] = struct{}{}
+		}
 		return nil
 	})
-	return w, err
+	if err != nil {
+		return w, err
+	}
+
+	// nil means "re-project everything" — a full build, where there is no
+	// previous projection to reuse.
+	reproject := e.widenToSharedRoots(changed, w.visited)
+	for _, c := range candidates {
+		if reproject == nil {
+			w.results = append(w.results, c)
+			continue
+		}
+		if _, must := reproject[c.realPath]; must {
+			w.results = append(w.results, c)
+			continue
+		}
+		// Skipped. Its nodes stay in the output db, so its construct IDs are
+		// still TAKEN even though nothing re-claims them this pass. Seed them,
+		// or a re-projected file rendering the same construct name takes the
+		// bare ID this one holds and overwrites it (mache-7a7919).
+		e.retainClaims(c.realPath, e.fileIndex[c.realPath].ClaimedIDs)
+	}
+	return w, nil
+}
+
+// widenToSharedRoots grows the set of files to re-project from those that
+// CHANGED to every file that writes a container any of them writes.
+//
+// Container directories — `store`, `store/functions`, the `$` nodes a schema
+// nests under a per-file root — are written by EVERY file in their package,
+// and each write stamps that file's context and location on them. Which file
+// wins is simply which projected last. Re-project a subset and a different
+// file wins, so the container ends up holding a different file's imports than
+// a cold build would give it: measured on the golden corpus, `store` and its
+// six sibling containers all carried index.go's header instead of store.go's
+// (mache-e7d9d0).
+//
+// The root is recoverable without projecting anything: a claimed construct ID
+// starts with it (`store/functions/init` -> `store`), and LoadFileIndex
+// already recovers each file's claims. Two directories can share a root —
+// `tool.go` and `tool/main.go` are both package main in the golden corpus —
+// so grouping by DIRECTORY would not be enough.
+//
+// Deleted files count as affecting their roots too: removing their constructs
+// changes what their package-mates project into.
+//
+// With no file index every file is re-projected anyway and this is a no-op.
+func (e *Engine) widenToSharedRoots(changed, visited map[string]struct{}) map[string]struct{} {
+	if len(e.fileIndex) == 0 {
+		return nil // full build: nil tells the caller to project everything
+	}
+	rootsOf := func(ids []string) []string {
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			root := id
+			if i := strings.Index(id, "/"); i > 0 {
+				root = id[:i]
+			}
+			out = append(out, root)
+		}
+		return out
+	}
+
+	affected := make(map[string]struct{})
+	for path := range changed {
+		for _, root := range rootsOf(e.fileIndex[path].ClaimedIDs) {
+			affected[root] = struct{}{}
+		}
+	}
+	// A DELETED file affects its containers too — it is not in `changed`
+	// because it is not on disk to be walked, but removing its constructs
+	// changes what its package-mates project into and which of them writes
+	// the container last.
+	for path, entry := range e.fileIndex {
+		if _, stillThere := visited[path]; stillThere {
+			continue
+		}
+		for _, root := range rootsOf(entry.ClaimedIDs) {
+			affected[root] = struct{}{}
+		}
+	}
+
+	reproject := make(map[string]struct{}, len(changed))
+	for path := range changed {
+		reproject[path] = struct{}{}
+	}
+	for path, entry := range e.fileIndex {
+		for _, root := range rootsOf(entry.ClaimedIDs) {
+			if _, hit := affected[root]; hit {
+				reproject[path] = struct{}{}
+				break
+			}
+		}
+	}
+	return reproject
 }
 
 func (e *Engine) ingestSourceTree(rootPath string) error {
@@ -89,6 +175,17 @@ func (e *Engine) ingestSourceTree(rootPath string) error {
 	// projecting so the reaped IDs are free for a surviving file to claim if
 	// one now renders that name.
 	e.reapDeleted(walk.visited)
+
+	// Every file about to be re-projected that the previous build also
+	// projected is cleared FIRST. Projection writes a construct's children,
+	// defs and refs through to the store as it goes, and the commit-time
+	// delete keys on the same ids — so clearing afterwards strips what
+	// projection just wrote (mache-e7d9d0).
+	for i := range results {
+		if entry, known := e.fileIndex[results[i].realPath]; known {
+			e.clearFileBeforeReprojecting(results[i].realPath, entry.ClaimedIDs)
+		}
+	}
 
 	// Sort by walk path. Dedup suffixes (e.g., init.from_b_go) depend on the
 	// order files are projected, and this lexical order over the full path is
@@ -344,9 +441,10 @@ func (e *Engine) reapDeleted(visited map[string]struct{}) {
 			continue
 		}
 		log.Printf("reaping %s: indexed but no longer present", path)
-		e.Store.DeleteFileNodes(path)
-		e.Store.DeleteNodes(entry.ClaimedIDs)
+		// Same removal a re-projected file gets, minus the re-projection:
+		// leaves by path, construct directories by ID, and the synthetic
+		// file-level ref caller.
+		e.clearFileBeforeReprojecting(path, entry.ClaimedIDs)
 		e.Store.ForgetFile(path)
-		e.releaseFileClaims(path)
 	}
 }

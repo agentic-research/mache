@@ -664,7 +664,12 @@ func (w *SQLiteWriter) DeleteFileNodes(filePath string) {
 func (w *SQLiteWriter) ForgetFile(path string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// Both per-path bookkeeping tables. file_index so the path stops being
+	// treated as unchanged, _index_coverage so "which producer indexed this
+	// file" stops naming a file that is gone — a deleted file otherwise keeps
+	// a coverage row forever, which the golden dump compares (mache-e7d9d0).
 	_, _ = w.tx.Exec(`DELETE FROM file_index WHERE path = ?`, path)
+	_, _ = w.tx.Exec(`DELETE FROM _index_coverage WHERE source_id = ?`, path)
 }
 
 func (w *SQLiteWriter) DeleteNodes(ids []string) {

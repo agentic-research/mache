@@ -37,32 +37,31 @@ wall_ms_advisory = 30000
 # a memory figure without its machine class, core count, parser version
 # and corpus is not a measurement, it is an anecdote.
 [[measurement]]
-date = "2026-09-15"
+date = "2026-09-16"
 machine_class = "apple-m3-max-32gb"
 gomaxprocs = 4
 schema = "go"
 leyline_version = "v0.19.1"
 corpus = "mache-self"
-corpus_sha = "e3da154"
-files = 1019
+corpus_sha = "ed93495"
+files = 1021
 corpus_bytes = 14000000
-wall_ms = 36200
-peak_rss_bytes = 3620000000
-leyline_db_bytes = 1870000000
-projection_db_bytes = 79200000
-warm_wall_ms = 13200
+wall_ms = 21430
+peak_rss_bytes = 3700000000
+leyline_db_bytes = 1880000000
+projection_db_bytes = 79500000
+warm_wall_ms = 2350
 warm_peak_rss_bytes = 1030000000
 note = """
-First run with a persistent parse cache (mache-80a851). The COLD numbers are
-unchanged in kind — a first init on a fresh machine still writes the whole
-1.87 GB parse db and still blows the memory budget, which is mache-3688da's
-to fix.
+Both halves incremental now (mache-80a851 parse cache, mache-e7d9d0
+projection reuse). A rebuild of an unchanged tree is 2.35 s against 21.4 s
+cold; touching one file costs 2.53 s.
 
-What changed is the WARM path, which is what a rebuild or a daemon restart
-actually costs: 13.2 s against 36.2 s, and 1.03 GB peak against 3.62 GB.
-The warm peak is INSIDE the 2.0 GB envelope. The memory blowup is the
-1.87 GB SQLite insert, and on an unchanged tree that insert does not run at
-all — leyline reports `0 parsed, 967 unchanged` in 35 ms.
+The COLD numbers are unchanged in kind — a first init still writes the whole
+1.88 GB parse db and still blows the memory budget, which is mache-3688da's
+to fix. Everything after the first is now dominated by neither half: the
+parse reports `0 parsed, N unchanged` in ~35 ms and the projection
+re-projects only the files whose container roots were touched.
 
 Warm is reported, never gated. The budget is about whether a FIRST init fits
 the machine, and that question is unchanged.

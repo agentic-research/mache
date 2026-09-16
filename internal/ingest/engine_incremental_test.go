@@ -214,10 +214,20 @@ func TestIncremental_DeletedFileIsReaped(t *testing.T) {
 	assert.Len(t, indexedPaths(t, dbPath), 1, "the deleted path is still in file_index")
 }
 
-// TestIncremental_DeletedFileOwnedTheBareName: the DELETED file held the bare
-// ID and the survivor holds the suffix. The survivor must keep the ID it has —
-// renaming it would break every reference an agent already holds — so the
-// reap must not be an excuse to re-derive the assignment.
+// TestIncremental_DeletedFileOwnedTheBareName: when the DELETED file held the
+// bare ID, the survivor takes it — exactly as a cold build of the remaining
+// tree would.
+//
+// This REVERSES what this test asserted when it was written (mache-31abc0),
+// and the reversal is deliberate. The original reasoning was reference
+// stability: renaming a construct breaks any ID an agent already holds. The
+// stronger property won instead — an incrementally rebuilt projection must be
+// byte-identical to a cold one (mache-e7d9d0), because otherwise two people
+// with identical source get different graphs depending on their edit history,
+// and the golden gate cannot pin the projection as a function of the source.
+//
+// You cannot have both once the bare name frees up. Determinism is the one
+// worth keeping, and it is the one a gate can enforce.
 func TestIncremental_DeletedFileOwnedTheBareName(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "index.db")
@@ -235,9 +245,9 @@ func TestIncremental_DeletedFileOwnedTheBareName(t *testing.T) {
 	buildInto(t, dir, dbPath, index)
 
 	after := constructs(t, dbPath)
-	assert.Equal(t, []string{"fns/shared.from_b_rs"}, slices.Sorted(maps.Keys(after)),
-		"b.rs was renamed, or a.rs's construct survived")
-	assert.Contains(t, after["fns/shared.from_b_rs"], "{ 2 }")
+	assert.Equal(t, []string{"fns/shared"}, slices.Sorted(maps.Keys(after)),
+		"the survivor should hold the bare ID, as a cold build of b.rs alone would")
+	assert.Contains(t, after["fns/shared"], "{ 2 }", "the surviving construct is b.rs's")
 }
 
 // TestIncremental_FullBuildReapsNothing: with no file index there is nothing
