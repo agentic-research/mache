@@ -397,6 +397,27 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A clean checkout is actually clean** (`mache-7bc00f`). `git status` on main
+  reported four untracked paths that must never be committed: `.mache.json`
+  (written by `mache init`, whose `.claude/` half was already ignored and which
+  has never been tracked in any branch), `claude-resume.txt` and
+  `codex-resume.txt` (the same artifact as the `/resume.txt` the ignore list
+  already names), and `__pycache__/` beside the tracked Python in
+  `benchmarks/cost-quality/`. Each was already covered by a convention this
+  repo had written down; only the rules were missing.
+
+  This matters more than tidiness: the standing rule here is never
+  `git add -A`, and that rule is only as safe as the ignore list beneath it.
+  `TestGitignore_CoversGeneratedAndPerClonePaths` now fails if any of the four
+  stops being ignored, and a second test runs `git check-ignore --no-index`
+  over every tracked file so a rule cannot grow broad enough to swallow
+  something the repo ships. `--no-index` is load-bearing — without it
+  `check-ignore` stays silent about tracked paths and the guard passes
+  vacuously, which is how adding `*.go` to `.gitignore` went undetected on the
+  first attempt. It found two files that are both tracked and ignored, where
+  the rule has therefore never done anything; they are named in a ratchet and
+  filed as `mache-8b6a8a`.
+
 - **A developer's global Git hooks no longer reach into mache's test
   repositories** (`mache-0fd9aa`). `HermeticGitCommand` dropped Git's
   repository-local environment variables but left `core.hooksPath` alone, so a
