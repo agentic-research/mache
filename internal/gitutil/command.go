@@ -7,12 +7,23 @@ import (
 	"strings"
 )
 
-// HermeticGitCommand constructs a Git command without repository-local environment
-// variables inherited from a parent Git hook. Those variables take precedence
-// over cmd.Dir and `git -C`, which can make a nested command operate on the
-// repository whose hook is running instead of its explicit target.
+// HermeticGitCommand constructs a Git command insulated from the surrounding
+// developer's Git setup, in two ways.
+//
+// It drops repository-local environment variables inherited from a parent Git
+// hook. Those take precedence over cmd.Dir and `git -C`, which can make a
+// nested command operate on the repository whose hook is running instead of
+// its explicit target.
+//
+// It also disables HOOKS. A developer with a global `core.hooksPath` — rsry
+// installs one that rejects any commit message without a bead reference — had
+// their hooks run inside mache's own temp repositories, and seven tests in
+// internal/mcpserve failed on `git commit -m "init"` for a machine-local
+// reason CI cannot see. Hooks are wrong for every call site here regardless:
+// these are read-only queries (rev-parse, log, remote get-url) and throwaway
+// clones, none of them a commit the developer authored.
 func HermeticGitCommand(args ...string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "core.hooksPath=" + os.DevNull}, args...)...)
 	cmd.Env = WithoutLocalEnv(os.Environ())
 	return cmd
 }

@@ -129,6 +129,17 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A developer's global Git hooks no longer reach into mache's test
+  repositories** (`mache-0fd9aa`). `HermeticGitCommand` dropped Git's
+  repository-local environment variables but left `core.hooksPath` alone, so a
+  global hooks directory ran inside the temp repositories tests build. rsry
+  installs one whose commit-msg hook rejects any message without a bead
+  reference, and it failed seven tests in `internal/mcpserve` on
+  `git commit -m "init"` — invisible to CI, which has no such hook, and
+  indistinguishable from a real failure locally. Hooks are wrong for every
+  call site regardless: these are read-only queries and throwaway clones, none
+  of them a commit the developer authored.
+
 - **An incremental re-index reaps a deleted file's constructs** (`mache-31abc0`).
   An incremental pass walks the files that are PRESENT, so a deleted file was
   never visited and nothing removed what it had projected. The graph kept
