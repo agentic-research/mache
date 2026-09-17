@@ -132,24 +132,37 @@ func TestArenaFlusher_Coalesce(t *testing.T) {
 		flusher.RequestFlush()
 	}
 
-	// Wait for at least one tick to fire
-	time.Sleep(80 * time.Millisecond)
+	// WAIT FOR THE FLUSH, do not sleep a guess at how long it takes
+	// (mache-3a2a8b). Sleeping 80ms of wall clock said nothing about whether
+	// the coalescing goroutine had been SCHEDULED to run the flush; on a
+	// loaded runner the tick fires and the goroutine has not had a slice yet,
+	// leaving the sequence at 1. That is how this failed on CI for a PR that
+	// touched only .gitignore.
+	//
+	// Waiting cannot inflate the number the ceiling below checks. `dirty` is
+	// one bool: the 10 requests set it once, the first tick that sees it
+	// clears it BEFORE flushing, and every later tick is a no-op. The
+	// sequence reaches 2 and stays there however long this waits — so the
+	// coalescing guarantee is enforced exactly as strictly as before.
+	var h ArenaHeader
+	require.Eventually(t, func() bool {
+		f, err := os.Open(arenaPath)
+		if err != nil {
+			return false
+		}
+		defer func() { _ = f.Close() }()
+		got, err := ReadArenaHeader(f)
+		if err != nil {
+			return false
+		}
+		h = *got
+		return h.Sequence >= 2
+	}, 5*time.Second, 5*time.Millisecond,
+		"no flush ran after 10 RequestFlush calls on a 50ms ticker")
 
-	// Verify the arena was actually flushed (header should have changed)
-	f, err := os.Open(arenaPath)
-	require.NoError(t, err)
-	h, err := ReadArenaHeader(f)
-	require.NoError(t, err)
-	_ = f.Close()
-
-	// Sequence should be 2 in the steady case (initial=1 + one coalesced
-	// flush) and at most 3 under CI load where scheduler delay can push
-	// the wall-clock-based 80ms sleep past a second tick. Either way it
-	// must be far below 11 — the coalescing guarantee is "10 rapid
-	// requests collapse to ≤2 flushes," not "exactly one flush."
-	// (mache-02a9ab)
-	assert.GreaterOrEqual(t, h.Sequence, uint64(2),
-		"at least one flush should have run after 10 RequestFlush + 80ms")
+	// The coalescing guarantee: "10 rapid requests collapse to ≤2 flushes,"
+	// not "exactly one flush." 3 allows a request landing across a tick
+	// boundary. Either way it must be far below 11 (mache-02a9ab).
 	assert.LessOrEqual(t, h.Sequence, uint64(3),
 		"10 rapid requests must coalesce — observed sequence %d implies they did not", h.Sequence)
 
