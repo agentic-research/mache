@@ -11,18 +11,18 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.1
 	github.com/go-task/task/v3 v3.53.1
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/mark3labs/mcp-go v0.58.0
+	github.com/mark3labs/mcp-go v1.0.0
 	github.com/ohler55/ojg v1.28.5
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	github.com/willscott/go-nfs v0.0.4
 	github.com/zeebo/blake3 v0.2.4
 	go.yaml.in/yaml/v3 v3.0.5
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.41.0
-	modernc.org/sqlite v1.57.0
-	mvdan.cc/gofumpt v0.11.0
+	modernc.org/sqlite v1.58.0
+	mvdan.cc/gofumpt v0.12.0
 	mvdan.cc/sh/v3 v3.14.0
 )
 
@@ -56,10 +56,10 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zclconf/go-cty v1.16.3 // indirect
 	github.com/zeebo/assert v1.3.0 // indirect
-	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
-	golang.org/x/tools v0.48.0 // indirect
-	modernc.org/libc v1.74.4 // indirect
+	golang.org/x/tools v0.49.0 // indirect
+	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.11.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
 )
