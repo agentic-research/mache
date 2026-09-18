@@ -36,6 +36,21 @@ jobs:
             echo "heavy=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Runs HERE and not in `test` or `lint`: this needs the commits a change
+      # adds, and those jobs check out at actions/checkout's default depth of 1
+      # — no base, no tags. This job already has fetch-depth: 0 and already
+      # computes the base sha, so the gate costs one second and no extra clone.
+      # (mache-55faa4)
+      - name: Changelog entry
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "no base sha on this event — a new branch has no commits to compare"
+            exit 0
+          fi
+          bash scripts/changelog-entry-check.sh "$BASE_SHA" .
+
   test:
     needs: changes
     if: needs.changes.outputs.heavy == 'true'
