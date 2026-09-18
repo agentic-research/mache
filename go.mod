@@ -20,7 +20,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
-	golang.org/x/text v0.41.0
+	golang.org/x/text v0.42.0
 	modernc.org/sqlite v1.58.0
 	mvdan.cc/gofumpt v0.12.0
 	mvdan.cc/sh/v3 v3.14.0
@@ -56,7 +56,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zclconf/go-cty v1.16.3 // indirect
 	github.com/zeebo/assert v1.3.0 // indirect
-	golang.org/x/mod v0.40.0 // indirect
+	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	modernc.org/libc v1.75.6 // indirect
