@@ -57,8 +57,18 @@ func writeValidCPUProfile(t *testing.T, path string) {
 
 func runFlamegraphs(t *testing.T, dir string) (string, error) {
 	t.Helper()
-	cmd := exec.Command("bash",
-		filepath.Join(testutil.MacheRepoRoot(t), "scripts", "flamegraphs.sh"), dir)
+	script := filepath.Join(testutil.MacheRepoRoot(t), "scripts", "flamegraphs.sh")
+
+	// READ the script before running it. `go test` caches a result against the
+	// files the test opened, and exec.Command opens nothing in-process — the
+	// kernel does, in the child. Without this, editing flamegraphs.sh leaves
+	// the cached PASS in place and a broken script reports "ok (cached)".
+	// Found while mutation-testing the sibling gate (mache-55faa4).
+	body, err := os.ReadFile(script)
+	require.NoError(t, err, "reading scripts/flamegraphs.sh")
+	require.NotEmpty(t, body, "scripts/flamegraphs.sh is empty")
+
+	cmd := exec.Command("bash", script, dir)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
