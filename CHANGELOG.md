@@ -8,6 +8,35 @@ bumps may include breaking changes.
 
 ### Added
 
+- **A merge is gated on saying what it did** (`mache-55faa4`). 19 of the PRs
+  merged between v0.21.1 and `9bbd8e6` touched `CHANGELOG.md` not at all, and
+  what went missing was not trivia — the whole `mache doctor` command,
+  `mache install`, the launchd reload fix, two leyline pin bumps. Nothing
+  noticed, because nothing looked; `mache-4fdbfd` backfilled it weeks later by
+  reconstructing intent from commit bodies.
+
+  `scripts/changelog-entry-check.sh` now requires every bead id a commit names
+  to appear under `## [Unreleased]`. When a change genuinely has no user-facing
+  surface — test or CI hygiene, a package move — the author says so **in the
+  commit message**:
+
+  ```
+  Changelog: none
+  ```
+
+  The trailer is the whole design. The obvious rule, "every `feat:`/`fix:`
+  needs an entry", is wrong: three of those 19 should have had none, and one
+  (`mache-3e78d2`, `fix(projcfg)`) has production-code scope with a test-only
+  effect, so the scope cannot tell you. The author knows at the moment they
+  commit and nobody does afterwards, so the trailer moves the judgement there
+  and makes the omission deliberate and reviewable rather than silent.
+
+  It runs in CI's `changes` job rather than `test` or `lint`, because it needs
+  the commits a change adds and those jobs check out at `actions/checkout`'s
+  default depth of 1 — where it could only skip or pass vacuously
+  (`mache-ddf14b`). An unresolvable base is exit 2, distinct from the exit 1 a
+  real violation uses, and says `fetch-depth: 0` in the remedy.
+
 - **`task bench:cold` — the cold-path budget, measured** (`mache-2de6c0`). The
   question is someone who just downloaded mache pointing it at their code on a
   4-core/16 GB laptop; until that is measured on a pinned corpus with the
