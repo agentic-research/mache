@@ -23,7 +23,7 @@ require (
 	golang.org/x/text v0.41.0
 	modernc.org/sqlite v1.58.0
 	mvdan.cc/gofumpt v0.12.0
-	mvdan.cc/sh/v3 v3.14.0
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (
