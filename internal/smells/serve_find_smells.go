@@ -97,6 +97,19 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
 		} // coverage:ignore
 
+		// The canonical views must exist BEFORE the pre-flight below, not
+		// merely before the query. Since mache-be17ce a rule's Requires names
+		// v_ast / v_nodes / v_defs / v_refs rather than ley-line-open's
+		// physical tables, and those are TEMP views installed per connection —
+		// so checking Requires first asks whether the boundary exists before
+		// anything installs it, and every migrated rule reports as unsupported.
+		// That failure is SILENT on the `--rule '*'` path, where an unsupported
+		// rule is skipped rather than failed. Idempotent, so calling it here
+		// and again at query time is safe.
+		if err := EnsureCanonicalViews(qg); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("rule %q: installing canonical views failed: %v", ruleID, err)), nil
+		}
+
 		// Pre-flight: every rule declares the tables it reads in
 		// rule.Requires. If any are missing on this backend, return a
 		// friendly tool error instead of letting the SQL fail with
@@ -247,10 +260,14 @@ func missingTables(qg graph.RefsQuerier, required []string) ([]string, error) {
 	for i, t := range required {
 		args[i] = t
 	}
-	rows, err := qg.QueryRefs(
-		"SELECT name FROM sqlite_master WHERE type='table' AND name IN ("+placeholders+")",
-		args...,
-	)
+	// Views count, and TEMP ones especially: a rule's Requires names what it
+	// READS, and since mache-be17ce that is mache's own v_ast / v_nodes rather
+	// than LLO's physical tables. Those live in the per-connection temp schema,
+	// so a main-schema type='table' lookup would report every migrated rule as
+	// unsupported and silently skip it.
+	query := "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name IN (" + placeholders + ")" +
+		" UNION SELECT name FROM temp.sqlite_master WHERE type IN ('table','view') AND name IN (" + placeholders + ")"
+	rows, err := qg.QueryRefs(query, append(args, args...)...)
 	if err != nil {
 		return nil, err
 	}
