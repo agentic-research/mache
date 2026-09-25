@@ -639,6 +639,16 @@ tasks:
     cmds:
       - bash scripts/docs-lint.sh
 
+  changelog:check:
+    desc: "Fail if a commit since BASE (default origin/main) lands work with no CHANGELOG Unreleased entry and no `Changelog: none` trailer. BASE=<ref> task changelog:check (mache-55faa4)"
+    # Deliberately NOT in `task check`: it compares against origin/main, so it
+    # needs a current fetch and would fail offline for a reason that is not the
+    # developer's change. CI runs it (ci.yml, the `changes` job, which already
+    # has fetch-depth: 0); `task check` covers the script's BEHAVIOUR through
+    # internal/lint/changelog_entry_test.go.
+    cmds:
+      - bash scripts/changelog-entry-check.sh "{{.BASE | default "origin/main"}}" .
+
   actions:lint:
     desc: Fail if any .github/workflows `uses:` ref is not SHA-pinned (supply-chain; mache-b8900d)
     cmds:
