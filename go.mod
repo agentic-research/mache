@@ -10,7 +10,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-billy/v5 v5.9.1
 	github.com/go-task/task/v3 v3.53.1
-	github.com/hashicorp/hcl/v2 v2.24.0
+	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/mark3labs/mcp-go v1.0.0
 	github.com/ohler55/ojg v1.28.6
 	github.com/spf13/cobra v1.10.2
@@ -30,6 +30,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/agext/levenshtein v1.2.1 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
+	github.com/apparentlymart/go-textseg/v17 v17.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.6 // indirect
 	github.com/colega/zeropool v0.0.0-20230505084239-6fb4a4f75381 // indirect
 	github.com/dominikbraun/graph v0.23.0 // indirect
@@ -54,7 +55,7 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/willscott/go-nfs-client v0.0.0-20240104095149-b44639837b00 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	github.com/zclconf/go-cty v1.16.3 // indirect
+	github.com/zclconf/go-cty v1.19.0 // indirect
 	github.com/zeebo/assert v1.3.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
