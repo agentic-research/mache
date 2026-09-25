@@ -52,6 +52,33 @@ func TestEnvDurationOr(t *testing.T) {
 // TestEnvIntOr pins the same contract for counts (the crash-loop burst): a
 // zero or negative burst would mean "trip immediately", turning the safety
 // valve into a daemon that can never start.
+// TestEnvBytesOr covers what makes it a separate parser from EnvIntOr: a size
+// budget is int64 and ZERO is a legitimate value, where EnvIntOr's
+// positive-only rule would reject it.
+func TestEnvBytesOr(t *testing.T) {
+	const key = "MACHE_TEST_BYTES"
+	const fallback int64 = 10 << 30
+
+	t.Setenv(key, "4096")
+	assert.Equal(t, int64(4096), EnvBytesOr(key, fallback))
+
+	// 0 means "keep nothing", a real instruction, not an error.
+	t.Setenv(key, "0")
+	assert.Zero(t, EnvBytesOr(key, fallback), "zero is a valid budget, not a parse failure")
+
+	// Beyond int32, because a byte budget routinely is.
+	t.Setenv(key, "21474836480")
+	assert.Equal(t, int64(21474836480), EnvBytesOr(key, fallback), "must not truncate to 32 bits")
+
+	for _, bad := range []string{"", "abc", "-1", "1.5", "10GiB"} {
+		t.Setenv(key, bad)
+		assert.Equalf(t, fallback, EnvBytesOr(key, fallback),
+			"%q must fall back — a misparsed budget silently changes what gets deleted", bad)
+	}
+
+	assert.Equal(t, fallback, EnvBytesOr("MACHE_TEST_BYTES_UNSET", fallback))
+}
+
 func TestEnvIntOr(t *testing.T) {
 	const key = "MACHE_TEST_INT"
 

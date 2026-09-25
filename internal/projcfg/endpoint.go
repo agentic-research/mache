@@ -42,6 +42,18 @@ func EnvDurationOr(key string, fallback time.Duration) time.Duration {
 	return fallback
 }
 
+// EnvBytesOr parses key as a non-negative byte count, or returns fallback.
+// Separate from EnvIntOr because a size budget is int64 and may legitimately
+// be zero, which EnvIntOr's positive-only rule would reject.
+func EnvBytesOr(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
 // EnvIntOr parses key as a positive integer, or returns fallback.
 func EnvIntOr(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {

@@ -37,6 +37,12 @@ func AutoInvokeLeylineParse(sourceDir string) (string, func(), error) {
 	// is unknowable (mache-438104).
 	leyline.RecordResolved(leylineBin, "resolved")
 
+	// Tidy up before adding to the pile, not after: this function is the sole
+	// producer of both leaks reapDisk bounds, and it is the only place
+	// guaranteed to run on every path that creates one (mache-8178a5). One
+	// readdir against a ~15 s parse.
+	reapDisk()
+
 	// Prefer the persistent per-project db: pointed at the SAME path as last
 	// time, leyline re-parses only what changed. Pointed at a fresh temp file
 	// it has nothing to diff and re-parses everything (mache-80a851). A nil

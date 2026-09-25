@@ -701,8 +701,48 @@ tasks:
       - |
         set -euo pipefail
         command -v tar >/dev/null 2>&1 || { echo "tar required (git archive extract)"; exit 1; }
-        SRC="$(mktemp -d)"; DB="$(mktemp -t mache-smells.XXXXXX.db)"
-        trap 'rm -rf "$SRC" "$DB"' EXIT
+        # A STABLE extraction dir, not mktemp -d (mache-8178a5). The parse
+        # cache keys on the source root, so a fresh temp dir every run minted
+        # a new ~1.8 GB entry that could never be hit -- 100% miss plus 1.8 GB
+        # retained, per invocation, which is what filled a 926 GB volume.
+        # Measured on this tree: mktemp -d re-parses all 978 files
+        # (insert=70s); a stable dir reports "0 parsed, 978 unchanged" even
+        # after the rm -rf below, because leyline keys on content hash rather
+        # than mtime.
+        #
+        # OUTSIDE the repo, and stable. Both halves are load-bearing.
+        #
+        # Outside: an extracted copy of the tree placed anywhere under $PWD is
+        # walked by every repo-scanning lint -- decomp_invariants, the regexp
+        # ratchet, the LLO boundary, removed-symbols -- which then report the
+        # copy's contents as new violations. Tried .task/smells-src; it failed
+        # four of them.
+        #
+        # Stable: the parse cache keys on the source root, so `mktemp -d` per
+        # run minted a new ~1.8 GB entry that could never be hit -- 100% miss
+        # plus 1.8 GB retained, per invocation, which is what filled a 926 GB
+        # volume (mache-8178a5). A fixed path turns that into a hit:
+        # 15,572 ms -> 41 ms on this tree.
+        #
+        # Keyed by the RESOLVED repo path so two checkouts do not share one
+        # extraction, and so ~/github/art/mache and ~/remotes/art/mache (a
+        # symlink to it) agree on which entry is theirs.
+        # The repo path with separators flattened, not a hash of it: no
+        # external tool to guard (the gate lint rejects an unguarded one, and
+        # rightly -- a gate that dies on a missing binary is a gate that did
+        # not run), and the directory name says which checkout it belongs to.
+        REPO="$(pwd -P)"
+        SRC="${TMPDIR:-/tmp}/mache-smells-src${REPO//\//_}"
+        DB="$(mktemp -t mache-smells.XXXXXX.db)"
+        # rm -rf so a file deleted since the last run cannot linger and be
+        # analysed as if still tracked. leyline keys on content hash, so this
+        # costs nothing: "0 parsed, 978 unchanged" with or without it.
+        rm -rf "$SRC"; mkdir -p "$SRC"
+        # SRC deliberately OUTLIVES the run: deleting it would throw away the
+        # root the cache is keyed on and put us back to a cold parse every
+        # time. .task/ is gitignored, and `git archive HEAD` ships tracked
+        # files only, so it cannot leak into the analysed tree.
+        trap 'rm -f "$DB"' EXIT
         git archive HEAD | tar -x -C "$SRC"
         ./{{.BINARY_NAME}} build "$SRC" "$DB" --backend leyline >/dev/null
         # --tags=gate scopes to the excess-shaped ratchet rules; the min-0

@@ -453,6 +453,48 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **mache no longer fills the disk** (`mache-8178a5`). Measured on a developer
+  machine: **over 100 GB** across two leaks, a 926 GB volume down to 1.8 GiB
+  free, and `task check` failing outright with `no space left on device`.
+
+  `$TMPDIR/mache-leyline-*.db` — **7,247 files**. `AutoInvokeLeylineParse`
+  falls back to a temp db whenever the parse cache is unavailable, which is
+  every `go test`, since the hermeticity guard deliberately refuses the real
+  `~/.mache` there. Its cleanup is a returned closure, so a panic, a failed
+  assertion or a caller that forgets leaks ~1.8 GB, and nothing ever swept
+  them.
+
+  `~/.mache/parse` — **64 GB across 38 entries**. The cache had no eviction,
+  and the key includes the source root, so every distinct tree minted a
+  permanent entry.
+
+  Both are now swept at parse time: orphaned temp dbs older than 24 h are
+  removed, and the parse cache is held to a 10 GiB budget, evicting
+  least-recently-used entries and **skipping any an another process holds a
+  lock on**. Sidecars count and are removed with their db — the `.ast.capnp`
+  beside an entry is routinely larger than the `.db` itself, so budgeting on
+  the db alone undercounts by most of an entry. Both bounds are overridable
+  with `MACHE_TEMP_DB_MAX_AGE` and `MACHE_PARSE_CACHE_MAX_BYTES`.
+
+- **The smell gate stopped re-parsing the whole tree on every run**
+  (`mache-8178a5`). `smells:run` extracted `git archive HEAD` into a fresh
+  `mktemp -d`, and the parse cache keys on the source root — so every run
+  minted a new ~1.8 GB entry that could never be hit. 100% miss *and* 1.8 GB
+  retained, per invocation; this is what filled the volume.
+
+  It now extracts to a fixed path keyed by the resolved repo root. Measured on
+  this tree, the parse step went from **15,572 ms to 41 ms**, and the run
+  reuses its cache entry instead of adding one. `rm -rf` still precedes each
+  extraction so a file deleted since the last run cannot linger — leyline keys
+  on content hash, so that costs nothing (`0 parsed, N unchanged` either way).
+
+  The directory stays **outside** the repo. An extracted copy placed anywhere
+  under `$PWD` is walked by every repo-scanning lint — `decomp_invariants`,
+  the regexp ratchet, the LLO boundary, removed-symbols — which then report
+  the copy's contents as new violations; a first attempt under `.task/` failed
+  four of them. The key is the `pwd -P` repo path, so two checkouts never
+  share an extraction and a symlinked checkout agrees with its real one.
+
 - **A clean checkout is actually clean** (`mache-7bc00f`). `git status` on main
   reported four untracked paths that must never be committed: `.mache.json`
   (written by `mache init`, whose `.claude/` half was already ignored and which
