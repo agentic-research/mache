@@ -231,13 +231,13 @@ func TestFindSmells_ListsRulesWhenNoRule(t *testing.T) {
 	for _, id := range []string{"cyclomatic_complexity", "fan_out_skew", "dead_code"} {
 		require.Contains(t, byID, id, "rule %q missing from listing", id)
 	}
-	assert.Contains(t, byID["cyclomatic_complexity"], "_ast",
+	assert.Contains(t, byID["cyclomatic_complexity"], "v_ast",
 		"cyclomatic_complexity walks the AST and must require _ast")
-	assert.Contains(t, byID["fan_out_skew"], "node_refs",
+	assert.Contains(t, byID["fan_out_skew"], "v_refs",
 		"fan_out_skew aggregates over node_refs and must require it")
-	assert.Contains(t, byID["dead_code"], "node_refs",
+	assert.Contains(t, byID["dead_code"], "v_refs",
 		"dead_code joins defs against refs and must require both tables")
-	assert.Contains(t, byID["dead_code"], "node_defs")
+	assert.Contains(t, byID["dead_code"], "v_defs")
 }
 
 // TestFindSmells_ListsRulesSurfacesDefaultMinMetric pins that the
@@ -3261,25 +3261,25 @@ func TestFindSmells_DriftDocRules_Registered(t *testing.T) {
 		{
 			id:          "drift_doc_broken_internal_link",
 			tags:        []string{"docs", "drift", "links"},
-			requires:    []string{"nodes"},
+			requires:    []string{"v_nodes"},
 			scopeColumn: "COALESCE(md.source_file, '')",
-			requiresMsg: "link-target validation needs the markdown content (nodes); filesystem stat happens host-side",
+			requiresMsg: "link-target validation needs the markdown content (v_nodes); filesystem stat happens host-side",
 		},
 		{
 			id:          "drift_doc_outdated_count",
 			tags:        []string{"docs", "drift", "counts"},
-			requires:    []string{"nodes"},
+			requires:    []string{"v_nodes"},
 			scopeColumn: "COALESCE(md.source_file, '')",
-			requiresMsg: "ground-truth queries from .mache/drift-counts.toml execute against the wider DB; this rule needs only the markdown content (nodes)",
+			requiresMsg: "ground-truth queries from .mache/drift-counts.toml execute against the wider DB; this rule needs only the markdown content (v_nodes)",
 		},
 		{
 			id:          "drift_doc_dead_symbol_reference",
 			tags:        []string{"docs", "drift"},
-			requires:    []string{"node_defs"},
+			requires:    []string{"v_defs"},
 			scopeColumn: "v.source_id",
-			requiresMsg: "the rule's own Requires only needs node_defs — v_doc_refs is installed " +
+			requiresMsg: "the rule's own Requires only needs v_defs — v_doc_refs is installed " +
 				"unconditionally by EnsureCanonicalViews and degrades to empty on its own " +
-				"when node_refs lacks source_id, so node_refs/_ast don't need to gate here",
+				"when the refs table lacks source_id, so v_refs/v_ast don't need to gate here",
 		},
 	}
 	for _, tc := range cases {
@@ -3301,9 +3301,9 @@ func TestFindSmells_DriftDocRules_ListingExposesIt(t *testing.T) {
 		tags     []string
 		requires []string
 	}{
-		{id: "drift_doc_broken_internal_link", tags: []string{"docs", "drift", "links"}, requires: []string{"nodes"}},
-		{id: "drift_doc_outdated_count", tags: []string{"docs", "drift", "counts"}, requires: []string{"nodes"}},
-		{id: "drift_doc_dead_symbol_reference", tags: []string{"docs", "drift"}, requires: []string{"node_defs"}},
+		{id: "drift_doc_broken_internal_link", tags: []string{"docs", "drift", "links"}, requires: []string{"v_nodes"}},
+		{id: "drift_doc_outdated_count", tags: []string{"docs", "drift", "counts"}, requires: []string{"v_nodes"}},
+		{id: "drift_doc_dead_symbol_reference", tags: []string{"docs", "drift"}, requires: []string{"v_defs"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.id, func(t *testing.T) {

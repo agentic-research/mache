@@ -163,7 +163,14 @@ func EnsureCanonicalViews(qg graph.RefsQuerier) error {
 	if hasRefsQualifier {
 		refsQualExpr = "COALESCE(qualifier, '')"
 	}
+	// node_id is the OCCURRENCE — the ref site itself — and is distinct from
+	// referrer_node_id, which resolves through container_node_id to the
+	// enclosing definition. A rule that wants "which node mentions this token"
+	// needs the former; one that wants "which function does the mentioning"
+	// needs the latter. Exposing only the second is what kept sleep_in_test
+	// reading node_refs directly (mache-be17ce).
 	refsBody := `SELECT ` + refsReferrerExpr + ` AS referrer_node_id,
+	       node_id,
 	       token,
 	       NULL  AS target_node_id,
 	       NULL  AS ref_uri,
@@ -191,6 +198,11 @@ func EnsureCanonicalViews(qg graph.RefsQuerier) error {
 	refsBody += `
 		UNION ALL
 		SELECT referrer_node_id,
+		       -- A binding record is a resolved edge, not a parse-tree
+		       -- occurrence, so it has no _ast node to point at. NULL keeps
+		       -- UNION arity and makes an occurrence-keyed JOIN drop these
+		       -- rows, which is the same set node_refs gave before.
+		       NULL AS node_id,
 		       token,
 		       target_node_id,
 		       ref_uri,
@@ -252,6 +264,12 @@ func EnsureCanonicalViews(qg graph.RefsQuerier) error {
 		return err
 	}
 	if err := ensureVendoredView(qg); err != nil {
+		return err
+	}
+	// The LLO physical-schema boundary (mache-be17ce). Installed here with the
+	// rest so every caller gets it — production and the tests that build
+	// fixtures by hand — for the same reason v_test_nodes is.
+	if err := ensureSchemaViews(qg); err != nil {
 		return err
 	}
 

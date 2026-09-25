@@ -2303,7 +2303,7 @@
     {
       "rule_id": "duplicate_definitions",
       "source_id": "internal/smells/smell_refs_views.go",
-      "node_hash": "3c6826a982e55c18974311e2d454f1ec3b2f20c9b37644c2be7651df213801d7",
+      "node_hash": "6de82be8ba1e9b6f1b7c75369e84db98a1f172408101d32e30671e9f2285f800",
       "count": 1
     },
     {
@@ -2759,7 +2759,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/smells/serve_find_smells.go",
-      "node_hash": "6a9417b3189a7a23081add3d9f05f6923804dfdddc0f11b1bea32f3c97c8a601",
+      "node_hash": "f7fb25b8c1c0f303a4c9f402492b0e2549c3cb636e69b6bc1ed0efb603e9ac04",
       "count": 1
     },
     {
@@ -3319,7 +3319,7 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells.go",
-      "node_hash": "6a9417b3189a7a23081add3d9f05f6923804dfdddc0f11b1bea32f3c97c8a601",
+      "node_hash": "f7fb25b8c1c0f303a4c9f402492b0e2549c3cb636e69b6bc1ed0efb603e9ac04",
       "count": 1
     },
     {
@@ -3361,7 +3361,7 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/smell_refs_views.go",
-      "node_hash": "3c6826a982e55c18974311e2d454f1ec3b2f20c9b37644c2be7651df213801d7",
+      "node_hash": "6de82be8ba1e9b6f1b7c75369e84db98a1f172408101d32e30671e9f2285f800",
       "count": 1
     },
     {
@@ -3428,12 +3428,6 @@
       "rule_id": "long_function",
       "source_id": "tools/server-json-gen/main.go",
       "node_hash": "a43bebdf933f92a87db2f4c6f1cf9279cf8259ff841c0ebb674f5957f778c2f6",
-      "count": 1
-    },
-    {
-      "rule_id": "sleep_in_test",
-      "source_id": "graph/arena_writer_test.go",
-      "node_hash": "b62ba4b9049e9d8ad3c34fa31d191e6c73d9eaf5e0ba58759c09512c25e021dd",
       "count": 1
     },
     {

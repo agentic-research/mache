@@ -297,6 +297,33 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **Smell rules read ley-line-open's schema through views, not column names**
+  (`mache-be17ce`). **Custom rules must do the same**: read `v_ast`, `v_nodes`,
+  `v_defs` and `v_refs` rather than `_ast`, `nodes`, `node_defs` or
+  `node_refs`, and name the view in `Requires`. `examples/smell-rules/` is
+  updated to match.
+
+  LLO's projection-v6 (release v0.20.0) renames `_ast.node_id` to `nid`,
+  replaces `_ast.node_kind` with a `kind_id` into `kinds`, drops `source_id` in
+  favour of `nid >> 24`, and replaces `nodes.id`/`name`/`parent_id` with
+  `nid`/`name_id`/`parent_nid`. All fourteen built-in rules named those columns
+  directly, so a producer release rewrote every one of them.
+
+  The views are not a compatibility shim — rendering the old path-string id
+  back out of v6 would reinstate the ~1 GB of path text across six b-trees that
+  v6 exists to delete. What is stable is the **vocabulary**: `node_id` is a
+  path string on v4 and an integer on v6, and consumers treat it as opaque.
+  `source_id` stays the repo-relative source path on both, because rules scope
+  and report by it.
+
+  Proven to change no rule's meaning rather than argued: both rule sets over
+  one identical tree, every rule, no baseline — **6,682 findings each side,
+  sorted and diffed, empty in both directions**.
+
+  `v_refs` also gains `node_id`, the occurrence itself, distinct from
+  `referrer_node_id`, which resolves through the container to the enclosing
+  definition.
+
 - **A source file is projected from its db section in three statements, not
   fifty-five** (`mache-40ce82`). The cold path spent 90% of its SQLite time in
   per-construct statements: every registered call pattern ran its own

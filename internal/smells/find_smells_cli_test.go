@@ -68,7 +68,7 @@ func TestFindSmellsCLI_ListRulesNoDB(t *testing.T) {
 		ids[r.ID] = r.Requires
 	}
 	assert.Contains(t, ids, "dead_code")
-	assert.Contains(t, ids["dead_code"], "node_refs")
+	assert.Contains(t, ids["dead_code"], "v_refs")
 }
 
 // TestFindSmellsCLI_RunRuleAgainstFixture exercises the full CLI path:

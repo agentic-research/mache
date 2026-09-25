@@ -9,8 +9,16 @@ structurally worse.
 
 Background in one paragraph: `mache build <src> <out.db>` parses a
 source tree into a SQLite database of code structure — construct nodes
-(`nodes`), definitions (`node_defs`), references (`node_refs`), and,
-when the leyline backend is used, raw AST spans (`_ast`). A **smell
+(`v_nodes`), definitions (`v_defs`), references (`v_refs`), and, when the
+leyline backend is used, AST spans (`v_ast`).
+
+Those are **views mache installs**, not ley-line-open's own tables, and a rule
+must read them rather than `nodes` / `node_defs` / `node_refs` / `_ast`
+directly. The physical schema is the producer's to change — LLO's
+projection-v6 renamed `_ast.node_id` to `nid`, replaced `node_kind` with an id
+into `kinds`, and dropped `source_id` — and every rule that named a physical
+column broke on that release. The views keep the column names stable across
+it (`mache-be17ce`). A **smell
 rule** is a SQL query over that database. `mache find-smells` runs
 rules and reports each row they return as a *finding*: a (file, node,
 span, metric) tuple describing one structural problem.
@@ -23,8 +31,8 @@ copy-paste templates:
 | File                                                             | Demonstrates                                                                                          |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | [`fatal_call_in_library.json`](fatal_call_in_library.json)       | Binary rule (`0 AS metric`), cross-reference tables only, `%%` escaping, the empty-`source_file` trap |
-| [`long_test_function.json`](long_test_function.json)             | Metric rule with `DefaultMinMetric`, `_ast`-backed, auto-skips on backends without `_ast`             |
-| [`long_unexported_function.json`](long_unexported_function.json) | Joining `_ast` spans to `nodes` for name-based filtering                                              |
+| [`long_test_function.json`](long_test_function.json)             | Metric rule with `DefaultMinMetric`, `v_ast`-backed, auto-skips on backends without an AST             |
+| [`long_unexported_function.json`](long_unexported_function.json) | Joining `v_ast` spans to `v_nodes` for name-based filtering                                              |
 
 The shape:
 
@@ -32,12 +40,12 @@ The shape:
 {
   "ID": "long_test_function",
   "Description": "What it flags, why it matters, and known false positives.",
-  "Requires": ["_ast"],
+  "Requires": ["v_ast"],
   "ScopeColumn": "fn.source_id",
   "DefaultMinMetric": 121,
   "Severity": "warn",
   "Tags": ["tests"],
-  "Query": "SELECT fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col, (fn.end_row - fn.start_row) AS metric FROM _ast fn WHERE ... %s ORDER BY metric DESC"
+  "Query": "SELECT fn.source_id, fn.node_id, fn.start_byte, fn.end_byte, fn.start_row, fn.start_col, (fn.end_row - fn.start_row) AS metric FROM v_ast fn WHERE ... %s ORDER BY metric DESC"
 }
 ```
 
@@ -211,13 +219,14 @@ loader rejects rules with unescaped `%` at startup.
 `mache build` dispatches to leyline when available (backend `auto`),
 else the in-process tree-sitter backend:
 
-- **Both backends**: `nodes`, `node_defs`, `node_refs` (plus the
-  `v_defs` / `v_refs` canonical views).
-- **leyline only**: `_ast`, `_source`, `_imports`, `_lsp*`.
+- **Both backends**: `v_nodes`, `v_defs`, `v_refs`.
+- **leyline only**: `v_ast`, plus `_source`, `_imports`, `_lsp*`.
 
-Declare every table your query reads in `Requires` so the pre-flight
-check reports "rule X needs table Y" instead of a raw
-`no such table: _ast` — and so `--rule '*'` can skip the rule cleanly.
+Declare every view your query reads in `Requires` so the pre-flight check
+reports "rule X needs Y" instead of a raw `no such table: v_ast` — and so
+`--rule '*'` can skip the rule cleanly. Name the **view**, not the table
+underneath it: an unresolvable `Requires` SKIPS the rule rather than failing
+it, so a stale name turns your rule off silently.
 To see which backend produced a `.db`:
 
 ```bash
@@ -231,7 +240,7 @@ The schema engine attaches `source_file` to leaf rendered files
 directory. So:
 
 ```sql
-SELECT id FROM nodes WHERE source_file NOT LIKE '%test.go'
+SELECT node_id FROM v_nodes WHERE source_file NOT LIKE '%test.go'
 ```
 
 does not exclude construct dirs — their `source_file` is `''`, and
@@ -243,29 +252,40 @@ rule uses:
 ```sql
 WITH child_source AS (
   SELECT parent_id AS node_id, MIN(source_file) AS source_file
-  FROM nodes
+  FROM v_nodes
   WHERE source_file IS NOT NULL AND source_file != ''
   GROUP BY parent_id
 )
 SELECT COALESCE(NULLIF(n.source_file, ''), cs.source_file, '') AS source_id,
        ...
-FROM nodes n
-LEFT JOIN child_source cs ON cs.node_id = n.id
+FROM v_nodes n
+LEFT JOIN child_source cs ON cs.node_id = n.node_id
 ```
 
 The `NULLIF(..., '')` is load-bearing — `COALESCE` only skips NULLs,
 not empty strings.
 
-### Joining `node_defs` to an `_ast` row
+### Getting a definition's span and kind
 
-`node_defs.node_id` is the construct dir (`functions/Foo`) while the
-matching `_ast` row's `node_id` is the AST path under the source. A
-`=` join returns nothing; use a prefix `LIKE` join:
+**Do not join to the AST for this, and do not reason about the shape of a
+`node_id`.** The old advice here was a prefix `LIKE` join —
+`a.node_id LIKE d.node_id || '/%%'` — which assumed node ids are `/`-joined
+paths. LLO's projection-v6 made them integers, and every rule written that way
+stopped matching *silently*, which is the worst failure mode a rule has.
+
+`v_defs` and `v_refs` carry the occurrence's own `node_kind` and span inline,
+so the join is unnecessary:
 
 ```sql
-SELECT ... FROM node_defs d
-JOIN _ast a ON a.node_id LIKE d.node_id || '/%%'
+SELECT d.token, d.node_id, d.node_kind, d.start_row, d.end_row
+FROM v_defs d
 ```
+
+Treat `node_id` as **opaque**. It is a path string on some backends and an
+integer on others; the only safe operations are equality and joining it to
+another view's `node_id`. If you need the enclosing construct, use
+`v_refs.referrer_node_id` (which resolves through the container) or
+`v_nodes.parent_id` — never string surgery on the id.
 
 ### Validation
 
