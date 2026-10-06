@@ -69,11 +69,7 @@ func AutoInvokeLeylineParse(sourceDir string) (string, func(), error) {
 	tmpPath := tmpFile.Name()
 	_ = tmpFile.Close()
 
-	cleanup := func() {
-		_ = os.Remove(tmpPath)
-		_ = os.Remove(tmpPath + "-wal")
-		_ = os.Remove(tmpPath + "-shm")
-	}
+	cleanup := tempParseCleanup(tmpPath)
 
 	log.Printf("auto-leyline: parsing %s -> %s", sourceDir, tmpPath)
 	if err := runLeylineParse(leylineBin, sourceDir, tmpPath); err != nil {
@@ -81,6 +77,21 @@ func AutoInvokeLeylineParse(sourceDir string) (string, func(), error) {
 		return "", nil, err
 	}
 	return tmpPath, cleanup, nil
+}
+
+// tempParseCleanup returns the cleanup for a temp parse db.
+//
+// Named rather than inline so it can be tested, which is how its predecessor
+// stayed broken: it removed the db, -wal and -shm and left leyline's three
+// capnp sidecars behind on the SUCCESS path. They key on the db's STEM, so a
+// reaper globbing `*.db` could never reach them either. One machine held 804
+// such orphans, 150 MB, growing forever (mache-8178a5).
+//
+// removeEntry is the single list of what an entry is, shared with
+// parseCacheEntry.discard and the reaper. Three hand-maintained copies of it
+// is what let them disagree.
+func tempParseCleanup(dbPath string) func() {
+	return func() { removeEntry(dbPath) }
 }
 
 // runLeylineParse shells out to `leyline parse <sourceDir> -o <dbPath>`.

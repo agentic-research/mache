@@ -56,7 +56,6 @@ const (
 	// ~1.8 GB for a 1,000-file repo, so this is roughly five to six trees.
 	defaultParseCacheMaxBytes int64 = 10 << 30 // 10 GiB
 
-	tempDBPattern = "mache-leyline-*.db"
 )
 
 // entryFiles returns every path leyline writes for one db. The capnp sidecars
@@ -89,26 +88,66 @@ func removeEntry(dbPath string) {
 	}
 }
 
-// reapStaleTempDBs removes orphaned `mache-leyline-*.db` files, and their
-// sidecars, that nothing has touched for longer than the max age.
+// tempEntryPatterns match every file an orphaned temp parse can leave.
 //
-// Returns how many entries it removed, for the tests and the log line.
+// The sidecars are listed SEPARATELY from the db on purpose. Keying the sweep
+// on `*.db` alone leaves a sidecar whose db is already gone unreachable
+// forever — and that is the common case, not a corner: until this was fixed,
+// the success path removed the db, -wal and -shm and left all three capnp
+// files behind. One machine held 804 such orphans, 150 MB, every one of them
+// invisible to a db-keyed reaper (mache-8178a5).
+var tempEntryPatterns = []string{
+	"mache-leyline-*.db",
+	"mache-leyline-*.ast.capnp",
+	"mache-leyline-*.head.capnp",
+	"mache-leyline-*.source.capnp",
+}
+
+// reapStaleTempDBs removes orphaned temp-parse files — dbs, their sidecars,
+// and sidecars whose db is already gone — that nothing has touched for longer
+// than the max age.
+//
+// Returns how many files it removed. A count of FILES rather than entries,
+// because a half-deleted entry has no well-defined count and the number exists
+// to be reported, not reconciled.
 func reapStaleTempDBs(dir string, maxAge time.Duration, now time.Time) int {
-	matches, err := filepath.Glob(filepath.Join(dir, tempDBPattern))
-	if err != nil {
-		return 0
-	}
+	seen := map[string]bool{}
 	reaped := 0
-	for _, db := range matches {
-		fi, serr := os.Stat(db)
-		if serr != nil || fi.IsDir() {
+	for _, pattern := range tempEntryPatterns {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
 			continue
 		}
-		if now.Sub(fi.ModTime()) <= maxAge {
-			continue
+		for _, path := range matches {
+			if seen[path] {
+				continue
+			}
+			fi, serr := os.Stat(path)
+			if serr != nil || fi.IsDir() {
+				continue
+			}
+			if now.Sub(fi.ModTime()) <= maxAge {
+				continue
+			}
+			// Remove the whole family when this is a db, so a live sidecar is
+			// not left behind by an entry that is going away; a lone sidecar
+			// removes just itself.
+			targets := []string{path}
+			if strings.HasSuffix(path, ".db") {
+				targets = entryFiles(path)
+			}
+			for _, f := range targets {
+				if seen[f] {
+					continue
+				}
+				if _, err := os.Stat(f); err != nil {
+					continue
+				}
+				_ = os.Remove(f)
+				seen[f] = true
+				reaped++
+			}
 		}
-		removeEntry(db)
-		reaped++
 	}
 	return reaped
 }

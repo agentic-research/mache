@@ -49,7 +49,8 @@ func TestReapStaleTempDBs_RemovesOnlyTheOldOnes(t *testing.T) {
 
 	n := reapStaleTempDBs(dir, 24*time.Hour, time.Now())
 
-	assert.Equal(t, 1, n)
+	// Four files: the db, its -wal, and two capnp sidecars.
+	assert.Equal(t, 4, n, "the count is of FILES removed, not entries")
 	assert.False(t, exists(t, old), "a day-old orphan must be reaped")
 	assert.True(t, exists(t, fresh), "a parse from a minute ago may still be running")
 	assert.True(t, exists(t, other), "only mache-leyline-*.db is ours to delete")
@@ -72,6 +73,76 @@ func TestReapStaleTempDBs_RemovesTheSidecarsToo(t *testing.T) {
 		db, db + "-wal", stem + ".ast.capnp", stem + ".source.capnp",
 	} {
 		assert.False(t, exists(t, f), "%s survived the reap", filepath.Base(f))
+	}
+}
+
+// A sidecar whose db is already gone is the COMMON orphan, not a corner case.
+// Until mache-8178a5 the success path removed the db, -wal and -shm and left
+// all three capnp files behind, so a reaper keyed on `*.db` could never see
+// them: one machine held 804 such files, 150 MB, growing forever.
+func TestReapStaleTempDBs_ReapsSidecarsWhoseDBIsAlreadyGone(t *testing.T) {
+	dir := t.TempDir()
+	stem := filepath.Join(dir, "mache-leyline-999")
+	orphans := []string{stem + ".ast.capnp", stem + ".head.capnp", stem + ".source.capnp"}
+	when := time.Now().Add(-48 * time.Hour)
+	for _, f := range orphans {
+		require.NoError(t, os.WriteFile(f, make([]byte, 32), 0o600))
+		require.NoError(t, os.Chtimes(f, when, when))
+	}
+	require.False(t, exists(t, stem+".db"), "the db is gone — that is the whole point")
+
+	n := reapStaleTempDBs(dir, 24*time.Hour, time.Now())
+
+	assert.Equal(t, 3, n)
+	for _, f := range orphans {
+		assert.False(t, exists(t, f), "%s must be reachable without its db", filepath.Base(f))
+	}
+}
+
+// A fresh sidecar belongs to a parse that may still be running.
+func TestReapStaleTempDBs_LeavesAFreshDBLessSidecar(t *testing.T) {
+	dir := t.TempDir()
+	fresh := filepath.Join(dir, "mache-leyline-888.ast.capnp")
+	require.NoError(t, os.WriteFile(fresh, make([]byte, 32), 0o600))
+
+	assert.Zero(t, reapStaleTempDBs(dir, 24*time.Hour, time.Now()))
+	assert.True(t, exists(t, fresh))
+}
+
+// removeEntry is the single list every deletion path uses — the temp-parse
+// cleanup, parseCacheEntry.discard, and the reaper. Three hand-maintained
+// copies is what let the success path leak sidecars for as long as it did.
+func TestRemoveEntry_RemovesEveryFileLeylineWrites(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "x.db")
+	stem := filepath.Join(dir, "x")
+	written := []string{
+		db, db + "-wal", db + "-shm", db + ".lock",
+		stem + ".ast.capnp", stem + ".head.capnp", stem + ".source.capnp",
+	}
+	for _, f := range written {
+		require.NoError(t, os.WriteFile(f, []byte("x"), 0o600))
+	}
+
+	removeEntry(db)
+
+	for _, f := range written {
+		assert.False(t, exists(t, f), "%s survived removeEntry", filepath.Base(f))
+	}
+}
+
+// The cleanup handed back for a temp parse must remove the WHOLE entry.
+// Its predecessor removed three of six files on the success path, and nothing
+// asserted otherwise — so the leak was invisible until a machine filled up.
+func TestTempParseCleanup_RemovesTheSidecarsToo(t *testing.T) {
+	dir := t.TempDir()
+	db := writeEntry(t, dir, "mache-leyline-777", time.Minute, 16, 16)
+
+	tempParseCleanup(db)()
+
+	stem := strings.TrimSuffix(db, ".db")
+	for _, f := range []string{db, db + "-wal", stem + ".ast.capnp", stem + ".source.capnp"} {
+		assert.False(t, exists(t, f), "%s survived the temp-parse cleanup", filepath.Base(f))
 	}
 }
 
