@@ -34,8 +34,16 @@ type SQLiteWriter struct {
 }
 
 // writerTablesDDL is the base table/index schema NewSQLiteWriter installs.
-// The canonical views live in CanonicalViewsDDL (one definition, executed
-// here and by EnsureCanonicalViews for databases some other producer wrote).
+//
+// It installs NO views. v_defs / v_refs / v_ast / v_nodes are TEMP views built
+// per connection by smells.EnsureCanonicalViews, which PROBES what the producer
+// actually wrote and emits a body to match (mache-be17ce). This writer used to
+// bake a second, static, mention-only pair into every db it created, which the
+// TEMP pair then shadowed — two definitions of the same view names with
+// different shapes, the persistent one permanently stale and reachable only by
+// a reader that forgot to install the real ones. Databases written before
+// mache-8178a5 still carry it; the shadowing that makes them harmless is
+// covered by fixturedb's standaloneViews.
 const writerTablesDDL = `
 CREATE TABLE IF NOT EXISTS nodes (
 	id TEXT PRIMARY KEY,
@@ -135,7 +143,7 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 		return nil, err
 	}
 
-	if _, err := db.Exec(writerTablesDDL + CanonicalViewsDDL); err != nil {
+	if _, err := db.Exec(writerTablesDDL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
@@ -371,44 +379,6 @@ type FileIndexEntry struct {
 	// (mache-7a7919). Seeding from here is what keeps the assignment the
 	// same as a full ingest's.
 	ClaimedIDs []string
-}
-
-// CanonicalViewsDDL is the SQL that creates v_defs / v_refs.
-// Exposed so consumers that opened a .db from a different writer
-// (e.g. LLO-built .db without these views, or an older mache build)
-// can install the views on demand. NewSQLiteWriter runs the same
-// DDL inline — repeated execution is safe via CREATE VIEW IF NOT
-// EXISTS.
-//
-// Once Step 1 (sister bead ley-line-453f7e) ships and _lsp_refs /
-// _lsp_defs gain the referrer_node_id / ref_token / def_token
-// columns, the view bodies extend with UNION ALL clauses pulling
-// the binding-fidelity rows. Consumer SQL doesn't change at that
-// point.
-const CanonicalViewsDDL = `
-CREATE VIEW IF NOT EXISTS v_defs AS
-	SELECT token, node_id, 'mention' AS fidelity FROM node_defs;
-
-CREATE VIEW IF NOT EXISTS v_refs AS
-	SELECT node_id AS referrer_node_id,
-	       token,
-	       NULL  AS target_node_id,
-	       NULL  AS ref_uri,
-	       NULL  AS ref_line,
-	       'mention' AS fidelity
-	FROM node_refs;
-`
-
-// EnsureCanonicalViews installs v_defs / v_refs on an existing
-// database connection. Idempotent — uses CREATE VIEW IF NOT EXISTS.
-// Useful for callers that opened a .db produced by something other
-// than mache's writer (e.g. an LLO build that hasn't been migrated
-// yet, or a pre-Step-3 mache .db on disk).
-func EnsureCanonicalViews(db *sql.DB) error {
-	if _, err := db.Exec(CanonicalViewsDDL); err != nil {
-		return fmt.Errorf("ensure canonical views: %w", err)
-	}
-	return nil
 }
 
 // CoverageEntry is one (source_id, producer) row from _index_coverage.

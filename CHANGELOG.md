@@ -297,6 +297,25 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **One definition of the canonical views, not two** (`mache-be17ce`).
+  `SQLiteWriter` baked a static, mention-only `v_defs`/`v_refs` into every
+  database it created, while `smells.EnsureCanonicalViews` installed TEMP views
+  of the same names — probed against what the producer actually wrote — that
+  shadowed them. Two definitions of the same view names with different shapes,
+  the persistent one permanently stale and reachable only by a reader that
+  forgot to install the real ones.
+
+  The writer now installs **no views**, and the dead `ingest.EnsureCanonicalViews`
+  goes with them: it had no production caller, and its own test said it existed
+  "so Step 4 can adopt it" — a step that never happened.
+
+  Databases written before this still carry the persistent pair, and the
+  shadowing that keeps them correct stays covered by a fixture now explicitly
+  modelling *history* rather than current output. The conformance test asserts
+  the inverse of what it used to: that the writer creates none of those views.
+  Re-introducing one would otherwise be **silent** — shadowed for every reader
+  that installs the TEMP pair, and wrong only for one that does not.
+
 - **Smell rules read ley-line-open's schema through views, not column names**
   (`mache-be17ce`). **Custom rules must do the same**: read `v_ast`, `v_nodes`,
   `v_defs` and `v_refs` rather than `_ast`, `nodes`, `node_defs` or
