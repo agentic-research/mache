@@ -35,8 +35,12 @@ import (
 func TestStandaloneSchema_MatchesSQLiteWriter(t *testing.T) {
 	got := deriveWriterSchema(t)
 
+	// standaloneViews is deliberately NOT in this set. Since mache-8178a5 the
+	// writer creates no views; those model what dbs written BEFORE that change
+	// carry, so the shadowing path stays covered for them. Their absence from
+	// the writer is asserted below, which is the stronger statement.
 	var modelled []string
-	for _, m := range []map[string]string{standaloneTables, standaloneIndexes, standaloneViews} {
+	for _, m := range []map[string]string{standaloneTables, standaloneIndexes} {
 		modelled = append(modelled, slices.Sorted(maps.Keys(m))...)
 	}
 	assert.ElementsMatch(t, modelled, sortedNames(got),
@@ -54,10 +58,16 @@ func TestStandaloneSchema_MatchesSQLiteWriter(t *testing.T) {
 		require.True(t, ok, "ingest.SQLiteWriter no longer creates index %s", name)
 		assert.Equal(t, normalizeDDL(want), normalizeDDL(g), "index %s drifted", name)
 	}
-	for name, want := range standaloneViews {
-		g, ok := got[name]
-		require.True(t, ok, "ingest.SQLiteWriter no longer creates view %s", name)
-		assert.Equal(t, normalizeDDL(want), normalizeDDL(g), "view %s drifted", name)
+	// The inverse of what this loop used to assert. Re-introducing a persistent
+	// view would be SILENT: smells.EnsureCanonicalViews installs TEMP views of
+	// the same names, which shadow it for every reader that calls the
+	// installer — so a stale persistent copy is wrong only for a reader that
+	// does not, and invisible to the rest of the suite (mache-8178a5).
+	for name := range standaloneViews {
+		_, created := got[name]
+		assert.False(t, created,
+			"ingest.SQLiteWriter creates view %s again; it must install none — "+
+				"a persistent view is shadowed by the TEMP pair and so fails silently", name)
 	}
 }
 

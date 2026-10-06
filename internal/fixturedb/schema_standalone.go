@@ -74,13 +74,20 @@ var standaloneIndexes = map[string]string{
 	"idx_defs_node":   `CREATE INDEX idx_defs_node ON node_defs(node_id)`,
 }
 
-// standaloneViews are the PERSISTENT v_defs / v_refs SQLiteWriter installs.
+// standaloneViews are the persistent v_defs / v_refs that SQLiteWriter USED TO
+// install into every db it created, removed in mache-8178a5.
 //
-// They matter because ensureCanonicalViews relies on TEMP objects SHADOWING
-// same-named main-schema objects for the current connection (see its doc
-// comment). A fixture that omits these never exercises the shadowing, so a
-// regression in it would be invisible — exactly the hidden-parameter problem
-// this package removes.
+// Kept deliberately, and not as dead weight: every .db written before that
+// change still carries them, and what makes those dbs read correctly is TEMP
+// objects SHADOWING same-named main-schema objects for the connection (see
+// EnsureCanonicalViews' doc comment). A fixture that omits them never
+// exercises the shadowing, so a regression would be invisible to the whole
+// suite while silently serving a stale, mention-only view to anyone with an
+// older artifact.
+//
+// This is now a fixture of HISTORY rather than a mirror of current output. It
+// can be deleted once pre-mache-8178a5 dbs are not worth supporting — and the
+// shadowing path deleted with it.
 var standaloneViews = map[string]string{
 	"v_defs": `CREATE VIEW v_defs AS
 		SELECT token, node_id, 'mention' AS fidelity FROM node_defs`,

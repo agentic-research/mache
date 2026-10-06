@@ -183,7 +183,6 @@ var lloTestFixtureAllowlist = []string{
 	"graph/sqlite_graph_lookupdef_test.go",
 	"graph/sqlite_graph_nodehash_test.go",
 	"internal/ingest/ast_flatten_db_test.go",
-	"internal/ingest/sqlite_writer_test.go",
 }
 
 // TestLLOBoundary_NoNewWritersOfLLOOwnedTables fails when a file not on the
