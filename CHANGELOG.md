@@ -453,6 +453,28 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **The temp-parse cleanup leaked leyline's capnp sidecars, and the reaper
+  could not see them** (`mache-8178a5`, following its own fix). Verified in the
+  wild rather than assumed: after the reaper shipped, one machine still held
+  **804 orphaned files, 150 MB** — and **zero** `.db` files among them.
+
+  Two bugs compounding. The temp-parse cleanup removed the db, `-wal` and
+  `-shm` but not the three `.capnp` sidecars, so **every successful parse**
+  leaked them. And because the sidecars key on the db's *stem*, a sweep
+  globbing `*.db` could never reach one whose db was already gone — which,
+  thanks to the first bug, was all of them.
+
+  Every deletion path now goes through one list of what an entry is, shared by
+  the temp cleanup, `parseCacheEntry.discard` and the reaper; three
+  hand-maintained copies is what let them disagree. The sweep also matches the
+  sidecar patterns directly, so a db-less orphan is reachable. The cleanup is a
+  named function rather than an inline closure specifically so its contract can
+  be tested — nothing asserted it before, which is how the leak stayed
+  invisible until a disk filled.
+
+  Measured after: 804 orphans → 18, all from the last few minutes, none older
+  than the 24 h cutoff.
+
 - **mache no longer fills the disk** (`mache-8178a5`). Measured on a developer
   machine: **over 100 GB** across two leaks, a 926 GB volume down to 1.8 GiB
   free, and `task check` failing outright with `no space left on device`.

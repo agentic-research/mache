@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/agentic-research/mache/internal/leyline"
@@ -48,13 +47,7 @@ func (e *parseCacheEntry) discard() {
 	if e == nil {
 		return
 	}
-	stem := strings.TrimSuffix(e.path, ".db")
-	for _, name := range []string{
-		e.path, e.path + "-wal", e.path + "-shm",
-		stem + ".ast.capnp", stem + ".head.capnp", stem + ".source.capnp",
-	} {
-		_ = os.Remove(name)
-	}
+	removeEntry(e.path)
 	e.release()
 }
 
