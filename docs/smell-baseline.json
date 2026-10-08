@@ -2062,18 +2062,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/ingest/sqlite_writer.go",
-      "node_hash": "e1b140a2d74911f63d046dc88bbadaf8248b2b470c05d2ea7f10468b4a5caf2e",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/ingest/sqlite_writer_test.go",
-      "node_hash": "f9cdfcb3a62ff54be5708d7ddba8e1702fee209bc08a0e103df633e12b4c9e4d",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "internal/lattice/project.go",
       "node_hash": "d02701b45559bf501e4201a58d4d141ec07b51fb1e2ed3bcf91e20ae4734f762",
       "count": 1
@@ -2298,12 +2286,6 @@
       "rule_id": "duplicate_definitions",
       "source_id": "internal/smells/serve_find_smells_test.go",
       "node_hash": "e842c5f569f14327205ee17291c15d1a4da809827b51b0fd1555db72ffb588e3",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/smells/smell_refs_views.go",
-      "node_hash": "6de82be8ba1e9b6f1b7c75369e84db98a1f172408101d32e30671e9f2285f800",
       "count": 1
     },
     {
@@ -3186,6 +3168,12 @@
     },
     {
       "rule_id": "long_function",
+      "source_id": "internal/lloschema/views.go",
+      "node_hash": "21cb07530989a46756586dcffd3eb3986abd2b173e03e8826361b6233b300f5c",
+      "count": 1
+    },
+    {
+      "rule_id": "long_function",
       "source_id": "internal/mcpserve/all_tools_e2e_test.go",
       "node_hash": "2b546959b975c5e71b307d68bf1bef0024830f2e62e7a182011797c75f684aa3",
       "count": 1
@@ -3307,7 +3295,7 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/falsifiability_skip_list_ablation_test.go",
-      "node_hash": "12d2cd3d28d65a49b7cbb0d55170927f534e8e7e6a13d362a1ece286fc076a81",
+      "node_hash": "ef141278df7a81ea24328a4dd596f637b908251f4d4bd22f09e2165314e7ac51",
       "count": 1
     },
     {
@@ -3343,25 +3331,19 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells_views_test.go",
-      "node_hash": "3463822016853469123cbef5b36247d8980aa5cda4f532293baed44426b10abd",
+      "node_hash": "a0401596f7fcf3aaa42ba05b7b62c2d9e131862ed45f718c4c4c1e038b2f3254",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/smell_findings.go",
-      "node_hash": "ff4786ae882b24f4dfa883f6ca15a6b2d63a338dac53f0c1b29fa7a45321a15a",
+      "node_hash": "f1c89e2740e11372f4b55bdd5e1fbb5febbb5b75130c004146a9e00a52368a76",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/smells/smell_incremental.go",
       "node_hash": "eab46050c0f8a786a8f5e0a1c28ebfdff40518096406c4600f046ba4a6feaa40",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/smells/smell_refs_views.go",
-      "node_hash": "6de82be8ba1e9b6f1b7c75369e84db98a1f172408101d32e30671e9f2285f800",
       "count": 1
     },
     {
