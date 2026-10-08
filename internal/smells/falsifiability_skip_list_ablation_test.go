@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -260,7 +262,7 @@ func TestFalsifiabilityA_SyntheticHarness(t *testing.T) {
 
 	qg := &sqlDBQuerier{db: db, path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
-	require.NoError(t, LoadCapnpBindings(qg, qg.DBPath()))
+	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
 
 	withSkip, withoutSkip := runDeadCodeWithAndWithout(t, db)
 

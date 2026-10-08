@@ -18,14 +18,22 @@ import (
 
 const module = "github.com/agentic-research/mache"
 
-// decompPackages is the extracted eight, with each one's ALLOWED internal
-// dependencies among the eight (the declared DAG). Any new edge fails here
+// decompPackages is the extracted packages, with each one's ALLOWED internal
+// dependencies among them (the declared DAG). Any new edge fails here
 // until this table is deliberately amended in review.
 var decompPackages = map[string][]string{
-	"internal/testutil":    {},
-	"internal/projcfg":     {},
-	"internal/mountmeta":   {},
-	"internal/smells":      {"internal/projcfg"},
+	"internal/testutil":  {},
+	"internal/projcfg":   {},
+	"internal/mountmeta": {},
+	"internal/smells":    {"internal/projcfg", "internal/lloschema"},
+	// lloschema is the LLO physical-schema boundary (mache-be17ce) and a LEAF
+	// among the extracted packages, deliberately: it depends on NONE of them,
+	// so anything may read ley-line-open's projection through it without
+	// taking on the smell engine. That is the whole point of the extraction —
+	// `graph` can install the canonical views, which it could not do while
+	// they lived in internal/smells. An edge FROM lloschema to any of the
+	// eight would make it a layer instead of a boundary.
+	"internal/lloschema":   {},
 	"internal/schemainfer": {"internal/leylinegraph", "internal/projcfg"},
 	// leylinegraph keeps the persistent parse cache under ~/.mache, resolved
 	// through projcfg's home seam so it inherits the test-hermeticity guard —
@@ -41,6 +49,7 @@ var decompPackages = map[string][]string{
 	"internal/mcpserve": {
 		"internal/projcfg", "internal/mountmeta", "internal/smells",
 		"internal/schemainfer", "internal/leylinegraph", "internal/daemonguard",
+		"internal/lloschema",
 	},
 }
 
@@ -71,7 +80,7 @@ func TestDecomp_NoPackageImportsCmd(t *testing.T) {
 }
 
 // TestDecomp_DAGMatchesDeclaredEdges is invariant 1b: each extracted
-// package's dependencies AMONG THE EIGHT are exactly a subset of the
+// package's dependencies AMONG THE DECLARED SET are exactly a subset of the
 // declared DAG. Growing an edge is a design decision, not a convenience —
 // amend decompPackages in the same PR and say why.
 func TestDecomp_DAGMatchesDeclaredEdges(t *testing.T) {

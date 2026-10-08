@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	capnp "capnproto.org/go/capnp/v3"
 	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
 	"github.com/agentic-research/mache/internal/lsp"
@@ -396,7 +398,7 @@ func TestLoadCapnpBindings_PopulatesViewFromSiblingLog(t *testing.T) {
 
 	qg := &sqlDBQuerier{db: db, path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
-	require.NoError(t, LoadCapnpBindings(qg, qg.DBPath()))
+	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
 
 	// v_refs should now surface 1 mention row + 2 binding rows.
 	var mentionRefs, bindingRefs int
@@ -448,7 +450,7 @@ func TestLoadCapnpBindings_NoSiblingLogIsNoOp(t *testing.T) {
 	qg := &sqlDBQuerier{db: db, path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
 	// Should not error even though no sibling .bindings.capnp exists.
-	require.NoError(t, LoadCapnpBindings(qg, qg.DBPath()))
+	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
 
 	var bindingRefs, mentionRefs int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'binding'`).Scan(&bindingRefs))
@@ -477,58 +479,9 @@ func TestLoadCapnpBindings_EmptyDBPathIsNoOp(t *testing.T) {
 
 	qg := &sqlDBQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
-	require.NoError(t, LoadCapnpBindings(qg, ""))
+	require.NoError(t, lloschema.LoadCapnpBindings(qg, ""))
 
 	var bindingRefs int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM v_refs WHERE fidelity = 'binding'`).Scan(&bindingRefs))
 	assert.Equal(t, 0, bindingRefs, "no path → silent skip, no binding rows")
-}
-
-func TestTableHasColumn(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "probe.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	// `derived` is a GENERATED column: readable, indexable, returned by
-	// SELECT *, and INVISIBLE to PRAGMA table_info. ley-line-open ships them
-	// (source_blobs.byte_len STORED, and nodes.parent_id VIRTUAL from
-	// projection-v4, mache-bc6ca3), and TableHasColumn decides whether the
-	// binding-fidelity clause is added to a view body — so probing with
-	// table_info would drop a usable column's rows on the floor.
-	_, err = db.Exec(`CREATE TABLE present (
-		a TEXT,
-		b INTEGER,
-		derived INTEGER GENERATED ALWAYS AS (length(a)) VIRTUAL
-	)`)
-	require.NoError(t, err)
-
-	qg := &sqlDBQuerier{db: db}
-
-	// Existing table, existing column.
-	got, err := TableHasColumn(qg, "present", "a")
-	require.NoError(t, err)
-	assert.True(t, got)
-
-	// Existing table, missing column — collapses with "table missing"
-	// into false; consumer doesn't need to distinguish.
-	got, err = TableHasColumn(qg, "present", "missing")
-	require.NoError(t, err)
-	assert.False(t, got)
-
-	// A GENERATED column is present and usable in a view body, so the probe
-	// must report it. PRAGMA table_info omits generated columns entirely and
-	// would answer false here; PRAGMA table_xinfo is why this passes.
-	got, err = TableHasColumn(qg, "present", "derived")
-	require.NoError(t, err)
-	assert.True(t, got, "a generated column is readable, so the probe must see it")
-
-	// Missing table — also false (PRAGMA table_xinfo returns 0 rows).
-	got, err = TableHasColumn(qg, "absent", "a")
-	require.NoError(t, err)
-	assert.False(t, got)
-
-	// Injection-defense: invalid identifier rejected.
-	_, err = TableHasColumn(qg, "no spaces; DROP TABLE present", "a")
-	require.Error(t, err)
 }

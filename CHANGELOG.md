@@ -297,6 +297,35 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **The LLO schema boundary is its own package** (`mache-be17ce`).
+  `internal/lloschema` now owns the translation from ley-line-open's physical
+  schema to mache's stable vocabulary — `v_ast`, `v_nodes`, `v_defs`, `v_refs`,
+  and the `TableHasColumn` probe they are built on.
+
+  It lived in `internal/smells`, which imports `graph` — so `graph` could not
+  install the canonical views without a cycle. That is the actual reason the Go
+  readers still spell out LLO's physical column names while the smell rules no
+  longer do, and why `projection-v6` broke them. `lloschema` declares its own
+  single-method `Querier` instead of importing `graph.RefsQuerier`, so the
+  dependency is legal in the direction that was needed; it is a **leaf** among
+  the extracted packages, verified: its only mache-internal dependency is
+  `internal/lsp`.
+
+  Views derived for a particular rule's question — `v_test_nodes`,
+  `v_vendored_files`, `v_doc_refs` — stay with the rules. That split is what
+  took the 247-line `EnsureCanonicalViews` apart along a real seam rather than
+  a line count.
+
+  `internal/mcpserve` stopped importing the smell engine entirely as a result:
+  it was reaching into it only for a schema probe.
+
+- **`v_defs` and `v_refs` work on projection-v6** (`mache-be17ce`). They probed
+  every *additive* column LLO has ever added — `node_hash`, `canonical_kind`,
+  `qualifier`, the spans — but assumed `node_defs.node_id` exists. v6 renamed
+  it to `nid`, and `container_node_id` to `container_nid`, so both views failed
+  outright there while `v_ast`/`v_nodes` were fine. Identity is now resolved by
+  probe, like everything else, and aliased back to the stable name.
+
 - **One definition of the canonical views, not two** (`mache-be17ce`).
   `SQLiteWriter` baked a static, mention-only `v_defs`/`v_refs` into every
   database it created, while `smells.EnsureCanonicalViews` installed TEMP views

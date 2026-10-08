@@ -1,10 +1,6 @@
-package smells
+package lloschema
 
-import (
-	"fmt"
-
-	"github.com/agentic-research/mache/graph"
-)
+import "fmt"
 
 // The boundary between mache's rule vocabulary and ley-line-open's physical
 // schema (mache-be17ce).
@@ -45,7 +41,7 @@ import (
 // A backend with no `_ast` gets no `v_ast`, which is what makes the rules'
 // `Requires: ["v_ast"]` skip them instead of failing at query time — the same
 // degradation the physical `Requires: ["_ast"]` gave before.
-func ensureSchemaViews(qg graph.RefsQuerier) error {
+func ensureSchemaViews(qg Querier) error {
 	astBody, err := astViewBody(qg)
 	if err != nil {
 		return err
@@ -63,18 +59,16 @@ func ensureSchemaViews(qg graph.RefsQuerier) error {
 		stmts = append(stmts, "CREATE TEMP VIEW v_nodes AS "+nodesBody)
 	}
 	for _, s := range stmts {
-		rows, qerr := qg.QueryRefs(s)
-		if qerr != nil {
-			return fmt.Errorf("ensure schema views: %w", qerr)
+		if err := exec(qg, s); err != nil {
+			return fmt.Errorf("ensure schema views: %w", err)
 		}
-		_ = rows.Close()
 	}
 	return nil
 }
 
 // astViewBody returns the SELECT for v_ast, or "" when the producer wrote no
 // usable `_ast`.
-func astViewBody(qg graph.RefsQuerier) (string, error) {
+func astViewBody(qg Querier) (string, error) {
 	v6, err := TableHasColumn(qg, "_ast", "nid")
 	if err != nil {
 		return "", fmt.Errorf("probe _ast.nid: %w", err)
@@ -122,7 +116,7 @@ func astViewBody(qg graph.RefsQuerier) (string, error) {
 // parent_nid outright. Both answer "which node encloses this one", which is
 // the only thing consumers may ask — mache-93e84b already isolated the last
 // rule that inferred it from the id's shape, for this change.
-func nodesViewBody(qg graph.RefsQuerier) (string, error) {
+func nodesViewBody(qg Querier) (string, error) {
 	v6, err := TableHasColumn(qg, "nodes", "nid")
 	if err != nil {
 		return "", fmt.Errorf("probe nodes.nid: %w", err)

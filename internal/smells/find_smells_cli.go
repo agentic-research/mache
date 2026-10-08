@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	"github.com/spf13/cobra"
 
 	"github.com/agentic-research/mache/graph"
@@ -333,7 +335,7 @@ func runRatchetGate(qg graph.RefsQuerier, results []ruleRunResult, skipped []ski
 	// rule, and it lands on the same backends, so it is reported on the same
 	// lines (mache-ddf14b / mache-dd45a3).
 	pathKeyed := false
-	if hasHash, hErr := TableHasColumn(qg, "_ast", "node_hash"); hErr == nil && !hasHash {
+	if hasHash, hErr := lloschema.TableHasColumn(qg, "_ast", "node_hash"); hErr == nil && !hasHash {
 		pathKeyed = true
 	}
 

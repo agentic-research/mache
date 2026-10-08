@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	"github.com/agentic-research/mache/graph"
 )
 
@@ -188,7 +190,7 @@ func runCyclomaticComplexityMemo(qg graph.RefsQuerier, sourceID string, limit in
 // scanASTFunctions reads every function/method occurrence from _ast, with its
 // node_hash (when the column exists) and span. Optionally scoped to one source.
 func scanASTFunctions(qg graph.RefsQuerier, sourceID string) ([]astFunc, error) {
-	hasHash, err := TableHasColumn(qg, "_ast", "node_hash")
+	hasHash, err := lloschema.TableHasColumn(qg, "_ast", "node_hash")
 	if err != nil {
 		return nil, fmt.Errorf("probe _ast.node_hash: %w", err)
 	}

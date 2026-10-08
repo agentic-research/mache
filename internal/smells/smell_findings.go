@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	"github.com/agentic-research/mache/graph"
 )
 
@@ -54,7 +56,7 @@ func ensureSmellQueryContext(qg graph.RefsQuerier) error {
 	// table. v_refs is already configured to UNION over that table
 	// (in EnsureCanonicalViews); empty table → no extra rows.
 	if dp, ok := qg.(graph.DBPathProvider); ok {
-		if err := LoadCapnpBindings(qg, dp.DBPath()); err != nil {
+		if err := lloschema.LoadCapnpBindings(qg, dp.DBPath()); err != nil {
 			return err
 		}
 	}
@@ -211,7 +213,7 @@ func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	hasHash, err := TableHasColumn(qg, "_ast", "node_hash")
+	hasHash, err := lloschema.TableHasColumn(qg, "_ast", "node_hash")
 	if err != nil {
 		return fmt.Errorf("enrich node hashes: probe _ast.node_hash: %w", err)
 	}
@@ -288,7 +290,7 @@ func enrichLocations(qg graph.RefsQuerier, findings []smellFinding) error {
 	// expected no-op, not an error. Probe once (rather than string-matching a
 	// "no such table" failure) so that any error from the chunked lookups below
 	// is a genuine query failure we must surface, not silent location loss.
-	hasAST, err := TableHasColumn(qg, "_ast", "node_id")
+	hasAST, err := lloschema.TableHasColumn(qg, "_ast", "node_id")
 	if err != nil {
 		return fmt.Errorf("enrich locations: probe _ast: %w", err)
 	}

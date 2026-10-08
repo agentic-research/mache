@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	"github.com/agentic-research/mache/graph"
 )
 
@@ -84,11 +86,11 @@ func vendoredViewSQL(hasNodes, hasAST bool) string {
 func ensureVendoredView(qg graph.RefsQuerier) error {
 	// Probe rather than assume: TableHasColumn is false for both "no table"
 	// and "table without column", which is exactly the question here.
-	hasNodes, err := TableHasColumn(qg, "nodes", "source_file")
+	hasNodes, err := lloschema.TableHasColumn(qg, "nodes", "source_file")
 	if err != nil {
 		return fmt.Errorf("probe nodes.source_file: %w", err)
 	}
-	hasAST, err := TableHasColumn(qg, "_ast", "source_id")
+	hasAST, err := lloschema.TableHasColumn(qg, "_ast", "source_id")
 	if err != nil {
 		return fmt.Errorf("probe _ast.source_id: %w", err)
 	}
