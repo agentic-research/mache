@@ -141,8 +141,16 @@ var lloWriterAllowlist = map[string]string{
 	// matched ley-line at all. When delegation lands these disappear with the
 	// rest.
 	"internal/fixturedb/schema_leyline.go": "the DERIVED ley-line DDL, conformance-tested against the pinned binary (mache-7555da)",
-	"internal/fixturedb/build.go":          "creates the derived tables for a fixture (mache-7555da)",
-	"internal/fixturedb/emit.go":           "inserts fixture rows into the derived tables (mache-7555da)",
+	// Same class as the line above, in the one package that owns derived DDL —
+	// but the reason is written honestly rather than copied: this mirror is
+	// checked against a v0.20.0 binary WHEN ONE IS RESOLVABLE, not against the
+	// pin, because the pin is still v0.19.1. That gap is time-boxed by
+	// TestLeylineV6Schema_IsCheckedOnceThePinReachesIt, and at the pin bump v6
+	// BECOMES schema_leyline.go — so this entry is merged away and the
+	// allowlist shrinks back to where it was (mache-be17ce).
+	"internal/fixturedb/schema_leyline_v6.go": "the DERIVED projection-v6 DDL, conformance-tested against a v0.20.0 binary when resolvable; merges into schema_leyline.go at the pin bump (mache-be17ce)",
+	"internal/fixturedb/build.go":             "creates the derived tables for a fixture (mache-7555da)",
+	"internal/fixturedb/emit.go":              "inserts fixture rows into the derived tables (mache-7555da)",
 }
 
 // lloTestFixtureAllowlist is the frozen set of TEST files still hand-building
