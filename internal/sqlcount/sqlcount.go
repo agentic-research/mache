@@ -32,6 +32,7 @@ import (
 var (
 	countingOnce sync.Once
 	sqlQueries   atomic.Int64
+	sqlPrepares  atomic.Int64
 )
 
 // Only QUERIES are counted, not writes.
@@ -76,6 +77,23 @@ func Reset() (count func() int64) {
 	return sqlQueries.Load
 }
 
+// ResetPrepares zeroes the PREPARE counter and returns a func reading it.
+//
+// A separate count from Reset because it measures a different thing. Every
+// query EXECUTES once however it is issued, so an execution count cannot tell
+// a reused prepared statement from one compiled afresh per call — and the
+// compilation is the cost: a profile of a warm point read on the direct path
+// showed SQLite's parser at ~half of all remaining time once page I/O was out
+// of the way (mache-3063fb). A prepare count separates them: it scales with
+// calls when a hot path hands database/sql a query STRING each time, and stays
+// fixed when the statement is prepared once and reused.
+//
+// Added per this file's own rule for counters: when a gate needs the number.
+func ResetPrepares() (count func() int64) {
+	sqlPrepares.Store(0)
+	return sqlPrepares.Load
+}
+
 type countingDriver struct{ base driver.Driver }
 
 func (d *countingDriver) Open(name string) (driver.Conn, error) {
@@ -115,6 +133,10 @@ func wrapStmt(s driver.Stmt, err error) (driver.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Both Prepare paths funnel through here, so this is the single point that
+	// sees every compilation — counting in the two callers instead would be
+	// two copies of the same increment waiting to disagree.
+	sqlPrepares.Add(1)
 	qc, ok := s.(driver.StmtQueryContext)
 	if !ok {
 		_ = s.Close()

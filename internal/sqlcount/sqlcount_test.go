@@ -52,4 +52,33 @@ func TestSQLCount_IsCalibrated(t *testing.T) {
 		count := sqlcount.Reset()
 		assert.Equal(t, int64(0), count())
 	})
+
+	// The prepare counter's whole job is to tell these two apart, so both
+	// halves are calibrated: a query STRING compiles every time it is issued,
+	// and a prepared statement compiles once however often it runs. A counter
+	// that could not separate them would make the read-path gate built on it
+	// (mache-3063fb) pass whether or not statements were reused.
+	t.Run("a query string compiles on every call", func(t *testing.T) {
+		prepares := sqlcount.ResetPrepares()
+		for i := range 7 {
+			rows, err := db.Query(`SELECT v FROM t WHERE id = ?`, i)
+			require.NoError(t, err)
+			require.NoError(t, rows.Close())
+		}
+		assert.Equal(t, int64(7), prepares(), "one compilation per call when handed a string")
+	})
+
+	t.Run("a prepared statement compiles once", func(t *testing.T) {
+		prepares := sqlcount.ResetPrepares()
+		stmt, err := db.Prepare(`SELECT v FROM t WHERE id = ?`)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = stmt.Close() })
+		for i := range 7 {
+			rows, err := stmt.Query(i)
+			require.NoError(t, err)
+			require.NoError(t, rows.Close())
+		}
+		assert.Equal(t, int64(1), prepares(),
+			"reusing a prepared statement on one connection must not compile again")
+	})
 }
