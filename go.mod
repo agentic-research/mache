@@ -1,6 +1,6 @@
 module github.com/agentic-research/mache
 
-go 1.26.0
+go 1.26.4
 
 require (
 	capnproto.org/go/capnp/v3 v3.1.0-alpha.2
@@ -9,7 +9,7 @@ require (
 	github.com/agentic-research/ley-line-open/clients/go/leyline-schema v0.18.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-billy/v5 v5.9.1
-	github.com/go-task/task/v3 v3.53.1
+	github.com/go-task/task/v3 v3.54.0
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/ohler55/ojg v1.28.7
@@ -58,7 +58,7 @@ require (
 	github.com/zclconf/go-cty v1.19.0 // indirect
 	github.com/zeebo/assert v1.3.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
