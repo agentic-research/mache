@@ -48,6 +48,23 @@ type NodesTableReader struct {
 	hasContext bool             // nodes table carries the context column (mache-b8fe72)
 	hasProps   bool             // nodes table carries the props column (mache-90b89b)
 	hasAST     bool             // db carries ley-line-open's _ast table, so nodes can be located in source (mache-e57065)
+	stmts      readerStmts      // compiled once, reused per call (mache-3063fb)
+}
+
+// readerStmts are every statement the reader issues, compiled on first use.
+//
+// All of them are fixed-shape: they depend only on tableName, a constant
+// pattern, and the column flags above, every one of which is settled at
+// construction. So none needs to be rebuilt per call — which is what the
+// reader used to do, compiling the same SQL afresh on every GetNode.
+type readerStmts struct {
+	node, children, childrenRoot, stats, statsRoot, content, record, callers *preparedStmt
+}
+
+func (s readerStmts) all() []*preparedStmt {
+	return []*preparedStmt{
+		s.node, s.children, s.childrenRoot, s.stats, s.statsRoot, s.content, s.record, s.callers,
+	}
 }
 
 // ColumnExists reports whether table has a column named col. Readers use it
@@ -81,7 +98,7 @@ func (r *NodesTableReader) DB() *sql.DB { return r.db }
 func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 	levels []*schemaLevel, fileMode, dirMode os.FileMode, cacheSize int,
 ) *NodesTableReader {
-	return &NodesTableReader{
+	r := &NodesTableReader{
 		db:         db,
 		tableName:  tableName,
 		render:     render,
@@ -95,6 +112,29 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 		// table and simply yields nodes without a source location.
 		hasAST: ColumnExists(db, "_ast", "start_row"),
 	}
+	// After the flags: nodeSelect reads them, and the statement text is fixed
+	// from here on.
+	r.stmts = readerStmts{
+		node:         newPreparedStmt(r.nodeSelect()),
+		children:     newPreparedStmt("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name"),
+		childrenRoot: newPreparedStmt("SELECT id FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
+		stats:        newPreparedStmt("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name"),
+		statsRoot:    newPreparedStmt("SELECT id, kind, size, mtime FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
+		content:      newPreparedStmt("SELECT record, record_id FROM nodes WHERE id = ?"),
+		record:       newPreparedStmt("SELECT record FROM " + tableName + " WHERE id = ?"),
+		callers: newPreparedStmt(
+			"SELECT node_id FROM node_refs WHERE token = ? AND node_id NOT LIKE '" + sentinelSQLPattern + "'"),
+	}
+	return r
+}
+
+// Close releases the reader's compiled statements. It does NOT close the
+// *sql.DB, which the caller owns; call it before closing the db so the
+// statements are released against a live connection.
+func (r *NodesTableReader) Close() {
+	for _, s := range r.stmts.all() {
+		s.close()
+	}
 }
 
 // GetNode returns a node by ID from the nodes table.
@@ -105,7 +145,11 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	}
 
 	var row nodeScan
-	err := r.db.QueryRow(r.nodeSelect(), id).Scan(row.scanTargets(r)...)
+	stmt, err := r.stmts.node.get(r.db)
+	if err != nil {
+		return nil, err
+	}
+	err = stmt.QueryRow(id).Scan(row.scanTargets(r)...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -143,94 +187,6 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	return node, nil
 }
 
-// nodeScan is one `nodes` row plus the `_ast` columns joined onto it. It exists
-// so GetNode reads as "query, then build the node" rather than fifty lines of
-// conditional column assembly — the smell gate flagged the inlined version as
-// a long function, and it was right.
-type nodeScan struct {
-	kind, size int
-	mtimeNano  int64
-	recordID   sql.NullString
-	context    []byte
-	props      []byte
-	loc        astLocation
-}
-
-// nodeSelect builds the statement, and scanTargets builds the destinations, in
-// the SAME order. They are adjacent and must stay that way: a column added to
-// one without the other scans a value into the wrong field, which SQLite will
-// not necessarily reject if the types happen to be compatible.
-func (r *NodesTableReader) nodeSelect() string {
-	cols := "n.kind, n.size, n.mtime, n.record_id"
-	if r.hasProps {
-		cols += ", n.props"
-	}
-	if r.hasContext {
-		cols += ", n.context"
-	}
-	from := "nodes n"
-	// The source location rides along on THIS query rather than a second one.
-	// GetNode is called per-node inside bulk walks — get_architecture BFSes up
-	// to 50,000 nodes (cmd/serve_architecture.go) reading only Mode.IsDir() —
-	// so a separate SELECT against _ast would add one round-trip per node to
-	// callers that never read Origin. A LEFT JOIN costs nothing extra when the
-	// row is absent, and nothing at all when the db has no _ast (mache-e57065).
-	if r.hasAST {
-		cols += ", a.source_id, a.start_byte, a.end_byte, a.start_row, a.start_col, a.end_row, a.end_col"
-		from += " LEFT JOIN _ast a ON a.node_id = n.id"
-	}
-	return "SELECT " + cols + " FROM " + from + " WHERE n.id = ?"
-}
-
-func (row *nodeScan) scanTargets(r *NodesTableReader) []any {
-	dest := []any{&row.kind, &row.size, &row.mtimeNano, &row.recordID}
-	if r.hasProps {
-		dest = append(dest, &row.props)
-	}
-	if r.hasContext {
-		dest = append(dest, &row.context)
-	}
-	if r.hasAST {
-		dest = append(dest, &row.loc.sourceID, &row.loc.startByte, &row.loc.endByte,
-			&row.loc.startRow, &row.loc.startCol, &row.loc.endRow, &row.loc.endCol)
-	}
-	return dest
-}
-
-// astLocation holds the nullable `_ast` columns a GetNode LEFT JOIN produces.
-// Every field is nullable because the join misses for directories and virtual
-// nodes, which have no parse-tree row.
-type astLocation struct {
-	sourceID           sql.NullString
-	startByte, endByte sql.NullInt64
-	startRow, startCol sql.NullInt64
-	endRow, endCol     sql.NullInt64
-}
-
-// origin converts the joined row into a SourceOrigin, or nil when the node has
-// no `_ast` row — the documented "not locatable" sentinel. A zero-valued
-// Origin would read as "line 0 of an empty file" to every consumer, which is
-// worse than admitting we do not know.
-//
-// Rows and columns are tree-sitter's 0-based; they are stored 1-based here so
-// a consumer can use them directly and so 0 unambiguously means unknown. Byte
-// offsets pass through UNCHANGED — write-back splices by byte and must not get
-// the +1 the reader-facing units need.
-func (l astLocation) origin() *SourceOrigin {
-	if !l.sourceID.Valid {
-		return nil
-	}
-	return &SourceOrigin{
-		FilePath:  l.sourceID.String,
-		StartByte: uint32(l.startByte.Int64),
-		EndByte:   uint32(l.endByte.Int64),
-		StartLine: uint32(l.startRow.Int64) + 1,
-		StartCol:  uint32(l.startCol.Int64) + 1,
-		EndLine:   uint32(l.endRow.Int64) + 1,
-		EndCol:    uint32(l.endCol.Int64) + 1,
-	}
-}
-
 // ListChildren returns child IDs for a directory from the nodes table.
 //
 // Empty-result contract: when the directory has no children, the
@@ -252,9 +208,9 @@ func (r *NodesTableReader) ListChildren(id string) ([]string, error) {
 		// root lists ITSELF as a child — and since ListChildren("") then
 		// returns that same "" again, any consumer doing a recursive walk
 		// never terminates. Found by examples/publicapi's ladder test.
-		rows, err = r.db.Query("SELECT id FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name")
+		rows, err = r.query(r.stmts.childrenRoot)
 	} else {
-		rows, err = r.db.Query("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name", id)
+		rows, err = r.query(r.stmts.children, id)
 	}
 	if err != nil {
 		return nil, err
@@ -281,9 +237,9 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 	if id == "" {
 		// Same self-child exclusion as ListChildren above; the two must
 		// agree or a stat-based walk and an id-based walk see different trees.
-		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name")
+		rows, err = r.query(r.stmts.statsRoot)
 	} else {
-		rows, err = r.db.Query("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name", id)
+		rows, err = r.query(r.stmts.stats, id)
 	}
 	if err != nil {
 		return nil, err
@@ -346,8 +302,11 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 
 	var record sql.NullString
 	var recordID sql.NullString
-	err := r.db.QueryRow("SELECT record, record_id FROM nodes WHERE id = ?", id).
-		Scan(&record, &recordID)
+	stmt, err := r.stmts.content.get(r.db)
+	if err != nil {
+		return nil, err
+	}
+	err = stmt.QueryRow(id).Scan(&record, &recordID)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -374,7 +333,11 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 // renderFromRecord fetches a record by ID and renders content via template.
 func (r *NodesTableReader) renderFromRecord(filePath, recordID string) ([]byte, error) {
 	var raw string
-	if err := r.db.QueryRow("SELECT record FROM "+r.tableName+" WHERE id = ?", recordID).Scan(&raw); err != nil {
+	stmt, err := r.stmts.record.get(r.db)
+	if err != nil {
+		return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
+	}
+	if err := stmt.QueryRow(recordID).Scan(&raw); err != nil {
 		return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
 	}
 
@@ -403,10 +366,7 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 	// '_file_level:') — they exist so dead_code's alive CTE can
 	// recognise top-level cobra RunE callbacks without polluting
 	// the caller view. They aren't real callers.
-	rows, err := r.db.Query(
-		"SELECT node_id FROM node_refs WHERE token = ? AND node_id NOT LIKE '"+sentinelSQLPattern+"'",
-		token,
-	)
+	rows, err := r.query(r.stmts.callers, token)
 	if err != nil {
 		return nil, fmt.Errorf("query node_refs: %w", err)
 	}
@@ -431,4 +391,15 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 func (r *NodesTableReader) Invalidate(id string) {
 	r.sizeCache.Delete(id)
 	r.cache.Delete(id)
+}
+
+// query runs a compiled statement. One helper rather than a get-then-Query pair
+// repeated at every call site, so a multi-row read cannot quietly go back to
+// handing database/sql a string.
+func (r *NodesTableReader) query(p *preparedStmt, args ...any) (*sql.Rows, error) {
+	stmt, err := p.get(r.db)
+	if err != nil {
+		return nil, err
+	}
+	return stmt.Query(args...)
 }

@@ -128,6 +128,8 @@ func (g *WritableGraph) FlushNow() error {
 
 // Close closes the database connection.
 func (g *WritableGraph) Close() error {
+	// Statements before the db they were compiled against (mache-3063fb).
+	g.ntr.Close()
 	return g.ntr.DB().Close()
 }
 

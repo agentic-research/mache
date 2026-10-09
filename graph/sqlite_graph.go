@@ -489,6 +489,10 @@ func (g *SQLiteGraph) Close() error {
 		}
 	}
 
+	// Statements before the db they were compiled against (mache-3063fb).
+	if g.ntr != nil {
+		g.ntr.Close()
+	}
 	err := g.db.Close()
 	if g.refsDB != nil {
 		if err2 := g.refsDB.Close(); err == nil {

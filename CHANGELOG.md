@@ -297,6 +297,21 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **Graph reads compile each SQL statement once, not once per call**
+  (`mache-3063fb`). Every `NodesTableReader` read — `GetNode`, `ListChildren`,
+  `ListChildStats`, `ReadContent`, `GetCallers` — passed a query string to
+  `database/sql`, which re-parsed and re-planned it on every call. Those are
+  the operations an NFS `READDIR`/`LOOKUP` storm or an MCP `list_directory`
+  walk hammers. Each statement is now prepared lazily on first use and reused
+  for the life of the graph, and `SQLiteGraph.Close` / `WritableGraph.Close`
+  release them. The statements are lazy so that a db with no `node_refs` still
+  fails only on `GetCallers`, as before.
+
+  `internal/sqlcount` now counts prepares as well as queries. The new gate
+  (`graph/nodes_table_prepare_test.go`) asserts zero compiles across 10, 100
+  and 1000 calls of each operation after warm-up. It is a count rather than a
+  timing, so it has no flake surface.
+
 - **The LLO schema boundary is its own package** (`mache-be17ce`).
   `internal/lloschema` now owns the translation from ley-line-open's physical
   schema to mache's stable vocabulary — `v_ast`, `v_nodes`, `v_defs`, `v_refs`,
@@ -971,8 +986,7 @@ bumps may include breaking changes.
 
 - **A daemon restart reloads the launchd job instead of kickstarting it — the
   kernel was SIGKILLing every new binary** (`mache-706d8f`). Caught live with a
-  crash report: `SIGKILL (Code Signature Invalid)` / `CODESIGNING code 4 —
-  "Launch Constraint Violation"`. launchd pins a job's code identity at
+  crash report: `SIGKILL (Code Signature Invalid)` / `CODESIGNING code 4 — "Launch Constraint Violation"`. launchd pins a job's code identity at
   bootstrap; mache is ad-hoc signed, so identity is effectively the CDHash and
   changes on **every** build, and `kickstart -k` after the binary is replaced
   relaunches it under the old pinned identity. The observed 10 s / 43 s / 112 s
