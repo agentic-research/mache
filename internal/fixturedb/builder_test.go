@@ -188,6 +188,29 @@ func TestNew_RejectsTheZeroProducer(t *testing.T) {
 	assert.True(t, Standalone.valid())
 }
 
+// TestNew_RejectsAProducerWithNoDialect is the other half. A producer named but
+// not given a dialect has no way to build its table shape, and must be refused
+// rather than borrowing another producer's: that borrowing is exactly what the
+// old `producer != Leyline` branches did to anything that was not Leyline.
+func TestNew_RejectsAProducerWithNoDialect(t *testing.T) {
+	assert.False(t, Producer{name: "v6-without-a-dialect"}.valid())
+}
+
+// TestDialects_AreDistinct guards the dispatch itself: each declared producer
+// builds its own shape. If both resolved to one dialect, every Standalone
+// fixture would silently be a Leyline one, or the reverse.
+func TestDialects_AreDistinct(t *testing.T) {
+	refsDDL := func(p Producer) string {
+		_, f := New(t, p).Build()
+		var ddl string
+		require.NoError(t, f.DB().QueryRow(
+			`SELECT sql FROM sqlite_master WHERE name = 'node_refs'`).Scan(&ddl))
+		return ddl
+	}
+	assert.Contains(t, refsDDL(Leyline), "container_node_id")
+	assert.NotContains(t, refsDDL(Standalone), "container_node_id")
+}
+
 // TestInferSource pins the id→source_id inference, which is how ley-line
 // composes node ids ("<source_id>/<tree-sitter path>").
 func TestInferSource(t *testing.T) {

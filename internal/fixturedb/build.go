@@ -2,9 +2,7 @@ package fixturedb
 
 import (
 	"database/sql"
-	"maps"
 	"path/filepath"
-	"slices"
 	"testing"
 )
 
@@ -57,7 +55,7 @@ func (b *Builder) Build() (string, *FixtureDB) {
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 
-	for _, stmt := range b.schemaStatements() {
+	for _, stmt := range b.producer.dialect.schema(b) {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatalf("fixturedb(%s): create schema: %v\n%s", b.producer, err, stmt)
 		}
@@ -73,45 +71,13 @@ func (b *Builder) Build() (string, *FixtureDB) {
 	return dbPath, f
 }
 
-// schemaStatements returns the producer's DDL, plus the ley-line-owned
-// `_ast` / `_source` / `node_content` / `_imports` tables when this fixture
-// carries rows for them.
-//
-// Presence is deliberately CONDITIONAL on [Standalone] and unconditional on
-// [Leyline], because that is what the producers do — and because
-// ensureCanonicalViews PROBES for `_ast`: creating it unconditionally would flip
-// every Standalone fixture onto the v_test_nodes arm that real mache .db files
-// never reach.
-func (b *Builder) schemaStatements() []string {
-	var stmts []string
-	add := func(names []string, from map[string]string) {
-		for _, n := range names {
-			stmts = append(stmts, from[n])
-		}
-	}
-
-	switch b.producer {
-	case Leyline:
-		add(leylineTableOrder, leylineTables)
-		add(slices.Sorted(maps.Keys(leylineIndexes)), leylineIndexes)
-	default: // Standalone
-		add(standaloneTableOrder, standaloneTables)
-		add(slices.Sorted(maps.Keys(standaloneIndexes)), standaloneIndexes)
-		add(slices.Sorted(maps.Keys(standaloneViews)), standaloneViews)
-		// The cache-hydration path (cmd/cache.go) materialises ley-line's
-		// parse output onto a mache-projection .db. Model it only when the
-		// fixture actually declares such rows.
-		if len(b.ast) > 0 {
-			stmts = append(stmts, leylineTables["node_content"], leylineTables["_ast"])
-		}
-		if len(b.sources) > 0 {
-			stmts = append(stmts, leylineTables["_source"])
-		}
-	}
+// lspDDL returns the LSP-enrichment table when this fixture declares rows for
+// it. It is not a producer table, so every dialect appends it.
+func (b *Builder) lspDDL() []string {
 	if len(b.lspDefs) > 0 {
-		stmts = append(stmts, lspDefsTable)
+		return []string{lspDefsTable}
 	}
-	return stmts
+	return nil
 }
 
 // lspDefsTable is the LSP-enrichment def table ley-line's ll-open/lsp crate
