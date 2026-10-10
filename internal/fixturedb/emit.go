@@ -11,9 +11,10 @@ import (
 
 // Emission: the ONE place a spec becomes columns.
 //
-// Every producer difference in this package lives here, in a `switch
-// b.producer` — never in a caller, never in a `CREATE TABLE` a test wrote. That
-// is what makes "which producer did this test mean?" a question with an answer.
+// Every producer difference lives in the producer's [dialect], never in a
+// caller and never in a `CREATE TABLE` a test wrote. That is what makes "which
+// producer did this test mean?" a question with an answer. This file holds the
+// row writers the dialects share.
 
 // emitter carries the per-build state the row writers share.
 type emitter struct {
@@ -40,17 +41,17 @@ func (b *Builder) insertRows(db *sql.DB) {
 	if err != nil {
 		b.t.Fatalf("fixturedb(%s): begin: %v", b.producer, err)
 	}
+	d := b.producer.dialect
 	e := &emitter{
 		b: b, db: tx,
-		hasNodeContent: b.producer == Leyline || len(b.ast) > 0,
+		hasNodeContent: d.hasNodeContent(b),
 		derivedParent:  sqlintro.ColumnIsGenerated(tx, "nodes", "parent_id"),
 	}
-	e.emitNodes()
-	e.emitDefs()
-	e.emitRefs()
-	e.emitAST()
-	e.emitSources()
-	e.emitImports()
+	d.emitNodes(e)
+	d.emitSymbols(e)
+	d.emitAST(e)
+	d.emitSources(e)
+	d.emitImports(e)
 	e.emitLSPDefs()
 	if err := tx.Commit(); err != nil {
 		b.t.Fatalf("fixturedb(%s): commit: %v", b.producer, err)
@@ -77,7 +78,8 @@ func (e *emitter) subtree(label, kind, token string) []byte {
 	return h
 }
 
-func (e *emitter) emitNodes() {
+// insertV4Nodes writes one projection-v4 `nodes` row per construct.
+func (e *emitter) insertV4Nodes() {
 	for _, id := range e.b.order {
 		c := e.b.constructs[id]
 		kind := 1
@@ -96,43 +98,9 @@ func (e *emitter) emitNodes() {
 	}
 }
 
-func (e *emitter) emitDefs() {
-	for _, d := range e.b.defs {
-		if e.b.producer != Leyline {
-			// The mache projection carries two columns. Everything the spec
-			// says about kind, container and content identity is DROPPED —
-			// which is the honest outcome, not a lossy shortcut.
-			e.exec(`INSERT OR IGNORE INTO node_defs (token, node_id) VALUES (?, ?)`,
-				d.token, string(d.nodeID))
-			continue
-		}
-		h := e.subtree(d.subtree, string(d.kind), d.token)
-		e.exec(`INSERT INTO node_defs (token, node_id, source_id, container_node_id, canonical_kind, node_hash)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			d.token, string(d.nodeID), string(e.b.sourceOf(d.nodeID)),
-			nullIfEmpty(string(d.container)), nullIfEmpty(string(d.kind)), h)
-	}
-}
-
-func (e *emitter) emitRefs() {
-	for _, r := range e.b.refs {
-		if e.b.producer != Leyline {
-			// No site column and no qualifier column: the ENCLOSING CONSTRUCT
-			// is what lands in node_id, and duplicate (token, node_id) pairs
-			// collapse under the primary key.
-			e.exec(`INSERT OR IGNORE INTO node_refs (token, node_id) VALUES (?, ?)`,
-				r.token, string(r.from))
-			continue
-		}
-		h := e.subtree(r.subtree, "call_expression", r.token)
-		e.exec(`INSERT INTO node_refs (token, node_id, source_id, container_node_id, qualifier, node_hash)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			r.token, string(r.at), string(e.b.sourceOf(r.from)), string(r.from),
-			nullIfEmpty(r.qualifier), h)
-	}
-}
-
-func (e *emitter) emitAST() {
+// insertV4AST writes the projection-v4 `_ast` rows and returns each node's
+// hash, keyed by node id, for the child lists.
+func (e *emitter) insertV4AST() map[string][]byte {
 	hashes := make(map[string][]byte, len(e.b.ast))
 	for _, a := range e.b.ast {
 		h := e.subtree(a.subtree, a.kind, a.token)
@@ -144,8 +112,19 @@ func (e *emitter) emitAST() {
 			a.span.StartByte, a.span.EndByte,
 			a.span.StartRow, a.span.StartCol, a.span.EndRow, a.span.EndCol, h)
 	}
-	if e.b.producer == Leyline {
-		e.emitNodeChildren(hashes)
+	return hashes
+}
+
+// insertV4Sources writes the projection-v4 `_source` rows.
+func (e *emitter) insertV4Sources() {
+	for _, id := range e.b.srcOrder {
+		s := e.b.sources[id]
+		var body any
+		if s.content != "" {
+			body = []byte(s.content)
+		}
+		e.exec(`INSERT OR REPLACE INTO _source (id, language, content, path, content_hash)
+			VALUES (?, ?, ?, ?, NULL)`, string(s.id), s.lang, body, s.path)
 	}
 }
 
@@ -204,31 +183,6 @@ func sameChildList(a, b []childRow) bool {
 	return slices.EqualFunc(a, b, func(x, y childRow) bool {
 		return slices.Equal(x.hash, y.hash) && x.field == y.field
 	})
-}
-
-func (e *emitter) emitSources() {
-	if e.b.producer != Leyline && len(e.b.sources) == 0 {
-		return
-	}
-	for _, id := range e.b.srcOrder {
-		s := e.b.sources[id]
-		var body any
-		if s.content != "" {
-			body = []byte(s.content)
-		}
-		e.exec(`INSERT OR REPLACE INTO _source (id, language, content, path, content_hash)
-			VALUES (?, ?, ?, ?, NULL)`, string(s.id), s.lang, body, s.path)
-	}
-}
-
-func (e *emitter) emitImports() {
-	if e.b.producer != Leyline {
-		return // the mache projection has no _imports table
-	}
-	for _, im := range e.b.imports {
-		e.exec(`INSERT INTO _imports (alias, path, source_id) VALUES (?, ?, ?)`,
-			im.alias, im.importPath, string(im.source))
-	}
 }
 
 func (e *emitter) emitLSPDefs() {

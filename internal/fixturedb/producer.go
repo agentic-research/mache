@@ -61,7 +61,10 @@ package fixturedb
 // package cannot construct a third. A fixture therefore cannot exist without
 // naming the producer it models — which is precisely what the 34 hand-written
 // fixtures never did.
-type Producer struct{ name string }
+type Producer struct {
+	name    string
+	dialect dialect
+}
 
 var (
 	// Leyline is the ley-line-open parse output: node_refs carries
@@ -69,7 +72,7 @@ var (
 	// primary key, so duplicate (token, node_id) rows SURVIVE. node_id is
 	// the call-SITE leaf; the enclosing definition is container_node_id.
 	// This is the shape production reads.
-	Leyline = Producer{name: "leyline"}
+	Leyline = Producer{name: "leyline", dialect: leylineDialect{}}
 
 	// Standalone is mache's own schema projection (internal/ingest.SQLiteWriter):
 	// node_refs is (token, node_id) with PRIMARY KEY (token, node_id) WITHOUT
@@ -79,7 +82,7 @@ var (
 	// The dedupe is not incidental. Any COUNT/AVG-over-v_refs rule measures a
 	// different quantity here than on [Leyline] — the fan_out_skew class
 	// (mache-50e939).
-	Standalone = Producer{name: "standalone"}
+	Standalone = Producer{name: "standalone", dialect: standaloneDialect{}}
 )
 
 // String returns the producer's name, for test failure messages.
@@ -90,6 +93,6 @@ func (p Producer) String() string {
 	return p.name
 }
 
-// valid reports whether p is one of the two package-declared producers rather
-// than the zero value. Only [New] consults it.
-func (p Producer) valid() bool { return p.name != "" }
+// valid reports whether p is a package-declared producer rather than the zero
+// value: one with a name and a [dialect] to build it. Only [New] consults it.
+func (p Producer) valid() bool { return p.name != "" && p.dialect != nil }
