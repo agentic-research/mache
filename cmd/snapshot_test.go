@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +18,7 @@ func TestCopyFile_ContentIntegrity(t *testing.T) {
 	content := []byte("SQLite format 3\x00fake db content for testing integrity")
 	require.NoError(t, os.WriteFile(srcPath, content, 0o644))
 
-	require.NoError(t, copyFile(srcPath, dstPath))
+	require.NoError(t, fsutil.CopyFile(srcPath, dstPath))
 
 	got, err := os.ReadFile(dstPath)
 	require.NoError(t, err)
@@ -35,7 +36,7 @@ func TestCopyFile_SnapshotIsolation(t *testing.T) {
 
 	original := []byte("original content")
 	require.NoError(t, os.WriteFile(srcPath, original, 0o644))
-	require.NoError(t, copyFile(srcPath, dstPath))
+	require.NoError(t, fsutil.CopyFile(srcPath, dstPath))
 
 	require.NoError(t, os.WriteFile(srcPath, []byte("modified content"), 0o644))
 
@@ -50,7 +51,7 @@ func TestCopyFile_EmptyFile(t *testing.T) {
 	dstPath := filepath.Join(tmpDir, "snapshot.db")
 
 	require.NoError(t, os.WriteFile(srcPath, []byte{}, 0o644))
-	require.NoError(t, copyFile(srcPath, dstPath))
+	require.NoError(t, fsutil.CopyFile(srcPath, dstPath))
 
 	got, err := os.ReadFile(dstPath)
 	require.NoError(t, err)
@@ -59,7 +60,7 @@ func TestCopyFile_EmptyFile(t *testing.T) {
 
 func TestCopyFile_SourceNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
-	err := copyFile(filepath.Join(tmpDir, "nonexistent.db"), filepath.Join(tmpDir, "dst.db"))
+	err := fsutil.CopyFile(filepath.Join(tmpDir, "nonexistent.db"), filepath.Join(tmpDir, "dst.db"))
 	require.Error(t, err)
 }
 

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/agentic-research/mache/internal/leyline"
 
 	"github.com/stretchr/testify/assert"
@@ -94,7 +95,7 @@ func TestRegisterProject_PreservesLegacyUncanonicalizedToken(t *testing.T) {
 	require.NoError(t, err)
 	legacyRegistry, err := json.Marshal(map[string]string{legacyToken: link})
 	require.NoError(t, err)
-	require.NoError(t, WriteFileAtomic(registryPath, append(legacyRegistry, '\n')))
+	require.NoError(t, fsutil.WriteFileAtomic(registryPath, append(legacyRegistry, '\n')))
 
 	canonicalToken, err := RegisterProject(link)
 	require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestRegisterProject_PreservesLegacyUncanonicalizedToken(t *testing.T) {
 // inserts, so all but the last are silently dropped. Measured on the unlocked
 // version: 50 concurrent roots left 1-3 registered, a 94-98% loss.
 //
-// Nothing crashed and nothing was corrupted — WriteFileAtomic renames, so the
+// Nothing crashed and nothing was corrupted — fsutil.WriteFileAtomic renames, so the
 // file is never torn. It just quietly lost almost everything, which defeats
 // the entire point: the token a later ?project= lookup needs was never
 // written. That is why this test asserts an EXACT count rather than

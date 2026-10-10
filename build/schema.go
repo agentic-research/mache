@@ -3,10 +3,10 @@ package build
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/fsutil"
 	internalingest "github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leylinegraph"
 	publicschema "github.com/agentic-research/mache/schema"
@@ -14,16 +14,37 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Option configures ParseWithSchema and ParseWithSchemaRef.
+type Option func(*parseOptions)
+
+type parseOptions struct {
+	finalize func(path string) error
+}
+
+// WithFinalize runs fn against the finished database before it is published at
+// output. fn receives the database's private path, not output: anything it
+// writes lands in the same atomic publish as the projection. Writing to output
+// after the build returns would modify a file readers may already have open.
+//
+// An error from fn abandons the build and leaves output as it was.
+func WithFinalize(fn func(path string) error) Option {
+	return func(o *parseOptions) { o.finalize = fn }
+}
+
 // ParseWithSchema parses source with the pinned leyline binary and projects
 // the resulting AST through topology into output. It is the library equivalent
 // of `mache build --schema` for callers that already hold a topology.
-func ParseWithSchema(source, output string, topology *api.Topology) error {
-	return parseWithSchema(source, output, topology, nil)
+//
+// output is published atomically: a reader sees the previous database or the
+// finished one, never a partial or missing file, and a failed build leaves the
+// previous database in place.
+func ParseWithSchema(source, output string, topology *api.Topology, opts ...Option) error {
+	return parseWithSchema(source, output, topology, nil, opts)
 }
 
 // ParseWithSchemaRef resolves a bundled preset name or schema file relative to
 // baseDir, then parses and projects source into output.
-func ParseWithSchemaRef(source, output, ref, baseDir string) error {
+func ParseWithSchemaRef(source, output, ref, baseDir string, opts ...Option) error {
 	resolved, err := publicschema.Resolve(ref, baseDir)
 	if err != nil {
 		return fmt.Errorf("load schema: %w", err)
@@ -31,10 +52,10 @@ func ParseWithSchemaRef(source, output, ref, baseDir string) error {
 	if resolved.Topology == nil {
 		return fmt.Errorf("load schema: schema reference is empty")
 	}
-	return parseWithSchema(source, output, resolved.Topology, resolved.Languages)
+	return parseWithSchema(source, output, resolved.Topology, resolved.Languages, opts)
 }
 
-func parseWithSchema(source, output string, topology *api.Topology, extraLanguages []string) error {
+func parseWithSchema(source, output string, topology *api.Topology, extraLanguages []string, opts []Option) error {
 	if topology == nil {
 		return fmt.Errorf("build with schema: topology is nil")
 	}
@@ -60,7 +81,11 @@ func parseWithSchema(source, output string, topology *api.Topology, extraLanguag
 	if err := requireSchemaCoverage(db, topology, source, extraLanguages); err != nil {
 		return err
 	}
-	return projectTopology(db, topology, source, output)
+	var o parseOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return publishProjection(db, topology, source, output, o.finalize)
 }
 
 func openParsedDatabase(path string) (*sql.DB, error) {
@@ -87,7 +112,16 @@ func requireSchemaCoverage(db *sql.DB, topology *api.Topology, source string, ex
 	return nil
 }
 
-func projectTopology(db *sql.DB, topology *api.Topology, source, output string) error {
+// publishProjection projects into a private copy of output and publishes it
+// in one rename (mache-21c210).
+//
+// It used to project into output itself, in place, through a writer running
+// journal_mode=MEMORY. A reader opening output mid-build saw a half-projected
+// database, or none at all in the window after a full rebuild removed it; and
+// a crash mid-write left output corrupt, because a MEMORY journal does not
+// survive the process. Publishing a finished file removes all three, and is
+// what makes it sound for a reader to treat a published database as immutable.
+func publishProjection(db *sql.DB, topology *api.Topology, source, output string, finalize func(string) error) error {
 	fingerprint, err := projectionFingerprint(topology)
 	if err != nil {
 		return err
@@ -98,15 +132,32 @@ func projectTopology(db *sql.DB, topology *api.Topology, source, output string) 
 	// landed first: a skipped file's construct IDs are seeded rather than left
 	// free for a changed file to take (mache-7a7919), and a file that has since
 	// been deleted has its nodes reaped (mache-31abc0).
+	//
+	// Reuse seeds the private copy from output. Without reuse the copy starts
+	// empty: a partial merge into a db some other build wrote is the one
+	// outcome worse than a slow build.
 	index := reusableIndex(output, fingerprint)
-	if index == nil {
-		// No reusable projection: start clean. A partial merge into a db some
-		// other build wrote is the one outcome worse than a slow build.
-		if err := os.Remove(output); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove existing output %s: %w", output, err)
-		}
+	seed := ""
+	if index != nil {
+		seed = output
 	}
+	return fsutil.Publish(output, seed, func(path string) error {
+		if err := projectTopology(db, topology, source, path, index); err != nil {
+			return err
+		}
+		if err := writeFingerprint(path, fingerprint); err != nil {
+			return err
+		}
+		if finalize != nil {
+			return finalize(path)
+		}
+		return nil
+	})
+}
 
+// projectTopology runs the projection into output, reusing index when it is
+// non-nil.
+func projectTopology(db *sql.DB, topology *api.Topology, source, output string, index map[string]internalingest.FileIndexEntry) error {
 	writer, err := internalingest.NewSQLiteWriter(output)
 	if err != nil {
 		return fmt.Errorf("create projection output %s: %w", output, err)
@@ -123,5 +174,5 @@ func projectTopology(db *sql.DB, topology *api.Topology, source, output string) 
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close sqlite writer: %w", err)
 	}
-	return writeFingerprint(output, fingerprint)
+	return nil
 }

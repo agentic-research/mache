@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/agentic-research/mache/internal/leyline"
 
 	"github.com/zeebo/blake3"
@@ -108,7 +109,7 @@ func loadOrCreateProjectSalt() ([]byte, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("generate project salt: %w", err)
 	}
-	if err := WriteFileAtomic(path, salt); err != nil {
+	if err := fsutil.WriteFileAtomic(path, salt); err != nil {
 		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
 	return salt, nil
@@ -205,7 +206,7 @@ func RegisterProject(absPath string) (string, error) {
 		if perr != nil {
 			return perr
 		}
-		if werr := WriteFileAtomic(path, append(data, '\n')); werr != nil {
+		if werr := fsutil.WriteFileAtomic(path, append(data, '\n')); werr != nil {
 			return fmt.Errorf("write %s: %w", path, werr)
 		}
 		return nil
@@ -271,7 +272,7 @@ func EnsureProjectRegistered(rootPath string) bool {
 		if perr != nil {
 			return perr
 		}
-		if werr := WriteFileAtomic(path, append(data, '\n')); werr != nil {
+		if werr := fsutil.WriteFileAtomic(path, append(data, '\n')); werr != nil {
 			return werr
 		}
 		registered = true

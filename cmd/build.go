@@ -3,11 +3,11 @@ package cmd
 import (
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/agentic-research/mache/api"
 	publicbuild "github.com/agentic-research/mache/build"
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/spf13/cobra"
 )
@@ -65,11 +65,11 @@ func runBuildViaLeyline(source, output string) error {
 	if schemaPath != "" {
 		start := time.Now()
 		log.Printf("Building %s from %s (leyline parse + schema projection)...", output, source)
-		if err := publicbuild.ParseWithSchemaRef(source, output, schemaPath, "."); err != nil {
+		if err := publicbuild.ParseWithSchemaRef(source, output, schemaPath, ".",
+			stampBuildMetadata("leyline+schema")); err != nil {
 			return fmt.Errorf("leyline backend: %w", err)
 		}
 		log.Printf("Done in %v.", time.Since(start))
-		_ = writeBuildMetadata(output, "leyline+schema")
 		warnIfEmptyBuild(output, source, "leyline")
 		return nil
 	}
@@ -79,17 +79,16 @@ func runBuildViaLeyline(source, output string) error {
 	}
 	defer cleanup()
 
-	// Move the temp .db to the output path. copyFile (cmd/utils.go)
-	// uses copy + close rather than rename so we don't fail across
-	// filesystems (TMPDIR may be on a different mount than the
-	// target). Pre-truncate the destination to match the prior
-	// `os.Remove(output)` behavior in the auto path.
-	_ = os.Remove(output)
-	if err := copyFile(tmpPath, output); err != nil {
-		return fmt.Errorf("copy leyline output to %s: %w", output, err)
+	// The parse db lives in TMPDIR or the parse cache, which may be another
+	// filesystem, so it is copied, never renamed into place. Publish seeds its
+	// private path with the copy and renames THAT, so output goes from the old
+	// db to the finished, stamped one in one step.
+	if err := fsutil.Publish(output, tmpPath, func(path string) error {
+		return writeBuildMetadata(path, "leyline")
+	}); err != nil {
+		return fmt.Errorf("publish leyline output to %s: %w", output, err)
 	}
 	log.Printf("Built %s from %s via leyline", output, source)
-	_ = writeBuildMetadata(output, "leyline")
 	warnIfEmptyBuild(output, source, "leyline")
 	return nil
 }
@@ -105,11 +104,20 @@ func runBuildViaLeyline(source, output string) error {
 func runBuildViaLeylineSchema(source, output string, schema *api.Topology) error {
 	start := time.Now()
 	log.Printf("Building %s from %s (leyline parse + schema projection)...", output, source)
-	if err := publicbuild.ParseWithSchema(source, output, schema); err != nil {
+	if err := publicbuild.ParseWithSchema(source, output, schema,
+		stampBuildMetadata("leyline+schema")); err != nil {
 		return fmt.Errorf("leyline backend: %w", err)
 	}
 	log.Printf("Done in %v.", time.Since(start))
-	_ = writeBuildMetadata(output, "leyline+schema")
 	warnIfEmptyBuild(output, source, "leyline")
 	return nil
+}
+
+// stampBuildMetadata writes _mache_meta into the projection before it is
+// published, so the provenance rows arrive in the same atomic step as the data
+// they describe rather than as a later write into a live file.
+func stampBuildMetadata(backend string) publicbuild.Option {
+	return publicbuild.WithFinalize(func(path string) error {
+		return writeBuildMetadata(path, backend)
+	})
 }

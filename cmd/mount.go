@@ -14,6 +14,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/buildinfo"
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
 	"github.com/agentic-research/mache/internal/lattice"
@@ -279,7 +280,7 @@ var rootCmd = &cobra.Command{
 					log.Printf("Snapshot: copied %d files in %v", n, time.Since(start))
 				} else {
 					log.Printf("Snapshot: copying %s → %s", dataPath, snapshotPath)
-					if err := copyFile(dataPath, snapshotPath); err != nil {
+					if err := fsutil.CopyFile(dataPath, snapshotPath); err != nil {
 						return fmt.Errorf("snapshot copy: %w", err)
 					}
 				}

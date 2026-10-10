@@ -516,6 +516,35 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`mache build` publishes its output in one step** (`mache-21c210`). Both
+  build paths used to write the output db in place:
+  - The raw path removed the file and then copied over it.
+  - A schema build removed the file and projected into it, or rewrote rows
+    inside it when reusing a previous projection.
+  - `_mache_meta` was stamped afterwards, as a second write into a file
+    readers might already have open.
+
+  A server or mount opening the db mid-build could find it missing or
+  half-written. Because the projection writer runs `journal_mode=MEMORY`, a
+  crash mid-build left the output corrupt.
+
+  The finished, stamped database is now built at a private path beside the
+  output and renamed into place. Readers see the previous db or the new one,
+  and a failed build leaves the previous one intact. A reader that already has
+  the db open keeps the file it opened until it reopens.
+
+  The new primitive is `internal/fsutil.Publish`. It refuses to publish while
+  the producer has left anything beside the file, such as an uncheckpointed
+  `-wal`, because renaming the main file alone would lose committed writes.
+  `projcfg.WriteFileAtomic` and `cmd`'s `copyFile` now live in the same package
+  instead of being separate copies.
+
+  For library callers, `build.ParseWithSchema` and `build.ParseWithSchemaRef`
+  publish the same way. A new `build.WithFinalize` option runs a function on
+  the finished database before it is published. `build.Parse` is unchanged: it
+  hands the output path straight to `leyline parse`, which writes sidecars
+  beside it.
+
 - **The temp-parse cleanup leaked leyline's capnp sidecars, and the reaper
   could not see them** (`mache-8178a5`, following its own fix). Verified in the
   wild rather than assumed: after the reaper shipped, one machine still held

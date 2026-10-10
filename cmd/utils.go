@@ -2,36 +2,16 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/agentic-research/mache/internal/ingest"
 )
 
 // shouldSkipDir delegates to ingest.ShouldSkipDir.
 func shouldSkipDir(base string) bool {
 	return ingest.ShouldSkipDir(base)
-}
-
-// copyFile copies src to dst, creating dst if it doesn't exist.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // copyDir recursively copies srcDir to dstDir, skipping hidden dirs and
@@ -60,7 +40,7 @@ func copyDir(srcDir, dstDir string) (int, error) {
 			return nil
 		}
 
-		if err := copyFile(path, dst); err != nil {
+		if err := fsutil.CopyFile(path, dst); err != nil {
 			return fmt.Errorf("copy %s: %w", rel, err)
 		}
 		copied++
