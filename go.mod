@@ -10,6 +10,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-billy/v5 v5.9.1
 	github.com/go-task/task/v3 v3.53.1
+	github.com/google/go-cmp v0.7.0
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/ohler55/ojg v1.28.7
@@ -37,7 +38,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
