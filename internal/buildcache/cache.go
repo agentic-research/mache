@@ -31,7 +31,7 @@ import (
 	capnp "capnproto.org/go/capnp/v3"
 	"github.com/BurntSushi/toml"
 	cache "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/cache"
-	"github.com/agentic-research/mache/internal/projcfg"
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/spf13/cobra"
 	"github.com/zeebo/blake3"
 	_ "modernc.org/sqlite"
@@ -277,6 +277,42 @@ func runCachePush(out io.Writer, dbPath, outDir string) error {
 		return err
 	}
 
+	entries, err := buildChunkEntries(db, sources, useAST)
+	if err != nil {
+		return err
+	}
+	if err := writeChunks(chunksDir, entries); err != nil {
+		return err
+	}
+
+	// Build the lockfile via capnp Builder.
+	rootHash := computeRoot(entries)
+	lfBytes, err := buildLockfile(entries, rootHash)
+	if err != nil {
+		return fmt.Errorf("build lockfile: %w", err)
+	}
+
+	// Write both renderings: canonical .bin (authoritative) + TOML
+	// (diff-friendly). Producer commits both; consumers can pick.
+	binPath := filepath.Join(outDir, "mache.lock.bin")
+	if err := fsutil.WriteFileAtomic(binPath, lfBytes); err != nil {
+		return fmt.Errorf("write lockfile bin: %w", err)
+	}
+	tomlPath := filepath.Join(outDir, "mache.lock.toml")
+	if err := writeLockfileTOML(tomlPath, entries, rootHash); err != nil {
+		return fmt.Errorf("write lockfile toml: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(out, "wrote %d chunks to %s\n", len(entries), chunksDir)
+	_, _ = fmt.Fprintf(out, "wrote %s (%d bytes canonical)\n", binPath, len(lfBytes))
+	_, _ = fmt.Fprintf(out, "wrote %s (TOML rendering)\n", tomlPath)
+	_, _ = fmt.Fprintf(out, "lockfile root: %x\n", rootHash)
+	return nil
+}
+
+// buildChunkEntries encodes one chunk per source: the raw content, or with
+// useAST, the content plus the file's AST node rows (Phase 4, mache-aeb262).
+func buildChunkEntries(db *sql.DB, sources []sourceRow, useAST bool) ([]chunkEntry, error) {
 	entries := make([]chunkEntry, 0, len(sources))
 	for _, s := range sources {
 		// input_hash is always BLAKE3 of the raw input bytes — that's
@@ -288,11 +324,11 @@ func runCachePush(out io.Writer, dbPath, outDir string) error {
 		if useAST {
 			nodes, err := loadASTNodesForSource(db, s.id)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			body, err := encodeASTChunk(s, nodes)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			chunkBytes = body
 		} else {
@@ -309,7 +345,11 @@ func runCachePush(out io.Writer, dbPath, outDir string) error {
 			fileName:   hex.EncodeToString(ch[:]),
 		})
 	}
+	return entries, nil
+}
 
+// writeChunks stores each entry under chunksDir, content-addressed.
+func writeChunks(chunksDir string, entries []chunkEntry) error {
 	// Write chunks. Use a content-addressed sub-layout under objects/
 	// matching LLO's FsBlobStore convention (`<hash[0..2]>/<hash[2..]>`),
 	// so a future migration to call FsBlobStore directly is a no-op.
@@ -329,33 +369,10 @@ func runCachePush(out io.Writer, dbPath, outDir string) error {
 			}
 			continue
 		}
-		if err := projcfg.WriteFileAtomic(path, e.chunkBytes); err != nil {
+		if err := fsutil.WriteFileAtomic(path, e.chunkBytes); err != nil {
 			return fmt.Errorf("write chunk %s: %w", path, err)
 		}
 	}
-
-	// Build the lockfile via capnp Builder.
-	rootHash := computeRoot(entries)
-	lfBytes, err := buildLockfile(entries, rootHash)
-	if err != nil {
-		return fmt.Errorf("build lockfile: %w", err)
-	}
-
-	// Write both renderings: canonical .bin (authoritative) + TOML
-	// (diff-friendly). Producer commits both; consumers can pick.
-	binPath := filepath.Join(outDir, "mache.lock.bin")
-	if err := projcfg.WriteFileAtomic(binPath, lfBytes); err != nil {
-		return fmt.Errorf("write lockfile bin: %w", err)
-	}
-	tomlPath := filepath.Join(outDir, "mache.lock.toml")
-	if err := writeLockfileTOML(tomlPath, entries, rootHash); err != nil {
-		return fmt.Errorf("write lockfile toml: %w", err)
-	}
-
-	_, _ = fmt.Fprintf(out, "wrote %d chunks to %s\n", len(entries), chunksDir)
-	_, _ = fmt.Fprintf(out, "wrote %s (%d bytes canonical)\n", binPath, len(lfBytes))
-	_, _ = fmt.Fprintf(out, "wrote %s (TOML rendering)\n", tomlPath)
-	_, _ = fmt.Fprintf(out, "lockfile root: %x\n", rootHash)
 	return nil
 }
 
@@ -941,7 +958,7 @@ func runCacheRemotePull(ctx context.Context, out io.Writer, baseURL, producer, s
 	if err := os.MkdirAll(filepath.Join(localDir, "objects"), 0o755); err != nil {
 		return err
 	}
-	if err := projcfg.WriteFileAtomic(filepath.Join(localDir, "mache.lock.bin"), configBytes); err != nil {
+	if err := fsutil.WriteFileAtomic(filepath.Join(localDir, "mache.lock.bin"), configBytes); err != nil {
 		return fmt.Errorf("write lockfile: %w", err)
 	}
 	for _, layer := range manifest.Layers {
@@ -967,7 +984,7 @@ func runCacheRemotePull(ctx context.Context, out io.Writer, baseURL, producer, s
 			}
 			continue
 		}
-		if err := projcfg.WriteFileAtomic(chunkPath, body); err != nil {
+		if err := fsutil.WriteFileAtomic(chunkPath, body); err != nil {
 			return fmt.Errorf("write chunk %s: %w", chunkPath, err)
 		}
 	}

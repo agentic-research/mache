@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/agentic-research/mache/internal/fsutil"
 	"github.com/agentic-research/mache/internal/projcfg"
 )
 
@@ -115,7 +116,7 @@ func (st state) save() {
 	if err != nil {
 		return
 	}
-	_ = projcfg.WriteFileAtomic(path, append(data, '\n'))
+	_ = fsutil.WriteFileAtomic(path, append(data, '\n'))
 }
 
 // prune drops records outside the window and caps the list length.
