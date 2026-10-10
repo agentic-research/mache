@@ -516,6 +516,18 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **No false "stale daemon" warning about a daemon on the pinned binary**
+  (`mache-d446a4`). Since the v0.19.1 pin, mache warned "reachable leyline
+  daemon reports 0.18.1 but mache pins v0.19.1, stop the stale daemon" about
+  daemons running exactly the pinned binary, including the one it had just
+  spawned itself, and `mache doctor` reported 0.18.1 as the serving version.
+  mache read a `version` key the daemon never sends, then fell back to
+  `schema_version`. That is the public schema-client contract, which LLO
+  versions separately (v0.19.1 and v0.20.1 both report 0.18.1). The check now
+  compares the daemon's `binary_version` to the pin, and a daemon that doesn't
+  report one is left unjudged. The tests had passed because their fake daemon
+  answered in a shape no real daemon uses; it now answers in the real one.
+
 - **`mache build` publishes its output in one step** (`mache-21c210`). Both
   build paths used to write the output db in place:
   - The raw path removed the file and then copied over it.

@@ -32,12 +32,28 @@ func captureStdLog(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// versionDaemon serves the leyline_version op reporting the given version.
-func versionDaemon(t *testing.T, version string) string {
+// wireSchemaVersion is the schema_version real ley-line daemons report. It is
+// deliberately NOT the binary version: v0.19.1 and v0.20.1 both report 0.18.1,
+// because LLO bumps the public schema-client contract independently.
+const wireSchemaVersion = "0.18.1"
+
+// versionDaemon serves the leyline_version op in the shape ley-line actually
+// sends (rs/ll-open/cli-lib/src/daemon/ops.rs op_leyline_version): the binary
+// version under binary_version, beside a schema_version that differs from it.
+//
+// The fake used to answer {"version": v}, a key no daemon sends. That shape is
+// why mache read the wrong field and every test still passed (mache-d446a4).
+func versionDaemon(t *testing.T, binaryVersion string) string {
 	t.Helper()
 	return mockServer(t, func(req map[string]any) map[string]any {
 		if req["op"] == "leyline_version" {
-			return map[string]any{"ok": true, "version": version}
+			return map[string]any{
+				"ok":                true,
+				"binary_version":    binaryVersion,
+				"schema_version":    wireSchemaVersion,
+				"wire_format_major": float64(1),
+				"compat_min":        "0.4.1",
+			}
 		}
 		return map[string]any{"ok": true}
 	})
@@ -74,6 +90,36 @@ func TestWarnIfAdoptedDaemonDrifts_SilentWhenPinned(t *testing.T) {
 	got := captureStdLog(t, func() { warnIfAdoptedDaemonDrifts(sock) })
 
 	assert.Empty(t, got, "a daemon matching the pin must say nothing")
+}
+
+// TestWarnIfAdoptedDaemonDrifts_SchemaVersionIsNotTheBinaryVersion is the bug
+// the release parity run found. A daemon on exactly the pinned binary reports
+// schema_version 0.18.1, and mache compared THAT to the binary pin, so it told
+// every user to "stop the stale daemon" about the daemon it had just spawned.
+func TestWarnIfAdoptedDaemonDrifts_SchemaVersionIsNotTheBinaryVersion(t *testing.T) {
+	resetDriftOnce(t)
+	pinned := strings.TrimPrefix(leylineBinaryVersion, "v")
+	require.NotEqual(t, wireSchemaVersion, pinned,
+		"this test needs a pin whose binary and schema versions differ, as every pin from v0.19.1 on does")
+	sock := versionDaemon(t, pinned)
+
+	got := captureStdLog(t, func() { warnIfAdoptedDaemonDrifts(sock) })
+
+	assert.Empty(t, got, "a daemon on the pinned binary is not stale, whatever its schema version")
+}
+
+// TestWarnIfAdoptedDaemonDrifts_SilentWithoutABinaryVersion: a daemon that does
+// not report its binary version cannot be judged, so it is not. Falling back to
+// schema_version would compare a different quantity, which is the bug above.
+func TestWarnIfAdoptedDaemonDrifts_SilentWithoutABinaryVersion(t *testing.T) {
+	resetDriftOnce(t)
+	sock := mockServer(t, func(req map[string]any) map[string]any {
+		return map[string]any{"ok": true, "schema_version": wireSchemaVersion}
+	})
+
+	got := captureStdLog(t, func() { warnIfAdoptedDaemonDrifts(sock) })
+
+	assert.Empty(t, got)
 }
 
 // TestWarnIfAdoptedDaemonDrifts_WarnsOnceNotPerCall is why the guard exists.
@@ -114,11 +160,11 @@ func TestWarnIfAdoptedDaemonDrifts_SurvivesAnUnreachableDaemon(t *testing.T) {
 // Asking beats inferring: the cached binary FILE named leyline-v0.18.2 reports
 // 0.18.1 when run. A check reading the resolved path would have said 0.18.2.
 func TestAdoptedDaemonVersion_ReportsWhatTheDaemonSays(t *testing.T) {
-	sock := versionDaemon(t, "0.18.1")
+	sock := versionDaemon(t, "0.19.1")
 	t.Setenv("LEYLINE_SOCKET", sock)
 
 	got, ok := AdoptedDaemonVersion()
 
 	require.True(t, ok)
-	assert.Equal(t, "0.18.1", got)
+	assert.Equal(t, "0.19.1", got, "the binary version, not the %s schema version beside it", wireSchemaVersion)
 }
