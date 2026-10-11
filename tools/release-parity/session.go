@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -87,8 +88,9 @@ func openSession(ctx context.Context, bin, corpus string) (*session, error) {
 func (s *session) close() error {
 	_ = s.c.Close()
 	err := reapSurvivors(s.home, survivorGrace)
-	if err != nil {
-		err = fmt.Errorf("%w\nlast lines of the server's log:\n%s", err, s.logTail(25))
+	var leak *leakError
+	if errors.As(err, &leak) {
+		leak.msg += "\nlast lines of the server's log:\n" + s.logTail(25)
 	}
 	_ = os.RemoveAll(s.home)
 	return err
@@ -118,8 +120,32 @@ func reapSurvivors(home string, grace time.Duration) error {
 		described = append(described, describeProcess(pid))
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
-	return fmt.Errorf("the binary left %d process(es) running %s after shutdown; killed them:\n  %s",
-		len(left), grace, strings.Join(described, "\n  "))
+	return &leakError{fmt.Sprintf("the binary left %d process(es) running %s after shutdown; killed them:\n  %s",
+		len(left), grace, strings.Join(described, "\n  "))}
+}
+
+// leakError reports processes a binary left running after shutdown. It is a
+// distinct type so the comparison can tell a leak from a failure to answer.
+type leakError struct{ msg string }
+
+func (e *leakError) Error() string { return e.msg }
+
+// classifyRunError decides what a run's error means for the comparison.
+//
+// The gate judges the CANDIDATE. A leak from the base release is a regression
+// it already shipped (v0.21.1 orphans its daemon, which mache-25f49e fixed),
+// so it becomes a note in the report and the base's answers are still
+// compared. Anything from the head, and any base error that is not a leak,
+// stays fatal.
+func classifyRunError(side string, err error) (note string, fatal error) {
+	if err == nil {
+		return "", nil
+	}
+	var leak *leakError
+	if side == "base" && errors.As(err, &leak) {
+		return leak.Error(), nil
+	}
+	return "", err
 }
 
 // describeProcess is "pid ppid elapsed command", so a leak report says what

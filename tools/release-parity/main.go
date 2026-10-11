@@ -123,20 +123,14 @@ func compareReleases(base, head, root string, plan []call, out string, timeout t
 	}
 
 	answers := map[string][]answer{}
+	var notes []string
 	for _, side := range []struct{ name, bin string }{{"base", base}, {"head", head}} {
-		var masked []answer
-		for run := range runsPerSide {
-			got, err := answerPlan(side.bin, root, plan, timeout)
-			if err != nil {
-				return 0, fmt.Errorf("%s (run %d): %w", side.name, run+1, err)
-			}
-			if masked == nil {
-				masked = got
-				continue
-			}
-			masked = maskNoise(masked, got)
+		got, sideNotes, err := answerSide(side.name, side.bin, root, plan, timeout)
+		if err != nil {
+			return 0, err
 		}
-		answers[side.name] = masked
+		answers[side.name] = got
+		notes = append(notes, sideNotes...)
 	}
 	// A path that is noise on either side is noise in the comparison.
 	for i := range plan {
@@ -149,7 +143,7 @@ func compareReleases(base, head, root string, plan []call, out string, timeout t
 	if err := writeAnswers(out, plan, answers); err != nil {
 		return 0, err
 	}
-	changed, err := writeReport(out, base, head, root, plan, answers)
+	changed, err := writeReport(out, base, head, root, plan, answers, notes)
 	if err != nil {
 		return 0, err
 	}
@@ -270,4 +264,29 @@ func readPlan(path string) ([]call, error) {
 		return nil, errors.New("plan is empty")
 	}
 	return plan, nil
+}
+
+// answerSide runs the plan runsPerSide times with one binary and returns its
+// answers with run-to-run noise masked, plus notes for any tolerated leaks
+// (see classifyRunError).
+func answerSide(name, bin, root string, plan []call, timeout time.Duration) ([]answer, []string, error) {
+	var masked []answer
+	var notes []string
+	for run := range runsPerSide {
+		got, err := answerPlan(bin, root, plan, timeout)
+		note, fatal := classifyRunError(name, err)
+		if fatal != nil {
+			return nil, nil, fmt.Errorf("%s (run %d): %w", name, run+1, fatal)
+		}
+		if note != "" {
+			notes = append(notes, fmt.Sprintf("%s run %d: %s", name, run+1, note))
+			fmt.Fprintf(os.Stderr, "release-parity: %s run %d leaked (noted, not fatal): %s\n", name, run+1, note)
+		}
+		if masked == nil {
+			masked = got
+			continue
+		}
+		masked = maskNoise(masked, got)
+	}
+	return masked, notes, nil
 }

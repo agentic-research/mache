@@ -35,18 +35,23 @@ func writeAnswers(out string, plan []call, answers map[string][]answer) error {
 }
 
 // writeReport writes report.md and returns how many calls differ.
-func writeReport(out, base, head, root string, plan []call, answers map[string][]answer) (int, error) {
+func writeReport(out, base, head, root string, plan []call, answers map[string][]answer, notes []string) (int, error) {
 	f, err := os.Create(filepath.Join(out, "report.md"))
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = f.Close() }()
-	return writeDiffReport(f, base, head, root, plan, answers)
+	return writeDiffReport(f, base, head, root, plan, answers, notes)
 }
 
-func writeDiffReport(w io.Writer, base, head, root string, plan []call, answers map[string][]answer) (int, error) {
+func writeDiffReport(w io.Writer, base, head, root string, plan []call, answers map[string][]answer, notes []string) (int, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Release parity\n\n- base: `%s`\n- head: `%s`\n- corpus: `%s`\n- schema: `%s`\n- calls: %d\n\n", base, head, root, schemaLabel(), len(plan))
+	if len(notes) > 0 {
+		b.WriteString("## Base release leaks (not fatal: the gate judges the head)\n\n```\n")
+		b.WriteString(strings.Join(notes, "\n\n"))
+		b.WriteString("\n```\n\n")
+	}
 	b.WriteString("Diff lines read `-` base, `+` head.\n\n")
 	changed := 0
 	for i, c := range plan {
