@@ -144,3 +144,6 @@ __pycache__/
 /tools/sheaf-subscribe-probe/
 /tools/sheaf-wire-check/
 /tools/uds-smoke/
+
+# release-parity reports (task release:parity)
+.parity/

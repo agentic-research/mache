@@ -1,0 +1,264 @@
+[
+  {
+    "tool": "get_overview",
+    "args": {}
+  },
+  {
+    "tool": "get_architecture",
+    "args": {}
+  },
+  {
+    "tool": "list_directory",
+    "args": {
+      "path": ""
+    }
+  },
+  {
+    "tool": "list_directory",
+    "args": {
+      "path": "store"
+    }
+  },
+  {
+    "tool": "list_directory",
+    "args": {
+      "path": "",
+      "exclude_tests": true
+    }
+  },
+  {
+    "tool": "read_file",
+    "args": {
+      "path": "store/store.go/function_declaration_0/identifier"
+    }
+  },
+  {
+    "tool": "read_file",
+    "args": {
+      "paths": "[\"store/store.go/function_declaration_0/identifier\", \"store/index.go/function_declaration_0/identifier\"]"
+    }
+  },
+  {
+    "tool": "read_file",
+    "args": {
+      "path": "store/store.go",
+      "mode": "signatures"
+    }
+  },
+  {
+    "tool": "read_file",
+    "args": {
+      "path": "store",
+      "mode": "map"
+    }
+  },
+  {
+    "tool": "search",
+    "args": {
+      "pattern": "%Store%"
+    }
+  },
+  {
+    "tool": "search",
+    "args": {
+      "pattern": "%Len%",
+      "role": "definition"
+    }
+  },
+  {
+    "tool": "search",
+    "args": {
+      "pattern": "New",
+      "limit": 5
+    }
+  },
+  {
+    "tool": "find_definition",
+    "args": {
+      "symbol": "New"
+    }
+  },
+  {
+    "tool": "find_definition",
+    "args": {
+      "symbol": "Store",
+      "kind": "type"
+    }
+  },
+  {
+    "tool": "find_definition",
+    "args": {
+      "symbol": "Stak",
+      "fuzzy": true
+    }
+  },
+  {
+    "tool": "find_callers",
+    "args": {
+      "token": "New"
+    }
+  },
+  {
+    "tool": "find_callers",
+    "args": {
+      "token": "keyOf"
+    }
+  },
+  {
+    "tool": "find_callers",
+    "args": {
+      "token": "helper"
+    }
+  },
+  {
+    "tool": "find_callees",
+    "args": {
+      "path": "store/store.go/function_declaration_0"
+    }
+  },
+  {
+    "tool": "find_callees",
+    "args": {
+      "path": "main.go/function_declaration"
+    }
+  },
+  {
+    "tool": "resolve_ref",
+    "args": {
+      "token": "mod:./store",
+      "base_path": "main.go"
+    }
+  },
+  {
+    "tool": "resolve_ref",
+    "args": {
+      "token": "npm:left-pad"
+    }
+  },
+  {
+    "tool": "get_impact",
+    "args": {
+      "symbol": "keyOf"
+    }
+  },
+  {
+    "tool": "get_impact",
+    "args": {
+      "symbol": "New",
+      "direction": "callees",
+      "depth": 2
+    }
+  },
+  {
+    "tool": "get_dataflow",
+    "args": {
+      "symbol": "Add"
+    }
+  },
+  {
+    "tool": "get_dataflow",
+    "args": {
+      "symbol": "New",
+      "direction": "callees",
+      "depth": 2
+    }
+  },
+  {
+    "tool": "get_communities",
+    "args": {}
+  },
+  {
+    "tool": "get_communities",
+    "args": {
+      "granularity": "file",
+      "summary": true
+    }
+  },
+  {
+    "tool": "get_diagram",
+    "args": {}
+  },
+  {
+    "tool": "get_diagram",
+    "args": {
+      "name": "store",
+      "compact": true
+    }
+  },
+  {
+    "tool": "find_smells",
+    "args": {}
+  },
+  {
+    "tool": "find_smells",
+    "args": {
+      "rule": "long_function"
+    }
+  },
+  {
+    "tool": "find_smells",
+    "args": {
+      "rule": "*",
+      "limit": 50
+    }
+  },
+  {
+    "tool": "get_type_info",
+    "args": {
+      "symbol": "Store"
+    }
+  },
+  {
+    "tool": "get_diagnostics",
+    "args": {}
+  },
+  {
+    "tool": "get_diagnostics",
+    "args": {
+      "file": "store/store.go"
+    }
+  },
+  {
+    "tool": "semantic_search",
+    "args": {
+      "query": "add an item to the store"
+    }
+  },
+  {
+    "tool": "get_sheaf_status",
+    "args": {}
+  },
+  {
+    "tool": "write_file",
+    "args": {
+      "path": "store/index.go/function_declaration_0",
+      "content": "func keyOf(name string) string {\n\treturn \"k:\" + name\n}\n"
+    }
+  },
+  {
+    "tool": "read_file",
+    "args": {
+      "path": "store/index.go/function_declaration_0",
+      "mode": "signatures"
+    }
+  },
+  {
+    "tool": "write_file",
+    "args": {
+      "path": "store/index.go/function_declaration_0",
+      "content": "func keyOf(name string) string {\n\treturn \n"
+    }
+  },
+  {
+    "tool": "find_callers",
+    "args": {
+      "token": "keyOf"
+    }
+  },
+  {
+    "tool": "resolve_ref",
+    "args": {
+      "token": "gomod:fmt"
+    }
+  }
+]
