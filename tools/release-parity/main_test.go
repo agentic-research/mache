@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,4 +116,27 @@ func TestReapSurvivors_ReportsAndKillsALeak(t *testing.T) {
 
 func TestReapSurvivors_CleanShutdownIsSilent(t *testing.T) {
 	assert.NoError(t, reapSurvivors(t.TempDir(), 200*time.Millisecond))
+}
+
+// The gate judges the candidate. A base release that leaks (v0.21.1 does) is
+// a regression it already shipped: noted, not fatal. A head leak, or any other
+// base failure, must still stop the run.
+func TestClassifyRunError(t *testing.T) {
+	leak := &leakError{"left 2 process(es) running"}
+	// answerPlan joins the close error onto its own, so the leak arrives wrapped.
+	wrapped := errors.Join(nil, leak)
+
+	note, fatal := classifyRunError("base", wrapped)
+	assert.NoError(t, fatal, "a base leak must not abort the comparison")
+	assert.Contains(t, note, "left 2 process(es) running")
+
+	_, fatal = classifyRunError("head", wrapped)
+	require.Error(t, fatal, "a head leak is a regression in the release being gated")
+
+	_, fatal = classifyRunError("base", errors.New("tools/list: broken pipe"))
+	require.Error(t, fatal, "a base that cannot answer cannot be compared")
+
+	note, fatal = classifyRunError("base", nil)
+	assert.Empty(t, note)
+	assert.NoError(t, fatal)
 }
