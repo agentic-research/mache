@@ -34,7 +34,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,8 +41,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -163,87 +160,14 @@ func compareReleases(base, head, root string, plan []call, out string, timeout t
 	return 0, nil
 }
 
-// session serves a private copy of the corpus with bin over stdio, under a
-// private HOME. The copy matters because write_file edits the corpus: without
-// it, one run's edits would become the next run's input.
-type session struct {
-	c    *client.Client
-	home string
-	root string
-}
-
-func openSession(ctx context.Context, bin, corpus string) (*session, error) {
-	home, err := isolatedHome()
-	if err != nil {
-		return nil, err
-	}
-	root := filepath.Join(home, "corpus")
-	if err := os.CopyFS(root, os.DirFS(corpus)); err != nil {
-		_ = os.RemoveAll(home)
-		return nil, fmt.Errorf("copy corpus: %w", err)
-	}
-	env := append(os.Environ(), "HOME="+home)
-	args := []string{"serve", "--stdio"}
-	if schema != "" {
-		args = append(args, "--schema", schema)
-	}
-	c, err := client.NewStdioMCPClient(bin, env, append(args, root)...)
-	if err != nil {
-		_ = os.RemoveAll(home)
-		return nil, err
-	}
-	init := mcp.InitializeRequest{}
-	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	init.Params.ClientInfo = mcp.Implementation{Name: "release-parity", Version: "1"}
-	if _, err := c.Initialize(ctx, init); err != nil {
-		_ = c.Close()
-		_ = os.RemoveAll(home)
-		return nil, fmt.Errorf("initialize: %w", err)
-	}
-	return &session{c: c, home: home, root: root}, nil
-}
-
-func (s *session) close() {
-	_ = s.c.Close()
-	_ = os.RemoveAll(s.home)
-}
-
-// isolatedHome makes a HOME whose ~/.mache/bin is the real one, so each binary
-// resolves its own pinned leyline without downloading, and whose parse cache
-// and daemon state are private to this run.
-func isolatedHome() (string, error) {
-	// Under /tmp, not TMPDIR: the managed leyline daemon binds a unix socket
-	// beneath HOME, macOS caps socket paths at 104 bytes, and TMPDIR there is a
-	// long /var/folders/... path. A run under it measures a socket-length
-	// failure no typical HOME has, not the code under test (mache-aab4f0).
-	home, err := os.MkdirTemp("/tmp", "rp-")
-	if err != nil {
-		return "", err
-	}
-	real, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Join(home, ".mache"), 0o755); err != nil {
-		return "", err
-	}
-	bin := filepath.Join(real, ".mache", "bin")
-	if _, err := os.Stat(bin); err == nil {
-		if err := os.Symlink(bin, filepath.Join(home, ".mache", "bin")); err != nil {
-			return "", err
-		}
-	}
-	return home, nil
-}
-
-func listTools(bin, root string, timeout time.Duration) ([]mcp.Tool, error) {
+func listTools(bin, root string, timeout time.Duration) (tools []mcp.Tool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	s, err := openSession(ctx, bin, root)
 	if err != nil {
 		return nil, err
 	}
-	defer s.close()
+	defer func() { err = errors.Join(err, s.close()) }()
 	res, err := s.c.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("tools/list: %w", err)
@@ -252,14 +176,14 @@ func listTools(bin, root string, timeout time.Duration) ([]mcp.Tool, error) {
 	return res.Tools, nil
 }
 
-func answerPlan(bin, root string, plan []call, timeout time.Duration) ([]answer, error) {
+func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers []answer, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	s, err := openSession(ctx, bin, root)
 	if err != nil {
 		return nil, err
 	}
-	defer s.close()
+	defer func() { err = errors.Join(err, s.close()) }()
 	listed, err := s.c.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("tools/list: %w", err)
@@ -319,120 +243,6 @@ func normalizeText(s, root, home string) any {
 	return s
 }
 
-// runsPerSide is how many times each binary runs the plan to measure its own
-// noise. Two runs missed a timing race that happened to agree within each side
-// (the sheaf subscriber reconnecting); three makes that much rarer, and a
-// difference that survives is reported, never hidden.
-const runsPerSide = 3
-
-// noise is what a masked value is replaced with.
-const noise = "<varies between identical runs>"
-
-// maskNoise returns first with every value that differs from second masked.
-func maskNoise(first, second []answer) []answer {
-	out := make([]answer, len(first))
-	for i := range first {
-		out[i] = first[i]
-		out[i].Body = mask(first[i].Body, second[i].Body)
-	}
-	return out
-}
-
-// mask returns a, with every leaf (or shape) that differs from b replaced by
-// [noise]. Objects are compared key by key and arrays index by index when
-// their lengths agree; anything else that differs is masked whole.
-func mask(a, b any) any {
-	switch av := a.(type) {
-	case map[string]any:
-		bv, ok := b.(map[string]any)
-		if !ok {
-			return noise
-		}
-		out := make(map[string]any, len(av))
-		for k, v := range av {
-			w, ok := bv[k]
-			if !ok {
-				out[k] = noise
-				continue
-			}
-			out[k] = mask(v, w)
-		}
-		// A key only the later run has is noise too: its presence varies.
-		for k := range bv {
-			if _, ok := av[k]; !ok {
-				out[k] = noise
-			}
-		}
-		return out
-	case []any:
-		bv, ok := b.([]any)
-		if !ok || len(bv) != len(av) {
-			if cmp.Equal(a, b) {
-				return a
-			}
-			return noise
-		}
-		out := make([]any, len(av))
-		for i := range av {
-			out[i] = mask(av[i], bv[i])
-		}
-		return out
-	default:
-		if cmp.Equal(a, b) {
-			return a
-		}
-		return noise
-	}
-}
-
-// maskEither masks, in both a and b, every position either side already
-// masked, so a field that is noise for one version is not reported as a
-// difference.
-func maskEither(a, b any) (any, any) {
-	if a == noise || b == noise {
-		return noise, noise
-	}
-	am, aok := a.(map[string]any)
-	bm, bok := b.(map[string]any)
-	if aok && bok {
-		ao, bo := make(map[string]any, len(am)), make(map[string]any, len(bm))
-		for k, v := range am {
-			ao[k] = v
-		}
-		for k, v := range bm {
-			bo[k] = v
-		}
-		for k := range am {
-			if w, ok := bm[k]; ok {
-				ao[k], bo[k] = maskEither(am[k], w)
-			}
-		}
-		// A key that is noise on one side and absent on the other is a field
-		// whose PRESENCE varies between identical runs; drop it from both.
-		for k, v := range ao {
-			if _, ok := bo[k]; !ok && v == noise {
-				delete(ao, k)
-			}
-		}
-		for k, v := range bo {
-			if _, ok := ao[k]; !ok && v == noise {
-				delete(bo, k)
-			}
-		}
-		return ao, bo
-	}
-	as, aok := a.([]any)
-	bs, bok := b.([]any)
-	if aok && bok && len(as) == len(bs) {
-		ao, bo := make([]any, len(as)), make([]any, len(bs))
-		for i := range as {
-			ao[i], bo[i] = maskEither(as[i], bs[i])
-		}
-		return ao, bo
-	}
-	return a, b
-}
-
 func uncoveredTools(tools []mcp.Tool, plan []call) []string {
 	called := map[string]bool{}
 	for _, c := range plan {
@@ -460,78 +270,4 @@ func readPlan(path string) ([]call, error) {
 		return nil, errors.New("plan is empty")
 	}
 	return plan, nil
-}
-
-func writeAnswers(out string, plan []call, answers map[string][]answer) error {
-	for side, as := range answers {
-		dir := filepath.Join(out, side)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		for i, a := range as {
-			b, err := json.MarshalIndent(struct {
-				Call   call   `json:"call"`
-				Answer answer `json:"answer"`
-			}{plan[i], a}, "", "  ")
-			if err != nil {
-				return err
-			}
-			name := fmt.Sprintf("%03d-%s.json", i, plan[i].Tool)
-			if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// writeReport writes report.md and returns how many calls differ.
-func writeReport(out, base, head, root string, plan []call, answers map[string][]answer) (int, error) {
-	f, err := os.Create(filepath.Join(out, "report.md"))
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = f.Close() }()
-	return writeDiffReport(f, base, head, root, plan, answers)
-}
-
-func writeDiffReport(w io.Writer, base, head, root string, plan []call, answers map[string][]answer) (int, error) {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# Release parity\n\n- base: `%s`\n- head: `%s`\n- corpus: `%s`\n- schema: `%s`\n- calls: %d\n\n", base, head, root, schemaLabel(), len(plan))
-	b.WriteString("Diff lines read `-` base, `+` head.\n\n")
-	changed := 0
-	for i, c := range plan {
-		ba, ha := answers["base"][i], answers["head"][i]
-		args, _ := json.Marshal(c.Args)
-		switch {
-		case ba.Missing && ha.Missing:
-			fmt.Fprintf(&b, "## %03d `%s` %s: not registered by either binary\n\n", i, c.Tool, args)
-			changed++
-		case ba.Missing:
-			fmt.Fprintf(&b, "## %03d `%s` %s: NEW in head\n\n", i, c.Tool, args)
-			changed++
-		case ha.Missing:
-			fmt.Fprintf(&b, "## %03d `%s` %s: REMOVED in head\n\n", i, c.Tool, args)
-			changed++
-		default:
-			d := cmp.Diff(ba, ha)
-			if d == "" {
-				continue
-			}
-			changed++
-			fmt.Fprintf(&b, "## %03d `%s` %s\n\n```diff\n%s```\n\n", i, c.Tool, args, d)
-		}
-	}
-	if changed == 0 {
-		b.WriteString("Every answer matches.\n")
-	}
-	_, err := io.WriteString(w, b.String())
-	return changed, err
-}
-
-func schemaLabel() string {
-	if schema == "" {
-		return "raw projection"
-	}
-	return schema
 }

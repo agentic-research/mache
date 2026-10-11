@@ -6,6 +6,31 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stopping mache no longer orphans its leyline daemon** (`mache-25f49e`).
+  An MCP client or editor that shut mache down could leave the managed daemon
+  and its `mache serve --control` child running with no owner; 81 accumulated
+  on one host. Three separate causes, each now fixed and tested:
+  - **Shutdown during a cold start was ignored.** Starting the daemon held a
+    lock through the whole wait for it to become ready (about 12 s on a
+    150-file corpus with the v0.19.1 pin), and stopping it needed the same
+    lock. So mache didn't respond to SIGTERM and was killed outright. The
+    wait no longer holds the lock, so a stop reaches a daemon that is still
+    starting.
+  - **A daemon could be started after shutdown.** A background trigger starts
+    the daemon once the graph has loaded. If the session closed first, there
+    was nothing to stop, and the trigger then started a daemon the exiting
+    process could never stop. Shutdown now refuses any later spawn.
+  - **Closing stderr killed mache mid-shutdown.** MCP clients close mache's
+    stdio pipes when stopping it, and Go kills a process that writes to a
+    closed stderr. mache's first shutdown log line ended it before it could
+    stop the daemon. `serve` and `mount` now survive a closed pipe.
+
+  The release-parity gate now fails a run that leaves any process behind,
+  names it, and shows the end of the server's log, which is how the second
+  and third causes were found after the first was fixed.
+
 ### Added
 
 - **A release gate that checks behavior, not just consistency**
