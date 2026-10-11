@@ -22,6 +22,7 @@ import (
 	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/materialize"
 	"github.com/agentic-research/mache/internal/mountmeta"
+	"github.com/agentic-research/mache/internal/procsig"
 	"github.com/agentic-research/mache/internal/schemainfer"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/spf13/cobra"
@@ -557,7 +558,8 @@ var rootCmd = &cobra.Command{
 
 		// Clean up any auto-spawned leyline daemon when the mount exits.
 		// TriggerEmbedding (below) or semantic search may auto-start one.
-		defer leyline.StopManaged()
+		procsig.SurviveBrokenPipes()
+		defer leyline.ShutdownManaged()
 
 		// Fire-and-forget: push content to ley-line for embedding
 		go leyline.TriggerEmbedding(g, 100)

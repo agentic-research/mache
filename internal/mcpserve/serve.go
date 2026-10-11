@@ -21,6 +21,7 @@ import (
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/mountmeta"
+	"github.com/agentic-research/mache/internal/procsig"
 	"github.com/agentic-research/mache/internal/smells"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/server"
@@ -82,12 +83,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// supervisor definition: a hand-run `mache serve` that keeps failing is
 	// the operator's business and must never be refused. Exiting ZERO is how
 	// both supervisors are told to stop respawning.
-	if daemonguard.Supervised() {
-		trip, unclean := daemonguard.RecordStart(time.Now())
-		if trip {
-			log.Print(daemonguard.TripMessage(unclean))
-			return nil
-		}
+	if crashLoopTripped() {
+		return nil
 	}
 
 	// When spawned by the daemon (--control), auto-assign port if --http wasn't
@@ -96,43 +93,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		serveHTTP = "localhost:0"
 	}
 
-	var repoCloneDir string // set only for HTTP + --repo mode
-
-	// Ephemeral mode: clone repo to temp dir, serve from there, cleanup on exit
-	if serveRepo != "" {
-		if serveStdio {
-			// Stdio: single session — clone directly, use as basePath
-			tmpDir, cleanup, err := cloneRepo(serveRepo)
-			if err != nil {
-				return fmt.Errorf("clone %s: %w", serveRepo, err)
-			}
-			defer cleanup()
-			servePath = tmpDir
-			log.Printf("ephemeral stdio mode: serving %s from %s", serveRepo, tmpDir)
-		} else {
-			// HTTP: multiple sessions — clone into base/ subdir so sessions/
-			// is a sibling under the same parent (all cleaned up together).
-			parentDir, err := os.MkdirTemp("", "mache-repo-*")
-			if err != nil {
-				return fmt.Errorf("create temp dir: %w", err)
-			}
-			defer func() {
-				log.Printf("ephemeral cleanup: removing %s", parentDir)
-				_ = os.RemoveAll(parentDir)
-			}()
-			baseDir := filepath.Join(parentDir, "base")
-			log.Printf("cloning %s for HTTP mode...", serveRepo)
-			cmd := gitutil.HermeticGitCommand("clone", "--depth=1", "--single-branch", serveRepo, baseDir)
-			cmd.Stdout = os.Stderr
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("git clone: %w", err)
-			}
-			repoCloneDir = baseDir
-			// Set basePath to base clone as fallback (not CWD)
-			servePath = baseDir
-			log.Printf("ephemeral HTTP mode: base clone at %s", baseDir)
-		}
+	// Deferred before the error check: a clone that fails part-way still
+	// cleans up what it created.
+	repoCloneDir, cleanupRepo, err := prepareEphemeralRepo()
+	defer cleanupRepo()
+	if err != nil {
+		return err
 	}
 
 	registry := newGraphRegistry(servePath, args)
@@ -150,25 +116,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}()
 	registry.repoCloneDir = repoCloneDir
 
-	// Resolve the external smell-rules dir ONCE at startup from
-	// $MACHE_SMELL_RULES_DIR or the served project's .mache.json
-	// (serve has no explicit flag for it). The find_smells handler
-	// rescans this fixed dir per request, so dropping a new rule file
-	// into it is picked up live — no restart, no reconnect. Changing
-	// the dir itself still needs a restart, which is fine.
-	registry.smellRulesDir = smells.ResolveSmellRulesDir("", registry.resolvedBasePath())
-	if registry.smellRulesDir != "" {
-		log.Printf("find_smells: external rules dir = %s (rescanned per request)", registry.smellRulesDir)
-	}
-
-	// Configure managed Leyline startup only after the served input is known.
-	// An explicit --path with no positional input is itself the source tree;
-	// a positional .db always wins and must never inherit CDC from --path.
-	baseIsSource := serveRepo != "" || cmd.Flags().Changed("path")
-	if len(serveMounts) > 0 {
-		baseIsSource = false
-	}
-	configureManagedLeylineRuntime(args, servePath, baseIsSource, serveControl != "", serveCDC)
+	configureServeRuntime(cmd, args, registry)
 
 	// Startup wire-compat handshake (mache-8kif): if a leyline daemon is
 	// already reachable, refuse to serve on a structural wire-format mismatch
@@ -178,22 +126,30 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Start the sheaf-invalidate event subscriber (mache-c14c43).
-	// One subscriber per process feeds the router; the router fans
-	// events out to every lazyGraph's invalidator. When no daemon
-	// socket is reachable at startup, startSheafSubscriber logs and
-	// returns nil + a no-op stop — local watcher invalidation still
-	// works, just without notifications from other initiators.
-	// registry.Close stops it during shutdown.
-	subscriberCtx, stopSubscriberCtx := context.WithCancel(context.Background()) // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
-	defer stopSubscriberCtx()                                                    // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
-	sub, stop := startSheafSubscriber(subscriberCtx, registry.sheafRouter)       // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
-	registry.sheafSubscriber = sub                                               // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
-	registry.stopSheafSubscriber = func() {                                      // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
-		stopSubscriberCtx() // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
-		stop()              // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
-	} // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	defer wireSheafSubscriber(registry)() // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
 
+	s := newMCPServer(registry)
+
+	// Resolve source label for sidecar metadata
+	source := registry.resolvedBasePath()
+	if len(args) > 0 {
+		source = args[0]
+	}
+
+	// Clean up any auto-spawned leyline daemon on exit.
+	// A client closing the stdio pipes must not kill mache before it stops
+	// its daemon (mache-25f49e).
+	procsig.SurviveBrokenPipes()
+	defer leyline.ShutdownManaged()
+
+	if serveStdio {
+		return serveOverStdio(s, registry, source)
+	}
+	return serveOverHTTP(s, source)
+}
+
+// newMCPServer builds the MCP server with its session hooks and every tool.
+func newMCPServer(registry *graphRegistry) *server.MCPServer {
 	// Clean up session → root mapping on disconnect.
 	// Root discovery happens lazily on the first tool call (see wrapHandler)
 	// because ListRoots deadlocks inside OnAfterInitialize — the client
@@ -222,33 +178,31 @@ func runServe(cmd *cobra.Command, args []string) error {
 Call get_overview first when exploring a new codebase, then get_architecture for deeper orientation.`),
 	)
 	registerMCPTools(s, registry)
+	return s
+}
 
-	// Resolve source label for sidecar metadata
-	source := registry.resolvedBasePath()
-	if len(args) > 0 {
-		source = args[0]
-	}
+// serveOverStdio serves one client on stdin/stdout until it disconnects or a
+// signal arrives.
+func serveOverStdio(s *server.MCPServer, registry *graphRegistry, source string) error {
+	// Stdio: hard exit on signal — no HTTP server to drain.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		leyline.ShutdownManaged()
+		registry.Close()
+		os.Exit(0)
+	}()
 
-	// Clean up any auto-spawned leyline daemon on exit.
-	defer leyline.StopManaged()
+	meta := registerServeSidecar(source, "mcp-stdio", "")
+	defer removeServeSidecar(meta)
+	log.Println("mache MCP server ready on stdio")
+	return server.ServeStdio(s)
+}
 
-	if serveStdio {
-		// Stdio: hard exit on signal — no HTTP server to drain.
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-		go func() {
-			<-sigCh
-			leyline.StopManaged()
-			registry.Close()
-			os.Exit(0)
-		}()
-
-		meta := registerServeSidecar(source, "mcp-stdio", "")
-		defer removeServeSidecar(meta)
-		log.Println("mache MCP server ready on stdio")
-		return server.ServeStdio(s)
-	}
-
+// serveOverHTTP serves Streamable HTTP on --http until a signal triggers a
+// graceful drain.
+func serveOverHTTP(s *server.MCPServer, source string) error {
 	// MCP spec: servers MUST NOT bind to 0.0.0.0 — loopback only.
 	if err := validateHTTPAddr(serveHTTP); err != nil {
 		return err
@@ -257,44 +211,13 @@ Call get_overview first when exploring a new codebase, then get_architecture for
 	meta := registerServeSidecar(source, "mcp-http", serveHTTP)
 	defer removeServeSidecar(meta)
 
-	mcpHandler := server.NewStreamableHTTPServer(s,
-		server.WithHTTPContextFunc(hostedContextFromRequest),
-	)
-
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpHandler)
-	mux.HandleFunc("/", serveLandingPage)
-
-	httpSrv := &http.Server{Addr: serveHTTP, Handler: mux}
+	httpSrv := newHTTPServer(s)
 
 	// HTTP: graceful shutdown drains in-flight requests so defers
 	// (registry.Close, StopManaged, removeServeSidecar) run normally.
 	// signal.NotifyContext auto-cleans up if ListenAndServe returns for
 	// a non-signal reason (bind error, etc.) — no leaked goroutine.
-	sigCtx, sigStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer sigStop()
-	go func() {
-		<-sigCtx.Done()
-		// Every phase below logs with a duration, because "shutting down…"
-		// used to be the LAST line this process ever wrote — the next line in
-		// the file was the replacement's "listening". A 112-second exit was
-		// observed and could not be attributed to drain, registry cleanup, or
-		// anything else, by construction (mache-706d8f). A shutdown that
-		// cannot say where its time went will be misdiagnosed; this one was,
-		// twice.
-		log.Println("shutting down…")
-		drainStart := time.Now()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := httpSrv.Shutdown(shutCtx); err != nil {
-			// Deadline expiry here is not an anomaly: any genuinely in-flight
-			// request pays it. Both observed exact-10s restarts coincided with
-			// long-running tool calls that were later made fast.
-			log.Printf("shutdown: drain gave up after %s: %v", time.Since(drainStart).Round(time.Millisecond), err)
-		} else {
-			log.Printf("shutdown: drained in %s", time.Since(drainStart).Round(time.Millisecond))
-		}
-	}()
+	defer drainOnSignal(httpSrv)()
 
 	log.Printf("mache MCP server listening on %s/mcp (Streamable HTTP)", serveHTTP)
 	if err := httpSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
@@ -861,4 +784,150 @@ func buildControlGraph(ctrlPath string, _ *api.Topology) (graph.Graph, *graph.Sh
 	log.Printf("Connected to ley-line daemon at %s", sockPath)
 
 	return g, nil, func() { _ = g.Close() }, nil
+}
+
+// prepareEphemeralRepo handles --repo: clone the repo to a temp dir and serve
+// from there. It returns the base clone dir (HTTP mode only) and a cleanup to
+// defer, which is safe to call whatever happened.
+func prepareEphemeralRepo() (repoCloneDir string, cleanup func(), err error) {
+	cleanup = func() {}
+	if serveRepo == "" {
+		return "", cleanup, nil
+	}
+	if serveStdio {
+		// Stdio: single session — clone directly, use as basePath
+		tmpDir, cleanupClone, err := cloneRepo(serveRepo)
+		if err != nil {
+			return "", cleanup, fmt.Errorf("clone %s: %w", serveRepo, err)
+		}
+		servePath = tmpDir
+		log.Printf("ephemeral stdio mode: serving %s from %s", serveRepo, tmpDir)
+		return "", cleanupClone, nil
+	}
+	// HTTP: multiple sessions — clone into base/ subdir so sessions/
+	// is a sibling under the same parent (all cleaned up together).
+	parentDir, err := os.MkdirTemp("", "mache-repo-*")
+	if err != nil {
+		return "", cleanup, fmt.Errorf("create temp dir: %w", err)
+	}
+	cleanup = func() {
+		log.Printf("ephemeral cleanup: removing %s", parentDir)
+		_ = os.RemoveAll(parentDir)
+	}
+	baseDir := filepath.Join(parentDir, "base")
+	log.Printf("cloning %s for HTTP mode...", serveRepo)
+	cmd := gitutil.HermeticGitCommand("clone", "--depth=1", "--single-branch", serveRepo, baseDir)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", cleanup, fmt.Errorf("git clone: %w", err)
+	}
+	// Set basePath to base clone as fallback (not CWD)
+	servePath = baseDir
+	log.Printf("ephemeral HTTP mode: base clone at %s", baseDir)
+	return baseDir, cleanup, nil
+}
+
+// wireSheafSubscriber starts the sheaf-invalidate event subscriber
+// (mache-c14c43) and returns the cancel to defer.
+//
+// One subscriber per process feeds the router; the router fans events out to
+// every lazyGraph's invalidator. When no daemon socket is reachable at
+// startup, startSheafSubscriber logs and returns nil + a no-op stop — local
+// watcher invalidation still works, just without notifications from other
+// initiators. registry.Close stops it during shutdown.
+func wireSheafSubscriber(registry *graphRegistry) (cancel func()) {
+	subscriberCtx, stopSubscriberCtx := context.WithCancel(context.Background()) // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	sub, stop := startSheafSubscriber(subscriberCtx, registry.sheafRouter)       // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	registry.sheafSubscriber = sub                                               // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	registry.stopSheafSubscriber = func() {                                      // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+		stopSubscriberCtx() // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+		stop()              // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	} // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+	return stopSubscriberCtx // coverage:ignore — serve startup wiring; reduction tracked in mache-89b5dd.
+}
+
+// configureServeRuntime resolves the per-serve settings that depend on what is
+// being served: the external smell-rules dir and the managed leyline runtime.
+func configureServeRuntime(cmd *cobra.Command, args []string, registry *graphRegistry) {
+	// Resolve the external smell-rules dir ONCE at startup from
+	// $MACHE_SMELL_RULES_DIR or the served project's .mache.json
+	// (serve has no explicit flag for it). The find_smells handler
+	// rescans this fixed dir per request, so dropping a new rule file
+	// into it is picked up live — no restart, no reconnect. Changing
+	// the dir itself still needs a restart, which is fine.
+	registry.smellRulesDir = smells.ResolveSmellRulesDir("", registry.resolvedBasePath())
+	if registry.smellRulesDir != "" {
+		log.Printf("find_smells: external rules dir = %s (rescanned per request)", registry.smellRulesDir)
+	}
+
+	// Configure managed Leyline startup only after the served input is known.
+	// An explicit --path with no positional input is itself the source tree;
+	// a positional .db always wins and must never inherit CDC from --path.
+	baseIsSource := serveRepo != "" || cmd.Flags().Changed("path")
+	if len(serveMounts) > 0 {
+		baseIsSource = false
+	}
+	configureManagedLeylineRuntime(args, servePath, baseIsSource, serveControl != "", serveCDC)
+}
+
+// crashLoopTripped records this start with the crash-loop breaker and reports
+// whether too many unclean starts mean this one should exit instead. Only
+// under mache's own supervisor; see runServe.
+func crashLoopTripped() bool {
+	if !daemonguard.Supervised() {
+		return false
+	}
+	trip, unclean := daemonguard.RecordStart(time.Now())
+	if trip {
+		log.Print(daemonguard.TripMessage(unclean))
+	}
+	return trip
+}
+
+// newHTTPServer serves the MCP endpoint at /mcp and the landing page at /.
+func newHTTPServer(s *server.MCPServer) *http.Server {
+	mcpHandler := server.NewStreamableHTTPServer(s,
+		server.WithHTTPContextFunc(hostedContextFromRequest),
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcpHandler)
+	mux.HandleFunc("/", serveLandingPage)
+
+	return &http.Server{Addr: serveHTTP, Handler: mux}
+}
+
+// drainOnSignal shuts httpSrv down gracefully on SIGINT/SIGTERM and returns
+// the stop to defer.
+//
+// HTTP: graceful shutdown drains in-flight requests so defers
+// (registry.Close, StopManaged, removeServeSidecar) run normally.
+// signal.NotifyContext auto-cleans up if ListenAndServe returns for
+// a non-signal reason (bind error, etc.) — no leaked goroutine.
+func drainOnSignal(httpSrv *http.Server) (stop func()) {
+	sigCtx, sigStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCtx.Done()
+		// Every phase below logs with a duration, because "shutting down…"
+		// used to be the LAST line this process ever wrote — the next line in
+		// the file was the replacement's "listening". A 112-second exit was
+		// observed and could not be attributed to drain, registry cleanup, or
+		// anything else, by construction (mache-706d8f). A shutdown that
+		// cannot say where its time went will be misdiagnosed; this one was,
+		// twice.
+		log.Println("shutting down…")
+		drainStart := time.Now()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(shutCtx); err != nil {
+			// Deadline expiry here is not an anomaly: any genuinely in-flight
+			// request pays it. Both observed exact-10s restarts coincided with
+			// long-running tool calls that were later made fast.
+			log.Printf("shutdown: drain gave up after %s: %v", time.Since(drainStart).Round(time.Millisecond), err)
+		} else {
+			log.Printf("shutdown: drained in %s", time.Since(drainStart).Round(time.Millisecond))
+		}
+	}()
+	return sigStop
 }

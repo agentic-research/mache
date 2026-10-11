@@ -200,3 +200,29 @@ func isClosed(ch <-chan struct{}) bool {
 		return false
 	}
 }
+
+// After shutdown, nothing may be spawned. The daemon used to be started by a
+// background trigger once the graph loaded; a session that closed first ran
+// StopManaged with nothing to stop, then the trigger spawned a daemon, and the
+// process exited underneath it. The daemon leads its own process group, so it
+// survived as an orphan (found by the parity gate's leak check).
+func TestShutdownManaged_RefusesALaterSpawn(t *testing.T) {
+	home := fakeDaemonEnv(t, "never")
+	// A spawn that slipped through would time out and be discarded, which
+	// would look like a refusal; keep that failure fast, and judge by whether
+	// the fake ever ran (it writes fake-listening as soon as it starts).
+	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "3s")
+	t.Cleanup(func() {
+		managed.mu.Lock()
+		managed.shuttingDown = false
+		managed.mu.Unlock()
+	})
+
+	ShutdownManaged()
+	_, err := DiscoverOrStart()
+
+	require.Error(t, err, "a spawn after shutdown would orphan its daemon")
+	assert.Contains(t, err.Error(), "shutting down")
+	assert.NoFileExists(t, filepath.Join(home, ".mache", "fake-listening"),
+		"a daemon was started after shutdown")
+}

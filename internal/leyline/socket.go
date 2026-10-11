@@ -12,6 +12,7 @@ package leyline
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -128,6 +129,10 @@ type managedDaemon struct {
 	// arrive meanwhile wait on this rather than probing a socket that is not
 	// bound yet and discarding the daemon as stale.
 	starting chan struct{}
+	// shuttingDown is set by ShutdownManaged. After it, DiscoverOrStart
+	// refuses to spawn: the process is exiting, and a daemon started now
+	// would outlive it as an orphan.
+	shuttingDown bool
 }
 
 var managed managedDaemon
@@ -246,6 +251,9 @@ func DiscoverOrStart() (string, error) {
 
 	if sock, found, err := adoptLiveDaemon(); found {
 		return sock, err
+	}
+	if managed.shuttingDown {
+		return "", errors.New("leyline: not spawning a daemon, mache is shutting down")
 	}
 
 	paths, err := resolveDaemonPaths()
@@ -573,6 +581,22 @@ func leylineStartTimeout() time.Duration {
 		return time.Duration(n) * time.Second
 	}
 	return defaultLeylineStartTimeout
+}
+
+// ShutdownManaged stops the managed daemon for good: it is StopManaged plus a
+// refusal to spawn again, for the process's exit paths.
+//
+// StopManaged alone is not enough there. The daemon can be spawned by a
+// background trigger once the graph finishes loading; a session that closed
+// first stopped nothing, the trigger then spawned a daemon, and the process
+// exited underneath it. The daemon leads its own process group, so it
+// survived as an orphan. The flag is set BEFORE stopping, so no spawn can
+// slip in between (mache-25f49e).
+func ShutdownManaged() {
+	managed.mu.Lock()
+	managed.shuttingDown = true
+	managed.mu.Unlock()
+	StopManaged()
 }
 
 // StopManaged gracefully stops the auto-spawned leyline daemon, if any.
