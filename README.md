@@ -218,15 +218,15 @@ Mache has two supported deployment shapes:
 **Bundle / image (canonical production path).** Mache ships its own
 [apko](https://github.com/chainguard-dev/apko) +
 [melange](https://github.com/chainguard-dev/melange) configs to produce a
-distroless OCI image (`mache:0.21.1`, ~33MB, x86_64 + aarch64). This is the
+distroless OCI image (`mache:0.22.0`, ~33MB, x86_64 + aarch64). This is the
 unit that a cluster orchestrator (e.g. cloister) deploys; inside the
 bundle, mache speaks to a co-located ley-line daemon over a UDS socket
 and is unreachable except via the orchestrator-mediated wire.
 
 ```bash
-task image                          # → mache.tar (mache:0.21.1)
+task image                          # → mache.tar (mache:0.22.0)
 docker load -i mache.tar
-docker run --rm -i mache:0.21.1 serve --stdio /path/to/source
+docker run --rm -i mache:0.22.0 serve --stdio /path/to/source
 ```
 
 Given a fixed `melange.rsa` signing key and pinned toolchain, the build is
@@ -248,7 +248,7 @@ Its `ENTRYPOINT` is `["mache", "serve"]`, so `docker run` args append to
 `mache serve` — do **not** repeat `serve`, or you get `mache serve serve`:
 
 ```bash
-docker run --rm -i ghcr.io/agentic-research/mache:v0.21.1 --stdio /source
+docker run --rm -i ghcr.io/agentic-research/mache:v0.22.0 --stdio /source
 ```
 
 Mache declares its own source via `server.json`'s
