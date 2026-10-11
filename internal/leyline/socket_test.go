@@ -953,7 +953,7 @@ func e2eHome(t *testing.T) string {
 }
 
 // captureDaemonArgv drives DiscoverOrStart against a fake leyline that records
-// its argv and then sleeps, and returns the argv the daemon was actually
+// its argv and then serves the socket itself, and returns the argv the daemon was actually
 // spawned with plus the HOME it ran under. beforeStart runs after HOME is
 // prepared but before the spawn, so a test can seed the ~/.mache state the
 // spawn path reads (an arena config record, for instance).
@@ -972,7 +972,15 @@ func captureDaemonArgv(t *testing.T, beforeStart func(home string)) []string {
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
 	argvPath := filepath.Join(home, "daemon.argv")
 	pin := strings.TrimPrefix(leylineBinaryVersion, "v")
-	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'leyline " + pin + " (open)'; exit 0;; esac\nprintf '%s\\n' \"$@\" > \"$MACHE_TEST_DAEMON_ARGV\"\nPATH=/bin:/usr/bin exec sleep 30\n"
+	// The fake records argv, then becomes TestHelperFakeLeylineDaemon in bind
+	// mode, which serves the socket DiscoverOrStart waits for. It used to sleep
+	// while a goroutine here polled for the argv file for at most 2s and bound
+	// the socket on its behalf; under task check's parallel load the fake took
+	// longer than that to start, nothing bound the socket, and DiscoverOrStart
+	// timed out. The daemon binding its own socket has no deadline to miss.
+	self, err := os.Executable()
+	require.NoError(t, err)
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'leyline " + pin + " (open)'; exit 0;; esac\nprintf '%s\\n' \"$@\" > \"$MACHE_TEST_DAEMON_ARGV\"\nexec '" + self + "' -test.run='^TestHelperFakeLeylineDaemon$'\n"
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "leyline"), []byte(fake), 0o755))
 
 	t.Setenv("HOME", home)
@@ -980,38 +988,14 @@ func captureDaemonArgv(t *testing.T, beforeStart func(home string)) []string {
 	t.Setenv("PATH", "/nonexistent-path-for-test")
 	t.Setenv("MACHE_NO_LEYLINE", "1")
 	t.Setenv("MACHE_TEST_DAEMON_ARGV", argvPath)
+	t.Setenv("MACHE_FAKE_LEYLINE_DAEMON", "bind")
 
 	if beforeStart != nil {
 		beforeStart(home)
 	}
 
-	// The fake daemon records argv then sleeps. Once its record appears,
-	// provide the socket that DiscoverOrStart waits for.
-	sockPath := filepath.Join(home, ".mache", "default.sock")
-	listenerReady := make(chan error, 1)
-	var ln net.Listener
-	go func() {
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, err := os.Stat(argvPath); err == nil {
-				var err error
-				ln, err = net.Listen("unix", sockPath)
-				listenerReady <- err
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		listenerReady <- fmt.Errorf("fake daemon did not record argv")
-	}()
-	t.Cleanup(func() {
-		if ln != nil {
-			_ = ln.Close()
-		}
-	})
-
-	_, err := DiscoverOrStart()
+	_, err = DiscoverOrStart()
 	require.NoError(t, err)
-	require.NoError(t, <-listenerReady)
 
 	argv, err := os.ReadFile(argvPath)
 	require.NoError(t, err)
