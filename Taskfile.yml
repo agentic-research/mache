@@ -603,6 +603,31 @@ tasks:
     cmds:
       - go run ./tools/bench-cold {{.CLI_ARGS}}
 
+  release:parity:
+    desc: |
+      Release behavior gate (mache-5ea00b) — serve each pinned corpus with the
+      last release and with bin/mache, send both every call in the committed
+      plan, and report every difference in what they answer. Each difference
+      must be explained by a CHANGELOG entry, or it is a regression.
+      Usage: task release:parity BASE=/path/to/mache-<last-release>
+      Exit 1 means differences to explain (reports under .parity/), 2 means a
+      plan does not call every registered tool.
+    deps: [build, leyline:ensure]
+    requires:
+      vars: [BASE]
+    cmds:
+      # Both corpora always run; the task exits with the WORST code, so neither
+      # corpus's differences can hide behind the other's clean run.
+      - |
+        rc=0
+        for corpus in small-go-golden medium-rust-rosary; do
+          go run ./tools/release-parity -base "{{.BASE}}" -head bin/mache \
+            -corpus "testdata/snapshots/$corpus" \
+            -plan "tools/release-parity/plans/$corpus.json" \
+            -out ".parity/$corpus" || { c=$?; [ "$c" -gt "$rc" ] && rc=$c; }
+        done
+        exit "$rc"
+
   smells:dogfood:
     desc: "Dogfood — index this repo and PRINT all standalone find_smells findings (no gate; see `task smells` for the ratchet gate)"
     deps: [build]

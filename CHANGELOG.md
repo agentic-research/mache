@@ -8,6 +8,45 @@ bumps may include breaking changes.
 
 ### Added
 
+- **A release gate that checks behavior, not just consistency**
+  (`mache-5ea00b`). `task check` proves the tree agrees with itself; it cannot
+  say what changed for someone upgrading. `tools/release-parity` serves a
+  pinned corpus with the last release and with the candidate, sends both every
+  call in a committed plan, and reports every difference in what they answer.
+  - The plan must call every registered tool, or the run refuses to start.
+  - Noise is measured, not guessed: each binary runs the plan three times, and
+    only what varies between runs of the same binary is masked.
+  - Each binary gets its own HOME, so neither reads the other's caches.
+
+  Every difference must then be explained by an entry here, or it is a
+  regression. Its first run found the `get_architecture` nondeterminism below,
+  a swallowed daemon-startup error (`mache-aab4f0`), `serve --schema` being
+  ignored for directories (`mache-860851`), a ley-line daemon panic on long
+  socket paths (`ley-line-open-d923b7`), and 25 shipped beads with no entry
+  in this file; the user-facing ones are now recorded below.
+
+- **Orphaned leyline daemons are attributable** (`mache-967cff`). A successful
+  daemon spawn writes `<socket>.owner.json` (pin, daemon pid, spawner pid,
+  start time). `mache doctor` warns about an orphaned daemon (alive, but its
+  spawner is gone) with its pid, age and pin, and reports a stale record (daemon
+  gone, file left) as harmless. The record is provenance only: the daemon's own
+  answer stays the authority on its version.
+
+- **mache warns when a `.db` declares a projection it does not know**
+  (`mache-cc631a`). Nothing read `_meta.projection_schema_version`, so a copied,
+  cached, or differently-built db was accepted unchecked. The binary pin alone
+  is not enough: a ley-line branch can report the same version string as a
+  release while emitting a different schema. Opening a db now checks the shape
+  the file itself declares, in one indexed lookup. It warns rather than
+  refuses, because every bump so far has been readable.
+
+- **`MACHE_LEYLINE_BINARY` reaches the gated tests** (`mache-cc1a70`). The
+  override already moved `mache build` onto a candidate ley-line, but the
+  pinned test gates kept testing the pin, or skipped. They now follow the
+  override too, so mache can be validated against an unreleased ley-line before
+  it is pinned. Naming an override that cannot be used fails instead of
+  skipping.
+
 - **A merge is gated on saying what it did** (`mache-55faa4`). 19 of the PRs
   merged between v0.21.1 and `9bbd8e6` touched `CHANGELOG.md` not at all, and
   what went missing was not trivia — the whole `mache doctor` command,
@@ -297,6 +336,13 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **The ley-line pin moved to v0.15.1 and then to v0.19.1** (`mache-ae82ac`,
+  `mache-9331aa`). The v0.19.1 pin is what this release ships.
+
+- **Dependencies** (`mache-1e2caa`, `mache-2d261e`, `mache-8bf5fa`,
+  `mache-3dbaad`): the dependabot batches since v0.21.1, including mcp-go 1.1.x,
+  hcl 2.25.0, modernc sqlite, ojg, go-task 3.54.0 and go-billy 5.9.2.
+
 - **Graph reads compile each SQL statement once, not once per call**
   (`mache-3063fb`). Every `NodesTableReader` read — `GetNode`, `ListChildren`,
   `ListChildStats`, `ReadContent`, `GetCallers` — passed a query string to
@@ -515,6 +561,56 @@ bumps may include breaking changes.
   largest duplicated block in production code, now one implementation.
 
 ### Fixed
+
+- **`get_communities` and `get_architecture` answer on real repositories, and
+  the answer is right** (`mache-92fe87`). `get_architecture` refused anything
+  with more than 5000 reference tokens, and `get_communities` with
+  `summary=true` returned 2.4 MB. The cap measured tokens, but the cost is pairs
+  of nodes sharing a token. Worse, a few hub tokens (`t` in Go tests alone was
+  49M pairs) joined thousands of unrelated nodes, so the communities were wrong
+  as well as slow.
+
+  Tokens above a fan-in cap (default 100) are now pruned. On mache's own tree
+  that keeps 98.5% of tokens and removes 99.2% of the work: 32.5 s became
+  215 ms, and modularity went from 0.543 to 0.985. `max_fan_in` and `limit` are
+  parameters. When the pair budget forces a tighter cap, the answer reports
+  `effective_max_fan_in` and the pruned tokens rather than refusing. Sheaf
+  regions are built from these communities, so cascading invalidation now
+  follows meaningful boundaries too.
+
+- **`get_architecture` returns the same answer to the same call**
+  (`mache-5e2cf4`). It ranked `most_referenced` and `key_abstractions` from Go
+  maps with no tie-break and then kept the top 20, so ties came out in a
+  different order every call, and a tie at the cut changed which symbols were
+  returned at all. Ties now break on the symbol name.
+
+- **`mache daemon restart` no longer races launchd's drain** (`mache-96465d`).
+  The reload bootstrapped the new job before the old label had left the launchd
+  domain. It now waits for the old job to be gone (bounded by the plist's 45 s
+  `ExitTimeOut`), in both the daemon verbs and the install-time restart, and a
+  stuck drain fails loudly naming that step. The plist now bakes `HOME`, so
+  launchd cannot start the daemon against a different home than the one it was
+  installed for. A hermetic real-launchd E2E (`task test:launchd-e2e`) found the
+  race on its first run.
+
+- **Recovered correctness repairs** (`mache-595c96`, `mache-c5e114`):
+  - project identity paths are canonicalized (`mache-0e4773`);
+  - the `current_root` coherence contract is corrected (`mache-0df550`);
+  - `find_definition` preserves workspace-resolution failures instead of
+    hiding them, and retries a transient roots discovery;
+  - an unavailable graph's error reaches the caller instead of being replaced.
+
+- **No false "stale daemon" warning about a daemon on the pinned binary**
+  (`mache-d446a4`). Since the v0.19.1 pin, mache warned "reachable leyline
+  daemon reports 0.18.1 but mache pins v0.19.1, stop the stale daemon" about
+  daemons running exactly the pinned binary, including the one it had just
+  spawned itself, and `mache doctor` reported 0.18.1 as the serving version.
+  mache read a `version` key the daemon never sends, then fell back to
+  `schema_version`. That is the public schema-client contract, which LLO
+  versions separately (v0.19.1 and v0.20.1 both report 0.18.1). The check now
+  compares the daemon's `binary_version` to the pin, and a daemon that doesn't
+  report one is left unjudged. The tests had passed because their fake daemon
+  answered in a shape no real daemon uses; it now answers in the real one.
 
 - **`mache build` publishes its output in one step** (`mache-21c210`). Both
   build paths used to write the output db in place:

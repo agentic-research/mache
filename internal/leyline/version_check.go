@@ -73,13 +73,8 @@ func (c *SocketClient) VerifyVersion(clientVersion string) error {
 // strictness — it was VISIBILITY. Silent drift is the failure; a loud line next
 // to the output that inherits it is the fix.
 func warnOnPinDrift(resp map[string]any) {
-	got, _ := resp["version"].(string)
-	if got == "" {
-		if s, ok := resp["schema_version"].(string); ok {
-			got = s
-		}
-	}
-	if got == "" {
+	got, ok := daemonBinaryVersion(resp)
+	if !ok {
 		return // nothing to compare — an older daemon that omits it
 	}
 	if parseSemverParts(got) == parseSemverParts(leylineBinaryVersion) {
@@ -233,11 +228,18 @@ func AdoptedDaemonVersion() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if v, ok := resp["version"].(string); ok && v != "" {
-		return v, true
-	}
-	if v, ok := resp["schema_version"].(string); ok && v != "" {
-		return v, true
-	}
-	return "", false
+	return daemonBinaryVersion(resp)
+}
+
+// daemonBinaryVersion is the binary version a leyline_version reply reports,
+// the only quantity the pin can be compared with.
+//
+// It is NOT schema_version. LLO versions the public schema-client contract
+// independently of the binary (v0.19.1 and v0.20.1 both report schema 0.18.1),
+// and mache used to read "version", a key the op never sends, then fall back to
+// schema_version, so every daemon on the pinned binary looked stale (mache-d446a4). A
+// daemon that does not report binary_version cannot be judged, so it is not.
+func daemonBinaryVersion(resp map[string]any) (string, bool) {
+	v, ok := resp["binary_version"].(string)
+	return v, ok && v != ""
 }
