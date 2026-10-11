@@ -28,7 +28,8 @@ import (
 // MACHE_FAKE_LEYLINE_DAEMON=never never binds a socket: a startup that does
 // not finish. =on-ready binds the managed socket path when it receives
 // SIGUSR1, so a test decides exactly when startup completes instead of racing
-// a timer. Both exit on SIGTERM. Blocking on signals, not a sleep, also keeps
+// a timer. =bind serves the socket at once, for tests that only need a
+// daemon that comes up. All exit on SIGTERM. Blocking on signals, not a sleep, also keeps
 // the runtime from reporting an idle helper as deadlocked.
 func TestHelperFakeLeylineDaemon(t *testing.T) {
 	mode := os.Getenv("MACHE_FAKE_LEYLINE_DAEMON")
@@ -43,12 +44,22 @@ func TestHelperFakeLeylineDaemon(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "fake-listening"), nil, 0o644); err != nil {
 		os.Exit(3)
 	}
-	for s := range sig {
-		if s == syscall.SIGTERM {
-			os.Exit(0)
-		}
-		if mode == "on-ready" {
-			break
+	if mode == "bind" {
+		go func() {
+			for s := range sig {
+				if s == syscall.SIGTERM {
+					os.Exit(0)
+				}
+			}
+		}()
+	} else {
+		for s := range sig {
+			if s == syscall.SIGTERM {
+				os.Exit(0)
+			}
+			if mode == "on-ready" {
+				break
+			}
 		}
 	}
 	ln, err := net.Listen("unix", filepath.Join(dir, "default.sock"))
