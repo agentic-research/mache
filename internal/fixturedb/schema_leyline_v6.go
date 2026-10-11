@@ -32,13 +32,10 @@ package fixturedb
 // test as this file's re-derivation worklist — the arrangement mache-cc1a70
 // established for validating against an LLO candidate.
 
-// NO PRODUCER USES THIS YET, and adding one has a trap worth knowing before
-// you start: emit.go branches on `if e.b.producer != Leyline`, so a third
-// producer silently falls into the STANDALONE arm and writes v4 mache-schema
-// rows into a v6 table set. Make those switches exhaustive and loud on an
-// unhandled producer FIRST; a fixture that quietly models the wrong shape is
-// the hidden-parameter failure this whole package exists to remove
-// (mache-7555da).
+// NO PRODUCER USES THIS YET. Adding one means adding a third [dialect]: the
+// producer difference is a method set, not a `producer != Leyline` branch, so a
+// v6 producer cannot silently fall into another producer's writers. It writes
+// v6 rows or it does not compile (mache-7555da is the failure that rules out).
 //
 // What this file is for in the meantime: it is the re-derivation worklist the
 // pin bump needs, verified against a real v0.20.0 binary NOW rather than
