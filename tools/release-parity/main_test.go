@@ -2,8 +2,11 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
@@ -79,4 +82,37 @@ func TestNormalizeText_ReplacesBothPathSpellings(t *testing.T) {
 
 func TestNormalizeText_NonJSONStaysText(t *testing.T) {
 	assert.Equal(t, "not found: $CORPUS/x", normalizeText("not found: /c/x", "/c", "/h"))
+}
+
+// A process still naming the session's private HOME after shutdown is a leak:
+// reapSurvivors must report it AND kill it, so it cannot outlive the run.
+func TestReapSurvivors_ReportsAndKillsALeak(t *testing.T) {
+	home := t.TempDir()
+	// The shell's own argv carries the marker ($0), and it blocks in the read
+	// builtin on a pipe nobody writes, so no child process stands in for it.
+	leak := exec.Command("/bin/sh", "-c", "read x", "leak-under-"+home)
+	stdin, err := leak.StdinPipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stdin.Close() })
+	require.NoError(t, leak.Start())
+	exited := make(chan struct{})
+	go func() { _ = leak.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = leak.Process.Kill() })
+
+	err = reapSurvivors(home, 200*time.Millisecond)
+
+	require.Error(t, err, "a process naming the session's HOME must be reported")
+	assert.Contains(t, err.Error(), strconv.Itoa(leak.Process.Pid))
+	require.Eventually(t, func() bool {
+		select {
+		case <-exited:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond, "the leaked process must be killed")
+}
+
+func TestReapSurvivors_CleanShutdownIsSilent(t *testing.T) {
+	assert.NoError(t, reapSurvivors(t.TempDir(), 200*time.Millisecond))
 }

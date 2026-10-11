@@ -56,7 +56,6 @@ var thinDepAllowlist = map[string]string{
 
 	// Test-only.
 	"github.com/mark3labs/mcp-go/mcptest": "mcptest.NewUnstartedServer/Server — MCP harness, test-only",
-	"github.com/mark3labs/mcp-go/client":  "client.NewStdioMCPClient — tools/release-parity drives real binaries over stdio",
 	"github.com/google/go-cmp/cmp":        "cmp.Diff/Equal — the structural diff tools/release-parity reports; not worth reimplementing",
 
 	// THE WORKED EXAMPLE — thin, but removal would be a fidelity regression.
