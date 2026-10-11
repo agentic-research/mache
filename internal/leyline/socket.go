@@ -122,6 +122,12 @@ type managedDaemon struct {
 	mu   sync.Mutex
 	proc *os.Process
 	sock string
+	// starting is non-nil while a spawn waits for its daemon to become ready,
+	// and is closed when that wait ends. The wait runs WITHOUT mu held, so
+	// StopManaged can reach a daemon that is still starting, and callers that
+	// arrive meanwhile wait on this rather than probing a socket that is not
+	// bound yet and discarding the daemon as stale.
+	starting chan struct{}
 }
 
 var managed managedDaemon
@@ -230,6 +236,52 @@ func DiscoverOrStart() (string, error) {
 	managed.mu.Lock()
 	defer managed.mu.Unlock()
 
+	// A spawn in progress owns the outcome: wait for it, then re-evaluate.
+	for managed.starting != nil {
+		starting := managed.starting
+		managed.mu.Unlock()
+		<-starting
+		managed.mu.Lock()
+	}
+
+	if sock, found, err := adoptLiveDaemon(); found {
+		return sock, err
+	}
+
+	paths, err := resolveDaemonPaths()
+	if err != nil {
+		return "", err
+	}
+
+	// Last-chance pre-spawn liveness check on the would-be socket path.
+	// A concurrent mache invocation (different process) might have just
+	// bound this exact path between findExistingSocket and here; if so,
+	// piggyback rather than starting a second daemon that will fight for
+	// the same arena/control files.
+	//
+	// coverage:ignore — defensive TOCTOU guard against an external
+	// process binding paths.sock between findExistingSocket (L179) and
+	// here. Cannot be exercised hermetically in-process: if a listener
+	// is alive at paths.sock when findExistingSocket runs, fast-path 1
+	// returns at L181; if it isn't, only an external second-process
+	// race can flip isSocketAlive to true here. The same path is
+	// safety-netted by the post-spawn poll loop (L290-297) if a
+	// concurrent spawn lands on the same inode.
+	if isSocketAlive(paths.sock) { // coverage:ignore
+		return paths.sock, nil // coverage:ignore
+	} // coverage:ignore
+	// And clear any leftover socket inode so the daemon can bind.
+	_ = os.Remove(paths.sock)
+
+	daemonArgs, arenaCfg := daemonCommandArgs(paths)
+	return spawnAndAwait(paths, daemonArgs, arenaCfg)
+}
+
+// adoptLiveDaemon returns a daemon that is already serving, if there is one:
+// one at LEYLINE_SOCKET or the well-known path, or the one this process
+// spawned earlier. found is false when a spawn is needed. Caller holds
+// managed.mu.
+func adoptLiveDaemon() (sock string, found bool, err error) {
 	// Fast path 1: env var or well-known path resolves AND the socket is
 	// live. A bare os.Stat hit isn't enough — a post-SIGKILL daemon
 	// leaves the socket file behind with nothing listening, and the
@@ -244,7 +296,7 @@ func DiscoverOrStart() (string, error) {
 			// startup, leaving `mache build` (the path that PRODUCES
 			// projections) unwarned (mache-233902).
 			warnIfAdoptedDaemonDrifts(sock)
-			return sock, nil
+			return sock, true, nil
 		}
 		// Stale: file exists, no listener. Remove it so the spawn below
 		// can re-bind the well-known path. Only the well-known path is
@@ -253,7 +305,7 @@ func DiscoverOrStart() (string, error) {
 		if env := os.Getenv("LEYLINE_SOCKET"); env == "" {
 			_ = os.Remove(sock)
 		} else {
-			return "", fmt.Errorf("LEYLINE_SOCKET=%s exists but no daemon is listening", env)
+			return "", true, fmt.Errorf("LEYLINE_SOCKET=%s exists but no daemon is listening", env)
 		}
 	}
 
@@ -262,14 +314,24 @@ func DiscoverOrStart() (string, error) {
 	// since we last looked (e.g. OOM-killed independently of mache).
 	if managed.sock != "" {
 		if isSocketAlive(managed.sock) {
-			return managed.sock, nil
+			return managed.sock, true, nil
 		}
 		// Stale managed daemon: reap its group + clear so the spawn block
 		// re-runs. discard() does the group-kill that avoids orphaning the
 		// daemon's mache child.
 		managed.discard()
 	}
+	return "", false, nil
+}
 
+// daemonPaths is where a managed daemon lives, and the binary that runs it.
+type daemonPaths struct {
+	bin, dataDir, mountDir, arena, ctrl, sock string
+}
+
+// resolveDaemonPaths finds the pinned leyline and creates the managed daemon's
+// directories under ~/.mache.
+func resolveDaemonPaths() (daemonPaths, error) {
 	// Find the leyline binary through the SAME pin-checked chokepoint as
 	// the build path (ResolveBinary: PATH → ~/.mache/bin → SHA-verified
 	// download, each candidate accepted only on the exact pinned version).
@@ -283,11 +345,11 @@ func DiscoverOrStart() (string, error) {
 	// MACHE_NO_LEYLINE before downloading.
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
+		return daemonPaths{}, fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	leylineBin, err := ResolveBinary(true)
 	if err != nil {
-		return "", fmt.Errorf("no pinned leyline to spawn: %w", err)
+		return daemonPaths{}, fmt.Errorf("no pinned leyline to spawn: %w", err)
 	}
 	source := "resolved-pinned"
 	// Record which binary won, from which tier, at what version — so the
@@ -297,46 +359,35 @@ func DiscoverOrStart() (string, error) {
 	recordResolvedLeyline(leylineBin, source)
 	dataDir := filepath.Join(home, ".mache")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return "", fmt.Errorf("create %s: %w", dataDir, err)
+		return daemonPaths{}, fmt.Errorf("create %s: %w", dataDir, err)
 	}
 	mountDir := filepath.Join(dataDir, "mount")
 	if err := os.MkdirAll(mountDir, 0o755); err != nil {
-		return "", fmt.Errorf("create %s: %w", mountDir, err)
+		return daemonPaths{}, fmt.Errorf("create %s: %w", mountDir, err)
 	}
 
-	arenaPath := filepath.Join(dataDir, "default.arena")
-	ctrlPath := filepath.Join(dataDir, "default.ctrl")
-	sockPath := filepath.Join(dataDir, "default.sock")
+	return daemonPaths{
+		bin:      leylineBin,
+		dataDir:  dataDir,
+		mountDir: mountDir,
+		arena:    filepath.Join(dataDir, "default.arena"),
+		ctrl:     filepath.Join(dataDir, "default.ctrl"),
+		sock:     filepath.Join(dataDir, "default.sock"),
+	}, nil
+}
 
-	// Last-chance pre-spawn liveness check on the would-be socket path.
-	// A concurrent mache invocation (different process) might have just
-	// bound this exact path between findExistingSocket and here; if so,
-	// piggyback rather than starting a second daemon that will fight for
-	// the same arena/control files.
-	//
-	// coverage:ignore — defensive TOCTOU guard against an external
-	// process binding sockPath between findExistingSocket (L179) and
-	// here. Cannot be exercised hermetically in-process: if a listener
-	// is alive at sockPath when findExistingSocket runs, fast-path 1
-	// returns at L181; if it isn't, only an external second-process
-	// race can flip isSocketAlive to true here. The same path is
-	// safety-netted by the post-spawn poll loop (L290-297) if a
-	// concurrent spawn lands on the same inode.
-	if isSocketAlive(sockPath) { // coverage:ignore
-		return sockPath, nil // coverage:ignore
-	} // coverage:ignore
-	// And clear any leftover socket inode so the daemon can bind.
-	_ = os.Remove(sockPath)
-
+// daemonCommandArgs builds the managed daemon's command line, and the arena
+// configuration it will be recorded under once it serves.
+func daemonCommandArgs(p daemonPaths) ([]string, arenaSpawnConfig) {
 	// Start leyline daemon as a background subprocess.
 	// `daemon` creates the UDS socket at <ctrl>.sock that mache connects to.
 	// `serve` mounts only (no socket) — wrong for our use case.
 	daemonArgs := []string{
 		"daemon",
-		"--arena", arenaPath,
+		"--arena", p.arena,
 		"--arena-size-mib", "64",
-		"--control", ctrlPath,
-		"--mount", mountDir,
+		"--control", p.ctrl,
+		"--mount", p.mountDir,
 	}
 	// --source lets the daemon run enrichment passes: op_enrich requires
 	// ctx.source_dir, so without it lsp/embed enrichment fails with "no
@@ -384,11 +435,17 @@ func DiscoverOrStart() (string, error) {
 	// The flag was unusable before v0.18.0 — it failed even on a fresh arena
 	// (ley-line-open-e37e03, filed from here) — which is the second reason the
 	// pin bump and this call belong in one commit.
-	if arenaNeedsReset(arenaPath, arenaCfg) {
-		log.Printf("leyline: arena was built for a different configuration — cold-starting %s", arenaPath)
+	if arenaNeedsReset(p.arena, arenaCfg) {
+		log.Printf("leyline: arena was built for a different configuration — cold-starting %s", p.arena)
 		daemonArgs = append(daemonArgs, "--reset-arena")
 	}
-	cmd := exec.Command(leylineBin, daemonArgs...)
+	return daemonArgs, arenaCfg
+}
+
+// spawnAndAwait starts the daemon and waits for it to serve. Caller holds
+// managed.mu on entry and on return; it is released for the wait.
+func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig) (string, error) {
+	cmd := exec.Command(p.bin, daemonArgs...)
 	// Detach from our stdio so it doesn't interfere with MCP transport
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -407,7 +464,7 @@ func DiscoverOrStart() (string, error) {
 	}
 
 	managed.proc = cmd.Process
-	managed.sock = sockPath
+	managed.sock = p.sock
 
 	// Wait on the process in the background (prevents a zombie) and surface
 	// its exit to the poll below so we can distinguish "daemon crashed on
@@ -416,53 +473,81 @@ func DiscoverOrStart() (string, error) {
 	waitErr := make(chan error, 1)
 	go func() { waitErr <- cmd.Wait() }()
 
-	// Poll for socket to appear AND accept a connection. Mere os.Stat is
-	// insufficient — the kernel can create the inode before the daemon
-	// finishes its accept loop bind, and a stat-only wait would return a
-	// path that DialSocket can't connect to.
-	//
-	// The wait is configurable (MACHE_LEYLINE_START_TIMEOUT): a cold start —
-	// first run, arena init, enrichment setup, or contention with co-tenant
-	// daemons on the shared arena — can exceed the old fixed 5s.
+	// The readiness wait runs WITHOUT mu (mache-25f49e). It can last up to
+	// MACHE_LEYLINE_START_TIMEOUT, and a cold start takes seconds; holding the
+	// lock through it meant a SIGTERM's StopManaged could not stop the daemon
+	// until startup finished, so the client SIGKILLed mache and the daemon was
+	// orphaned. Callers arriving meanwhile wait on starting (above).
+	starting := make(chan struct{})
+	managed.starting = starting
+	managed.mu.Unlock()
 	timeout := leylineStartTimeout()
+	ready, exited, werr := awaitDaemonSocket(p.sock, waitErr, timeout)
+	managed.mu.Lock()
+	managed.starting = nil
+	close(starting)
+
+	// StopManaged may have run during the wait and cleared the daemon.
+	if managed.proc != cmd.Process {
+		return "", fmt.Errorf("leyline daemon was stopped during startup before socket %s appeared", p.sock)
+	}
+	if ready {
+		log.Printf("leyline daemon ready (pid=%d, socket=%s)", cmd.Process.Pid, p.sock)
+		// Record only now that the daemon is actually serving: a config
+		// written before the spawn would describe an arena state a crashed
+		// startup never produced, and the next run would warm-start onto it.
+		if err := recordArenaConfig(p.arena, arenaCfg); err != nil {
+			log.Printf("leyline: could not record arena config (next spawn will cold-start): %v", err)
+		}
+		// Provenance beside the socket, same only-once-serving rationale
+		// as the arena config above (mache-967cff).
+		writeOwnerRecord(p.sock, cmd.Process.Pid)
+		return p.sock, nil
+	}
+	managed.discard()
+	if exited {
+		// If the daemon already exited, the socket will never appear: report
+		// it as a crash, not a timeout.
+		if werr == nil {
+			// Clean exit (status 0) before binding is still a failure —
+			// nothing is listening on the socket. Return an explicit error
+			// rather than wrapping nil (which renders "%!w(<nil>)").
+			return "", fmt.Errorf("leyline daemon exited cleanly (status 0) during startup before socket %s appeared", p.sock)
+		}
+		return "", fmt.Errorf("leyline daemon exited during startup before socket %s appeared: %w", p.sock, werr)
+	}
+
+	// Timed out with the process still running — initializing too slowly or
+	// wedged. The group (daemon + any child it spawned) is discarded above;
+	// point at the knob to extend the wait and the likely-contended arena.
+	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within %s — it may still be initializing or contending for %s; raise MACHE_LEYLINE_START_TIMEOUT to allow longer",
+		p.sock, timeout, p.arena)
+}
+
+// awaitDaemonSocket polls until sockPath accepts a connection (ready), the
+// daemon exits (exited, with its wait error), or timeout passes. It touches
+// no shared state, so it runs with managed.mu released.
+//
+// Mere os.Stat is insufficient — the kernel can create the inode before the
+// daemon finishes its accept loop bind, and a stat-only wait would return a
+// path that DialSocket can't connect to. The timeout is configurable
+// (MACHE_LEYLINE_START_TIMEOUT): a cold start — first run, arena init,
+// enrichment setup, or contention with co-tenant daemons on the shared arena —
+// can exceed the old fixed 5s.
+func awaitDaemonSocket(sockPath string, waitErr <-chan error, timeout time.Duration) (ready, exited bool, werr error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if isSocketAlive(sockPath) {
-			log.Printf("leyline daemon ready (pid=%d, socket=%s)", cmd.Process.Pid, sockPath)
-			// Record only now that the daemon is actually serving: a config
-			// written before the spawn would describe an arena state a crashed
-			// startup never produced, and the next run would warm-start onto it.
-			if err := recordArenaConfig(arenaPath, arenaCfg); err != nil {
-				log.Printf("leyline: could not record arena config (next spawn will cold-start): %v", err)
-			}
-			// Provenance beside the socket, same only-once-serving rationale
-			// as the arena config above (mache-967cff).
-			writeOwnerRecord(sockPath, cmd.Process.Pid)
-			return sockPath, nil
+			return true, false, nil
 		}
-		// If the daemon already exited, the socket will never appear — stop
-		// waiting and report it as a crash, not a timeout.
 		select {
 		case werr := <-waitErr:
-			managed.discard()
-			if werr == nil {
-				// Clean exit (status 0) before binding is still a failure —
-				// nothing is listening on the socket. Return an explicit error
-				// rather than wrapping nil (which renders "%!w(<nil>)").
-				return "", fmt.Errorf("leyline daemon exited cleanly (status 0) during startup before socket %s appeared", sockPath)
-			}
-			return "", fmt.Errorf("leyline daemon exited during startup before socket %s appeared: %w", sockPath, werr)
+			return false, true, werr
 		default:
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-
-	// Timed out with the process still running — initializing too slowly or
-	// wedged. Discard the group (daemon + any child it spawned) and point at
-	// the knob to extend the wait and the likely-contended arena.
-	managed.discard()
-	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within %s — it may still be initializing or contending for %s; raise MACHE_LEYLINE_START_TIMEOUT to allow longer",
-		sockPath, timeout, arenaPath)
+	return false, false, nil
 }
 
 // defaultLeylineStartTimeout is how long DiscoverOrStart waits for a freshly

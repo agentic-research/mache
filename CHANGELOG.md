@@ -6,6 +6,19 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shutting mache down during the daemon's cold start no longer orphans the
+  daemon** (`mache-25f49e`). Starting the managed leyline daemon held a lock
+  through the whole wait for it to become ready, and stopping it needed the
+  same lock. A cold start takes seconds (about 12 s on a 150-file corpus with
+  the v0.19.1 pin), so an MCP client or editor that shut mache down during it
+  saw no response to SIGTERM and SIGKILLed mache. The daemon and its
+  `mache serve --control` child then ran on with no owner: 81 accumulated on
+  one host. The wait now runs without the lock, so a stop reaches a daemon that
+  is still starting, and a second caller arriving meanwhile waits for the
+  startup instead of discarding the daemon as stale.
+
 ### Added
 
 - **A release gate that checks behavior, not just consistency**
