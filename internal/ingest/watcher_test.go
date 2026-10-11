@@ -3,6 +3,7 @@ package ingest
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -217,19 +218,15 @@ func TestWatcher_NewSubdirectory(t *testing.T) {
 	require.NoError(t, err)
 	defer w.Stop()
 
-	// Create a new subdirectory with a source file. macOS FSEvents has
-	// higher latency than Linux inotify, so the sub-watcher install can
-	// take >50ms — wait long enough for it to settle before the file
-	// write, otherwise the watcher misses the create event entirely.
-	//
-	// Bumped warmup 250ms → 500ms and the eventually window 2s → 5s
-	// (mache-402c60). Under noisy macos-latest CI the previous bounds
-	// produced occasional flakes — assertion never satisfied, retry
-	// always green. The happy path stays sub-second on inotify; the
-	// 5s ceiling only kicks in when something has genuinely gone wrong.
+	// Create a new subdirectory and write a source file into it IMMEDIATELY.
+	// No warmup: a file written before the new directory's watch registers
+	// used to be missed outright, and this test hid that behind a sleep
+	// that grew from 250ms to 500ms and still flaked on macOS (mache-402c60).
+	// The watcher now reports what a new directory already contains
+	// (mache-538c51), so the file is caught by its own event, by that walk,
+	// or by both.
 	subDir := filepath.Join(tmpDir, "pkg")
 	require.NoError(t, os.MkdirAll(subDir, 0o755))
-	time.Sleep(500 * time.Millisecond)
 
 	goFile := filepath.Join(subDir, "lib.go")
 	require.NoError(t, os.WriteFile(goFile, []byte("package pkg"), 0o644))
@@ -413,4 +410,56 @@ func TestWatcher_GitignoreSkipsDirs(t *testing.T) {
 
 	assert.Equal(t, int32(1), called.Load(),
 		"non-ignored source files should still trigger callbacks")
+}
+
+// TestWatcher_ReportsFilesAlreadyInAMovedInDirectory is the deterministic form
+// of the race TestWatcher_NewSubdirectory used to paper over with a sleep
+// (mache-538c51).
+//
+// A directory renamed into the watched tree arrives as ONE event, the
+// directory's Create. The file inside it was created before any watch existed,
+// so it never produces an event of its own. Unless the watcher reports what a
+// new directory already contains, that file is never indexed. The same thing
+// happens to a file written into a brand-new directory before its watch
+// registers, and to `mv`, `git checkout` of a new package, or unpacking an
+// archive.
+func TestWatcher_ReportsFilesAlreadyInAMovedInDirectory(t *testing.T) {
+	root := t.TempDir()
+	staging := t.TempDir()
+
+	var mu sync.Mutex
+	var changed []string
+	onChange := func(path string) {
+		mu.Lock()
+		changed = append(changed, path)
+		mu.Unlock()
+	}
+	w, err := NewWatcher(root, onChange, func(string) {}, WithDebounce(20*time.Millisecond))
+	require.NoError(t, err)
+	defer w.Stop()
+
+	// Build the package OUTSIDE the watched tree, then move it in whole.
+	pkg := filepath.Join(staging, "pkg")
+	require.NoError(t, os.MkdirAll(filepath.Join(pkg, "inner"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkg, "lib.go"), []byte("package pkg"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkg, "inner", "deep.go"), []byte("package inner"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkg, "notes.txt"), []byte("not source"), 0o644))
+	moved := filepath.Join(root, "pkg")
+	require.NoError(t, os.Rename(pkg, moved))
+
+	want := []string{filepath.Join(moved, "inner", "deep.go"), filepath.Join(moved, "lib.go")}
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, p := range want {
+			if !slices.Contains(changed, p) {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "files inside a moved-in directory must be reported")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.NotContains(t, changed, filepath.Join(moved, "notes.txt"), "only source files are reported")
 }

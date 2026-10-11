@@ -562,6 +562,18 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **The file watcher indexes files that were already in a new directory**
+  (`mache-538c51`). When a directory appeared, the watcher started watching it
+  but never reported what was already inside. A file written right after
+  `mkdir`, or a whole directory moved in (`mv`, `git checkout` of a new
+  package, unpacking an archive), produced no event of its own, so it was
+  missing from the index until something touched it again. A new directory's
+  existing source files are now reported through the same debounce as any
+  other change. The test that hid this behind a 500 ms sleep, and still
+  flaked on macOS CI, now writes immediately and passes 50 runs in a row. A
+  second test moves a pre-populated directory in and fails every time without
+  the fix.
+
 - **`get_communities` and `get_architecture` answer on real repositories, and
   the answer is right** (`mache-92fe87`). `get_architecture` refused anything
   with more than 5000 reference tokens, and `get_communities` with

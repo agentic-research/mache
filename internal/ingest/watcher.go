@@ -158,12 +158,14 @@ func (w *Watcher) handleEvent(ev fsnotify.Event) {
 		return
 	}
 
-	// For newly created directories, start watching them.
+	// For newly created directories, start watching them, then report what
+	// they already contain.
 	if ev.Has(fsnotify.Create) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			if err := w.addDirsRecursive(path); err != nil {
 				log.Printf("watcher: failed to watch new dir %s: %v", path, err)
 			}
+			w.reportExisting(path)
 			return
 		}
 	}
@@ -245,6 +247,35 @@ func (w *Watcher) addDirsRecursive(root string) error {
 			return filepath.SkipDir
 		}
 		return w.watcher.Add(path)
+	})
+}
+
+// reportExisting reports every source file already under a directory that has
+// just appeared (mache-538c51).
+//
+// A new directory's watch is installed only after its Create event arrives, so
+// anything created inside it before then (a file written right after mkdir, or
+// a whole directory moved in by mv, git checkout, or an archive) produces no
+// event of its own and was never reported. Reporting goes through the same
+// debounce as a live event, so a file that ALSO raced its own Create event is
+// still reported once. Files are walked AFTER the watches are installed: one
+// created in between is then caught by its event, by this walk, or by both,
+// never by neither.
+func (w *Watcher) reportExisting(root string) {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries, as addDirsRecursive does
+		}
+		if d.IsDir() {
+			if path != root && w.shouldIgnoreDir(path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !w.shouldIgnorePath(path) && isSourceFile(path) {
+			w.debouncedOnChange(path)
+		}
+		return nil
 	})
 }
 
