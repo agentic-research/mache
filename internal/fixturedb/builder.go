@@ -120,12 +120,13 @@ func (b *Builder) Def(token string, in ConstructID, kind CanonicalKind, detail .
 func (b *Builder) Ref(token string, from ConstructID, at SiteID, qualifier string, detail ...Detail) *Builder {
 	b.Construct(from)
 	d := first(detail)
-	if at == "" {
+	synthetic := at == ""
+	if synthetic {
 		at = b.nextSite(from)
 	}
 	b.refs = append(b.refs, refSpec{
 		token: token, from: from, at: at, qualifier: qualifier,
-		subtree: d.label(b.nextSubtree()),
+		subtree: d.label(b.nextSubtree()), synthetic: synthetic,
 	})
 	return b
 }

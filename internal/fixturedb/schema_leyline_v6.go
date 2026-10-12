@@ -3,7 +3,9 @@ package fixturedb
 // The ley-line-open projection-v6 table contract, DERIVED not authored.
 //
 // Every statement below was copied out of `sqlite_master` after running a
-// v0.20.0 ley-line binary on a one-file Go corpus:
+// v0.20.0 ley-line binary on a one-file Go corpus, and re-verified unchanged
+// against v0.20.3, the release the pin moves to (v0.20.1 through v0.20.3 keep
+// projection-v6 and change no table):
 //
 //	$ leyline parse ./src -o out.db
 //	$ sqlite3 out.db "SELECT sql FROM sqlite_master ORDER BY type, name"
@@ -25,25 +27,18 @@ package fixturedb
 //
 // CONFORMANCE STATUS, stated plainly rather than implied: while the pin is
 // v0.19.1 this mirror is NOT verified against a binary in CI, because CI has
-// no v0.20.0 binary to verify it against. TestLeylineV6Schema_MatchesBinary
+// no v0.20.x binary to verify it against. TestLeylineV6Schema_MatchesBinary
 // checks it whenever one IS resolvable (locally, or via
 // MACHE_LEYLINE_BINARY), and the pin bump turns the check on permanently by
 // making v6 the pinned shape. Until then, treat a difference found by that
 // test as this file's re-derivation worklist — the arrangement mache-cc1a70
 // established for validating against an LLO candidate.
 
-// NO PRODUCER USES THIS YET. Adding one means adding a third [dialect]: the
-// producer difference is a method set, not a `producer != Leyline` branch, so a
-// v6 producer cannot silently fall into another producer's writers. It writes
-// v6 rows or it does not compile (mache-7555da is the failure that rules out).
+// The LeylineV6 producer (dialect_v6.go) builds fixtures in this shape.
 //
-// What this file is for in the meantime: it is the re-derivation worklist the
-// pin bump needs, verified against a real v0.20.0 binary NOW rather than
-// discovered during the bump.
-
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.20.0"
+const leylineV6SchemaVersion = "v0.20.3"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
