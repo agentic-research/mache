@@ -29,6 +29,10 @@ type refSpec struct {
 	at        SiteID
 	qualifier string
 	subtree   string
+	// synthetic is true when the spec left the site unnamed and the builder
+	// made one up. A v6 fixture gives such a site its own node and lets the
+	// naming rule name it, rather than trusting the made-up path.
+	synthetic bool
 }
 
 type astSpec struct {

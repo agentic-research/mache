@@ -83,6 +83,14 @@ var (
 	// different quantity here than on [Leyline] — the fan_out_skew class
 	// (mache-50e939).
 	Standalone = Producer{name: "standalone", dialect: standaloneDialect{}}
+
+	// LeylineV6 is ley-line-open's projection-v6 (v0.20.x): integer nids
+	// (file_id<<24 | preorder ordinal, directories -dir_id), interned names and
+	// kinds, and paths derived by LLO's v_node_path rather than stored. A
+	// spec's construct ids are reproduced as v_node_path, so the same spec can
+	// be read from either shape; it must therefore name syntax nodes as
+	// leyline does, suffixing "_k" only on a kind that repeats among siblings.
+	LeylineV6 = Producer{name: "leyline-v6", dialect: leylineV6Dialect{}}
 )
 
 // String returns the producer's name, for test failure messages.

@@ -323,14 +323,12 @@ type identityColumns struct {
 // test hand-writing CREATE TABLE for an LLO-owned table, and rightly: the DDL
 // a fixture happens to type decides which arm EnsureViews emits, so it is a
 // hidden test parameter (mache-7555da). fixturedb derives fixtures from the
-// real pinned producer instead — but it has no projection-v6 producer yet, so
-// an end-to-end v6 test cannot be written without hand-writing exactly what
-// that gate prohibits.
+// real producer instead, and since fixturedb.LeylineV6 both arms run end to
+// end: TestVocabulary_SameAnswersFromProjectionV4AndV6 builds one spec as v4
+// and v6 and requires the same answers from each.
 //
-// Making the mapping PURE is the way out: it is the part with the per-version
-// knowledge, and it is fully testable from a bool. The probe below is one
-// line, exercised end-to-end on v4 through a real fixturedb fixture, and the
-// v6 end-to-end arm arrives with the v6 producer model (mache-3688da).
+// The mapping stays PURE anyway: it is the part with the per-version
+// knowledge, and a bool is the cheapest way to test it exhaustively.
 func identityFor(v6 bool) identityColumns {
 	if v6 {
 		return identityColumns{

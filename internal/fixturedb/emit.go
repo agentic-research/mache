@@ -30,6 +30,12 @@ type emitter struct {
 	// point node_hash values at. Ley-line always does; a Standalone fixture only
 	// does when it modelled the cache-hydration path.
 	hasNodeContent bool
+
+	// v6 and v6Sites are the projection-v6 dialect's tree and its call-site
+	// nodes (one per ref, in b.refs order), built once on first use. Unused by
+	// the v4 dialects.
+	v6      *v6Tree
+	v6Sites []*v6Node
 }
 
 // insertRows writes every spec inside ONE transaction: a fixture is
@@ -125,6 +131,38 @@ func (e *emitter) insertV4Sources() {
 		}
 		e.exec(`INSERT OR REPLACE INTO _source (id, language, content, path, content_hash)
 			VALUES (?, ?, ?, ?, NULL)`, string(s.id), s.lang, body, s.path)
+	}
+}
+
+// insertV6AST writes the projection-v6 `_ast` rows, keyed by nid, and returns
+// each node's hash, keyed by node id, for the child lists.
+func (e *emitter) insertV6AST() map[string][]byte {
+	t := e.v6Tree()
+	hashes := make(map[string][]byte, len(e.b.ast))
+	for _, a := range e.b.ast {
+		h := e.subtree(a.subtree, a.kind, a.token)
+		hashes[a.nodeID] = h
+		e.exec(`INSERT OR REPLACE INTO _ast
+			(nid, kind_id, start_byte, end_byte, start_row, start_col, end_row, end_col, node_hash)
+			VALUES (?, (SELECT kind_id FROM kinds WHERE raw_kind = ? AND lang = ?), ?, ?, ?, ?, ?, ?, ?)`,
+			t.byPath[a.nodeID].nid, a.kind, e.b.langOf(a.source),
+			a.span.StartByte, a.span.EndByte, a.span.StartRow, a.span.StartCol, a.span.EndRow, a.span.EndCol, h)
+	}
+	return hashes
+}
+
+// insertV6Sources writes the projection-v6 `_source` rows, each with the
+// interned file id its nodes are keyed under.
+func (e *emitter) insertV6Sources() {
+	t := e.v6Tree()
+	for _, id := range e.b.srcOrder {
+		s := e.b.sources[id]
+		var body any
+		if s.content != "" {
+			body = []byte(s.content)
+		}
+		e.exec(`INSERT OR REPLACE INTO _source (id, language, content, path, content_hash, file_id)
+			VALUES (?, ?, ?, ?, NULL, ?)`, string(s.id), s.lang, body, s.path, t.byPath[string(s.id)].fileID)
 	}
 }
 

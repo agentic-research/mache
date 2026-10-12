@@ -46,14 +46,14 @@ func resolveV6Binary(t *testing.T) (string, string) {
 }
 
 // TestLeylineV6Schema_MatchesBinary re-derives schema_leyline_v6.go from a real
-// v0.20.0 binary and fails on any drift.
+// binary at leylineV6SchemaVersion and fails on any drift.
 //
 // IT SKIPS WHEN NO SUCH BINARY IS PRESENT, which is a compromise and is worth
-// naming. The pin is still v0.19.1, so CI has no v0.20.0 binary to check
+// naming. The pin is still v0.19.1, so CI has no v0.20.x binary to check
 // against, and a gate that can never pass would be red forever rather than
 // informative. The skip is time-boxed by construction:
 // TestLeylineV6Schema_IsCheckedOnceThePinReachesIt fails the moment the pin
-// reaches v0.20.0 with this mirror still sitting off to the side — at which
+// reaches leylineV6SchemaVersion with this mirror still sitting off to the side — at which
 // point v6 becomes the pinned shape and the primary conformance test covers it
 // unconditionally.
 //
@@ -95,7 +95,7 @@ func TestLeylineV6Schema_MatchesBinary(t *testing.T) {
 //
 // While the pin trails v6 this mirror is unverified in CI, which is tolerable
 // only because it cannot stay that way silently: the moment the pin reaches
-// v0.20.0, v6 IS the pinned shape, and leaving schema_leyline.go as the
+// leylineV6SchemaVersion, v6 IS the pinned shape, and leaving schema_leyline.go as the
 // checked mirror would mean the primary conformance test is comparing the
 // pinned binary against a v4 model — it would fail anyway, but for a confusing
 // reason. This fails first, and says what to do.
