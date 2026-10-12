@@ -148,6 +148,14 @@ type writeFile struct {
 	pos     int64
 	written bool // true only when Write() has been called (not just Truncate)
 	onClose WriteBackFunc
+
+	// replaceAtZero makes a first write at offset 0 replace the whole buffer
+	// (see openWritable). truncated is set by an explicit Truncate, after which
+	// the buffer is already what the client meant.
+	replaceAtZero, truncated bool
+	// session, when set, records the client's bytes on Close so the next
+	// WRITE request, which go-nfs serves as a fresh open, continues them.
+	session *GraphFS
 }
 
 func (f *writeFile) Name() string { return f.id }
@@ -176,6 +184,9 @@ func (f *writeFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *writeFile) Write(p []byte) (int, error) {
+	if !f.written && !f.truncated && f.replaceAtZero && f.pos == 0 {
+		f.buf = f.buf[:0]
+	}
 	end := f.pos + int64(len(p))
 	if end > int64(len(f.buf)) {
 		grown := make([]byte, end)
@@ -214,17 +225,29 @@ func (f *writeFile) Truncate(size int64) error {
 		f.buf = grown
 	}
 	// Truncate alone does NOT set written — see Close() comment.
+	f.truncated = true
 	return nil
 }
 
 // Close is THE COMMIT POINT. Only splice if Write() was actually called.
 // NFS SETATTR(size=0) causes a Truncate+Close cycle without Write — we
 // must NOT splice in that case, or the source file content gets deleted.
+//
+// Either way the client's bytes are recorded in the write session, so a
+// truncate is not forgotten by the WRITE that follows it, and a later chunk
+// of the same edit continues from them (mache-bc65f8).
 func (f *writeFile) Close() error {
 	if !f.written || f.onClose == nil {
+		if f.truncated && f.session != nil {
+			f.session.saveSession(f.id, f.buf)
+		}
 		return nil
 	}
-	if err := f.onClose(f.id, f.origin, f.buf); err != nil {
+	err := f.onClose(f.id, f.origin, f.buf)
+	if f.session != nil {
+		f.session.saveSession(f.id, f.buf)
+	}
+	if err != nil {
 		return fmt.Errorf("write-back failed for %s: %w", f.id, err)
 	}
 	return nil
