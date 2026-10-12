@@ -4,12 +4,14 @@
 package nfsmount
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,6 +40,12 @@ type GraphFS struct {
 
 	// Optional prompt content served as /PROMPT.txt virtual file (agent mode).
 	promptContent []byte
+
+	// sessions holds, per writable path, the bytes the NFS client has written
+	// so far. go-nfs serves every WRITE request as its own open/write/close,
+	// so without this each request after the first started over (mache-bc65f8).
+	sessionsMu sync.Mutex
+	sessions   map[string]*writeSession
 }
 
 // NewGraphFS creates a billy.Filesystem backed by a mache Graph.
@@ -172,24 +180,14 @@ func (fs *GraphFS) openWritable(filename string, flag int) (billy.File, error) {
 		return nil, &os.PathError{Op: "open", Path: filename, Err: fmt.Errorf("no source origin for write-back")}
 	}
 
-	// Pre-fill buffer with existing content (for O_RDWR / partial writes)
+	current := fs.readAll(filename, node)
+
+	// A write continues the client's own bytes for this path when a write is
+	// in progress, and the node's content otherwise. O_TRUNC starts empty.
 	var buf []byte
-
-	// Implicit truncation for 'source' files:
-	// Agents/Editors usually mean "replace" when writing to source.
-	// If it's a 'source' file and NOT append mode, we treat it as O_TRUNC
-	// even if the client didn't send it. This avoids "old tail" garbage.
-	shouldTruncate := (flag&os.O_TRUNC != 0)
-	if filepath.Base(filename) == "source" && (flag&os.O_APPEND == 0) {
-		shouldTruncate = true
-	}
-
-	if !shouldTruncate {
-		size := node.ContentSize()
-		if size > 0 {
-			buf = make([]byte, size)
-			n, _ := fs.graph.ReadContent(filename, buf, 0)
-			buf = buf[:n]
+	if flag&os.O_TRUNC == 0 {
+		if buf = fs.sessionBytes(filename, current); buf == nil {
+			buf = bytes.Clone(current)
 		}
 	}
 
@@ -198,6 +196,13 @@ func (fs *GraphFS) openWritable(filename string, flag int) (billy.File, error) {
 		origin:  *node.Origin,
 		buf:     buf,
 		onClose: fs.writeBack,
+		// Agents and editors mean "replace" when they write a source file from
+		// the top, often without sending a truncate. So a write that STARTS at
+		// offset 0 replaces the whole buffer. Only then: a write at an offset
+		// is the next chunk of one edit, or a patch, and continues the bytes
+		// before it rather than zero-filling them (mache-bc65f8).
+		replaceAtZero: filepath.Base(filename) == "source" && flag&os.O_APPEND == 0,
+		session:       fs,
 	}, nil
 }
 
@@ -509,3 +514,59 @@ var (
 	_ billy.File = (*graphFile)(nil)
 	_ billy.File = (*bytesFile)(nil)
 )
+
+// writeSession is the NFS client's bytes for one path, and the node's content
+// as it stood right after those bytes were last committed or truncated. A
+// node whose content has moved on since was changed by someone else, so the
+// session is stale and is dropped.
+type writeSession struct {
+	buf      []byte
+	nodeView []byte
+}
+
+// sessionBytes returns a copy of the client's bytes for filename when a write
+// session exists and the node still holds what that session last left, and
+// nil otherwise. A stale session is dropped.
+func (fs *GraphFS) sessionBytes(filename string, current []byte) []byte {
+	fs.sessionsMu.Lock()
+	defer fs.sessionsMu.Unlock()
+	s, ok := fs.sessions[filename]
+	if !ok {
+		return nil
+	}
+	if !bytes.Equal(s.nodeView, current) {
+		delete(fs.sessions, filename)
+		return nil
+	}
+	if s.buf == nil {
+		return []byte{}
+	}
+	return bytes.Clone(s.buf)
+}
+
+// saveSession records the client's bytes for filename, against the node's
+// content as it stands now.
+func (fs *GraphFS) saveSession(filename string, buf []byte) {
+	node, err := fs.graph.GetNode(filename)
+	if err != nil {
+		return
+	}
+	nodeView := fs.readAll(filename, node)
+	fs.sessionsMu.Lock()
+	defer fs.sessionsMu.Unlock()
+	if fs.sessions == nil {
+		fs.sessions = map[string]*writeSession{}
+	}
+	fs.sessions[filename] = &writeSession{buf: bytes.Clone(buf), nodeView: nodeView}
+}
+
+// readAll returns a node's whole content.
+func (fs *GraphFS) readAll(filename string, node *graph.Node) []byte {
+	size := node.ContentSize()
+	if size <= 0 {
+		return nil
+	}
+	buf := make([]byte, size)
+	n, _ := fs.graph.ReadContent(filename, buf, 0)
+	return buf[:n]
+}

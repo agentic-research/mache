@@ -8,6 +8,21 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Saving through the NFS mount no longer zero-fills a file sent in pieces**
+  (`mache-bc65f8`). The NFS library serves every write request as its own
+  open, write and close, and mache emptied a `source` file on every open. So
+  when a client sent one save as several requests, each request started from
+  an empty buffer. The second one wrote zero bytes in place of everything
+  before its offset, and that was saved over the function: the first part of
+  the edit was lost. It was usually hidden because macOS sends small files in
+  one request; large files or memory pressure split the save.
+
+  mache now keeps the client's bytes for a file across those requests: a later
+  piece continues from them, a truncate is remembered for the write that
+  follows it, and a write that starts at the top still replaces the whole
+  file. If something else changes the file in between, the next write works
+  on the new content.
+
 - **Stopping mache no longer orphans its leyline daemon** (`mache-25f49e`).
   An MCP client or editor that shut mache down could leave the managed daemon
   and its `mache serve --control` child running with no owner; 81 accumulated
