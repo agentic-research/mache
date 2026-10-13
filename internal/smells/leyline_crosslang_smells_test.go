@@ -46,7 +46,7 @@ func newCrossLangGraph(t *testing.T, defs []crossLangDef) *testutil.SmellTestGra
 	t.Helper()
 	return newSmellFixture(t, fixturedb.Leyline, func(b *fixturedb.Builder) {
 		for _, d := range defs {
-			b.Construct(d.nodeID) // symbol lives on Def; nodes.name is the id's last segment
+			b.Parsed(d.nodeID) // as a parse writes it: ancestors and kinds included
 			b.Def(d.token, d.nodeID, d.kind)
 		}
 	})

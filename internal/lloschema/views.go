@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/agentic-research/mache/internal/lsp"
 )
@@ -31,11 +32,6 @@ import (
 // Idempotent — DROP VIEW IF EXISTS before each CREATE — so safe to
 // call before every rule execution.
 func EnsureViews(qg Querier) error {
-	// _lsp_defs probe still runs because v_defs's binding-fidelity
-	// arm has not yet migrated to capnp — BindingRecord covers refs
-	// (the link from a call site to a definition), not standalone
-	// def metadata. _lsp_defs migration is tracked separately; for
-	// now the def-side dual-read mirrors the pre-mache-6bd4d8 shape.
 	// IDENTITY first, because it is the only thing projection-v6 renames and
 	// everything below selects it. v6 replaced the occurrence tables'
 	// `node_id` with an integer `nid`, and `container_node_id` with
@@ -50,179 +46,14 @@ func EnsureViews(qg Querier) error {
 		return err
 	}
 
-	hasLSPDefsToken, err := TableHasColumn(qg, "_lsp_defs", "def_token")
+	defsBody, err := defsViewBody(qg, ids)
 	if err != nil {
-		return fmt.Errorf("probe _lsp_defs: %w", err)
+		return err
 	}
-
-	// Additive node_hash passthrough (mache-ff9a9d). The merkle-AST
-	// producer (LLO) writes an additive node_hash BLOB column onto the
-	// occurrence tables (node_defs / node_refs / _ast): identical
-	// subtrees dedup to one node_content row keyed by that 32-byte
-	// hash, and each OCCURRENCE carries a pointer back to it. mache
-	// reads the occurrence layer unchanged (keyed on token / node_id);
-	// we surface node_hash as a trailing additive column so downstream
-	// consumers can group/annotate by content identity WITHOUT changing
-	// the token/node_id keying.
-	//
-	// INVARIANT: node_hash is ONE-TO-MANY — a deduped subtree appears at
-	// many occurrences, so the same node_hash recurs across many
-	// (token, node_id) rows. Resolution always targets an occurrence
-	// (node_id), NEVER a node_hash; a JOIN on node_hash assuming a
-	// single row is a fan-out bug (mirror of be6136).
-	//
-	// Standalone-mache .db files (written by NewSQLiteWriter, no merkle
-	// producer) have no node_hash column. We probe and emit `NULL AS
-	// node_hash` in that case — same trailing-column shape on every db,
-	// mirroring how `qualifier` is always present in v_refs. Existing
-	// consumers select explicit column lists (never SELECT *), so the
-	// added trailing column is transparent to them; the rows they read
-	// are byte-identical to before.
-	hasDefsNodeHash, err := TableHasColumn(qg, "node_defs", "node_hash")
+	refsBody, err := refsViewBody(qg, ids)
 	if err != nil {
-		return fmt.Errorf("probe node_defs.node_hash: %w", err)
+		return err
 	}
-
-	// canonical_kind is LLO's closed κ vocabulary (function / method / type /
-	// module / constant / ...) written onto node_defs (v0.7.5+, bead
-	// ley-line-open-b9d1d5 sibling). It normalizes the per-language tree-sitter
-	// kinds (function_declaration / function_item / function_definition → the
-	// single canonical 'function') so rules filter by ONE canonical value
-	// instead of the mache-schema 'functions/' node_id path (which the leyline
-	// projection doesn't use) or an ever-growing per-language kind list. Surface
-	// it as a trailing additive column on v_defs; NULL on legacy dbs (and on the
-	// LSP binding arm, which has no κ concept) so `canonical_kind = 'function'`
-	// filters degrade to "no match" there rather than erroring. (mache-608a3c)
-	hasDefsCanonicalKind, err := TableHasColumn(qg, "node_defs", "canonical_kind")
-	if err != nil {
-		return fmt.Errorf("probe node_defs.canonical_kind: %w", err)
-	}
-	hasRefsNodeHash, err := TableHasColumn(qg, "node_refs", "node_hash")
-	if err != nil {
-		return fmt.Errorf("probe node_refs.node_hash: %w", err)
-	}
-
-	// referrer_node_id is meant to be the ENCLOSING definition of each ref
-	// (its caller), so caller-aggregating rules group by the real caller.
-	// The mache-schema/tree-sitter projection puts the enclosing construct in
-	// node_refs.node_id directly. The leyline AST-native projection puts the
-	// call-SITE path there (a unique leaf per call) and instead emits the
-	// enclosing def as a separate additive column, node_refs.container_node_id
-	// (ley-line-open v0.7.4+, bead ley-line-open-b9d1d5). Without this, GROUP BY
-	// referrer_node_id yields n=1 per call site and fan_out_skew and
-	// untested_function's test-caller arm return 0 on leyline. Probe for the
-	// column and prefer it; NULLIF falls back to node_id for the ~1% of leyline
-	// refs (top-level / file scope) with no enclosing def, and the whole
-	// expression degrades to node_id on legacy dbs lacking the column — so
-	// tree-sitter/mache-schema behavior is unchanged. (mache-ba3dc6)
-	hasRefsContainer, err := TableHasColumn(qg, "node_refs", ids.refsContainer)
-	if err != nil {
-		return fmt.Errorf("probe node_refs.%s: %w", ids.refsContainer, err)
-	}
-
-	// node_refs.qualifier (ley-line-open v0.8.0, bead ley-line-open-4dde42):
-	// the receiver/selector text of a call site — the bare-token row of a
-	// dual-emit pair carries its qualifier (the `Println` row carries `fmt`;
-	// `obj.Method()` carries `obj`; '' for bare calls). Before v0.8.0 the
-	// mention arm had no qualifier source, so it emitted a constant '' and
-	// only capnp binding rows carried one. Surfacing it lets package-scoped
-	// rules GROUP BY structurally (fan_out_skew) and resolve stdlib-vs-local
-	// callees through _imports (fatal_call rung-1, mache-4dc205). Probe and
-	// prefer it; degrades to '' on legacy dbs — tree-sitter/mache-schema
-	// behavior is unchanged.
-	hasRefsQualifier, err := TableHasColumn(qg, "node_refs", "qualifier")
-	if err != nil {
-		return fmt.Errorf("probe node_refs.qualifier: %w", err)
-	}
-
-	defsHashExpr := "NULL"
-	if hasDefsNodeHash {
-		defsHashExpr = "node_hash"
-	}
-	defsCanonExpr := "NULL"
-	if hasDefsCanonicalKind {
-		defsCanonExpr = "canonical_kind"
-	}
-	defsBody := `SELECT token, ` + ids.defsNode + ` AS node_id, 'mention' AS fidelity, ` +
-		defsHashExpr + ` AS node_hash, ` + defsCanonExpr + ` AS canonical_kind FROM node_defs`
-	if hasLSPDefsToken {
-		// Binding-fidelity def rows come from _lsp_defs, which has no
-		// merkle node_hash or κ canonical_kind concept — emit NULL for
-		// both to keep UNION arity.
-		defsBody += `
-			UNION ALL
-			SELECT def_token AS token, node_id, 'binding' AS fidelity,
-			       NULL AS node_hash, NULL AS canonical_kind
-			FROM _lsp_defs
-			WHERE def_token != ''`
-	}
-
-	// v_refs columns: referrer_node_id, token, target_node_id,
-	// ref_uri, ref_line, fidelity, qualifier. The qualifier column
-	// is empty for mention-fidelity rows (tree-sitter call extractor
-	// doesn't populate it) and for pre-T8.7 capnp records (default
-	// '' per schema-evolution invariant). See mache-6c0d07 for the
-	// fan_out_skew metric that consumes it.
-	refsHashExpr := "NULL"
-	if hasRefsNodeHash {
-		refsHashExpr = "node_hash"
-	}
-	refsReferrerExpr := ids.refsNode
-	if hasRefsContainer {
-		refsReferrerExpr = "COALESCE(NULLIF(" + ids.refsContainer + ", ''), " + ids.refsNode + ")"
-	}
-	refsQualExpr := "''"
-	if hasRefsQualifier {
-		refsQualExpr = "COALESCE(qualifier, '')"
-	}
-	// node_id is the OCCURRENCE — the ref site itself — and is distinct from
-	// referrer_node_id, which resolves through container_node_id to the
-	// enclosing definition. A rule that wants "which node mentions this token"
-	// needs the former; one that wants "which function does the mentioning"
-	// needs the latter. Exposing only the second is what kept sleep_in_test
-	// reading node_refs directly (mache-be17ce).
-	refsBody := `SELECT ` + refsReferrerExpr + ` AS referrer_node_id,
-	       ` + ids.refsNode + ` AS node_id,
-	       token,
-	       NULL  AS target_node_id,
-	       NULL  AS ref_uri,
-	       NULL  AS ref_line,
-	       'mention' AS fidelity,
-	       ` + refsQualExpr + ` AS qualifier,
-	       ` + refsHashExpr + ` AS node_hash
-	FROM node_refs`
-	// Binding-fidelity rows come from the per-connection
-	// _capnp_binding_refs TEMP table, populated from the sibling
-	// .bindings.capnp event log by LoadCapnpBindings (mache-190508).
-	// When LoadCapnpBindings hasn't run for this connection, the
-	// table stays empty and v_refs surfaces only mention-fidelity
-	// rows from node_refs — same as the pre-LSP behavior.
-	//
-	// The legacy _lsp_refs SQL UNION arm was retired in mache-6bd4d8
-	// (T8.8 mirror): SQL columns are no longer the consumer-side
-	// contract, the capnp event log is. Removing the arm structurally
-	// precludes be6136-class column-name-as-protocol disagreements
-	// between LLO writer and mache reader (rather than only
-	// preventing them by flag). LLO continues writing _lsp_refs in
-	// the transition window; mache no longer reads it.
-	// _capnp_binding_refs has no merkle node_hash concept — emit NULL
-	// to keep UNION arity with the mention arm's trailing node_hash.
-	refsBody += `
-		UNION ALL
-		SELECT referrer_node_id,
-		       -- A binding record is a resolved edge, not a parse-tree
-		       -- occurrence, so it has no _ast node to point at. NULL keeps
-		       -- UNION arity and makes an occurrence-keyed JOIN drop these
-		       -- rows, which is the same set node_refs gave before.
-		       NULL AS node_id,
-		       token,
-		       target_node_id,
-		       ref_uri,
-		       ref_line,
-		       'binding' AS fidelity,
-		       qualifier,
-		       NULL AS node_hash
-		FROM _capnp_binding_refs`
 
 	stmts := []string{
 		"DROP VIEW IF EXISTS temp.v_defs",
@@ -342,6 +173,242 @@ func identityFor(v6 bool) identityColumns {
 		refsNode:      "node_id",
 		refsContainer: "container_node_id",
 	}
+}
+
+// defsViewBody assembles v_defs: the mention rows node_defs holds and the
+// binding rows of _lsp_defs, over whichever optional columns this producer
+// wrote.
+func defsViewBody(qg Querier, ids identityColumns) (string, error) {
+	// _lsp_defs probe still runs because v_defs's binding-fidelity
+	// arm has not yet migrated to capnp — BindingRecord covers refs
+	// (the link from a call site to a definition), not standalone
+	// def metadata. _lsp_defs migration is tracked separately; for
+	// now the def-side dual-read mirrors the pre-mache-6bd4d8 shape.
+	hasLSPDefsToken, err := TableHasColumn(qg, "_lsp_defs", "def_token")
+	if err != nil {
+		return "", fmt.Errorf("probe _lsp_defs: %w", err)
+	}
+
+	// Additive node_hash passthrough (mache-ff9a9d). The merkle-AST
+	// producer (LLO) writes an additive node_hash BLOB column onto the
+	// occurrence tables (node_defs / node_refs / _ast): identical
+	// subtrees dedup to one node_content row keyed by that 32-byte
+	// hash, and each OCCURRENCE carries a pointer back to it. mache
+	// reads the occurrence layer unchanged (keyed on token / node_id);
+	// we surface node_hash as a trailing additive column so downstream
+	// consumers can group/annotate by content identity WITHOUT changing
+	// the token/node_id keying.
+	//
+	// INVARIANT: node_hash is ONE-TO-MANY — a deduped subtree appears at
+	// many occurrences, so the same node_hash recurs across many
+	// (token, node_id) rows. Resolution always targets an occurrence
+	// (node_id), NEVER a node_hash; a JOIN on node_hash assuming a
+	// single row is a fan-out bug (mirror of be6136).
+	//
+	// Standalone-mache .db files (written by NewSQLiteWriter, no merkle
+	// producer) have no node_hash column. We probe and emit `NULL AS
+	// node_hash` in that case — same trailing-column shape on every db,
+	// mirroring how `qualifier` is always present in v_refs. Existing
+	// consumers select explicit column lists (never SELECT *), so the
+	// added trailing column is transparent to them; the rows they read
+	// are byte-identical to before.
+	hasDefsNodeHash, err := TableHasColumn(qg, "node_defs", "node_hash")
+	if err != nil {
+		return "", fmt.Errorf("probe node_defs.node_hash: %w", err)
+	}
+
+	// canonical_kind is LLO's closed κ vocabulary (function / method / type /
+	// module / constant / ...) written onto node_defs (v0.7.5+, bead
+	// ley-line-open-b9d1d5 sibling). It normalizes the per-language tree-sitter
+	// kinds (function_declaration / function_item / function_definition → the
+	// single canonical 'function') so rules filter by ONE canonical value
+	// instead of the mache-schema 'functions/' node_id path (which the leyline
+	// projection doesn't use) or an ever-growing per-language kind list. Surface
+	// it as a trailing additive column on v_defs; NULL on legacy dbs (and on the
+	// LSP binding arm, which has no κ concept) so `canonical_kind = 'function'`
+	// filters degrade to "no match" there rather than erroring. (mache-608a3c)
+	hasDefsCanonicalKind, err := TableHasColumn(qg, "node_defs", "canonical_kind")
+	if err != nil {
+		return "", fmt.Errorf("probe node_defs.canonical_kind: %w", err)
+	}
+	defsHashExpr := "NULL"
+	if hasDefsNodeHash {
+		defsHashExpr = "node_hash"
+	}
+	defsCanonExpr := "NULL"
+	if hasDefsCanonicalKind {
+		defsCanonExpr = "canonical_kind"
+	}
+	defsBody := `SELECT token, ` + ids.defsNode + ` AS node_id, 'mention' AS fidelity, ` +
+		defsHashExpr + ` AS node_hash, ` + defsCanonExpr + ` AS canonical_kind FROM node_defs`
+	if hasLSPDefsToken {
+		// Binding-fidelity def rows come from _lsp_defs, which has no
+		// merkle node_hash or κ canonical_kind concept — emit NULL for
+		// both to keep UNION arity.
+		defsBody += `
+			UNION ALL
+			SELECT def_token AS token, node_id, 'binding' AS fidelity,
+			       NULL AS node_hash, NULL AS canonical_kind
+			FROM _lsp_defs
+			WHERE def_token != ''`
+	}
+
+	return defsBody, nil
+}
+
+// refsColumns are the expressions v_refs' mention arm selects, each falling
+// back to a constant where this producer did not write the column.
+type refsColumns struct {
+	referrer, hash, qualifier, source string
+}
+
+// probeRefsColumns decides each refsColumns expression from what node_refs
+// carries on this database.
+func probeRefsColumns(qg Querier, ids identityColumns) (refsColumns, error) {
+	hasRefsNodeHash, err := TableHasColumn(qg, "node_refs", "node_hash")
+	if err != nil {
+		return refsColumns{}, fmt.Errorf("probe node_refs.node_hash: %w", err)
+	}
+
+	// referrer_node_id is meant to be the ENCLOSING definition of each ref
+	// (its caller), so caller-aggregating rules group by the real caller.
+	// The mache-schema/tree-sitter projection puts the enclosing construct in
+	// node_refs.node_id directly. The leyline AST-native projection puts the
+	// call-SITE path there (a unique leaf per call) and instead emits the
+	// enclosing def as a separate additive column, node_refs.container_node_id
+	// (ley-line-open v0.7.4+, bead ley-line-open-b9d1d5). Without this, GROUP BY
+	// referrer_node_id yields n=1 per call site and fan_out_skew and
+	// untested_function's test-caller arm return 0 on leyline. Probe for the
+	// column and prefer it; NULLIF falls back to node_id for the ~1% of leyline
+	// refs (top-level / file scope) with no enclosing def, and the whole
+	// expression degrades to node_id on legacy dbs lacking the column — so
+	// tree-sitter/mache-schema behavior is unchanged. (mache-ba3dc6)
+	hasRefsContainer, err := TableHasColumn(qg, "node_refs", ids.refsContainer)
+	if err != nil {
+		return refsColumns{}, fmt.Errorf("probe node_refs.%s: %w", ids.refsContainer, err)
+	}
+
+	// node_refs.qualifier (ley-line-open v0.8.0, bead ley-line-open-4dde42):
+	// the receiver/selector text of a call site — the bare-token row of a
+	// dual-emit pair carries its qualifier (the `Println` row carries `fmt`;
+	// `obj.Method()` carries `obj`; '' for bare calls). Before v0.8.0 the
+	// mention arm had no qualifier source, so it emitted a constant '' and
+	// only capnp binding rows carried one. Surfacing it lets package-scoped
+	// rules GROUP BY structurally (fan_out_skew) and resolve stdlib-vs-local
+	// callees through _imports (fatal_call rung-1, mache-4dc205). Probe and
+	// prefer it; degrades to '' on legacy dbs — tree-sitter/mache-schema
+	// behavior is unchanged.
+	hasRefsQualifier, err := TableHasColumn(qg, "node_refs", "qualifier")
+	if err != nil {
+		return refsColumns{}, fmt.Errorf("probe node_refs.qualifier: %w", err)
+	}
+
+	// v_refs columns: referrer_node_id, token, target_node_id,
+	// ref_uri, ref_line, fidelity, qualifier. The qualifier column
+	// is empty for mention-fidelity rows (tree-sitter call extractor
+	// doesn't populate it) and for pre-T8.7 capnp records (default
+	// '' per schema-evolution invariant). See mache-6c0d07 for the
+	// fan_out_skew metric that consumes it.
+	refsHashExpr := "NULL"
+	if hasRefsNodeHash {
+		refsHashExpr = "node_hash"
+	}
+	refsReferrerExpr := ids.refsNode
+	if hasRefsContainer {
+		refsReferrerExpr = "COALESCE(NULLIF(" + ids.refsContainer + ", ''), " + ids.refsNode + ")"
+	}
+	refsQualExpr := "''"
+	if hasRefsQualifier {
+		refsQualExpr = "COALESCE(qualifier, '')"
+	}
+	refsSourceExpr, err := refsSource(qg, ids)
+	if err != nil {
+		return refsColumns{}, err
+	}
+	return refsColumns{
+		referrer: refsReferrerExpr, hash: refsHashExpr,
+		qualifier: refsQualExpr, source: refsSourceExpr,
+	}, nil
+}
+
+// refsViewBody assembles v_refs: the mention rows node_refs holds and the
+// binding rows the capnp sidecar loads, over whichever optional columns this
+// producer wrote.
+func refsViewBody(qg Querier, ids identityColumns) (string, error) {
+	cols, err := probeRefsColumns(qg, ids)
+	if err != nil {
+		return "", err
+	}
+	// node_id is the OCCURRENCE — the ref site itself — and is distinct from
+	// referrer_node_id, which resolves through container_node_id to the
+	// enclosing definition. A rule that wants "which node mentions this token"
+	// needs the former; one that wants "which function does the mentioning"
+	// needs the latter. Exposing only the second is what kept sleep_in_test
+	// reading node_refs directly (mache-be17ce).
+	refsBody := `SELECT ` + cols.referrer + ` AS referrer_node_id,
+	       ` + ids.refsNode + ` AS node_id,
+	       token,
+	       NULL  AS target_node_id,
+	       NULL  AS ref_uri,
+	       NULL  AS ref_line,
+	       'mention' AS fidelity,
+	       ` + cols.qualifier + ` AS qualifier,
+	       ` + cols.hash + ` AS node_hash,
+	       ` + cols.source + ` AS source_id
+	FROM node_refs`
+	// Binding-fidelity rows come from the per-connection
+	// _capnp_binding_refs TEMP table, populated from the sibling
+	// .bindings.capnp event log by LoadCapnpBindings (mache-190508).
+	// When LoadCapnpBindings hasn't run for this connection, the
+	// table stays empty and v_refs surfaces only mention-fidelity
+	// rows from node_refs — same as the pre-LSP behavior.
+	//
+	// The legacy _lsp_refs SQL UNION arm was retired in mache-6bd4d8
+	// (T8.8 mirror): SQL columns are no longer the consumer-side
+	// contract, the capnp event log is. Removing the arm structurally
+	// precludes be6136-class column-name-as-protocol disagreements
+	// between LLO writer and mache reader (rather than only
+	// preventing them by flag). LLO continues writing _lsp_refs in
+	// the transition window; mache no longer reads it.
+	// _capnp_binding_refs has no merkle node_hash concept — emit NULL
+	// to keep UNION arity with the mention arm's trailing node_hash.
+	refsBody += `
+		UNION ALL
+		SELECT referrer_node_id,
+		       -- A binding record is a resolved edge, not a parse-tree
+		       -- occurrence, so it has no _ast node to point at. NULL keeps
+		       -- UNION arity and makes an occurrence-keyed JOIN drop these
+		       -- rows, which is the same set node_refs gave before.
+		       NULL AS node_id,
+		       token,
+		       target_node_id,
+		       ref_uri,
+		       ref_line,
+		       'binding' AS fidelity,
+		       qualifier,
+		       NULL AS node_hash,
+		       NULL AS source_id
+		FROM _capnp_binding_refs`
+
+	return refsBody, nil
+}
+
+// refsSource is the expression for the file a node_refs row's site is in.
+// projection-v4 stores it as node_refs.source_id; projection-v6 dropped the
+// column, because the site's nid already names its file. mache's own
+// projection stores neither, and the column reads NULL there.
+func refsSource(qg Querier, ids identityColumns) (string, error) {
+	if ids.refsNode == "nid" {
+		return "(SELECT s.id FROM _source s WHERE s.file_id = nid >> " + strconv.Itoa(V6FileShift) + ")", nil
+	}
+	has, err := TableHasColumn(qg, "node_refs", "source_id")
+	if err != nil {
+		return "", fmt.Errorf("probe node_refs.source_id: %w", err)
+	}
+	if has {
+		return "source_id", nil
+	}
+	return "NULL", nil
 }
 
 // resolveIdentity probes the db rather than consulting a version string: an

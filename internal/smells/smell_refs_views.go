@@ -26,11 +26,15 @@ func EnsureCanonicalViews(qg graph.RefsQuerier) error {
 		return err
 	}
 
-	hasAST, err := lloschema.TableHasColumn(qg, "_ast", "node_id")
+	readsAST, err := hasAST(qg)
 	if err != nil {
 		return fmt.Errorf("probe _ast: %w", err)
 	}
-	if hasAST {
+	if err := ensureDefScopeTable(qg, readsAST); err != nil {
+		return err
+	}
+	withAST := readsAST
+	if withAST {
 		// Both tables are required: _ast supplies positions and kinds,
 		// node_content the attribute's token. Fixtures carry one without the
 		// other, and a half-present schema must degrade to "no test nodes".
@@ -38,18 +42,13 @@ func EnsureCanonicalViews(qg graph.RefsQuerier) error {
 		if cerr != nil {
 			return fmt.Errorf("probe node_content: %w", cerr)
 		}
-		hasAST = hasContent
+		withAST = hasContent
 	}
-	if err := ensureTestNodesView(qg, hasAST); err != nil {
+	if err := ensureTestNodesView(qg, withAST); err != nil {
 		return err
 	}
 	if err := ensureVendoredView(qg); err != nil {
 		return err
 	}
-
-	hasRefsSourceID, err := lloschema.TableHasColumn(qg, "node_refs", "source_id")
-	if err != nil {
-		return fmt.Errorf("probe node_refs.source_id: %w", err)
-	}
-	return ensureDocRefsView(qg, hasRefsSourceID)
+	return ensureDocRefsView(qg)
 }

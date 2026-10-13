@@ -65,18 +65,20 @@ func TestSmells_V6FindingIsAPathWithAHashAndALocation(t *testing.T) {
 	assert.Equal(t, 2, top.Column)
 }
 
-// A rule that reads meaning into node_id's shape is refused on v6, where it
-// would answer wrongly, and still runs where ids are paths.
+// A rule that declares it reads meaning into node_id's shape is refused on v6,
+// where it would answer wrongly, and still runs where ids are paths. No
+// built-in rule declares it any more (TestEveryBuiltinRule_*); an external
+// rule written against path ids still can.
 func TestSmells_PathShapedRuleIsRefusedOnV6Only(t *testing.T) {
-	rule := embeddedRule(t, "cyclomatic_complexity")
-	require.True(t, rule.PathShapedIDs)
+	rule := *embeddedRule(t, "long_function")
+	rule.ID, rule.PathShapedIDs = "path_shaped_external", true
 
-	_, err := RunSmellRule(smellSpec(t, fixturedb.LeylineV6), rule, "", 100)
+	_, err := RunSmellRule(smellSpec(t, fixturedb.LeylineV6), &rule, "", 100)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrPathShapedRule), "got %v", err)
 	assert.Contains(t, err.Error(), "mache-2dc105", "the error names the work that lifts it")
 
-	_, err = RunSmellRule(smellSpec(t, fixturedb.Leyline), rule, "", 100)
+	_, err = RunSmellRule(smellSpec(t, fixturedb.Leyline), &rule, "", 100)
 	assert.NoError(t, err)
 }
 
