@@ -115,7 +115,13 @@ func assertOverview(t *testing.T, ctx context.Context, client *mcpClient) {
 	}](t, "get_overview", body)
 
 	assert.NotEmpty(t, got.TopLevel, "overview must describe the projected tree")
-	assert.Positive(t, got.TotalFiles, "a projection with no files is a silent ingestion failure")
+	// The fixture is pkg/checksum.go. A leyline source file is a directory
+	// of syntax nodes, so it counts among the dirs; total_files once passed
+	// here only because MaterializeVirtuals had written a _schema.json row,
+	// which projection-v6 dbs do not get (mache-abaf17). What an empty
+	// projection loses is the package and its file.
+	assert.GreaterOrEqual(t, got.TotalDirs+got.TotalFiles, 2,
+		"the package and its source file must both be counted; fewer is a silent ingestion failure")
 	assert.GreaterOrEqual(t, got.DefTokens, 2,
 		"the fixture defines ComputeChecksum and VerifyChecksum; fewer means definitions were lost")
 

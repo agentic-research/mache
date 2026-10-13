@@ -2,9 +2,11 @@ package fixturedb
 
 import (
 	"database/sql"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -17,13 +19,18 @@ import (
 
 // The derivation, re-run.
 //
-// [leylineTables] and [leylineIndexes] claim to be the pinned producer's own
-// `sqlite_master` output. This test makes that claim FALSIFIABLE: it runs the
+// The fixture mirrors claim to be a producer's own `sqlite_master` output.
+// This test makes that claim FALSIFIABLE for the PINNED producer: it runs the
 // pinned binary on a two-file corpus and diffs, so a ley-line release that
 // changes shape fails here — instead of silently flipping which arm of
 // ensureCanonicalViews the entire suite exercises, which is exactly how the
 // pre-fixturedb fixtures drifted to ten mutually incompatible spellings without
 // anyone noticing.
+//
+// The pinned shape is projection-v6 (leyline v0.20.x), mirrored in
+// schema_leyline_v6.go. The projection-v4 mirror (schema_leyline.go) is kept
+// for the artifacts the previous pin built, which mache still reads, and is
+// checked against its own binary in schema_leyline_v4_conformance_test.go.
 //
 // GATED, never downloads: skips when no cached binary matches the pin, matching
 // every other pinned gate in this repo.
@@ -35,37 +42,44 @@ import (
 func TestLeylineSchema_MatchesPinnedBinary(t *testing.T) {
 	ll := lltest.ResolveBinaryOrSkip(t)
 
+	against := leylineV6SchemaVersion
 	if ll.Override {
 		// Asserting "the DDL was derived from the pin" is meaningless when the
 		// operator deliberately pointed us at something else. Report what
 		// actually answered, so no reader mistakes this run for a pinned one.
-		t.Logf("comparing schema_leyline.go (derived from %s) against OVERRIDE %s reporting %s — "+
+		t.Logf("comparing schema_leyline_v6.go (derived from %s) against OVERRIDE %s reporting %s — "+
 			"differences below are that candidate's re-derivation worklist, not drift from the pin",
-			leylineSchemaVersion, ll.Path, ll.Version)
-	} else {
-		require.Equal(t, leyline.PinnedBinaryVersion(), leylineSchemaVersion,
-			"the DDL in schema_leyline.go was derived from %s but the build now pins %s — "+
-				"re-derive it (leyline parse; SELECT sql FROM sqlite_master) rather than editing by hand",
-			leylineSchemaVersion, leyline.PinnedBinaryVersion())
-	}
-
-	got := derivePinnedSchema(t, ll.Path)
-	against := leylineSchemaVersion
-	if ll.Override {
+			leylineV6SchemaVersion, ll.Path, ll.Version)
 		against = ll.Version + " (override)"
+	} else {
+		require.Equal(t, leyline.PinnedBinaryVersion(), leylineV6SchemaVersion,
+			"the DDL in schema_leyline_v6.go was derived from %s but the build now pins %s — "+
+				"re-derive it (leyline parse; SELECT sql FROM sqlite_master) rather than editing by hand",
+			leylineV6SchemaVersion, leyline.PinnedBinaryVersion())
 	}
+	assertMirror(t, ll.Path, against, "schema_leyline_v6.go",
+		leylineV6Tables, leylineV6Views, leylineV6Indexes)
+}
 
-	for name, want := range leylineTables {
-		g, ok := got[name]
-		require.True(t, ok, "leyline %s no longer creates table %s", against, name)
-		assert.Equal(t, normalizeDDL(want), normalizeDDL(g),
-			"table %s drifted from producer %s; re-derive schema_leyline.go", name, against)
+// assertMirror derives bin's schema and requires every object a mirror models
+// to exist in it with the same DDL. Only modelled objects: a real db carries
+// capnp blobs and bookkeeping tables no fixture needs, and modelling them would
+// only create more surface to drift.
+func assertMirror(t *testing.T, bin, against, file string, mirrors ...map[string]string) {
+	t.Helper()
+	got := derivePinnedSchema(t, bin)
+	modelled := map[string]string{}
+	for _, m := range mirrors {
+		maps.Copy(modelled, m)
 	}
-	for name, want := range leylineIndexes {
+	for _, name := range slices.Sorted(maps.Keys(modelled)) {
 		g, ok := got[name]
-		require.True(t, ok, "leyline %s no longer creates index %s", against, name)
-		assert.Equal(t, normalizeDDL(want), normalizeDDL(g),
-			"index %s drifted from producer %s; re-derive schema_leyline.go", name, against)
+		if !assert.Truef(t, ok, "leyline %s no longer creates %s (it has %v) — re-derive %s",
+			against, name, slices.Sorted(maps.Keys(got)), file) {
+			continue
+		}
+		assert.Equal(t, normalizeDDL(modelled[name]), normalizeDDL(g),
+			"%s drifted from producer %s; re-derive %s", name, against, file)
 	}
 }
 

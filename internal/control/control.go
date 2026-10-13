@@ -2,9 +2,11 @@ package control
 
 import (
 	"crypto/subtle"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -15,20 +17,23 @@ import (
 const (
 	ControlSize = 4096       // 1 page
 	Magic       = 0x4C455943 // 'LEYC'
-	// Version 2 is the current control-block layout: identity is the BLAKE3
-	// `current_root` of the arena payload. Old (v1) controllers — which
-	// exposed a monotonic `generation` counter instead — are rejected with
-	// a descriptive error so cross-version mismatches fail loudly.
-	Version = 2
+	// Version 3 is the current control-block protocol (ley-line-open
+	// v0.20.1+, ley-line-open-49a1ef): the layout is v2's, identity is the
+	// BLAKE3 `current_root` of the arena payload, and the word at offset 8 is
+	// a seqlock sequence, odd while a writer is changing the payload and even
+	// when it is whole. v2 wrote the payload and then bumped the word once,
+	// so a reader could not tell a publish in flight from a finished one.
+	// Any other version is rejected with a descriptive error, so
+	// cross-version mismatches fail loudly (mache-3451a1).
+	Version = 3
 )
 
 // Field offsets must match LLO `rs/ll-core/core/src/control.rs` exactly.
-// Bytes 8..16 (the old `Generation` slot) are now used as a private
-// sync atom for Acquire/Release fencing — no public surface.
+// Bytes 8..16 (the old `Generation` slot) are the private seqlock sequence.
 const (
 	offMagic          = 0
 	offVersion        = 4
-	offSync           = 8 // private fence atom (formerly Generation)
+	offSync           = 8 // seqlock sequence (formerly Generation)
 	offArenaPath      = 16
 	arenaPathLen      = 256
 	offArenaSize      = 272
@@ -101,7 +106,8 @@ func OpenOrCreate(path string) (*Controller, error) {
 			_ = f.Close()
 			return nil, fmt.Errorf(
 				"control block version mismatch: file is v%d, expected v%d — "+
-					"remove the stale .ctrl file and let a current writer (ley-line-open ≥ 0.2.0) recreate it",
+					"v3 publishes under a seqlock (ley-line-open ≥ 0.20.1); "+
+					"remove the stale .ctrl file and let a current writer recreate it",
 				existingVersion, Version,
 			)
 		}
@@ -110,99 +116,134 @@ func OpenOrCreate(path string) (*Controller, error) {
 	return &Controller{path: path, file: f, data: data}, nil
 }
 
+// The payload (path, size, root) is 296 bytes, which nothing writes
+// atomically, so a reader overlapping a publish could copy half of one and
+// half of the next. The seqlock makes the overlap detectable, exactly as
+// ley-line-open's control.rs does:
+//
+//   - a writer increments the sequence to ODD before touching the payload
+//     and to EVEN after the last byte;
+//   - a reader loads the sequence, retries while it is odd, copies the
+//     payload, reloads the sequence, and keeps the copy only if it did not
+//     move. A publish that began or finished during the copy changed it.
+//
+// Every payload word is moved with an 8-byte atomic load or store (the
+// fields are 8-byte aligned in a page-aligned mapping). Go has no volatile
+// access; atomics give the same "really read it from the mapping" guarantee,
+// order every access against the sequence, and keep a reader racing a
+// writer in this process free of data races.
+
+// snapshot is one consistent copy of the payload: path, size and root as a
+// single publish left them.
+type snapshot struct {
+	path [arenaPathLen]byte
+	size uint64
+	root [currentRootLen]byte
+}
+
+func (c *Controller) word(off int) *uint64 { return (*uint64)(unsafe.Pointer(&c.data[off])) }
+
+func (c *Controller) loadWords(off int, dst []byte) {
+	for i := 0; i < len(dst); i += 8 {
+		binary.NativeEndian.PutUint64(dst[i:], atomic.LoadUint64(c.word(off+i)))
+	}
+}
+
+func (c *Controller) storeWords(off int, src []byte) {
+	for i := 0; i < len(src); i += 8 {
+		atomic.StoreUint64(c.word(off+i), binary.NativeEndian.Uint64(src[i:]))
+	}
+}
+
+// yieldWhileOdd is what a reader does on finding a publish in flight. A
+// variable so a test can observe the reader waiting, rather than inferring
+// it from how long a read took.
+var yieldWhileOdd = runtime.Gosched
+
+// snapshot reads the payload under the seqlock.
+func (c *Controller) snapshot() snapshot {
+	seq := c.word(offSync)
+	for {
+		before := atomic.LoadUint64(seq)
+		if before&1 == 1 {
+			yieldWhileOdd() // a publish is in flight
+			continue
+		}
+		var s snapshot
+		c.loadWords(offArenaPath, s.path[:])
+		s.size = atomic.LoadUint64(c.word(offArenaSize))
+		c.loadWords(offCurrentRoot, s.root[:])
+		if atomic.LoadUint64(seq) == before {
+			return s
+		}
+	}
+}
+
+// publish writes the payload under the seqlock. root nil keeps the
+// published root, for a re-advertisement that moves only path and size.
+//
+// The protocol assumes one writer per control block at a time, as LLO's
+// does; the counter itself is incremented atomically, so two writers
+// cannot lose an increment.
+func (c *Controller) publish(path string, size uint64, root *[currentRootLen]byte) error {
+	if len(path) >= arenaPathLen {
+		return fmt.Errorf("path too long (max %d)", arenaPathLen-1)
+	}
+	var buf [arenaPathLen]byte
+	copy(buf[:], path)
+
+	seq := c.word(offSync)
+	atomic.AddUint64(seq, 1) // odd: the payload is changing
+	c.storeWords(offArenaPath, buf[:])
+	atomic.StoreUint64(c.word(offArenaSize), size)
+	if root != nil {
+		c.storeWords(offCurrentRoot, root[:])
+	}
+	atomic.AddUint64(seq, 1) // even: the payload is whole
+	return nil
+}
+
 // GetCurrentRoot returns the BLAKE3 root hash of the arena payload that
 // the writer most recently published, or the zero sentinel `[32]byte{}`
-// when no snapshot has been published yet.
-//
-// The Acquire-load only fences root-byte reads against a publish whose
-// Release-store this load observes. A writer that begins after the load writes
-// the 32-byte root before bumping sync, so a concurrent read can still be
-// torn. A reader-only retry cannot close that window: a real seqlock requires
-// the shared Go/Rust writer protocol to mark the write in progress before
-// changing the payload and complete it afterward (mache-0df550).
-//
-// Callers may use this for advisory or uncontended reads. Anything that polls
-// or treats the root as a coherent identity must re-open a fresh Controller
-// after observing a root change, matching ley-line-open's controller contract,
-// until both sides adopt an odd/even seqlock protocol.
+// when no snapshot has been published yet. The root is always one some
+// publish wrote in full. The consistency is per call: a following
+// GetArenaPath is its own snapshot and may reflect a later publish.
 func (c *Controller) GetCurrentRoot() [32]byte {
-	atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offSync])))
-	var out [32]byte
-	copy(out[:], c.data[offCurrentRoot:offCurrentRoot+currentRootLen])
-	return out
+	return c.snapshot().root
 }
 
 // GetArenaPath returns the path to the currently active arena.
-//
-// The Acquire-load on the sync atom only fences the subsequent path-byte
-// reads against publishes that have completed (sync bumped) by the time
-// we load it; a writer that begins after the load and writes bytes before
-// bumping sync can still produce a torn read here. End-to-end safety
-// against torn reads relies on the BLAKE3 current_root check at the
-// callsite — the path bytes alone are advisory. If a stronger guarantee
-// is needed, the writer needs a seqlock-style protocol (bump-then-write-
-// then-bump, with reader retry on odd / mismatched seq).
 func (c *Controller) GetArenaPath() string {
-	atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offSync])))
-	b := c.data[offArenaPath : offArenaPath+arenaPathLen]
+	b := c.snapshot().path
 	for i, v := range b {
 		if v == 0 {
 			return string(b[:i])
 		}
 	}
-	return string(b)
+	return string(b[:])
 }
 
 // GetArenaSize returns the size in bytes of the currently active arena file.
 func (c *Controller) GetArenaSize() uint64 {
-	return atomic.LoadUint64((*uint64)(unsafe.Pointer(&c.data[offArenaSize])))
+	return c.snapshot().size
 }
 
-// SetArena atomically updates the control block to point to a new arena
-// without changing `current_root`. Bumps the private sync atom so
-// readers fence and re-read path/size.
+// SetArena points the control block at a new arena without changing
+// `current_root`: a re-advertisement, which polling readers (who compare
+// roots) do not treat as new content.
 //
 // Use SetArenaWithRoot when publishing a new snapshot (i.e. when the
 // payload bytes changed). Use SetArena when only the path/size moved
 // but the root remains the previous value.
 func (c *Controller) SetArena(path string, size uint64) error {
-	if len(path) >= arenaPathLen {
-		return fmt.Errorf("path too long (max %d)", arenaPathLen-1)
-	}
-
-	pathBuf := c.data[offArenaPath : offArenaPath+arenaPathLen]
-	for i := range pathBuf {
-		pathBuf[i] = 0
-	}
-	copy(pathBuf, path)
-
-	atomic.StoreUint64((*uint64)(unsafe.Pointer(&c.data[offArenaSize])), size)
-
-	atomic.AddUint64((*uint64)(unsafe.Pointer(&c.data[offSync])), 1)
-	return nil
+	return c.publish(path, size, nil)
 }
 
-// SetArenaWithRoot atomically publishes a new arena and the BLAKE3 root
-// of its payload. Readers polling GetCurrentRoot observe a coherent
-// (path, size, root) triple thanks to the Release-store fence on the
-// sync atom.
+// SetArenaWithRoot publishes a new arena and the BLAKE3 root of its
+// payload. A reader sees either the previous (path, size, root) or this
+// one, never a mixture.
 func (c *Controller) SetArenaWithRoot(path string, size uint64, root [32]byte) error {
-	if len(path) >= arenaPathLen {
-		return fmt.Errorf("path too long (max %d)", arenaPathLen-1)
-	}
-
-	pathBuf := c.data[offArenaPath : offArenaPath+arenaPathLen]
-	for i := range pathBuf {
-		pathBuf[i] = 0
-	}
-	copy(pathBuf, path)
-
-	atomic.StoreUint64((*uint64)(unsafe.Pointer(&c.data[offArenaSize])), size)
-
-	copy(c.data[offCurrentRoot:offCurrentRoot+currentRootLen], root[:])
-
-	atomic.AddUint64((*uint64)(unsafe.Pointer(&c.data[offSync])), 1)
-	return nil
+	return c.publish(path, size, &root)
 }
 
 // IsZeroRoot reports whether root is the all-zero sentinel that
