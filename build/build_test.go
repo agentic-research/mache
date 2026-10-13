@@ -9,6 +9,7 @@ import (
 	"github.com/agentic-research/mache/build"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/schema"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	_ "modernc.org/sqlite"
@@ -41,10 +42,21 @@ func TestBuildThenOpen(t *testing.T) {
 	ids := g.LookupDef("greet")
 	require.NotEmpty(t, ids, "LookupDef must find the function Parse's own leyline run just wrote")
 
-	rows, err := g.QueryRefs("SELECT node_id FROM node_refs WHERE token = ?", "greet")
+	// QueryRefs is raw SQL over the producer's tables, so it asks only for
+	// what every projection has: the reference's token. (The site's id column
+	// is node_id on projection-v4 and nid on projection-v6.)
+	rows, err := g.QueryRefs("SELECT token FROM node_refs WHERE token = ?", "greet")
 	require.NoError(t, err)
-	defer func() { _ = rows.Close() }()
-	require.True(t, rows.Next(), "QueryRefs must find the call site main() makes to greet()")
+	found := rows.Next()
+	require.NoError(t, rows.Close())
+	require.True(t, found, "QueryRefs must find the call site main() makes to greet()")
+
+	// The shape-aware API names that site as a path, whichever projection
+	// wrote it.
+	callers, err := g.GetCallers("greet")
+	require.NoError(t, err)
+	require.Len(t, callers, 1)
+	assert.Contains(t, callers[0].ID, "main.go/function_declaration", "the call sits inside main()")
 }
 
 // TestBuild_MissingSourceErrors proves Build surfaces a real error rather

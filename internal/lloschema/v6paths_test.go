@@ -372,3 +372,22 @@ func TestQuerierRenderer_AgreesWithPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
+
+// ParsedSourceLike answers "was this language parsed at all?" on either
+// projection: through _ast.source_id on v4, and by each matching file's nid
+// range on v6.
+func TestParsedSourceLike_BothProjections(t *testing.T) {
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
+		f := paritySpec(t, p)
+		got, err := ParsedSourceLike(DB(f.DB()), "%.go")
+		require.NoError(t, err)
+		assert.True(t, got, "%v: the spec parses Go files", p)
+		got, err = ParsedSourceLike(DB(f.DB()), "%.rs")
+		require.NoError(t, err)
+		assert.False(t, got, "%v: and no Rust", p)
+	}
+	_, standalone := fixturedb.New(t, fixturedb.Standalone).Construct("a.go/F").Build()
+	got, err := ParsedSourceLike(DB(standalone.DB()), "%.go")
+	require.NoError(t, err)
+	assert.False(t, got, "a projection with no _ast parsed nothing")
+}

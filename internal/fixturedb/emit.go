@@ -224,6 +224,20 @@ func sameChildList(a, b []childRow) bool {
 }
 
 func (e *emitter) emitLSPDefs() {
+	if _, v6 := e.b.producer.dialect.(leylineV6Dialect); v6 {
+		for _, d := range e.b.lspDefs {
+			n, ok := e.v6Tree().byPath[d.nodeID]
+			if !ok {
+				e.b.t.Fatalf("fixturedb(leyline-v6): LSPDef on %q, which the spec never declares; "+
+					"v6 keys _lsp_defs by the node's nid, so the node must exist", d.nodeID)
+			}
+			e.exec(`INSERT INTO _lsp_defs
+				(nid, def_token, def_uri, def_start_line, def_start_col, def_end_line, def_end_col)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				n.nid, d.token, d.uri, d.startLine, d.startCol, d.endLine, d.endCol)
+		}
+		return
+	}
 	for _, d := range e.b.lspDefs {
 		e.exec(`INSERT INTO _lsp_defs
 			(node_id, def_token, def_uri, def_start_line, def_start_col, def_end_line, def_end_col)

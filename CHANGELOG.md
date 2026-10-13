@@ -28,6 +28,13 @@ bumps may include breaking changes.
   projection-v4 (8 s to 1 s and 15 s to 5 s on mache's own `internal/`). An
   external rule that still reads ids as paths can say so (`PathShapedIDs`)
   and is refused on a projection-v6 `.db` rather than answering wrongly.
+  `search role=reference`, `get_impact`, `get_dataflow`, the `callers/`
+  entry in `list_directory` (which also looked callers up by a construct's
+  kind rather than its symbol on every leyline projection), `mache build`'s
+  language-coverage check, and serving a `.db` all read projection-v6 too.
+  A v6 `.db` is served without materialized virtual rows, which mache will
+  no longer write into LLO's arena (`mache-abaf17`), and the LSP tools still
+  look symbols up by id text (`mache-b1f7b8`).
   `mache cache push` refuses a projection-v6 `.db` with an error naming
   `mache-e64f36`, instead of failing on a missing column. Its chunks carry
   projection-v4 `_ast`, and the cache is moving to LLO's own arena rather

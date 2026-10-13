@@ -1204,6 +1204,34 @@ func (lg *lazyGraph) LookupDef(token string) []string {
 	return out
 }
 
+// SearchRefs forwards graph.RefSearcher to the base graph, which is what
+// reference search read before (through QueryRefs).
+func (lg *lazyGraph) SearchRefs(pattern, segment string, limit int) ([]graph.RefHit, error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil, err
+	}
+	rs, ok := g.(graph.RefSearcher)
+	if !ok {
+		return nil, fmt.Errorf("reference search requires a SQLite-backed graph")
+	}
+	return rs.SearchRefs(pattern, segment, limit)
+}
+
+// DefTokenOf forwards graph.DefTokener to the base graph. A base that is not
+// a DefTokener knows no definitions: no token.
+func (lg *lazyGraph) DefTokenOf(id string) (string, bool, error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return "", false, err
+	}
+	dt, ok := g.(graph.DefTokener)
+	if !ok {
+		return "", false, nil
+	}
+	return dt.DefTokenOf(id)
+}
+
 // ASTKindChain forwards graph.ASTKinder to the base graph, which is what the
 // kind filter reads (as QueryRefs, which it also uses, does). A base that
 // is not an ASTKinder has no AST: no chain.

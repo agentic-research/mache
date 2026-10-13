@@ -80,6 +80,23 @@ func (b *Builder) lspDDL() []string {
 	return nil
 }
 
+// lspDefsTableV6 is the same table as ley-line-open v0.20.x writes it for
+// projection-v6, keyed by nid. Transcribed from LSP_DEFS_DDL in
+// rs/ll-open/lsp/src/project.rs at v0.20.3: the table is written by `leyline
+// lsp`, which needs language servers a conformance run cannot assume, so this
+// one is not re-derived from a binary.
+var lspDefsTableV6 = []string{
+	`CREATE TABLE _lsp_defs (
+	nid INTEGER NOT NULL,
+	def_token TEXT NOT NULL DEFAULT '',
+	def_uri TEXT NOT NULL,
+	def_start_line INTEGER NOT NULL, def_start_col INTEGER NOT NULL,
+	def_end_line INTEGER NOT NULL, def_end_col INTEGER NOT NULL
+)`,
+	`CREATE INDEX idx_lsp_defs_node ON _lsp_defs(nid)`,
+	`CREATE INDEX idx_lsp_defs_token ON _lsp_defs(def_token)`,
+}
+
 // lspDefsTable is the LSP-enrichment def table ley-line's ll-open/lsp crate
 // writes. Not a producer table: it is optional on both producers.
 const lspDefsTable = `CREATE TABLE _lsp_defs (

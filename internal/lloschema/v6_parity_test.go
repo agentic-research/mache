@@ -36,6 +36,9 @@ func paritySpec(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
 	b.Def("helper", "pkg/a.go/function_declaration_1", fixturedb.Function)
 	b.Ref("Greet", "main.go/function_declaration", "", "pkg")
 	b.Ref("helper", "pkg/a.go/function_declaration_0", "", "")
+	// A binding-fidelity definition from LSP enrichment: _lsp_defs is keyed
+	// by node_id on v4 and nid on v6, and v_defs unions it in either way.
+	b.LSPDef("Greet", "pkg/a.go/function_declaration_0", "file:///pkg/a.go", 3, 5, 3, 10)
 	_, f := b.Build()
 	require.NoError(t, EnsureViews(DB(f.DB())))
 	return f
@@ -91,8 +94,8 @@ func answers(t *testing.T, f *fixturedb.FixtureDB, v6 bool) map[string][]string 
 		"pkg/a.go/function_declaration_1": true, "pkg/a.go/function_declaration_0/identifier": true,
 	}
 	return map[string][]string{
-		"defs": collect(`SELECT token, node_id FROM v_defs`, func(c []any) string {
-			return fmt.Sprintf("%s @ %s", c[0], path(c[1]))
+		"defs": collect(`SELECT token, node_id, fidelity FROM v_defs`, func(c []any) string {
+			return fmt.Sprintf("%s @ %s (%s)", c[0], path(c[1]), str(c[2]))
 		}),
 		// The referrer, not the site: a site the spec left unnamed is
 		// ".../call_expression_0" in a v4 fixture and the leyline-faithful

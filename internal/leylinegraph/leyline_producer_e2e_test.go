@@ -61,6 +61,16 @@ func TestMaterializeVirtuals_AgainstRealProducerArena(t *testing.T) {
 		`SELECT value FROM _meta WHERE key = 'projection_schema_version'`).Scan(&projection); err != nil {
 		projection = "(absent — arena predates the _meta channel)"
 	}
+	schema := &api.Topology{
+		Version: "v1",
+		Nodes:   []api.Node{{Name: "functions", Selector: "(function_declaration)"}},
+	}
+
+	if projection == "projection-v6" {
+		assertRefusedOnV6(t, db, dbPath, schema)
+		return
+	}
+
 	var hidden int
 	if err := db.QueryRow(
 		`SELECT hidden FROM pragma_table_xinfo('nodes') WHERE name='parent_id'`).Scan(&hidden); err != nil {
@@ -69,10 +79,6 @@ func TestMaterializeVirtuals_AgainstRealProducerArena(t *testing.T) {
 	t.Logf("producer %s: projection=%s, parent_id hidden=%d (0 stored, 2 GENERATED VIRTUAL)",
 		ll.Version, projection, hidden)
 
-	schema := &api.Topology{
-		Version: "v1",
-		Nodes:   []api.Node{{Name: "functions", Selector: "(function_declaration)"}},
-	}
 	require.NoError(t, MaterializeVirtuals(dbPath, schema, true),
 		"MaterializeVirtuals must succeed against a real %s arena (projection %s)",
 		ll.Version, projection)
@@ -105,4 +111,17 @@ func TestMaterializeVirtuals_AgainstRealProducerArena(t *testing.T) {
 	require.NotZero(t, seen,
 		"no callers/ dirs were materialized — the corpus has a resolvable call, so this "+
 			"means the producer's node_defs/node_refs shape changed under us")
+}
+
+// assertRefusedOnV6: projection-v6 keys nodes by nid and stores no paths, so
+// virtual nodes are not materialized into it (mache-abaf17), and the arena is
+// left as the producer wrote it.
+func assertRefusedOnV6(t *testing.T, db *sql.DB, dbPath string, schema *api.Topology) {
+	t.Helper()
+	var before int
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&before))
+	require.ErrorIs(t, MaterializeVirtuals(dbPath, schema, true), ErrProjectionV6)
+	var after int
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&after))
+	assert.Equal(t, before, after, "a refused materialization writes nothing")
 }

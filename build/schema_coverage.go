@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lang"
@@ -41,14 +43,11 @@ func schemaCoverageGaps(db *sql.DB, topology *api.Topology, source string, extra
 		}
 		parsed := false
 		for _, extension := range language.Extensions {
-			var exists int
-			if err := db.QueryRow(
-				`SELECT EXISTS(SELECT 1 FROM _ast WHERE source_id LIKE ?)`,
-				"%"+extension,
-			).Scan(&exists); err != nil {
+			exists, err := lloschema.ParsedSourceLike(lloschema.DB(db), "%"+extension)
+			if err != nil {
 				return nil, err
 			}
-			if exists == 1 {
+			if exists {
 				parsed = true
 				break
 			}

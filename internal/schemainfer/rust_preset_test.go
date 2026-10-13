@@ -122,8 +122,7 @@ func TestRustPreset_EveryFunctionItemProjectedOnce(t *testing.T) {
 	astDB, parseDir := lltest.ParseSourceViaLeyline(t, srcPath)
 	store := projectPreset(t, "rust", astDB, parseDir)
 
-	var functionItems int
-	require.NoError(t, astDB.QueryRow(`SELECT count(*) FROM _ast WHERE node_kind = 'function_item'`).Scan(&functionItems))
+	functionItems := declaredCount(t, astDB, "function_item")
 	require.Positive(t, functionItems)
 
 	functions := projectedNames(t, store, "functions")

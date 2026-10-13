@@ -5,11 +5,23 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/lloschema"
+
 	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// astRows is the vocabulary's view of _ast as a subquery, so these oracles
+// count the same nodes on projection-v4 and projection-v6.
+func astRows(t *testing.T, astDB *sql.DB) string {
+	t.Helper()
+	body, err := lloschema.ASTSelect(lloschema.DB(astDB))
+	require.NoError(t, err)
+	require.NotEmpty(t, body, "the parse must have an _ast")
+	return "(" + body + ")"
+}
 
 // declaredCount is how many nodes of one AST kind ley-line parsed. Every
 // "is each declaration projected exactly once" assertion in this package
@@ -18,20 +30,22 @@ func declaredCount(t *testing.T, astDB *sql.DB, nodeKind string) int {
 	t.Helper()
 	var n int
 	require.NoError(t, astDB.QueryRow(
-		`SELECT count(*) FROM _ast WHERE node_kind = ?`, nodeKind).Scan(&n))
+		`SELECT count(*) FROM `+astRows(t, astDB)+` WHERE node_kind = ?`, nodeKind).Scan(&n))
 	require.Positive(t, n, "no %s nodes in the fixture", nodeKind)
 	return n
 }
 
 // recordPositionalProperties counts the parameters in a record's positional
 // list — the properties C# generates that have no property_declaration node of
-// their own. Matched on the node_id path, which is how the _ast records
-// structure, the same way the smell rules discriminate on it.
+// their own: parameters inside a record_declaration's subtree.
 func recordPositionalProperties(t *testing.T, astDB *sql.DB) int {
 	t.Helper()
+	rows := astRows(t, astDB)
 	var n int
 	require.NoError(t, astDB.QueryRow(
-		`SELECT count(*) FROM _ast WHERE node_kind = 'parameter' AND node_id LIKE '%record_declaration%'`).Scan(&n))
+		`SELECT count(*) FROM `+rows+` p WHERE p.node_kind = 'parameter' AND EXISTS (
+		   SELECT 1 FROM `+rows+` r WHERE r.node_kind = 'record_declaration'
+		     AND p.node_id >= r.subtree_lo AND p.node_id < r.subtree_hi)`).Scan(&n))
 	return n
 }
 

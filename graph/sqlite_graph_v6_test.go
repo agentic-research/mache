@@ -95,6 +95,16 @@ func lookups(t *testing.T, g *SQLiteGraph) map[string]any {
 		require.NoError(t, err)
 		chains[id] = fmt.Sprint(ok, chain)
 	}
+	search := func(pattern, segment string) []string {
+		hits, err := g.SearchRefs(pattern, segment, 100)
+		require.NoError(t, err)
+		var out []string
+		for _, h := range hits {
+			out = append(out, h.Token+" @ "+h.ID)
+		}
+		slices.Sort(out)
+		return out
+	}
 	defs := sorted(g.DefsMap())
 	return map[string]any{
 		"RefRangeOf":   fmt.Sprintf("%+v", *rr),
@@ -105,6 +115,8 @@ func lookups(t *testing.T, g *SQLiteGraph) map[string]any {
 		"RefsMap":      sorted(g.RefsMap()),
 		"GetCallees":   calleeIDs,
 		"ASTKindChain": chains,
+		"SearchRefs":   search("%", ""),
+		"SearchRefsIn": search("%", "function_declaration_0"),
 	}
 }
 
@@ -121,6 +133,8 @@ func TestSQLiteGraphLookups_SameAnswersFromProjectionV4AndV6(t *testing.T) {
 		"a node with no _ast row of its own has no kind, whatever its ancestors have")
 	require.NotEmpty(t, v4["RefsMap"])
 	require.NotEmpty(t, v4["GetCallees"])
+	require.Len(t, v4["SearchRefs"], 2)
+	require.Equal(t, []string{"helper @ " + gGreetFn}, v4["SearchRefsIn"], "the segment narrows to refs under it")
 	require.Contains(t, v4["ResolveRef"], "example.com/m/pkg")
 	require.Contains(t, v4["ASTKindChain"].(map[string]string)[gMethod], "class_definition")
 

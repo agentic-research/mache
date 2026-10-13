@@ -2,7 +2,6 @@ package mcpserve
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -23,138 +22,107 @@ func makeSearchHandler(g graph.Graph) server.ToolHandlerFunc {
 		role := request.GetString("role", "")
 		limit := request.GetInt("limit", 100)
 
-		type searchResult struct {
-			Token string `json:"token"`
-			Path  string `json:"path"`
-			Role  string `json:"role,omitempty"`
-		}
-
-		// Definition search.
-		//
-		// Two backends: SQL-pushdown via graph.DefsSearcher (preferred — covers
-		// pre-built .db files whose in-memory defs map is empty), and
-		// in-memory map iteration via graph.DefsMapper (legacy MemoryStore
-		// and live-ingest paths).
-		//
-		// Wrappers like lazyGraph always satisfy the graph.DefsSearcher
-		// interface (they have the method, even if the inner backend
-		// doesn't). If the wrapper returns nil from SearchDefs because
-		// the inner didn't implement it, fall through to the DefsMap
-		// path — `nil` from SearchDefs is distinguishable from `empty
-		// map = no matches` and signals "I don't speak this protocol."
-		//
-		// Bead mache-9cba08 caught the original SQL pushdown gap; the
-		// nil-passthrough fallback below was caught by the PR #373
-		// post-fix audit (lazyGraph→MemoryStore returned nil and the
-		// fallback was unreachable due to dispatch ordering).
 		if role == "definition" {
-			var matches map[string][]string
-			if ds, ok := g.(graph.DefsSearcher); ok {
-				matches = ds.SearchDefs(pattern, limit)
-			}
-			if matches == nil {
-				if dp, ok := g.(graph.DefsMapper); ok {
-					defs := dp.DefsMap()
-					matches = make(map[string][]string, len(defs))
-					for token, ids := range defs {
-						if sqlLikeMatch(pattern, token) {
-							matches[token] = ids
-						}
-					}
-				} else {
-					return mcp.NewToolResultError("backend does not support definition search"), nil
-				}
-			}
-
-			var results []searchResult
-			seenPaths := make(map[string]bool)
-			for token, ids := range matches {
-				for _, id := range ids {
-					if typeFilter != "" && !strings.Contains(id, "/"+typeFilter+"/") {
-						continue
-					}
-					// Dedup: both "Foo.Bar" and "pkg.Foo.Bar" map to the same path
-					if seenPaths[id] {
-						continue
-					}
-					seenPaths[id] = true
-					results = append(results, searchResult{Token: token, Path: id, Role: "definition"})
-					if len(results) >= limit {
-						break
-					}
-				}
-				if len(results) >= limit {
-					break
-				}
-			}
-			if results == nil {
-				results = []searchResult{}
-			}
-			data, _ := json.MarshalIndent(results, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			return searchDefinitions(g, pattern, typeFilter, limit), nil
 		}
+		return searchReferences(g, pattern, typeFilter, limit), nil
+	}
+}
 
-		// Reference search (default): query mache_refs (vtab) or node_refs (real table).
-		// Leyline-parsed .dbs have node_refs (token, node_id); legacy sidecar has mache_refs (token, path).
-		//
-		// `path NOT LIKE '_file_level:%'` filters the engine's
-		// file-level sentinel rows (from PR #270) — synthetic
-		// caller_ids the engine uses to mark file-level fn-value
-		// refs (mache-02r9) as alive. They're not real source
-		// locations and would surface as fake "/path/file.go"
-		// results. NodesTableReader.GetCallers applies the same
-		// filter; this puts search/role=reference in agreement.
-		qg, ok := g.(graph.RefsQuerier)
-		if !ok {
-			return mcp.NewToolResultError("reference search requires a SQLite-backed graph; use role=definition for in-memory search"), nil
-		}
-		var rows *sql.Rows
-		var err error
-		if typeFilter != "" {
-			rows, err = qg.QueryRefs(
-				"SELECT token, path FROM mache_refs WHERE token LIKE ? AND path LIKE ? AND path NOT LIKE '_file_level:%' LIMIT ?",
-				pattern, "%/"+typeFilter+"/%", limit,
-			)
+// searchDefinitions is search role=definition.
+//
+// Two backends: SQL-pushdown via graph.DefsSearcher (preferred — covers
+// pre-built .db files whose in-memory defs map is empty), and
+// in-memory map iteration via graph.DefsMapper (legacy MemoryStore
+// and live-ingest paths).
+//
+// Wrappers like lazyGraph always satisfy the graph.DefsSearcher
+// interface (they have the method, even if the inner backend
+// doesn't). If the wrapper returns nil from SearchDefs because
+// the inner didn't implement it, fall through to the DefsMap
+// path — `nil` from SearchDefs is distinguishable from `empty
+// map = no matches` and signals "I don't speak this protocol."
+//
+// Bead mache-9cba08 caught the original SQL pushdown gap; the
+// nil-passthrough fallback below was caught by the PR #373
+// post-fix audit (lazyGraph→MemoryStore returned nil and the
+// fallback was unreachable due to dispatch ordering).
+func searchDefinitions(g graph.Graph, pattern, typeFilter string, limit int) *mcp.CallToolResult {
+	type searchResult struct {
+		Token string `json:"token"`
+		Path  string `json:"path"`
+		Role  string `json:"role,omitempty"`
+	}
+	var matches map[string][]string
+	if ds, ok := g.(graph.DefsSearcher); ok {
+		matches = ds.SearchDefs(pattern, limit)
+	}
+	if matches == nil {
+		if dp, ok := g.(graph.DefsMapper); ok {
+			defs := dp.DefsMap()
+			matches = make(map[string][]string, len(defs))
+			for token, ids := range defs {
+				if sqlLikeMatch(pattern, token) {
+					matches[token] = ids
+				}
+			}
 		} else {
-			rows, err = qg.QueryRefs(
-				"SELECT token, path FROM mache_refs WHERE token LIKE ? AND path NOT LIKE '_file_level:%' LIMIT ?",
-				pattern, limit,
-			)
+			return mcp.NewToolResultError("backend does not support definition search")
 		}
-		// Fallback: node_refs table (leyline-parsed .db) when mache_refs vtab doesn't exist.
-		if err != nil && strings.Contains(err.Error(), "no such table") {
-			if typeFilter != "" {
-				rows, err = qg.QueryRefs(
-					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? AND node_id LIKE ? AND node_id NOT LIKE '_file_level:%' LIMIT ?",
-					pattern, "%/"+typeFilter+"/%", limit,
-				)
-			} else {
-				rows, err = qg.QueryRefs(
-					"SELECT token, node_id AS path FROM node_refs WHERE token LIKE ? AND node_id NOT LIKE '_file_level:%' LIMIT ?",
-					pattern, limit,
-				)
-			}
-		}
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("query: %v", err)), nil
-		}
-		defer func() { _ = rows.Close() }()
+	}
 
-		var results []searchResult
-		for rows.Next() {
-			var r searchResult
-			if err := rows.Scan(&r.Token, &r.Path); err != nil {
+	var results []searchResult
+	seenPaths := make(map[string]bool)
+	for token, ids := range matches {
+		for _, id := range ids {
+			if typeFilter != "" && !strings.Contains(id, "/"+typeFilter+"/") {
 				continue
 			}
-			results = append(results, r)
+			// Dedup: both "Foo.Bar" and "pkg.Foo.Bar" map to the same path
+			if seenPaths[id] {
+				continue
+			}
+			seenPaths[id] = true
+			results = append(results, searchResult{Token: token, Path: id, Role: "definition"})
+			if len(results) >= limit {
+				break
+			}
 		}
-		if results == nil {
-			results = []searchResult{}
+		if len(results) >= limit {
+			break
 		}
-
-		data, _ := json.MarshalIndent(results, "", "  ")
-		return mcp.NewToolResultText(string(data)), nil
 	}
+	if results == nil {
+		results = []searchResult{}
+	}
+	data, _ := json.MarshalIndent(results, "", "  ")
+	return mcp.NewToolResultText(string(data))
+}
+
+// searchReferences is search role=reference, through the graph's
+// RefSearcher: the backend knows where its references live (the mache_refs
+// sidecar, or node_refs keyed by node_id on projection-v4 and nid on v6) and
+// drops the engine's file-level sentinel rows (PR #270), synthetic caller_ids
+// that are not real source locations, the same filter GetCallers applies.
+func searchReferences(g graph.Graph, pattern, typeFilter string, limit int) *mcp.CallToolResult {
+	rs, ok := g.(graph.RefSearcher)
+	if !ok {
+		return mcp.NewToolResultError("reference search requires a SQLite-backed graph; use role=definition for in-memory search")
+	}
+	hits, err := rs.SearchRefs(pattern, typeFilter, limit)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("query: %v", err))
+	}
+	type reference struct {
+		Token string `json:"token"`
+		Path  string `json:"path"`
+	}
+	results := make([]reference, 0, len(hits))
+	for _, h := range hits {
+		results = append(results, reference{Token: h.Token, Path: h.ID})
+	}
+	data, _ := json.MarshalIndent(results, "", "  ")
+	return mcp.NewToolResultText(string(data))
 }
 
 // sqlLikeMatch performs a simple SQL LIKE pattern match (% = wildcard).
