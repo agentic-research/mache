@@ -47,7 +47,9 @@ var decompPackages = map[string][]string{
 	// (mache-80a851 / mache-3e78d2). schemainfer carries it transitively
 	// through the leylinegraph edge above.
 	"internal/leylinegraph": {"internal/projcfg", "internal/lloschema"},
-	"internal/buildcache":   {"internal/projcfg"},
+	// buildcache asks lloschema which projection a .db holds, to refuse a
+	// projection-v6 _ast it cannot carry (mache-90cb9f, mache-e64f36).
+	"internal/buildcache": {"internal/projcfg", "internal/lloschema"},
 	// daemonguard keeps per-machine daemon state under ~/.mache, resolved
 	// through projcfg's home seam so it inherits the test-hermeticity guard
 	// (mache-956488 / mache-3e78d2).
