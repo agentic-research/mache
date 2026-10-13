@@ -15,5 +15,6 @@
     "duplication",
     "structure",
     "gate"
-  ]
+  ],
+  "PathShapedIDs": true
 }

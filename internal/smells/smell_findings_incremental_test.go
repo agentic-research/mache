@@ -135,14 +135,17 @@ func buildASTFixture(t testing.TB, funcs []fixFunc) *sql.DB {
 }
 
 // cyclomaticRule returns the embedded cyclomatic_complexity rule.
-func cyclomaticRule(t testing.TB) *SmellRule {
+func cyclomaticRule(t testing.TB) *SmellRule { return embeddedRule(t, "cyclomatic_complexity") }
+
+// embeddedRule is the built-in rule with this id.
+func embeddedRule(t testing.TB, id string) *SmellRule {
 	t.Helper()
 	for _, r := range mustLoadEmbeddedRules() {
-		if r.ID == "cyclomatic_complexity" {
+		if r.ID == id {
 			return &r
 		}
 	}
-	t.Fatal("cyclomatic_complexity rule not found in embedded ruleset")
+	t.Fatalf("%s rule not found in embedded ruleset", id)
 	return nil
 }
 

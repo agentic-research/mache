@@ -87,8 +87,7 @@ WHERE n.parent_nid = ? AND k.raw_kind = ?`),
 		nth: sqlstmt.NewLazy(`SELECT n.nid FROM nodes n JOIN kinds k ON k.kind_id = n.kind_id
 WHERE n.parent_nid = ? AND k.raw_kind = ?
 ORDER BY n.ord LIMIT 1 OFFSET ?`),
-		hop: sqlstmt.NewLazy(`SELECT n.parent_nid, v.name FROM nodes n JOIN v_node_name v ON v.nid = n.nid
-WHERE n.nid = ?`),
+		hop: sqlstmt.NewLazy(hopSQL),
 	}
 }
 
@@ -232,13 +231,65 @@ func (p *V6Paths) one(s *sqlstmt.Lazy, args ...any) (int64, bool, error) {
 // (ll-core/schema), for the same reason. Use one per batch and drop it; it
 // does not see later changes to the database.
 type PathRenderer struct {
-	p    *V6Paths
+	// hop reads one node's parent and name; ok is false when there is no
+	// such node.
+	hop  func(nid int64) (parent sql.NullInt64, name string, ok bool, err error)
 	memo map[int64]string
 }
 
-// Renderer returns a renderer over p's database.
+// hopSQL is one step up: a node's parent and its name, from LLO's own
+// v_node_name.
+const hopSQL = `SELECT n.parent_nid, v.name FROM nodes n JOIN v_node_name v ON v.nid = n.nid WHERE n.nid = ?`
+
+// Renderer returns a renderer over p's database, on p's compiled statement.
 func (p *V6Paths) Renderer() *PathRenderer {
-	return &PathRenderer{p: p, memo: map[int64]string{}}
+	return newRenderer(func(nid int64) (*sql.Row, error) {
+		stmt, err := p.hop.Get(p.db)
+		if err != nil {
+			return nil, err
+		}
+		return stmt.QueryRow(nid), nil
+	})
+}
+
+// QuerierRenderer returns a renderer for a caller that holds a Querier rather
+// than the database: the smell engine, which reads through whatever graph
+// backend it was given.
+func QuerierRenderer(qg Querier) *PathRenderer {
+	return &PathRenderer{memo: map[int64]string{}, hop: func(nid int64) (sql.NullInt64, string, bool, error) {
+		rows, err := qg.QueryRefs(hopSQL, nid)
+		if err != nil {
+			return sql.NullInt64{}, "", false, err
+		}
+		defer func() { _ = rows.Close() }()
+		if !rows.Next() {
+			return sql.NullInt64{}, "", false, rows.Err()
+		}
+		var parent sql.NullInt64
+		var name string
+		if err := rows.Scan(&parent, &name); err != nil {
+			return sql.NullInt64{}, "", false, err
+		}
+		return parent, name, true, nil
+	}}
+}
+
+func newRenderer(row func(nid int64) (*sql.Row, error)) *PathRenderer {
+	return &PathRenderer{memo: map[int64]string{}, hop: func(nid int64) (sql.NullInt64, string, bool, error) {
+		var parent sql.NullInt64
+		var name string
+		r, err := row(nid)
+		if err != nil {
+			return parent, name, false, err
+		}
+		if err := r.Scan(&parent, &name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return parent, name, false, nil
+			}
+			return parent, name, false, err
+		}
+		return parent, name, true, nil
+	}}
 }
 
 // Path returns the path nid renders as, and false when there is no such node.
@@ -246,16 +297,8 @@ func (r *PathRenderer) Path(nid int64) (string, bool, error) {
 	if path, ok := r.memo[nid]; ok {
 		return path, true, nil
 	}
-	stmt, err := r.p.hop.Get(r.p.db)
-	if err != nil {
-		return "", false, err
-	}
-	var parent sql.NullInt64
-	var name string
-	if err := stmt.QueryRow(nid).Scan(&parent, &name); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", false, nil
-		}
+	parent, name, ok, err := r.hop(nid)
+	if err != nil || !ok {
 		return "", false, err
 	}
 	path := name

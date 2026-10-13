@@ -3,6 +3,7 @@ package smells
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,6 +34,11 @@ type smellFinding struct {
 	// grandfathered and a vacated path stops spending an allowance
 	// (mache-dd45a3).
 	NodeHash string `json:"node_hash,omitempty"`
+	// key is the node as the rule returned it, which is what the _ast
+	// lookups below join on: the same string as NodeID on projection-v4, and
+	// a nid on projection-v6, where NodeID is that nid's rendered path
+	// (mache-90cb9f). Never serialized.
+	key any
 }
 
 // ensureSmellQueryContext installs the canonical views/tables (v_defs,
@@ -80,6 +86,9 @@ func RunSmellRule(qg graph.RefsQuerier, rule *SmellRule, sourceID string, limit 
 // multi-rule callers pay the view/table setup cost once instead of once per
 // rule.
 func runSmellRuleQuery(qg graph.RefsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
+	if err := refuseOnOpaqueIDs(qg, rule); err != nil {
+		return nil, err
+	}
 	scope := ""
 	args := []any{}
 	if sourceID != "" && rule.ScopeColumn != "" {
@@ -99,20 +108,20 @@ func runSmellRuleQuery(qg graph.RefsQuerier, rule *SmellRule, sourceID string, l
 	for rows.Next() {
 		var (
 			src       string
-			nodeID    string
+			key       any
 			startByte int
 			endByte   int
 			startRow  int
 			startCol  int
 			metric    int64
 		)
-		if err := rows.Scan(&src, &nodeID, &startByte, &endByte, &startRow, &startCol, &metric); err != nil {
+		if err := rows.Scan(&src, &key, &startByte, &endByte, &startRow, &startCol, &metric); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		out = append(out, smellFinding{
 			RuleID:    rule.ID,
 			SourceID:  src,
-			NodeID:    nodeID,
+			key:       key,
 			StartByte: startByte,
 			EndByte:   endByte,
 			Line:      startRow + 1, // tree-sitter is 0-indexed; agents expect 1-based
@@ -126,6 +135,11 @@ func runSmellRuleQuery(qg graph.RefsQuerier, rule *SmellRule, sourceID string, l
 	// Release the connection before the enrichment query so we don't hold
 	// two open cursors on a single-connection backend.
 	_ = rows.Close()
+	// Ids before anything that compares them: isFileLevel asks whether a
+	// node IS its file, which only a rendered path can answer on v6.
+	if err := renderNodeIDs(qg, out); err != nil {
+		return nil, err
+	}
 	// Content addresses first: the ratchet keys on them, so a finding without
 	// one silently degrades to path keying (mache-dd45a3).
 	if err := enrichNodeHashes(qg, out); err != nil {
@@ -200,17 +214,97 @@ func isFileLevel(f smellFinding) bool {
 	return f.NodeID == "" || f.NodeID == f.SourceID
 }
 
+// ErrPathShapedRule is returned for a rule marked PathShapedIDs on a database
+// whose node ids are not paths.
+var ErrPathShapedRule = errors.New("rule reads node ids as paths, which projection-v6 does not store")
+
+// refuseOnOpaqueIDs refuses a PathShapedIDs rule on projection-v6, whose node
+// ids are integers: running it would answer, wrongly, rather than fail.
+func refuseOnOpaqueIDs(qg graph.RefsQuerier, rule *SmellRule) error {
+	if !rule.PathShapedIDs {
+		return nil
+	}
+	v6, err := lloschema.TableHasColumn(qg, "nodes", "nid")
+	if err != nil {
+		return fmt.Errorf("rule %s: probe nodes.nid: %w", rule.ID, err)
+	}
+	if v6 {
+		return fmt.Errorf("rule %s: %w (mache-2dc105)", rule.ID, ErrPathShapedRule)
+	}
+	return nil
+}
+
+// renderNodeIDs sets each finding's NodeID from the key its rule returned:
+// the key itself on projection-v4, where a node id is its path, and the
+// rendered path of the nid on projection-v6, with shared ancestors named once.
+// A nid with no node (a row LLO wrote for a node it does not store,
+// ley-line-open-260fcf) renders as no node at all, as a file-level finding.
+func renderNodeIDs(qg graph.RefsQuerier, findings []smellFinding) error {
+	var r *lloschema.PathRenderer
+	for i := range findings {
+		switch k := findings[i].key.(type) {
+		case string:
+			findings[i].NodeID = k
+		case int64:
+			if r == nil {
+				r = lloschema.QuerierRenderer(qg)
+			}
+			path, ok, err := r.Path(k)
+			if err != nil {
+				return fmt.Errorf("render node %d: %w", k, err)
+			}
+			if ok {
+				findings[i].NodeID = path
+			}
+		}
+	}
+	return nil
+}
+
+// astRowsByKey reads cols from v_ast for every node key, in chunks under
+// SQLite's bound-variable limit, calling row with each result (node_id first,
+// then cols). v_ast is the vocabulary's view over _ast, installed by
+// ensureSmellQueryContext, so the same lookup reads both projections.
+func astRowsByKey(qg graph.RefsQuerier, keys []any, cols string, row func(*sql.Rows) error) error {
+	for start := 0; start < len(keys); start += enrichLocChunk {
+		batch := keys[start:min(start+enrichLocChunk, len(keys))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := qg.QueryRefs("SELECT node_id, "+cols+" FROM v_ast WHERE node_id IN ("+placeholders+")", batch...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			if err := row(rows); err != nil {
+				_ = rows.Close()
+				return err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+	return nil
+}
+
+// hasAST reports whether the producer wrote an _ast mache can read.
+func hasAST(qg graph.RefsQuerier) (bool, error) {
+	body, err := lloschema.ASTSelect(qg)
+	return body != "", err
+}
+
 func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
-	ids := make([]string, 0, len(findings))
-	seen := make(map[string]bool, len(findings))
+	keys := make([]any, 0, len(findings))
+	seen := make(map[any]bool, len(findings))
 	for _, f := range findings {
-		if isFileLevel(f) || seen[f.NodeID] {
+		if isFileLevel(f) || seen[f.key] {
 			continue // file-level finding, or already queued
 		}
-		seen[f.NodeID] = true
-		ids = append(ids, f.NodeID)
+		seen[f.key] = true
+		keys = append(keys, f.key)
 	}
-	if len(ids) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
 	hasHash, err := lloschema.TableHasColumn(qg, "_ast", "node_hash")
@@ -221,48 +315,31 @@ func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
 		return nil // standalone producer: path keying, by design
 	}
 
-	byNode := make(map[string]string, len(ids))
-	for start := 0; start < len(ids); start += enrichLocChunk {
-		end := min(start+enrichLocChunk, len(ids))
-		batch := ids[start:end]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
-		q := "SELECT node_id, hex(node_hash) FROM _ast WHERE node_id IN (" + placeholders + ")"
-		args := make([]any, len(batch))
-		for i, id := range batch {
-			args[i] = id
+	byNode := make(map[any]string, len(keys))
+	err = astRowsByKey(qg, keys, "hex(node_hash)", func(rows *sql.Rows) error {
+		var key any
+		var hash sql.NullString
+		if err := rows.Scan(&key, &hash); err != nil {
+			return err
 		}
-		rows, err := qg.QueryRefs(q, args...)
-		if err != nil {
-			return fmt.Errorf("enrich node hashes: _ast lookup: %w", err)
+		if hash.Valid && hash.String != "" {
+			// Normalize case: SQL hex() returns UPPERCASE while the
+			// incremental memo carries lowercase. Identical content
+			// reaching the ratchet under two spellings would key as two
+			// different findings — caught by the memo-vs-full-scan
+			// byte-equality test, which is exactly what it is for.
+			byNode[key] = strings.ToLower(hash.String)
 		}
-		for rows.Next() {
-			var id string
-			var hash sql.NullString
-			if err := rows.Scan(&id, &hash); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("enrich node hashes: scan: %w", err)
-			}
-			if hash.Valid && hash.String != "" {
-				// Normalize case: SQL hex() returns UPPERCASE while the
-				// incremental memo carries lowercase. Identical content
-				// reaching the ratchet under two spellings would key as two
-				// different findings — caught by the memo-vs-full-scan
-				// byte-equality test, which is exactly what it is for.
-				byNode[id] = strings.ToLower(hash.String)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("enrich node hashes: rows: %w", err)
-		}
-		_ = rows.Close()
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("enrich node hashes: _ast lookup: %w", err)
 	}
-
 	for i := range findings {
 		if isFileLevel(findings[i]) {
 			continue
 		}
-		if h, ok := byNode[findings[i].NodeID]; ok {
+		if h, ok := byNode[findings[i].key]; ok {
 			findings[i].NodeHash = h
 		}
 	}
@@ -271,30 +348,30 @@ func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
 
 func enrichLocations(qg graph.RefsQuerier, findings []smellFinding) error {
 	needsLoc := func(f smellFinding) bool { return f.StartByte == 0 && f.Line <= 1 }
-	ids := make([]string, 0)
-	seen := make(map[string]bool)
+	keys := make([]any, 0)
+	seen := make(map[any]bool)
 	for i := range findings {
 		f := findings[i]
 		if f.NodeID == "" || (!needsLoc(f) && f.SourceID != "") {
-			continue // already fully located, or no node_id to key on
+			continue // already fully located, or no node to key on
 		}
-		if !seen[f.NodeID] {
-			seen[f.NodeID] = true
-			ids = append(ids, f.NodeID)
+		if !seen[f.key] {
+			seen[f.key] = true
+			keys = append(keys, f.key)
 		}
 	}
-	if len(ids) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
 	// _ast is absent on the standalone tree-sitter backend — that's an
 	// expected no-op, not an error. Probe once (rather than string-matching a
 	// "no such table" failure) so that any error from the chunked lookups below
 	// is a genuine query failure we must surface, not silent location loss.
-	hasAST, err := lloschema.TableHasColumn(qg, "_ast", "node_id")
+	ok, err := hasAST(qg)
 	if err != nil {
 		return fmt.Errorf("enrich locations: probe _ast: %w", err)
 	}
-	if !hasAST {
+	if !ok {
 		return nil
 	}
 
@@ -303,45 +380,28 @@ func enrichLocations(qg graph.RefsQuerier, findings []smellFinding) error {
 		startByte, endByte int
 		startRow, startCol int
 	}
-	byNode := make(map[string]loc, len(ids))
-	// Chunk the IN(...) list under SQLite's bound-variable limit so a large
-	// finding set can't fail the lookup (and silently revert to line:1).
-	for start := 0; start < len(ids); start += enrichLocChunk {
-		end := min(start+enrichLocChunk, len(ids))
-		batch := ids[start:end]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
-		q := "SELECT node_id, source_id, start_byte, end_byte, start_row, start_col FROM _ast WHERE node_id IN (" + placeholders + ")"
-		args := make([]any, len(batch))
-		for i, id := range batch {
-			args[i] = id
+	byNode := make(map[any]loc, len(keys))
+	err = astRowsByKey(qg, keys, "source_id, start_byte, end_byte, start_row, start_col", func(rows *sql.Rows) error {
+		var (
+			key              any
+			srcID            string
+			sb, eb           int
+			startRow, startC sql.NullInt64
+		)
+		if err := rows.Scan(&key, &srcID, &sb, &eb, &startRow, &startC); err != nil {
+			return err
 		}
-		rows, err := qg.QueryRefs(q, args...)
-		if err != nil {
-			// _ast exists (probed above) yet the lookup failed — a real error
-			// (e.g. too-many-variables); surface it instead of swallowing.
-			return fmt.Errorf("enrich locations: _ast lookup: %w", err)
-		}
-		for rows.Next() {
-			var (
-				id, srcID        string
-				sb, eb           int
-				startRow, startC sql.NullInt64
-			)
-			if err := rows.Scan(&id, &srcID, &sb, &eb, &startRow, &startC); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("enrich locations: scan: %w", err)
-			}
-			byNode[id] = loc{srcID, sb, eb, int(startRow.Int64), int(startC.Int64)}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("enrich locations: rows: %w", err)
-		}
-		_ = rows.Close()
+		byNode[key] = loc{srcID, sb, eb, int(startRow.Int64), int(startC.Int64)}
+		return nil
+	})
+	if err != nil {
+		// _ast exists (probed above) yet the lookup failed — a real error
+		// (e.g. too-many-variables); surface it instead of swallowing.
+		return fmt.Errorf("enrich locations: _ast lookup: %w", err)
 	}
 
 	for i := range findings {
-		l, ok := byNode[findings[i].NodeID]
+		l, ok := byNode[findings[i].key]
 		if !ok {
 			continue
 		}

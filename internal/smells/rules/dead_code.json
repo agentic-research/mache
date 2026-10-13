@@ -13,5 +13,6 @@
   "Severity": "",
   "Tags": [
     "gate"
-  ]
+  ],
+  "PathShapedIDs": true
 }
