@@ -21,9 +21,15 @@ const module = "github.com/agentic-research/mache"
 // decompPackages is the extracted packages, with each one's ALLOWED internal
 // dependencies among them (the declared DAG). Any new edge fails here
 // until this table is deliberately amended in review.
+//
+// internal/lloschema appears in the rows of every package that imports
+// `graph`, and only because of that: graph's nodes-table reader addresses
+// projection-v6 through lloschema.V6Paths (mache-90cb9f), the edge the
+// lloschema row below anticipates. lloschema is a leaf, so the edge brings
+// nothing else with it.
 var decompPackages = map[string][]string{
-	"internal/testutil":  {},
-	"internal/projcfg":   {},
+	"internal/testutil":  {"internal/lloschema"},
+	"internal/projcfg":   {"internal/lloschema"},
 	"internal/mountmeta": {},
 	"internal/smells":    {"internal/projcfg", "internal/lloschema"},
 	// lloschema is the LLO physical-schema boundary (mache-be17ce) and a LEAF
@@ -34,18 +40,18 @@ var decompPackages = map[string][]string{
 	// they lived in internal/smells. An edge FROM lloschema to any of the
 	// eight would make it a layer instead of a boundary.
 	"internal/lloschema":   {},
-	"internal/schemainfer": {"internal/leylinegraph", "internal/projcfg"},
+	"internal/schemainfer": {"internal/leylinegraph", "internal/projcfg", "internal/lloschema"},
 	// leylinegraph keeps the persistent parse cache under ~/.mache, resolved
 	// through projcfg's home seam so it inherits the test-hermeticity guard —
 	// the same deliberate edge daemonguard has, for the same reason
 	// (mache-80a851 / mache-3e78d2). schemainfer carries it transitively
 	// through the leylinegraph edge above.
-	"internal/leylinegraph": {"internal/projcfg"},
+	"internal/leylinegraph": {"internal/projcfg", "internal/lloschema"},
 	"internal/buildcache":   {"internal/projcfg"},
 	// daemonguard keeps per-machine daemon state under ~/.mache, resolved
 	// through projcfg's home seam so it inherits the test-hermeticity guard
 	// (mache-956488 / mache-3e78d2).
-	"internal/daemonguard": {"internal/projcfg"},
+	"internal/daemonguard": {"internal/projcfg", "internal/lloschema"},
 	"internal/mcpserve": {
 		"internal/projcfg", "internal/mountmeta", "internal/smells",
 		"internal/schemainfer", "internal/leylinegraph", "internal/daemonguard",

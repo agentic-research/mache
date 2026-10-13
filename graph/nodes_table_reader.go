@@ -13,23 +13,6 @@ import (
 	"github.com/agentic-research/mache/internal/sqlstmt"
 )
 
-// NodeKindFile and NodeKindDir are the integer values stored in the nodes
-// table's `kind` column (the wire format produced by mache build /
-// leyline parse). They are NOT a substitute for *Node.Mode at runtime —
-// Mode uses fs.FileMode and carries the IsDir() predicate. The kind
-// constants are used by ingestion writers when populating the column,
-// by readers when interpreting it, and as a comment marker next to
-// bare-int SQL literals like `kind = 1` (SQL can't reference Go
-// constants directly).
-//
-// These values are part of the on-disk schema and must not change.
-//
-// Bead mache-e7e9e5.
-const (
-	NodeKindFile = 0
-	NodeKindDir  = 1
-)
-
 // NodesTableReader provides read methods for the nodes-table schema.
 // Shared by SQLiteGraph (nodes-table fast path) and WritableGraph.
 //
@@ -50,6 +33,7 @@ type NodesTableReader struct {
 	hasContext bool             // nodes table carries the context column (mache-b8fe72)
 	hasProps   bool             // nodes table carries the props column (mache-90b89b)
 	hasAST     bool             // db carries ley-line-open's _ast table, so nodes can be located in source (mache-e57065)
+	shape      *v6Shape         // nil for path-keyed nodes; set for projection-v6 (mache-90cb9f)
 	stmts      readerStmts      // compiled once, reused per call (mache-3063fb)
 }
 
@@ -67,29 +51,6 @@ func (s readerStmts) all() []*sqlstmt.Lazy {
 	return []*sqlstmt.Lazy{
 		s.node, s.children, s.childrenRoot, s.stats, s.statsRoot, s.content, s.record, s.callers,
 	}
-}
-
-// ColumnExists reports whether table has a column named col. Readers use it
-// to stay compatible with nodes tables written before a column was added
-// (e.g. `context`, mache-b8fe72) or produced by leyline, and writers use it
-// to decide whether an ALTER is needed.
-//
-// Deliberately pragma_table_xinfo, NOT pragma_table_info: table_info omits
-// GENERATED columns entirely, so it answers "missing" for a column that is
-// present, readable, indexed, and returned by SELECT *. ley-line-open already
-// ships one (`source_blobs.byte_len` STORED) and projection-v4 makes
-// `nodes.parent_id` another (mache-bc6ca3). Under table_info a reader would
-// silently downgrade to a compatibility path for a column it can read, and a
-// writer would emit an ALTER that fails with "duplicate column name". xinfo
-// reports the same rows as info plus generated and hidden ones, so no existing
-// probe changes its answer.
-func ColumnExists(db *sql.DB, table, col string) bool {
-	rows, err := db.Query("SELECT 1 FROM pragma_table_xinfo(?) WHERE name = ?", table, col)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = rows.Close() }()
-	return rows.Next()
 }
 
 // DB returns the underlying database connection.
@@ -116,17 +77,8 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 	}
 	// After the flags: nodeSelect reads them, and the statement text is fixed
 	// from here on.
-	r.stmts = readerStmts{
-		node:         sqlstmt.NewLazy(r.nodeSelect()),
-		children:     sqlstmt.NewLazy("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name"),
-		childrenRoot: sqlstmt.NewLazy("SELECT id FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
-		stats:        sqlstmt.NewLazy("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name"),
-		statsRoot:    sqlstmt.NewLazy("SELECT id, kind, size, mtime FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
-		content:      sqlstmt.NewLazy("SELECT record, record_id FROM nodes WHERE id = ?"),
-		record:       sqlstmt.NewLazy("SELECT record FROM " + tableName + " WHERE id = ?"),
-		callers: sqlstmt.NewLazy(
-			"SELECT node_id FROM node_refs WHERE token = ? AND node_id NOT LIKE '" + sentinelSQLPattern + "'"),
-	}
+	r.shape = newV6Shape(r)
+	r.stmts = r.shape.statements(r)
 	return r
 }
 
@@ -137,6 +89,7 @@ func (r *NodesTableReader) Close() {
 	for _, s := range r.stmts.all() {
 		s.Close()
 	}
+	r.shape.close()
 }
 
 // GetNode returns a node by ID from the nodes table.
@@ -146,12 +99,19 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 		return &Node{ID: "", Mode: os.ModeDir | r.dirMode}, nil
 	}
 
+	key, ok, err := r.shape.key(id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
 	var row nodeScan
 	stmt, err := r.stmts.node.Get(r.db)
 	if err != nil {
 		return nil, err
 	}
-	err = stmt.QueryRow(id).Scan(row.scanTargets(r)...)
+	err = stmt.QueryRow(key).Scan(row.scanTargets(r)...)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -212,7 +172,7 @@ func (r *NodesTableReader) ListChildren(id string) ([]string, error) {
 		// never terminates. Found by examples/publicapi's ladder test.
 		rows, err = r.query(r.stmts.childrenRoot)
 	} else {
-		rows, err = r.query(r.stmts.children, id)
+		rows, err = r.queryAt(r.stmts.children, id)
 	}
 	if err != nil {
 		return nil, err
@@ -225,7 +185,7 @@ func (r *NodesTableReader) ListChildren(id string) ([]string, error) {
 		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
-		children = append(children, name)
+		children = append(children, r.shape.childID(id, name))
 	}
 	return children, rows.Err()
 }
@@ -241,7 +201,7 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 		// agree or a stat-based walk and an id-based walk see different trees.
 		rows, err = r.query(r.stmts.statsRoot)
 	} else {
-		rows, err = r.query(r.stmts.stats, id)
+		rows, err = r.queryAt(r.stmts.stats, id)
 	}
 	if err != nil {
 		return nil, err
@@ -257,7 +217,7 @@ func (r *NodesTableReader) ListChildStats(id string) ([]NodeStat, error) {
 			return nil, err
 		}
 		stats = append(stats, NodeStat{
-			ID:          childID,
+			ID:          r.shape.childID(id, childID),
 			IsDir:       kind == NodeKindDir,
 			ContentSize: int64(size),
 			ModTime:     time.Unix(0, mtimeNano),
@@ -302,13 +262,20 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 		return c, nil
 	}
 
+	key, ok, err := r.shape.key(id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
 	var record sql.NullString
 	var recordID sql.NullString
 	stmt, err := r.stmts.content.Get(r.db)
 	if err != nil {
 		return nil, err
 	}
-	err = stmt.QueryRow(id).Scan(&record, &recordID)
+	err = stmt.QueryRow(key).Scan(&record, &recordID)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -374,11 +341,29 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	var nodes []*Node
+	// Read in full before resolving: on projection-v6 a site's path is
+	// another query, which must not wait on this one's connection.
+	var cols []any
 	for rows.Next() {
-		var nodeID string
-		if err := rows.Scan(&nodeID); err != nil {
+		var col any
+		if err := rows.Scan(&col); err != nil {
 			log.Printf("GetCallers: skip row scan: %v", err)
+			continue
+		}
+		cols = append(cols, col)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_ = rows.Close()
+
+	var nodes []*Node
+	for _, col := range cols {
+		nodeID, ok, err := r.shape.idOf(col)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			continue
 		}
 		nodes = append(nodes, &Node{
@@ -386,7 +371,7 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 			Mode: r.fileMode,
 		})
 	}
-	return nodes, rows.Err()
+	return nodes, nil
 }
 
 // Invalidate evicts cached content and size for a node.
@@ -398,6 +383,20 @@ func (r *NodesTableReader) Invalidate(id string) {
 // query runs a compiled statement. One helper rather than a get-then-Query pair
 // repeated at every call site, so a multi-row read cannot quietly go back to
 // handing database/sql a string.
+// queryAt runs a listing keyed by the node at id, as the shape keys it. A node
+// that does not exist lists nothing, as a parent_id with no rows does: keyed
+// by NULL, which equals no parent.
+func (r *NodesTableReader) queryAt(p *sqlstmt.Lazy, id string) (*sql.Rows, error) {
+	key, ok, err := r.shape.key(id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		key = nil
+	}
+	return r.query(p, key)
+}
+
 func (r *NodesTableReader) query(p *sqlstmt.Lazy, args ...any) (*sql.Rows, error) {
 	stmt, err := p.Get(r.db)
 	if err != nil {

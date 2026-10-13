@@ -5,11 +5,11 @@ package fixturedb
 // columns each becomes is decided per producer at emit time (emit.go).
 
 type construct struct {
-	id      ConstructID
-	source  SourceID
-	name    string
-	parent  ConstructID
-	dirKind bool
+	id     ConstructID
+	source SourceID
+	name   string
+	parent ConstructID
+	leaf   bool
 	// record is `nodes.record`: the token text of a leaf `_ast` node, which
 	// ley-line writes there as well as into node_content. Empty otherwise.
 	record string

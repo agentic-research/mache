@@ -2,7 +2,6 @@ package lloschema
 
 import (
 	"database/sql"
-	"fmt"
 	"os"
 	"testing"
 
@@ -171,10 +170,10 @@ func TestSplitRank(t *testing.T) {
 //     Measured, v_node_path's reads grow ~1000x over this range while these
 //     grow under 2x, so the bound below separates the two classes with room on
 //     both sides.
-const deepPath = "pkg/f0000.go/function_declaration_1/block"
+const deepPath = fixturedb.WideDeepID
 
 func TestV6Paths_LookupCostDoesNotGrowWithTheDatabase(t *testing.T) {
-	small, large := v6PathsScale(t, 10), v6PathsScale(t, 2000)
+	small, large := fixturedb.Wide(t, fixturedb.LeylineV6, 10).DBPath(), fixturedb.Wide(t, fixturedb.LeylineV6, 2000).DBPath()
 
 	statements := func(path string) int64 {
 		sqlcount.RegisterDriver()
@@ -226,23 +225,6 @@ func TestV6Paths_LookupCostDoesNotGrowWithTheDatabase(t *testing.T) {
 		require.Positive(t, s, "%s: the counter must see the reads, or the gate is vacuous", name)
 		assert.LessOrEqual(t, l, 4*s, "%s read %d bytes at 10 files and %d at 2000: its cost grows with the database", name, s, l)
 	}
-}
-
-// v6PathsScale builds a projection-v6 database of n files, each with three
-// functions and a block below one of them, and returns its path.
-func v6PathsScale(t *testing.T, n int) string {
-	b := fixturedb.New(t, fixturedb.LeylineV6)
-	for i := range n {
-		src := fixturedb.SourceID(fmt.Sprintf("pkg/f%04d.go", i))
-		b.Source(src, "go", "")
-		for j := range 3 {
-			b.ASTNode(fmt.Sprintf("%s/function_declaration_%d", src, j), "function_declaration", src,
-				fixturedb.Bytes(10*j, 10*j+9))
-		}
-		b.ASTNode(string(src)+"/function_declaration_1/block", "block", src, fixturedb.Bytes(12, 18))
-	}
-	_, f := b.Build()
-	return f.DBPath()
 }
 
 // roundTrip is one round trip: the deep path to its nid and back.

@@ -35,10 +35,11 @@ func (r *NodesTableReader) nodeSelect() string {
 	// callers that never read Origin. A LEFT JOIN costs nothing extra when the
 	// row is absent, and nothing at all when the db has no _ast (mache-e57065).
 	if r.hasAST {
-		cols += ", a.source_id, a.start_byte, a.end_byte, a.start_row, a.start_col, a.end_row, a.end_col"
-		from += " LEFT JOIN _ast a ON a.node_id = n.id"
+		sourceCol, join := r.shape.astJoin()
+		cols += ", " + sourceCol + ", a.start_byte, a.end_byte, a.start_row, a.start_col, a.end_row, a.end_col"
+		from += join
 	}
-	return "SELECT " + cols + " FROM " + from + " WHERE n.id = ?"
+	return "SELECT " + cols + " FROM " + from + " WHERE " + r.shape.nodeKeyColumn() + " = ?"
 }
 
 func (row *nodeScan) scanTargets(r *NodesTableReader) []any {

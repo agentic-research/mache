@@ -20,8 +20,11 @@ type Where struct {
 	Name string
 	// Parent sets `nodes.parent_id`.
 	Parent ConstructID
-	// Directory marks a directory node (`nodes.kind` 0) rather than a leaf (1).
-	Directory bool
+	// Leaf marks a leaf node: `nodes.kind` 0, which mache reads as
+	// graph.NodeKindFile, a token with no children whose `record` is its text.
+	// The default is 1 (graph.NodeKindDir), what ley-line writes for any node
+	// with children: directories, files and most syntax nodes.
+	Leaf bool
 }
 
 // Detail states the optional facts about a definition, a reference or an `_ast`

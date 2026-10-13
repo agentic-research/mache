@@ -37,9 +37,9 @@ const storedParentIDColumn = "parent_id TEXT"
 func buildLeylineFixture(t *testing.T) string {
 	t.Helper()
 	path, _ := fixturedb.New(t, fixturedb.Leyline).
-		Construct("functions", fixturedb.Where{Directory: true}).
-		Construct("functions/HandleRequest", fixturedb.Where{Parent: "functions", Directory: true}).
-		Construct("functions/ProcessOrder", fixturedb.Where{Parent: "functions", Directory: true}).
+		Construct("functions").
+		Construct("functions/HandleRequest", fixturedb.Where{Parent: "functions"}).
+		Construct("functions/ProcessOrder", fixturedb.Where{Parent: "functions"}).
 		Def("HandleRequest", "functions/HandleRequest", fixturedb.Function).
 		Def("ProcessOrder", "functions/ProcessOrder", fixturedb.Function).
 		Ref("HandleRequest", "functions/ProcessOrder", "functions/ProcessOrder/call_0", "").
