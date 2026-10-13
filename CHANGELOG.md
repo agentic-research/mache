@@ -52,8 +52,8 @@ bumps may include breaking changes.
   entry in `list_directory` (which also looked callers up by a construct's
   kind rather than its symbol on every leyline projection), `mache build`'s
   language-coverage check, and serving a `.db` all read projection-v6 too.
-  A v6 `.db` is served without materialized virtual rows, which mache will
-  no longer write into LLO's arena (`mache-abaf17`). The LSP tools read
+  So do `callers/` and `_schema.json` over MCP (`mache-abaf17`, see Fixed).
+  The LSP tools read
   projection-v6 too (`mache-b1f7b8`): `get_type_info`, `get_diagnostics` and
   `find_definition`'s `_lsp_defs` fallback, whether the tables are in the
   served `.db` or in the daemon's arena after a live enrich. On the pinned
