@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // The smell engine on ley-line-open's projection-v6 (mache-90cb9f), whose node
@@ -82,15 +83,20 @@ func TestSmells_PathShapedRuleIsRefusedOnV6Only(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// A nid that names no node (rows LLO writes for injected-language nodes it
-// does not store, ley-line-open-260fcf) renders as no node rather than as a
-// number dressed up as an id.
-func TestRenderNodeIDs_ANidWithNoNodeRendersAsNoNode(t *testing.T) {
+// A nid with no node is either an occurrence in an injected language, which
+// LLO numbers in its host file but does not store (ley-line-open-260fcf), and
+// is named as LLO's wire names it, as v4 named it too; or a nid in no interned
+// file, which renders as no node rather than as a number dressed up as an id.
+func TestRenderNodeIDs_ANidWithNoNode(t *testing.T) {
 	f := smellSpec(t, fixturedb.LeylineV6)
-	findings := []smellFinding{{key: int64(1) << 40}, {key: "kept/as/is"}}
+	var fileID int64
+	require.NoError(t, f.DB().QueryRow(`SELECT file_id FROM _source WHERE id = 'pkg/a.go'`).Scan(&fileID))
+	injected := fileID<<lloschema.V6FileShift | 9999
+	findings := []smellFinding{{key: int64(1) << 40}, {key: "kept/as/is"}, {key: injected}}
 	require.NoError(t, renderNodeIDs(f, findings))
 	assert.Empty(t, findings[0].NodeID)
 	assert.Equal(t, "kept/as/is", findings[1].NodeID)
+	assert.Equal(t, "pkg/a.go#inj@9999", findings[2].NodeID)
 }
 
 // A rule that emits no span (the node_defs-based ones emit 0 AS start_byte)

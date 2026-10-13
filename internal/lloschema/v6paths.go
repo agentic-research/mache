@@ -43,6 +43,9 @@ import (
 type V6Paths struct {
 	db                                *sql.DB
 	path, file, dir, single, nth, hop *sqlstmt.Lazy
+	// sourceOf and fileOf map between a file id and its _source id, for the
+	// addresses of injected occurrences (injectedAddress).
+	sourceOf, fileOf *sqlstmt.Lazy
 }
 
 // V6RootNid is the root directory's nid: directory ids are stored negated,
@@ -88,13 +91,15 @@ WHERE n.parent_nid = ? AND k.raw_kind = ?`),
 		nth: sqlstmt.NewLazy(`SELECT n.nid FROM nodes n JOIN kinds k ON k.kind_id = n.kind_id
 WHERE n.parent_nid = ? AND k.raw_kind = ?
 ORDER BY n.ord LIMIT 1 OFFSET ?`),
-		hop: sqlstmt.NewLazy(hopSQL),
+		hop:      sqlstmt.NewLazy(hopSQL),
+		sourceOf: sqlstmt.NewLazy(sourceOfSQL + `?`),
+		fileOf:   sqlstmt.NewLazy(`SELECT file_id FROM _source WHERE id = ?`),
 	}
 }
 
 // Close releases the compiled statements. It does not close the db.
 func (p *V6Paths) Close() {
-	for _, s := range []*sqlstmt.Lazy{p.path, p.file, p.dir, p.single, p.nth, p.hop} {
+	for _, s := range []*sqlstmt.Lazy{p.path, p.file, p.dir, p.single, p.nth, p.hop, p.sourceOf, p.fileOf} {
 		s.Close()
 	}
 }
@@ -136,6 +141,24 @@ func (p *V6Paths) Resolve(path string) (int64, bool, error) {
 	if path == "" {
 		return V6RootNid, true, nil
 	}
+	nid, ok, err := p.resolveTree(path)
+	if err != nil || ok {
+		return nid, ok, err
+	}
+	source, ordinal, ok := splitInjected(path)
+	if !ok {
+		return 0, false, nil
+	}
+	fileID, ok, err := p.one(p.fileOf, source)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	return fileID<<V6FileShift | ordinal, true, nil
+}
+
+// resolveTree resolves a path through the tree: directories, a file, then
+// syntax nodes.
+func (p *V6Paths) resolveTree(path string) (int64, bool, error) {
 	segs := strings.Split(path, "/")
 	// Directories and files first: descend directories while segments name
 	// them, until one names a file, below which every segment is syntax.
@@ -222,6 +245,40 @@ func (p *V6Paths) one(s *sqlstmt.Lazy, args ...any) (int64, bool, error) {
 	return v.Int64, v.Valid, nil
 }
 
+// injectedMark joins an injected occurrence's host file and ordinal in its
+// address.
+const injectedMark = "#inj@"
+
+// injectedAddress is how LLO names an occurrence in a language injected into a
+// host file (SQL in a Go string, code spans in markdown), which it numbers
+// inside the host's nid range but stores no node for (ley-line-open-260fcf):
+// "<source id>#inj@<ordinal>", the explicit file-anchored form its daemon's
+// wire gives such a nid (wire_ref_of), never a bare number that could be a
+// file's name. Resolve reads it back.
+func injectedAddress(source string, nid int64) string {
+	return source + injectedMark + strconv.FormatInt(nid&(1<<V6FileShift-1), 10)
+}
+
+// splitInjected parses injectedAddress's form.
+func splitInjected(path string) (source string, ordinal int64, ok bool) {
+	i := strings.LastIndex(path, injectedMark)
+	if i <= 0 {
+		return "", 0, false
+	}
+	digits := path[i+len(injectedMark):]
+	if digits == "" || strings.TrimLeft(digits, "0123456789") != "" {
+		return "", 0, false
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || n >= 1<<V6FileShift {
+		return "", 0, false
+	}
+	return path[:i], n, true
+}
+
+// sourceOfSQL is the _source id of a file id, to be completed with one.
+const sourceOfSQL = `SELECT id FROM _source WHERE file_id = `
+
 // PathRenderer renders the paths of many nodes, naming each ancestor once.
 //
 // Path walks a node's whole ancestry per call, which is right for one node
@@ -234,8 +291,10 @@ func (p *V6Paths) one(s *sqlstmt.Lazy, args ...any) (int64, bool, error) {
 type PathRenderer struct {
 	// hop reads one node's parent and name; ok is false when there is no
 	// such node.
-	hop  func(nid int64) (parent sql.NullInt64, name string, ok bool, err error)
-	memo map[int64]string
+	hop func(nid int64) (parent sql.NullInt64, name string, ok bool, err error)
+	// source reads a file id's _source id; ok is false when there is none.
+	source func(fileID int64) (string, bool, error)
+	memo   map[int64]string
 }
 
 // hopSQL is one step up: a node's parent and its name, from LLO's own
@@ -269,6 +328,16 @@ func ValuesRenderer(run func(query string) ([][]any, error)) *PathRenderer {
 			return sql.NullInt64{}, "", false, fmt.Errorf("path hop for nid %d: name is %T, want string", nid, rows[0][1])
 		}
 		return parent, name, true, nil
+	}, source: func(fileID int64) (string, bool, error) {
+		rows, err := run(sourceOfSQL + strconv.FormatInt(fileID, 10))
+		if err != nil || len(rows) == 0 || len(rows[0]) == 0 {
+			return "", false, err
+		}
+		id, ok := rows[0][0].(string)
+		if !ok {
+			return "", false, fmt.Errorf("source of file %d is %T, want string", fileID, rows[0][0])
+		}
+		return id, true, nil
 	}}
 }
 
@@ -293,13 +362,16 @@ func IntValue(v any) (int64, error) {
 
 // Renderer returns a renderer over p's database, on p's compiled statement.
 func (p *V6Paths) Renderer() *PathRenderer {
-	return newRenderer(func(nid int64) (*sql.Row, error) {
-		stmt, err := p.hop.Get(p.db)
-		if err != nil {
-			return nil, err
+	row := func(s *sqlstmt.Lazy) func(id int64) (*sql.Row, error) {
+		return func(id int64) (*sql.Row, error) {
+			stmt, err := s.Get(p.db)
+			if err != nil {
+				return nil, err
+			}
+			return stmt.QueryRow(id), nil
 		}
-		return stmt.QueryRow(nid), nil
-	})
+	}
+	return newRenderer(row(p.hop), row(p.sourceOf))
 }
 
 // QuerierRenderer returns a renderer for a caller that holds a Querier rather
@@ -321,11 +393,35 @@ func QuerierRenderer(qg Querier) *PathRenderer {
 			return sql.NullInt64{}, "", false, err
 		}
 		return parent, name, true, nil
+	}, source: func(fileID int64) (string, bool, error) {
+		rows, err := qg.QueryRefs(sourceOfSQL+`?`, fileID)
+		if err != nil {
+			return "", false, err
+		}
+		defer func() { _ = rows.Close() }()
+		if !rows.Next() {
+			return "", false, rows.Err()
+		}
+		var id string
+		return id, true, rows.Scan(&id)
 	}}
 }
 
-func newRenderer(row func(nid int64) (*sql.Row, error)) *PathRenderer {
-	return &PathRenderer{memo: map[int64]string{}, hop: func(nid int64) (sql.NullInt64, string, bool, error) {
+func newRenderer(row, sourceRow func(id int64) (*sql.Row, error)) *PathRenderer {
+	return &PathRenderer{memo: map[int64]string{}, source: func(fileID int64) (string, bool, error) {
+		var id string
+		r, err := sourceRow(fileID)
+		if err != nil {
+			return "", false, err
+		}
+		if err := r.Scan(&id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return id, true, nil
+	}, hop: func(nid int64) (sql.NullInt64, string, bool, error) {
 		var parent sql.NullInt64
 		var name string
 		r, err := row(nid)
@@ -364,6 +460,23 @@ func (r *PathRenderer) Path(nid int64) (string, bool, error) {
 	}
 	r.memo[nid] = path
 	return path, true, nil
+}
+
+// OccurrencePath is the address a node_defs or node_refs row's nid is shown
+// by: its path, or, for an occurrence LLO numbers in a host file but stores no
+// node for (an injected language, ley-line-open-260fcf), injectedAddress, as
+// LLO's own wire shows it. ok is false only when the nid's file is not interned
+// either, so nothing anchors it.
+func (r *PathRenderer) OccurrencePath(nid int64) (string, bool, error) {
+	path, ok, err := r.Path(nid)
+	if err != nil || ok || nid < 1<<V6FileShift {
+		return path, ok, err
+	}
+	source, ok, err := r.source(nid >> V6FileShift)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return injectedAddress(source, nid), true, nil
 }
 
 // ParsedSourceLike reports whether any source file whose id matches the SQL

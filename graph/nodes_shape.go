@@ -71,10 +71,13 @@ func (s *v6Shape) ids(cols []any) ([]string, error) {
 	return out, nil
 }
 
-// idFunc returns the conversion from one node-id column to a node id: the
-// column itself, or the path of the nid it holds. On v6 it shares one
-// renderer across every call, so a batch names each shared ancestor once;
-// take a fresh one per batch.
+// idFunc returns the conversion from one node_defs or node_refs node column to
+// a node id: the column itself, or the address of the nid it holds — its path,
+// or, for an occurrence in an injected language that LLO stores no node for,
+// the file-anchored address LLO's own wire gives it, as v4 also named those
+// occurrences rather than dropping them (lloschema.OccurrencePath). On v6 it
+// shares one renderer across every call, so a batch names each shared
+// ancestor once; take a fresh one per batch.
 func (s *v6Shape) idFunc() func(col any) (string, bool, error) {
 	if s == nil {
 		return func(col any) (string, bool, error) {
@@ -88,7 +91,7 @@ func (s *v6Shape) idFunc() func(col any) (string, bool, error) {
 		if !ok {
 			return "", false, nil
 		}
-		return r.Path(nid)
+		return r.OccurrencePath(nid)
 	}
 }
 

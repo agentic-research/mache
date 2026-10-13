@@ -65,6 +65,18 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Markdown code spans and SQL in strings are found again on a
+  projection-v6 `.db`** (`mache-0a5e4c`). leyline indexes references inside
+  an injected language (a code span in markdown, SQL inside a Go string) but
+  stores no node for them (`ley-line-open-260fcf`). projection-v4 named such
+  an occurrence by a path of its own, and every lookup returned it; on v6 it
+  has only a number, and mache dropped it, so `search`, callers, communities
+  and diagrams lost them (10,281 of 153,695 references on mache's own parse),
+  and `drift_doc_*` findings lost their `node_id`. Such an occurrence is now
+  named as leyline's own daemon names it, `<file>#inj@<ordinal>`
+  (`docs/adr/0004.md#inj@57`), and an id in that form resolves back. It is a
+  reference, not a node: `read_file` cannot open it, as on v4.
+
 - **`callers/` and `_schema.json` answer over MCP on a projection-v6 `.db`**
   (`mache-abaf17`). Serving a `.db` used to write them into it as rows first,
   and mache does not write into a v6 arena, so on one `list_directory`

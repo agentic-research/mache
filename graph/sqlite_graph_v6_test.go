@@ -174,19 +174,16 @@ func TestSQLiteGraphLookups_RealProjectionV6(t *testing.T) {
 	defer func() { _ = g.Close() }()
 	require.NotNil(t, g.shape())
 
-	// Rows whose nid has no node are dropped by design: they name nothing a
-	// consumer can open. A v0.20.3 parse writes such rows for languages
-	// injected into string literals (SQL inside Go), whose nodes it does not
-	// store (ley-line-open-260fcf), so the count to
-	// match is the rows that DO name a node.
-	count := func(table string) int {
-		var n, dangling int
-		require.NoError(t, g.db.QueryRow(`SELECT count(*) FROM `+table+` r
-			WHERE EXISTS (SELECT 1 FROM nodes n WHERE n.nid = r.nid)`).Scan(&n))
+	// A v0.20.3 parse writes rows for languages injected into string literals
+	// and markdown (SQL inside Go, code spans), whose nodes it does not store
+	// (ley-line-open-260fcf). They are named as LLO's wire names them, so
+	// every row comes back; only a stored node can be opened.
+	count := func(table string) (all, dangling int) {
+		require.NoError(t, g.db.QueryRow(`SELECT count(*) FROM `+table).Scan(&all))
 		require.NoError(t, g.db.QueryRow(`SELECT count(*) FROM `+table+` r
 			WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.nid = r.nid)`).Scan(&dangling))
-		t.Logf("%s: %d rows name a node, %d do not", table, n, dangling)
-		return n
+		t.Logf("%s: %d rows, %d naming no stored node", table, all, dangling)
+		return all, dangling
 	}
 	total := func(m map[string][]string) int {
 		n := 0
@@ -198,15 +195,59 @@ func TestSQLiteGraphLookups_RealProjectionV6(t *testing.T) {
 	start := time.Now()
 	refs := g.refsMapFromNodesTable() // RefsMap minus the sentinel filter, which v6 rows never match
 	t.Logf("rendered %d reference sites in %s", total(refs), time.Since(start))
-	assert.Equal(t, count("node_refs"), total(refs))
+	refRows, _ := count("node_refs")
+	assert.Equal(t, refRows, total(refs))
 
 	defs := g.DefsMap()
-	assert.Equal(t, count("node_defs"), total(defs))
+	defRows, danglingDefs := count("node_defs")
+	assert.Equal(t, defRows, total(defs))
+	unopenable := 0
 	for _, ids := range defs {
 		for _, id := range ids {
 			n, err := g.GetNode(id)
-			require.NoError(t, err, id)
+			if err != nil {
+				unopenable++
+				continue
+			}
 			require.NotNil(t, n.Origin, "%s: a definition is located", id)
 		}
+	}
+	assert.Equal(t, danglingDefs, unopenable, "only the injected definitions are not nodes")
+}
+
+// An occurrence in an injected language (a markdown code span) is a reference
+// leyline indexes but stores no node for (ley-line-open-260fcf). v4 named it
+// by a path of its own and every lookup returned it; v6 has only a nid, and
+// lookups used to drop it, so markdown code spans vanished from search,
+// callers and communities. It is now named as LLO's wire names it, and found
+// by every lookup on both projections, each under its own projection's name.
+func TestSQLiteGraph_InjectedOccurrencesAreFoundOnBothProjections(t *testing.T) {
+	open := func(p fixturedb.Producer) *SQLiteGraph {
+		b := fixturedb.New(t, p)
+		b.Source("doc.md", "markdown", "")
+		b.ASTNode("doc.md", "document", "doc.md", fixturedb.Bytes(0, 100))
+		b.ASTNode("doc.md/section", "section", "doc.md", fixturedb.Bytes(0, 100))
+		b.InjectedRef("Bead", "doc.md/section", "code_span")
+		path, _ := b.Build()
+		g, err := OpenSQLiteGraph(path, &api.Topology{Version: api.SchemaVersion}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = g.Close() })
+		return g
+	}
+	want := map[fixturedb.Producer]string{
+		fixturedb.Leyline:   "doc.md/section#inj0/code_span",
+		fixturedb.LeylineV6: "doc.md#inj@2",
+	}
+	for p, id := range want {
+		g := open(p)
+		assert.Equal(t, []string{id}, g.RefsMap()["Bead"], "%v: RefsMap", p)
+		hits, err := g.SearchRefs("Bead", "", 10)
+		require.NoError(t, err)
+		require.Len(t, hits, 1, "%v: SearchRefs", p)
+		assert.Equal(t, id, hits[0].ID, "%v", p)
+		callers, err := g.GetCallers("Bead")
+		require.NoError(t, err)
+		require.Len(t, callers, 1, "%v: GetCallers", p)
+		assert.Equal(t, id, callers[0].ID, "%v", p)
 	}
 }
