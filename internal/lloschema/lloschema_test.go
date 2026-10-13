@@ -11,15 +11,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// sqlQuerier adapts a *sql.DB to Querier. Deliberately not importing a graph
-// backend: this package must be testable without one, which is the same
-// property that lets `graph` depend on it.
-type sqlQuerier struct{ db *sql.DB }
-
-func (q sqlQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	return q.db.Query(query, args...)
-}
-
 // Moved here with its function (mache-be17ce). It predates this package and
 // already documented the table_xinfo rationale below — which is worth saying
 // plainly: that trap was known and guarded, and this test is what would have
@@ -43,7 +34,7 @@ func TestTableHasColumn(t *testing.T) {
 	)`)
 	require.NoError(t, err)
 
-	qg := sqlQuerier{db: db}
+	qg := DB(db)
 
 	// Existing table, existing column.
 	got, err := TableHasColumn(qg, "present", "a")

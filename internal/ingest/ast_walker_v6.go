@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"database/sql"
 	"fmt"
 	"path"
 
@@ -105,11 +104,4 @@ func (w *ASTWalker) loadFileIndexV6(sourceID string) (*fileIndex, error) {
 		return nil, fmt.Errorf("file index for %s: %w", sourceID, err)
 	}
 	return idx, nil
-}
-
-// sqlDB lets a *sql.DB answer lloschema's Querier.
-type sqlDB struct{ *sql.DB }
-
-func (d sqlDB) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	return d.Query(query, args...)
 }

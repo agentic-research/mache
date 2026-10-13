@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
+	machetmpl "github.com/agentic-research/mache/internal/template"
+
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/require"
@@ -49,6 +52,42 @@ func buildLeylineRustASTFixture(t *testing.T) *testutil.SmellTestGraph {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
+	seedRustAncestry(t, db, fileID, freeFn, implID, declList, methodFn)
+
+	// node_defs mirrors the in-memory defs so the fixture is faithful to
+	// a real SQLiteGraph (which resolves defs from this table). Both
+	// `parse` defs ALSO call `helper`, so the same two leyline-shaped
+	// node_ids exercise the find_callers kind filter (function-caller
+	// vs method-caller).
+	store := graph.NewMemoryStore()
+	for _, id := range []string{freeFn, methodFn} {
+		// AddRoot registers the node so GetCallers can return it by ID.
+		store.AddRoot(&graph.Node{ID: id, Mode: fs.ModeDir, Children: []string{}})
+		require.NoError(t, store.AddDef("parse", id))
+		require.NoError(t, store.AddRef("helper", id))
+		_, err = db.Exec("INSERT INTO node_defs (token, node_id) VALUES ('parse', ?)", id)
+		require.NoError(t, err)
+	}
+
+	return &testutil.SmellTestGraph{MemoryStore: store, DB: db, Path: dbPath, ASTKinds: openKinds(t, dbPath)}
+}
+
+// openKinds opens the production SQLiteGraph over dbPath for its ASTKinder:
+// the kinds the filter reads come from the real query, on either projection.
+func openKinds(t *testing.T, dbPath string) graph.ASTKinder {
+	t.Helper()
+	sg, err := graph.OpenSQLiteGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, machetmpl.Render)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sg.Close() })
+	return sg
+}
+
+// seedRustAncestry writes the nodes, _ast and node_defs tables of the Rust
+// fixture: the parent chain (file -> impl_item -> declaration_list -> fn)
+// and each node's tree-sitter kind.
+func seedRustAncestry(t *testing.T, db *sql.DB, fileID, freeFn, implID, declList, methodFn string) {
+	t.Helper()
+	var err error
 	_, err = db.Exec(`
 		CREATE TABLE nodes (
 			id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
@@ -98,23 +137,6 @@ func buildLeylineRustASTFixture(t *testing.T) *testutil.SmellTestGraph {
 			r.id, r.kind)
 		require.NoError(t, err)
 	}
-
-	// node_defs mirrors the in-memory defs so the fixture is faithful to
-	// a real SQLiteGraph (which resolves defs from this table). Both
-	// `parse` defs ALSO call `helper`, so the same two leyline-shaped
-	// node_ids exercise the find_callers kind filter (function-caller
-	// vs method-caller).
-	store := graph.NewMemoryStore()
-	for _, id := range []string{freeFn, methodFn} {
-		// AddRoot registers the node so GetCallers can return it by ID.
-		store.AddRoot(&graph.Node{ID: id, Mode: fs.ModeDir, Children: []string{}})
-		require.NoError(t, store.AddDef("parse", id))
-		require.NoError(t, store.AddRef("helper", id))
-		_, err = db.Exec("INSERT INTO node_defs (token, node_id) VALUES ('parse', ?)", id)
-		require.NoError(t, err)
-	}
-
-	return &testutil.SmellTestGraph{MemoryStore: store, DB: db, Path: dbPath}
 }
 
 // TestKindDiscriminator_LeylineAST_FindDefinition is the regression
@@ -175,9 +197,14 @@ func TestResolveKindFromAST_EdgeCases(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
+	// The _ast columns are the ones every ley-line _ast carries; the kinds
+	// are read through lloschema.ASTSelect, which selects them all. A cycle
+	// cannot be declared through fixturedb, hence the hand-written DDL.
 	_, err = db.Exec(`
 		CREATE TABLE nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind INTEGER NOT NULL DEFAULT 0);
-		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL, start_byte INTEGER NOT NULL DEFAULT 0, end_byte INTEGER NOT NULL DEFAULT 0);
+		CREATE TABLE _ast (node_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, node_kind TEXT NOT NULL,
+			start_byte INTEGER NOT NULL DEFAULT 0, end_byte INTEGER NOT NULL DEFAULT 0,
+			start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER);
 	`)
 	require.NoError(t, err)
 
@@ -194,7 +221,7 @@ func TestResolveKindFromAST_EdgeCases(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO _ast (node_id, source_id, node_kind) VALUES ('sig','f.rs','function_signature_item')`)
 	require.NoError(t, err)
 
-	g := &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db, Path: dbPath}
+	g := openKinds(t, dbPath)
 
 	require.Equal(t, "function", resolveKindFromAST(g, "A"),
 		"cyclic parent_id must terminate (depth cap) and resolve by own node_kind")

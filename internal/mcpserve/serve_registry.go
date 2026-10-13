@@ -1204,6 +1204,21 @@ func (lg *lazyGraph) LookupDef(token string) []string {
 	return out
 }
 
+// ASTKindChain forwards graph.ASTKinder to the base graph, which is what the
+// kind filter reads (as QueryRefs, which it also uses, does). A base that
+// is not an ASTKinder has no AST: no chain.
+func (lg *lazyGraph) ASTKindChain(id string) ([]string, bool, error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil, false, err
+	}
+	ak, ok := g.(graph.ASTKinder)
+	if !ok {
+		return nil, false, nil
+	}
+	return ak.ASTKindChain(id)
+}
+
 // SearchDefs forwards the optional graph.DefsSearcher interface so
 // `search role=definition` can use a SQL-pushdown when the inner
 // backend supports it. Mirrors LookupDef's passthrough shape.

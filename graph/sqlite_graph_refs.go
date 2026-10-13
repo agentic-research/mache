@@ -61,20 +61,15 @@ func (g *SQLiteGraph) DefsMap() map[string][]string {
 	if !g.useNodesTable || g.db == nil {
 		return cp
 	}
-	rows, err := g.db.Query("SELECT token, node_id FROM node_defs")
+	pairs, err := g.queryTokenIDs("SELECT token, " + g.shape().defNode() + " FROM node_defs")
 	if err != nil {
 		return cp
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var token, nodeID string
-		if scanErr := rows.Scan(&token, &nodeID); scanErr != nil {
+	for _, p := range pairs {
+		if _, fromMemory := inMemoryTokens[p.token]; fromMemory {
 			continue
 		}
-		if _, fromMemory := inMemoryTokens[token]; fromMemory {
-			continue
-		}
-		cp[token] = append(cp[token], nodeID)
+		cp[p.token] = append(cp[p.token], p.id)
 	}
 	return cp
 }
@@ -111,24 +106,19 @@ func (g *SQLiteGraph) SearchDefs(pattern string, limit int) map[string][]string 
 	if !g.useNodesTable || g.db == nil {
 		return out
 	}
-	rows, err := g.db.Query(
-		"SELECT token, node_id FROM node_defs WHERE token LIKE ? LIMIT ?",
+	pairs, err := g.queryTokenIDs(
+		"SELECT token, "+g.shape().defNode()+" FROM node_defs WHERE token LIKE ? LIMIT ?",
 		pattern, limit-len(out),
 	)
 	if err != nil {
 		return out
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var token, nodeID string
-		if scanErr := rows.Scan(&token, &nodeID); scanErr != nil {
-			continue
-		}
+	for _, p := range pairs {
 		// In-memory had precedence — don't override an existing entry.
-		if _, exists := out[token]; exists {
+		if _, exists := out[p.token]; exists {
 			continue
 		}
-		out[token] = append(out[token], nodeID)
+		out[p.token] = append(out[p.token], p.id)
 		if len(out) >= limit {
 			return out
 		}
@@ -196,16 +186,14 @@ func (g *SQLiteGraph) LookupDef(token string) []string {
 	if !g.useNodesTable || g.db == nil {
 		return nil
 	}
-	rows, err := g.db.Query("SELECT node_id FROM node_defs WHERE token = ?", token)
+	ids, err := g.queryIDs("SELECT "+g.shape().defNode()+" FROM node_defs WHERE token = ?", token)
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = rows.Close() }()
 	var dirIDs []string
-	for rows.Next() {
-		var dirID string
-		if scanErr := rows.Scan(&dirID); scanErr == nil && dirID != "" {
-			dirIDs = append(dirIDs, dirID)
+	for _, id := range ids {
+		if id != "" {
+			dirIDs = append(dirIDs, id)
 		}
 	}
 	return dirIDs
@@ -420,19 +408,13 @@ func (g *SQLiteGraph) RefsMap() map[string][]string {
 }
 
 func (g *SQLiteGraph) refsMapFromNodesTable() map[string][]string {
-	rows, err := g.db.Query("SELECT token, node_id FROM node_refs")
+	pairs, err := g.queryTokenIDs("SELECT token, " + g.shape().refSite() + " FROM node_refs")
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = rows.Close() }()
-
 	refs := map[string][]string{}
-	for rows.Next() {
-		var token, nodeID string
-		if err := rows.Scan(&token, &nodeID); err != nil {
-			continue
-		}
-		refs[token] = append(refs[token], nodeID)
+	for _, p := range pairs {
+		refs[p.token] = append(refs[p.token], p.id)
 	}
 	return refs
 }

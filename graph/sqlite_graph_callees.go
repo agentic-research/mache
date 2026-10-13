@@ -99,81 +99,100 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	}
 
 	if !scoped && len(qcalls) == 0 {
-		// 1. Find the "source" file child
-		children, err := g.ListChildren(id)
+		calls, err := g.callsFromSourceChild(id, langName)
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
-
-		var sourceID string
-		for _, child := range children {
-			base := filepath.Base(child)
-			if base == "source" {
-				// Both backends now return full paths from ListChildren —
-				// SQLiteGraph forwards to NodesTableReader which selects the
-				// `id` column (full path); the sidecar path also stores full
-				// paths in dirChildren. Earlier this branch concatenated
-				// `id + "/" + child` for useNodesTable assuming bare names —
-				// produced "leyline/methods/SendOp/leyline/methods/SendOp/source"
-				// and made find_callees silently return [] for every construct
-				// on a pre-built .db. Bead mache-9ca6af root cause.
-				sourceID = child
-				break
-			}
-		}
-		if sourceID == "" {
-			return nil, nil
-		}
-
-		// node_refs fallback (bead mache-6fbaf1): a `mache build --schema`
-		// .db has no live `_ast` table (retaining it for a whole repo costs
-		// 228MB+162MB — prohibitive), so pickScopedCallExtractor/
-		// pickCallExtractor above wire up nil/no-op extractors and the
-		// content-based path below would silently return [] every time.
-		// node_refs(token, node_id) already holds every call token
-		// ScopeCalls found for this construct at projection time
-		// (engine_walk.go), keyed by the construct's "source" file node id
-		// — resolve straight from there instead.
-		if g.useNodesTable {
-			tokens, rerr := g.calleeTokensFromRefs(sourceID)
-			if rerr != nil {
-				return nil, rerr
-			}
-			for _, tok := range tokens {
-				qcalls = append(qcalls, QualifiedCall{Token: tok})
-			}
-		}
-
-		if len(qcalls) == 0 {
-			// 2. Read content
-			segments := strings.Split(sourceID, "/")
-			_, fileLeaf := g.walkSchema(segments)
-
-			if fileLeaf == nil && !g.useNodesTable {
-				return nil, nil
-			}
-
-			content, err := g.resolveContent(sourceID, segments, fileLeaf)
-			if err != nil {
-				return nil, nil
-			}
-
-			// 3. Extract qualified calls
-			if g.extractor == nil {
-				return nil, nil
-			}
-			calls, err := g.extractor(content, sourceID, langName)
-			if err != nil {
-				return nil, fmt.Errorf("extract calls: %w", err)
-			}
-			qcalls = calls
-		}
+		qcalls = calls
 	}
 	if len(qcalls) == 0 {
 		return nil, nil
 	}
 
 	// 5. Resolve tokens to definition nodes (qualified → bare → SQL fallback)
+	return g.resolveCallees(id, qcalls), nil
+}
+
+// callsFromSourceChild finds the calls of the construct at id through its
+// "source" file child: node_refs keyed by that child, else the legacy
+// content-based extractor. nil when the construct has no such child.
+func (g *SQLiteGraph) callsFromSourceChild(id, langName string) ([]QualifiedCall, error) {
+	var qcalls []QualifiedCall
+	// 1. Find the "source" file child
+	children, err := g.ListChildren(id)
+	if err != nil {
+		return nil, nil
+	}
+
+	var sourceID string
+	for _, child := range children {
+		base := filepath.Base(child)
+		if base == "source" {
+			// Both backends now return full paths from ListChildren —
+			// SQLiteGraph forwards to NodesTableReader which selects the
+			// `id` column (full path); the sidecar path also stores full
+			// paths in dirChildren. Earlier this branch concatenated
+			// `id + "/" + child` for useNodesTable assuming bare names —
+			// produced "leyline/methods/SendOp/leyline/methods/SendOp/source"
+			// and made find_callees silently return [] for every construct
+			// on a pre-built .db. Bead mache-9ca6af root cause.
+			sourceID = child
+			break
+		}
+	}
+	if sourceID == "" {
+		return nil, nil
+	}
+
+	// node_refs fallback (bead mache-6fbaf1): a `mache build --schema`
+	// .db has no live `_ast` table (retaining it for a whole repo costs
+	// 228MB+162MB — prohibitive), so pickScopedCallExtractor/
+	// pickCallExtractor above wire up nil/no-op extractors and the
+	// content-based path below would silently return [] every time.
+	// node_refs(token, node_id) already holds every call token
+	// ScopeCalls found for this construct at projection time
+	// (engine_walk.go), keyed by the construct's "source" file node id
+	// — resolve straight from there instead.
+	if g.useNodesTable {
+		tokens, rerr := g.calleeTokensFromRefs(sourceID)
+		if rerr != nil {
+			return nil, rerr
+		}
+		for _, tok := range tokens {
+			qcalls = append(qcalls, QualifiedCall{Token: tok})
+		}
+	}
+
+	if len(qcalls) == 0 {
+		// 2. Read content
+		segments := strings.Split(sourceID, "/")
+		_, fileLeaf := g.walkSchema(segments)
+
+		if fileLeaf == nil && !g.useNodesTable {
+			return nil, nil
+		}
+
+		content, err := g.resolveContent(sourceID, segments, fileLeaf)
+		if err != nil {
+			return nil, nil
+		}
+
+		// 3. Extract qualified calls
+		if g.extractor == nil {
+			return nil, nil
+		}
+		calls, err := g.extractor(content, sourceID, langName)
+		if err != nil {
+			return nil, fmt.Errorf("extract calls: %w", err)
+		}
+		qcalls = calls
+	}
+	return qcalls, nil
+}
+
+// resolveCallees resolves call tokens to definition nodes: qualified, then
+// bare, against the in-memory defs, then through the database.
+func (g *SQLiteGraph) resolveCallees(id string, qcalls []QualifiedCall) []*Node {
 	var nodes []*Node
 	seen := make(map[string]bool)
 
@@ -210,17 +229,15 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 			}
 			// SQL fallback: node_defs table (pre-built DBs)
 			if !resolved && g.useNodesTable {
-				rows, qErr := g.db.Query("SELECT node_id FROM node_defs WHERE token = ?", qualKey)
+				defIDs, qErr := g.queryIDs("SELECT "+g.shape().defNode()+" FROM node_defs WHERE token = ?", qualKey)
 				if qErr == nil {
-					for rows.Next() {
-						var defID string
-						if rows.Scan(&defID) == nil && defID != id && !seen[defID] {
+					for _, defID := range defIDs {
+						if defID != id && !seen[defID] {
 							seen[defID] = true
 							nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
 							resolved = true
 						}
 					}
-					_ = rows.Close()
 				}
 			}
 			if resolved {
@@ -247,54 +264,70 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 
 		// SQL fallback: node_defs then nodes table
 		if g.useNodesTable {
-			var defID string
-			err := g.db.QueryRow("SELECT node_id FROM node_defs WHERE token = ? LIMIT 1", qc.Token).Scan(&defID)
-			if err == nil && defID != id && !seen[defID] {
-				seen[defID] = true
-				nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
-				continue
-			}
-
-			// Suffix-match fallback for receiver-method calls (bead
-			// mache-9ca6af). A call like `c.sendRaw(...)` extracts as
-			// the bare token "sendRaw"; node_defs has it only as the
-			// qualified form "SocketClient.sendRaw". Bare lookup above
-			// misses. If there's exactly ONE "*.token" entry in
-			// node_defs, that's our target — unambiguous resolution
-			// for the receiver case. >1 matches means ambiguous (two
-			// types both define a method of this name) — skip rather
-			// than guess wrongly. LIMIT 2 detects ambiguity cheaply.
-			rows, qErr := g.db.Query(
-				"SELECT node_id FROM node_defs WHERE token LIKE ? LIMIT 2",
-				"%."+qc.Token,
-			)
-			if qErr == nil {
-				var candidates []string
-				for rows.Next() {
-					var nodeID string
-					if scanErr := rows.Scan(&nodeID); scanErr == nil && nodeID != id {
-						candidates = append(candidates, nodeID)
-					}
-				}
-				_ = rows.Close()
-				if len(candidates) == 1 && !seen[candidates[0]] {
-					seen[candidates[0]] = true
-					nodes = append(nodes, &Node{ID: candidates[0], Mode: os.ModeDir | 0o555})
-					continue
-				}
-			}
-
-			// Final fallback: name match in nodes table
-			// kind = 1 → graph.NodeKindDir (definition constructs are dirs).
-			err = g.db.QueryRow("SELECT id FROM nodes WHERE name = ? AND kind = 1 LIMIT 1", qc.Token).Scan(&defID)
-			if err == nil && defID != id && !seen[defID] {
-				seen[defID] = true
-				nodes = append(nodes, &Node{ID: defID, Mode: os.ModeDir | 0o555})
+			if n := g.calleeFromDB(id, qc, seen); n != nil {
+				nodes = append(nodes, n)
 			}
 		}
 	}
 
-	return nodes, nil
+	return nodes
+}
+
+// calleeFromDB resolves one call token through the database when the
+// in-memory defs did not: node_defs by exact token, then a unique "*.token"
+// suffix match, then, on a path-keyed projection, a construct named after
+// it. nil when none resolves.
+func (g *SQLiteGraph) calleeFromDB(id string, qc QualifiedCall, seen map[string]bool) *Node {
+	first, err := g.queryIDs("SELECT "+g.shape().defNode()+" FROM node_defs WHERE token = ? LIMIT 1", qc.Token)
+	if err == nil && len(first) == 1 && first[0] != id && !seen[first[0]] {
+		seen[first[0]] = true
+		return &Node{ID: first[0], Mode: os.ModeDir | 0o555}
+	}
+
+	// Suffix-match fallback for receiver-method calls (bead
+	// mache-9ca6af). A call like `c.sendRaw(...)` extracts as
+	// the bare token "sendRaw"; node_defs has it only as the
+	// qualified form "SocketClient.sendRaw". Bare lookup above
+	// misses. If there's exactly ONE "*.token" entry in
+	// node_defs, that's our target — unambiguous resolution
+	// for the receiver case. >1 matches means ambiguous (two
+	// types both define a method of this name) — skip rather
+	// than guess wrongly. LIMIT 2 detects ambiguity cheaply.
+	matched, qErr := g.queryIDs(
+		"SELECT "+g.shape().defNode()+" FROM node_defs WHERE token LIKE ? LIMIT 2",
+		"%."+qc.Token,
+	)
+	if qErr == nil {
+		var candidates []string
+		for _, nodeID := range matched {
+			if nodeID != id {
+				candidates = append(candidates, nodeID)
+			}
+		}
+		if len(candidates) == 1 && !seen[candidates[0]] {
+			seen[candidates[0]] = true
+			return &Node{ID: candidates[0], Mode: os.ModeDir | 0o555}
+		}
+	}
+
+	// Final fallback: name match in nodes table
+	// kind = 1 → graph.NodeKindDir (definition constructs are dirs).
+	//
+	// Not on projection-v6. The match finds definitions only where a
+	// construct directory is named after its symbol, which is mache's
+	// own schema projection. An LLO parse names nodes after kinds,
+	// directories and files, and v6 stores a name only for the last
+	// two, so the fallback could never find a definition there.
+	if g.shape() != nil {
+		return nil
+	}
+	var defID string
+	err = g.db.QueryRow("SELECT id FROM nodes WHERE name = ? AND kind = 1 LIMIT 1", qc.Token).Scan(&defID)
+	if err == nil && defID != id && !seen[defID] {
+		seen[defID] = true
+		return &Node{ID: defID, Mode: os.ModeDir | 0o555}
+	}
+	return nil
 }
 
 // calleeTokensFromRefs returns the call tokens node_refs recorded for
@@ -325,10 +358,18 @@ func (g *SQLiteGraph) calleeTokensFromContainer(nodeID string) ([]string, error)
 	// and must surface. Swallowing both alike would make a transient DB fault
 	// read as "this function calls nothing" — which is precisely what
 	// calleeTokensFromRefs' doc comment, three functions below, warns against.
-	if !ColumnExists(g.db, "node_refs", "container_node_id") {
+	container := g.shape().refContainer()
+	if !ColumnExists(g.db, "node_refs", container) {
 		return nil, nil
 	}
-	rows, err := g.db.Query("SELECT DISTINCT token FROM node_refs WHERE container_node_id = ?", nodeID)
+	key, ok, err := g.key(nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("query callee tokens for %s: %w", nodeID, err)
+	}
+	if !ok {
+		return nil, nil
+	}
+	rows, err := g.db.Query("SELECT DISTINCT token FROM node_refs WHERE "+container+" = ?", key)
 	if err != nil {
 		return nil, fmt.Errorf("query callee tokens for %s: %w", nodeID, err)
 	}
@@ -346,7 +387,14 @@ func (g *SQLiteGraph) calleeTokensFromContainer(nodeID string) ([]string, error)
 }
 
 func (g *SQLiteGraph) calleeTokensFromRefs(sourceID string) ([]string, error) {
-	rows, err := g.db.Query("SELECT token FROM node_refs WHERE node_id = ?", sourceID)
+	key, ok, err := g.key(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("query node_refs for %s: %w", sourceID, err)
+	}
+	if !ok {
+		return nil, nil
+	}
+	rows, err := g.db.Query("SELECT token FROM node_refs WHERE "+g.shape().refSite()+" = ?", key)
 	if err != nil {
 		return nil, fmt.Errorf("query node_refs for %s: %w", sourceID, err)
 	}

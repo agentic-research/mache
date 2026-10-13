@@ -357,19 +357,13 @@ func (r *NodesTableReader) GetCallers(token string) ([]*Node, error) {
 	}
 	_ = rows.Close()
 
-	var nodes []*Node
-	for _, col := range cols {
-		nodeID, ok, err := r.shape.idOf(col)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		nodes = append(nodes, &Node{
-			ID:   nodeID,
-			Mode: r.fileMode,
-		})
+	ids, err := r.shape.ids(cols)
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]*Node, 0, len(ids))
+	for _, id := range ids {
+		nodes = append(nodes, &Node{ID: id, Mode: r.fileMode})
 	}
 	return nodes, nil
 }

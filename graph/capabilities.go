@@ -109,6 +109,18 @@ type RefResolver interface {
 	ResolveRef(nodeID string) (*RefTarget, error)
 }
 
+// ASTKinder reports the tree-sitter kinds of a node and its ancestors: the
+// question a kind filter asks ("is this a function, and is it inside a
+// class?"). It exists so the asker does not spell the producer's columns,
+// which projection-v6 renamed: _ast and nodes are keyed by node_id/id on v4
+// and by nid on v6 (mache-90cb9f).
+type ASTKinder interface {
+	// ASTKindChain returns the kind of the node at id, followed by the kinds
+	// of those of its ancestors that have one, nearest first. ok is false
+	// when the node itself has no _ast row.
+	ASTKindChain(id string) (chain []string, ok bool, err error)
+}
+
 // DefsNodeLookuper is [DefsLookuper]'s node-returning twin, for consumers that
 // want the definition itself rather than its id.
 //

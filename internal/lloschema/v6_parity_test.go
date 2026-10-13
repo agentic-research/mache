@@ -37,7 +37,7 @@ func paritySpec(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
 	b.Ref("Greet", "main.go/function_declaration", "", "pkg")
 	b.Ref("helper", "pkg/a.go/function_declaration_0", "", "")
 	_, f := b.Build()
-	require.NoError(t, EnsureViews(sqlQuerier{db: f.DB()}))
+	require.NoError(t, EnsureViews(DB(f.DB())))
 	return f
 }
 

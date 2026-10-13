@@ -61,6 +61,16 @@ type Querier interface {
 	QueryRefs(query string, args ...any) (*sql.Rows, error)
 }
 
+// DB adapts a *sql.DB to Querier, for a caller holding the database itself
+// rather than a graph backend.
+func DB(db *sql.DB) Querier { return sqlDB{db} }
+
+type sqlDB struct{ db *sql.DB }
+
+func (d sqlDB) QueryRefs(query string, args ...any) (*sql.Rows, error) {
+	return d.db.Query(query, args...)
+}
+
 // exec runs a statement for its side effect, closing the rowset the Querier
 // interface forces it to return.
 func exec(qg Querier, stmt string) error {

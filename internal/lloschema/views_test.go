@@ -28,7 +28,7 @@ func TestEnsureViews_InstallsTheVocabulary(t *testing.T) {
 	b.Def("Alpha", "pkg/a.go/function_declaration_0", fixturedb.Function)
 	_, f := b.Build()
 
-	qg := sqlQuerier{db: f.DB()}
+	qg := DB(f.DB())
 	require.NoError(t, EnsureViews(qg), "a second install on the same connection must be safe")
 
 	// Each view must exist AND carry the stable column names, because the
@@ -63,7 +63,7 @@ func TestEnsureViews_InstallsTheVocabulary(t *testing.T) {
 func TestASTSelect_SameRowsFromProjectionV4AndV6(t *testing.T) {
 	rowsOf := func(p fixturedb.Producer) []string {
 		f := paritySpec(t, p)
-		body, err := ASTSelect(sqlQuerier{db: f.DB()})
+		body, err := ASTSelect(DB(f.DB()))
 		require.NoError(t, err)
 		require.NotEmpty(t, body)
 		rows, err := f.DB().Query(`SELECT source_id, node_kind, start_byte, end_byte FROM (` + body + `)`)
@@ -86,7 +86,7 @@ func TestASTSelect_SameRowsFromProjectionV4AndV6(t *testing.T) {
 
 	// A mache projection has no _ast: nothing to select, said as "".
 	_, standalone := fixturedb.New(t, fixturedb.Standalone).Construct("a.go/F").Build()
-	body, err := ASTSelect(sqlQuerier{db: standalone.DB()})
+	body, err := ASTSelect(DB(standalone.DB()))
 	require.NoError(t, err)
 	assert.Empty(t, body)
 }

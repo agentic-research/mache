@@ -317,3 +317,41 @@ func TestV6FileNids_SelectsOneFile(t *testing.T) {
 		}
 	}
 }
+
+// A renderer gives every node the path Path gives it, and pays for each
+// ancestor once: rendering a node whose parent it already rendered costs one
+// statement, however deep the node is.
+func TestPathRenderer_AgreesWithPathAndRendersEachAncestorOnce(t *testing.T) {
+	f := v6PathsSpec(t)
+	want := allNodes(t, f.DB())
+	p := NewV6Paths(f.DB())
+	defer p.Close()
+	r := p.Renderer()
+	for nid, path := range want {
+		got, ok, err := r.Path(nid)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, path, got, "nid %d", nid)
+	}
+	_, ok, err := r.Path(1 << 40)
+	require.NoError(t, err)
+	assert.False(t, ok, "a nid with no row has no path")
+
+	sqlcount.RegisterDriver()
+	db, err := sql.Open(sqlcount.DriverName, f.DBPath()+"?mode=ro")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	cp := NewV6Paths(db)
+	defer cp.Close()
+	cr := cp.Renderer()
+	deep := nidAt(t, cp, "pkg/a.go/function_declaration_1/block")
+	parent := nidAt(t, cp, "pkg/a.go/function_declaration_1")
+	_, _, err = cr.Path(parent) // renders the parent and every ancestor above it
+	require.NoError(t, err)
+	count := sqlcount.Reset()
+	got, ok, err := cr.Path(deep)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "pkg/a.go/function_declaration_1/block", got)
+	assert.Equal(t, int64(1), count(), "only the node itself is new; its ancestors are remembered")
+}
