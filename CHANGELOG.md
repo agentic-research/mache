@@ -20,17 +20,18 @@ bumps may include breaking changes.
   nodes, matches and calls as from projection-v4. So do definitions,
   references and callees (`find_definition`, `find_callers`, `find_callees`,
   `resolve_ref`, `search role=definition`, and the `kind` filter). Before,
-  these silently came back empty on such a `.db`. `find_smells` reads it too.
-  `long_function`, `long_file` and `magic_int_in_comparison` give the same
-  findings, content hashes included, as from projection-v4 of the same tree.
-  The eight built-in rules whose SQL treats node ids as paths
-  (`cyclomatic_complexity`, `duplicate_code`, `dead_code`, `god_file`,
-  `sleep_in_test`, `untested_function`, `duplicate_definitions`,
-  `fan_out_skew`) are refused on a projection-v6 `.db` with an error naming
-  `mache-2dc105`, rather than answering wrongly. `mache cache push` refuses
-  a projection-v6 `.db` with an error naming `mache-e64f36`, instead of
-  failing on a missing column. Its chunks carry projection-v4 `_ast`, and the
-  cache is moving to LLO's own arena rather than learning v6.
+  these silently came back empty on such a `.db`. `find_smells` reads it too:
+  every built-in rule gives the same findings, content hashes included, as
+  from projection-v4 of the same tree (`mache-2dc105`). Eight rules used to
+  read meaning into node ids as paths; they now ask the vocabulary instead,
+  which also makes `cyclomatic_complexity` and `duplicate_code` faster on
+  projection-v4 (8 s to 1 s and 15 s to 5 s on mache's own `internal/`). An
+  external rule that still reads ids as paths can say so (`PathShapedIDs`)
+  and is refused on a projection-v6 `.db` rather than answering wrongly.
+  `mache cache push` refuses a projection-v6 `.db` with an error naming
+  `mache-e64f36`, instead of failing on a missing column. Its chunks carry
+  projection-v4 `_ast`, and the cache is moving to LLO's own arena rather
+  than learning v6.
 
 ### Fixed
 

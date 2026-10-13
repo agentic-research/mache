@@ -1,12 +1,11 @@
 package smells
 
 import (
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/agentic-research/mache/internal/lloschema"
 
 	"github.com/agentic-research/mache/graph"
 )
@@ -68,8 +67,10 @@ func newSmellMemo() *smellMemo {
 // astFunc is one function occurrence read from _ast, before its metric is
 // resolved.
 type astFunc struct {
-	sourceID  string
-	nodeID    string
+	sourceID string
+	// key is the node as v_ast names it: a path on projection-v4, a nid on
+	// projection-v6. The finding renders it like any rule's (renderNodeIDs).
+	key       any
 	hashHex   string // "" when the producer wrote no node_hash (standalone db)
 	startByte int
 	endByte   int
@@ -94,7 +95,7 @@ func runCyclomaticComplexityMemo(qg graph.RefsQuerier, sourceID string, limit in
 	// memo; a hashless occurrence keys only itself (no dedup possible).
 	seenThisScan := make(map[string]bool) // node_hash hexes scheduled/available this scan
 	toCompute := make([]astFunc, 0)       // representatives needing the branch-count join
-	local := make(map[string]int64)       // node_id → metric, for hashless occurrences
+	local := make(map[any]int64)          // node key → metric, for hashless occurrences
 	for _, f := range funcs {
 		if f.hashHex != "" {
 			if _, ok := memo.metric[f.hashHex]; ok {
@@ -120,41 +121,17 @@ func runCyclomaticComplexityMemo(qg graph.RefsQuerier, sourceID string, limit in
 		return nil, err
 	}
 	for _, f := range toCompute {
-		m := computed[f.nodeID]
+		m := computed[f.key]
 		if f.hashHex != "" {
 			memo.metric[f.hashHex] = m
 		} else {
-			local[f.nodeID] = m
+			local[f.key] = m
 		}
 	}
 
-	// Build findings, resolving each occurrence's metric from the memo (hashed)
-	// or the per-occurrence local map (hashless).
-	out := make([]smellFinding, 0, len(funcs))
-	for _, f := range funcs {
-		var m int64
-		if f.hashHex != "" {
-			m = memo.metric[f.hashHex]
-		} else {
-			m = local[f.nodeID]
-		}
-		out = append(out, smellFinding{
-			RuleID:    cyclomaticRuleID,
-			SourceID:  f.sourceID,
-			NodeID:    f.nodeID,
-			StartByte: f.startByte,
-			EndByte:   f.endByte,
-			Line:      f.startRow + 1,
-			Column:    f.startCol + 1,
-			Metric:    m,
-			// The memo already knows each function's content address — it is
-			// the memo key. Carrying it here keeps this path byte-identical
-			// to the full scan (which enriches from _ast) and gives the
-			// ratchet the same refactor-invariant identity either way
-			// (mache-dd45a3). Empty on producers without node_hash, exactly
-			// as the enrichment leaves it.
-			NodeHash: f.hashHex,
-		})
+	out := memoFindings(funcs, memo, local)
+	if err := renderNodeIDs(qg, out); err != nil {
+		return nil, err
 	}
 
 	// Match the rule's ORDER BY metric DESC, source_id, start_byte. (source_id,
@@ -187,19 +164,45 @@ func runCyclomaticComplexityMemo(qg graph.RefsQuerier, sourceID string, limit in
 	return out, nil
 }
 
+// memoFindings builds one finding per function occurrence, its metric from
+// the memo (hashed) or the per-occurrence local map (hashless).
+func memoFindings(funcs []astFunc, memo *smellMemo, local map[any]int64) []smellFinding {
+	out := make([]smellFinding, 0, len(funcs))
+	for _, f := range funcs {
+		var m int64
+		if f.hashHex != "" {
+			m = memo.metric[f.hashHex]
+		} else {
+			m = local[f.key]
+		}
+		out = append(out, smellFinding{
+			RuleID:    cyclomaticRuleID,
+			SourceID:  f.sourceID,
+			key:       f.key,
+			StartByte: f.startByte,
+			EndByte:   f.endByte,
+			Line:      f.startRow + 1,
+			Column:    f.startCol + 1,
+			Metric:    m,
+			// The memo already knows each function's content address — it is
+			// the memo key. Carrying it here keeps this path byte-identical
+			// to the full scan (which enriches from _ast) and gives the
+			// ratchet the same refactor-invariant identity either way
+			// (mache-dd45a3). Empty on producers without node_hash, exactly
+			// as the enrichment leaves it.
+			NodeHash: f.hashHex,
+		})
+	}
+
+	return out
+}
+
 // scanASTFunctions reads every function/method occurrence from _ast, with its
 // node_hash (when the column exists) and span. Optionally scoped to one source.
 func scanASTFunctions(qg graph.RefsQuerier, sourceID string) ([]astFunc, error) {
-	hasHash, err := lloschema.TableHasColumn(qg, "_ast", "node_hash")
-	if err != nil {
-		return nil, fmt.Errorf("probe _ast.node_hash: %w", err)
-	}
-	hashExpr := "NULL"
-	if hasHash {
-		hashExpr = "node_hash"
-	}
-	q := "SELECT source_id, node_id, " + hashExpr +
-		", start_byte, end_byte, start_row, start_col FROM _ast" +
+	// Through the vocabulary, as the rule reads it, so both see the same
+	// functions with the same keys on either projection (mache-2dc105).
+	q := "SELECT source_id, node_id, node_hash, start_byte, end_byte, start_row, start_col FROM v_ast" +
 		" WHERE node_kind IN ('function_declaration','method_declaration')"
 	args := []any{}
 	if sourceID != "" {
@@ -219,7 +222,7 @@ func scanASTFunctions(qg graph.RefsQuerier, sourceID string) ([]astFunc, error) 
 			f    astFunc
 			hash []byte
 		)
-		if err := rows.Scan(&f.sourceID, &f.nodeID, &hash, &f.startByte, &f.endByte, &f.startRow, &f.startCol); err != nil {
+		if err := rows.Scan(&f.sourceID, &f.key, &hash, &f.startByte, &f.endByte, &f.startRow, &f.startCol); err != nil {
 			return nil, fmt.Errorf("scan _ast function: %w", err)
 		}
 		if len(hash) > 0 {
@@ -234,51 +237,32 @@ func scanASTFunctions(qg graph.RefsQuerier, sourceID string) ([]astFunc, error) 
 // occurrences (representatives of distinct subtrees) and returns node_id →
 // metric. Empty input is a no-op — the whole point of the memo is that a warm
 // re-run schedules nothing.
-func computeCyclomaticMetrics(qg graph.RefsQuerier, funcs []astFunc) (map[string]int64, error) {
-	out := make(map[string]int64, len(funcs))
+func computeCyclomaticMetrics(qg graph.RefsQuerier, funcs []astFunc) (map[any]int64, error) {
+	out := make(map[any]int64, len(funcs))
 	if len(funcs) == 0 {
 		return out, nil
 	}
 	kindList := "'" + strings.Join(cyclomaticBranchKinds, "','") + "'"
-	ids := make([]string, len(funcs))
+	keys := make([]any, len(funcs))
 	for i, f := range funcs {
-		ids[i] = f.nodeID
+		keys[i] = f.key
 	}
-	// Chunk the IN(...) list under SQLite's bound-variable limit.
-	for start := 0; start < len(ids); start += enrichLocChunk {
-		end := min(start+enrichLocChunk, len(ids))
-		batch := ids[start:end]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
-		q := "SELECT fn.node_id, COUNT(branch.node_id) AS metric FROM _ast fn" +
-			" LEFT JOIN _ast branch ON branch.source_id = fn.source_id" +
-			" AND branch.node_id LIKE fn.node_id || '/%'" +
-			" AND branch.node_kind IN (" + kindList + ")" +
-			" WHERE fn.node_id IN (" + placeholders + ")" +
-			" GROUP BY fn.node_id"
-		args := make([]any, len(batch))
-		for i, id := range batch {
-			args[i] = id
+	// The rule's count, one function at a time: the branch nodes inside its
+	// subtree extent.
+	cols := "(SELECT COUNT(*) FROM v_ast branch" +
+		" WHERE branch.node_id >= v_ast.subtree_lo AND branch.node_id < v_ast.subtree_hi" +
+		" AND branch.node_kind IN (" + kindList + "))"
+	err := astRowsByKey(qg, keys, cols, func(rows *sql.Rows) error {
+		var key any
+		var metric int64
+		if err := rows.Scan(&key, &metric); err != nil {
+			return fmt.Errorf("scan cyclomatic metric: %w", err)
 		}
-		rows, err := qg.QueryRefs(q, args...)
-		if err != nil {
-			return nil, fmt.Errorf("compute cyclomatic metrics: %w", err)
-		}
-		for rows.Next() {
-			var (
-				id     string
-				metric int64
-			)
-			if err := rows.Scan(&id, &metric); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("scan cyclomatic metric: %w", err)
-			}
-			out[id] = metric
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		_ = rows.Close()
+		out[key] = metric
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compute cyclomatic metrics: %w", err)
 	}
 	return out, nil
 }

@@ -79,17 +79,44 @@ func ASTSelect(qg Querier) (string, error) {
 		return "", fmt.Errorf("probe _ast.nid: %w", err)
 	}
 	if v6 {
-		// nid >> 24 is the interned file id (LLO's nid = file_id<<24 | ordinal),
-		// and _source.file_id is UNIQUE, so this join is one row per file.
+		// nid >> V6FileShift is the interned file id (LLO's nid =
+		// file_id<<24 | ordinal), and _source.file_id is UNIQUE, so the file
+		// is one lookup.
+		//
+		// One table, with the file and the kind as scalar lookups rather
+		// than joins. SQLite will not flatten a JOIN that is the right
+		// operand of a LEFT JOIN, and rules put v_ast exactly there ("this
+		// function, LEFT JOIN its branches"): as a three-way join the view
+		// was materialized and scanned whole per outer row, 143 s for
+		// cyclomatic_complexity on a 492k-node parse. As one table it
+		// flattens, and the inner side is a primary-key range: 0.2 s.
+		//
+		// subtree_lo/subtree_hi bound the node's descendants: a node d is a
+		// descendant of a exactly when a.subtree_lo <= d.node_id <
+		// a.subtree_hi. Rules ask "inside this function?" (cyclomatic,
+		// duplicate_code), and on v4 they answered it by reading node_id as
+		// a path prefix, which an opaque id cannot be (mache-2dc105). v6
+		// numbers a file's nodes in preorder, so a subtree is the run of
+		// nids after the node that start before it ends: the first later
+		// node of the file to start at or after end_byte is the first
+		// outside it. That holds for any properly nested parse; the one
+		// exception is a zero-width node exactly at end_byte, which only
+		// error recovery emits. The subquery is evaluated only for rows that
+		// read the column, and it stops at the subtree's end.
+		shift := strconv.Itoa(V6FileShift)
+		fileEnd := "((a.nid >> " + shift + ") + 1) << " + shift
 		return `SELECT a.nid                  AS node_id,
-		       s.id                  AS source_id,
-		       k.raw_kind            AS node_kind,
+		       (SELECT s.id FROM _source s WHERE s.file_id = (a.nid >> ` + shift + `)) AS source_id,
+		       (SELECT k.raw_kind FROM kinds k WHERE k.kind_id = a.kind_id) AS node_kind,
 		       a.start_byte, a.end_byte,
 		       a.start_row, a.start_col, a.end_row, a.end_col,
-		       a.node_hash
-		FROM _ast a
-		JOIN kinds   k ON k.kind_id = a.kind_id
-		JOIN _source s ON s.file_id = (a.nid >> ` + strconv.Itoa(V6FileShift) + `)`, nil
+		       a.node_hash,
+		       a.nid + 1             AS subtree_lo,
+		       COALESCE((SELECT m.nid FROM _ast m
+		                 WHERE m.nid > a.nid AND m.nid < ` + fileEnd + `
+		                   AND m.start_byte >= a.end_byte
+		                 ORDER BY m.nid LIMIT 1), ` + fileEnd + `) AS subtree_hi
+		FROM _ast a`, nil
 	}
 
 	v4, err := TableHasColumn(qg, "_ast", "node_id")
@@ -107,9 +134,15 @@ func ASTSelect(qg Querier) (string, error) {
 	if hasHash {
 		hashExpr = "node_hash"
 	}
+	// A v4 node_id is its path, so its descendants are the ids under
+	// node_id + '/': the range up to node_id + '0', the next byte after '/'.
+	// A range rather than LIKE: exact (LIKE folds ASCII case) and a search
+	// on the node_id index.
 	return `SELECT node_id, source_id, node_kind,
 	       start_byte, end_byte, start_row, start_col, end_row, end_col,
-	       ` + hashExpr + ` AS node_hash
+	       ` + hashExpr + ` AS node_hash,
+	       node_id || '/' AS subtree_lo,
+	       node_id || '0' AS subtree_hi
 	FROM _ast`, nil
 }
 
@@ -133,11 +166,19 @@ func nodesViewBody(qg Querier) (string, error) {
 		// siblings (`function_declaration_1`), which is the v4 scheme mache
 		// depends on. Unlike v_node_path it is a flat correlated select, not
 		// a recursive walk, so it is safe in a join.
+		//
+		// source_file moved too: v6 leaves nodes.source_file empty, because a
+		// node's file is its nid's top bits. On v4 every node under a file
+		// names it, and rules scope by it (sleep_in_test, untested_function,
+		// dead_code), so the view derives it: the file the nid sits in, and
+		// NULL for directories, which sit in none (mache-2dc105).
 		return `SELECT n.nid        AS node_id,
 		       n.parent_nid AS parent_id,
 		       vn.name      AS name,
 		       n.kind       AS kind,
-		       n.source_file
+		       CASE WHEN n.nid > 0 THEN
+		         (SELECT s.id FROM _source s WHERE s.file_id = n.nid >> ` + strconv.Itoa(V6FileShift) + `)
+		       END AS source_file
 		FROM nodes n
 		JOIN v_node_name vn ON vn.nid = n.nid`, nil
 	}

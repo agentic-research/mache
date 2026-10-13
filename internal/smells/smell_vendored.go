@@ -44,7 +44,7 @@ var vendoredPrefixes = []string{
 // A view rather than a build-time exclusion: the fixtures must stay in the
 // projection, because other tests parse them. What is scoped is the
 // population a smell rule judges, which is a question about the rule.
-func vendoredViewSQL(hasNodes, hasAST bool) string {
+func vendoredViewSQL(hasNodes, hasSource bool) string {
 	// arm builds one SELECT over `table`, reading paths from `col`.
 	// vendoredPrefixes is the only place a vendored tree is declared, so the
 	// predicate is generated rather than written out per table.
@@ -59,18 +59,19 @@ func vendoredViewSQL(hasNodes, hasAST bool) string {
 			expr, table, expr, pred)
 	}
 
-	// The path column lives in a different table per producer, and rules
-	// declare different Requires: god_file and duplicate_definitions read
-	// `nodes.source_file`, while long_file reads `_ast.source_id` and never
-	// touches `nodes` at all. A view over only one of them is empty — or
-	// errors — on the db shapes the other rule runs against, so it unions
-	// whichever tables this database actually has.
+	// Where a file's path lives depends on the producer. ley-line-open
+	// lists every file it parsed in _source, on projection-v4 and v6 alike:
+	// v4 also repeats the path on every nodes row, but v6 does not
+	// (nodes.source_file is empty there; a node's file is its nid's top
+	// bits), so _source is the one table that answers for both
+	// (mache-2dc105). mache's own projection has no _source and keeps the
+	// path on nodes.source_file.
 	var arms []string
-	if hasNodes {
+	switch {
+	case hasSource:
+		arms = append(arms, arm("_source", "id"))
+	case hasNodes:
 		arms = append(arms, arm("nodes", "source_file"))
-	}
-	if hasAST {
-		arms = append(arms, arm("_ast", "source_id"))
 	}
 	if len(arms) == 0 {
 		// Nothing to read a path from: nothing is KNOWN to be vendored. An
@@ -90,16 +91,16 @@ func ensureVendoredView(qg graph.RefsQuerier) error {
 	if err != nil {
 		return fmt.Errorf("probe nodes.source_file: %w", err)
 	}
-	hasAST, err := lloschema.TableHasColumn(qg, "_ast", "source_id")
+	hasSource, err := lloschema.TableHasColumn(qg, "_source", "id")
 	if err != nil {
-		return fmt.Errorf("probe _ast.source_id: %w", err)
+		return fmt.Errorf("probe _source.id: %w", err)
 	}
 
 	// The returned Rows MUST be closed even for DDL: RefsQuerier only exposes
 	// a query method, and a fixture pinned to one connection (as
 	// internal/fixturedb is, deliberately, so TEMP objects survive) blocks
 	// forever on the next statement if this one is still holding it.
-	rows, err := qg.QueryRefs(vendoredViewSQL(hasNodes, hasAST))
+	rows, err := qg.QueryRefs(vendoredViewSQL(hasNodes, hasSource))
 	if err != nil {
 		return fmt.Errorf("create v_vendored_files: %w", err)
 	}

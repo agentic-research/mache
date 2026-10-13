@@ -1,11 +1,14 @@
 package smells
 
 import (
+	"database/sql"
+	"path"
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/agentic-research/mache/internal/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 // Tests in this package build their .db fixtures through internal/fixturedb,
@@ -34,4 +37,35 @@ func newSmellFixture(t *testing.T, p fixturedb.Producer, seed func(*fixturedb.Bu
 	seed(b)
 	path, f := b.Build()
 	return &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: f.DB(), Path: path}
+}
+
+// completeMacheDirs adds the directory rows a hand-built mache-schema fixture
+// leaves out. mache's writer emits a nodes row for every directory
+// (pkg, pkg/types, ...), and the category rules read a definition's ancestry
+// through those rows (v_def_scope, mache-2dc105); a fixture that names only
+// its leaves describes a projection mache never writes. Ids here are mache
+// paths by construction, so a parent is the id up to its last '/'.
+func completeMacheDirs(t *testing.T, db *sql.DB) {
+	t.Helper()
+	rows, err := db.Query(`SELECT parent_id FROM nodes WHERE parent_id IS NOT NULL AND parent_id != ''`)
+	require.NoError(t, err)
+	var parents []string
+	for rows.Next() {
+		var p string
+		require.NoError(t, rows.Scan(&p))
+		parents = append(parents, p)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	for _, p := range parents {
+		for dir := p; dir != "." && dir != ""; dir = path.Dir(dir) {
+			parent := path.Dir(dir)
+			if parent == "." {
+				parent = ""
+			}
+			_, err := db.Exec(`INSERT OR IGNORE INTO nodes (id, parent_id, name, kind, mtime) VALUES (?, ?, ?, 1, 0)`,
+				dir, parent, path.Base(dir))
+			require.NoError(t, err)
+		}
+	}
 }

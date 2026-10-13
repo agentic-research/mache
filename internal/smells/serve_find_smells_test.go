@@ -743,6 +743,7 @@ func TestFindSmells_DeadCodeSkipsImports(t *testing.T) {
 		  ('pkg/functions/Orphan', 'pkg/functions', 'Orphan', 1, 0, 'orphan.go', '');
 	`)
 	require.NoError(t, err)
+	completeMacheDirs(t, tg.DB)
 
 	handler := MakeFindSmellsHandler(tg)
 	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
@@ -796,6 +797,7 @@ func TestFindSmells_DeadCodeSkipsNonCallableCategories(t *testing.T) {
 		  ('pkg/functions/Orphan', 'pkg/functions', 'Orphan', 1, 0, 'orphan.go', '');
 	`)
 	require.NoError(t, err)
+	completeMacheDirs(t, tg.DB)
 
 	handler := MakeFindSmellsHandler(tg)
 	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
@@ -2613,68 +2615,6 @@ func TestFindSmells_DuplicateDefinitions(t *testing.T) {
 	}
 }
 
-// TestFindSmells_DuplicateDefinitionsSkipsImports asserts that nodes
-// under '/imports/' don't surface as duplicate definitions, even
-// when the same import path appears across many packages. Imports
-// are external references, not definitions.
-//
-// Surfaced by dogfooding: 559 → 200 findings on mache.db after
-// excluding imports/.
-func TestFindSmells_DuplicateDefinitionsSkipsImports(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		-- Same import path in three packages — these should NOT
-		-- surface as a duplicate-defs finding.
-		INSERT INTO node_defs VALUES
-		  ('"fmt"', 'pkg/a/imports/"fmt"'),
-		  ('"fmt"', 'pkg/b/imports/"fmt"'),
-		  ('"fmt"', 'pkg/c/imports/"fmt"');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/a/imports/"fmt"', 'pkg/a/imports', '"fmt"', 1, 0, 'a/main.go', ''),
-		  ('pkg/b/imports/"fmt"', 'pkg/b/imports', '"fmt"', 1, 0, 'b/main.go', ''),
-		  ('pkg/c/imports/"fmt"', 'pkg/c/imports', '"fmt"', 1, 0, 'c/main.go', '');
-
-		-- Real duplicate (functions with the same name in two
-		-- packages) — control: this should still be flagged.
-		INSERT INTO node_defs VALUES
-		  ('Helper', 'pkg/a/functions/Helper'),
-		  ('Helper', 'pkg/b/functions/Helper');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/helper.go', ''),
-		  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/helper.go', '');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-
-	gotIDs := make([]string, len(resp.Findings))
-	for i, f := range resp.Findings {
-		gotIDs[i] = f.NodeID
-	}
-	for _, id := range gotIDs {
-		assert.NotContains(t, id, "/imports/",
-			"imports/ nodes must not appear in duplicate_definitions")
-	}
-	assert.ElementsMatch(t,
-		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
-		gotIDs,
-		"only the real Helper duplicate is flagged",
-	)
-}
-
 // TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles asserts
 // that capnp / protobuf / *_generated.go / *.gen.go method sets
 // don't surface in duplicate_definitions. Generated types share a
@@ -2735,72 +2675,6 @@ func TestFindSmells_DuplicateDefinitionsSkipsGeneratedFiles(t *testing.T) {
 		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
 		gotIDs,
 		"only the production-source duplicate is flagged",
-	)
-}
-
-// TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories
-// asserts that types/, constants/, variables/ duplicates don't
-// surface — common short names like 'content', 'src', 'name'
-// legitimately duplicate as local variables across functions and
-// aren't meaningful "duplicate definitions". Surfaced by PR #243's
-// GHA comment showing 9 variable-shape duplicate findings.
-func TestFindSmells_DuplicateDefinitionsSkipsNonCallableCategories(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
-
-		-- Variable / constant / type duplicates — must NOT surface.
-		INSERT INTO node_defs VALUES
-		  ('content', 'pkg/variables/content'),
-		  ('content', 'pkg/other/variables/content'),
-		  ('MaxSize', 'pkg/constants/MaxSize'),
-		  ('MaxSize', 'pkg/other/constants/MaxSize'),
-		  ('Result',  'pkg/types/Result'),
-		  ('Result',  'pkg/other/types/Result');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/variables/content',       'pkg/variables', 'content', 1, 0, 'a.go', ''),
-		  ('pkg/other/variables/content', 'pkg/other/variables', 'content', 1, 0, 'b.go', ''),
-		  ('pkg/constants/MaxSize',       'pkg/constants', 'MaxSize', 1, 0, 'c.go', ''),
-		  ('pkg/other/constants/MaxSize', 'pkg/other/constants', 'MaxSize', 1, 0, 'd.go', ''),
-		  ('pkg/types/Result',            'pkg/types',     'Result',  1, 0, 'e.go', ''),
-		  ('pkg/other/types/Result',      'pkg/other/types', 'Result', 1, 0, 'f.go', '');
-
-		-- Real function duplicate — control: must still flag.
-		INSERT INTO node_defs VALUES
-		  ('Helper', 'pkg/a/functions/Helper'),
-		  ('Helper', 'pkg/b/functions/Helper');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/h.go', ''),
-		  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/h.go', '');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-
-	gotIDs := make([]string, len(resp.Findings))
-	for i, f := range resp.Findings {
-		gotIDs[i] = f.NodeID
-	}
-	for _, id := range gotIDs {
-		assert.NotContains(t, id, "/types/", "types/ must be skipped")
-		assert.NotContains(t, id, "/constants/", "constants/ must be skipped")
-		assert.NotContains(t, id, "/variables/", "variables/ must be skipped")
-	}
-	assert.ElementsMatch(t,
-		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
-		gotIDs,
-		"only the real function duplicate is flagged",
 	)
 }
 
@@ -2927,77 +2801,6 @@ func TestFindSmells_DuplicateDefinitionsSkipsQualifiedInit(t *testing.T) {
 		[]string{"pkg/a/functions/myHelper", "pkg/b/functions/myHelper"},
 		gotIDs,
 		"only the real myHelper duplicate is flagged",
-	)
-}
-
-// TestFindSmells_DuplicateDefinitionsExcludesAllMethods asserts that
-// every method def is filtered out structurally (NOT LIKE
-// '%/methods/%'), regardless of whether the bare-leaf token matches
-// the named-skip list. The engine registers a bare-leaf alias
-// ('Method' from 'Receiver.Method') so dead_code's skip list can
-// match interface contracts by name; without the structural exclusion,
-// every interface method (ReadContent, GetNode, custom mache-internal
-// interfaces) collides on the bare token across N implementing types
-// and inflates duplicate_definitions.
-//
-// Surfaced by dogfooding: mache.db's go-schema path had 290
-// duplicate_definitions findings, dominated by Graph-interface
-// methods (ReadContent x24, GetNode x15, ListChildren x15, ...).
-// After this fix: 12.
-func TestFindSmells_DuplicateDefinitionsExcludesAllMethods(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-
-	_, err := tg.DB.Exec(`
-		-- Mache-internal interface (graph.Graph) implemented by 3 types.
-		-- 'ReadContent' is NOT in any named-skip list — only the
-		-- structural methods/ filter saves us.
-		INSERT INTO node_defs VALUES
-		  ('ReadContent',                 'cmd/methods/lazyGraph.ReadContent'),
-		  ('lazyGraph.ReadContent',       'cmd/methods/lazyGraph.ReadContent'),
-		  ('ReadContent',                 'graph/methods/MemoryStore.ReadContent'),
-		  ('MemoryStore.ReadContent',     'graph/methods/MemoryStore.ReadContent'),
-		  ('ReadContent',                 'graph/methods/SQLiteGraph.ReadContent'),
-		  ('SQLiteGraph.ReadContent',     'graph/methods/SQLiteGraph.ReadContent');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('cmd/methods/lazyGraph.ReadContent',    'cmd/methods',   'lazyGraph.ReadContent',    1, 0, 'cmd.go',    ''),
-		  ('graph/methods/MemoryStore.ReadContent','graph/methods', 'MemoryStore.ReadContent',  1, 0, 'mem.go',    ''),
-		  ('graph/methods/SQLiteGraph.ReadContent','graph/methods', 'SQLiteGraph.ReadContent',  1, 0, 'sqlite.go', '');
-
-		-- Real cross-package free-function duplicate as control —
-		-- must still be flagged.
-		INSERT INTO node_defs VALUES
-		  ('Helper', 'pkg/a/functions/Helper'),
-		  ('Helper', 'pkg/b/functions/Helper');
-		INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
-		  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/h.go', ''),
-		  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/h.go', '');
-	`)
-	require.NoError(t, err)
-
-	handler := MakeFindSmellsHandler(tg)
-	res, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "duplicate_definitions"}))
-	require.NoError(t, err)
-	require.False(t, res.IsError)
-
-	var resp struct {
-		Total    int            `json:"total"`
-		Findings []smellFinding `json:"findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, res)), &resp))
-
-	gotIDs := make([]string, len(resp.Findings))
-	for i, f := range resp.Findings {
-		gotIDs[i] = f.NodeID
-	}
-	for _, id := range gotIDs {
-		assert.NotContains(t, id, "/methods/",
-			"method defs must be excluded structurally — they're interface implementations, not duplicates")
-	}
-	assert.ElementsMatch(t,
-		[]string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"},
-		gotIDs,
-		"only the real free-function duplicate is flagged",
 	)
 }
 
@@ -3706,4 +3509,153 @@ func TestFindSmells_ThresholdIsCorpusInvariant(t *testing.T) {
 	assert.Equal(t, before, after,
 		"adding unrelated files changed an untouched file's verdict — the corpus-relative "+
 			"threshold is back, and with it a gate failure no PR author can act on")
+}
+
+// TestFindSmells_DuplicateDefinitionsSkipsCategories: definitions under a
+// non-callable category (imports, types, constants, variables) or a method
+// container are not duplicates, while a real free-function duplicate still
+// is. Each case is a mache-schema projection; completeMacheDirs adds the
+// directory rows mache's writer emits, which the rule reads the ancestry
+// through (mache-2dc105).
+// dupDefCategoryCases are TestFindSmells_DuplicateDefinitionsSkipsCategories'
+// projections, each with the path segments no finding may carry.
+var dupDefCategoryCases = []struct {
+	name      string
+	forbidden []string
+	seed      string
+}{
+	// Nodes under '/imports/' don't surface as duplicate definitions, even
+	// when the same import path appears across many packages. Imports
+	// are external references, not definitions.
+	//
+	// Surfaced by dogfooding: 559 → 200 findings on mache.db after
+	// excluding imports/.
+	{
+		name:      "SkipsImports",
+		forbidden: []string{"/imports/"},
+		seed: `
+	CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+	-- Same import path in three packages — these should NOT
+	-- surface as a duplicate-defs finding.
+	INSERT INTO node_defs VALUES
+	  ('"fmt"', 'pkg/a/imports/"fmt"'),
+	  ('"fmt"', 'pkg/b/imports/"fmt"'),
+	  ('"fmt"', 'pkg/c/imports/"fmt"');
+	INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+	  ('pkg/a/imports/"fmt"', 'pkg/a/imports', '"fmt"', 1, 0, 'a/main.go', ''),
+	  ('pkg/b/imports/"fmt"', 'pkg/b/imports', '"fmt"', 1, 0, 'b/main.go', ''),
+	  ('pkg/c/imports/"fmt"', 'pkg/c/imports', '"fmt"', 1, 0, 'c/main.go', '');
+
+	-- Real duplicate (functions with the same name in two
+	-- packages) — control: this should still be flagged.
+	INSERT INTO node_defs VALUES
+	  ('Helper', 'pkg/a/functions/Helper'),
+	  ('Helper', 'pkg/b/functions/Helper');
+	INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+	  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/helper.go', ''),
+	  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/helper.go', '');
+	`,
+	},
+	// types/, constants/, variables/ duplicates don't surface — common short names like 'content', 'src', 'name'
+	// legitimately duplicate as local variables across functions and
+	// aren't meaningful "duplicate definitions". Surfaced by PR #243's
+	// GHA comment showing 9 variable-shape duplicate findings.
+	{
+		name:      "SkipsNonCallableCategories",
+		forbidden: []string{"/types/", "/constants/", "/variables/"},
+		seed: `
+	CREATE TABLE IF NOT EXISTS node_defs (token TEXT, node_id TEXT, PRIMARY KEY (token, node_id)) WITHOUT ROWID;
+
+	-- Variable / constant / type duplicates — must NOT surface.
+	INSERT INTO node_defs VALUES
+	  ('content', 'pkg/variables/content'),
+	  ('content', 'pkg/other/variables/content'),
+	  ('MaxSize', 'pkg/constants/MaxSize'),
+	  ('MaxSize', 'pkg/other/constants/MaxSize'),
+	  ('Result',  'pkg/types/Result'),
+	  ('Result',  'pkg/other/types/Result');
+	INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+	  ('pkg/variables/content',       'pkg/variables', 'content', 1, 0, 'a.go', ''),
+	  ('pkg/other/variables/content', 'pkg/other/variables', 'content', 1, 0, 'b.go', ''),
+	  ('pkg/constants/MaxSize',       'pkg/constants', 'MaxSize', 1, 0, 'c.go', ''),
+	  ('pkg/other/constants/MaxSize', 'pkg/other/constants', 'MaxSize', 1, 0, 'd.go', ''),
+	  ('pkg/types/Result',            'pkg/types',     'Result',  1, 0, 'e.go', ''),
+	  ('pkg/other/types/Result',      'pkg/other/types', 'Result', 1, 0, 'f.go', '');
+
+	-- Real function duplicate — control: must still flag.
+	INSERT INTO node_defs VALUES
+	  ('Helper', 'pkg/a/functions/Helper'),
+	  ('Helper', 'pkg/b/functions/Helper');
+	INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+	  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/h.go', ''),
+	  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/h.go', '');
+	`,
+	},
+	// Every method def is filtered out structurally (any ancestor named
+	// methods/), regardless of whether the bare-leaf token matches
+	// the named-skip list. The engine registers a bare-leaf alias
+	// ('Method' from 'Receiver.Method') so dead_code's skip list can
+	// match interface contracts by name; without the structural exclusion,
+	// every interface method (ReadContent, GetNode, custom mache-internal
+	// interfaces) collides on the bare token across N implementing types
+	// and inflates duplicate_definitions.
+	//
+	// Surfaced by dogfooding: mache.db's go-schema path had 290
+	// duplicate_definitions findings, dominated by Graph-interface
+	// methods (ReadContent x24, GetNode x15, ListChildren x15, ...).
+	// After this fix: 12.
+	{
+		name:      "ExcludesAllMethods",
+		forbidden: []string{"/methods/"},
+		seed: `
+	-- Mache-internal interface (graph.Graph) implemented by 3 types.
+	-- 'ReadContent' is NOT in any named-skip list — only the
+	-- structural methods/ filter saves us.
+	INSERT INTO node_defs VALUES
+	  ('ReadContent',                 'cmd/methods/lazyGraph.ReadContent'),
+	  ('lazyGraph.ReadContent',       'cmd/methods/lazyGraph.ReadContent'),
+	  ('ReadContent',                 'graph/methods/MemoryStore.ReadContent'),
+	  ('MemoryStore.ReadContent',     'graph/methods/MemoryStore.ReadContent'),
+	  ('ReadContent',                 'graph/methods/SQLiteGraph.ReadContent'),
+	  ('SQLiteGraph.ReadContent',     'graph/methods/SQLiteGraph.ReadContent');
+	INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+	  ('cmd/methods/lazyGraph.ReadContent',    'cmd/methods',   'lazyGraph.ReadContent',    1, 0, 'cmd.go',    ''),
+	  ('graph/methods/MemoryStore.ReadContent','graph/methods', 'MemoryStore.ReadContent',  1, 0, 'mem.go',    ''),
+	  ('graph/methods/SQLiteGraph.ReadContent','graph/methods', 'SQLiteGraph.ReadContent',  1, 0, 'sqlite.go', '');
+
+	-- Real cross-package free-function duplicate as control —
+	-- must still be flagged.
+	INSERT INTO node_defs VALUES
+	  ('Helper', 'pkg/a/functions/Helper'),
+	  ('Helper', 'pkg/b/functions/Helper');
+	INSERT INTO nodes (id, parent_id, name, kind, mtime, source_file, record) VALUES
+	  ('pkg/a/functions/Helper', 'pkg/a/functions', 'Helper', 1, 0, 'a/h.go', ''),
+	  ('pkg/b/functions/Helper', 'pkg/b/functions', 'Helper', 1, 0, 'b/h.go', '');
+	`,
+	},
+}
+
+func TestFindSmells_DuplicateDefinitionsSkipsCategories(t *testing.T) {
+	for _, tc := range dupDefCategoryCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tg := seedSmellAST(t)
+			defer func() { _ = tg.DB.Close() }()
+			_, err := tg.DB.Exec(tc.seed)
+			require.NoError(t, err)
+			completeMacheDirs(t, tg.DB)
+
+			var gotIDs []string
+			for _, f := range runDuplicateDefinitions(t, tg) {
+				gotIDs = append(gotIDs, f.NodeID)
+			}
+			for _, id := range gotIDs {
+				for _, seg := range tc.forbidden {
+					assert.NotContains(t, id, seg, "%s must be skipped", seg)
+				}
+			}
+			assert.ElementsMatch(t, []string{"pkg/a/functions/Helper", "pkg/b/functions/Helper"}, gotIDs,
+				"only the real free-function duplicate is flagged")
+		})
+	}
 }

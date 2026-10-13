@@ -1,5 +1,7 @@
 package fixturedb
 
+import "strings"
+
 // The producer-side declarations: what ley-line's parse writes about a source
 // file (`_source`, `_ast` + `nodes`, `node_child`, `_imports`) and what LSP
 // enrichment adds (`_lsp_defs`). The mache-projection side of the fixture —
@@ -86,4 +88,36 @@ func (b *Builder) LSPDef(token string, in ConstructID, uri string, startLine, st
 		startLine: startLine, startCol: startCol, endLine: endLine, endCol: endCol,
 	})
 	return b
+}
+
+// Parsed declares id the way a parse writes it: the node, and every syntax
+// node from its source file down to it, each a nodes row with an _ast row of
+// the kind its segment names (the raw kind, less a "_k" suffix). A parse never
+// writes a syntax node without its ancestors or its kind, and a rule that
+// reads ancestry (which kind of construct is this inside?) needs both. Nodes
+// already declared through ASTNode keep their spans; the rest get an empty
+// one. The source file itself is declared too, as Go's root (source_file).
+func (b *Builder) Parsed(id ConstructID) *Builder {
+	src := inferSource(id)
+	if src == "" {
+		b.t.Fatalf("fixturedb: Parsed(%q): no source file in the id", id)
+	}
+	b.parsedNode(string(src), "source_file", src)
+	cur := string(src)
+	for _, seg := range strings.Split(strings.TrimPrefix(string(id), string(src)+"/"), "/") {
+		cur += "/" + seg
+		kind, _ := splitKind(seg)
+		b.parsedNode(cur, kind, src)
+	}
+	return b
+}
+
+// parsedNode declares one parsed node unless an ASTNode already did.
+func (b *Builder) parsedNode(id, kind string, src SourceID) {
+	for _, a := range b.ast {
+		if a.nodeID == id {
+			return
+		}
+	}
+	b.ASTNode(id, kind, src, Span{})
 }
