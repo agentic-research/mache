@@ -1,4 +1,10 @@
-package graph
+// Package sqlstmt holds a statement compiled on first use and reused
+// thereafter (mache-3063fb).
+//
+// It is its own package because two readers need it and neither may import
+// the other: graph's NodesTableReader, and lloschema's projection-v6 path
+// addressing, which graph imports.
+package sqlstmt
 
 import (
 	"database/sql"
@@ -6,8 +12,7 @@ import (
 	"sync/atomic"
 )
 
-// preparedStmt is a statement compiled on first use and reused thereafter
-// (mache-3063fb).
+// Lazy is a statement compiled on first use and reused thereafter.
 //
 // The direct read path used to hand database/sql a query STRING on every call,
 // so modernc compiled the same SQL from scratch and discarded it each time —
@@ -25,16 +30,17 @@ import (
 // permanent for the life of the reader; here the next call simply tries again.
 // The fast path is a single atomic load, so the lock is only ever taken by
 // callers racing to compile the statement the first time.
-type preparedStmt struct {
+type Lazy struct {
 	query string
 	mu    sync.Mutex
 	stmt  atomic.Pointer[sql.Stmt]
 }
 
-func newPreparedStmt(query string) *preparedStmt { return &preparedStmt{query: query} }
+// NewLazy returns a statement for query, not yet compiled.
+func NewLazy(query string) *Lazy { return &Lazy{query: query} }
 
-// get returns the compiled statement, compiling it on first use.
-func (p *preparedStmt) get(db *sql.DB) (*sql.Stmt, error) {
+// Get returns the compiled statement, compiling it on first use.
+func (p *Lazy) Get(db *sql.DB) (*sql.Stmt, error) {
 	if s := p.stmt.Load(); s != nil {
 		return s, nil
 	}
@@ -51,9 +57,9 @@ func (p *preparedStmt) get(db *sql.DB) (*sql.Stmt, error) {
 	return s, nil
 }
 
-// close releases the statement if one was compiled. Safe to call on a
+// Close releases the statement if one was compiled. Safe to call on a
 // statement that was never used.
-func (p *preparedStmt) close() {
+func (p *Lazy) Close() {
 	if s := p.stmt.Swap(nil); s != nil {
 		_ = s.Close()
 	}
