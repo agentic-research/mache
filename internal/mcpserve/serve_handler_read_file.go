@@ -51,24 +51,16 @@ func readOneFileWithOrigin(g graph.Graph, path string) (*fileReadResult, error) 
 
 	node, err := g.GetNode(path)
 	if err != nil {
-		return nil, fmt.Errorf("not found: %s", path)
+		return readVirtual(g, path)
 	}
 	if node.Mode.IsDir() {
 		return nil, fmt.Errorf("%s is a directory — use list_directory", path)
 	}
-	size := node.ContentSize()
-	if size == 0 {
-		return &fileReadResult{Origin: node.Origin}, nil
-	}
-	if size > maxReadFileSize {
-		return nil, fmt.Errorf("%s too large (%d bytes, max %d)", path, size, maxReadFileSize)
-	}
-	buf := make([]byte, size)
-	n, err := g.ReadContent(path, buf, 0)
+	content, err := readNodeContent(g, path, node)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %v", path, err)
+		return nil, err
 	}
-	return &fileReadResult{Content: string(buf[:n]), Origin: node.Origin}, nil
+	return &fileReadResult{Content: content, Origin: node.Origin}, nil
 }
 
 func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {

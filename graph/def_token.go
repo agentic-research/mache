@@ -1,12 +1,11 @@
-package mcpserve
+package graph
 
 import (
 	"path/filepath"
-
-	"github.com/agentic-research/mache/graph"
+	"strings"
 )
 
-// tokenForNode returns the symbol a node defines.
+// DefTokenFor returns the symbol a node defines.
 //
 // Callers that need "what is this node called?" must NOT reach for
 // filepath.Base(nodeID). That works only on the standalone mache schema, where
@@ -28,15 +27,19 @@ import (
 // node_defs is the authority: it maps a node to the token that node declares,
 // asked through the graph's DefTokener so this file names none of the
 // producer's columns (projection-v6 renamed them, mache-90cb9f).
+//
+// Every surface that names a construct's callers asks this: MCP's
+// list_directory, get_impact and get_dataflow, and the mount's callers/.
 // The filepath.Base fallback is kept for the standalone mache schema (no
 // node_defs table, or a backend with no SQL handle at all), where it IS the
 // symbol — and only for that case.
-func tokenForNode(g graph.Graph, nodeID string) string {
-	dt, ok := g.(graph.DefTokener)
+func DefTokenFor(g Graph, nodeID string) string {
+	dt, ok := g.(DefTokener)
 	if !ok {
 		return filepath.Base(nodeID)
 	}
-	token, ok, err := dt.DefTokenOf(nodeID)
+	// A mount addresses nodes from the root ("/a.go/..."); ids do not.
+	token, ok, err := dt.DefTokenOf(strings.TrimPrefix(nodeID, "/"))
 	if err != nil || !ok {
 		// No node_defs table (standalone projection), a query failure, or a
 		// node that defines nothing (a directory, a file node, a virtual

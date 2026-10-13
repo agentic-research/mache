@@ -52,8 +52,8 @@ bumps may include breaking changes.
   entry in `list_directory` (which also looked callers up by a construct's
   kind rather than its symbol on every leyline projection), `mache build`'s
   language-coverage check, and serving a `.db` all read projection-v6 too.
-  A v6 `.db` is served without materialized virtual rows, which mache will
-  no longer write into LLO's arena (`mache-abaf17`). The LSP tools read
+  So do `callers/` and `_schema.json` over MCP (`mache-abaf17`, see Fixed).
+  The LSP tools read
   projection-v6 too (`mache-b1f7b8`): `get_type_info`, `get_diagnostics` and
   `find_definition`'s `_lsp_defs` fallback, whether the tables are in the
   served `.db` or in the daemon's arena after a live enrich. On the pinned
@@ -64,6 +64,25 @@ bumps may include breaking changes.
   than learning v6.
 
 ### Fixed
+
+- **`callers/` and `_schema.json` answer over MCP on a projection-v6 `.db`**
+  (`mache-abaf17`). Serving a `.db` used to write them into it as rows first,
+  and mache does not write into a v6 arena, so on one `list_directory`
+  offered a construct's `callers/` that then listed as empty, and
+  `_schema.json` was not found. MCP now answers both at runtime through the
+  resolver the NFS mount already used, from either projection, and serving no
+  longer writes callers, callees or the schema into the `.db` it is given
+  (schema-declared content sources still are). Two consequences:
+  - A `callers/` entry is named for the caller's node id
+    (`a.go_function_declaration_1_block_call_expression`), as on the mount,
+    and `read_file` on it reads that node.
+  - `get_overview`'s `total_files` and `get_architecture`'s `file_count` and
+    per-directory counts no longer count those virtual rows as code.
+
+  The mount's `callers/` looked callers up by a construct's last path
+  segment, which on a leyline projection is its kind (`function_declaration_0`),
+  never its symbol, so it never appeared there; it now asks `node_defs`, as
+  MCP does (`mache-cb4369`).
 
 - **Saving through the NFS mount no longer zero-fills a file sent in pieces**
   (`mache-bc65f8`). The NFS library serves every write request as its own

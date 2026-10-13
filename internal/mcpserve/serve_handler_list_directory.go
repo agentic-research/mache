@@ -52,6 +52,17 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 		path := request.GetString("path", "")
 		excludeTests := request.GetBool("exclude_tests", false)
 
+		// A virtual directory the graph holds no rows for (callers/ on a
+		// projection-v6 .db) is listed by the mount's resolver.
+		if path != "" {
+			if _, err := g.GetNode(path); err != nil {
+				if entries, ok := listVirtualDir(g, path); ok {
+					data, _ := json.MarshalIndent(entries, "", "  ")
+					return mcp.NewToolResultText(string(data)), nil
+				}
+			}
+		}
+
 		// Single-RLock snapshot of all children. Replaces the prior
 		// pattern of ListChildren + N×GetNode (one lookup per child).
 		// On a large dir (300+ children) this is the difference between
@@ -83,6 +94,8 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 		// (skip if already materialized in the db)
 		if path != "" {
 			entries = append(entries, virtualEntries(g, path, entries)...)
+		} else {
+			entries = withVirtualRoot(g, entries)
 		}
 
 		data, _ := json.MarshalIndent(entries, "", "  ")
@@ -124,7 +137,7 @@ func virtualEntries(g graph.Graph, path string, listed []nodeEntry) []nodeEntry 
 	// leyline projection that segment is a tree-sitter kind
 	// (function_declaration_0), never the symbol (mache-cb4369).
 	if !isContainer && !seen["callers"] {
-		if callers, err := g.GetCallers(tokenForNode(g, path)); err == nil && len(callers) > 0 {
+		if callers, err := g.GetCallers(graph.DefTokenFor(g, path)); err == nil && len(callers) > 0 {
 			virtual = append(virtual, nodeEntry{
 				Name: "callers",
 				Path: path + "/callers",

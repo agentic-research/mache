@@ -7,7 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/agentic-research/mache/internal/sqlintro"
 	_ "modernc.org/sqlite"
 )
@@ -811,4 +815,45 @@ func TestExtractFuncName(t *testing.T) {
 			t.Errorf("extractFuncName(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
+}
+
+// MaterializeContentSources is what serving still writes into a .db: the
+// schema's content-source files, and none of the virtual paths, which MCP and
+// the mount answer at runtime (mache-abaf17).
+func TestMaterializeContentSources_WritesOnlyTheSchemasContentSources(t *testing.T) {
+	db := setupTestDBWithLSP(t)
+	defer func() { _ = db.Close() }()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	_, err := db.Exec(`VACUUM INTO ?`, dbPath)
+	require.NoError(t, err)
+	schema := &api.Topology{Version: "v1", Nodes: []api.Node{{
+		Name: "functions", Selector: "$",
+		Children: []api.Node{{
+			Name: "{{.name}}", Selector: "(function_declaration name: (identifier) @name) @scope",
+			Files: []api.Leaf{{Name: "hover", ContentSource: "lsp_hover"}},
+		}},
+	}}}
+
+	require.NoError(t, MaterializeContentSources(dbPath, schema))
+
+	fileDB, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = fileDB.Close() }()
+	var record string
+	require.NoError(t, fileDB.QueryRow(`SELECT record FROM nodes WHERE id = 'functions/HandleRequest/hover'`).Scan(&record))
+	assert.Equal(t, "func HandleRequest(w http.ResponseWriter, r *http.Request)", record)
+	var virtual int
+	require.NoError(t, fileDB.QueryRow(`SELECT COUNT(*) FROM nodes WHERE name IN ('_schema.json', 'callers', 'callees')`).Scan(&virtual))
+	assert.Zero(t, virtual, "virtual paths are answered at runtime, not written")
+}
+
+// A projection-v6 .db is refused only when there is something to write: with
+// no content sources, serving one writes nothing and says nothing.
+func TestMaterializeContentSources_RefusesProjectionV6OnlyWithSomethingToWrite(t *testing.T) {
+	path, _ := fixturedb.New(t, fixturedb.LeylineV6).Parsed("a.go/function_declaration").Build()
+	assert.NoError(t, MaterializeContentSources(path, &api.Topology{Version: api.SchemaVersion}))
+	withSource := &api.Topology{Version: "v1", Nodes: []api.Node{{
+		Name: "f", Selector: "$", Files: []api.Leaf{{Name: "hover", ContentSource: "lsp_hover"}},
+	}}}
+	assert.ErrorIs(t, MaterializeContentSources(path, withSource), ErrProjectionV6)
 }
