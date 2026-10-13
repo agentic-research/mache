@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"path"
 	"slices"
+	"strings"
 
 	"github.com/agentic-research/mache/internal/sqlintro"
 )
@@ -58,7 +59,7 @@ func (b *Builder) insertRows(db *sql.DB) {
 	d.emitAST(e)
 	d.emitSources(e)
 	d.emitImports(e)
-	e.emitLSPDefs()
+	e.emitLSP()
 	if err := tx.Commit(); err != nil {
 		b.t.Fatalf("fixturedb(%s): commit: %v", b.producer, err)
 	}
@@ -92,16 +93,20 @@ func (e *emitter) insertV4Nodes() {
 		if c.leaf {
 			kind = 0
 		}
-		if e.derivedParent {
-			e.exec(`INSERT OR REPLACE INTO nodes (id, name, kind, size, mtime, record_id, record, source_file)
-				VALUES (?, ?, ?, 0, 0, '', ?, ?)`,
-				string(c.id), c.name, kind, c.record, string(c.source))
-			continue
-		}
-		e.exec(`INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file)
-			VALUES (?, ?, ?, ?, 0, 0, '', ?, ?)`,
-			string(c.id), string(c.parent), c.name, kind, c.record, string(c.source))
+		e.insertV4Node(string(c.id), string(c.parent), c.name, kind, c.record, string(c.source))
 	}
+}
+
+// insertV4Node writes one projection-v4 `nodes` row, leaving parent_id to
+// SQLite when the table generates it.
+func (e *emitter) insertV4Node(id, parent, name string, kind int, record any, source string) {
+	if e.derivedParent {
+		e.exec(`INSERT OR REPLACE INTO nodes (id, name, kind, size, mtime, record_id, record, source_file)
+			VALUES (?, ?, ?, 0, 0, '', ?, ?)`, id, name, kind, record, source)
+		return
+	}
+	e.exec(`INSERT OR REPLACE INTO nodes (id, parent_id, name, kind, size, mtime, record_id, record, source_file)
+		VALUES (?, ?, ?, ?, 0, 0, '', ?, ?)`, id, parent, name, kind, record, source)
 }
 
 // insertV4AST writes the projection-v4 `_ast` rows and returns each node's
@@ -223,41 +228,55 @@ func sameChildList(a, b []childRow) bool {
 	})
 }
 
-func (e *emitter) emitLSPDefs() {
-	if _, v6 := e.b.producer.dialect.(leylineV6Dialect); v6 {
-		for _, d := range e.b.lspDefs {
-			n, ok := e.v6Tree().byPath[d.nodeID]
-			if !ok {
-				e.b.t.Fatalf("fixturedb(leyline-v6): LSPDef on %q, which the spec never declares; "+
-					"v6 keys _lsp_defs by the node's nid, so the node must exist", d.nodeID)
-			}
-			e.exec(`INSERT INTO _lsp_defs
-				(nid, def_token, def_uri, def_start_line, def_start_col, def_end_line, def_end_col)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				n.nid, d.token, d.uri, d.startLine, d.startCol, d.endLine, d.endCol)
+// emitLSP writes the LSP-enrichment rows: _lsp_defs, _lsp and _lsp_hover.
+func (e *emitter) emitLSP() {
+	_, v6 := e.b.producer.dialect.(leylineV6Dialect)
+	// key is the column value naming a node: its nid on v6, which the spec
+	// must declare, its id on v4.
+	key := func(table, id string) any {
+		if !v6 {
+			return id
 		}
-		return
+		n, ok := e.v6Tree().byPath[id]
+		if !ok {
+			e.b.t.Fatalf("fixturedb(leyline-v6): %s row on %q, which the spec never declares; "+
+				"v6 keys %s by the node's nid, so the node must exist", table, id, table)
+		}
+		return n.nid
+	}
+	col := "node_id"
+	if v6 {
+		col = "nid"
 	}
 	for _, d := range e.b.lspDefs {
 		e.exec(`INSERT INTO _lsp_defs
-			(node_id, def_token, def_uri, def_start_line, def_start_col, def_end_line, def_end_col)
+			(`+col+`, def_token, def_uri, def_start_line, def_start_col, def_end_line, def_end_col)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			d.nodeID, d.token, d.uri, d.startLine, d.startCol, d.endLine, d.endCol)
+			key("_lsp_defs", d.nodeID), d.token, d.uri, d.startLine, d.startCol, d.endLine, d.endCol)
+	}
+	for _, l := range e.b.lspSyms {
+		e.exec(`INSERT INTO _lsp (`+col+`, symbol_kind, detail, start_line, start_col, end_line, end_col, diagnostics)
+			VALUES (?, ?, '', 0, 0, 0, 0, ?)`, key("_lsp", l.nodeID), l.symbolKind, nullIfEmpty(l.diagnostics))
+	}
+	for _, h := range e.b.lspHovers {
+		if !v6 {
+			e.insertV4Chain(h.symbol)
+		}
+		e.exec(`INSERT OR REPLACE INTO _lsp_hover (`+col+`, hover_text) VALUES (?, ?)`, key("_lsp_hover", h.symbol), h.text)
 	}
 }
 
-// sourceOf resolves a construct's source file, falling back to inference so
-// Def/Ref never depend on declaration order.
-func (b *Builder) sourceOf(id ConstructID) SourceID {
-	if c, ok := b.constructs[id]; ok {
-		return c.source
+// insertV4Chain writes a standalone address's nodes rows on projection-v4, one
+// directory per link, as LLO's standalone_chain does. v6 interns the same chain
+// as directories when it builds the tree.
+func (e *emitter) insertV4Chain(p string) {
+	parent := ""
+	for _, seg := range strings.Split(p, "/") {
+		id := seg
+		if parent != "" {
+			id = parent + "/" + seg
+		}
+		e.insertV4Node(id, parent, seg, 1, "", "")
+		parent = id
 	}
-	return inferSource(id)
-}
-
-func nullIfEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }

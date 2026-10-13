@@ -3,6 +3,7 @@ package lloschema
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -239,7 +240,56 @@ type PathRenderer struct {
 
 // hopSQL is one step up: a node's parent and its name, from LLO's own
 // v_node_name.
-const hopSQL = `SELECT n.parent_nid, v.name FROM nodes n JOIN v_node_name v ON v.nid = n.nid WHERE n.nid = ?`
+const hopSQL = hopFrom + `?`
+
+const hopFrom = `SELECT n.parent_nid, v.name FROM nodes n JOIN v_node_name v ON v.nid = n.nid WHERE n.nid = `
+
+// ValuesRenderer returns a renderer for a caller that can only run a whole
+// statement and read values back, with no parameters: the leyline daemon's
+// query op. The nid is an integer, so writing it into the statement is exact.
+func ValuesRenderer(run func(query string) ([][]any, error)) *PathRenderer {
+	return &PathRenderer{memo: map[int64]string{}, hop: func(nid int64) (sql.NullInt64, string, bool, error) {
+		rows, err := run(hopFrom + strconv.FormatInt(nid, 10))
+		if err != nil || len(rows) == 0 {
+			return sql.NullInt64{}, "", false, err
+		}
+		if len(rows[0]) < 2 {
+			return sql.NullInt64{}, "", false, fmt.Errorf("path hop for nid %d: %d columns, want 2", nid, len(rows[0]))
+		}
+		var parent sql.NullInt64
+		if rows[0][0] != nil {
+			p, err := IntValue(rows[0][0])
+			if err != nil {
+				return sql.NullInt64{}, "", false, fmt.Errorf("path hop for nid %d: parent: %w", nid, err)
+			}
+			parent = sql.NullInt64{Int64: p, Valid: true}
+		}
+		name, ok := rows[0][1].(string)
+		if !ok {
+			return sql.NullInt64{}, "", false, fmt.Errorf("path hop for nid %d: name is %T, want string", nid, rows[0][1])
+		}
+		return parent, name, true, nil
+	}}
+}
+
+// IntValue is an integer column's value as a statement that answers in values
+// (ValuesRenderer's) hands it back: an int64 from a database/sql driver, or
+// decimal text from the leyline daemon's query op, whose wire carries every
+// value as text (`values: List(Text)`; sql_value_to_json in LLO's daemon).
+func IntValue(v any) (int64, error) {
+	switch x := v.(type) {
+	case int64:
+		return x, nil
+	case string:
+		n, err := strconv.ParseInt(x, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("%q is not a decimal integer", x)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("%T is not an integer", v)
+	}
+}
 
 // Renderer returns a renderer over p's database, on p's compiled statement.
 func (p *V6Paths) Renderer() *PathRenderer {

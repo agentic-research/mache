@@ -18,9 +18,7 @@ type leylineV6Dialect struct{}
 
 func (leylineV6Dialect) schema(b *Builder) []string {
 	stmts := tableDDL(leylineV6TableOrder, leylineV6Tables)
-	if len(b.lspDefs) > 0 {
-		stmts = append(stmts, lspDefsTableV6...)
-	}
+	stmts = append(stmts, b.lspDDL(true)...)
 	stmts = append(stmts, tableDDL(slices.Sorted(maps.Keys(leylineV6Indexes)), leylineV6Indexes)...)
 	// v_node_path reads v_node_name, so name first.
 	return append(stmts, leylineV6Views["v_node_name"], leylineV6Views["v_node_path"])

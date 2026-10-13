@@ -53,8 +53,11 @@ bumps may include breaking changes.
   kind rather than its symbol on every leyline projection), `mache build`'s
   language-coverage check, and serving a `.db` all read projection-v6 too.
   A v6 `.db` is served without materialized virtual rows, which mache will
-  no longer write into LLO's arena (`mache-abaf17`), and the LSP tools still
-  look symbols up by id text (`mache-b1f7b8`).
+  no longer write into LLO's arena (`mache-abaf17`). The LSP tools read
+  projection-v6 too (`mache-b1f7b8`): `get_type_info`, `get_diagnostics` and
+  `find_definition`'s `_lsp_defs` fallback, whether the tables are in the
+  served `.db` or in the daemon's arena after a live enrich. On the pinned
+  leyline, both tools had become errors instead of answers.
   `mache cache push` refuses a projection-v6 `.db` with an error naming
   `mache-e64f36`, instead of failing on a missing column. Its chunks carry
   projection-v4 `_ast`, and the cache is moving to LLO's own arena rather
@@ -81,6 +84,7 @@ bumps may include breaking changes.
   An MCP client or editor that shut mache down could leave the managed daemon
   and its `mache serve --control` child running with no owner; 81 accumulated
   on one host. Three separate causes, each now fixed and tested:
+
   - **Shutdown during a cold start was ignored.** Starting the daemon held a
     lock through the whole wait for it to become ready (about 12 s on a
     150-file corpus with the v0.19.1 pin), and stopping it needed the same
@@ -107,6 +111,7 @@ bumps may include breaking changes.
   say what changed for someone upgrading. `tools/release-parity` serves a
   pinned corpus with the last release and with the candidate, sends both every
   call in a committed plan, and reports every difference in what they answer.
+
   - The plan must call every registered tool, or the run refuses to start.
   - Noise is measured, not guessed: each binary runs the plan three times, and
     only what varies between runs of the same binary is masked.
@@ -700,6 +705,7 @@ bumps may include breaking changes.
   race on its first run.
 
 - **Recovered correctness repairs** (`mache-595c96`, `mache-c5e114`):
+
   - project identity paths are canonicalized (`mache-0e4773`);
   - the `current_root` coherence contract is corrected (`mache-0df550`);
   - `find_definition` preserves workspace-resolution failures instead of
@@ -720,6 +726,7 @@ bumps may include breaking changes.
 
 - **`mache build` publishes its output in one step** (`mache-21c210`). Both
   build paths used to write the output db in place:
+
   - The raw path removed the file and then copied over it.
   - A schema build removed the file and projected into it, or rewrote rows
     inside it when reusing a previous projection.

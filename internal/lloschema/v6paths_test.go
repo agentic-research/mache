@@ -3,6 +3,7 @@ package lloschema
 import (
 	"database/sql"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -390,4 +391,77 @@ func TestParsedSourceLike_BothProjections(t *testing.T) {
 	got, err := ParsedSourceLike(DB(standalone.DB()), "%.go")
 	require.NoError(t, err)
 	assert.False(t, got, "a projection with no _ast parsed nothing")
+}
+
+// IntValue reads an integer back from a driver (int64) or from the daemon's
+// query op, which sends every value as text, and refuses text that is not
+// exactly a decimal integer rather than reading some other node's nid out of it.
+func TestIntValue(t *testing.T) {
+	for _, tc := range []struct {
+		in   any
+		want int64
+		ok   bool
+	}{
+		{int64(-7), -7, true},
+		{"50331657", 3<<24 | 9, true},
+		{"-1", -1, true},
+		{"1.5", 0, false},
+		{"12abc", 0, false},
+		{"", 0, false},
+		{1.0, 0, false},
+		{nil, 0, false},
+	} {
+		got, err := IntValue(tc.in)
+		if tc.ok {
+			require.NoError(t, err, "%v", tc.in)
+			assert.Equal(t, tc.want, got, "%v", tc.in)
+		} else {
+			assert.Error(t, err, "%v", tc.in)
+		}
+	}
+}
+
+// ValuesRenderer renders the same paths from a source that answers only in
+// values, every one as text, the way the leyline daemon's query op answers:
+// an integer in decimal, NULL as nil (sql_value_to_json in LLO's daemon).
+func TestValuesRenderer_RendersEveryNodeThroughTheDaemonWire(t *testing.T) {
+	f := v6PathsSpec(t)
+	want := allNodes(t, f.DB())
+	var statements int
+	run := func(query string) ([][]any, error) {
+		statements++
+		rows, err := f.DB().Query(query)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rows.Close() }()
+		var out [][]any
+		for rows.Next() {
+			var parent sql.NullInt64
+			var name string
+			if err := rows.Scan(&parent, &name); err != nil {
+				return nil, err
+			}
+			row := []any{nil, name}
+			if parent.Valid {
+				row[0] = strconv.FormatInt(parent.Int64, 10)
+			}
+			out = append(out, row)
+		}
+		return out, rows.Err()
+	}
+	r := ValuesRenderer(run)
+	for nid, path := range want {
+		got, ok, err := r.Path(nid)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, path, got, "nid %d", nid)
+	}
+	assert.Equal(t, len(want), statements, "each node is read once, however many paths pass through it")
+	_, ok, err := r.Path(1 << 40)
+	require.NoError(t, err)
+	assert.False(t, ok, "a nid with no row has no path")
+
+	_, _, err = ValuesRenderer(func(string) ([][]any, error) { return [][]any{{"1.5", "x"}}, nil }).Path(7)
+	assert.Error(t, err, "a parent that is not a decimal integer is refused, not truncated")
 }

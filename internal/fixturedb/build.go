@@ -71,13 +71,51 @@ func (b *Builder) Build() (string, *FixtureDB) {
 	return dbPath, f
 }
 
-// lspDDL returns the LSP-enrichment table when this fixture declares rows for
-// it. It is not a producer table, so every dialect appends it.
-func (b *Builder) lspDDL() []string {
-	if len(b.lspDefs) > 0 {
-		return []string{lspDefsTable}
+// lspDDL returns the LSP-enrichment tables this fixture declares rows for, in
+// the shape projection-v6 (keyed by nid) or v4 (keyed by node_id) writes them.
+// They are not producer tables, so every dialect appends them.
+func (b *Builder) lspDDL(v6 bool) []string {
+	var out []string
+	add := func(declared int, v4DDL, v6DDL []string) {
+		switch {
+		case declared == 0:
+		case v6:
+			out = append(out, v6DDL...)
+		default:
+			out = append(out, v4DDL...)
+		}
 	}
-	return nil
+	add(len(b.lspDefs), []string{lspDefsTable}, lspDefsTableV6)
+	add(len(b.lspSyms), lspSymbolsDDL("node_id TEXT"), lspSymbolsDDL("nid INTEGER"))
+	add(len(b.lspHovers), lspHoverDDL("node_id TEXT"), lspHoverDDL("nid INTEGER"))
+	return out
+}
+
+// lspSymbolsDDL and lspHoverDDL are `_lsp` and `_lsp_hover` as ley-line-open
+// writes them, transcribed from LSP_DDL and LSP_HOVER_DDL in
+// rs/ll-open/lsp/src/project.rs, at v0.19.1 for projection-v4 (key node_id
+// TEXT) and v0.20.3 for v6 (key nid INTEGER); nothing else differs. Like
+// _lsp_defs below, they are written by `leyline lsp`, which needs language
+// servers a conformance run cannot assume.
+func lspSymbolsDDL(key string) []string {
+	return []string{
+		`CREATE TABLE _lsp (
+	` + key + ` PRIMARY KEY,
+	symbol_kind TEXT,
+	detail TEXT,
+	start_line INTEGER NOT NULL, start_col INTEGER NOT NULL,
+	end_line INTEGER NOT NULL, end_col INTEGER NOT NULL,
+	diagnostics TEXT
+)`,
+		`CREATE INDEX idx_lsp_kind ON _lsp(symbol_kind)`,
+	}
+}
+
+func lspHoverDDL(key string) []string {
+	return []string{`CREATE TABLE _lsp_hover (
+	` + key + ` PRIMARY KEY,
+	hover_text TEXT NOT NULL
+)`}
 }
 
 // lspDefsTableV6 is the same table as ley-line-open v0.20.x writes it for

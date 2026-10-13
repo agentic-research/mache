@@ -16,7 +16,7 @@ type leylineDialect struct{}
 func (leylineDialect) schema(b *Builder) []string {
 	stmts := tableDDL(leylineTableOrder, leylineTables)
 	stmts = append(stmts, tableDDL(slices.Sorted(maps.Keys(leylineIndexes)), leylineIndexes)...)
-	return append(stmts, b.lspDDL()...)
+	return append(stmts, b.lspDDL(false)...)
 }
 
 // Ley-line always writes node_content.
@@ -80,7 +80,7 @@ func (standaloneDialect) schema(b *Builder) []string {
 	if len(b.sources) > 0 {
 		stmts = append(stmts, leylineTables["_source"])
 	}
-	return append(stmts, b.lspDDL()...)
+	return append(stmts, b.lspDDL(false)...)
 }
 
 // A Standalone fixture has node_content only when it modelled the

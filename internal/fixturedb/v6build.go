@@ -29,6 +29,11 @@ func (e *emitter) v6Tree() *v6Tree {
 	for _, id := range b.srcOrder {
 		t.ensureFile(string(id))
 	}
+	// LSP enrichment addresses a symbol's hover by a standalone chain outside
+	// every file, which LLO interns as directories.
+	for _, h := range b.lspHovers {
+		t.ensureDir(h.symbol)
+	}
 	for _, a := range b.ast {
 		n := add(a.nodeID, a.source, a.span.StartByte)
 		if n.isFile {
