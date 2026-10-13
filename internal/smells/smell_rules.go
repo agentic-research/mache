@@ -85,6 +85,13 @@ type SmellRule struct {
 	// Cap at 3-5 tags per rule to avoid the clippy-group explosion;
 	// expand the vocabulary deliberately, not reactively.
 	Tags []string
+	// PathShapedIDs marks a rule whose SQL reads meaning into node_id's
+	// shape: a path prefix for "descendant", '/' counted for depth, a path
+	// segment such as "/functions/". The vocabulary leaves node_id opaque,
+	// and on projection-v6 it is an integer nid, so such a rule's answers
+	// there would be silently wrong. It is refused on v6 instead, with an
+	// error naming the work that removes the dependence (mache-2dc105).
+	PathShapedIDs bool
 }
 
 // Severity is one of off / warn / error. ESLint precedent (string

@@ -355,3 +355,20 @@ func TestPathRenderer_AgreesWithPathAndRendersEachAncestorOnce(t *testing.T) {
 	assert.Equal(t, "pkg/a.go/function_declaration_1/block", got)
 	assert.Equal(t, int64(1), count(), "only the node itself is new; its ancestors are remembered")
 }
+
+// A renderer over a Querier (the smell engine holds one, not the database)
+// gives the same paths as one over the compiled statement.
+func TestQuerierRenderer_AgreesWithPath(t *testing.T) {
+	f := v6PathsSpec(t)
+	want := allNodes(t, f.DB())
+	r := QuerierRenderer(DB(f.DB()))
+	for nid, path := range want {
+		got, ok, err := r.Path(nid)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.Equal(t, path, got, "nid %d", nid)
+	}
+	_, ok, err := r.Path(1 << 40)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}

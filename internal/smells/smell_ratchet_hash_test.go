@@ -271,10 +271,11 @@ func TestEnrich_FileLevelNodeGetsNoHash(t *testing.T) {
 		"a/big.go/func_1").Scan(&want))
 	require.NotEmpty(t, want, "fixture must give the construct a content address")
 
+	// key is what the rule row carries; on projection-v4 it is the node id.
 	findings := []smellFinding{
-		{RuleID: "long_file", SourceID: "a/big.go", NodeID: "a/big.go"},            // node IS the file
-		{RuleID: "long_function", SourceID: "a/big.go", NodeID: "a/big.go/func_1"}, // a construct in it
-		{RuleID: "god_file", SourceID: "a/big.go"},                                 // no node at all
+		{RuleID: "long_file", SourceID: "a/big.go", NodeID: "a/big.go", key: "a/big.go"},                   // node IS the file
+		{RuleID: "long_function", SourceID: "a/big.go", NodeID: "a/big.go/func_1", key: "a/big.go/func_1"}, // a construct in it
+		{RuleID: "god_file", SourceID: "a/big.go", key: ""},                                                // no node at all
 	}
 	require.NoError(t, enrichNodeHashes(f, findings))
 

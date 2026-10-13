@@ -20,8 +20,15 @@ bumps may include breaking changes.
   nodes, matches and calls as from projection-v4. So do definitions,
   references and callees (`find_definition`, `find_callers`, `find_callees`,
   `resolve_ref`, `search role=definition`, and the `kind` filter). Before,
-  these silently came back empty on such a `.db`. Smell rules and the build
-  cache follow in later changes.
+  these silently came back empty on such a `.db`. `find_smells` reads it too.
+  `long_function`, `long_file` and `magic_int_in_comparison` give the same
+  findings, content hashes included, as from projection-v4 of the same tree.
+  The eight built-in rules whose SQL treats node ids as paths
+  (`cyclomatic_complexity`, `duplicate_code`, `dead_code`, `god_file`,
+  `sleep_in_test`, `untested_function`, `duplicate_definitions`,
+  `fan_out_skew`) are refused on a projection-v6 `.db` with an error naming
+  `mache-2dc105`, rather than answering wrongly. The build cache follows in a
+  later change.
 
 ### Fixed
 
