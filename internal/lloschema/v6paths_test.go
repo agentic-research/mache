@@ -552,3 +552,17 @@ func TestOccurrencePath_NamesAnInjectedOccurrenceAsLLOsWireDoes(t *testing.T) {
 		assert.False(t, ok, bad)
 	}
 }
+
+// injectedAddress and splitInjected are inverses over every ordinal a file's
+// nid range holds, and the ordinal is the nid's low bits, not the whole nid.
+func TestInjectedAddress_RoundTrips(t *testing.T) {
+	for _, ord := range []int64{0, 1, 9999, 1<<V6FileShift - 1} {
+		nid := int64(7)<<V6FileShift | ord
+		addr := injectedAddress("docs/a b#c.md", nid)
+		assert.Equal(t, "docs/a b#c.md#inj@"+strconv.FormatInt(ord, 10), addr)
+		source, got, ok := splitInjected(addr)
+		require.True(t, ok, addr)
+		assert.Equal(t, "docs/a b#c.md", source)
+		assert.Equal(t, ord, got)
+	}
+}

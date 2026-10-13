@@ -44,7 +44,7 @@ type V6Paths struct {
 	db                                *sql.DB
 	path, file, dir, single, nth, hop *sqlstmt.Lazy
 	// sourceOf and fileOf map between a file id and its _source id, for the
-	// addresses of injected occurrences (InjectedAddress).
+	// addresses of injected occurrences (injectedAddress).
 	sourceOf, fileOf *sqlstmt.Lazy
 }
 
@@ -249,17 +249,17 @@ func (p *V6Paths) one(s *sqlstmt.Lazy, args ...any) (int64, bool, error) {
 // address.
 const injectedMark = "#inj@"
 
-// InjectedAddress is how LLO names an occurrence in a language injected into a
+// injectedAddress is how LLO names an occurrence in a language injected into a
 // host file (SQL in a Go string, code spans in markdown), which it numbers
 // inside the host's nid range but stores no node for (ley-line-open-260fcf):
 // "<source id>#inj@<ordinal>", the explicit file-anchored form its daemon's
 // wire gives such a nid (wire_ref_of), never a bare number that could be a
 // file's name. Resolve reads it back.
-func InjectedAddress(source string, nid int64) string {
+func injectedAddress(source string, nid int64) string {
 	return source + injectedMark + strconv.FormatInt(nid&(1<<V6FileShift-1), 10)
 }
 
-// splitInjected parses InjectedAddress's form.
+// splitInjected parses injectedAddress's form.
 func splitInjected(path string) (source string, ordinal int64, ok bool) {
 	i := strings.LastIndex(path, injectedMark)
 	if i <= 0 {
@@ -464,7 +464,7 @@ func (r *PathRenderer) Path(nid int64) (string, bool, error) {
 
 // OccurrencePath is the address a node_defs or node_refs row's nid is shown
 // by: its path, or, for an occurrence LLO numbers in a host file but stores no
-// node for (an injected language, ley-line-open-260fcf), InjectedAddress, as
+// node for (an injected language, ley-line-open-260fcf), injectedAddress, as
 // LLO's own wire shows it. ok is false only when the nid's file is not interned
 // either, so nothing anchors it.
 func (r *PathRenderer) OccurrencePath(nid int64) (string, bool, error) {
@@ -476,7 +476,7 @@ func (r *PathRenderer) OccurrencePath(nid int64) (string, bool, error) {
 	if err != nil || !ok {
 		return "", false, err
 	}
-	return InjectedAddress(source, nid), true, nil
+	return injectedAddress(source, nid), true, nil
 }
 
 // ParsedSourceLike reports whether any source file whose id matches the SQL
