@@ -53,7 +53,7 @@ func FlattenASTDB(db *sql.DB, sourceLike string, limit int) ([]any, error) {
 	// same query reads projection-v4 and projection-v6 (mache-90cb9f). On v6
 	// node_id is the nid, which is preorder, so the parent-first tiebreak
 	// holds there too.
-	body, err := lloschema.ASTSelect(sqlDB{db})
+	body, err := lloschema.ASTSelect(lloschema.DB(db))
 	if err != nil {
 		return nil, fmt.Errorf("flatten _ast: %w", err)
 	}

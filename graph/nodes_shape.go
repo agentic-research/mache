@@ -53,18 +53,63 @@ func (s *v6Shape) childID(parent, col string) string {
 	return parent + "/" + col
 }
 
-// idOf is the id of the node a reference row names: the column itself, or the
-// path of the nid it holds. ok is false for a nid with no node.
-func (s *v6Shape) idOf(col any) (string, bool, error) {
+// ids turns node-id columns, as node_defs, node_refs or nodes return them,
+// into node ids (see idFunc). A column naming no node is dropped, as a
+// dangling row names nothing a consumer can open.
+func (s *v6Shape) ids(cols []any) ([]string, error) {
+	id := s.idFunc()
+	out := make([]string, 0, len(cols))
+	for _, c := range cols {
+		v, ok, err := id(c)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+// idFunc returns the conversion from one node-id column to a node id: the
+// column itself, or the path of the nid it holds. On v6 it shares one
+// renderer across every call, so a batch names each shared ancestor once;
+// take a fresh one per batch.
+func (s *v6Shape) idFunc() func(col any) (string, bool, error) {
 	if s == nil {
-		id, ok := col.(string)
-		return id, ok, nil
+		return func(col any) (string, bool, error) {
+			id, ok := col.(string)
+			return id, ok, nil
+		}
 	}
-	nid, ok := col.(int64)
-	if !ok {
-		return "", false, nil
+	r := s.paths.Renderer()
+	return func(col any) (string, bool, error) {
+		nid, ok := col.(int64)
+		if !ok {
+			return "", false, nil
+		}
+		return r.Path(nid)
 	}
-	return s.paths.Path(nid)
+}
+
+// The columns node_defs and node_refs name nodes by. projection-v6 renamed
+// them and dropped node_refs.source_id: a reference's file is its site's,
+// found through the nid's file id.
+func (s *v6Shape) defNode() string { return s.pick("node_id", "nid") }
+
+func (s *v6Shape) refSite() string { return s.pick("node_id", "nid") }
+
+func (s *v6Shape) refContainer() string { return s.pick("container_node_id", "container_nid") }
+
+func (s *v6Shape) refSource() string {
+	return s.pick("source_id", "(SELECT id FROM _source WHERE file_id = nid >> "+strconv.Itoa(lloschema.V6FileShift)+")")
+}
+
+func (s *v6Shape) pick(v4, v6 string) string {
+	if s == nil {
+		return v4
+	}
+	return v6
 }
 
 func (s *v6Shape) close() {

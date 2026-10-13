@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // Resolution says WHY a reference did or did not reach a definition. It exists
@@ -73,12 +75,23 @@ type RefRange struct {
 // projection carries no spans, and nil is the honest answer rather than a
 // zero-valued range that reads as "line 0".
 func (g *SQLiteGraph) RefRangeOf(nodeID string) (*RefRange, error) {
-	if !ColumnExists(g.db, "_ast", "node_id") {
+	// _ast through lloschema's ASTSelect, the body of v_ast, so one query
+	// reads both projections. SQLite flattens the subquery, so on v6 the
+	// node_id filter is a primary-key lookup on _ast.nid.
+	body, err := lloschema.ASTSelect(lloschema.DB(g.db))
+	if err != nil {
+		return nil, fmt.Errorf("ref range for %s: %w", nodeID, err)
+	}
+	if body == "" {
 		return nil, nil
+	}
+	key, ok, err := g.key(nodeID)
+	if err != nil || !ok {
+		return nil, err
 	}
 	row := g.db.QueryRow(
 		`SELECT source_id, start_byte, end_byte, start_row, start_col, end_row, end_col
-		   FROM _ast WHERE node_id = ?`, nodeID)
+		   FROM (`+body+`) WHERE node_id = ?`, key)
 
 	var (
 		src                                string
@@ -140,13 +153,21 @@ func (g *SQLiteGraph) ResolveRef(nodeID string) (*RefTarget, error) {
 	// ordering a non-NULL qualifier first selects the row whose token can
 	// actually match a definition, and falls through to the single row for an
 	// unqualified call.
+	key, ok, err := g.key(nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("load reference %s: %w", nodeID, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("no reference at node %s", nodeID)
+	}
+	s := g.shape()
 	var token, qualifier, sourceID string
-	err := g.db.QueryRow(
-		`SELECT token, COALESCE(qualifier,''), source_id FROM node_refs
-		  WHERE node_id = ?
+	err = g.db.QueryRow(
+		`SELECT token, COALESCE(qualifier,''), `+s.refSource()+` FROM node_refs
+		  WHERE `+s.refSite()+` = ?
 		  ORDER BY (qualifier IS NOT NULL AND qualifier != '') DESC, token
 		  LIMIT 1`,
-		nodeID).Scan(&token, &qualifier, &sourceID)
+		key).Scan(&token, &qualifier, &sourceID)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("no reference at node %s", nodeID)
 	}
@@ -201,22 +222,14 @@ func (g *SQLiteGraph) importFor(qualifier, sourceID string) string {
 // so an ambiguous result is stable across runs — an unstable candidate list
 // makes a diffable report churn for no reason.
 func (g *SQLiteGraph) defsForToken(token string) ([]string, error) {
-	rows, err := g.db.Query(
-		`SELECT DISTINCT node_id FROM node_defs WHERE token = ? ORDER BY node_id`, token)
+	out, err := g.queryIDs(`SELECT DISTINCT `+g.shape().defNode()+` FROM node_defs WHERE token = ?`, token)
 	if err != nil {
 		return nil, fmt.Errorf("defs for %s: %w", token, err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	// Sorted as ids, not as whatever the column is: on v6 that is a nid,
+	// and nid order is not path order.
+	slices.Sort(out)
+	return out, nil
 }
 
 // narrowToPackage keeps only the definitions whose file sits under the

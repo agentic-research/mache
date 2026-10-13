@@ -17,7 +17,10 @@ bumps may include breaking changes.
   large the database is, checked against a 487k-node parse. Projecting
   source from such a `.db` (the AST walker behind `mache build`, `mount` and
   `serve`, and `--infer`'s schema inference) reads it too, with the same
-  nodes, matches and calls as from projection-v4. Smell rules and the build
+  nodes, matches and calls as from projection-v4. So do definitions,
+  references and callees (`find_definition`, `find_callers`, `find_callees`,
+  `resolve_ref`, `search role=definition`, and the `kind` filter). Before,
+  these silently came back empty on such a `.db`. Smell rules and the build
   cache follow in later changes.
 
 ### Fixed

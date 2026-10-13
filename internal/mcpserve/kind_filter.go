@@ -2,6 +2,7 @@ package mcpserve
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -113,55 +114,31 @@ func hasASTTable(qg graph.RefsQuerier) bool {
 	return rows.Next()
 }
 
-// resolveKindFromAST resolves a node's canonical kind from _ast.node_kind,
+// methodContainers are the kinds whose descendants' functions are methods.
+var methodContainers = map[string]bool{
+	"impl_item": true, "trait_item": true, "class_definition": true, "class_declaration": true,
+}
+
+// resolveKindFromAST resolves a node's canonical kind from its AST kind,
 // upgrading ambiguous function kinds to "method" when the node has a
-// method-container ancestor. Returns "" when the node is absent from
-// _ast or its node_kind is unmapped — caller falls back to path-segment.
-func resolveKindFromAST(qg graph.RefsQuerier, nodeID string) string {
-	rows, err := qg.QueryRefs(`SELECT node_kind FROM _ast WHERE node_id = ? LIMIT 1`, nodeID)
-	if err != nil {
+// method-container ancestor. Returns "" when the node has no AST row or its
+// kind is unmapped — caller falls back to path-segment.
+//
+// The kinds come from the graph's ASTKinder, so this file spells none of the
+// producer's columns: projection-v6 renamed them (mache-90cb9f).
+func resolveKindFromAST(ak graph.ASTKinder, nodeID string) string {
+	chain, ok, err := ak.ASTKindChain(nodeID)
+	if err != nil || !ok {
 		return ""
 	}
-	var nodeKind string
-	func() {
-		defer func() { _ = rows.Close() }()
-		if rows.Next() {
-			_ = rows.Scan(&nodeKind)
-		}
-	}()
-	canonical, ok := astNodeKindToCanonical[nodeKind]
+	canonical, ok := astNodeKindToCanonical[chain[0]]
 	if !ok {
 		return ""
 	}
-	if canonical == "function" && astNodeHasMethodContainerAncestor(qg, nodeID) {
+	if canonical == "function" && slices.ContainsFunc(chain[1:], func(k string) bool { return methodContainers[k] }) {
 		return "method"
 	}
 	return canonical
-}
-
-// astNodeHasMethodContainerAncestor walks the nodes.parent_id chain and
-// reports whether any ancestor's _ast.node_kind is a method container.
-// A single recursive CTE keeps this one round-trip regardless of depth.
-func astNodeHasMethodContainerAncestor(qg graph.RefsQuerier, nodeID string) bool {
-	// The depth column bounds recursion at 256 — real AST ancestry to a
-	// method container is shallow; the cap is purely a guard against a
-	// malformed leyline `nodes` table with a cyclic parent_id (which would
-	// otherwise spin forever). No legitimate source nests this deep.
-	rows, err := qg.QueryRefs(`
-		WITH RECURSIVE ancestors(id, depth) AS (
-			SELECT parent_id, 0 FROM nodes WHERE id = ?
-			UNION ALL
-			SELECT n.parent_id, a.depth + 1 FROM nodes n JOIN ancestors a ON n.id = a.id
-			WHERE n.parent_id IS NOT NULL AND n.parent_id != '' AND a.depth < 256
-		)
-		SELECT 1 FROM ancestors a JOIN _ast x ON x.node_id = a.id
-		WHERE x.node_kind IN ('impl_item','trait_item','class_definition','class_declaration')
-		LIMIT 1`, nodeID)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = rows.Close() }()
-	return rows.Next()
 }
 
 // filterDirIDsByKindGraph is the projection-aware kind filter. When the
@@ -181,12 +158,13 @@ func filterDirIDsByKindGraph(g graph.Graph, dirIDs []string, kind string) ([]str
 		return nil, false
 	}
 	qg, ok := g.(graph.RefsQuerier)
-	if !ok || !hasASTTable(qg) {
+	ak, isKinder := g.(graph.ASTKinder)
+	if !ok || !isKinder || !hasASTTable(qg) {
 		return filterDirIDsByKind(dirIDs, kind)
 	}
 	filtered := make([]string, 0, len(dirIDs))
 	for _, id := range dirIDs {
-		switch resolveKindFromAST(qg, id) {
+		switch resolveKindFromAST(ak, id) {
 		case kind:
 			filtered = append(filtered, id)
 		case "":

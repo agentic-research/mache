@@ -40,8 +40,8 @@ import (
 // Statements are compiled once and reused (sqlstmt.Lazy), as the
 // nodes-table reader's are.
 type V6Paths struct {
-	db                           *sql.DB
-	path, file, dir, single, nth *sqlstmt.Lazy
+	db                                *sql.DB
+	path, file, dir, single, nth, hop *sqlstmt.Lazy
 }
 
 // V6RootNid is the root directory's nid: directory ids are stored negated,
@@ -87,12 +87,14 @@ WHERE n.parent_nid = ? AND k.raw_kind = ?`),
 		nth: sqlstmt.NewLazy(`SELECT n.nid FROM nodes n JOIN kinds k ON k.kind_id = n.kind_id
 WHERE n.parent_nid = ? AND k.raw_kind = ?
 ORDER BY n.ord LIMIT 1 OFFSET ?`),
+		hop: sqlstmt.NewLazy(`SELECT n.parent_nid, v.name FROM nodes n JOIN v_node_name v ON v.nid = n.nid
+WHERE n.nid = ?`),
 	}
 }
 
 // Close releases the compiled statements. It does not close the db.
 func (p *V6Paths) Close() {
-	for _, s := range []*sqlstmt.Lazy{p.path, p.file, p.dir, p.single, p.nth} {
+	for _, s := range []*sqlstmt.Lazy{p.path, p.file, p.dir, p.single, p.nth, p.hop} {
 		s.Close()
 	}
 }
@@ -218,4 +220,55 @@ func (p *V6Paths) one(s *sqlstmt.Lazy, args ...any) (int64, bool, error) {
 		return 0, false, err
 	}
 	return v.Int64, v.Valid, nil
+}
+
+// PathRenderer renders the paths of many nodes, naming each ancestor once.
+//
+// Path walks a node's whole ancestry per call, which is right for one node
+// and wasteful for a table's worth: the references in a file share every
+// ancestor down to their functions. A renderer remembers each path it builds,
+// so rendering n nodes costs one statement per DISTINCT node on their paths,
+// however many rows name them. It is LLO's own PathRenderer
+// (ll-core/schema), for the same reason. Use one per batch and drop it; it
+// does not see later changes to the database.
+type PathRenderer struct {
+	p    *V6Paths
+	memo map[int64]string
+}
+
+// Renderer returns a renderer over p's database.
+func (p *V6Paths) Renderer() *PathRenderer {
+	return &PathRenderer{p: p, memo: map[int64]string{}}
+}
+
+// Path returns the path nid renders as, and false when there is no such node.
+func (r *PathRenderer) Path(nid int64) (string, bool, error) {
+	if path, ok := r.memo[nid]; ok {
+		return path, true, nil
+	}
+	stmt, err := r.p.hop.Get(r.p.db)
+	if err != nil {
+		return "", false, err
+	}
+	var parent sql.NullInt64
+	var name string
+	if err := stmt.QueryRow(nid).Scan(&parent, &name); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	path := name
+	if parent.Valid {
+		above, ok, err := r.Path(parent.Int64)
+		if err != nil || !ok {
+			return "", ok, err
+		}
+		// Only the root has an empty name, and it contributes no segment.
+		if above != "" {
+			path = above + "/" + name
+		}
+	}
+	r.memo[nid] = path
+	return path, true, nil
 }
