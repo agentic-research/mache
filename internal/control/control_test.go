@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // ---------------------------------------------------------------------------
@@ -553,7 +554,30 @@ func TestValidatePath_RelativePathResolvesToCwd(t *testing.T) {
 
 // A reader that finds the sequence odd waits for the publish to finish rather
 // than copying a payload that is half written.
-func TestGetCurrentRoot_WaitsOutAPublishInFlight(t *testing.T) {
+// lockAsPublisher takes the publish lock on its own open of the control file,
+// as a publisher in another process holds it, and returns the release.
+func lockAsPublisher(t *testing.T, ctrl *Controller) func() {
+	t.Helper()
+	f, err := os.OpenFile(ctrl.path, os.O_RDWR, 0)
+	require.NoError(t, err)
+	require.NoError(t, unix.Flock(int(f.Fd()), unix.LOCK_EX))
+	return func() {
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = f.Close()
+	}
+}
+
+// dieMidPublish leaves the control block as a publisher killed mid-publish
+// leaves it: sequence odd, half of a new root written, no lock held.
+func dieMidPublish(ctrl *Controller) {
+	atomic.AddUint64((*uint64)(unsafe.Pointer(&ctrl.data[offSync])), 1)
+	ctrl.storeWords(offCurrentRoot, bytes.Repeat([]byte{9}, currentRootLen/2))
+}
+
+// A live publisher holds the publish lock while the sequence is odd. The
+// reader waits it out, however long, and returns the finished publish; the
+// test advances when the reader reports it is waiting, not after a duration.
+func TestGetCurrentRoot_WaitsOutALivePublish(t *testing.T) {
 	ctrl, _ := newController(t)
 	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/old", 1, [32]byte{1}))
 
@@ -565,17 +589,74 @@ func TestGetCurrentRoot_WaitsOutAPublishInFlight(t *testing.T) {
 		runtime.Gosched()
 	}
 
+	unlock := lockAsPublisher(t, ctrl)
 	seq := (*uint64)(unsafe.Pointer(&ctrl.data[offSync]))
 	atomic.AddUint64(seq, 1) // a writer has begun: odd
 	got := make(chan [32]byte)
 	go func() { got <- ctrl.GetCurrentRoot() }()
 
-	<-waiting // the reader saw the publish in flight and did not return
-	// The writer finishes: new root, then even.
+	<-waiting // the reader found the lock held and did not return
+	// The writer finishes: new root, then even, then releases the lock.
 	ctrl.storeWords(offCurrentRoot, bytes.Repeat([]byte{2}, currentRootLen))
 	atomic.AddUint64(seq, 1)
+	unlock()
 	assert.Equal(t, [32]byte(bytes.Repeat([]byte{2}, currentRootLen)), <-got,
 		"the reader returns the finished publish, not the payload it found half written")
+}
+
+// A publisher that died mid-publish left the sequence odd and released its
+// lock when it died (ley-line-open-0a8c14). A reader neither waits forever
+// nor hands out the torn root: it answers "nothing published", with the path
+// a restarted publisher needs.
+func TestGetCurrentRoot_ADeadPublisherReadsAsNothingPublished(t *testing.T) {
+	ctrl, _ := newController(t)
+	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/a", 7, [32]byte{1}))
+	dieMidPublish(ctrl)
+
+	defer func(orig func()) { yieldWhileOdd = orig }(yieldWhileOdd)
+	yieldWhileOdd = func() { t.Fatal("waited for a publisher that is gone") }
+
+	assert.True(t, IsZeroRoot(ctrl.GetCurrentRoot()), "neither the old root nor a torn one")
+	assert.Equal(t, "/tmp/a", ctrl.GetArenaPath(), "the path a restart needs survives")
+	assert.Equal(t, uint64(7), ctrl.GetArenaSize())
+}
+
+// The next publish after a dead publisher keeps the sequence odd while it
+// writes, rather than turning it even over a half-written payload, and ends
+// even with its own root whole.
+func TestPublish_AfterADeadPublisherKeepsTheSequenceOddUntilWhole(t *testing.T) {
+	ctrl, _ := newController(t)
+	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/a", 1, [32]byte{1}))
+	dieMidPublish(ctrl)
+
+	seq := (*uint64)(unsafe.Pointer(&ctrl.data[offSync]))
+	var oddMidPublish bool
+	defer func(orig func()) { duringPublish = orig }(duringPublish)
+	duringPublish = func() { oddMidPublish = atomic.LoadUint64(seq)&1 == 1 }
+
+	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/b", 2, [32]byte{2}))
+	assert.True(t, oddMidPublish, "odd while the payload is written")
+	assert.Zero(t, atomic.LoadUint64(seq)&1, "even once it is whole")
+	assert.Equal(t, [32]byte{2}, ctrl.GetCurrentRoot())
+	assert.Equal(t, "/tmp/b", ctrl.GetArenaPath())
+}
+
+// A publish holds the publish lock while the payload is half written, so a
+// reader anywhere, this process included, can tell it from a dead one.
+func TestPublish_HoldsThePublishLockWhileOdd(t *testing.T) {
+	ctrl, _ := newController(t)
+	other, err := os.Open(ctrl.path)
+	require.NoError(t, err)
+	defer func() { _ = other.Close() }()
+
+	var probe error
+	defer func(orig func()) { duringPublish = orig }(duringPublish)
+	duringPublish = func() { probe = unix.Flock(int(other.Fd()), unix.LOCK_SH|unix.LOCK_NB) }
+
+	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/a", 1, [32]byte{1}))
+	assert.ErrorIs(t, probe, unix.EWOULDBLOCK, "the lock is held mid-publish")
+	require.NoError(t, unix.Flock(int(other.Fd()), unix.LOCK_SH|unix.LOCK_NB), "and released after")
+	_ = unix.Flock(int(other.Fd()), unix.LOCK_UN)
 }
 
 // The property the seqlock exists for: with a writer publishing distinct

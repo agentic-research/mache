@@ -50,7 +50,12 @@ const (
 type Controller struct {
 	path string
 	file *os.File
-	data []byte
+	// probe is a second open of the control file, on which a reader tests the
+	// publish lock. flock(2) locks belong to an open file description, so a
+	// shared lock taken on file itself would quietly convert this process's
+	// own exclusive publish lock instead of contending with it.
+	probe *os.File
+	data  []byte
 }
 
 // OpenOrCreate opens or creates a control file at the given path.
@@ -113,7 +118,13 @@ func OpenOrCreate(path string) (*Controller, error) {
 		}
 	}
 
-	return &Controller{path: path, file: f, data: data}, nil
+	probe, err := os.Open(path)
+	if err != nil {
+		_ = unix.Munmap(data)
+		_ = f.Close()
+		return nil, fmt.Errorf("open control file for the publish lock: %w", err)
+	}
+	return &Controller{path: path, file: f, probe: probe, data: data}, nil
 }
 
 // The payload (path, size, root) is 296 bytes, which nothing writes
@@ -126,6 +137,19 @@ func OpenOrCreate(path string) (*Controller, error) {
 //   - a reader loads the sequence, retries while it is odd, copies the
 //     payload, reloads the sequence, and keeps the copy only if it did not
 //     move. A publish that began or finished during the copy changed it.
+//
+// A publisher can die mid-publish and leave the sequence odd. So a publish
+// also holds an exclusive flock(2) on the control file for as long as the
+// sequence is odd, as ley-line-open's does (ley-line-open-0a8c14). A reader
+// facing an odd sequence whose lock it can take, and which does not move
+// while it holds the lock shared, knows the publisher is gone: the payload
+// may be torn, so it answers the zero root ("nothing published"), which
+// every consumer refuses to load data under, with the path and size as left,
+// so a restarted publisher can find its arena. A publish that finds the
+// sequence already odd keeps it odd, and ends even over a whole payload. The
+// lock decides, not a clock, so a publisher that takes no lock (leyline
+// before the release that added it) reads as dead while odd: every process
+// publishing to one control block moves to the lock together.
 //
 // Every payload word is moved with an 8-byte atomic load or store (the
 // fields are 8-byte aligned in a page-aligned mapping). Go has no volatile
@@ -166,25 +190,53 @@ func (c *Controller) snapshot() snapshot {
 	for {
 		before := atomic.LoadUint64(seq)
 		if before&1 == 1 {
-			yieldWhileOdd() // a publish is in flight
+			if c.publisherIsDead(before) {
+				s := c.copyPayload()
+				s.root = [currentRootLen]byte{}
+				return s
+			}
+			yieldWhileOdd() // a live publish is in flight
 			continue
 		}
-		var s snapshot
-		c.loadWords(offArenaPath, s.path[:])
-		s.size = atomic.LoadUint64(c.word(offArenaSize))
-		c.loadWords(offCurrentRoot, s.root[:])
+		s := c.copyPayload()
 		if atomic.LoadUint64(seq) == before {
 			return s
 		}
 	}
 }
 
+// copyPayload copies the payload as it stands, consistent or not.
+func (c *Controller) copyPayload() snapshot {
+	var s snapshot
+	c.loadWords(offArenaPath, s.path[:])
+	s.size = atomic.LoadUint64(c.word(offArenaSize))
+	c.loadWords(offCurrentRoot, s.root[:])
+	return s
+}
+
+// publisherIsDead reports whether the odd sequence odd was left by a publisher
+// that is gone: no one holds the publish lock, and the sequence does not move
+// while this reader holds it shared, which keeps a new publish from starting.
+// A held lock, a failed probe or a sequence that moved all say "keep waiting".
+func (c *Controller) publisherIsDead(odd uint64) bool {
+	fd := int(c.probe.Fd())
+	if err := unix.Flock(fd, unix.LOCK_SH|unix.LOCK_NB); err != nil {
+		return false
+	}
+	unmoved := atomic.LoadUint64(c.word(offSync)) == odd
+	_ = unix.Flock(fd, unix.LOCK_UN)
+	return unmoved
+}
+
+// duringPublish runs while a publish holds the lock with the payload half
+// written. A test seam, so a test can look at the control block mid-publish
+// instead of racing one.
+var duringPublish = func() {}
+
 // publish writes the payload under the seqlock. root nil keeps the
 // published root, for a re-advertisement that moves only path and size.
 //
-// The protocol assumes one writer per control block at a time, as LLO's
-// does; the counter itself is incremented atomically, so two writers
-// cannot lose an increment.
+// The publish lock serializes writers, across processes and within this one.
 func (c *Controller) publish(path string, size uint64, root *[currentRootLen]byte) error {
 	if len(path) >= arenaPathLen {
 		return fmt.Errorf("path too long (max %d)", arenaPathLen-1)
@@ -192,15 +244,36 @@ func (c *Controller) publish(path string, size uint64, root *[currentRootLen]byt
 	var buf [arenaPathLen]byte
 	copy(buf[:], path)
 
+	fd := int(c.file.Fd())
+	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+		return fmt.Errorf("take the control block's publish lock: %w", err)
+	}
+	defer func() { _ = unix.Flock(fd, unix.LOCK_UN) }()
+
 	seq := c.word(offSync)
-	atomic.AddUint64(seq, 1) // odd: the payload is changing
+	beginPublish(seq) // odd: the payload is changing
 	c.storeWords(offArenaPath, buf[:])
+	duringPublish()
 	atomic.StoreUint64(c.word(offArenaSize), size)
 	if root != nil {
 		c.storeWords(offCurrentRoot, root[:])
 	}
 	atomic.AddUint64(seq, 1) // even: the payload is whole
 	return nil
+}
+
+// beginPublish makes the sequence odd. Called with the publish lock held, so
+// a sequence that is already odd cannot belong to a live publish: a publisher
+// died mid-publish. It stays odd, since turning it even would let readers copy
+// this publish half-written, and this publish's last increment makes it even
+// over a whole payload.
+func beginPublish(seq *uint64) {
+	for {
+		cur := atomic.LoadUint64(seq)
+		if cur&1 == 1 || atomic.CompareAndSwapUint64(seq, cur, cur+1) {
+			return
+		}
+	}
 }
 
 // GetCurrentRoot returns the BLAKE3 root hash of the arena payload that
@@ -258,6 +331,7 @@ func (c *Controller) Close() error {
 	if err := unix.Munmap(c.data); err != nil {
 		return err
 	}
+	_ = c.probe.Close()
 	return c.file.Close()
 }
 

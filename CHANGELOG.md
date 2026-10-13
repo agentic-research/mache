@@ -21,6 +21,14 @@ bumps may include breaking changes.
     root and half of the next. A `.ctrl` written by an older leyline is
     refused with a message saying so; stop that daemon and let mache start
     the pinned one, which it caches separately per pin.
+  - **A publisher killed mid-publish no longer wedges the control block**
+    (`mache-4eadcc`, with ley-line-open-0a8c14). It left the seqlock odd, so
+    readers waited forever. A publish now holds an exclusive lock on the
+    `.ctrl` file while the sequence is odd. A reader that finds it odd and
+    the lock free answers "nothing published" (the zero root, which no
+    consumer loads data under) instead of hanging, and the next publish
+    repairs it. mache and the pinned leyline speak this together; a
+    leyline from before the lock reads as a dead publisher mid-publish.
   - **The daemon's NFS server listens on loopback only** (v0.20.2); v0.19.1
     listened on all interfaces. It also shuts down gracefully on SIGTERM,
     unmounts on exit, and makes NFS writes durable at the client's
