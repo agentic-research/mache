@@ -17,7 +17,8 @@ import (
 // the rule under test reports without changing what it queries.
 func TestWhere_ShapesTheNodesRow(t *testing.T) {
 	b := New(t, Leyline)
-	b.Construct("pkg", Where{Directory: true})
+	b.Construct("pkg")
+	b.Construct("pkg/Orphan/name", Where{Leaf: true})
 	// id, name and parent must agree: ley-line writes nodes.name as the id's
 	// last segment, and projection-v4 DERIVES parent_id by stripping
 	// "/"+name from the id. A fixture that disagrees describes a node the
@@ -33,12 +34,12 @@ func TestWhere_ShapesTheNodesRow(t *testing.T) {
 		"pkg/Orphan").Scan(&parent, &name, &kind, &source))
 	assert.Equal(t, "pkg", parent)
 	assert.Equal(t, "Orphan", name)
-	assert.Equal(t, 1, kind, "a construct is a leaf node")
+	assert.Equal(t, 1, kind, "a construct has children by default: graph.NodeKindDir")
 	assert.Equal(t, "pkg/orphan.go", source)
 
 	require.NoError(t, f.DB().QueryRow(
-		`SELECT kind FROM nodes WHERE id='pkg'`).Scan(&kind))
-	assert.Equal(t, 0, kind, "Where{Directory:true} marks a directory node")
+		`SELECT kind FROM nodes WHERE id='pkg/Orphan/name'`).Scan(&kind))
+	assert.Equal(t, 0, kind, "Where{Leaf:true} marks a leaf: graph.NodeKindFile")
 }
 
 // TestWhere_RefusesAnIncoherentNodeShape pins the guard that projection-v4 made

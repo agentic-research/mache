@@ -6,6 +6,17 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **mache reads ley-line-open's projection-v6 databases** (`mache-90cb9f`,
+  in progress). leyline v0.20.x writes nodes as integer ids with paths
+  derived on demand, and mache's direct reader used to fail on every such
+  `.db`. Listing directories, reading nodes and their content, source
+  locations and callers now work on them, with the same answers as on a
+  projection-v4 `.db` of the same code. A lookup costs the same however
+  large the database is, checked against a 487k-node parse. The AST walker,
+  smell rules and build cache follow in later changes.
+
 ### Fixed
 
 - **Saving through the NFS mount no longer zero-fills a file sent in pieces**

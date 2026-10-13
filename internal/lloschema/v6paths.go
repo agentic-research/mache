@@ -44,9 +44,14 @@ type V6Paths struct {
 	path, file, dir, single, nth *sqlstmt.Lazy
 }
 
-// rootNid is the root directory's nid: directory ids are stored negated, and
-// the root is directory 1.
-const rootNid = -1
+// V6RootNid is the root directory's nid: directory ids are stored negated,
+// and the root is directory 1.
+const V6RootNid = -1
+
+// V6FileShift places a file's id in the top bits of every nid below it: a
+// file is file_id << V6FileShift, and the syntax nodes in it add their
+// preorder ordinal. So nid >> V6FileShift is the file a node belongs to.
+const V6FileShift = 24
 
 // NewV6Paths returns path addressing over a projection-v6 database. The
 // caller owns db; call Close before closing it.
@@ -116,7 +121,7 @@ func (p *V6Paths) Path(nid int64) (string, bool, error) {
 // "" is the root directory.
 func (p *V6Paths) Resolve(path string) (int64, bool, error) {
 	if path == "" {
-		return rootNid, true, nil
+		return V6RootNid, true, nil
 	}
 	segs := strings.Split(path, "/")
 	// Directories and files first: descend directories while segments name
@@ -131,7 +136,7 @@ func (p *V6Paths) Resolve(path string) (int64, bool, error) {
 			return 0, false, err
 		}
 		if ok {
-			cur, inFile = fileID<<24, true
+			cur, inFile = fileID<<V6FileShift, true
 			continue
 		}
 		sub, ok, err := p.one(p.dir, dirID, segs[i])

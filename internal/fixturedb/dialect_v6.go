@@ -96,7 +96,7 @@ func (leylineV6Dialect) emitNodes(e *emitter) {
 // children (every directory and file does), 0 for a leaf.
 func (e *emitter) v6NodeKind(n *v6Node) int {
 	if c, ok := e.b.constructs[ConstructID(n.path)]; ok && n.path != "" {
-		if c.dirKind {
+		if c.leaf {
 			return 0
 		}
 		return 1

@@ -77,8 +77,8 @@ func (b *Builder) Construct(id ConstructID, where ...Where) *Builder {
 		requireParentMatchesID(b.t, id, w.Parent, c.name)
 		c.parent = w.Parent
 	}
-	if w.Directory {
-		c.dirKind = true
+	if w.Leaf {
+		c.leaf = true
 	}
 	return b
 }

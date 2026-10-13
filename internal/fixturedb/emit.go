@@ -89,7 +89,7 @@ func (e *emitter) insertV4Nodes() {
 	for _, id := range e.b.order {
 		c := e.b.constructs[id]
 		kind := 1
-		if c.dirKind {
+		if c.leaf {
 			kind = 0
 		}
 		if e.derivedParent {
