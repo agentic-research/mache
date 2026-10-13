@@ -14,8 +14,11 @@ bumps may include breaking changes.
   `.db`. Listing directories, reading nodes and their content, source
   locations and callers now work on them, with the same answers as on a
   projection-v4 `.db` of the same code. A lookup costs the same however
-  large the database is, checked against a 487k-node parse. The AST walker,
-  smell rules and build cache follow in later changes.
+  large the database is, checked against a 487k-node parse. Projecting
+  source from such a `.db` (the AST walker behind `mache build`, `mount` and
+  `serve`, and `--infer`'s schema inference) reads it too, with the same
+  nodes, matches and calls as from projection-v4. Smell rules and the build
+  cache follow in later changes.
 
 ### Fixed
 

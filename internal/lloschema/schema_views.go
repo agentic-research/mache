@@ -1,6 +1,9 @@
 package lloschema
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // The boundary between mache's rule vocabulary and ley-line-open's physical
 // schema (mache-be17ce).
@@ -42,7 +45,7 @@ import "fmt"
 // `Requires: ["v_ast"]` skip them instead of failing at query time — the same
 // degradation the physical `Requires: ["_ast"]` gave before.
 func ensureSchemaViews(qg Querier) error {
-	astBody, err := astViewBody(qg)
+	astBody, err := ASTSelect(qg)
 	if err != nil {
 		return err
 	}
@@ -66,9 +69,11 @@ func ensureSchemaViews(qg Querier) error {
 	return nil
 }
 
-// astViewBody returns the SELECT for v_ast, or "" when the producer wrote no
-// usable `_ast`.
-func astViewBody(qg Querier) (string, error) {
+// ASTSelect returns the SELECT behind v_ast, or "" when the producer wrote no
+// usable `_ast`. It is exported for a consumer that cannot rely on the TEMP
+// view, which exists only on the connection that installed it: such a
+// consumer reads `FROM (<ASTSelect>) a` on whatever connection it gets.
+func ASTSelect(qg Querier) (string, error) {
 	v6, err := TableHasColumn(qg, "_ast", "nid")
 	if err != nil {
 		return "", fmt.Errorf("probe _ast.nid: %w", err)
@@ -84,7 +89,7 @@ func astViewBody(qg Querier) (string, error) {
 		       a.node_hash
 		FROM _ast a
 		JOIN kinds   k ON k.kind_id = a.kind_id
-		JOIN _source s ON s.file_id = (a.nid >> 24)`, nil
+		JOIN _source s ON s.file_id = (a.nid >> ` + strconv.Itoa(V6FileShift) + `)`, nil
 	}
 
 	v4, err := TableHasColumn(qg, "_ast", "node_id")

@@ -116,6 +116,9 @@ func (w *ASTWalker) fileIndex(sourceID string) (*fileIndex, error) {
 // unconsumed row carrying its hash. A child the list does not contain is a
 // db that contradicts itself and is an error, not a node without a field.
 func (w *ASTWalker) loadFileIndex(sourceID string) (*fileIndex, error) {
+	if w.isV6() {
+		return w.loadFileIndexV6(sourceID)
+	}
 	idx := newFileIndex()
 	rows, err := w.db.Query(`SELECT n.id, COALESCE(n.parent_id, ''), n.name, n.kind,
 	        COALESCE(n.record, ''), a.node_kind, a.start_byte, a.end_byte, a.node_hash
@@ -143,7 +146,10 @@ func (w *ASTWalker) loadFileIndex(sourceID string) (*fileIndex, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	lists, err := w.loadChildLists(sourceID)
+	lists, err := w.queryChildLists(`SELECT parent_hash, child_hash, COALESCE(field, '')
+	 FROM node_child
+	 WHERE parent_hash IN (SELECT node_hash FROM _ast WHERE source_id = ?)
+	 ORDER BY parent_hash, ordinal`, sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -159,13 +165,12 @@ type childListRow struct {
 	field string
 }
 
-// loadChildLists reads the node_child lists of every subtree in the file,
-// keyed by parent hash, each in ordinal order.
-func (w *ASTWalker) loadChildLists(sourceID string) (map[string][]childListRow, error) {
-	rows, err := w.db.Query(`SELECT parent_hash, child_hash, COALESCE(field, '')
-	 FROM node_child
-	 WHERE parent_hash IN (SELECT node_hash FROM _ast WHERE source_id = ?)
-	 ORDER BY parent_hash, ordinal`, sourceID)
+// queryChildLists reads the node_child lists of every subtree in the file,
+// keyed by parent hash, each in ordinal order. query selects them for the
+// file whose _source id is its one parameter; it differs by projection only in
+// how the file's subtrees are found.
+func (w *ASTWalker) queryChildLists(query, sourceID string) (map[string][]childListRow, error) {
+	rows, err := w.db.Query(query, sourceID)
 	if err != nil {
 		return nil, err
 	}

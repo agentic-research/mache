@@ -46,9 +46,9 @@ const testASTSource = "package main\n\nfunc Validate(x int) error {\n\treturn ni
 //
 // The database is file-backed with one connection, so the concurrency tests
 // share it too.
-func seedTestAST(t *testing.T) *sql.DB {
+func seedTestAST(t *testing.T, p fixturedb.Producer) *sql.DB {
 	t.Helper()
-	b := fixturedb.New(t, fixturedb.Leyline)
+	b := fixturedb.New(t, p)
 	b.Source("main.go", "go", testASTSource)
 	b.ASTNode("main.go", "source_file", "main.go", fixturedb.Bytes(0, len(testASTSource)))
 	b.ASTNode("main.go/package_clause", "package_clause", "main.go", fixturedb.Bytes(0, 12))
@@ -93,7 +93,7 @@ func seedTestAST(t *testing.T) *sql.DB {
 }
 
 func TestASTWalker_QueryFunctionDeclarations(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -113,7 +113,7 @@ func TestASTWalker_QueryFunctionDeclarations(t *testing.T) {
 }
 
 func TestASTWalker_QueryTypeDeclarations(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -128,7 +128,7 @@ func TestASTWalker_QueryTypeDeclarations(t *testing.T) {
 }
 
 func TestASTWalker_ContextScopesSubtree(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -147,7 +147,7 @@ func TestASTWalker_ContextScopesSubtree(t *testing.T) {
 }
 
 func TestASTWalker_CaptureOrigin(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -187,9 +187,9 @@ const hclBlocksSource = "resource \"aws_instance\" {\n  ami = \"abc\"\n}\n\n" +
 //
 // HCL's grammar names no fields, so no child carries one — a block's type,
 // labels and body are distinguished by kind and position alone.
-func seedHCLBlocksAST(t *testing.T) *sql.DB {
+func seedHCLBlocksAST(t *testing.T, p fixturedb.Producer) *sql.DB {
 	t.Helper()
-	b := fixturedb.New(t, fixturedb.Leyline)
+	b := fixturedb.New(t, p)
 	b.Source("main.tf", "hcl", hclBlocksSource)
 	b.ASTNode("main.tf", "config_file", "main.tf", fixturedb.Bytes(0, len(hclBlocksSource)))
 	b.ASTNode("main.tf/body", "body", "main.tf", fixturedb.Bytes(0, 81))
@@ -208,7 +208,7 @@ func seedHCLBlocksAST(t *testing.T) *sql.DB {
 }
 
 func TestASTWalker_PredicateEqFilter(t *testing.T) {
-	db := seedHCLBlocksAST(t)
+	db := seedHCLBlocksAST(t, fixturedb.Leyline)
 	w := NewASTWalker(db)
 	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
 
@@ -226,7 +226,7 @@ func TestASTWalker_PredicateEqFilter(t *testing.T) {
 // filter captures using the capture's resolved text. Implements bead
 // mache-37646f — replaces the previous "rejects #match?" behavior.
 func TestASTWalker_MatchPredicate(t *testing.T) {
-	db := seedHCLBlocksAST(t)
+	db := seedHCLBlocksAST(t, fixturedb.Leyline)
 	w := NewASTWalker(db)
 	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
 
@@ -259,7 +259,7 @@ func TestASTWalker_MatchPredicate(t *testing.T) {
 }
 
 func TestSelectWalker_ReturnsASTWalkerWhenASTTableExists(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w, err := SelectWalker(db)
@@ -449,7 +449,7 @@ func TestParseSelector_MatchPredicates(t *testing.T) {
 // predicates (#not-eq?, #any-eq?, #is?, #is-not?) are rejected with an
 // error rather than silently ignored.
 func TestASTWalker_NotEqPredicateSilentlyIgnored(t *testing.T) {
-	db := seedHCLBlocksAST(t)
+	db := seedHCLBlocksAST(t, fixturedb.Leyline)
 	w := NewASTWalker(db)
 	root := ASTRoot{DB: db, SourceID: "main.tf", ParentPrefix: ""}
 
@@ -464,7 +464,7 @@ func TestASTWalker_NotEqPredicateSilentlyIgnored(t *testing.T) {
 // byte ranges for named captures (e.g., @name), not just @scope. The _ast table
 // has start_byte/end_byte for every node — these are stored in astMatch.captureRanges.
 func TestASTWalker_CaptureOriginNamedCapture(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -590,7 +590,7 @@ func FuzzParseSelector(f *testing.F) {
 // Uses a temp file DB because :memory: gives each pool connection its own
 // isolated database — concurrent queries would fail with "no such table".
 func TestASTWalker_ConcurrentQueries(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -639,7 +639,7 @@ func TestASTWalker_ConcurrentQueries(t *testing.T) {
 // TestASTWalker_RaceSelectWalker runs SelectWalker concurrently — it queries
 // sqlite_master and creates walkers, so connection pool behavior matters.
 func TestASTWalker_RaceSelectWalker(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	const goroutines = 10

@@ -1,6 +1,8 @@
 package lloschema
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -53,4 +55,38 @@ func TestEnsureViews_InstallsTheVocabulary(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 	require.True(t, rows.Next(), "v_defs must surface a seeded definition, not just exist")
+}
+
+// ASTSelect is v_ast's body, usable on any connection as a subquery, and reads
+// the same rows from projection-v4 and projection-v6 (node ids aside, which
+// are paths on one and nids on the other).
+func TestASTSelect_SameRowsFromProjectionV4AndV6(t *testing.T) {
+	rowsOf := func(p fixturedb.Producer) []string {
+		f := paritySpec(t, p)
+		body, err := ASTSelect(sqlQuerier{db: f.DB()})
+		require.NoError(t, err)
+		require.NotEmpty(t, body)
+		rows, err := f.DB().Query(`SELECT source_id, node_kind, start_byte, end_byte FROM (` + body + `)`)
+		require.NoError(t, err)
+		defer func() { _ = rows.Close() }()
+		var out []string
+		for rows.Next() {
+			var src, kind string
+			var s, e int
+			require.NoError(t, rows.Scan(&src, &kind, &s, &e))
+			out = append(out, fmt.Sprintf("%s %s [%d,%d)", src, kind, s, e))
+		}
+		require.NoError(t, rows.Err())
+		slices.Sort(out)
+		return out
+	}
+	v4 := rowsOf(fixturedb.Leyline)
+	require.NotEmpty(t, v4)
+	assert.Equal(t, v4, rowsOf(fixturedb.LeylineV6))
+
+	// A mache projection has no _ast: nothing to select, said as "".
+	_, standalone := fixturedb.New(t, fixturedb.Standalone).Construct("a.go/F").Build()
+	body, err := ASTSelect(sqlQuerier{db: standalone.DB()})
+	require.NoError(t, err)
+	assert.Empty(t, body)
 }

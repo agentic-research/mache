@@ -3,6 +3,7 @@ package lloschema
 import (
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -291,4 +292,28 @@ func TestV6Paths_RoundTripOverARealParse(t *testing.T) {
 		require.Equal(t, nid, back, "Resolve(Path(%d)) = Resolve(%q)", nid, got)
 	}
 	t.Logf("round-tripped %d nodes", len(nids))
+}
+
+// V6FileNids selects exactly one file's nodes, by the file's _source id: not
+// the file before it, not the file after it.
+func TestV6FileNids_SelectsOneFile(t *testing.T) {
+	f := v6PathsSpec(t)
+	want := allNodes(t, f.DB())
+	for _, src := range []string{"main.go", "pkg/a.go", "pkg/sub/b.go"} {
+		rows, err := f.DB().Query(`SELECT nid FROM nodes WHERE `+V6FileNids("nid")+` ORDER BY nid`, src)
+		require.NoError(t, err)
+		var got []string
+		for rows.Next() {
+			var nid int64
+			require.NoError(t, rows.Scan(&nid))
+			got = append(got, want[nid])
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.NotEmpty(t, got, src)
+		assert.Equal(t, src, got[0], "the file node comes first")
+		for _, p := range got {
+			assert.True(t, p == src || strings.HasPrefix(p, src+"/"), "%s is not in %s", p, src)
+		}
+	}
 }

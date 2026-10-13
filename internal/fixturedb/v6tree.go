@@ -21,7 +21,9 @@ import (
 //   - every directory is a nodes row with nid = -dir_id; the root is dir 1, nid
 //     -1, with an empty name and no parent;
 //   - every file is a row with nid = file_id<<24, parent -dir_id, its name
-//     interned, and kind source_file; file ids follow sorted path order;
+//     interned, and the kind of its grammar's root (source_file for Go,
+//     config_file for HCL), because the file node IS that root; file ids
+//     follow sorted path order;
 //   - every syntax node is file_id<<24 | ordinal, numbered in preorder by
 //     sibling order, with no stored name: v_node_name renders it as its raw
 //     kind, plus "_k" (the k-th sibling of that kind by ord) when the parent
@@ -121,6 +123,7 @@ func (tr *v6Tree) ensureFile(file string) *v6Node {
 	}
 	n := tr.child(parent, file, path.Base(file))
 	n.isFile = true
+	// Until an ASTNode declares the root's kind, assume Go's.
 	n.kind = "source_file"
 	tr.files = append(tr.files, n)
 	return n

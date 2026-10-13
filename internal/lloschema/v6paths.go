@@ -53,6 +53,17 @@ const V6RootNid = -1
 // preorder ordinal. So nid >> V6FileShift is the file a node belongs to.
 const V6FileShift = 24
 
+// V6FileNids is a SQL condition on the nid column col that holds for exactly
+// the nodes of one file, the one whose _source id is the statement's FIRST
+// parameter. It is a range on the nid, so a primary-key search, where
+// filtering on the file id derived from each row (nid >> V6FileShift) would
+// scan the table. The file id is looked up once: the subquery is constant.
+func V6FileNids(col string) string {
+	file := "(SELECT file_id FROM _source WHERE id = ?1)"
+	shift := strconv.Itoa(V6FileShift)
+	return col + " >= " + file + " << " + shift + " AND " + col + " < (" + file + " + 1) << " + shift
+}
+
 // NewV6Paths returns path addressing over a projection-v6 database. The
 // caller owns db; call Close before closing it.
 func NewV6Paths(db *sql.DB) *V6Paths {
