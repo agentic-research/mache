@@ -36,7 +36,7 @@ func leylineShapedGraph(t *testing.T, p fixturedb.Producer) graph.Graph {
 	return sg
 }
 
-// TestTokenForNode_ResolvesLeylineIDsToTheirSymbol is the regression. Before
+// TestDefTokenFor_ResolvesLeylineIDsToTheirSymbol is the regression. Before
 // the fix, both get_impact and get_dataflow derived the lookup token with
 // filepath.Base(nodeID), which on a leyline projection yields
 // "function_declaration" — a string that matches nothing real, and matches
@@ -44,9 +44,9 @@ func leylineShapedGraph(t *testing.T, p fixturedb.Producer) graph.Graph {
 // projection: 0 of 10,409 node_defs rows have an ID ending in their token.
 // It holds on projection-v6 too, where the id the caller holds is a path and
 // node_defs keys by nid.
-func TestTokenForNode_ResolvesLeylineIDsToTheirSymbol(t *testing.T) {
+func TestDefTokenFor_ResolvesLeylineIDsToTheirSymbol(t *testing.T) {
 	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
-		got := tokenForNode(leylineShapedGraph(t, p), "a.go/function_declaration")
+		got := graph.DefTokenFor(leylineShapedGraph(t, p), "a.go/function_declaration")
 		require.Equal(t, "Alpha", got,
 			"%v: the token must come from node_defs; the node ID's last segment is a construct kind, never the symbol", p)
 		assert.NotContains(t, got, "function_declaration",
@@ -54,21 +54,21 @@ func TestTokenForNode_ResolvesLeylineIDsToTheirSymbol(t *testing.T) {
 	}
 }
 
-// TestTokenForNode_FallsBackForNodesThatDefineNothing covers directories, file
+// TestDefTokenFor_FallsBackForNodesThatDefineNothing covers directories, file
 // nodes and virtual nodes: they have no node_defs row, so there is no better
 // answer than the path segment.
-func TestTokenForNode_FallsBackForNodesThatDefineNothing(t *testing.T) {
+func TestDefTokenFor_FallsBackForNodesThatDefineNothing(t *testing.T) {
 	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
-		assert.Equal(t, "a.go", tokenForNode(leylineShapedGraph(t, p), "a.go"), "%v", p)
+		assert.Equal(t, "a.go", graph.DefTokenFor(leylineShapedGraph(t, p), "a.go"), "%v", p)
 	}
 }
 
-// TestTokenForNode_FallsBackWithoutASQLHandle covers a backend that is not a
+// TestDefTokenFor_FallsBackWithoutASQLHandle covers a backend that is not a
 // RefsQuerier at all (a plain MemoryStore). On the standalone mache schema the
 // path segment IS the symbol, so the fallback is correct there — it is only
 // wrong on leyline, which is what the fix distinguishes.
-func TestTokenForNode_FallsBackWithoutASQLHandle(t *testing.T) {
-	assert.Equal(t, "Alpha", tokenForNode(graph.NewMemoryStore(), "pkg/functions/Alpha"))
+func TestDefTokenFor_FallsBackWithoutASQLHandle(t *testing.T) {
+	assert.Equal(t, "Alpha", graph.DefTokenFor(graph.NewMemoryStore(), "pkg/functions/Alpha"))
 }
 
 // TestLeylineProjection_CallersImpactAndDataflowAgree exercises the real

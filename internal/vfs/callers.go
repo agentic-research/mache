@@ -1,7 +1,6 @@
 package vfs
 
 import (
-	"path/filepath"
 	"strings"
 
 	"github.com/agentic-research/mache/graph"
@@ -24,7 +23,7 @@ func (h *CallersHandler) Stat(path string) *VEntry {
 	if _, err := h.Graph.GetNode(parentDir); err != nil {
 		return nil
 	}
-	token := filepath.Base(parentDir)
+	token := graph.DefTokenFor(h.Graph, parentDir)
 	callers, err := h.Graph.GetCallers(token)
 	if err != nil || len(callers) == 0 {
 		return nil
@@ -66,7 +65,7 @@ func (h *CallersHandler) ListDir(path string) ([]DirExtra, bool) {
 	if _, err := h.Graph.GetNode(parentDir); err != nil {
 		return nil, false
 	}
-	token := filepath.Base(parentDir)
+	token := graph.DefTokenFor(h.Graph, parentDir)
 	callers, err := h.Graph.GetCallers(token)
 	if err != nil || len(callers) == 0 {
 		return nil, false
@@ -87,7 +86,7 @@ func (h *CallersHandler) DirExtras(parentPath string, _ *graph.Node) []DirExtra 
 	if parentPath == "/" {
 		return nil
 	}
-	token := filepath.Base(parentPath)
+	token := graph.DefTokenFor(h.Graph, parentPath)
 	callers, err := h.Graph.GetCallers(token)
 	if err != nil || len(callers) == 0 {
 		return nil

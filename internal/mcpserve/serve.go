@@ -697,12 +697,15 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 	if extraCleanup == nil {
 		extraCleanup = func() {}
 	}
-	switch err := leylinegraph.MaterializeVirtuals(dbPath, schema, false); {
+	// Virtual paths (callers/, callees/, _schema.json) are answered at
+	// runtime (serve_virtual.go); only schema-declared content sources are
+	// written into the .db.
+	switch err := leylinegraph.MaterializeContentSources(dbPath, schema); {
 	case errors.Is(err, leylinegraph.ErrProjectionV6):
-		log.Printf("serving %s without materialized virtual nodes: %v", dbPath, err)
+		log.Printf("serving %s without its schema's content-source files: %v", dbPath, err)
 	case err != nil:
 		extraCleanup()
-		return nil, nil, func() {}, fmt.Errorf("materialize virtuals: %w", err)
+		return nil, nil, func() {}, fmt.Errorf("materialize content sources: %w", err)
 	}
 	sg, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
 	if err != nil {
