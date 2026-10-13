@@ -27,9 +27,9 @@ func TestEscapeLikeMeta(t *testing.T) {
 	}
 }
 
-// sqlText writes a literal into a statement the daemon's query op runs, which
+// sqlLiteral writes a literal into a statement the daemon's query op runs, which
 // takes no parameters, so a quote in the symbol must not end the literal.
-func TestSQLText(t *testing.T) {
+func TestSQLLiteral(t *testing.T) {
 	tests := []struct {
 		input, want string
 	}{
@@ -42,7 +42,7 @@ func TestSQLText(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, sqlText(tt.input))
+			assert.Equal(t, tt.want, sqlLiteral(tt.input))
 		})
 	}
 }

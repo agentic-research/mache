@@ -224,28 +224,23 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
-// enrichAndQueryTypeInfo triggers LSP enrichment and queries hover data
-// directly from the ley-line daemon's arena via UDS, bypassing mache's
-// in-memory graph (which doesn't have _lsp* tables).
-// Uses a single connection for both enrichment and query.
-func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult, error) {
+// enrichFile runs the ley-line daemon's LSP pass over filePath, and returns
+// the connection, ready to query the daemon's arena (mache's own graph has no
+// _lsp* tables on this path), with the reasons the pass skipped any of it. The
+// caller closes the client.
+func enrichFile(filePath string) (*leyline.SocketClient, []string, error) {
 	sockPath, err := leyline.DiscoverOrStart()
 	if err != nil {
-		return nil, fmt.Errorf("discover/start leyline: %w", err)
+		return nil, nil, fmt.Errorf("discover/start leyline: %w", err)
 	}
 	client, err := leyline.DialSocket(sockPath)
 	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
+		return nil, nil, fmt.Errorf("dial: %w", err)
 	}
-	defer func() { _ = client.Close() }()
-
-	// Enrichment phase — 30s timeout for LSP
-	if err := client.SetDeadline(time.Now().Add(lspEnrichTimeout)); err != nil {
-		return nil, fmt.Errorf("set deadline: %w", err)
-	}
-	resp, err := client.Enrich("lsp", []string{relForEnrich(filePath)})
+	resp, err := enrichOn(client, filePath)
 	if err != nil {
-		return nil, err
+		_ = client.Close()
+		return nil, nil, err
 	}
 	log.Printf("LSP enrichment via ley-line daemon: %v", resp)
 	skipReasons := extractEnrichSkipReasons(resp)
@@ -257,12 +252,32 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 			log.Printf("  - %s", r)
 		}
 	}
+	return client, skipReasons, nil
+}
 
-	// Query phase — reuse same connection, reset deadline
+// enrichOn sends the enrich op under the LSP budget, then resets the
+// connection's deadline for the queries that follow.
+func enrichOn(client *leyline.SocketClient, filePath string) (map[string]any, error) {
+	if err := client.SetDeadline(time.Now().Add(lspEnrichTimeout)); err != nil {
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+	resp, err := client.Enrich("lsp", []string{relForEnrich(filePath)})
+	if err != nil {
+		return nil, err
+	}
 	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set query deadline: %w", err)
 	}
+	return resp, nil
+}
 
+// enrichAndQueryTypeInfo enriches filePath, then reads hover from the daemon.
+func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult, error) {
+	client, skipReasons, err := enrichFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
 	results, err := lookupHover(client.Query, symbol, kind)
 	if err != nil {
 		return nil, fmt.Errorf("read hover via daemon: %w", err)
@@ -270,7 +285,6 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 	if len(results) == 0 {
 		return mcp.NewToolResultText(formatNoHoverMessage(symbol, kind, skipReasons)), nil
 	}
-
 	data, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
 }
@@ -293,40 +307,14 @@ func queryTypeInfoFromGraph(qg graph.RefsQuerier, symbol, kind string) (*mcp.Cal
 	return mcp.NewToolResultText(string(data)), nil
 }
 
-// enrichAndQueryDiagnostics triggers LSP enrichment and queries diagnostics
-// directly from the ley-line daemon's arena via UDS.
-// Uses a single connection for both enrichment and query.
+// enrichAndQueryDiagnostics enriches filePath, then reads diagnostics from the
+// daemon.
 func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
-	sockPath, err := leyline.DiscoverOrStart()
-	if err != nil {
-		return nil, fmt.Errorf("discover/start leyline: %w", err)
-	}
-	client, err := leyline.DialSocket(sockPath)
-	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
-	}
-	defer func() { _ = client.Close() }()
-
-	if err := client.SetDeadline(time.Now().Add(lspEnrichTimeout)); err != nil {
-		return nil, fmt.Errorf("set deadline: %w", err)
-	}
-	resp, err := client.Enrich("lsp", []string{relForEnrich(filePath)})
+	client, skipReasons, err := enrichFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("LSP enrichment via ley-line daemon: %v", resp)
-	skipReasons := extractEnrichSkipReasons(resp)
-	if len(skipReasons) > 0 {
-		log.Printf("LSP enrichment SKIPPED reasons (file=%s):", filePath)
-		for _, r := range skipReasons {
-			log.Printf("  - %s", r)
-		}
-	}
-
-	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return nil, fmt.Errorf("set query deadline: %w", err)
-	}
-
+	defer func() { _ = client.Close() }()
 	results, err := lookupDiagnostics(client.Query, symbol, kind, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read diagnostics via daemon: %w", err)
@@ -334,7 +322,6 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 	if len(results) == 0 {
 		return noDiagnosticsResultWithSkipReasons(symbol, kind, skipReasons), nil
 	}
-
 	data, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
 }

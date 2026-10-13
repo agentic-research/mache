@@ -70,7 +70,7 @@ type lspRow struct {
 // by path so both shapes answer in the same order. A v6 row whose nid names no
 // node is dropped, as SQLiteGraph's lookups drop one: it names nothing a
 // consumer can open. cols and where are this package's constant SQL, plus
-// literals written by sqlText.
+// literals written by sqlLiteral.
 func readLSPRows(src lspSource, table lspTable, cols, where string) ([]lspRow, error) {
 	v6, err := lspKeyedByNid(src, table)
 	if err != nil {
@@ -164,8 +164,8 @@ func likeFold(s string) string {
 	}, s)
 }
 
-// sqlText is s as a SQL string literal.
-func sqlText(s string) string {
+// sqlLiteral is s as a SQL string literal.
+func sqlLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
@@ -240,7 +240,7 @@ func lookupDiagnostics(src lspSource, symbol, kind string, limit int) ([]diagRes
 func lookupLSPDefs(src lspSource, symbol string) ([]lspDefLocation, error) {
 	rows, err := readLSPRows(src, lspDefs,
 		"def_uri, def_start_line, def_start_col, def_end_line, def_end_col",
-		"def_token = "+sqlText(symbol))
+		"def_token = "+sqlLiteral(symbol))
 	if err != nil {
 		return nil, err
 	}

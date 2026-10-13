@@ -86,18 +86,18 @@ func (b *Builder) lspDDL(v6 bool) []string {
 		}
 	}
 	add(len(b.lspDefs), []string{lspDefsTable}, lspDefsTableV6)
-	add(len(b.lspSyms), lspTable("node_id TEXT"), lspTable("nid INTEGER"))
-	add(len(b.lspHovers), lspHoverTable("node_id TEXT"), lspHoverTable("nid INTEGER"))
+	add(len(b.lspSyms), lspSymbolsDDL("node_id TEXT"), lspSymbolsDDL("nid INTEGER"))
+	add(len(b.lspHovers), lspHoverDDL("node_id TEXT"), lspHoverDDL("nid INTEGER"))
 	return out
 }
 
-// lspTable and lspHoverTable are `_lsp` and `_lsp_hover` as ley-line-open
+// lspSymbolsDDL and lspHoverDDL are `_lsp` and `_lsp_hover` as ley-line-open
 // writes them, transcribed from LSP_DDL and LSP_HOVER_DDL in
 // rs/ll-open/lsp/src/project.rs, at v0.19.1 for projection-v4 (key node_id
 // TEXT) and v0.20.3 for v6 (key nid INTEGER); nothing else differs. Like
 // _lsp_defs below, they are written by `leyline lsp`, which needs language
 // servers a conformance run cannot assume.
-func lspTable(key string) []string {
+func lspSymbolsDDL(key string) []string {
 	return []string{
 		`CREATE TABLE _lsp (
 	` + key + ` PRIMARY KEY,
@@ -111,7 +111,7 @@ func lspTable(key string) []string {
 	}
 }
 
-func lspHoverTable(key string) []string {
+func lspHoverDDL(key string) []string {
 	return []string{`CREATE TABLE _lsp_hover (
 	` + key + ` PRIMARY KEY,
 	hover_text TEXT NOT NULL
