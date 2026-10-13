@@ -621,6 +621,37 @@ func TestGetCurrentRoot_ADeadPublisherReadsAsNothingPublished(t *testing.T) {
 	assert.Equal(t, uint64(7), ctrl.GetArenaSize())
 }
 
+// A reader that has read the block consistently before keeps that read when
+// a publisher dies mid-publish: path, size and root together, none of them
+// from the abandoned publish, which never becomes its last (the Go side of
+// ley-line-open's a_reader_facing_a_dead_publisher_keeps_its_last_root).
+func TestGetCurrentRoot_ADeadPublisherLeavesTheReadersLastSnapshot(t *testing.T) {
+	ctrl, _ := newController(t)
+	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/a", 7, [32]byte{1}))
+	require.Equal(t, [32]byte{1}, ctrl.GetCurrentRoot(), "a consistent read: this handle's last")
+
+	atomic.AddUint64((*uint64)(unsafe.Pointer(&ctrl.data[offSync])), 1)
+	var torn [arenaPathLen]byte
+	copy(torn[:], "/tmp/half")
+	ctrl.storeWords(offArenaPath, torn[:])
+	atomic.StoreUint64(ctrl.word(offArenaSize), 99)
+	ctrl.storeWords(offCurrentRoot, bytes.Repeat([]byte{9}, currentRootLen/2))
+
+	defer func(orig func()) { yieldWhileOdd = orig }(yieldWhileOdd)
+	yieldWhileOdd = func() { t.Fatal("waited for a publisher that is gone") }
+	for range 2 { // the abandoned payload never becomes the last read
+		assert.Equal(t, [32]byte{1}, ctrl.GetCurrentRoot())
+		assert.Equal(t, "/tmp/a", ctrl.GetArenaPath())
+		assert.Equal(t, uint64(7), ctrl.GetArenaSize())
+	}
+	assert.True(t, IsZeroRoot(func() [32]byte {
+		fresh, err := OpenOrCreate(ctrl.path)
+		require.NoError(t, err)
+		defer func() { _ = fresh.Close() }()
+		return fresh.GetCurrentRoot()
+	}()), "a handle with no consistent read answers nothing published")
+}
+
 // The next publish after a dead publisher keeps the sequence odd while it
 // writes, rather than turning it even over a half-written payload, and ends
 // even with its own root whole.

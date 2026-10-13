@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -20,6 +21,10 @@ type Controller struct {
 	// own exclusive publish lock instead of contending with it.
 	probe *os.File
 	data  []byte
+	// last is this handle's last consistent read, which it answers with when
+	// a publisher died mid-publish. In memory only, and set only by a
+	// consistent read.
+	last atomic.Pointer[snapshot]
 }
 
 // OpenOrCreate opens or creates a control file at the given path.

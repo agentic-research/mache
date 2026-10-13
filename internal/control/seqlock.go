@@ -25,10 +25,11 @@ import (
 // also holds an exclusive flock(2) on the control file for as long as the
 // sequence is odd, as ley-line-open's does (ley-line-open-0a8c14). A reader
 // facing an odd sequence whose lock it can take, and which does not move
-// while it holds the lock shared, knows the publisher is gone: the payload
-// may be torn, so it answers the zero root ("nothing published"), which
-// every consumer refuses to load data under, with the path and size as left,
-// so a restarted publisher can find its arena. A publish that finds the
+// while it holds the lock shared, knows the publisher is gone. The payload
+// may be torn, so it answers with its own last consistent read, whole; with
+// none, it answers the path and size as left and the zero root ("nothing
+// published"), which every consumer refuses to load data under; the path
+// lets a restarted publisher find its arena. A publish that finds the
 // sequence already odd keeps it odd, and ends even over a whole payload. The
 // lock decides, not a clock, so a publisher that takes no lock (leyline
 // before the release that added it) reads as dead while odd: every process
@@ -67,22 +68,30 @@ func (c *Controller) storeWords(off int, src []byte) {
 // it from how long a read took.
 var yieldWhileOdd = runtime.Gosched
 
-// snapshot reads the payload under the seqlock.
+// snapshot reads the payload under the seqlock. A consistent copy is
+// remembered as this handle's last; facing a dead publisher, a reader returns
+// that last copy whole, or, having none, the payload as left with the zero
+// root. The torn root is never returned. This is ley-line-open's reader rule
+// (ley-line-open-0a8c14), step for step.
 func (c *Controller) snapshot() snapshot {
 	seq := c.word(offSync)
 	for {
 		before := atomic.LoadUint64(seq)
 		if before&1 == 1 {
-			if c.publisherIsDead(before) {
-				s := c.copyPayload()
-				s.root = [currentRootLen]byte{}
-				return s
+			left, dead := c.abandonedPayload(before)
+			if !dead {
+				yieldWhileOdd() // a live publish is in flight
+				continue
 			}
-			yieldWhileOdd() // a live publish is in flight
-			continue
+			if last := c.last.Load(); last != nil {
+				return *last
+			}
+			left.root = [currentRootLen]byte{}
+			return left
 		}
 		s := c.copyPayload()
 		if atomic.LoadUint64(seq) == before {
+			c.last.Store(&s)
 			return s
 		}
 	}
@@ -97,18 +106,22 @@ func (c *Controller) copyPayload() snapshot {
 	return s
 }
 
-// publisherIsDead reports whether the odd sequence odd was left by a publisher
-// that is gone: no one holds the publish lock, and the sequence does not move
-// while this reader holds it shared, which keeps a new publish from starting.
-// A held lock, a failed probe or a sequence that moved all say "keep waiting".
-func (c *Controller) publisherIsDead(odd uint64) bool {
+// abandonedPayload reports whether the odd sequence odd was left by a
+// publisher that is gone, and if so the payload as it left it: no one holds
+// the publish lock, and the sequence does not move while this reader holds it
+// shared, which keeps a new publish from starting, so the copy is taken under
+// that shared lock. A held lock, a failed probe or a sequence that moved all
+// say "keep waiting".
+func (c *Controller) abandonedPayload(odd uint64) (snapshot, bool) {
 	fd := int(c.probe.Fd())
 	if err := unix.Flock(fd, unix.LOCK_SH|unix.LOCK_NB); err != nil {
-		return false
+		return snapshot{}, false
 	}
-	unmoved := atomic.LoadUint64(c.word(offSync)) == odd
-	_ = unix.Flock(fd, unix.LOCK_UN)
-	return unmoved
+	defer func() { _ = unix.Flock(fd, unix.LOCK_UN) }()
+	if atomic.LoadUint64(c.word(offSync)) != odd {
+		return snapshot{}, false
+	}
+	return c.copyPayload(), true
 }
 
 // duringPublish runs while a publish holds the lock with the payload half
