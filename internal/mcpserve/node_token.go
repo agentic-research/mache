@@ -25,30 +25,23 @@ import (
 // too — so get_impact answered with code spans from docs/ARCHITECTURE.md
 // presented as call sites. Wrong answers, not empty ones.
 //
-// node_defs is the authority: it maps node_id to the token that node declares.
+// node_defs is the authority: it maps a node to the token that node declares,
+// asked through the graph's DefTokener so this file names none of the
+// producer's columns (projection-v6 renamed them, mache-90cb9f).
 // The filepath.Base fallback is kept for the standalone mache schema (no
 // node_defs table, or a backend with no SQL handle at all), where it IS the
 // symbol — and only for that case.
 func tokenForNode(g graph.Graph, nodeID string) string {
-	qg, ok := g.(graph.RefsQuerier)
+	dt, ok := g.(graph.DefTokener)
 	if !ok {
 		return filepath.Base(nodeID)
 	}
-	rows, err := qg.QueryRefs("SELECT token FROM node_defs WHERE node_id = ? LIMIT 1", nodeID)
-	if err != nil {
-		// No node_defs table (standalone projection) or a query failure: fall
-		// back rather than losing the traversal entirely.
+	token, ok, err := dt.DefTokenOf(nodeID)
+	if err != nil || !ok {
+		// No node_defs table (standalone projection), a query failure, or a
+		// node that defines nothing (a directory, a file node, a virtual
+		// node): filepath.Base is as good an answer as exists.
 		return filepath.Base(nodeID)
 	}
-	defer func() { _ = rows.Close() }()
-
-	if rows.Next() {
-		var token string
-		if err := rows.Scan(&token); err == nil && token != "" {
-			return token
-		}
-	}
-	// A node with no node_defs row is not a definition — a directory, a file
-	// node, a virtual node. filepath.Base is as good an answer as exists.
-	return filepath.Base(nodeID)
+	return token
 }

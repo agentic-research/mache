@@ -315,3 +315,36 @@ func (r *PathRenderer) Path(nid int64) (string, bool, error) {
 	r.memo[nid] = path
 	return path, true, nil
 }
+
+// ParsedSourceLike reports whether any source file whose id matches the SQL
+// LIKE pattern has a parse tree in _ast: whether that language was parsed at
+// all. projection-v4 records each _ast row's file; projection-v6 keys _ast by
+// nid, so a file's rows are the nid range its file_id names (V6FileNids).
+// False, without error, when the db has no _ast.
+func ParsedSourceLike(qg Querier, pattern string) (bool, error) {
+	v6, err := TableHasColumn(qg, "_ast", "nid")
+	if err != nil {
+		return false, err
+	}
+	q := `SELECT EXISTS(SELECT 1 FROM _ast WHERE source_id LIKE ?)`
+	if v6 {
+		shift := strconv.Itoa(V6FileShift)
+		q = `SELECT EXISTS(SELECT 1 FROM _source s WHERE s.id LIKE ? AND EXISTS(
+		       SELECT 1 FROM _ast a
+		       WHERE a.nid >= s.file_id << ` + shift + ` AND a.nid < (s.file_id + 1) << ` + shift + `))`
+	} else if has, err := TableHasColumn(qg, "_ast", "source_id"); err != nil || !has {
+		return false, err
+	}
+	rows, err := qg.QueryRefs(q, pattern)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	var exists bool
+	if rows.Next() {
+		if err := rows.Scan(&exists); err != nil {
+			return false, err
+		}
+	}
+	return exists, rows.Err()
+}

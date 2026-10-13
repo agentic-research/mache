@@ -121,6 +121,16 @@ type ASTKinder interface {
 	ASTKindChain(id string) (chain []string, ok bool, err error)
 }
 
+// DefTokener reports the symbol a node defines: the token node_defs records
+// for it. A node id says nothing about its symbol on a leyline projection
+// (it ends in a tree-sitter kind), and on projection-v6 it is an integer the
+// caller never sees, so the answer has to come from the backend.
+type DefTokener interface {
+	// DefTokenOf returns the token node_defs records for the node at id; ok
+	// is false when the node defines nothing.
+	DefTokenOf(id string) (token string, ok bool, err error)
+}
+
 // DefsNodeLookuper is [DefsLookuper]'s node-returning twin, for consumers that
 // want the definition itself rather than its id.
 //

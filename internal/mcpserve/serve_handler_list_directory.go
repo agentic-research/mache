@@ -82,53 +82,64 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 		// Surface virtual entries on construct directories
 		// (skip if already materialized in the db)
 		if path != "" {
-			seen := make(map[string]bool, len(entries))
-			for _, e := range entries {
-				seen[e.Name] = true
-			}
-
-			// Location: source file coordinates for orientation
-			if !seen["location"] {
-				if node, err := g.GetNode(path); err == nil {
-					if loc := graph.PropString(node, "location"); loc != "" {
-						entries = append(entries, nodeEntry{
-							Name: "location",
-							Path: path + "/location",
-							Type: "virtual",
-							Size: int64(len(loc)),
-						})
-					}
-				}
-			}
-
-			// Skip GetCallers / GetCallees probes at schema container
-			// levels (methods/, functions/, types/, ...). Their basename
-			// is never a callable token, so the SQL/parse cost is wasted
-			// every readdir.
-			token := filepath.Base(path)
-			isContainer := containerNames[token]
-
-			if !isContainer && !seen["callers"] {
-				if callers, err := g.GetCallers(token); err == nil && len(callers) > 0 {
-					entries = append(entries, nodeEntry{
-						Name: "callers",
-						Path: path + "/callers",
-						Type: "virtual",
-					})
-				}
-			}
-			if !isContainer && !seen["callees"] {
-				if callees, err := g.GetCallees(path); err == nil && len(callees) > 0 {
-					entries = append(entries, nodeEntry{
-						Name: "callees",
-						Path: path + "/callees",
-						Type: "virtual",
-					})
-				}
-			}
+			entries = append(entries, virtualEntries(g, path, entries)...)
 		}
 
 		data, _ := json.MarshalIndent(entries, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
+}
+
+// virtualEntries are the entries list_directory adds to a construct
+// directory's listing: its location, and callers/ and callees/ when it has
+// any, each skipped when the db already materialized it among listed.
+func virtualEntries(g graph.Graph, path string, listed []nodeEntry) []nodeEntry {
+	var virtual []nodeEntry
+	seen := make(map[string]bool, len(listed))
+	for _, e := range listed {
+		seen[e.Name] = true
+	}
+
+	// Location: source file coordinates for orientation
+	if !seen["location"] {
+		if node, err := g.GetNode(path); err == nil {
+			if loc := graph.PropString(node, "location"); loc != "" {
+				virtual = append(virtual, nodeEntry{
+					Name: "location",
+					Path: path + "/location",
+					Type: "virtual",
+					Size: int64(len(loc)),
+				})
+			}
+		}
+	}
+
+	// Skip GetCallers / GetCallees probes at schema container
+	// levels (methods/, functions/, types/, ...). Their basename
+	// is never a callable token, so the SQL/parse cost is wasted
+	// every readdir.
+	isContainer := containerNames[filepath.Base(path)]
+
+	// The token a construct defines, not its last path segment: on a
+	// leyline projection that segment is a tree-sitter kind
+	// (function_declaration_0), never the symbol (mache-cb4369).
+	if !isContainer && !seen["callers"] {
+		if callers, err := g.GetCallers(tokenForNode(g, path)); err == nil && len(callers) > 0 {
+			virtual = append(virtual, nodeEntry{
+				Name: "callers",
+				Path: path + "/callers",
+				Type: "virtual",
+			})
+		}
+	}
+	if !isContainer && !seen["callees"] {
+		if callees, err := g.GetCallees(path); err == nil && len(callees) > 0 {
+			virtual = append(virtual, nodeEntry{
+				Name: "callees",
+				Path: path + "/callees",
+				Type: "virtual",
+			})
+		}
+	}
+	return virtual
 }

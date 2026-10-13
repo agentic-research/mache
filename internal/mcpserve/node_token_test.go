@@ -24,35 +24,43 @@ import (
 // That distinction is the entire bug (mache-cb4369), so the fixture has to
 // carry it — a mache-schema fixture, where the ID ends in the symbol, cannot
 // fail the way production did.
-func leylineShapedGraph(t *testing.T) *testutil.SmellTestGraph {
+func leylineShapedGraph(t *testing.T, p fixturedb.Producer) graph.Graph {
 	t.Helper()
-	_, f := fixturedb.New(t, fixturedb.Leyline).
-		Construct("a.go/function_declaration_0").
-		Def("Alpha", "a.go/function_declaration_0", fixturedb.Function).
+	path, _ := fixturedb.New(t, p).
+		Parsed("a.go/function_declaration").
+		Def("Alpha", "a.go/function_declaration", fixturedb.Function).
 		Build()
-	return &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: f.DB()}
+	sg, err := graph.OpenSQLiteGraph(path, &api.Topology{Version: api.SchemaVersion}, machetmpl.Render)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sg.Close() })
+	return sg
 }
 
 // TestTokenForNode_ResolvesLeylineIDsToTheirSymbol is the regression. Before
 // the fix, both get_impact and get_dataflow derived the lookup token with
 // filepath.Base(nodeID), which on a leyline projection yields
-// "function_declaration_0" — a string that matches nothing real, and matches
+// "function_declaration" — a string that matches nothing real, and matches
 // PROSE in markdown, which leyline also indexes. Measured over a real
 // projection: 0 of 10,409 node_defs rows have an ID ending in their token.
+// It holds on projection-v6 too, where the id the caller holds is a path and
+// node_defs keys by nid.
 func TestTokenForNode_ResolvesLeylineIDsToTheirSymbol(t *testing.T) {
-	got := tokenForNode(leylineShapedGraph(t), "a.go/function_declaration_0")
-
-	require.Equal(t, "Alpha", got,
-		"the token must come from node_defs; the node ID's last segment is a construct kind, never the symbol")
-	assert.NotContains(t, got, "function_declaration",
-		"leaking the construct kind is what made get_impact match markdown code spans as call sites")
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
+		got := tokenForNode(leylineShapedGraph(t, p), "a.go/function_declaration")
+		require.Equal(t, "Alpha", got,
+			"%v: the token must come from node_defs; the node ID's last segment is a construct kind, never the symbol", p)
+		assert.NotContains(t, got, "function_declaration",
+			"leaking the construct kind is what made get_impact match markdown code spans as call sites")
+	}
 }
 
 // TestTokenForNode_FallsBackForNodesThatDefineNothing covers directories, file
 // nodes and virtual nodes: they have no node_defs row, so there is no better
 // answer than the path segment.
 func TestTokenForNode_FallsBackForNodesThatDefineNothing(t *testing.T) {
-	assert.Equal(t, "a.go", tokenForNode(leylineShapedGraph(t), "a.go"))
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
+		assert.Equal(t, "a.go", tokenForNode(leylineShapedGraph(t, p), "a.go"), "%v", p)
+	}
 }
 
 // TestTokenForNode_FallsBackWithoutASQLHandle covers a backend that is not a

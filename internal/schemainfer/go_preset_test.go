@@ -6,7 +6,6 @@ import (
 	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestGoPreset_GenericReceiversAreMethods pins mache-51571b: a method on a
@@ -58,10 +57,7 @@ func TestGoPreset_EveryMethodDeclarationProjectedOnce(t *testing.T) {
 	astDB, parseDir := lltest.ParseSourceViaLeyline(t, testutil.GoldenCorpusDir(t))
 	store := projectPreset(t, "go", astDB, parseDir)
 
-	var declared int
-	require.NoError(t, astDB.QueryRow(
-		`SELECT count(*) FROM _ast WHERE node_kind = 'method_declaration'`).Scan(&declared))
-	require.Positive(t, declared)
+	declared := declaredCount(t, astDB, "method_declaration")
 
 	projected := 0
 	for _, pkg := range []string{"main", "store"} {

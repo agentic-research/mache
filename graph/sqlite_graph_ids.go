@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/agentic-research/mache/internal/lloschema"
@@ -140,4 +142,23 @@ func (g *SQLiteGraph) ASTKindChain(id string) ([]string, bool, error) {
 		return nil, false, nil
 	}
 	return chain, true, nil
+}
+
+var _ DefTokener = (*SQLiteGraph)(nil)
+
+// DefTokenOf implements [DefTokener].
+func (g *SQLiteGraph) DefTokenOf(id string) (string, bool, error) {
+	key, ok, err := g.key(id)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	var token string
+	err = g.db.QueryRow("SELECT token FROM node_defs WHERE "+g.shape().defNode()+" = ? LIMIT 1", key).Scan(&token)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("token of %s: %w", id, err)
+	}
+	return token, token != "", nil
 }

@@ -697,7 +697,10 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 	if extraCleanup == nil {
 		extraCleanup = func() {}
 	}
-	if err := leylinegraph.MaterializeVirtuals(dbPath, schema, false); err != nil {
+	switch err := leylinegraph.MaterializeVirtuals(dbPath, schema, false); {
+	case errors.Is(err, leylinegraph.ErrProjectionV6):
+		log.Printf("serving %s without materialized virtual nodes: %v", dbPath, err)
+	case err != nil:
 		extraCleanup()
 		return nil, nil, func() {}, fmt.Errorf("materialize virtuals: %w", err)
 	}

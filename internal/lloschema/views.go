@@ -179,16 +179,6 @@ func identityFor(v6 bool) identityColumns {
 // binding rows of _lsp_defs, over whichever optional columns this producer
 // wrote.
 func defsViewBody(qg Querier, ids identityColumns) (string, error) {
-	// _lsp_defs probe still runs because v_defs's binding-fidelity
-	// arm has not yet migrated to capnp — BindingRecord covers refs
-	// (the link from a call site to a definition), not standalone
-	// def metadata. _lsp_defs migration is tracked separately; for
-	// now the def-side dual-read mirrors the pre-mache-6bd4d8 shape.
-	hasLSPDefsToken, err := TableHasColumn(qg, "_lsp_defs", "def_token")
-	if err != nil {
-		return "", fmt.Errorf("probe _lsp_defs: %w", err)
-	}
-
 	// Additive node_hash passthrough (mache-ff9a9d). The merkle-AST
 	// producer (LLO) writes an additive node_hash BLOB column onto the
 	// occurrence tables (node_defs / node_refs / _ast): identical
@@ -241,17 +231,11 @@ func defsViewBody(qg Querier, ids identityColumns) (string, error) {
 	}
 	defsBody := `SELECT token, ` + ids.defsNode + ` AS node_id, 'mention' AS fidelity, ` +
 		defsHashExpr + ` AS node_hash, ` + defsCanonExpr + ` AS canonical_kind FROM node_defs`
-	if hasLSPDefsToken {
-		// Binding-fidelity def rows come from _lsp_defs, which has no
-		// merkle node_hash or κ canonical_kind concept — emit NULL for
-		// both to keep UNION arity.
-		defsBody += `
-			UNION ALL
-			SELECT def_token AS token, node_id, 'binding' AS fidelity,
-			       NULL AS node_hash, NULL AS canonical_kind
-			FROM _lsp_defs
-			WHERE def_token != ''`
+	lspArm, err := lspDefsArm(qg)
+	if err != nil {
+		return "", err
 	}
+	defsBody += lspArm
 
 	return defsBody, nil
 }
@@ -391,6 +375,49 @@ func refsViewBody(qg Querier, ids identityColumns) (string, error) {
 		FROM _capnp_binding_refs`
 
 	return refsBody, nil
+}
+
+// lspDefsArm is v_defs' binding-fidelity arm over _lsp_defs, or "" when the
+// db has none.
+//
+// _lsp_defs is still read because v_defs's binding-fidelity arm has not yet
+// migrated to capnp: BindingRecord covers refs (the link from a call site to
+// a definition), not standalone def metadata. _lsp_defs migration is tracked
+// separately; for now the def-side dual-read mirrors the pre-mache-6bd4d8
+// shape. _lsp_defs has no merkle node_hash or κ canonical_kind concept, so
+// both are NULL to keep UNION arity. Its node column follows the projection
+// (lspDefsNode).
+func lspDefsArm(qg Querier) (string, error) {
+	has, err := TableHasColumn(qg, "_lsp_defs", "def_token")
+	if err != nil {
+		return "", fmt.Errorf("probe _lsp_defs: %w", err)
+	}
+	if !has {
+		return "", nil
+	}
+	lspNode, err := lspDefsNode(qg)
+	if err != nil {
+		return "", err
+	}
+	return `
+			UNION ALL
+			SELECT def_token AS token, ` + lspNode + ` AS node_id, 'binding' AS fidelity,
+			       NULL AS node_hash, NULL AS canonical_kind
+			FROM _lsp_defs
+			WHERE def_token != ''`, nil
+}
+
+// lspDefsNode is _lsp_defs' node column: nid when LLO wrote it for
+// projection-v6, node_id before.
+func lspDefsNode(qg Querier) (string, error) {
+	v6, err := TableHasColumn(qg, "_lsp_defs", "nid")
+	if err != nil {
+		return "", fmt.Errorf("probe _lsp_defs.nid: %w", err)
+	}
+	if v6 {
+		return "nid", nil
+	}
+	return "node_id", nil
 }
 
 // refsSource is the expression for the file a node_refs row's site is in.

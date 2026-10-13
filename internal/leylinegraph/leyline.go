@@ -3,9 +3,12 @@ package leylinegraph
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/agentic-research/mache/internal/lloschema"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/sqlintro"
@@ -97,6 +100,15 @@ func checkParentDerivable(id, parentID, name string) error {
 	return nil
 }
 
+// ErrProjectionV6 is MaterializeVirtuals refusing a projection-v6 .db
+// (leyline v0.20.x). Its virtual nodes are rows in the producer's own nodes
+// table; in a v6 arena that means allocating nids and interning names inside
+// LLO's numbering, which is the data-plane work the LLO boundary keeps out of
+// mache (mache-e64f36). A caller can serve the db without them: MCP tools
+// read callers and callees through the graph, and synthesizing the virtual
+// directories there instead of materializing them is mache-abaf17.
+var ErrProjectionV6 = errors.New("virtual nodes are not materialized into a projection-v6 arena (mache-abaf17)")
+
 // MaterializeVirtuals adds virtual file nodes to the .db so that leyline's
 // NFS mount can serve them without mache-specific runtime logic.
 //
@@ -113,6 +125,14 @@ func MaterializeVirtuals(dbPath string, schema *api.Topology, agentMode bool) er
 		return fmt.Errorf("open db: %w", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	v6, err := lloschema.TableHasColumn(lloschema.DB(db), "nodes", "nid")
+	if err != nil {
+		return fmt.Errorf("probe nodes.nid: %w", err)
+	}
+	if v6 {
+		return ErrProjectionV6
+	}
 
 	nt, err := beginNodeTx(db)
 	if err != nil {
