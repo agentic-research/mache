@@ -3,6 +3,7 @@ package mcpserve
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -183,10 +184,17 @@ func textValue(v any) string {
 	}
 }
 
-// intColumn is an INTEGER column's value.
-func intColumn(v any) (int, error) {
+// lspPosition is a line or column number from _lsp_defs. LSP positions are
+// `uinteger`, 0 to 2^31-1, so anything outside that is not one.
+func lspPosition(v any) (int, error) {
 	n, err := lloschema.IntValue(v)
-	return int(n), err
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 || n > math.MaxInt32 {
+		return 0, fmt.Errorf("%d is not an LSP position", n)
+	}
+	return int(n), nil
 }
 
 type hoverResult struct {
@@ -248,7 +256,7 @@ func lookupLSPDefs(src lspSource, symbol string) ([]lspDefLocation, error) {
 	for _, r := range rows {
 		d := lspDefLocation{NodeID: r.path, URI: textValue(r.cols[0])}
 		for i, dst := range []*int{&d.StartLine, &d.StartCol, &d.EndLine, &d.EndCol} {
-			if *dst, err = intColumn(r.cols[i+1]); err != nil {
+			if *dst, err = lspPosition(r.cols[i+1]); err != nil {
 				return nil, fmt.Errorf("_lsp_defs: %w", err)
 			}
 		}

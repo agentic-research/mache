@@ -146,3 +146,27 @@ func TestLSPLookups_ReadAV6ArenaThroughTheDaemonWire(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, none, "limit 0 is no rows, as LIMIT 0 was")
 }
+
+// An _lsp_defs position is an LSP uinteger; a value outside 0..2^31-1 is not
+// one, and is refused rather than wrapped into some other line.
+func TestLSPPosition(t *testing.T) {
+	for _, tc := range []struct {
+		in   any
+		want int
+		ok   bool
+	}{
+		{int64(0), 0, true},
+		{"2147483647", 2147483647, true},
+		{int64(-1), 0, false},
+		{"2147483648", 0, false},
+		{"x", 0, false},
+	} {
+		got, err := lspPosition(tc.in)
+		if tc.ok {
+			require.NoError(t, err, "%v", tc.in)
+			assert.Equal(t, tc.want, got)
+		} else {
+			assert.Error(t, err, "%v", tc.in)
+		}
+	}
+}
