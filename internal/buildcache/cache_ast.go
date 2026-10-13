@@ -44,6 +44,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // astChunkSourceEntry is the wire shape of one chunk body when the
@@ -90,8 +92,26 @@ func dbHasASTTable(db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("check _ast table presence: %w", err)
 	}
+	v6, err := lloschema.TableHasColumn(lloschema.DB(db), "_ast", "nid")
+	if err != nil {
+		return false, fmt.Errorf("check _ast shape: %w", err)
+	}
+	if v6 {
+		return false, ErrProjectionV6
+	}
 	return name == "_ast", nil
 }
+
+// ErrProjectionV6 refuses a push from a projection-v6 .db (leyline v0.20.x).
+//
+// A chunk carries _ast rows in projection-v4's shape, and pull writes them
+// back. Teaching the cache v6's shape would mean mache writing more of LLO's
+// tables, which is the data-plane work the LLO boundary marks for deletion:
+// the cache is to consume LLO's own arena instead (mache-e64f36). Falling
+// back to source-only chunks would restore a database without its AST and
+// say nothing, so the push fails, naming why.
+var ErrProjectionV6 = errors.New("the build cache cannot carry a projection-v6 _ast; " +
+	"consuming LLO's arena instead is mache-e64f36")
 
 // loadASTNodesForSource returns all `_ast` rows whose source_id
 // equals sourceID, in stable node_id order. Used by Phase 4 push to

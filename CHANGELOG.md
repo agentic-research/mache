@@ -27,8 +27,10 @@ bumps may include breaking changes.
   (`cyclomatic_complexity`, `duplicate_code`, `dead_code`, `god_file`,
   `sleep_in_test`, `untested_function`, `duplicate_definitions`,
   `fan_out_skew`) are refused on a projection-v6 `.db` with an error naming
-  `mache-2dc105`, rather than answering wrongly. The build cache follows in a
-  later change.
+  `mache-2dc105`, rather than answering wrongly. `mache cache push` refuses
+  a projection-v6 `.db` with an error naming `mache-e64f36`, instead of
+  failing on a missing column. Its chunks carry projection-v4 `_ast`, and the
+  cache is moving to LLO's own arena rather than learning v6.
 
 ### Fixed
 
