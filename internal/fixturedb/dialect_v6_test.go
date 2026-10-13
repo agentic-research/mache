@@ -178,3 +178,24 @@ func TestSplitKind(t *testing.T) {
 		assert.Equal(t, tc.k, k, tc.seg)
 	}
 }
+
+// A file node is its grammar's root, as a real parse writes it: an HCL file is
+// a config_file, a Go file a source_file. Read from `leyline parse` v0.20.3.
+func TestLeylineV6_AFileNodeIsItsGrammarsRoot(t *testing.T) {
+	b := New(t, LeylineV6)
+	b.Source("a.go", "go", "")
+	b.Source("main.tf", "hcl", "")
+	b.ASTNode("main.tf", "config_file", "main.tf", Bytes(0, 40))
+	b.ASTNode("main.tf/body", "body", "main.tf", Bytes(0, 40))
+	_, f := b.Build()
+
+	kindOf := func(path string) string {
+		var k string
+		require.NoError(t, f.DB().QueryRow(`SELECT k.raw_kind FROM nodes n JOIN kinds k ON k.kind_id = n.kind_id
+			WHERE n.nid = ?`, nidOf(t, f.DB(), path)).Scan(&k))
+		return k
+	}
+	assert.Equal(t, "config_file", kindOf("main.tf"))
+	assert.Equal(t, "source_file", kindOf("a.go"), "an undeclared root is Go's")
+	assert.Equal(t, "main.tf/body", pathOf(t, f.DB(), nidOf(t, f.DB(), "main.tf/body")))
+}

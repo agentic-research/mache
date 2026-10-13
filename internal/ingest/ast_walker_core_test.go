@@ -14,7 +14,7 @@ import (
 // creates the compound index used by findNodesByKind. Exercises the
 // EnsureIndexes method left uncovered by other tests.
 func TestASTWalker_EnsureIndexes(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -35,7 +35,7 @@ func TestASTWalker_EnsureIndexes(t *testing.T) {
 // TestASTWalker_Close is a smoke test that Close doesn't panic and doesn't
 // touch the database (the walker doesn't own the connection).
 func TestASTWalker_Close(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -51,7 +51,7 @@ func TestASTWalker_Close(t *testing.T) {
 // returns a single empty-values match — the grouping-container path used
 // by schemas like functions/, types/, imports/.
 func TestASTWalker_Query_WildcardSelector(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -70,7 +70,7 @@ func TestASTWalker_Query_WildcardSelector(t *testing.T) {
 // TestASTWalker_Query_WrongRootType verifies Query rejects roots that
 // aren't ASTRoot — exercises the type-assertion error path.
 func TestASTWalker_Query_WrongRootType(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	defer func() { _ = db.Close() }()
 
 	w := NewASTWalker(db)
@@ -79,41 +79,31 @@ func TestASTWalker_Query_WrongRootType(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected ASTRoot")
 }
 
-// TestASTWalker_Query_MissingRequiredCapture verifies that when a required
-// capture (one whose name doesn't start with "_") can't be resolved, the
-// whole match is dropped. Uses a selector that names a capture whose
-// child_kind doesn't exist in the seeded tree.
-func TestASTWalker_Query_MissingRequiredCapture(t *testing.T) {
-	db := seedTestAST(t)
-	defer func() { _ = db.Close() }()
-
-	w := NewASTWalker(db)
-	root := ASTRoot{DB: db, SourceID: "main.go", ParentPrefix: ""}
-
-	// function_declaration nodes exist, but require a "return_type" capture
-	// of kind "nonexistent_kind" — should drop the matches.
-	matches, err := w.Query(root,
-		`(function_declaration (nonexistent_kind) @return_type) @scope`)
-	require.NoError(t, err)
-	assert.Empty(t, matches, "matches should be dropped when required capture is missing")
-}
-
-// TestASTWalker_Query_OptionalUnderscoreCaptureMissing verifies that when
-// an underscore-prefixed capture (treated as optional, used for predicates)
-// is missing, the match is NOT dropped — the loop continues.
-func TestASTWalker_Query_OptionalUnderscoreCaptureMissing(t *testing.T) {
-	db := seedTestAST(t)
-	defer func() { _ = db.Close() }()
-
-	w := NewASTWalker(db)
-	root := ASTRoot{DB: db, SourceID: "main.go", ParentPrefix: ""}
-
-	// Function captures @name (required, identifier) and @_marker (optional,
-	// nonexistent_kind). Matches should still come through.
-	matches, err := w.Query(root,
-		`(function_declaration (identifier) @name (nonexistent_kind) @_marker) @scope`)
-	require.NoError(t, err)
-	assert.NotEmpty(t, matches, "match should survive missing optional capture")
+// TestASTWalker_Query_MissingCaptures pins what a missing capture does to a
+// match. A required capture whose child_kind does not exist in the seeded
+// tree drops the whole match. An underscore-prefixed capture is optional
+// (used for predicates), so its absence keeps the match.
+func TestASTWalker_Query_MissingCaptures(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		selector string
+		kept     bool
+	}{
+		// function_declaration nodes exist, but require a "return_type"
+		// capture of a kind that does not.
+		{"required", `(function_declaration (nonexistent_kind) @return_type) @scope`, false},
+		// @name is required and present; @_marker is optional and absent.
+		{"optional", `(function_declaration (identifier) @name (nonexistent_kind) @_marker) @scope`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := seedTestAST(t, fixturedb.Leyline)
+			defer func() { _ = db.Close() }()
+			w := NewASTWalker(db)
+			matches, err := w.Query(ASTRoot{DB: db, SourceID: "main.go"}, tc.selector)
+			require.NoError(t, err)
+			assert.Equal(t, tc.kept, len(matches) > 0)
+		})
+	}
 }
 
 // TestReadSource_PathFallback verifies that when a _source row has empty
@@ -139,7 +129,7 @@ func TestReadSource_PathFallback(t *testing.T) {
 // Query when findNodesByKind fails. Closing the DB before Query gives the
 // underlying SQL query a guaranteed error.
 func TestASTWalker_Query_FindNodesByKindError(t *testing.T) {
-	db := seedTestAST(t)
+	db := seedTestAST(t, fixturedb.Leyline)
 	w := NewASTWalker(db)
 
 	// Close the DB so the subsequent SQL query fails.

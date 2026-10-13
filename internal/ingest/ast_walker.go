@@ -38,6 +38,10 @@ type ASTWalker struct {
 	importsMu     sync.Mutex
 	importsProbed bool
 	hasImports    bool
+	// shapeProbed/v6 remember whether the db is projection-v6 (see isV6).
+	shapeMu     sync.Mutex
+	shapeProbed bool
+	v6          bool
 }
 
 // scopedAddrRef is one whole-file address-ref match: the token plus the id of
@@ -172,6 +176,11 @@ func (w *ASTWalker) InvalidateSource(sourceID string) {
 // Returns an error if the index cannot be created (e.g., no _ast table,
 // read-only DB, or connection pool exhausted).
 func (w *ASTWalker) EnsureIndexes() error {
+	if w.isV6() {
+		// projection-v6 keys _ast by nid, and a file's nodes are a range of
+		// it: the section load is a primary-key search with nothing to add.
+		return nil
+	}
 	_, err := w.db.Exec("CREATE INDEX IF NOT EXISTS idx_ast_kind_source ON _ast(node_kind, source_id)")
 	return err
 }

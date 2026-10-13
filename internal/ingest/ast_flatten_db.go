@@ -3,6 +3,8 @@ package ingest
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // FlattenASTDB streams FCA records from a leyline-produced `_ast` database,
@@ -46,9 +48,21 @@ func FlattenASTDB(db *sql.DB, sourceLike string, limit int) ([]any, error) {
 	// parent's id is a strict prefix of its child's and sorts first), and
 	// finally ordinal so duplicate field names resolve last-wins like
 	// FlattenAST's child loop.
-	const q = `
+	//
+	// The rows come through lloschema's ASTSelect, the body of v_ast, so the
+	// same query reads projection-v4 and projection-v6 (mache-90cb9f). On v6
+	// node_id is the nid, which is preorder, so the parent-first tiebreak
+	// holds there too.
+	body, err := lloschema.ASTSelect(sqlDB{db})
+	if err != nil {
+		return nil, fmt.Errorf("flatten _ast: %w", err)
+	}
+	if body == "" {
+		return nil, fmt.Errorf("flatten _ast: the database has no _ast table mache can read")
+	}
+	q := `
 SELECT a.node_id, a.node_kind, COALESCE(nc.field, ''), COALESCE(cc.raw_kind, '')
-FROM _ast a
+FROM (` + body + `) a
 LEFT JOIN node_child nc ON nc.parent_hash = a.node_hash AND nc.field IS NOT NULL AND nc.field != ''
 LEFT JOIN node_content cc ON cc.node_hash = nc.child_hash
 WHERE (? = '' OR a.source_id LIKE ?)

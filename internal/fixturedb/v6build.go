@@ -31,6 +31,13 @@ func (e *emitter) v6Tree() *v6Tree {
 	}
 	for _, a := range b.ast {
 		n := add(a.nodeID, a.source, a.span.StartByte)
+		if n.isFile {
+			// The file node IS the grammar's root, so its kind is whatever
+			// that root is: source_file for Go, config_file for HCL. Its
+			// name is the file name, so nothing has to agree with it.
+			n.kind = a.kind
+			continue
+		}
 		if n.kind != a.kind {
 			b.t.Fatalf("fixturedb(leyline-v6): ASTNode %q has kind %q, but its last segment names kind %q; "+
 				"v6 derives the name from the kind, so they must agree", a.nodeID, a.kind, n.kind)
