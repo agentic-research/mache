@@ -220,3 +220,19 @@ func parentMatchesID(id, parent ConstructID, name string) (string, bool) {
 	want := string(parent) + "/" + name
 	return want, string(id) == want
 }
+
+// sourceOf resolves a construct's source file, falling back to inference so
+// Def/Ref never depend on declaration order.
+func (b *Builder) sourceOf(id ConstructID) SourceID {
+	if c, ok := b.constructs[id]; ok {
+		return c.source
+	}
+	return inferSource(id)
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
