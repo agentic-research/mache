@@ -33,6 +33,10 @@ type refSpec struct {
 	// made one up. A v6 fixture gives such a site its own node and lets the
 	// naming rule name it, rather than trusting the made-up path.
 	synthetic bool
+	// injected is true for an occurrence inside a language injected into the
+	// host file, which leyline numbers but stores no node for
+	// (ley-line-open-260fcf); see InjectedRef.
+	injected bool
 }
 
 type astSpec struct {

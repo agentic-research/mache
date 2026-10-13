@@ -465,3 +465,90 @@ func TestValuesRenderer_RendersEveryNodeThroughTheDaemonWire(t *testing.T) {
 	_, _, err = ValuesRenderer(func(string) ([][]any, error) { return [][]any{{"1.5", "x"}}, nil }).Path(7)
 	assert.Error(t, err, "a parent that is not a decimal integer is refused, not truncated")
 }
+
+// textWire runs statements on db and answers as the leyline daemon's query op
+// does: every integer as decimal text, NULL as nil.
+func textWire(db *sql.DB) func(string) ([][]any, error) {
+	return func(query string) ([][]any, error) {
+		rows, err := db.Query(query)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rows.Close() }()
+		cols, err := rows.Columns()
+		if err != nil {
+			return nil, err
+		}
+		var out [][]any
+		for rows.Next() {
+			vals := make([]any, len(cols))
+			ptrs := make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				return nil, err
+			}
+			for i, v := range vals {
+				if n, ok := v.(int64); ok {
+					vals[i] = strconv.FormatInt(n, 10)
+				}
+			}
+			out = append(out, vals)
+		}
+		return out, rows.Err()
+	}
+}
+
+// An occurrence in an injected language (a markdown code span) has a nid in
+// its host file's range and no node (ley-line-open-260fcf). Every renderer
+// names it as LLO's wire does, "<source>#inj@<ordinal>", and Resolve reads that
+// back, so an id taken from a reference still finds its row.
+func TestOccurrencePath_NamesAnInjectedOccurrenceAsLLOsWireDoes(t *testing.T) {
+	b := fixturedb.New(t, fixturedb.LeylineV6)
+	b.Source("doc.md", "markdown", "")
+	b.ASTNode("doc.md", "document", "doc.md", fixturedb.Bytes(0, 100))
+	b.ASTNode("doc.md/section", "section", "doc.md", fixturedb.Bytes(0, 100))
+	b.InjectedRef("Bead", "doc.md/section", "code_span")
+	_, f := b.Build()
+	db := f.DB()
+	var nid int64
+	require.NoError(t, db.QueryRow(`SELECT nid FROM node_refs WHERE token = 'Bead'`).Scan(&nid))
+	var stored int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE nid = ?`, nid).Scan(&stored))
+	require.Zero(t, stored, "the fixture models LLO: no node for an injected occurrence")
+	want := "doc.md#inj@" + strconv.FormatInt(nid&(1<<V6FileShift-1), 10)
+
+	p := NewV6Paths(db)
+	defer p.Close()
+	for name, r := range map[string]*PathRenderer{
+		"compiled": p.Renderer(), "querier": QuerierRenderer(DB(db)), "daemon wire": ValuesRenderer(textWire(db)),
+	} {
+		_, ok, err := r.Path(nid)
+		require.NoError(t, err)
+		assert.False(t, ok, "%s: an injected occurrence is no node", name)
+		got, ok, err := r.OccurrencePath(nid)
+		require.NoError(t, err)
+		require.True(t, ok, name)
+		assert.Equal(t, want, got, name)
+		section, _, err := p.Resolve("doc.md/section")
+		require.NoError(t, err)
+		got, ok, err = r.OccurrencePath(section)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, "doc.md/section", got, "%s: a stored node is named by its path", name)
+		_, ok, err = r.OccurrencePath(99<<V6FileShift | 3)
+		require.NoError(t, err)
+		assert.False(t, ok, "%s: a nid in no interned file has nothing to anchor it", name)
+	}
+
+	back, ok, err := p.Resolve(want)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, nid, back, "Resolve reads the address back")
+	for _, bad := range []string{"doc.md#inj@", "doc.md#inj@x1", "#inj@3", "nope.md#inj@3", "doc.md#inj@16777216"} {
+		_, ok, err := p.Resolve(bad)
+		require.NoError(t, err)
+		assert.False(t, ok, bad)
+	}
+}

@@ -236,9 +236,10 @@ func refuseOnOpaqueIDs(qg graph.RefsQuerier, rule *SmellRule) error {
 
 // renderNodeIDs sets each finding's NodeID from the key its rule returned:
 // the key itself on projection-v4, where a node id is its path, and the
-// rendered path of the nid on projection-v6, with shared ancestors named once.
-// A nid with no node (a row LLO wrote for a node it does not store,
-// ley-line-open-260fcf) renders as no node at all, as a file-level finding.
+// address of the nid on projection-v6, with shared ancestors named once. An
+// occurrence LLO stores no node for (an injected language,
+// ley-line-open-260fcf) is named as LLO's wire names it
+// (lloschema.OccurrencePath), as v4 named it too.
 func renderNodeIDs(qg graph.RefsQuerier, findings []smellFinding) error {
 	var r *lloschema.PathRenderer
 	for i := range findings {
@@ -249,7 +250,7 @@ func renderNodeIDs(qg graph.RefsQuerier, findings []smellFinding) error {
 			if r == nil {
 				r = lloschema.QuerierRenderer(qg)
 			}
-			path, ok, err := r.Path(k)
+			path, ok, err := r.OccurrencePath(k)
 			if err != nil {
 				return fmt.Errorf("render node %d: %w", k, err)
 			}

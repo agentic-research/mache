@@ -53,6 +53,9 @@ func (e *emitter) v6Tree() *v6Tree {
 	}
 	e.v6Sites = make([]*v6Node, len(b.refs))
 	for i, r := range b.refs {
+		if r.injected {
+			continue // numbered once the file's stored nodes are
+		}
 		if r.synthetic {
 			e.v6Sites[i] = t.addSyntheticSite(t.byPath[string(r.from)])
 			continue
@@ -60,6 +63,11 @@ func (e *emitter) v6Tree() *v6Tree {
 		e.v6Sites[i] = add(string(r.at), b.sourceOf(r.from), -1)
 	}
 	t.assignIDs()
+	for i, r := range b.refs {
+		if r.injected {
+			e.v6Sites[i] = t.injectedSite(t.byPath[string(b.sourceOf(r.from))])
+		}
+	}
 	if problems := t.nameProblems(); len(problems) > 0 {
 		b.t.Fatalf("fixturedb(leyline-v6): leyline suffixes a syntax node \"_k\" only when its kind repeats "+
 			"among its siblings, so these ids cannot exist in a projection-v6 database:\n  %s",

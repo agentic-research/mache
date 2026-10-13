@@ -133,6 +133,21 @@ func (b *Builder) Ref(token string, from ConstructID, at SiteID, qualifier strin
 	return b
 }
 
+// InjectedRef declares that token is referenced from inside a language
+// injected into construct from: a code span in markdown, SQL in a Go string.
+// leyline indexes such an occurrence but stores no node for it
+// (ley-line-open-260fcf). On projection-v4 its node_id is from's path, then
+// "#inj0/", then inner, the injected tree's path, and only node_refs names it;
+// on v6 it is a nid in from's file past every node the file stores.
+func (b *Builder) InjectedRef(token string, from ConstructID, inner string) *Builder {
+	b.Construct(from)
+	b.refs = append(b.refs, refSpec{
+		token: token, from: from, at: SiteID(string(from) + "#inj0/" + inner),
+		subtree: b.nextSubtree(), injected: true,
+	})
+	return b
+}
+
 // nextSite synthesises a ley-line-shaped call-site leaf under from, so two
 // unnamed occurrences in one construct stay two distinct rows.
 func (b *Builder) nextSite(from ConstructID) SiteID {

@@ -62,6 +62,8 @@ type v6Tree struct {
 	dirs   []*v6Node
 	files  []*v6Node
 	seq    int
+	// injected counts the injected occurrences numbered in each file so far.
+	injected map[*v6Node]int64
 }
 
 func newV6Tree() *v6Tree {
@@ -274,4 +276,24 @@ func (tr *v6Tree) nameProblems() []string {
 	}
 	walk(tr.root)
 	return out
+}
+
+// injectedSite numbers an occurrence in a language injected into file: the
+// next ordinal past every node the file stores, which is where leyline puts
+// an injected subtree, with no node of its own (ley-line-open-260fcf).
+func (tr *v6Tree) injectedSite(file *v6Node) *v6Node {
+	last := file.nid
+	var walk func(*v6Node)
+	walk = func(n *v6Node) {
+		last = max(last, n.nid)
+		for _, c := range n.kids {
+			walk(c)
+		}
+	}
+	walk(file)
+	if tr.injected == nil {
+		tr.injected = map[*v6Node]int64{}
+	}
+	tr.injected[file]++
+	return &v6Node{nid: last + tr.injected[file], k: -1, start: -1}
 }
