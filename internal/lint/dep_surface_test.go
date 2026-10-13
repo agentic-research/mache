@@ -41,6 +41,7 @@ var thinDepAllowlist = map[string]string{
 	"github.com/ohler55/ojg/jp":                   "jp.ParseString — the JSONPath engine behind the JSON walker",
 	"mvdan.cc/gofumpt/format":                     "format.Source/Options — gofumpt IS the Go formatter for write-back",
 	"github.com/zeebo/blake3":                     "blake3.Sum256/New — content addressing; must match ley-line's hash exactly",
+	"modernc.org/sqlite/vfs":                      "vfs.New — sqlcount counts the bytes a query reads from the file; same module as the SQL driver, no new dependency",
 
 	// HCL: three packages, one job (Terraform/HCL write-back validate + format).
 	"github.com/hashicorp/hcl/v2":           "hcl.InitialPos/DiagError — diagnostics for HCL write-back validation",

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/agentic-research/mache/internal/sqlstmt"
 )
 
 // NodeKindFile and NodeKindDir are the integer values stored in the nodes
@@ -58,11 +60,11 @@ type NodesTableReader struct {
 // construction. So none needs to be rebuilt per call — which is what the
 // reader used to do, compiling the same SQL afresh on every GetNode.
 type readerStmts struct {
-	node, children, childrenRoot, stats, statsRoot, content, record, callers *preparedStmt
+	node, children, childrenRoot, stats, statsRoot, content, record, callers *sqlstmt.Lazy
 }
 
-func (s readerStmts) all() []*preparedStmt {
-	return []*preparedStmt{
+func (s readerStmts) all() []*sqlstmt.Lazy {
+	return []*sqlstmt.Lazy{
 		s.node, s.children, s.childrenRoot, s.stats, s.statsRoot, s.content, s.record, s.callers,
 	}
 }
@@ -115,14 +117,14 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 	// After the flags: nodeSelect reads them, and the statement text is fixed
 	// from here on.
 	r.stmts = readerStmts{
-		node:         newPreparedStmt(r.nodeSelect()),
-		children:     newPreparedStmt("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name"),
-		childrenRoot: newPreparedStmt("SELECT id FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
-		stats:        newPreparedStmt("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name"),
-		statsRoot:    newPreparedStmt("SELECT id, kind, size, mtime FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
-		content:      newPreparedStmt("SELECT record, record_id FROM nodes WHERE id = ?"),
-		record:       newPreparedStmt("SELECT record FROM " + tableName + " WHERE id = ?"),
-		callers: newPreparedStmt(
+		node:         sqlstmt.NewLazy(r.nodeSelect()),
+		children:     sqlstmt.NewLazy("SELECT id FROM nodes WHERE parent_id = ? ORDER BY name"),
+		childrenRoot: sqlstmt.NewLazy("SELECT id FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
+		stats:        sqlstmt.NewLazy("SELECT id, kind, size, mtime FROM nodes WHERE parent_id = ? ORDER BY name"),
+		statsRoot:    sqlstmt.NewLazy("SELECT id, kind, size, mtime FROM nodes WHERE (parent_id = '' OR parent_id IS NULL) AND id != '' ORDER BY name"),
+		content:      sqlstmt.NewLazy("SELECT record, record_id FROM nodes WHERE id = ?"),
+		record:       sqlstmt.NewLazy("SELECT record FROM " + tableName + " WHERE id = ?"),
+		callers: sqlstmt.NewLazy(
 			"SELECT node_id FROM node_refs WHERE token = ? AND node_id NOT LIKE '" + sentinelSQLPattern + "'"),
 	}
 	return r
@@ -133,7 +135,7 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 // statements are released against a live connection.
 func (r *NodesTableReader) Close() {
 	for _, s := range r.stmts.all() {
-		s.close()
+		s.Close()
 	}
 }
 
@@ -145,7 +147,7 @@ func (r *NodesTableReader) GetNode(id string) (*Node, error) {
 	}
 
 	var row nodeScan
-	stmt, err := r.stmts.node.get(r.db)
+	stmt, err := r.stmts.node.Get(r.db)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +304,7 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 
 	var record sql.NullString
 	var recordID sql.NullString
-	stmt, err := r.stmts.content.get(r.db)
+	stmt, err := r.stmts.content.Get(r.db)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +335,7 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 // renderFromRecord fetches a record by ID and renders content via template.
 func (r *NodesTableReader) renderFromRecord(filePath, recordID string) ([]byte, error) {
 	var raw string
-	stmt, err := r.stmts.record.get(r.db)
+	stmt, err := r.stmts.record.Get(r.db)
 	if err != nil {
 		return nil, fmt.Errorf("fetch record %s: %w", recordID, err)
 	}
@@ -396,8 +398,8 @@ func (r *NodesTableReader) Invalidate(id string) {
 // query runs a compiled statement. One helper rather than a get-then-Query pair
 // repeated at every call site, so a multi-row read cannot quietly go back to
 // handing database/sql a string.
-func (r *NodesTableReader) query(p *preparedStmt, args ...any) (*sql.Rows, error) {
-	stmt, err := p.get(r.db)
+func (r *NodesTableReader) query(p *sqlstmt.Lazy, args ...any) (*sql.Rows, error) {
+	stmt, err := p.Get(r.db)
 	if err != nil {
 		return nil, err
 	}
