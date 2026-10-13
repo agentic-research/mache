@@ -22,17 +22,10 @@ package fixturedb
 // WHY A SECOND MIRROR RATHER THAN REPLACING THE FIRST. mache reads artifacts
 // produced by several leyline versions — lloschema.resolveIdentity exists
 // precisely because a db carries its own answer — so fixtures must be able to
-// model both. schema_leyline.go stays the v4 model and stays conformance-
-// checked against the pin; this one models v6.
-//
-// CONFORMANCE STATUS, stated plainly rather than implied: while the pin is
-// v0.19.1 this mirror is NOT verified against a binary in CI, because CI has
-// no v0.20.x binary to verify it against. TestLeylineV6Schema_MatchesBinary
-// checks it whenever one IS resolvable (locally, or via
-// MACHE_LEYLINE_BINARY), and the pin bump turns the check on permanently by
-// making v6 the pinned shape. Until then, treat a difference found by that
-// test as this file's re-derivation worklist — the arrangement mache-cc1a70
-// established for validating against an LLO candidate.
+// model both. This one models v6, the PINNED shape since the v0.20.3 pin, and
+// TestLeylineSchema_MatchesPinnedBinary checks it against the pinned binary.
+// schema_leyline.go stays the v4 model, for artifacts the previous pin built,
+// checked against its own binary by TestLeylineV4Schema_MatchesItsBinary.
 
 // The LeylineV6 producer (dialect_v6.go) builds fixtures in this shape.
 //

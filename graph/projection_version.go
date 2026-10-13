@@ -28,7 +28,7 @@ var knownProjections = map[string]string{
 	// _meta channel did not exist yet — but ley-line-open's main stamped it
 	// between v0.18.2 and v0.19.0, so arenas from that window say so.
 	"projection-v2": "pre-v0.19.0: parent_id stored, spans only on _ast",
-	// THE PINNED SHAPE as of leyline v0.19.0. nodes.parent_id becomes
+	// The pinned shape for leyline v0.19.x. nodes.parent_id becomes
 	// GENERATED; node_defs/node_refs gain their own node_kind + span columns;
 	// _ast gains blob_ord. Every change is ADDITIVE except the parent_id
 	// conversion, and nothing is removed — verified by re-deriving
@@ -39,7 +39,13 @@ var knownProjections = map[string]string{
 	// integer FK, because the derivation only means anything while ids are
 	// path-shaped. mache probes the column at runtime rather than keying on
 	// this version, so that reversal needs no change here (mache-bc6ca3).
-	"projection-v4": "the pinned shape: parent_id derived; spans on node_defs/node_refs; _ast.blob_ord",
+	"projection-v4": "leyline v0.19.x: parent_id derived; spans on node_defs/node_refs; _ast.blob_ord",
+	// THE PINNED SHAPE as of leyline v0.20.3 (v0.20.0 introduced it): nodes
+	// keyed by integer nid with interned names and kinds, paths derived by
+	// LLO's v_node_name rather than stored, _ast/node_defs/node_refs keyed by
+	// nid. Every mache reader handles it through internal/lloschema, checked
+	// against real parses of one tree in both shapes (mache-90cb9f).
+	"projection-v6": "the pinned shape: integer nids, derived paths, interned names and kinds",
 }
 
 // ProjectionVersion returns the projection shape an artifact declares and

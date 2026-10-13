@@ -6,6 +6,26 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **leyline is pinned to v0.20.3** (`mache-3451a1`), up from v0.19.1. New
+  parses are projection-v6, which mache now reads everywhere (see Added).
+  `.db` files built by the previous pin stay readable, and node hashes are
+  unchanged (IR `merkle-ast-v2`, extraction epoch 5), so a smell baseline
+  taken on v0.19.1 still applies; mache's own gate passes on the new pin
+  with no change to it.
+  - **Control block VERSION 3.** leyline v0.20.1+ publishes the arena
+    pointer under a seqlock: odd while a writer is changing it, even when it
+    is whole. mache's control block speaks v3 only, reading with the seqlock
+    and marking its own publishes, so a reader can no longer see half of one
+    root and half of the next. A `.ctrl` written by an older leyline is
+    refused with a message saying so; stop that daemon and let mache start
+    the pinned one, which it caches separately per pin.
+  - **The daemon's NFS server listens on loopback only** (v0.20.2); v0.19.1
+    listened on all interfaces. It also shuts down gracefully on SIGTERM,
+    unmounts on exit, and makes NFS writes durable at the client's
+    fsync/close.
+
 ### Added
 
 - **mache reads ley-line-open's projection-v6 databases** (`mache-90cb9f`,

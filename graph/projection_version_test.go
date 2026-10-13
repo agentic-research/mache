@@ -90,7 +90,7 @@ func TestProjectionVersion_ReportsWhatTheArtifactDeclares(t *testing.T) {
 // and "nobody looked", so an entry going missing must fail rather than silently
 // widen the warning to shapes mache does in fact support.
 func TestKnownProjections_CoverTheShapesMacheActuallyReads(t *testing.T) {
-	for _, v := range []string{"projection-v2", "projection-v4"} {
+	for _, v := range []string{"projection-v2", "projection-v4", "projection-v6"} {
 		_, ok := knownProjections[v]
 		assert.True(t, ok, "%s is a shape mache has been checked against", v)
 	}
@@ -121,6 +121,7 @@ func TestWarnUnknownProjection_IsQuietOnEverythingMacheSupports(t *testing.T) {
 		{"released leyline, no projection row", map[string]string{"parse_time": "1"}, false},
 		{"pinned shape", map[string]string{ProjectionSchemaVersionKey: "projection-v2"}, false},
 		{"projection-v4", map[string]string{ProjectionSchemaVersionKey: "projection-v4"}, false},
+		{"projection-v6, the pin", map[string]string{ProjectionSchemaVersionKey: "projection-v6"}, false},
 		{"a shape from the future", map[string]string{ProjectionSchemaVersionKey: "projection-v9"}, true},
 		{"a fork's own string", map[string]string{ProjectionSchemaVersionKey: "acme-projection-1"}, true},
 	} {

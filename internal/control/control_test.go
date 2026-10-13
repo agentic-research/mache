@@ -1,8 +1,11 @@
 package control
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -220,19 +223,20 @@ func TestSetArena_PathTooLong(t *testing.T) {
 // TestSetArena_BumpsSyncAtom asserts the Release-store contract: SetArena
 // must increment the private sync atom so reader Acquire-loads observe a
 // fenced view.
-func TestSetArena_BumpsSyncAtom(t *testing.T) {
+func TestSetArena_PublishesUnderTheSeqlock(t *testing.T) {
 	ctrl, _ := newController(t)
 
 	syncPtr := (*uint64)(unsafe.Pointer(&ctrl.data[offSync]))
 	before := atomic.LoadUint64(syncPtr)
+	require.Zero(t, before&1, "a fresh control block is at rest: even")
 
 	require.NoError(t, ctrl.SetArena("/tmp/a", 1))
 	mid := atomic.LoadUint64(syncPtr)
-	assert.Equal(t, before+1, mid, "SetArena must bump sync atom by exactly 1")
+	assert.Equal(t, before+2, mid, "a publish marks the sequence odd, then even: two steps")
 
-	require.NoError(t, ctrl.SetArena("/tmp/b", 2))
+	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/b", 2, [32]byte{1}))
 	after := atomic.LoadUint64(syncPtr)
-	assert.Equal(t, mid+1, after, "second SetArena must bump sync atom again")
+	assert.Equal(t, mid+2, after, "every publish, with or without a root")
 }
 
 // TestSetArena_ClearsPriorPathBytes asserts the path-buffer zero-fill: writing
@@ -379,6 +383,14 @@ func TestOpenOrCreate_VersionMismatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "version mismatch")
 	assert.Contains(t, err.Error(), "v1")
+
+	// v2 shares v3's layout but not its publish protocol: a v2 writer leaves
+	// no odd mark for a v3 reader to wait on, so it is refused too.
+	*(*uint32)(unsafe.Pointer(&buf[offVersion])) = 2
+	require.NoError(t, os.WriteFile(path, buf, 0o644))
+	_, err = OpenOrCreate(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file is v2, expected v3")
 }
 
 // TestOpenOrCreate_ConcurrentCreate covers the race where two callers
@@ -537,4 +549,100 @@ func TestValidatePath_RelativePathResolvesToCwd(t *testing.T) {
 	if err != nil {
 		assert.Contains(t, err.Error(), "security violation")
 	}
+}
+
+// A reader that finds the sequence odd waits for the publish to finish rather
+// than copying a payload that is half written.
+func TestGetCurrentRoot_WaitsOutAPublishInFlight(t *testing.T) {
+	ctrl, _ := newController(t)
+	require.NoError(t, ctrl.SetArenaWithRoot("/tmp/old", 1, [32]byte{1}))
+
+	waiting := make(chan struct{})
+	var once sync.Once
+	defer func(orig func()) { yieldWhileOdd = orig }(yieldWhileOdd)
+	yieldWhileOdd = func() {
+		once.Do(func() { close(waiting) })
+		runtime.Gosched()
+	}
+
+	seq := (*uint64)(unsafe.Pointer(&ctrl.data[offSync]))
+	atomic.AddUint64(seq, 1) // a writer has begun: odd
+	got := make(chan [32]byte)
+	go func() { got <- ctrl.GetCurrentRoot() }()
+
+	<-waiting // the reader saw the publish in flight and did not return
+	// The writer finishes: new root, then even.
+	ctrl.storeWords(offCurrentRoot, bytes.Repeat([]byte{2}, currentRootLen))
+	atomic.AddUint64(seq, 1)
+	assert.Equal(t, [32]byte(bytes.Repeat([]byte{2}, currentRootLen)), <-got,
+		"the reader returns the finished publish, not the payload it found half written")
+}
+
+// The property the seqlock exists for: with a writer publishing distinct
+// (path, size, root) triples as fast as it can, no reader ever sees a
+// mixture of two. Each triple is self-describing (path, size and every root
+// byte encode the same n), so a torn read is detectable from the read alone.
+func TestSeqlock_NoTornReadsUnderAConcurrentWriter(t *testing.T) {
+	ctrl, path := newController(t)
+	triple := func(n uint64) (string, [32]byte) {
+		var root [32]byte
+		for i := range root {
+			root[i] = byte(n)
+		}
+		return fmt.Sprintf("/tmp/arena-%03d", n%256), root
+	}
+
+	// Publish one triple before any reader starts: the control block's
+	// initial all-zero state is not a triple anyone published.
+	p0, r0 := triple(0)
+	require.NoError(t, ctrl.SetArenaWithRoot(p0, 0, r0))
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for n := uint64(1); ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			p, r := triple(n % 256)
+			if err := ctrl.SetArenaWithRoot(p, n%256, r); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+
+	// Readers on their own mapping of the same file, as another process
+	// would be.
+	const readers, reads = 4, 30000
+	var torn atomic.Int64
+	var rg sync.WaitGroup
+	for range readers {
+		rg.Add(1)
+		go func() {
+			defer rg.Done()
+			r, err := OpenOrCreate(path)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = r.Close() }()
+			for range reads {
+				s := r.snapshot()
+				n := s.size
+				p, root := triple(n)
+				if string(s.path[:len(p)]) != p || s.path[len(p)] != 0 || s.root != root {
+					torn.Add(1)
+				}
+			}
+		}()
+	}
+	rg.Wait()
+	close(stop)
+	wg.Wait()
+	assert.Zero(t, torn.Load(), "every read must be a triple some publish wrote whole (%d reads)", readers*reads)
 }

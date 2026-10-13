@@ -28,7 +28,10 @@ package fixturedb
 // Re-derive with the comments removed line-wise, preserving structure.
 
 // leylineSchemaVersion is the ley-line-open release these statements were
-// derived from. The conformance test asserts the pinned binary still reports it.
+// derived from: the last projection-v4 pin. The pin is now projection-v6
+// (schema_leyline_v6.go); this mirror models the artifacts the previous pin
+// built, which mache still reads, and TestLeylineV4Schema_MatchesItsBinary
+// checks it against a cached binary of this version.
 const leylineSchemaVersion = "v0.19.1"
 
 // leylineTables is the ley-line-owned subset fixtures model, keyed by table

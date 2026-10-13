@@ -1084,12 +1084,31 @@ func (c *SocketClient) Prioritize(files []string) error {
 // re-run `leyline parse` to gain the repaired Terraform refs (mache-91beb0,
 // ley-line-open-55c1cc).
 //
+// v0.19.1 -> v0.20.3 CHANGES THE PROJECTION SHAPE, NOT THE IR LINEAGE.
+// IR_SCHEMA_VERSION stays "merkle-ast-v2" and the extraction epoch stays 5,
+// so node_hash values remain comparable with artifacts the previous pin built
+// (the smell baseline keys on them). What changes:
+//   - projection-v6 (v0.20.0, ley-line-open-17c271): nodes are integer nids
+//     with interned names and kinds, and paths are derived, not stored. mache
+//     reads both shapes through internal/lloschema (mache-90cb9f); a .db built
+//     by the previous pin stays readable, and a new parse writes v6.
+//   - control block VERSION 3 (v0.20.1, ley-line-open-49a1ef): the payload is
+//     published under a seqlock. internal/control speaks v3 only, and v2 and
+//     v3 files refuse each other by name (mache-3451a1).
+//   - the NFS server listens on loopback only (v0.20.2); v0.19.1 listened on
+//     0.0.0.0. The daemon shuts down gracefully on SIGTERM and unmounts on
+//     exit; NFS writes are durable at the client's fsync/close (v0.20.3).
+//
+// The wire major remains 1 and the compatibility floor v0.6.0. The schema
+// client moves to v0.20.2 (Head gains treeRoot/parserId, additive); v0.20.3
+// published no new schema tag.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.19.1"
+const leylineBinaryVersion = "v0.20.3"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
