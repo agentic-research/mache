@@ -62,3 +62,11 @@ type lspDefSpec struct {
 	startLine, startCol int
 	endLine, endCol     int
 }
+
+// lspHoverSpec is one _lsp_hover row. symbol is the standalone address
+// `leyline lsp` keys hover by: "symbols/" plus the document-symbol path.
+type lspHoverSpec struct{ symbol, text string }
+
+// lspSymbolSpec is one _lsp row: a document symbol merged onto the AST node its
+// name is in, with the JSON diagnostics in its range ("" for none).
+type lspSymbolSpec struct{ nodeID, symbolKind, diagnostics string }

@@ -391,3 +391,31 @@ func TestParsedSourceLike_BothProjections(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got, "a projection with no _ast parsed nothing")
 }
+
+// IntValue reads an integer back from a driver (int64) or from the daemon's
+// query op, which sends every value as text, and refuses text that is not
+// exactly a decimal integer rather than reading some other node's nid out of it.
+func TestIntValue(t *testing.T) {
+	for _, tc := range []struct {
+		in   any
+		want int64
+		ok   bool
+	}{
+		{int64(-7), -7, true},
+		{"50331657", 3<<24 | 9, true},
+		{"-1", -1, true},
+		{"1.5", 0, false},
+		{"12abc", 0, false},
+		{"", 0, false},
+		{1.0, 0, false},
+		{nil, 0, false},
+	} {
+		got, err := IntValue(tc.in)
+		if tc.ok {
+			require.NoError(t, err, "%v", tc.in)
+			assert.Equal(t, tc.want, got, "%v", tc.in)
+		} else {
+			assert.Error(t, err, "%v", tc.in)
+		}
+	}
+}

@@ -28,6 +28,8 @@ type Builder struct {
 	srcOrder   []SourceID
 	imports    []importSpec
 	lspDefs    []lspDefSpec
+	lspHovers  []lspHoverSpec
+	lspSyms    []lspSymbolSpec
 
 	siteSeq map[ConstructID]int
 	subtree int

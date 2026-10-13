@@ -90,6 +90,30 @@ func (b *Builder) LSPDef(token string, in ConstructID, uri string, startLine, st
 	return b
 }
 
+// LSPHover declares one `_lsp_hover` row. `leyline lsp` keys hover by the
+// symbol's standalone address, "symbols/" plus its document-symbol path
+// (symbols/Store/Add), not by an AST node. That address is a chain of nodes
+// outside every file: on projection-v6 each link is a directory, interned the
+// way LLO's standalone_chain interns it; on v4 each is a nodes row whose id is
+// the path.
+func (b *Builder) LSPHover(symbol, text string) *Builder {
+	if !strings.HasPrefix(symbol, "symbols/") {
+		b.t.Fatalf("fixturedb: LSPHover on %q: leyline keys hover by the symbol's standalone address, "+
+			"which is under symbols/", symbol)
+	}
+	b.lspHovers = append(b.lspHovers, lspHoverSpec{symbol: symbol, text: text})
+	return b
+}
+
+// LSPSymbol declares one `_lsp` row: a document symbol merged onto the AST node
+// its name is in, which on projection-v6 the spec must declare, since v6 keys
+// the row by that node's nid. diagnostics is the JSON array `leyline lsp`
+// stores for the symbol's range, or "" for none.
+func (b *Builder) LSPSymbol(at ConstructID, symbolKind, diagnostics string) *Builder {
+	b.lspSyms = append(b.lspSyms, lspSymbolSpec{nodeID: string(at), symbolKind: symbolKind, diagnostics: diagnostics})
+	return b
+}
+
 // Parsed declares id the way a parse writes it: the node, and every syntax
 // node from its source file down to it, each a nodes row with an _ast row of
 // the kind its segment names (the raw kind, less a "_k" suffix). A parse never

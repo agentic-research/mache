@@ -263,49 +263,10 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 		return nil, fmt.Errorf("set query deadline: %w", err)
 	}
 
-	escaped := escapeLikePattern(symbol)
-	rows, err := client.Query(fmt.Sprintf(
-		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s' ESCAPE '\'`, escaped))
+	results, err := lookupHover(client.Query, symbol, kind)
 	if err != nil {
-		return nil, fmt.Errorf("query _lsp_hover via daemon: %w", err)
+		return nil, fmt.Errorf("read hover via daemon: %w", err)
 	}
-
-	type hoverResult struct {
-		NodeID    string `json:"node_id"`
-		HoverText string `json:"hover_text"`
-	}
-
-	var results []hoverResult
-	for _, row := range rows {
-		if len(row) >= 2 {
-			results = append(results, hoverResult{
-				NodeID:    fmt.Sprint(row[0]),
-				HoverText: fmt.Sprint(row[1]),
-			})
-		}
-	}
-
-	// Fallback: broader match
-	if len(results) == 0 {
-		rows, err = client.Query(fmt.Sprintf(
-			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE '%%%s%%' ESCAPE '\'`, escaped))
-		if err == nil {
-			for _, row := range rows {
-				if len(row) >= 2 {
-					results = append(results, hoverResult{
-						NodeID:    fmt.Sprint(row[0]),
-						HoverText: fmt.Sprint(row[1]),
-					})
-				}
-			}
-		}
-	}
-
-	if len(results) == 0 {
-		return mcp.NewToolResultText(formatNoHoverMessage(symbol, "", skipReasons)), nil
-	}
-
-	results = filterByNodeIDKind(results, kind, func(r hoverResult) string { return r.NodeID })
 	if len(results) == 0 {
 		return mcp.NewToolResultText(formatNoHoverMessage(symbol, kind, skipReasons)), nil
 	}
@@ -317,47 +278,10 @@ func enrichAndQueryTypeInfo(filePath, symbol, kind string) (*mcp.CallToolResult,
 // queryTypeInfoFromGraph queries _lsp_hover from mache's in-memory graph
 // (used when LSP tables already exist in the graph, e.g. from leyline lsp CLI).
 func queryTypeInfoFromGraph(qg graph.RefsQuerier, symbol, kind string) (*mcp.CallToolResult, error) {
-	type hoverResult struct {
-		NodeID    string `json:"node_id"`
-		HoverText string `json:"hover_text"`
-	}
-
-	rows, err := qg.QueryRefs(
-		`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ? ESCAPE '\'`,
-		"%/"+escapeLikeMeta(symbol),
-	)
+	results, err := lookupHover(graphLSPSource(qg), symbol, kind)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query _lsp_hover: %v", err)), nil
 	}
-
-	var results []hoverResult
-	for rows.Next() {
-		var r hoverResult
-		if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	_ = rows.Close()
-
-	if len(results) == 0 {
-		rows, err = qg.QueryRefs(
-			`SELECT node_id, hover_text FROM _lsp_hover WHERE node_id LIKE ? ESCAPE '\'`,
-			"%"+escapeLikeMeta(symbol)+"%",
-		)
-		if err == nil {
-			for rows.Next() {
-				var r hoverResult
-				if err := rows.Scan(&r.NodeID, &r.HoverText); err != nil {
-					continue
-				}
-				results = append(results, r)
-			}
-			_ = rows.Close()
-		}
-	}
-
-	results = filterByNodeIDKind(results, kind, func(r hoverResult) string { return r.NodeID })
 	if len(results) == 0 {
 		if kind != "" {
 			return mcp.NewToolResultText(fmt.Sprintf("no type info found for %q with kind=%s", symbol, kind)), nil
@@ -403,41 +327,10 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 		return nil, fmt.Errorf("set query deadline: %w", err)
 	}
 
-	var query string
-	if symbol != "" {
-		escaped := escapeLikePattern(symbol)
-		query = fmt.Sprintf(
-			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE '%%%s%%' ESCAPE '\' LIMIT %d`,
-			escaped, limit)
-	} else {
-		query = fmt.Sprintf(
-			`SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT %d`,
-			limit)
-	}
-
-	rows, err := client.Query(query)
+	results, err := lookupDiagnostics(client.Query, symbol, kind, limit)
 	if err != nil {
-		return nil, fmt.Errorf("query _lsp via daemon: %w", err)
+		return nil, fmt.Errorf("read diagnostics via daemon: %w", err)
 	}
-
-	type diagResult struct {
-		NodeID      string `json:"node_id"`
-		SymbolKind  string `json:"symbol_kind"`
-		Diagnostics string `json:"diagnostics"`
-	}
-
-	var results []diagResult
-	for _, row := range rows {
-		if len(row) >= 3 {
-			results = append(results, diagResult{
-				NodeID:      fmt.Sprint(row[0]),
-				SymbolKind:  fmt.Sprint(row[1]),
-				Diagnostics: fmt.Sprint(row[2]),
-			})
-		}
-	}
-
-	results = filterByNodeIDKind(results, kind, func(r diagResult) string { return r.NodeID })
 	if len(results) == 0 {
 		return noDiagnosticsResultWithSkipReasons(symbol, kind, skipReasons), nil
 	}
@@ -489,38 +382,10 @@ func noDiagnosticsResultWithSkipReasons(symbol, kind string, skipReasons []strin
 
 // queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph.
 func queryDiagnosticsFromGraph(qg graph.RefsQuerier, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
-	type diagResult struct {
-		NodeID      string `json:"node_id"`
-		SymbolKind  string `json:"symbol_kind"`
-		Diagnostics string `json:"diagnostics"`
-	}
-
-	var query string
-	var args []any
-	if symbol != "" {
-		query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' AND node_id LIKE ? ESCAPE '\' LIMIT ?`
-		args = []any{"%" + escapeLikeMeta(symbol) + "%", limit}
-	} else {
-		query = `SELECT node_id, symbol_kind, diagnostics FROM _lsp WHERE diagnostics IS NOT NULL AND diagnostics != '' LIMIT ?`
-		args = []any{limit}
-	}
-
-	rows, err := qg.QueryRefs(query, args...)
+	results, err := lookupDiagnostics(graphLSPSource(qg), symbol, kind, limit)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query _lsp: %v", err)), nil
 	}
-
-	var results []diagResult
-	for rows.Next() {
-		var r diagResult
-		if err := rows.Scan(&r.NodeID, &r.SymbolKind, &r.Diagnostics); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	_ = rows.Close()
-
-	results = filterByNodeIDKind(results, kind, func(r diagResult) string { return r.NodeID })
 	if len(results) == 0 {
 		return noDiagnosticsResult(symbol, kind), nil
 	}
@@ -573,26 +438,7 @@ func queryLSPDefs(qg graph.RefsQuerier, symbol string) ([]lspDefLocation, error)
 		return queryLSPDefsLegacy(qg, symbol)
 	}
 
-	rows, err := qg.QueryRefs(
-		`SELECT node_id, def_uri, def_start_line, def_start_col, def_end_line, def_end_col
-		 FROM _lsp_defs
-		 WHERE def_token = ?`,
-		symbol,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query _lsp_defs: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var results []lspDefLocation
-	for rows.Next() {
-		var r lspDefLocation
-		if err := rows.Scan(&r.NodeID, &r.URI, &r.StartLine, &r.StartCol, &r.EndLine, &r.EndCol); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	return results, rows.Err()
+	return lookupLSPDefs(graphLSPSource(qg), symbol)
 }
 
 // queryLSPRefs returns reference locations for a symbol.
@@ -812,10 +658,4 @@ func refsTableExists(qg graph.RefsQuerier, name string) (bool, error) {
 func escapeLikeMeta(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(s)
-}
-
-// escapeLikePattern escapes LIKE metacharacters AND doubles single quotes.
-// For non-parameterized queries (daemon socket path) only.
-func escapeLikePattern(s string) string {
-	return strings.ReplaceAll(escapeLikeMeta(s), `'`, `''`)
 }
