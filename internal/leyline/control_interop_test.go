@@ -26,7 +26,7 @@ func TestControlBlock_ReadsWhatLeylineWrites(t *testing.T) {
 	}
 	out, err := exec.Command(bin, "--version").Output()
 	require.NoError(t, err)
-	fields := strings.Fields(string(out)) // "leyline 0.20.3 (open)"
+	fields := strings.Fields(string(out)) // "leyline 0.20.5 (open)"
 	require.GreaterOrEqual(t, len(fields), 2, "unexpected --version output %q", out)
 	if compareSemver(fields[1], "0.20.1") < 0 {
 		t.Skipf("leyline %s writes control block v2; v3 arrived in 0.20.1", fields[1])

@@ -33,10 +33,10 @@ const BinaryVersion = leylineBinaryVersion
 //	gh release view <tag> --repo agentic-research/ley-line-open --json assets \
 //	  --jq '.assets[]|select(.name|test("^leyline-(darwin|linux)-(amd64|arm64)$"))|"\(.name) \(.digest)"'
 var leylinePinnedSHA256 = map[string]string{
-	"darwin-amd64": "0f61543fb730a21c08c8e790f07cddd9819ff799b2dba43767149f72ba116323",
-	"darwin-arm64": "77a9701f37196af3c170b634b55231dde6d3363d1385a68c3d06261741072234",
-	"linux-amd64":  "efa7c80c0145abc78c1775682102c7be6bdd2bd96eeec8a170b7f5538596c8ba",
-	"linux-arm64":  "68bb3030648d9a830be1325e9c45615852c24adaac9f5725d8dbfa7c5338dcfd",
+	"darwin-amd64": "7bd2bd8f82185ba01b1496f947afca54ab08932888848d4d65eb1de0d6e1bb41",
+	"darwin-arm64": "a869e4f3d44539aed576928009dbf630cb9e0c4dc9fb4bb6fe9f948bd6e51765",
+	"linux-amd64":  "48cc6dd242d25d1afe7fdde3418be26294a2d34def2e14e2b0b3932c8febebe2",
+	"linux-arm64":  "0773dde8b0fbf36432f9ba04a53657de15c0c5b118ce24f93a55d13e641376de",
 }
 
 // leylineVersionMatchesPin runs `<path> --version` and reports whether the

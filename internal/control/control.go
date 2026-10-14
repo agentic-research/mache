@@ -2,55 +2,29 @@ package control
 
 import (
 	"crypto/subtle"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-const (
-	ControlSize = 4096       // 1 page
-	Magic       = 0x4C455943 // 'LEYC'
-	// Version 3 is the current control-block protocol (ley-line-open
-	// v0.20.1+, ley-line-open-49a1ef): the layout is v2's, identity is the
-	// BLAKE3 `current_root` of the arena payload, and the word at offset 8 is
-	// a seqlock sequence, odd while a writer is changing the payload and even
-	// when it is whole. v2 wrote the payload and then bumped the word once,
-	// so a reader could not tell a publish in flight from a finished one.
-	// Any other version is rejected with a descriptive error, so
-	// cross-version mismatches fail loudly (mache-3451a1).
-	Version = 3
-)
-
-// Field offsets must match LLO `rs/ll-core/core/src/control.rs` exactly.
-// Bytes 8..16 (the old `Generation` slot) are the private seqlock sequence.
-const (
-	offMagic          = 0
-	offVersion        = 4
-	offSync           = 8 // seqlock sequence (formerly Generation)
-	offArenaPath      = 16
-	arenaPathLen      = 256
-	offArenaSize      = 272
-	offInterruptFlags = 280
-	offInterruptEpoch = 288
-	offInterruptAck   = 296
-	offPayloadOffset  = 304
-	offPayloadLen     = 312
-	offCurrentRoot    = 320
-	currentRootLen    = 32
-)
-
 // Controller manages the memory-mapped control file.
 type Controller struct {
 	path string
 	file *os.File
-	data []byte
+	// probe is a second open of the control file, on which a reader tests the
+	// publish lock. flock(2) locks belong to an open file description, so a
+	// shared lock taken on file itself would quietly convert this process's
+	// own exclusive publish lock instead of contending with it.
+	probe *os.File
+	data  []byte
+	// last is this handle's last consistent read, which it answers with when
+	// a publisher died mid-publish. In memory only, and set only by a
+	// consistent read.
+	last atomic.Pointer[snapshot]
 }
 
 // OpenOrCreate opens or creates a control file at the given path.
@@ -113,94 +87,13 @@ func OpenOrCreate(path string) (*Controller, error) {
 		}
 	}
 
-	return &Controller{path: path, file: f, data: data}, nil
-}
-
-// The payload (path, size, root) is 296 bytes, which nothing writes
-// atomically, so a reader overlapping a publish could copy half of one and
-// half of the next. The seqlock makes the overlap detectable, exactly as
-// ley-line-open's control.rs does:
-//
-//   - a writer increments the sequence to ODD before touching the payload
-//     and to EVEN after the last byte;
-//   - a reader loads the sequence, retries while it is odd, copies the
-//     payload, reloads the sequence, and keeps the copy only if it did not
-//     move. A publish that began or finished during the copy changed it.
-//
-// Every payload word is moved with an 8-byte atomic load or store (the
-// fields are 8-byte aligned in a page-aligned mapping). Go has no volatile
-// access; atomics give the same "really read it from the mapping" guarantee,
-// order every access against the sequence, and keep a reader racing a
-// writer in this process free of data races.
-
-// snapshot is one consistent copy of the payload: path, size and root as a
-// single publish left them.
-type snapshot struct {
-	path [arenaPathLen]byte
-	size uint64
-	root [currentRootLen]byte
-}
-
-func (c *Controller) word(off int) *uint64 { return (*uint64)(unsafe.Pointer(&c.data[off])) }
-
-func (c *Controller) loadWords(off int, dst []byte) {
-	for i := 0; i < len(dst); i += 8 {
-		binary.NativeEndian.PutUint64(dst[i:], atomic.LoadUint64(c.word(off+i)))
+	probe, err := os.Open(path)
+	if err != nil {
+		_ = unix.Munmap(data)
+		_ = f.Close()
+		return nil, fmt.Errorf("open control file for the publish lock: %w", err)
 	}
-}
-
-func (c *Controller) storeWords(off int, src []byte) {
-	for i := 0; i < len(src); i += 8 {
-		atomic.StoreUint64(c.word(off+i), binary.NativeEndian.Uint64(src[i:]))
-	}
-}
-
-// yieldWhileOdd is what a reader does on finding a publish in flight. A
-// variable so a test can observe the reader waiting, rather than inferring
-// it from how long a read took.
-var yieldWhileOdd = runtime.Gosched
-
-// snapshot reads the payload under the seqlock.
-func (c *Controller) snapshot() snapshot {
-	seq := c.word(offSync)
-	for {
-		before := atomic.LoadUint64(seq)
-		if before&1 == 1 {
-			yieldWhileOdd() // a publish is in flight
-			continue
-		}
-		var s snapshot
-		c.loadWords(offArenaPath, s.path[:])
-		s.size = atomic.LoadUint64(c.word(offArenaSize))
-		c.loadWords(offCurrentRoot, s.root[:])
-		if atomic.LoadUint64(seq) == before {
-			return s
-		}
-	}
-}
-
-// publish writes the payload under the seqlock. root nil keeps the
-// published root, for a re-advertisement that moves only path and size.
-//
-// The protocol assumes one writer per control block at a time, as LLO's
-// does; the counter itself is incremented atomically, so two writers
-// cannot lose an increment.
-func (c *Controller) publish(path string, size uint64, root *[currentRootLen]byte) error {
-	if len(path) >= arenaPathLen {
-		return fmt.Errorf("path too long (max %d)", arenaPathLen-1)
-	}
-	var buf [arenaPathLen]byte
-	copy(buf[:], path)
-
-	seq := c.word(offSync)
-	atomic.AddUint64(seq, 1) // odd: the payload is changing
-	c.storeWords(offArenaPath, buf[:])
-	atomic.StoreUint64(c.word(offArenaSize), size)
-	if root != nil {
-		c.storeWords(offCurrentRoot, root[:])
-	}
-	atomic.AddUint64(seq, 1) // even: the payload is whole
-	return nil
+	return &Controller{path: path, file: f, probe: probe, data: data}, nil
 }
 
 // GetCurrentRoot returns the BLAKE3 root hash of the arena payload that
@@ -258,36 +151,6 @@ func (c *Controller) Close() error {
 	if err := unix.Munmap(c.data); err != nil {
 		return err
 	}
+	_ = c.probe.Close()
 	return c.file.Close()
-}
-
-func validatePath(path string) error {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
-	}
-
-	if home, err := os.UserHomeDir(); err == nil {
-		safeHome := filepath.Join(home, ".mache")
-		if isUnder(abs, safeHome) {
-			return nil
-		}
-	}
-
-	if isUnder(abs, os.TempDir()) {
-		return nil
-	}
-
-	return fmt.Errorf("security violation: control file path %q must be under ~/.mache or %s", abs, os.TempDir())
-}
-
-func isUnder(path, base string) bool {
-	rel, err := filepath.Rel(base, path)
-	if err != nil {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return true
 }

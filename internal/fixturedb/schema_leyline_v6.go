@@ -4,7 +4,7 @@ package fixturedb
 //
 // Every statement below was copied out of `sqlite_master` after running a
 // v0.20.0 ley-line binary on a one-file Go corpus, and re-verified unchanged
-// against v0.20.3, the release the pin moves to (v0.20.1 through v0.20.3 keep
+// against v0.20.5, the release the pin moves to (v0.20.1 through v0.20.5 keep
 // projection-v6 and change no table):
 //
 //	$ leyline parse ./src -o out.db
@@ -31,7 +31,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.20.3"
+const leylineV6SchemaVersion = "v0.20.5"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
