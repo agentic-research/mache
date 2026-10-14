@@ -440,71 +440,7 @@ func restartDaemonAgent(w io.Writer) {
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		launchctl, err := exec.LookPath("launchctl")
-		if err != nil {
-			return // no supervisor tooling; nothing was running under it
-		}
-		// `launchctl kickstart` is a START verb — man launchctl: "Instructs
-		// launchd to run the specified service immediately, REGARDLESS OF ITS
-		// CONFIGURED LAUNCH CONDITIONS"; -k only adds kill-first when an
-		// instance is already up. So kickstart alone does not implement
-		// restart-if-running: a job that is loaded but IDLE gets started.
-		//
-		// That state is reachable for mache, not hypothetical. The plist sets
-		// KeepAlive{SuccessfulExit:false} and `mache serve` exits 0 on SIGTERM,
-		// so `launchctl stop com.agentic-research.mache` leaves the job loaded
-		// and not running. Without this guard, the next `task install` would
-		// resurrect a daemon the user had deliberately stopped — and announce
-		// that it had merely restarted it.
-		//
-		// Linux needs no equivalent guard: systemctl try-restart is documented
-		// as restart-only-if-running.
-		if job := querySupervisorJob(); !job.Running {
-			// Not loaded, or loaded-and-idle. Either way there is no running
-			// daemon serving a stale binary, which is the only thing this
-			// exists to fix. Starting one is `mache init --global`'s decision.
-			return
-		}
-		// RELOAD, not `kickstart -k`. launchd pins the job's code identity at
-		// bootstrap; this restart runs precisely because the binary was just
-		// REPLACED, and mache's ad-hoc signature has no stable identity across
-		// builds — so kickstarting the old registration makes the kernel
-		// SIGKILL the new binary at exec (CODESIGNING "Launch Constraint
-		// Violation", caught in a live crash report). That kill plus launchd's
-		// respawn throttling was the unexplained 10s/43s/112s family of
-		// install-restart failures (mache-706d8f). bootout may fail if the job
-		// races to unloaded — bootstrap wants that state anyway.
-		// NEVER UNLOAD WHAT CANNOT BE RELOADED (mache-658325). The job lives in
-		// the uid's launchd domain, but the plist that reloads it is found via
-		// $HOME. With HOME isolated (tests, CI, a clean-HOME install check) the
-		// two disagree: bootout would tear down the host's REAL daemon and the
-		// bootstrap from the scratch HOME would fail, leaving it unloaded and
-		// every MCP client refused. Observed live, 2026-10-14.
-		plist := launchAgentPlistPath()
-		if _, err := os.Stat(plist); plist == "" || err != nil {
-			logf(w, "WARNING: a supervised mache daemon is running, but its job file %q is missing — "+
-				"left it untouched rather than unload a job this install cannot reload (mache-658325)\n", plist)
-			return
-		}
-		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
-		_ = runSupervisorCmd(launchctl, "bootout", target)
-		// bootout's effect is asynchronous: bootstrapping while the outgoing
-		// job still holds the label fails with EIO (caught by the launchd
-		// E2E). Wait for the label to actually leave the domain.
-		if !awaitJobGone() {
-			logf(w, "WARNING: the outgoing daemon did not release its job within %s; reload may fail\n",
-				daemonDrainTimeout)
-		}
-		if err := runSupervisorCmd(launchctl, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plist); err != nil {
-			logf(w, "WARNING: could not reload the daemon job: %v\n", err)
-			return
-		}
-		// RunAtLoad does not fire on bootstrap (verified live: the job loads
-		// as "not running, never exited" until kicked).
-		if err := runSupervisorCmd(launchctl, "kickstart", target); err != nil {
-			return
-		}
-		confirmRestart(w, launchAgentLabel)
+		reloadLaunchdJob(w)
 	case "linux":
 		systemctl, err := exec.LookPath("systemctl")
 		if err != nil {
@@ -515,6 +451,77 @@ func restartDaemonAgent(w io.Writer) {
 		}
 		confirmRestart(w, "mache.service")
 	}
+}
+
+// reloadLaunchdJob is restartDaemonAgent's darwin half: reload a RUNNING
+// launchd job so it re-execs the newly installed binary. Split out so each
+// half stays a readable length; the reasoning lives in the comments below.
+func reloadLaunchdJob(w io.Writer) {
+	launchctl, err := exec.LookPath("launchctl")
+	if err != nil {
+		return // no supervisor tooling; nothing was running under it
+	}
+	// `launchctl kickstart` is a START verb — man launchctl: "Instructs
+	// launchd to run the specified service immediately, REGARDLESS OF ITS
+	// CONFIGURED LAUNCH CONDITIONS"; -k only adds kill-first when an
+	// instance is already up. So kickstart alone does not implement
+	// restart-if-running: a job that is loaded but IDLE gets started.
+	//
+	// That state is reachable for mache, not hypothetical. The plist sets
+	// KeepAlive{SuccessfulExit:false} and `mache serve` exits 0 on SIGTERM,
+	// so `launchctl stop com.agentic-research.mache` leaves the job loaded
+	// and not running. Without this guard, the next `task install` would
+	// resurrect a daemon the user had deliberately stopped — and announce
+	// that it had merely restarted it.
+	//
+	// Linux needs no equivalent guard: systemctl try-restart is documented
+	// as restart-only-if-running.
+	if job := querySupervisorJob(); !job.Running {
+		// Not loaded, or loaded-and-idle. Either way there is no running
+		// daemon serving a stale binary, which is the only thing this
+		// exists to fix. Starting one is `mache init --global`'s decision.
+		return
+	}
+	// RELOAD, not `kickstart -k`. launchd pins the job's code identity at
+	// bootstrap; this restart runs precisely because the binary was just
+	// REPLACED, and mache's ad-hoc signature has no stable identity across
+	// builds — so kickstarting the old registration makes the kernel
+	// SIGKILL the new binary at exec (CODESIGNING "Launch Constraint
+	// Violation", caught in a live crash report). That kill plus launchd's
+	// respawn throttling was the unexplained 10s/43s/112s family of
+	// install-restart failures (mache-706d8f). bootout may fail if the job
+	// races to unloaded — bootstrap wants that state anyway.
+	// NEVER UNLOAD WHAT CANNOT BE RELOADED (mache-658325). The job lives in
+	// the uid's launchd domain, but the plist that reloads it is found via
+	// $HOME. With HOME isolated (tests, CI, a clean-HOME install check) the
+	// two disagree: bootout would tear down the host's REAL daemon and the
+	// bootstrap from the scratch HOME would fail, leaving it unloaded and
+	// every MCP client refused. Observed live, 2026-10-14.
+	plist := launchAgentPlistPath()
+	if _, err := os.Stat(plist); plist == "" || err != nil {
+		logf(w, "WARNING: a supervised mache daemon is running, but its job file %q is missing — "+
+			"left it untouched rather than unload a job this install cannot reload (mache-658325)\n", plist)
+		return
+	}
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
+	_ = runSupervisorCmd(launchctl, "bootout", target)
+	// bootout's effect is asynchronous: bootstrapping while the outgoing
+	// job still holds the label fails with EIO (caught by the launchd
+	// E2E). Wait for the label to actually leave the domain.
+	if !awaitJobGone() {
+		logf(w, "WARNING: the outgoing daemon did not release its job within %s; reload may fail\n",
+			daemonDrainTimeout)
+	}
+	if err := runSupervisorCmd(launchctl, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plist); err != nil {
+		logf(w, "WARNING: could not reload the daemon job: %v\n", err)
+		return
+	}
+	// RunAtLoad does not fire on bootstrap (verified live: the job loads
+	// as "not running, never exited" until kicked).
+	if err := runSupervisorCmd(launchctl, "kickstart", target); err != nil {
+		return
+	}
+	confirmRestart(w, launchAgentLabel)
 }
 
 // confirmRestart reports the restart HONESTLY: it waits for the endpoint to
