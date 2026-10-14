@@ -1103,12 +1103,22 @@ func (c *SocketClient) Prioritize(files []string) error {
 // client moves to v0.20.2 (Head gains treeRoot/parserId, additive); v0.20.3
 // published no new schema tag.
 //
+// v0.20.3 -> v0.20.5: the control block (still VERSION 3) gains a publish lock
+// (ley-line-open-0a8c14). A publisher holds an exclusive flock on the .ctrl
+// while the seqlock is odd, and a reader facing an odd sequence with the lock
+// free treats the publisher as dead and keeps its last consistent read.
+// internal/control speaks it (mache-4eadcc). A lockless publisher reads as dead
+// to a lock-aware reader, so this pin and that change move together. v0.20.4
+// added the daemon's read_source/propose ops (schema 0.20.4, unused here until
+// mache-0fed77); v0.20.5 keeps mount edits out of live.db until their flush
+// lands. Projection, wire and IR lineage are unchanged.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.20.3"
+const leylineBinaryVersion = "v0.20.5"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

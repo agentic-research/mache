@@ -8,8 +8,8 @@ bumps may include breaking changes.
 
 ### Changed
 
-- **leyline is pinned to v0.20.3** (`mache-3451a1`), up from v0.19.1. New
-  parses are projection-v6, which mache now reads everywhere (see Added).
+- **leyline is pinned to v0.20.5** (`mache-3451a1`, `mache-4eadcc`), up from
+  v0.19.1. New parses are projection-v6, which mache now reads everywhere (see Added).
   `.db` files built by the previous pin stay readable, and node hashes are
   unchanged (IR `merkle-ast-v2`, extraction epoch 5), so a smell baseline
   taken on v0.19.1 still applies; mache's own gate passes on the new pin
