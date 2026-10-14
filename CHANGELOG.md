@@ -74,6 +74,15 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`mache install` no longer takes down your running daemon when HOME is
+  isolated** (`mache-658325`). Install restarts a running supervised daemon by
+  unloading and reloading its launchd job, but it found the job by uid and the
+  plist to reload it from by `$HOME`. Run with a scratch HOME (tests, CI, a
+  clean-HOME install check), it unloaded the real daemon, failed to reload it
+  ("could not reload the daemon job: exit status 5"), and left every MCP client
+  refused. It now leaves the daemon untouched, with a warning, when the plist it
+  would reload from is missing.
+
 - **Markdown code spans and SQL in strings are found again on a
   projection-v6 `.db`** (`mache-0a5e4c`). leyline indexes references inside
   an injected language (a code span in markdown, SQL inside a Go string) but
