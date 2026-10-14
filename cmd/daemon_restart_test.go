@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -103,6 +104,8 @@ func TestRestartDaemonAgent_UsesRestartNotStart(t *testing.T) {
 
 	stubDaemonSettle(t, true)
 
+	withLaunchAgentPlist(t, true)
+
 	var buf bytes.Buffer
 	restartDaemonAgent(&buf)
 
@@ -152,6 +155,8 @@ func TestRestartDaemonAgent_SupervisorFailureIsSilent(t *testing.T) {
 		return "mache = {\n\tstate = running\n\tprogram = /x/mache\n}\n", nil
 	}
 	runSupervisorCmd = func(string, ...string) error { return errors.New("Could not find service") }
+
+	withLaunchAgentPlist(t, true)
 
 	var buf bytes.Buffer
 	stubDaemonSettle(t, true)
@@ -250,6 +255,7 @@ func TestRestartDaemonAgent_RestartsARunningJob(t *testing.T) {
 	}
 
 	stubDaemonSettle(t, true)
+	withLaunchAgentPlist(t, true)
 
 	var buf bytes.Buffer
 	restartDaemonAgent(&buf)
@@ -281,4 +287,48 @@ func TestParseLaunchctlPrint_DecodesPathsThePlistWriterEscapes(t *testing.T) {
 			assert.True(t, job.Running)
 		})
 	}
+}
+
+// withLaunchAgentPlist points HOME at a temp dir, with or without the daemon's
+// plist, so the restart path never depends on the developer's real HOME.
+func withLaunchAgentPlist(t *testing.T, present bool) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if present {
+		dir := filepath.Join(home, "Library", "LaunchAgents")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, launchAgentLabel+".plist"), []byte("<plist/>"), 0o644))
+	}
+}
+
+// TestRestartDaemonAgent_LeavesTheHostDaemonAloneUnderAnIsolatedHome pins
+// mache-658325: an install run with HOME isolated (no plist there) must not
+// bootout the uid's running daemon — it could never bootstrap it back, and the
+// host's daemon was left unloaded with every MCP client refused.
+func TestRestartDaemonAgent_LeavesTheHostDaemonAloneUnderAnIsolatedHome(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-specific path")
+	}
+	prevRun, prevQuery, prevAuto := runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload
+	t.Cleanup(func() {
+		runSupervisorCmd, querySupervisorCmd, daemonAgentAutoload = prevRun, prevQuery, prevAuto
+	})
+	daemonAgentAutoload = true
+	querySupervisorCmd = func(string, ...string) (string, error) {
+		return "com.agentic-research.mache = {\n\tstate = running\n\tprogram = /Users/x/.local/bin/mache\n\tpid = 123\n}\n", nil
+	}
+	var ran [][]string
+	runSupervisorCmd = func(name string, args ...string) error {
+		ran = append(ran, append([]string{name}, args...))
+		return nil
+	}
+	stubDaemonSettle(t, true)
+	withLaunchAgentPlist(t, false)
+
+	var buf bytes.Buffer
+	restartDaemonAgent(&buf)
+
+	assert.Empty(t, ran, "no launchctl verb may run when the plist to reload from is missing")
+	assert.Contains(t, buf.String(), "left it untouched")
 }

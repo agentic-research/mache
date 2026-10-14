@@ -474,6 +474,18 @@ func restartDaemonAgent(w io.Writer) {
 		// respawn throttling was the unexplained 10s/43s/112s family of
 		// install-restart failures (mache-706d8f). bootout may fail if the job
 		// races to unloaded — bootstrap wants that state anyway.
+		// NEVER UNLOAD WHAT CANNOT BE RELOADED (mache-658325). The job lives in
+		// the uid's launchd domain, but the plist that reloads it is found via
+		// $HOME. With HOME isolated (tests, CI, a clean-HOME install check) the
+		// two disagree: bootout would tear down the host's REAL daemon and the
+		// bootstrap from the scratch HOME would fail, leaving it unloaded and
+		// every MCP client refused. Observed live, 2026-10-14.
+		plist := launchAgentPlistPath()
+		if _, err := os.Stat(plist); plist == "" || err != nil {
+			logf(w, "WARNING: a supervised mache daemon is running, but its job file %q is missing — "+
+				"left it untouched rather than unload a job this install cannot reload (mache-658325)\n", plist)
+			return
+		}
 		target := fmt.Sprintf("gui/%d/%s", os.Getuid(), launchAgentLabel)
 		_ = runSupervisorCmd(launchctl, "bootout", target)
 		// bootout's effect is asynchronous: bootstrapping while the outgoing
@@ -483,11 +495,9 @@ func restartDaemonAgent(w io.Writer) {
 			logf(w, "WARNING: the outgoing daemon did not release its job within %s; reload may fail\n",
 				daemonDrainTimeout)
 		}
-		if plist := launchAgentPlistPath(); plist != "" {
-			if err := runSupervisorCmd(launchctl, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plist); err != nil {
-				logf(w, "WARNING: could not reload the daemon job: %v\n", err)
-				return
-			}
+		if err := runSupervisorCmd(launchctl, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plist); err != nil {
+			logf(w, "WARNING: could not reload the daemon job: %v\n", err)
+			return
 		}
 		// RunAtLoad does not fire on bootstrap (verified live: the job loads
 		// as "not running, never exited" until kicked).
