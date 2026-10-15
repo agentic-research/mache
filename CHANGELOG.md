@@ -6,6 +6,8 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [v0.22.0] — 2026-10-15
+
 ### Changed
 
 - **leyline is pinned to v0.20.5** (`mache-3451a1`, `mache-4eadcc`), up from
@@ -37,12 +39,13 @@ bumps may include breaking changes.
 
 ### Added
 
-- **mache reads ley-line-open's projection-v6 databases** (`mache-90cb9f`,
-  in progress). leyline v0.20.x writes nodes as integer ids with paths
-  derived on demand, and mache's direct reader used to fail on every such
-  `.db`. Listing directories, reading nodes and their content, source
-  locations and callers now work on them, with the same answers as on a
-  projection-v4 `.db` of the same code. A lookup costs the same however
+- **mache reads ley-line-open's projection-v6 databases** (`mache-90cb9f`).
+  leyline v0.20.x writes nodes as integer ids with paths derived on demand,
+  and mache's direct reader used to fail on every such `.db`. Listing
+  directories, reading nodes and their content, source locations and
+  callers now work on them, with the same answers as on a projection-v4
+  `.db` of the same code; a file's entry in a listing also carries its size,
+  which v6 records. A lookup costs the same however
   large the database is, checked against a 487k-node parse. Projecting
   source from such a `.db` (the AST walker behind `mache build`, `mount` and
   `serve`, and `--infer`'s schema inference) reads it too, with the same
