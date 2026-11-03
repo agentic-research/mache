@@ -45,6 +45,18 @@ func VersionReply(binaryVersion string) map[string]any {
 // that). Shutdown is registered via t.Cleanup.
 func FakeDaemon(t *testing.T, handler Handler) string {
 	t.Helper()
+	return rawFakeDaemon(t, func(req map[string]any) any {
+		if req["op"] == "leyline_version" {
+			return VersionReply(leyline.PinnedBinaryVersion())
+		}
+		return handler(req)
+	})
+}
+
+// rawFakeDaemon is FakeDaemon without the version answer: every request,
+// leyline_version included, goes to handler.
+func rawFakeDaemon(t *testing.T, handler Handler) string {
+	t.Helper()
 
 	// os.MkdirTemp("", ...) uses $TMPDIR which stays under the ~104-byte
 	// sun_path limit on macOS, unlike t.TempDir()'s deeply nested paths.
@@ -89,13 +101,7 @@ func serveConn(conn net.Conn, handler Handler) {
 		if err := json.Unmarshal(line, &req); err != nil {
 			return
 		}
-		var reply any
-		if req["op"] == "leyline_version" {
-			reply = VersionReply(leyline.PinnedBinaryVersion())
-		} else {
-			reply = handler(req)
-		}
-		resp, err := json.Marshal(reply)
+		resp, err := json.Marshal(handler(req))
 		if err != nil {
 			return
 		}
