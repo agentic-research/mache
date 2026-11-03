@@ -75,6 +75,15 @@ func (m *parentAwareMatch) ScopeSource() []byte {
 	return nil
 }
 
+// ScopeBlob forwards to the inner match if it implements BlobScope, for the
+// same reason as ScopeSource: nested matches are always wrapped.
+func (m *parentAwareMatch) ScopeBlob() []byte {
+	if bs, ok := m.inner.(BlobScope); ok {
+		return bs.ScopeBlob()
+	}
+	return nil
+}
+
 // DocRange forwards to the inner match if it implements DocScope.
 func (m *parentAwareMatch) DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool) {
 	if ds, ok := m.inner.(DocScope); ok {

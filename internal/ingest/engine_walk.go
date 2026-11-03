@@ -746,14 +746,16 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 					FilePath:  absSourceFile,
 					StartByte: extStart,
 					EndByte:   extEnd,
+					Blob:      scopeBlob(match),
 				}
 			} else if op, ok := match.(OriginProvider); ok && absSourceFile != "" {
 				// Fallback for non-sitter matches
 				if start, end, ok := op.CaptureOrigin("scope"); ok { // coverage:ignore
 					fileNode.Origin = &graph.SourceOrigin{ // coverage:ignore
-						FilePath:  absSourceFile, // coverage:ignore
-						StartByte: start,         // coverage:ignore
-						EndByte:   end,           // coverage:ignore
+						FilePath:  absSourceFile,    // coverage:ignore
+						StartByte: start,            // coverage:ignore
+						EndByte:   end,              // coverage:ignore
+						Blob:      scopeBlob(match), // coverage:ignore
 					} // coverage:ignore
 				} // coverage:ignore
 			}
@@ -777,6 +779,14 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				} // coverage:ignore
 			}
 		}
+	}
+	return nil
+}
+
+// scopeBlob is the parsed blob match's offsets refer to, or nil.
+func scopeBlob(match Match) []byte {
+	if bs, ok := match.(BlobScope); ok {
+		return bs.ScopeBlob()
 	}
 	return nil
 }

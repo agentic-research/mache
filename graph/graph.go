@@ -53,6 +53,13 @@ type SourceOrigin struct {
 	StartCol  uint32 `json:"start_col,omitempty"`
 	EndLine   uint32 `json:"end_line,omitempty"`
 	EndCol    uint32 `json:"end_col,omitempty"`
+
+	// Blob is the hash of the parsed bytes these offsets refer to (leyline's
+	// _source.content_hash), nil when the producer records none. It is the
+	// base a write proposes against, so a write never applies these offsets
+	// to bytes they were not taken from (mache-631b8b). Internal: not part of
+	// any tool's output.
+	Blob []byte `json:"-"`
 }
 
 // NodeStat holds the immutable stat fields needed for directory listing.

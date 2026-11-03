@@ -23,3 +23,19 @@ func SourceBytesExpr(qg Querier) (string, error) {
 	return "COALESCE(_source.content, (SELECT source_blobs.blob_bytes FROM source_blobs " +
 		"WHERE source_blobs.blob_hash = _source.content_hash))", nil
 }
+
+// SourceHashExpr is the SQL expression for a `_source` row's blob hash on qg,
+// the key SourceBytesExpr reads under: the hash of exactly the bytes every
+// node's offsets refer to, and the base leyline's propose checks a write
+// against (mache-631b8b). A db whose `_source` has no `content_hash` column
+// (mache's cache-hydrated db) names no blob, so it reads NULL.
+func SourceHashExpr(qg Querier) (string, error) {
+	has, err := TableHasColumn(qg, "_source", "content_hash")
+	if err != nil {
+		return "", err
+	}
+	if !has {
+		return "NULL", nil
+	}
+	return "_source.content_hash", nil
+}
