@@ -6,6 +6,36 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **leyline is pinned to v0.21.0** (`mache-bc3c84`), up from v0.20.5, with the
+  schema client at `clients/go/leyline-schema` v0.21.0. New parses are
+  projection-v7: every projection-v6 table is unchanged, and two are added,
+  `_tree` (every entry, explicit directories included) and
+  `_parse_diagnostics`. mache's v6 readers read v7 as they are; fixturedb's
+  mirror was re-derived from the released binary and now models both new
+  tables, and its conformance test refuses any table leyline creates that the
+  mirror neither models nor lists as deliberately unmodelled (the check had
+  only compared tables the mirror already knew, so v7's additions passed
+  unseen). The control block stays VERSION 3 with the publish lock, and IR
+  lineage is unchanged, so node hashes and the smell baseline still apply.
+  The refusals that name the nid shape (`ErrNidProjection`, formerly
+  `ErrProjectionV6`) now say "projection-v6 or later", since they apply to v7.
+- **The leyline daemon mache starts runs headless** (`mache-3a4713`). It was
+  given `--mount ~/.mache/mount`, which nothing in mache read: on macOS a
+  loopback NFS mount per daemon start, the mount type behind the Apple
+  NFS-client panics, and which leyline v0.21.0 refuses below Tahoe 26.7 /
+  Sequoia 15.8, where it would fail the daemon's start.
+- **Upgrading no longer leaves the daemon unable to start** (`mache-bc3c84`).
+  mache reuses one arena, `~/.mache/default.arena`, and cold-starts it only
+  when its recorded configuration changes; the leyline release was not part
+  of that record. leyline v0.21.0 exits on the projection-v6 arena v0.20.5
+  left ("this arena was written by projection-v6; this binary writes
+  projection-v7"), so the first daemon start after upgrading would have
+  failed and every daemon-backed tool gone dark. The record now carries the
+  leyline pin, and an arena another pin built is cold-started; checked by
+  upgrading a real v0.20.5 arena with the v0.21.0 binary.
+
 ### Fixed
 
 - **Stopping mache's leyline daemon no longer races the goroutine that reaps
@@ -15,6 +45,8 @@ bumps may include breaking changes.
   race caught on CI under `-race`). It now signals the daemon and waits for
   that goroutine to report the reap, and returns only once the daemon is
   gone, not merely signalled.
+
+||||||| parent of 9551d00 ([mache-bc3c84] feat: pin leyline v0.21.0 (projection-v7), run the managed daemon headless)
 
 ## [v0.22.0] — 2026-10-15
 

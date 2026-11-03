@@ -66,22 +66,35 @@ func TestMaterializeVirtuals_AgainstRealProducerArena(t *testing.T) {
 		Nodes:   []api.Node{{Name: "functions", Selector: "(function_declaration)"}},
 	}
 
-	if projection == "projection-v6" {
-		assertRefusedOnV6(t, db, dbPath, schema)
+	// By shape, as MaterializeVirtuals decides, not by version string: v6 and
+	// v7 (and whatever follows) are keyed by nid.
+	var nidKeyed int
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM pragma_table_info('nodes') WHERE name = 'nid'`).Scan(&nidKeyed))
+	if nidKeyed > 0 {
+		t.Logf("producer %s: projection=%s, keyed by nid", ll.Version, projection)
+		assertRefusedOnNidProjection(t, db, dbPath, schema)
 		return
 	}
 
+	assertMaterializedOnPathProjection(t, db, dbPath, schema, ll.Version, projection)
+}
+
+// assertMaterializedOnPathProjection: a path-keyed projection (v4 and before)
+// takes the virtual nodes, each parented under the node its id names.
+func assertMaterializedOnPathProjection(t *testing.T, db *sql.DB, dbPath string, schema *api.Topology, version, projection string) {
+	t.Helper()
 	var hidden int
 	if err := db.QueryRow(
 		`SELECT hidden FROM pragma_table_xinfo('nodes') WHERE name='parent_id'`).Scan(&hidden); err != nil {
 		t.Fatalf("producer arena has no nodes.parent_id at all: %v", err)
 	}
 	t.Logf("producer %s: projection=%s, parent_id hidden=%d (0 stored, 2 GENERATED VIRTUAL)",
-		ll.Version, projection, hidden)
+		version, projection, hidden)
 
 	require.NoError(t, MaterializeVirtuals(dbPath, schema, true),
 		"MaterializeVirtuals must succeed against a real %s arena (projection %s)",
-		ll.Version, projection)
+		version, projection)
 
 	// _schema.json is a root, so its derived parent is '' either way.
 	var parent, name string
@@ -113,14 +126,14 @@ func TestMaterializeVirtuals_AgainstRealProducerArena(t *testing.T) {
 			"means the producer's node_defs/node_refs shape changed under us")
 }
 
-// assertRefusedOnV6: projection-v6 keys nodes by nid and stores no paths, so
-// virtual nodes are not materialized into it (mache-abaf17), and the arena is
-// left as the producer wrote it.
-func assertRefusedOnV6(t *testing.T, db *sql.DB, dbPath string, schema *api.Topology) {
+// assertRefusedOnNidProjection: projection-v6 and later key nodes by nid and
+// store no paths, so virtual nodes are not materialized into them
+// (mache-abaf17), and the arena is left as the producer wrote it.
+func assertRefusedOnNidProjection(t *testing.T, db *sql.DB, dbPath string, schema *api.Topology) {
 	t.Helper()
 	var before int
 	require.NoError(t, db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&before))
-	require.ErrorIs(t, MaterializeVirtuals(dbPath, schema, true), ErrProjectionV6)
+	require.ErrorIs(t, MaterializeVirtuals(dbPath, schema, true), ErrNidProjection)
 	var after int
 	require.NoError(t, db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&after))
 	assert.Equal(t, before, after, "a refused materialization writes nothing")

@@ -855,5 +855,5 @@ func TestMaterializeContentSources_RefusesProjectionV6OnlyWithSomethingToWrite(t
 	withSource := &api.Topology{Version: "v1", Nodes: []api.Node{{
 		Name: "f", Selector: "$", Files: []api.Leaf{{Name: "hover", ContentSource: "lsp_hover"}},
 	}}}
-	assert.ErrorIs(t, MaterializeContentSources(path, withSource), ErrProjectionV6)
+	assert.ErrorIs(t, MaterializeContentSources(path, withSource), ErrNidProjection)
 }

@@ -97,20 +97,21 @@ func dbHasASTTable(db *sql.DB) (bool, error) {
 		return false, fmt.Errorf("check _ast shape: %w", err)
 	}
 	if v6 {
-		return false, ErrProjectionV6
+		return false, ErrNidProjection
 	}
 	return name == "_ast", nil
 }
 
-// ErrProjectionV6 refuses a push from a projection-v6 .db (leyline v0.20.x).
+// ErrNidProjection refuses a push from a .db keyed by integer node ids:
+// projection-v6 (leyline v0.20.x) or later, so projection-v7 (v0.21.x) too.
 //
 // A chunk carries _ast rows in projection-v4's shape, and pull writes them
-// back. Teaching the cache v6's shape would mean mache writing more of LLO's
+// back. Teaching the cache the nid shape would mean mache writing more of LLO's
 // tables, which is the data-plane work the LLO boundary marks for deletion:
 // the cache is to consume LLO's own arena instead (mache-e64f36). Falling
 // back to source-only chunks would restore a database without its AST and
 // say nothing, so the push fails, naming why.
-var ErrProjectionV6 = errors.New("the build cache cannot carry a projection-v6 _ast; " +
+var ErrNidProjection = errors.New("the build cache cannot carry the _ast of projection-v6 or later (integer node ids); " +
 	"consuming LLO's arena instead is mache-e64f36")
 
 // loadASTNodesForSource returns all `_ast` rows whose source_id

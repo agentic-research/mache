@@ -701,7 +701,7 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 	// runtime (serve_virtual.go); only schema-declared content sources are
 	// written into the .db.
 	switch err := leylinegraph.MaterializeContentSources(dbPath, schema); {
-	case errors.Is(err, leylinegraph.ErrProjectionV6):
+	case errors.Is(err, leylinegraph.ErrNidProjection):
 		log.Printf("serving %s without its schema's content-source files: %v", dbPath, err)
 	case err != nil:
 		extraCleanup()

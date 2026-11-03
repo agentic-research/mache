@@ -4,8 +4,10 @@ package fixturedb
 //
 // Every statement below was copied out of `sqlite_master` after running a
 // v0.20.0 ley-line binary on a one-file Go corpus, and re-verified unchanged
-// against v0.20.5, the release the pin moves to (v0.20.1 through v0.20.5 keep
-// projection-v6 and change no table):
+// against v0.21.0, the release the pin moves to. v0.20.1 through v0.20.5 keep
+// projection-v6 and change no table; v0.21.0 writes projection-v7, which
+// changes none of these and adds _tree and _parse_diagnostics, copied from a
+// v0.21.0 parse:
 //
 //	$ leyline parse ./src -o out.db
 //	$ sqlite3 out.db "SELECT sql FROM sqlite_master ORDER BY type, name"
@@ -22,7 +24,8 @@ package fixturedb
 // WHY A SECOND MIRROR RATHER THAN REPLACING THE FIRST. mache reads artifacts
 // produced by several leyline versions — lloschema.resolveIdentity exists
 // precisely because a db carries its own answer — so fixtures must be able to
-// model both. This one models v6, the PINNED shape since the v0.20.3 pin, and
+// model both. This one models the nid-keyed shape, projection-v6 and the
+// pinned projection-v7 (v7 is v6 plus two tables), and
 // TestLeylineSchema_MatchesPinnedBinary checks it against the pinned binary.
 // schema_leyline.go stays the v4 model, for artifacts the previous pin built,
 // checked against its own binary by TestLeylineV4Schema_MatchesItsBinary.
@@ -31,13 +34,35 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.20.5"
+const leylineV6SchemaVersion = "v0.21.0"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
 // files — because a v6 fixture cannot express a node's name or kind without
 // them: `nodes` holds only name_id and kind_id.
 var leylineV6Tables = map[string]string{
+	// projection-v7 (v0.21.0): every entry of the tree, explicit directories
+	// included (mode 0o40000, NULL blob_hash), closed under parents. _source
+	// lists only the files a parser projected, with content_hash = blob_hash.
+	"_tree": `CREATE TABLE _tree (
+    path      TEXT PRIMARY KEY,
+    mode      INTEGER NOT NULL,
+    blob_hash BLOB,
+    mtime     INTEGER,
+    size      INTEGER
+) WITHOUT ROWID`,
+	// projection-v7 (v0.21.0): a file that parsed with errors (projected=1)
+	// or was not projected at all, being binary or oversized (projected=0).
+	"_parse_diagnostics": `CREATE TABLE _parse_diagnostics (
+    path       TEXT PRIMARY KEY,
+    blob_hash  BLOB NOT NULL,
+    projected  INTEGER NOT NULL,
+    start_byte INTEGER,
+    end_byte   INTEGER,
+    start_row  INTEGER,
+    start_col  INTEGER,
+    message    TEXT NOT NULL
+) WITHOUT ROWID`,
 	"_ast": `CREATE TABLE _ast (
     nid INTEGER PRIMARY KEY,
     kind_id INTEGER NOT NULL,
@@ -153,6 +178,21 @@ var leylineV6Tables = map[string]string{
     record TEXT,
     source_file TEXT
 )`,
+}
+
+// leylineV6Unmodelled are the objects the pinned binary creates that fixtures
+// deliberately do not model: LLO's own storage and bookkeeping, which mache
+// never reads. The conformance test refuses any object that is in neither this
+// set nor the mirror, so a table LLO adds is a decision someone makes, not a
+// gap nobody sees (projection-v7's _tree and _parse_diagnostics went unnoticed
+// for exactly that reason until the v0.21.0 pin).
+var leylineV6Unmodelled = map[string]string{
+	"_ast_blob":    "LLO's packed AST storage; mache reads _ast",
+	"_meta":        "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
+	"_queries":     "LLO's tree-sitter query registry",
+	"capnp_blobs":  "LLO's capnp payload store",
+	"query_blobs":  "LLO's compiled-query store",
+	"source_blobs": "LLO's content-addressed source store; mache reads _source",
 }
 
 // leylineV6Views are LLO's OWN views, and modelling them is not optional.

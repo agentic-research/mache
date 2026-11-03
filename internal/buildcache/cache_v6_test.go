@@ -24,7 +24,7 @@ func TestCachePush_RefusesProjectionV6(t *testing.T) {
 
 	err := runCachePush(new(bytes.Buffer), dbPath, t.TempDir())
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrProjectionV6), "got %v", err)
+	assert.True(t, errors.Is(err, ErrNidProjection), "got %v", err)
 	assert.Contains(t, err.Error(), "mache-e64f36")
 }
 
