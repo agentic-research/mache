@@ -123,6 +123,13 @@ type managedDaemon struct {
 	mu   sync.Mutex
 	proc *os.Process
 	sock string
+	// exited is closed when proc has been reaped, by the one goroutine that
+	// waits on it (started with the spawn). Nothing else may Wait on or
+	// Release proc: a second waiter races that goroutine for the child, and
+	// Release writes proc.Pid under its read (a DATA RACE under -race,
+	// mache-144496). Waiting on exited is how anyone else learns the daemon
+	// is gone, with the happens-before edge the race detector needs.
+	exited chan struct{}
 	// starting is non-nil while a spawn waits for its daemon to become ready,
 	// and is closed when that wait ends. The wait runs WITHOUT mu held, so
 	// StopManaged can reach a daemon that is still starting, and callers that
@@ -156,6 +163,7 @@ func (m *managedDaemon) discard() {
 	}
 	m.proc = nil
 	m.sock = ""
+	m.exited = nil
 }
 
 // DialSocket connects to the ley-line control socket at sockPath.
@@ -450,6 +458,32 @@ func daemonCommandArgs(p daemonPaths) ([]string, arenaSpawnConfig) {
 	return daemonArgs, arenaCfg
 }
 
+// startReaped starts the daemon and its one reaper, recording both in
+// managed. Caller holds managed.mu. The returned channel carries the daemon's
+// exit, buffered so the reaper never blocks after the readiness poll is done;
+// the reaper then closes managed.exited.
+func startReaped(cmd *exec.Cmd, sock string) (<-chan error, error) {
+	log.Printf("auto-starting leyline daemon: %s", strings.Join(cmd.Args, " "))
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start leyline: %w", err)
+	}
+	managed.proc = cmd.Process
+	managed.sock = sock
+
+	// Wait on the process in the background (prevents a zombie) and surface
+	// its exit to the readiness poll, so "daemon crashed on startup" is told
+	// from "daemon is still initializing" (mache-0a1ded). This goroutine is
+	// the daemon's only waiter (mache-144496).
+	waitErr := make(chan error, 1)
+	reaped := make(chan struct{})
+	managed.exited = reaped
+	go func() {
+		waitErr <- cmd.Wait()
+		close(reaped)
+	}()
+	return waitErr, nil
+}
+
 // spawnAndAwait starts the daemon and waits for it to serve. Caller holds
 // managed.mu on entry and on return; it is released for the wait.
 func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig) (string, error) {
@@ -466,20 +500,10 @@ func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig
 	// (mache-823d91).
 	setProcessGroup(cmd)
 
-	log.Printf("auto-starting leyline daemon: %s", strings.Join(cmd.Args, " "))
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start leyline: %w", err)
+	waitErr, err := startReaped(cmd, p.sock)
+	if err != nil {
+		return "", err
 	}
-
-	managed.proc = cmd.Process
-	managed.sock = p.sock
-
-	// Wait on the process in the background (prevents a zombie) and surface
-	// its exit to the poll below so we can distinguish "daemon crashed on
-	// startup" from "daemon is still initializing" (mache-0a1ded). Buffered
-	// so the send never blocks after the poll returns.
-	waitErr := make(chan error, 1)
-	go func() { waitErr <- cmd.Wait() }()
 
 	// The readiness wait runs WITHOUT mu (mache-25f49e). It can last up to
 	// MACHE_LEYLINE_START_TIMEOUT, and a cold start takes seconds; holding the
@@ -612,37 +636,29 @@ func StopManaged() {
 	}
 
 	pid := managed.proc.Pid
+	exited := managed.exited
 	log.Printf("stopping managed leyline daemon (pid=%d)", pid)
 
 	// SIGTERM the whole group: leyline's signal handler unmounts NFS then
 	// exits, and the `mache serve --control` child it spawned is terminated
-	// alongside it rather than orphaned (mache-823d91).
-	if err := managed.signalGroup(syscall.SIGTERM); err != nil {
-		// Group already gone — just clean up
-		_ = managed.proc.Release()
-		managed.proc = nil
-		managed.sock = ""
-		return
-	}
+	// alongside it rather than orphaned (mache-823d91). A group already gone
+	// is a daemon that already exited; its waiter has reaped it or is about to.
+	_ = managed.signalGroup(syscall.SIGTERM)
 
-	// Wait up to 3s for graceful exit
-	done := make(chan struct{})
-	go func() {
-		_, _ = managed.proc.Wait()
-		close(done)
-	}()
-
+	// Wait up to 3s for graceful exit, on the spawn's waiter, never on the
+	// process itself (mache-144496).
 	select {
-	case <-done:
+	case <-exited:
 		log.Printf("leyline daemon (pid=%d) exited gracefully", pid)
 	case <-time.After(3 * time.Second):
 		log.Printf("leyline daemon (pid=%d) did not exit after SIGTERM, sending SIGKILL", pid)
 		_ = managed.signalGroup(syscall.SIGKILL)
-		<-done
+		<-exited
 	}
 
 	managed.proc = nil
 	managed.sock = ""
+	managed.exited = nil
 }
 
 // findExistingSocket checks env var and well-known path for an existing socket.

@@ -237,3 +237,40 @@ func TestShutdownManaged_RefusesALaterSpawn(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(home, ".mache", "fake-listening"),
 		"a daemon was started after shutdown")
 }
+
+// A daemon that exits on its own is reaped by the one goroutine that waits on
+// it, started with the spawn. StopManaged then finds the group gone, and must
+// neither wait on the process a second time nor release it behind that
+// goroutine's back: both race the reaper (a DATA RACE under -race, found on CI
+// in PR #753's run of TestDiscoverOrStart_ConcurrentCallerWaitsForTheStartup).
+func TestStopManaged_AfterTheDaemonExitedOnItsOwn(t *testing.T) {
+	fakeDaemonEnv(t, "bind")
+	_, err := DiscoverOrStart()
+	require.NoError(t, err)
+	pid := managedPID(t)
+
+	require.NoError(t, syscall.Kill(-pid, syscall.SIGKILL), "kill the daemon's group, outside StopManaged")
+	require.Eventually(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) },
+		10*time.Second, 10*time.Millisecond, "the spawn's waiter reaps the daemon")
+
+	StopManaged()
+	managed.mu.Lock()
+	defer managed.mu.Unlock()
+	assert.Nil(t, managed.proc, "the stopped daemon is forgotten")
+	assert.Empty(t, managed.sock)
+}
+
+// StopManaged returns only once the daemon has been reaped, not merely
+// signalled: a caller that exits or respawns right after must not leave a live
+// daemon, or a zombie, behind. Checked the moment it returns, with no polling.
+func TestStopManaged_ReturnsOnlyOnceTheDaemonIsReaped(t *testing.T) {
+	fakeDaemonEnv(t, "bind")
+	_, err := DiscoverOrStart()
+	require.NoError(t, err)
+	pid := managedPID(t)
+	require.NoError(t, syscall.Kill(pid, 0), "the daemon is running before the stop")
+
+	StopManaged()
+	assert.True(t, errors.Is(syscall.Kill(pid, 0), syscall.ESRCH),
+		"pid %d still exists (running or unreaped) when StopManaged returned", pid)
+}

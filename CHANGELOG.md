@@ -6,6 +6,16 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stopping mache's leyline daemon no longer races the goroutine that reaps
+  it** (`mache-144496`). Each daemon mache starts has one goroutine waiting on
+  it; `StopManaged` also called `Wait` on the process itself and, when the
+  daemon had already exited, `Release`, both racing that goroutine (a data
+  race caught on CI under `-race`). It now signals the daemon and waits for
+  that goroutine to report the reap, and returns only once the daemon is
+  gone, not merely signalled.
+
 ## [v0.22.0] — 2026-10-15
 
 ### Changed
