@@ -38,7 +38,9 @@ bumps may include breaking changes.
 - **leyline is pinned to v0.21.1** (`mache-bc3c84`, `mache-40e8e7`), up from
   v0.20.5, with the schema client at `clients/go/leyline-schema` v0.21.0.
   v0.21.1 differs from v0.21.0 only in leyline's execution runtime, which mache
-  does not use; everything below is v0.21.0's. New parses are
+  does not use; everything below is v0.21.0's. A daemon an earlier mache left
+  running on v0.21.0 is refused (see above) until it is stopped; the next
+  start runs v0.21.1. New parses are
   projection-v7: every projection-v6 table is unchanged, and two are added,
   `_tree` (every entry, explicit directories included) and
   `_parse_diagnostics`. mache's v6 readers read v7 as they are; fixturedb's
