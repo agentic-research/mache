@@ -27,7 +27,7 @@ bumps may include breaking changes.
   shapes while the wire handshake passed. Now every adoption asks the daemon
   its release, and anything but the pin is refused with the socket, the
   daemon's pid when known, and both versions, e.g. "the leyline daemon at
-  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.21.0 — stop it
+  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.21.1 — stop it
   and mache will start the pinned one". A daemon that cannot say, either
   because it reports no binary version, does not answer `leyline_version`, or
   cannot be reached, is refused too. `mache serve`'s startup handshake applies
@@ -35,8 +35,10 @@ bumps may include breaking changes.
   purpose, and its daemon is not refused. The daemon mache spawned itself is
   not asked again on each operation.
 
-- **leyline is pinned to v0.21.0** (`mache-bc3c84`), up from v0.20.5, with the
-  schema client at `clients/go/leyline-schema` v0.21.0. New parses are
+- **leyline is pinned to v0.21.1** (`mache-bc3c84`, `mache-40e8e7`), up from
+  v0.20.5, with the schema client at `clients/go/leyline-schema` v0.21.0.
+  v0.21.1 differs from v0.21.0 only in leyline's execution runtime, which mache
+  does not use; everything below is v0.21.0's. New parses are
   projection-v7: every projection-v6 table is unchanged, and two are added,
   `_tree` (every entry, explicit directories included) and
   `_parse_diagnostics`. mache's v6 readers read v7 as they are; fixturedb's
