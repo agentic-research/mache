@@ -26,6 +26,15 @@ bumps may include breaking changes.
   loopback NFS mount per daemon start, the mount type behind the Apple
   NFS-client panics, and which leyline v0.21.0 refuses below Tahoe 26.7 /
   Sequoia 15.8, where it would fail the daemon's start.
+- **Upgrading no longer leaves the daemon unable to start** (`mache-bc3c84`).
+  mache reuses one arena, `~/.mache/default.arena`, and cold-starts it only
+  when its recorded configuration changes; the leyline release was not part
+  of that record. leyline v0.21.0 exits on the projection-v6 arena v0.20.5
+  left ("this arena was written by projection-v6; this binary writes
+  projection-v7"), so the first daemon start after upgrading would have
+  failed and every daemon-backed tool gone dark. The record now carries the
+  leyline pin, and an arena another pin built is cold-started; checked by
+  upgrading a real v0.20.5 arena with the v0.21.0 binary.
 
 ### Fixed
 

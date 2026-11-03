@@ -434,6 +434,7 @@ func daemonCommandArgs(p daemonPaths) ([]string, arenaSpawnConfig) {
 	arenaCfg := arenaSpawnConfig{
 		SourceRoot: CanonicalSourceRoot(DaemonSource()),
 		CDCTarget:  cdcTarget,
+		Leyline:    leylineBinaryVersion,
 	}
 	//
 	// --reset-arena is leyline's own mechanism for this and is used in
