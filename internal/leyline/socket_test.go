@@ -25,9 +25,23 @@ import (
 )
 
 // mockServer starts a UDS server that echoes back canned responses.
-// handler receives each parsed JSON request and returns a response map.
-// Uses /tmp for socket paths to avoid macOS 104-byte UDS path limit.
+// handler receives each parsed JSON request and returns a response map. It
+// answers leyline_version itself, as the pinned release, because mache refuses
+// a daemon that is not the pin (mache-a2edb2); rawMockServer leaves that op to
+// the handler, for the tests of that refusal.
 func mockServer(t *testing.T, handler func(map[string]any) map[string]any) string {
+	t.Helper()
+	return rawMockServer(t, func(req map[string]any) map[string]any {
+		if req["op"] == "leyline_version" {
+			return versionResponse(pinnedVersion)
+		}
+		return handler(req)
+	})
+}
+
+// rawMockServer is mockServer without the version answer. Uses /tmp for socket
+// paths to avoid macOS 104-byte UDS path limit.
+func rawMockServer(t *testing.T, handler func(map[string]any) map[string]any) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "leyline-test-*")
 	if err != nil {
@@ -294,15 +308,8 @@ func TestDiscoverOrStart_UsesExistingSocket(t *testing.T) {
 	// socket with a live Dial (not just os.Stat) so a touch-file isn't
 	// enough to pass the dedup gate. The listener simulates an existing
 	// daemon and must accept the connect attempt.
-	dir, err := os.MkdirTemp("/tmp", "leyline-existing-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sockPath := filepath.Join(dir, "test.sock")
-
-	ln, err := net.Listen("unix", sockPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go acceptAndClose(ln)
+	// mockServer answers the version check as the pinned daemon would.
+	sockPath := mockServer(t, func(map[string]any) map[string]any { return map[string]any{"ok": true} })
 
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 	found, err := DiscoverOrStart()
@@ -859,15 +866,8 @@ func TestDiscoverOrStart_LiveDaemonNotRespawned(t *testing.T) {
 	resetManaged(t)
 	t.Cleanup(func() { resetManaged(t) })
 
-	dir, err := os.MkdirTemp("/tmp", "leyline-live-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sockPath := filepath.Join(dir, "live.sock")
-
-	ln, err := net.Listen("unix", sockPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go acceptAndClose(ln)
+	// mockServer answers the version check as the pinned daemon would.
+	sockPath := mockServer(t, func(map[string]any) map[string]any { return map[string]any{"ok": true} })
 
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 	// Belt-and-braces: even if the liveness check were broken, the spawn
@@ -897,15 +897,8 @@ func TestDiscoverOrStart_ConcurrentCallersDoNotDoubleSpawn(t *testing.T) {
 	resetManaged(t)
 	t.Cleanup(func() { resetManaged(t) })
 
-	dir, err := os.MkdirTemp("/tmp", "leyline-concurrent-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sockPath := filepath.Join(dir, "shared.sock")
-
-	ln, err := net.Listen("unix", sockPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go acceptAndClose(ln)
+	// mockServer answers the version check as the pinned daemon would.
+	sockPath := mockServer(t, func(map[string]any) map[string]any { return map[string]any{"ok": true} })
 
 	t.Setenv("LEYLINE_SOCKET", sockPath)
 	t.Setenv("PATH", "/nonexistent-path-for-test")

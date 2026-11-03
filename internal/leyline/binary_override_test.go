@@ -67,19 +67,3 @@ func TestBinaryVersionString_DegradesToUnknown(t *testing.T) {
 	require.NoError(t, os.WriteFile(ok, []byte("#!/bin/sh\necho 'leyline 0.10.2 (open)'\n"), 0o755))
 	assert.Equal(t, "0.10.2", binaryVersionString(ok))
 }
-
-// The drift warning is the fix for the daemon-path hole: a reachable daemon at
-// a non-pinned version must be VISIBLE. These assert the comparison logic —
-// same version quiet, different version noisy, absent version quiet.
-func TestWarnOnPinDrift_ComparesAgainstThePin(t *testing.T) {
-	// Same version as the pin: no drift. Uses the pin itself so the test does
-	// not go stale when the pin bumps.
-	warnOnPinDrift(map[string]any{"version": leylineBinaryVersion})
-	// A patch-level difference is exactly the case that produced a 0.10.2
-	// daemon serving a v0.10.3 pin, and must not be treated as equal.
-	assert.NotEqual(t, parseSemverParts("0.10.2"), parseSemverParts(leylineBinaryVersion),
-		"a patch difference must compare unequal — LLO ships _ast changes in patch releases")
-	// Absent version field: nothing to compare, must not panic.
-	warnOnPinDrift(map[string]any{})
-	warnOnPinDrift(map[string]any{"schema_version": ""})
-}

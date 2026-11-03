@@ -6,6 +6,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,4 +77,41 @@ func TestFakeDaemon_ServesMultipleRequestsPerConnection(t *testing.T) {
 		require.NoError(t, json.Unmarshal(line, &resp))
 		assert.EqualValues(t, i, resp["n"])
 	}
+}
+
+// TestFakeDaemon_IsThePinnedDaemon: the fake stands in for the daemon mache
+// would run, so mache's own refusal (mache-a2edb2) must accept it, and the
+// version op must not reach a handler written for other ops.
+func TestFakeDaemon_IsThePinnedDaemon(t *testing.T) {
+	t.Setenv(leyline.BinaryOverrideEnv, "")
+	sock := FakeDaemon(t, func(req map[string]any) any {
+		return map[string]any{"ok": true, "handled": req["op"]}
+	})
+	t.Setenv("LEYLINE_SOCKET", sock)
+
+	require.NoError(t, leyline.VerifyReachableDaemonVersion(), "mache must adopt the fake")
+	assert.Equal(t, mapOfJSON(t, VersionReply(leyline.PinnedBinaryVersion())),
+		sendLine(t, sock, map[string]any{"op": "leyline_version"}))
+	assert.Equal(t, "embed_status", sendLine(t, sock, map[string]any{"op": "embed_status"})["handled"],
+		"every other op still goes to the handler")
+}
+
+// TestVersionReply_IsWhatMacheRefuses: a reply naming another release is
+// refused by the same check, so the fake's answer is what decides adoption.
+func TestVersionReply_IsWhatMacheRefuses(t *testing.T) {
+	t.Setenv(leyline.BinaryOverrideEnv, "")
+	sock := rawFakeDaemon(t, func(map[string]any) any { return VersionReply("0.20.5") })
+	t.Setenv("LEYLINE_SOCKET", sock)
+
+	assert.ErrorIs(t, leyline.VerifyReachableDaemonVersion(), leyline.ErrDaemonNotPinned)
+}
+
+// mapOfJSON is v as it reads back off the wire (numbers become float64).
+func mapOfJSON(t *testing.T, v any) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(v)
+	require.NoError(t, err)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(data, &out))
+	return out
 }

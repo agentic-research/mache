@@ -1,7 +1,9 @@
 package leyline
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"log"
@@ -262,11 +264,19 @@ func brokenStatusServer(t *testing.T) string {
 			}
 			go func(c net.Conn) {
 				defer c.Close() //nolint:errcheck
-				buf := make([]byte, 4096)
+				rd := bufio.NewReader(c)
 				for {
-					n, err := c.Read(buf)
-					if err != nil || n == 0 {
+					line, err := rd.ReadString('\n')
+					if err != nil {
 						return
+					}
+					// The version check is answered as the pinned daemon
+					// would, so the embed path reaches embed_status.
+					var req map[string]any
+					if json.Unmarshal([]byte(line), &req) == nil && req["op"] == "leyline_version" {
+						data, _ := json.Marshal(versionResponse(pinnedVersion))
+						_, _ = c.Write(append(data, '\n'))
+						continue
 					}
 					// Reply with bare newline — empty payload causes
 					// json.Unmarshal to fail on the client side.

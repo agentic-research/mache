@@ -12,19 +12,50 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/agentic-research/mache/internal/leyline"
 )
 
 // Handler produces the response object for one decoded request. The returned
 // value is JSON-marshalled and written back as a single line.
 type Handler func(req map[string]any) any
 
+// VersionReply is a daemon's answer to the leyline_version op, in the shape
+// ley-line sends (rs/ll-open/cli-lib/src/daemon/ops.rs op_leyline_version):
+// the binary version under binary_version, beside a schema_version that is a
+// different quantity.
+func VersionReply(binaryVersion string) map[string]any {
+	return map[string]any{
+		"ok":                true,
+		"binary_version":    binaryVersion,
+		"schema_version":    "0.18.1",
+		"wire_format_major": float64(1),
+		"compat_min":        "0.4.1",
+	}
+}
+
 // FakeDaemon starts a Unix-domain-socket server that speaks the daemon's
 // line-delimited JSON protocol, answering every request via handler. It
+// answers leyline_version itself, as the pinned release: mache refuses a daemon
+// that is not the pin (mache-a2edb2), and a fake stands in for the daemon mache
+// would run. It
 // returns the socket path; callers wire it up with
 // t.Setenv("LEYLINE_SOCKET", sock). The server tolerates probe connections
 // that close without sending (DiscoverOrStart's liveness check does exactly
 // that). Shutdown is registered via t.Cleanup.
 func FakeDaemon(t *testing.T, handler Handler) string {
+	t.Helper()
+	return rawFakeDaemon(t, func(req map[string]any) any {
+		if req["op"] == "leyline_version" {
+			return VersionReply(leyline.PinnedBinaryVersion())
+		}
+		return handler(req)
+	})
+}
+
+// rawFakeDaemon is FakeDaemon without the version answer: every request,
+// leyline_version included, goes to handler.
+func rawFakeDaemon(t *testing.T, handler Handler) string {
 	t.Helper()
 
 	// os.MkdirTemp("", ...) uses $TMPDIR which stays under the ~104-byte

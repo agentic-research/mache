@@ -19,6 +19,22 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **mache refuses a leyline daemon that is not the pinned release**
+  (`mache-a2edb2`). A daemon mache did not start, whether found at
+  `LEYLINE_SOCKET` or the well-known socket, used to draw a one-time warning
+  and then serve. LLO changes the projection and the write wire between
+  releases, so a daemon left over from an older mache answered in the wrong
+  shapes while the wire handshake passed. Now every adoption asks the daemon
+  its release, and anything but the pin is refused with the socket, the
+  daemon's pid when known, and both versions, e.g. "the leyline daemon at
+  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.21.0 — stop it
+  and mache will start the pinned one". A daemon that cannot say, either
+  because it reports no binary version, does not answer `leyline_version`, or
+  cannot be reached, is refused too. `mache serve`'s startup handshake applies
+  the same rule. `MACHE_LEYLINE_BINARY` still selects another leyline on
+  purpose, and its daemon is not refused. The daemon mache spawned itself is
+  not asked again on each operation.
+
 - **leyline is pinned to v0.21.0** (`mache-bc3c84`), up from v0.20.5, with the
   schema client at `clients/go/leyline-schema` v0.21.0. New parses are
   projection-v7: every projection-v6 table is unchanged, and two are added,
