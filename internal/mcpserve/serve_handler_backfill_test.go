@@ -12,13 +12,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -163,61 +163,24 @@ func TestGetSheafStatus_DaemonErrorReturnsUnavailable(t *testing.T) {
 // requested k back as len(results) capped to len(canned).
 func startMockSemanticServer(t *testing.T, canned []map[string]any, returnError string) string {
 	t.Helper()
-	// NOTE: t.TempDir() returns paths under $TMPDIR which on macOS
-	// (/var/folders/...) exceed the 104-byte sun_path limit for UDS
-	// sockets. Keep using a short /tmp base — mirrors startMockSheafServer.
-	dir, err := os.MkdirTemp("/tmp", "mache-sem-tool-")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sockPath := filepath.Join(dir, "t.sock")
-
-	ln, err := net.Listen("unix", sockPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				defer func() { _ = c.Close() }()
-				dec := json.NewDecoder(c)
-				for {
-					var req map[string]any
-					if err := dec.Decode(&req); err != nil {
-						return
-					}
-					op, _ := req["op"].(string)
-					if op != "semantic_search" {
-						_, _ = c.Write([]byte(`{"error":"unexpected op"}` + "\n"))
-						continue
-					}
-					var resp map[string]any
-					if returnError != "" {
-						resp = map[string]any{"error": returnError}
-					} else {
-						k := 10
-						if v, ok := req["k"].(float64); ok && int(v) > 0 {
-							k = int(v)
-						}
-						if k > len(canned) {
-							k = len(canned)
-						}
-						items := make([]any, k)
-						for i := 0; i < k; i++ {
-							items[i] = canned[i]
-						}
-						resp = map[string]any{"results": items}
-					}
-					data, _ := json.Marshal(resp)
-					_, _ = c.Write(append(data, '\n'))
-				}
-			}(conn)
+	return lltest.FakeDaemon(t, func(req map[string]any) any {
+		if op, _ := req["op"].(string); op != "semantic_search" {
+			return map[string]any{"error": "unexpected op"}
 		}
-	}()
-	return sockPath
+		if returnError != "" {
+			return map[string]any{"error": returnError}
+		}
+		k := 10
+		if v, ok := req["k"].(float64); ok && int(v) > 0 {
+			k = int(v)
+		}
+		k = min(k, len(canned))
+		items := make([]any, k)
+		for i := range k {
+			items[i] = canned[i]
+		}
+		return map[string]any{"results": items}
+	})
 }
 
 // isolateLeyline ensures LEYLINE_SOCKET + HOME point at temp dirs so a

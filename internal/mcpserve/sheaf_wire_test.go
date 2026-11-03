@@ -1,13 +1,10 @@
 package mcpserve
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +12,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
@@ -455,49 +453,11 @@ func TestGetCommunities_NoInvalidatorWhenGraphDoesntProvide(t *testing.T) {
 // fresh. Pre-cmd-c14c43 the agent has no signal that the cascade fired
 // at all — this tool is the missing visibility.
 
-// startMockSheafServer is a self-contained UDS server that handles a
-// single op pattern: receive line-delimited JSON, return the canned
-// response from the handler func. Mirrors the (unexported)
-// internal/leyline test helper; kept local to cmd/ so the package
-// boundary stays clean.
+// startMockSheafServer is a fake daemon answering each request with handler's
+// response (lltest.FakeDaemon, which also answers leyline_version as the pin).
 func startMockSheafServer(t *testing.T, handler func(map[string]any) map[string]any) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "mache-sheaf-tool-")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sockPath := filepath.Join(dir, "t.sock")
-
-	ln, err := net.Listen("unix", sockPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				defer func() { _ = c.Close() }()
-				rd := bufio.NewReader(c)
-				for {
-					line, err := rd.ReadString('\n')
-					if err != nil {
-						return
-					}
-					var req map[string]any
-					if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &req); err != nil {
-						continue
-					}
-					resp := handler(req)
-					data, _ := json.Marshal(resp)
-					_, _ = c.Write(append(data, '\n'))
-				}
-			}(conn)
-		}
-	}()
-
-	return sockPath
+	return lltest.FakeDaemon(t, func(req map[string]any) any { return handler(req) })
 }
 
 // TestGetSheafStatus_ReturnsDaemonState pins the happy path: when the

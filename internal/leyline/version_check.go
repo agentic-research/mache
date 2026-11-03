@@ -1,11 +1,11 @@
 package leyline
 
 import (
+	"errors"
 	"fmt"
-	"log"
+	"os"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 // expectedLeylineWireFormatMajor is the ley-line-open daemon wire-format major
@@ -15,12 +15,10 @@ import (
 // garbage — so mache refuses rather than proceeding (mache-8kif / M3).
 const expectedLeylineWireFormatMajor uint64 = 1
 
-// VerifyReachableDaemonVersion is the startup wire-compat handshake: if a
-// leyline daemon is ALREADY reachable (it never auto-starts one), it queries the
-// leyline_version op and refuses to proceed on a structural mismatch. It returns
-// nil when no daemon is reachable, when the daemon predates the leyline_version
-// op, or when the versions are compatible — a version probe must never be
-// stricter than the actual wire decode.
+// VerifyReachableDaemonVersion is the startup handshake: if a leyline daemon
+// is ALREADY listening (it never auto-starts one), it must be the pinned release
+// and speak a wire mache decodes, or serve refuses to start (verifyDaemon). It
+// returns nil only when nothing is listening.
 func VerifyReachableDaemonVersion() error {
 	sock, err := DiscoverSocket() // never auto-starts a daemon
 	if err != nil {
@@ -29,61 +27,44 @@ func VerifyReachableDaemonVersion() error {
 	if !isSocketAlive(sock) {
 		return nil // stale socket file, no listener
 	}
-	c, err := DialSocket(sock)
-	if err != nil {
-		return nil // transient dial failure — don't block startup on a probe
-	}
-	defer func() { _ = c.Close() }()
-	return c.VerifyVersion(leylineBinaryVersion)
+	return verifyDaemon(sock)
 }
 
-// VerifyVersion queries the daemon's leyline_version op and checks wire-format
-// and schema compatibility against clientVersion (this build's leyline
-// schema-client version). A daemon that predates the op (SendOp errors) is not
-// an error — older daemons simply can't be verified, and we must not refuse a
-// daemon we might still decode fine.
-func (c *SocketClient) VerifyVersion(clientVersion string) error {
-	resp, err := c.SendOp(map[string]any{"op": "leyline_version"})
-	if err != nil {
+// ErrDaemonNotPinned is a reachable leyline daemon refused because it is not
+// the release mache pins.
+var ErrDaemonNotPinned = errors.New("leyline daemon is not the pinned release")
+
+// pinDriftError refuses a daemon whose binary version is not the pin, or that
+// does not report one. sock, and the daemon's pid when its owner record names
+// one, go in the message so the user knows which process to stop.
+//
+// It used to warn and carry on. That closed the visibility hole that produced
+// mache-608a3c twice, but a warned-about daemon still served: LLO changes the
+// projection and the write wire between releases (v0.21.0 is breaking on both),
+// so a daemon left over from an older mache would answer with the wrong shapes
+// while every handshake passed. One daemon per repo is the authority; mache
+// refuses a mismatched one, failing closed, and says what to restart
+// (mache-a2edb2). A developer who set MACHE_LEYLINE_BINARY chose another
+// binary on purpose, and is not refused.
+func pinDriftError(resp map[string]any, sock string) error {
+	if os.Getenv(BinaryOverrideEnv) != "" {
 		return nil
 	}
-	warnOnPinDrift(resp)
-	return checkLeylineVersionCompat(resp, clientVersion)
-}
-
-// warnOnPinDrift surfaces a daemon whose version differs from the pin.
-//
-// This closes the hole that produced mache-608a3c a second time. ResolveBinary
-// enforces the exact pin at every tier, but DiscoverOrStart's fast path returns
-// an ALREADY-RUNNING daemon's socket without ever calling it — so a daemon left
-// over from another branch or an earlier session serves _ast at whatever version
-// it happens to be, and the wire-compat handshake passes it because
-// wire_format_major and compat_min are both satisfied.
-//
-// That is the correct outcome for the handshake, which guards whether the wire
-// DECODES. It is the wrong outcome for _ast schema identity, which is what the
-// pin exists for: LLO ships _ast changes in patch releases, so a 0.10.2 daemon
-// answering a v0.10.3 pin produces a structurally different graph while every
-// compatibility check reports green.
-//
-// Deliberately a WARNING rather than a refusal. A running daemon may be someone
-// else's (LEYLINE_SOCKET), killing the process's ability to proceed on a version
-// nit would be worse than the drift, and the handshake's own contract is that a
-// probe must never be stricter than the decode. What was missing was not
-// strictness — it was VISIBILITY. Silent drift is the failure; a loud line next
-// to the output that inherits it is the fix.
-func warnOnPinDrift(resp map[string]any) {
+	where := "the leyline daemon at " + sock
+	if rec, ok := ReadOwnerRecord(sock); ok && rec.DaemonPID > 0 {
+		where += fmt.Sprintf(" (pid %d)", rec.DaemonPID)
+	}
 	got, ok := daemonBinaryVersion(resp)
 	if !ok {
-		return // nothing to compare — an older daemon that omits it
+		return fmt.Errorf("%w: %s does not report its version, and mache needs %s — "+
+			"stop it and mache will start the pinned one", ErrDaemonNotPinned, where, leylineBinaryVersion)
 	}
 	if parseSemverParts(got) == parseSemverParts(leylineBinaryVersion) {
-		return
+		return nil
 	}
-	log.Printf("WARNING: reachable leyline daemon reports %s but mache pins %s — "+
-		"_ast output may differ from CI (LLO ships schema changes in patch releases). "+
-		"Stop the stale daemon, or set %s to make the override explicit.",
-		got, leylineBinaryVersion, BinaryOverrideEnv)
+	return fmt.Errorf("%w: %s is v%s, mache needs %s — stop it and mache will start the pinned one "+
+		"(or set %s to use another leyline on purpose)",
+		ErrDaemonNotPinned, where, strings.TrimPrefix(got, "v"), leylineBinaryVersion, BinaryOverrideEnv)
 }
 
 // checkLeylineVersionCompat compares a leyline_version response against this
@@ -167,46 +148,30 @@ func parseSemverParts(v string) [3]uint64 {
 	return out
 }
 
-// driftCheckOnce guards the adoption-path drift probe so a warning fires once
-// per process rather than once per operation.
-//
-// DiscoverOrStart is called per-op by several consumers (validate, trigger,
-// semantic_search, get_communities, the LSP handlers), so an unguarded probe
-// would add a socket round-trip to every call and repeat the same line until it
-// is noise. Once is enough: the adopted daemon cannot change version underneath
-// a running process without the socket going away, and a socket that goes away
-// re-enters the spawn path.
-var driftCheckOnce sync.Once
-
-// warnIfAdoptedDaemonDrifts probes a daemon mache did NOT spawn and warns when
-// its leyline version differs from the pin.
-//
-// WHY HERE. The same probe already existed behind VerifyReachableDaemonVersion,
-// but that has exactly one caller — `mache serve` startup — while adoption
-// happens in DiscoverOrStart, which every consumer reaches. So the path with
-// the SMALLEST consequence was checked and the one that PRODUCES projections
-// (`mache build`) was not, even though _ast identity is precisely what the pin
-// protects (mache-233902).
-//
-// Only for ADOPTED daemons. A daemon this process spawned came from
-// ResolveBinary, which already enforces the exact pin at every tier, so probing
-// it would ask a question whose answer is structural.
-//
-// Warn, never refuse — see warnOnPinDrift. The daemon may be someone else's,
-// and a probe must not be stricter than the decode.
-func warnIfAdoptedDaemonDrifts(sock string) {
-	driftCheckOnce.Do(func() {
-		c, err := DialSocket(sock)
-		if err != nil {
-			return // transient: never block adoption on a diagnostic
-		}
-		defer func() { _ = c.Close() }()
-		resp, err := c.SendOp(map[string]any{"op": "leyline_version"})
-		if err != nil {
-			return // predates the op; cannot be judged, so is not judged
-		}
-		warnOnPinDrift(resp)
-	})
+// verifyDaemon asks a daemon mache did NOT spawn which release it is, and
+// refuses it unless it is the pin (pinDriftError) and its wire is one mache
+// decodes (checkLeylineVersionCompat). Every DiscoverOrStart consumer adopts
+// through here (mache-233902), and so does serve's startup handshake. It asks on every
+// adoption: one socket round trip, and a user who restarts the daemon onto the
+// right release is served at once rather than refused for the rest of the
+// process. A daemon that cannot be asked is refused too, failing closed
+// (mache-a2edb2): a daemon that predates the leyline_version op predates every
+// release mache could pin.
+func verifyDaemon(sock string) error {
+	c, err := DialSocket(sock)
+	if err != nil {
+		return fmt.Errorf("%w: cannot ask the leyline daemon at %s its version: %v", ErrDaemonNotPinned, sock, err)
+	}
+	defer func() { _ = c.Close() }()
+	resp, err := c.SendOp(map[string]any{"op": "leyline_version"})
+	if err != nil {
+		return fmt.Errorf("%w: the leyline daemon at %s does not answer leyline_version (mache needs %s): %v",
+			ErrDaemonNotPinned, sock, leylineBinaryVersion, err)
+	}
+	if err := pinDriftError(resp, sock); err != nil {
+		return err
+	}
+	return checkLeylineVersionCompat(resp, leylineBinaryVersion)
 }
 
 // AdoptedDaemonVersion reports the leyline version a reachable daemon claims,
