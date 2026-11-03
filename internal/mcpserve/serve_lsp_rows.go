@@ -2,6 +2,7 @@ package mcpserve
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -242,6 +243,82 @@ func lookupDiagnostics(src lspSource, symbol, kind string, limit int) ([]diagRes
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// lookupParseDiagnostics is what leyline's parse recorded about files it could
+// not project cleanly (projection-v7's _parse_diagnostics), as diagnostics: a
+// file that projected with error nodes is kind "parse", one not projected at
+// all (binary or oversized) is "unprojected". present is false when the db has
+// no such table (projection-v6 and before, or mache's own projection). They are
+// file-level, so a construct-kind filter matches none of them; symbol narrows
+// by path, as it does for LSP diagnostics.
+func lookupParseDiagnostics(src lspSource, symbol, kind string) (out []diagResult, present bool, err error) {
+	rows, err := src("SELECT COUNT(*) FROM pragma_table_info('_parse_diagnostics')")
+	if err != nil {
+		return nil, false, fmt.Errorf("probe _parse_diagnostics: %w", err)
+	}
+	if len(rows) == 0 || len(rows[0]) == 0 {
+		return nil, false, nil
+	}
+	if n, err := lloschema.IntValue(rows[0][0]); err != nil || n == 0 {
+		return nil, false, err
+	}
+	if kind != "" {
+		return nil, true, nil
+	}
+	rows, err = src(`SELECT path, projected, start_byte, end_byte, start_row, start_col, message
+		FROM _parse_diagnostics ORDER BY path`)
+	if err != nil {
+		return nil, true, fmt.Errorf("query _parse_diagnostics: %w", err)
+	}
+	for _, r := range rows {
+		d, err := parseDiagnostic(r)
+		if err != nil {
+			return nil, true, err
+		}
+		if symbol == "" || strings.Contains(likeFold(d.NodeID), likeFold(symbol)) {
+			out = append(out, d)
+		}
+	}
+	return out, true, nil
+}
+
+// parseDiagnostic renders one _parse_diagnostics row as an LSP-shaped
+// diagnostic, so a client reads it like the language server's: severity 1
+// (error), source "leyline-parse", and the start position and byte span the
+// parse recorded, when it recorded one.
+func parseDiagnostic(r []any) (diagResult, error) {
+	path := textValue(r[0])
+	projected, err := lloschema.IntValue(r[1])
+	if err != nil {
+		return diagResult{}, fmt.Errorf("_parse_diagnostics.projected for %s: %w", path, err)
+	}
+	diag := map[string]any{"severity": 1, "source": "leyline-parse", "message": textValue(r[6])}
+	if r[4] != nil && r[5] != nil {
+		line, lerr := lspPosition(r[4])
+		col, cerr := lspPosition(r[5])
+		if lerr != nil || cerr != nil {
+			return diagResult{}, fmt.Errorf("_parse_diagnostics position for %s: %v %v", path, lerr, cerr)
+		}
+		diag["range"] = map[string]any{"start": map[string]int{"line": line, "character": col}}
+	}
+	if r[2] != nil && r[3] != nil {
+		start, serr := lloschema.IntValue(r[2])
+		end, eerr := lloschema.IntValue(r[3])
+		if serr != nil || eerr != nil {
+			return diagResult{}, fmt.Errorf("_parse_diagnostics span for %s: %v %v", path, serr, eerr)
+		}
+		diag["byte_range"] = []int64{start, end}
+	}
+	raw, err := json.Marshal([]any{diag})
+	if err != nil {
+		return diagResult{}, err
+	}
+	kind := "parse"
+	if projected == 0 {
+		kind = "unprojected"
+	}
+	return diagResult{NodeID: path, SymbolKind: kind, Diagnostics: string(raw)}, nil
 }
 
 // lookupLSPDefs is every _lsp_defs row whose def_token is symbol.

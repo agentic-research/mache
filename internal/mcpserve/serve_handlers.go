@@ -157,7 +157,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	s.AddTool(
 		mcp.NewTool("get_diagnostics",
 			readToolExternal(),
-			mcp.WithDescription("Get LSP diagnostics (errors, warnings) for symbols. Returns diagnostics from the language server. If LSP data is missing and 'file' is provided, auto-enriches via ley-line daemon."),
+			mcp.WithDescription("Get diagnostics (errors, warnings) for symbols and files. Returns what leyline's parse recorded (symbol_kind \"parse\" for a file that parsed with errors, \"unprojected\" for one it could not project), then the language server's diagnostics. If LSP data is missing and 'file' is provided, auto-enriches via ley-line daemon."),
 			mcp.WithString("symbol", mcp.Description("Symbol name to filter by (optional, returns all if empty)")),
 			mcp.WithString("kind", mcp.Description("Optional construct-kind filter applied to result NodeIDs. Accepted values: function, method, type, constant, variable, import. Omit to return all kinds.")),
 			mcp.WithNumber("limit", mcp.Description("Max results (default 50)")),
