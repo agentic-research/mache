@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -169,4 +173,58 @@ func TestLSPPosition(t *testing.T) {
 			assert.Error(t, err, "%v", tc.in)
 		}
 	}
+}
+
+// On projection-v7 leyline records, per file, what its parse could not
+// project cleanly (_parse_diagnostics). get_diagnostics reports it with no LSP
+// enrichment at all: a file that parsed with errors is kind "parse", with the
+// parse's message and position. Run against the pinned leyline, which writes
+// the table, not against a hand-built fixture of it.
+func TestGetDiagnostics_ReportsWhatTheParseRecorded(t *testing.T) {
+	ll := lltest.ResolveBinaryOrSkip(t)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "pkg", "bad.go"), []byte("package pkg\nfunc Broken( {\n"), 0o644))
+	dbPath := filepath.Join(dir, "out.db")
+	out, err := exec.Command(ll.Path, "parse", src, "-o", dbPath).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	g, _, cleanup, err := openDBGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, nil)
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	if _, present, err := lookupParseDiagnostics(graphLSPSource(g.(graph.RefsQuerier)), "", ""); err != nil || !present {
+		t.Skipf("leyline %s writes no _parse_diagnostics (projection-v7 arrived in v0.21.0): %v", ll.Version, err)
+	}
+
+	call := func(args map[string]any) string {
+		res, err := makeGetDiagnosticsHandler(g)(context.Background(), testutil.MakeRequest(args))
+		require.NoError(t, err)
+		require.False(t, res.IsError, testutil.ResultText(t, res))
+		return testutil.ResultText(t, res)
+	}
+	var diags []diagResult
+	require.NoError(t, json.Unmarshal([]byte(call(map[string]any{})), &diags),
+		"answered with no _lsp table and no file: the parse's own record needs neither")
+	require.Len(t, diags, 1, "only the broken file: %v", diags)
+	assert.Equal(t, "pkg/bad.go", diags[0].NodeID)
+	assert.Equal(t, "parse", diags[0].SymbolKind, "projected, with error nodes")
+	var lsp []struct {
+		Severity int    `json:"severity"`
+		Source   string `json:"source"`
+		Message  string `json:"message"`
+		Range    struct {
+			Start struct{ Line, Character int } `json:"start"`
+		} `json:"range"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(diags[0].Diagnostics), &lsp))
+	require.Len(t, lsp, 1)
+	assert.Equal(t, 1, lsp[0].Severity)
+	assert.Equal(t, "leyline-parse", lsp[0].Source)
+	assert.Contains(t, lsp[0].Message, "syntax error")
+	assert.Equal(t, 1, lsp[0].Range.Start.Line, "the parse error is on the second line, 0-based")
+
+	assert.Contains(t, call(map[string]any{"symbol": "main.go"}), "no diagnostics found", "symbol narrows by path")
+	assert.Contains(t, call(map[string]any{"kind": "function"}), "no diagnostics found", "file-level, so no construct kind matches")
 }

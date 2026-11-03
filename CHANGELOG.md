@@ -6,6 +6,17 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`get_diagnostics` reports what leyline's parse recorded** (`mache-3a375a`).
+  A projection-v7 `.db` carries `_parse_diagnostics`: each file that parsed
+  with error nodes (`symbol_kind` `parse`) or could not be projected at all
+  (`unprojected`), with the parse's message and position. `get_diagnostics`
+  returns those first, as LSP-shaped diagnostics with source `leyline-parse`,
+  and then the language server's. They need no LSP enrichment, so on such a
+  `.db` the tool now answers even without an `_lsp` table or a `file`
+  argument; a `kind` filter excludes them, since they are file-level.
+
 ### Changed
 
 - **leyline is pinned to v0.21.0** (`mache-bc3c84`), up from v0.20.5, with the

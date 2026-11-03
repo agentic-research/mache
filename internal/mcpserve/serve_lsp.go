@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -197,6 +198,13 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("get_diagnostics requires a SQL-capable graph backend (mache standalone or leyline-parsed .db)"), nil
 		}
 
+		// What the parse itself recorded (projection-v7) is in the served db,
+		// with or without LSP enrichment, and is reported first.
+		parsed, hasParse, err := lookupParseDiagnostics(graphLSPSource(qg), symbol, kind)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("query _parse_diagnostics: %v", err)), nil
+		}
+
 		// Check if _lsp table exists
 		rows, err := qg.QueryRefs(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_lsp'`)
 		if err != nil {
@@ -210,9 +218,12 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 		if refsTableExists == 0 {
 			filePath := request.GetString("file", "")
 			if filePath == "" {
+				if hasParse {
+					return diagnosticsResult(parsed, nil, limit, symbol, kind, nil), nil
+				}
 				return lspTableMissing("_lsp", "diagnostics"), nil
 			}
-			result, err := enrichAndQueryDiagnostics(filePath, symbol, kind, limit)
+			result, err := enrichAndQueryDiagnostics(filePath, symbol, kind, limit, parsed)
 			if err != nil {
 				log.Printf("LSP auto-enrichment failed: %v", err)
 				return lspEnrichFailed("diagnostics"), nil
@@ -220,7 +231,7 @@ func makeGetDiagnosticsHandler(g graph.Graph) server.ToolHandlerFunc {
 			return result, nil
 		}
 
-		return queryDiagnosticsFromGraph(qg, symbol, kind, limit)
+		return queryDiagnosticsFromGraph(qg, symbol, kind, limit, parsed)
 	}
 }
 
@@ -308,8 +319,8 @@ func queryTypeInfoFromGraph(qg graph.RefsQuerier, symbol, kind string) (*mcp.Cal
 }
 
 // enrichAndQueryDiagnostics enriches filePath, then reads diagnostics from the
-// daemon.
-func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
+// daemon, after the parse diagnostics the served db already holds.
+func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int, parsed []diagResult) (*mcp.CallToolResult, error) {
 	client, skipReasons, err := enrichFile(filePath)
 	if err != nil {
 		return nil, err
@@ -319,11 +330,21 @@ func enrichAndQueryDiagnostics(filePath, symbol, kind string, limit int) (*mcp.C
 	if err != nil {
 		return nil, fmt.Errorf("read diagnostics via daemon: %w", err)
 	}
-	if len(results) == 0 {
-		return noDiagnosticsResultWithSkipReasons(symbol, kind, skipReasons), nil
+	return diagnosticsResult(parsed, results, limit, symbol, kind, skipReasons), nil
+}
+
+// diagnosticsResult is the tool's answer: parse diagnostics, then LSP's, up to
+// limit, or the "no diagnostics found" message naming any enrich skip reasons.
+func diagnosticsResult(parsed, lsp []diagResult, limit int, symbol, kind string, skipReasons []string) *mcp.CallToolResult {
+	all := append(slices.Clone(parsed), lsp...)
+	if limit >= 0 && len(all) > limit {
+		all = all[:limit]
 	}
-	data, _ := json.MarshalIndent(results, "", "  ")
-	return mcp.NewToolResultText(string(data)), nil
+	if len(all) == 0 {
+		return noDiagnosticsResultWithSkipReasons(symbol, kind, skipReasons)
+	}
+	data, _ := json.MarshalIndent(all, "", "  ")
+	return mcp.NewToolResultText(string(data))
 }
 
 // noDiagnosticsResult returns the appropriate "no diagnostics found"
@@ -367,18 +388,14 @@ func noDiagnosticsResultWithSkipReasons(symbol, kind string, skipReasons []strin
 	return mcp.NewToolResultText(sb.String())
 }
 
-// queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph.
-func queryDiagnosticsFromGraph(qg graph.RefsQuerier, symbol, kind string, limit int) (*mcp.CallToolResult, error) {
+// queryDiagnosticsFromGraph queries _lsp from mache's in-memory graph, after
+// the parse diagnostics.
+func queryDiagnosticsFromGraph(qg graph.RefsQuerier, symbol, kind string, limit int, parsed []diagResult) (*mcp.CallToolResult, error) {
 	results, err := lookupDiagnostics(graphLSPSource(qg), symbol, kind, limit)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query _lsp: %v", err)), nil
 	}
-	if len(results) == 0 {
-		return noDiagnosticsResult(symbol, kind), nil
-	}
-
-	data, _ := json.MarshalIndent(results, "", "  ")
-	return mcp.NewToolResultText(string(data)), nil
+	return diagnosticsResult(parsed, results, limit, symbol, kind, nil), nil
 }
 
 // ---------------------------------------------------------------------------
