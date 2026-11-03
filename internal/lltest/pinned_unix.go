@@ -35,6 +35,20 @@ func UsePinnedDaemon(t *testing.T) {
 // different wire behavior than CI's SHA-verified release (mache-608a3c).
 func StartPinnedDaemon(t *testing.T) string {
 	t.Helper()
+	return startPinned(t, "") // headless: no --source — validate is content-supplied
+}
+
+// StartPinnedSourceDaemon is StartPinnedDaemon serving src: the daemon parses
+// it into its store, answers read_source from it, and materializes accepted
+// proposals into it — the write path's daemon (mache-3a0fb9).
+func StartPinnedSourceDaemon(t *testing.T, src string) string {
+	t.Helper()
+	return startPinned(t, src)
+}
+
+// startPinned spawns the pinned daemon, serving src when it is not "".
+func startPinned(t *testing.T, src string) string {
+	t.Helper()
 
 	bin := ResolveBinaryOrSkip(t).Path
 
@@ -45,11 +59,16 @@ func StartPinnedDaemon(t *testing.T) string {
 		t.Fatalf("lltest: create pinned daemon dir: %v", err)
 	}
 
-	cmd := exec.Command(bin, "daemon",
+	args := []string{
+		"daemon",
 		"--arena", filepath.Join(dir, "d.arena"),
 		"--arena-size-mib", "64",
 		"--control", filepath.Join(dir, "d.ctrl"),
-	) // headless: no --mount, no --source — validate is content-supplied
+	} // headless: no --mount
+	if src != "" {
+		args = append(args, "--source", src)
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = os.RemoveAll(dir)
