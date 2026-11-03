@@ -1147,12 +1147,17 @@ func (c *SocketClient) Prioritize(files []string) error {
 // changed only in a test), IR lineage stays merkle-ast-v2 at extraction epoch
 // 5, and the schema client moves to clients/go/leyline-schema v0.21.0.
 //
+// v0.21.0 -> v0.21.1 changes only the execution runtime mache does not use (the
+// native tier refuses a workspace grant it cannot serve; a cleanup race).
+// SCHEMA_VERSION stays 0.21.0 and no schema-client tag was cut, so go.mod is
+// unchanged; projection, wire, control block and IR lineage are unchanged.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.21.0"
+const leylineBinaryVersion = "v0.21.1"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
