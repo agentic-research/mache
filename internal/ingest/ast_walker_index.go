@@ -1,10 +1,10 @@
 package ingest
 
 import (
-	"database/sql"
 	"fmt"
-	"os"
 	"sync"
+
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // fileIndex is one source file's whole section of the ley-line db, held in
@@ -243,26 +243,42 @@ func (w *ASTWalker) fileSection(sourceID string) (*fileIndex, error) {
 		return nil, err
 	}
 	idx.srcOnce.Do(func() {
-		idx.lang, idx.source, idx.srcErr = readSource(w.db, sourceID)
+		idx.lang, idx.source, idx.srcErr = w.readSource(sourceID)
 	})
 	return idx, nil
 }
 
-// readSource reads one _source row: the language and the content, which is
-// either the inline BLOB or — when ley-line stores a path reference instead
-// (its default; content is NULL) — the file at that path.
-func readSource(db *sql.DB, sourceID string) (lang string, content []byte, err error) {
-	var path sql.NullString
-	if err := db.QueryRow("SELECT language, content, path FROM _source WHERE id = ?", sourceID).
-		Scan(&lang, &content, &path); err != nil {
+// readSource reads one _source row: the language and the bytes the parse saw
+// (lloschema.SourceBytesExpr). Every node's byte offsets refer to exactly
+// those bytes. It used to read the file at _source.path when the row carried
+// no inline content, which is leyline's default, so a file edited after the
+// parse was sliced with offsets from before the edit (mache-46c59d). A row
+// whose bytes the projection does not hold is an error, not a disk read.
+func (w *ASTWalker) readSource(sourceID string) (lang string, content []byte, err error) {
+	q, err := w.sourceQuery()
+	if err != nil {
 		return "", nil, err
 	}
-	if len(content) > 0 {
-		return lang, content, nil
+	if err := w.db.QueryRow(q, sourceID).Scan(&lang, &content); err != nil {
+		return "", nil, err
 	}
-	if path.Valid && path.String != "" {
-		content, err = os.ReadFile(path.String)
-		return lang, content, err
+	if content == nil {
+		return lang, nil, fmt.Errorf("_source %s: the projection holds no content for it", sourceID)
 	}
-	return lang, nil, fmt.Errorf("_source %s: no content and no path", sourceID)
+	return lang, content, nil
+}
+
+// sourceQuery is the statement readSource runs, built once per db: which
+// expression reads a row's bytes depends on whether the db has source_blobs.
+func (w *ASTWalker) sourceQuery() (string, error) {
+	w.sourceMu.Lock()
+	defer w.sourceMu.Unlock()
+	if w.sourceSQL == "" {
+		expr, err := lloschema.SourceBytesExpr(lloschema.DB(w.db))
+		if err != nil {
+			return "", err
+		}
+		w.sourceSQL = "SELECT language, " + expr + " FROM _source WHERE id = ?"
+	}
+	return w.sourceSQL, nil
 }

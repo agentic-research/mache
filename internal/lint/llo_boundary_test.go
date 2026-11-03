@@ -61,6 +61,7 @@ var lloOwnedTables = []string{
 	"_ast_pointer",
 	"node_child",
 	"_source",
+	"source_blobs",
 	"_lsp",
 	"_lsp_defs",
 	"_lsp_refs",

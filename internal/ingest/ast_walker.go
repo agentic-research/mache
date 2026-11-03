@@ -42,6 +42,10 @@ type ASTWalker struct {
 	shapeMu     sync.Mutex
 	shapeProbed bool
 	v6          bool
+	// sourceSQL is the statement that reads one _source row's language and
+	// parsed bytes (lloschema.SourceBytesExpr) — a per-db fact, asked once.
+	sourceMu  sync.Mutex
+	sourceSQL string
 }
 
 // scopedAddrRef is one whole-file address-ref match: the token plus the id of

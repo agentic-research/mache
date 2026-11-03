@@ -2,7 +2,6 @@ package ingest
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
@@ -106,23 +105,28 @@ func TestASTWalker_Query_MissingCaptures(t *testing.T) {
 	}
 }
 
-// TestReadSource_PathFallback verifies that when a _source row has empty
-// content but a non-empty path column, readSource falls back to reading the
-// file from disk.
-func TestReadSource_PathFallback(t *testing.T) {
-	dir := t.TempDir()
-	srcPath := filepath.Join(dir, "x.go")
-	body := []byte("package x\n")
-	require.NoError(t, os.WriteFile(srcPath, body, 0o600))
+// TestReadSource_ReadsTheParsedBytesNotTheFile is mache-46c59d. ley-line
+// leaves _source.content NULL and keeps the parsed bytes in source_blobs; the
+// file at _source.path may have changed since, or be gone. Every node's offsets
+// refer to the parsed bytes, so those are what the walker reads, whatever is
+// on disk; here nothing is.
+func TestReadSource_ReadsTheParsedBytesNotTheFile(t *testing.T) {
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
+		t.Run(p.String(), func(t *testing.T) {
+			b := fixturedb.New(t, p)
+			b.Source("x.go", "go", "package parsed\n")
+			_, f := b.Build()
+			var path string
+			require.NoError(t, f.DB().QueryRow(`SELECT path FROM _source WHERE id = 'x.go'`).Scan(&path))
+			_, statErr := os.Stat(path)
+			require.True(t, os.IsNotExist(statErr), "the row's path names no file, so only the projection can answer")
 
-	b := fixturedb.New(t, fixturedb.Leyline)
-	b.SourceFile("x.go", "go", srcPath)
-	_, f := b.Build()
-
-	lang, got, err := readSource(f.DB(), "x.go")
-	require.NoError(t, err)
-	assert.Equal(t, "go", lang)
-	assert.Equal(t, body, got)
+			lang, got, err := NewASTWalker(f.DB()).readSource("x.go")
+			require.NoError(t, err)
+			assert.Equal(t, "go", lang)
+			assert.Equal(t, "package parsed\n", string(got))
+		})
+	}
 }
 
 // TestASTWalker_Query_FindNodesByKindError verifies the error path in
@@ -171,14 +175,14 @@ func TestASTWalker_Query_ByteRangeFallback(t *testing.T) {
 	assert.Equal(t, "Validate", got, "expected byte-range fallback to recover the identifier")
 }
 
-// TestReadSource_NoContentNoPath verifies the error path when _source has
-// neither inline content nor a path reference.
+// TestReadSource_NoContentNoPath: a row whose bytes the projection does not
+// hold is an error. The file at its path is not read in their place.
 func TestReadSource_NoContentNoPath(t *testing.T) {
 	b := fixturedb.New(t, fixturedb.Leyline)
-	b.SourceFile("empty.go", "go", "")
+	b.Source("empty.go", "go", "")
 	_, f := b.Build()
 
-	_, _, err := readSource(f.DB(), "empty.go")
+	_, _, err := NewASTWalker(f.DB()).readSource("empty.go")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no content")
 }

@@ -51,7 +51,7 @@ func emitLeylineRefs(e *emitter) {
 
 func (leylineDialect) emitAST(e *emitter) { e.emitNodeChildren(e.insertV4AST()) }
 
-func (leylineDialect) emitSources(e *emitter) { e.insertV4Sources() }
+func (leylineDialect) emitSources(e *emitter) { e.insertV4Sources(true) }
 
 func (leylineDialect) emitImports(e *emitter) {
 	for _, im := range e.b.imports {
@@ -106,7 +106,7 @@ func (standaloneDialect) emitSymbols(e *emitter) {
 // The hydrated `_ast` carries no merkle child lists.
 func (standaloneDialect) emitAST(e *emitter) { e.insertV4AST() }
 
-func (standaloneDialect) emitSources(e *emitter) { e.insertV4Sources() }
+func (standaloneDialect) emitSources(e *emitter) { e.insertV4Sources(false) }
 
 // The mache projection has no _imports table; [Builder.Import] documents that
 // the call is dropped here.

@@ -36,12 +36,20 @@ const leylineSchemaVersion = "v0.19.1"
 
 // leylineTables is the ley-line-owned subset fixtures model, keyed by table
 // name. Deliberately not every table ley-line writes — `capnp_blobs`,
-// `query_blobs`, `source_blobs`, `_queries`, `_meta`, `_ast_pointer` and
+// `query_blobs`, `_queries`, `_meta`, `_ast_pointer` and
 // `_file_index` carry no signal any smell rule or canonical view reads, and
 // modelling them would only create more surface to drift.
 //
 // The values are byte-identical to the pinned producer's `sqlite_master.sql`.
 var leylineTables = map[string]string{
+	// The parsed bytes of every _source row, under _source.content_hash;
+	// _source.content is NULL (mache-46c59d).
+	"source_blobs": `CREATE TABLE source_blobs (
+    blob_hash BLOB PRIMARY KEY,
+    blob_bytes BLOB NOT NULL,
+    byte_len INTEGER GENERATED ALWAYS AS (length(blob_bytes)) STORED
+)`,
+
 	"nodes": `CREATE TABLE nodes (
     id TEXT PRIMARY KEY,
     parent_id TEXT GENERATED ALWAYS AS (CASE WHEN length(id) > length(name) THEN substr(id, 1, length(id) - length(name) - 1) ELSE '' END) VIRTUAL,
@@ -160,5 +168,5 @@ var leylineIndexes = map[string]string{
 // leylineTableOrder is creation order: node_content first because node_child /
 // node_defs / node_refs / _ast carry REFERENCES into it.
 var leylineTableOrder = []string{
-	"node_content", "node_child", "nodes", "node_defs", "node_refs", "_ast", "_source", "_imports",
+	"node_content", "node_child", "nodes", "node_defs", "node_refs", "_ast", "source_blobs", "_source", "_imports",
 }

@@ -32,6 +32,7 @@ import (
 	"github.com/BurntSushi/toml"
 	cache "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/cache"
 	"github.com/agentic-research/mache/internal/fsutil"
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/spf13/cobra"
 	"github.com/zeebo/blake3"
 	_ "modernc.org/sqlite"
@@ -377,10 +378,16 @@ func writeChunks(chunksDir string, entries []chunkEntry) error {
 }
 
 func readSources(db *sql.DB) ([]sourceRow, error) {
-	// _source schema (per mache/internal/ingest/ast_walker.go):
-	//   id TEXT PRIMARY KEY, content BLOB, path TEXT, language TEXT, ...
-	// We select what we need; missing columns (older schemas) get NULL.
-	rows, err := db.Query("SELECT id, path, language, content FROM _source ORDER BY id")
+	// The bytes are the ones the parse saw (lloschema.SourceBytesExpr), so the
+	// chunk is self-contained and agrees with the offsets beside it. They used
+	// to be read from the file at _source.path when the row had no inline
+	// content, leyline's default, which put post-parse edits into a chunk keyed
+	// by the parse (mache-46c59d).
+	expr, err := lloschema.SourceBytesExpr(lloschema.DB(db))
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query("SELECT id, path, language, " + expr + " FROM _source ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -389,28 +396,13 @@ func readSources(db *sql.DB) ([]sourceRow, error) {
 	for rows.Next() {
 		var r sourceRow
 		var pathN, langN sql.NullString
-		var content []byte
-		if err := rows.Scan(&r.id, &pathN, &langN, &content); err != nil {
+		if err := rows.Scan(&r.id, &pathN, &langN, &r.content); err != nil {
 			return nil, err
 		}
 		r.path = pathN.String
 		r.language = langN.String
-		r.content = content
-		// Skip sources with no content AND no path — they can't be
-		// reconstructed from a chunk. This shouldn't happen on a
-		// well-formed mache db but the gate is cheap.
-		if len(content) == 0 && r.path == "" {
-			continue
-		}
-		// If content is empty but path is set, the original was a
-		// path-only reference — load content from disk so the chunk
-		// is self-contained.
-		if len(content) == 0 {
-			body, err := os.ReadFile(r.path)
-			if err != nil {
-				return nil, fmt.Errorf("load source content from %s: %w", r.path, err)
-			}
-			r.content = body
+		if r.content == nil {
+			return nil, fmt.Errorf("_source %s: the projection holds no content for it", r.id)
 		}
 		out = append(out, r)
 	}

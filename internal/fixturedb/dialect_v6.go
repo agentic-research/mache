@@ -28,7 +28,7 @@ func (leylineV6Dialect) schema(b *Builder) []string {
 // tables that reference them.
 var leylineV6TableOrder = []string{
 	"names", "kinds", "dirs", "files", "nodes", "node_content", "node_child",
-	"_ast", "_source", "node_defs", "node_refs", "_imports",
+	"_ast", "source_blobs", "_source", "node_defs", "node_refs", "_imports",
 	"_tree", "_parse_diagnostics",
 }
 
