@@ -46,7 +46,13 @@ bumps may include breaking changes.
   that goroutine to report the reap, and returns only once the daemon is
   gone, not merely signalled.
 
-||||||| parent of 9551d00 ([mache-bc3c84] feat: pin leyline v0.21.0 (projection-v7), run the managed daemon headless)
+- **A write through the mount fails when the validator cannot answer**
+  (`mache-3a213e`). With the leyline daemon unreachable or too old, a save
+  through a writable mount was kept as a draft and reported success, while
+  the source file, and so every build, still had the old code; only the
+  virtual `_diagnostics` file said otherwise. The write now returns an error
+  to the writer and leaves no draft, so the mount keeps serving the source as
+  it is on disk. A syntax error still drafts, as before.
 
 ## [v0.22.0] — 2026-10-15
 
