@@ -9,11 +9,9 @@ import (
 	"github.com/agentic-research/mache/internal/fixturedb"
 )
 
-// sourceBytes runs SourceBytesExpr against one _source row of f.
-func sourceBytes(t *testing.T, f *fixturedb.FixtureDB, id string) []byte {
+// scanBytes reads one _source row's bytes through expr.
+func scanBytes(t *testing.T, f *fixturedb.FixtureDB, expr, id string) []byte {
 	t.Helper()
-	expr, err := SourceBytesExpr(f)
-	require.NoError(t, err)
 	var got []byte
 	require.NoError(t, f.DB().QueryRow("SELECT "+expr+" FROM _source WHERE id = ?", id).Scan(&got))
 	return got
@@ -30,7 +28,9 @@ func TestSourceBytesExpr_ReadsTheParsedBytes(t *testing.T) {
 			b.Source("a.go", "go", "package a\n")
 			_, f := b.Build()
 
-			assert.Equal(t, []byte("package a\n"), sourceBytes(t, f, "a.go"))
+			expr, err := SourceBytesExpr(f)
+			require.NoError(t, err)
+			assert.Equal(t, []byte("package a\n"), scanBytes(t, f, expr, "a.go"))
 		})
 	}
 }
@@ -44,7 +44,9 @@ func TestSourceBytesExpr_NoBytesIsNull(t *testing.T) {
 			b.Source("a.go", "go", "")
 			_, f := b.Build()
 
-			assert.Nil(t, sourceBytes(t, f, "a.go"))
+			expr, err := SourceBytesExpr(f)
+			require.NoError(t, err)
+			assert.Nil(t, scanBytes(t, f, expr, "a.go"))
 		})
 	}
 }
@@ -57,5 +59,7 @@ func TestSourceBytesExpr_FollowsAReparse(t *testing.T) {
 	_, f := b.Build()
 	f.Reparse("a.go", "package a // edited\n")
 
-	assert.Equal(t, []byte("package a // edited\n"), sourceBytes(t, f, "a.go"))
+	expr, err := SourceBytesExpr(f)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("package a // edited\n"), scanBytes(t, f, expr, "a.go"))
 }
