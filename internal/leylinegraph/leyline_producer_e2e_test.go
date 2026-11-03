@@ -77,17 +77,24 @@ func TestMaterializeVirtuals_AgainstRealProducerArena(t *testing.T) {
 		return
 	}
 
+	assertMaterializedOnPathProjection(t, db, dbPath, schema, ll.Version, projection)
+}
+
+// assertMaterializedOnPathProjection: a path-keyed projection (v4 and before)
+// takes the virtual nodes, each parented under the node its id names.
+func assertMaterializedOnPathProjection(t *testing.T, db *sql.DB, dbPath string, schema *api.Topology, version, projection string) {
+	t.Helper()
 	var hidden int
 	if err := db.QueryRow(
 		`SELECT hidden FROM pragma_table_xinfo('nodes') WHERE name='parent_id'`).Scan(&hidden); err != nil {
 		t.Fatalf("producer arena has no nodes.parent_id at all: %v", err)
 	}
 	t.Logf("producer %s: projection=%s, parent_id hidden=%d (0 stored, 2 GENERATED VIRTUAL)",
-		ll.Version, projection, hidden)
+		version, projection, hidden)
 
 	require.NoError(t, MaterializeVirtuals(dbPath, schema, true),
 		"MaterializeVirtuals must succeed against a real %s arena (projection %s)",
-		ll.Version, projection)
+		version, projection)
 
 	// _schema.json is a root, so its derived parent is '' either way.
 	var parent, name string
