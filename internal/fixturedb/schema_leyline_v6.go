@@ -196,11 +196,11 @@ var leylineV6Tables = map[string]string{
 // gap nobody sees (projection-v7's _tree and _parse_diagnostics went unnoticed
 // for exactly that reason until the v0.21.0 pin).
 var leylineV6Unmodelled = map[string]string{
-	"_ast_blob":    "LLO's packed AST storage; mache reads _ast",
-	"_meta":        "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
-	"_queries":     "LLO's tree-sitter query registry",
-	"capnp_blobs":  "LLO's capnp payload store",
-	"query_blobs":  "LLO's compiled-query store",
+	"_ast_blob":   "LLO's packed AST storage; mache reads _ast",
+	"_meta":       "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
+	"_queries":    "LLO's tree-sitter query registry",
+	"capnp_blobs": "LLO's capnp payload store",
+	"query_blobs": "LLO's compiled-query store",
 }
 
 // leylineV6Views are LLO's OWN views, and modelling them is not optional.
