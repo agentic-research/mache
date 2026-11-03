@@ -46,8 +46,6 @@ bumps may include breaking changes.
   that goroutine to report the reap, and returns only once the daemon is
   gone, not merely signalled.
 
-||||||| parent of 9551d00 ([mache-bc3c84] feat: pin leyline v0.21.0 (projection-v7), run the managed daemon headless)
-
 ## [v0.22.0] — 2026-10-15
 
 ### Changed

@@ -28,100 +28,7 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 
 	// Wire write-back if requested (validate → format → splice → surgical update → invalidate)
 	if writable && engine != nil {
-		store, isMemStore := g.(*graph.MemoryStore)
-		graphFs.SetWriteBack(func(nodeID string, origin graph.SourceOrigin, content []byte) error {
-			// Retrieve node to update DraftData
-			node, err := g.GetNode(nodeID)
-			if err != nil {
-				return fmt.Errorf("node not found: %w", err)
-			}
-
-			// 1. Validate syntax before touching source file. ONE leyline
-			// parse serves both validation and (for Go) the lint rules
-			// below via the returned AST payload — no second parse.
-			astPayload, err := writeback.ValidateWithAST(content, origin.FilePath)
-			if err != nil {
-				// Syntax failure and validator-infra failure (daemon
-				// unreachable / too old) both draft — the pre-existing
-				// contract — but the _diagnostics message distinguishes
-				// them so an editor user can tell "my code is broken"
-				// from "the validator is down" (#527 review).
-				diag := err.Error()
-				var ve *writeback.ValidationError
-				if !errors.As(err, &ve) {
-					diag = "validator unavailable (draft saved, source untouched): " + diag
-				}
-				log.Printf("writeback: validation failed for %s: %v (saving draft)", origin.FilePath, err)
-				// Store diagnostic for _diagnostics/ virtual dir
-				if isMemStore {
-					store.WriteStatus.Store(filepath.Dir(nodeID), diag)
-					// Save as Draft
-					draft := make([]byte, len(content))
-					copy(draft, content)
-					node.DraftData = draft
-				}
-				return nil
-			}
-
-			// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform)
-			formatted := writeback.FormatBuffer(content, origin.FilePath)
-
-			// Linting (Warning only). Runs on the pre-format AST — for the
-			// snippet writes this path receives, FormatBuffer is a no-op
-			// (format.Source needs a whole file), so line numbers agree;
-			// any residual drift is acceptable for a warning-only signal.
-			if strings.HasSuffix(origin.FilePath, ".go") {
-				if diags, err := linter.LintAST(astPayload); err == nil && len(diags) > 0 {
-					var sb strings.Builder
-					for _, d := range diags {
-						sb.WriteString(d.String() + "\n")
-					}
-					store.WriteStatus.Store(filepath.Dir(nodeID)+"/lint", sb.String())
-				} else {
-					store.WriteStatus.Delete(filepath.Dir(nodeID) + "/lint")
-				}
-			}
-
-			// 3. Splice formatted content into source file
-			oldLen := origin.EndByte - origin.StartByte
-			if err := writeback.Splice(origin, formatted); err != nil {
-				return err
-			}
-
-			// 4. Surgical node update — no re-ingest
-			newOrigin := &graph.SourceOrigin{
-				FilePath:  origin.FilePath,
-				StartByte: origin.StartByte,
-				EndByte:   origin.StartByte + uint32(len(formatted)),
-			}
-			if isMemStore {
-				delta := int32(len(formatted)) - int32(oldLen)
-				if delta != 0 {
-					store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
-				}
-				// Use source file mtime for deterministic timestamps
-				modTime := time.Now()
-				if fi, err := os.Stat(origin.FilePath); err == nil {
-					modTime = fi.ModTime()
-				}
-				if err := store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime); err != nil {
-					// Splice already touched disk; the graph is now stale.
-					// Surface via WriteStatus so the _diagnostics virtual
-					// dir reflects reality (file on disk is correct,
-					// in-memory graph is wrong, re-read to refresh).
-					log.Printf("writeback: graph update failed after splice for %s: %v", nodeID, err)
-					store.WriteStatus.Store(filepath.Dir(nodeID),
-						fmt.Sprintf("graph stale (splice succeeded, graph update failed): %v", err))
-				} else {
-					store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
-				}
-				store.RecordFileMtime(origin.FilePath, modTime)
-			}
-
-			// 5. Invalidate cached size/content
-			g.Invalidate(nodeID)
-			return nil
-		})
+		graphFs.SetWriteBack(spliceWriteBack(g))
 		log.Println("Write-back enabled: edits will splice into source files.")
 	} else if writable {
 		log.Println("Warning: --writable ignored (only supported for non-.db sources)")
@@ -155,3 +62,108 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 
 // FUSE backend removed in v0.7.0 (ADR-0006). NFS is the only mount backend.
 // For FUSE mounts, use ley-line-open's `leyline serve`.
+
+// spliceWriteBack is the write-back for a mount over source files: validate,
+// format, splice into the source file, then update the node in place.
+func spliceWriteBack(g graph.Graph) nfsmount.WriteBackFunc {
+	store, isMemStore := g.(*graph.MemoryStore)
+	return func(nodeID string, origin graph.SourceOrigin, content []byte) error {
+		// Retrieve node to update DraftData
+		node, err := g.GetNode(nodeID)
+		if err != nil {
+			return fmt.Errorf("node not found: %w", err)
+		}
+
+		// 1. Validate syntax before touching source file. ONE leyline
+		// parse serves both validation and (for Go) the lint rules
+		// below via the returned AST payload — no second parse.
+		astPayload, err := writeback.ValidateWithAST(content, origin.FilePath)
+		var ve *writeback.ValidationError
+		if err != nil && !errors.As(err, &ve) {
+			// The validator itself could not answer (daemon unreachable or
+			// too old). Fail closed: the writer gets an error and no draft
+			// stands in for the edit, so the mount keeps serving the source
+			// as it is on disk. Drafting here reported success while builds
+			// still saw the old code (mache-3a213e).
+			log.Printf("writeback: validator unavailable for %s: %v (write refused)", origin.FilePath, err)
+			if isMemStore {
+				store.WriteStatus.Store(filepath.Dir(nodeID), "validator unavailable (write refused, source untouched): "+err.Error())
+			}
+			return fmt.Errorf("validator unavailable, write refused: %w", err)
+		}
+		if err != nil {
+			// A syntax error drafts: the edit is kept for the user to fix,
+			// and _diagnostics says why it did not reach the source (#527).
+			diag := err.Error()
+			log.Printf("writeback: validation failed for %s: %v (saving draft)", origin.FilePath, err)
+			// Store diagnostic for _diagnostics/ virtual dir
+			if isMemStore {
+				store.WriteStatus.Store(filepath.Dir(nodeID), diag)
+				// Save as Draft
+				draft := make([]byte, len(content))
+				copy(draft, content)
+				node.DraftData = draft
+			}
+			return nil
+		}
+
+		// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform)
+		formatted := writeback.FormatBuffer(content, origin.FilePath)
+
+		// Linting (Warning only). Runs on the pre-format AST — for the
+		// snippet writes this path receives, FormatBuffer is a no-op
+		// (format.Source needs a whole file), so line numbers agree;
+		// any residual drift is acceptable for a warning-only signal.
+		if strings.HasSuffix(origin.FilePath, ".go") {
+			if diags, err := linter.LintAST(astPayload); err == nil && len(diags) > 0 {
+				var sb strings.Builder
+				for _, d := range diags {
+					sb.WriteString(d.String() + "\n")
+				}
+				store.WriteStatus.Store(filepath.Dir(nodeID)+"/lint", sb.String())
+			} else {
+				store.WriteStatus.Delete(filepath.Dir(nodeID) + "/lint")
+			}
+		}
+
+		// 3. Splice formatted content into source file
+		oldLen := origin.EndByte - origin.StartByte
+		if err := writeback.Splice(origin, formatted); err != nil {
+			return err
+		}
+
+		// 4. Surgical node update — no re-ingest
+		newOrigin := &graph.SourceOrigin{
+			FilePath:  origin.FilePath,
+			StartByte: origin.StartByte,
+			EndByte:   origin.StartByte + uint32(len(formatted)),
+		}
+		if isMemStore {
+			delta := int32(len(formatted)) - int32(oldLen)
+			if delta != 0 {
+				store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
+			}
+			// Use source file mtime for deterministic timestamps
+			modTime := time.Now()
+			if fi, err := os.Stat(origin.FilePath); err == nil {
+				modTime = fi.ModTime()
+			}
+			if err := store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime); err != nil {
+				// Splice already touched disk; the graph is now stale.
+				// Surface via WriteStatus so the _diagnostics virtual
+				// dir reflects reality (file on disk is correct,
+				// in-memory graph is wrong, re-read to refresh).
+				log.Printf("writeback: graph update failed after splice for %s: %v", nodeID, err)
+				store.WriteStatus.Store(filepath.Dir(nodeID),
+					fmt.Sprintf("graph stale (splice succeeded, graph update failed): %v", err))
+			} else {
+				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
+			}
+			store.RecordFileMtime(origin.FilePath, modTime)
+		}
+
+		// 5. Invalidate cached size/content
+		g.Invalidate(nodeID)
+		return nil
+	}
+}
