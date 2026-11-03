@@ -7,7 +7,8 @@ package fixturedb
 // against v0.21.0, the release the pin moves to. v0.20.1 through v0.20.5 keep
 // projection-v6 and change no table; v0.21.0 writes projection-v7, which
 // changes none of these and adds _tree and _parse_diagnostics, copied from a
-// v0.21.0 parse:
+// v0.21.0 parse. v0.21.1 was re-derived the same way and its sqlite_master is
+// identical, all 225 objects (mache-40e8e7):
 //
 //	$ leyline parse ./src -o out.db
 //	$ sqlite3 out.db "SELECT sql FROM sqlite_master ORDER BY type, name"
@@ -34,7 +35,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.21.0"
+const leylineV6SchemaVersion = "v0.21.1"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
