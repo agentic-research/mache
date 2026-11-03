@@ -41,6 +41,15 @@ const leylineV6SchemaVersion = "v0.21.0"
 // files — because a v6 fixture cannot express a node's name or kind without
 // them: `nodes` holds only name_id and kind_id.
 var leylineV6Tables = map[string]string{
+	// The parsed bytes of every _source row, under _source.content_hash;
+	// _source.content is NULL. The only correct source text: node offsets
+	// refer to these bytes, not to the file as it is now (mache-46c59d).
+	"source_blobs": `CREATE TABLE source_blobs (
+    blob_hash BLOB PRIMARY KEY,
+    blob_bytes BLOB NOT NULL,
+    byte_len INTEGER GENERATED ALWAYS AS (length(blob_bytes)) STORED
+)`,
+
 	// projection-v7 (v0.21.0): every entry of the tree, explicit directories
 	// included (mode 0o40000, NULL blob_hash), closed under parents. _source
 	// lists only the files a parser projected, with content_hash = blob_hash.
@@ -187,12 +196,11 @@ var leylineV6Tables = map[string]string{
 // gap nobody sees (projection-v7's _tree and _parse_diagnostics went unnoticed
 // for exactly that reason until the v0.21.0 pin).
 var leylineV6Unmodelled = map[string]string{
-	"_ast_blob":    "LLO's packed AST storage; mache reads _ast",
-	"_meta":        "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
-	"_queries":     "LLO's tree-sitter query registry",
-	"capnp_blobs":  "LLO's capnp payload store",
-	"query_blobs":  "LLO's compiled-query store",
-	"source_blobs": "LLO's content-addressed source store; mache reads _source",
+	"_ast_blob":   "LLO's packed AST storage; mache reads _ast",
+	"_meta":       "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
+	"_queries":    "LLO's tree-sitter query registry",
+	"capnp_blobs": "LLO's capnp payload store",
+	"query_blobs": "LLO's compiled-query store",
 }
 
 // leylineV6Views are LLO's OWN views, and modelling them is not optional.

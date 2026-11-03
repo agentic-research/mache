@@ -15,6 +15,30 @@ type FixtureDB struct {
 	t    testing.TB
 	db   *sql.DB
 	path string
+	// inline: sources carry their bytes in _source.content (Standalone, as
+	// buildcache writes them) rather than in source_blobs (ley-line).
+	inline bool
+}
+
+// Reparse replaces source id's bytes as a ley-line reparse of the edited file
+// does: a new source_blobs row, and _source.content_hash naming it (inline
+// content on Standalone). Only the bytes change; the AST rows are the test's
+// business. It is how a test edits a file: the projection is what mache reads,
+// never the file on disk (mache-46c59d).
+func (f *FixtureDB) Reparse(id SourceID, content string) {
+	f.t.Helper()
+	if f.inline {
+		f.exec(`UPDATE _source SET content = ? WHERE id = ?`, []byte(content), string(id))
+		return
+	}
+	f.exec(`UPDATE _source SET content_hash = ? WHERE id = ?`, storeBlob(f.exec, content), string(id))
+}
+
+func (f *FixtureDB) exec(stmt string, args ...any) {
+	f.t.Helper()
+	if _, err := f.db.Exec(stmt, args...); err != nil {
+		f.t.Fatalf("fixturedb: %v\n%s", err, stmt)
+	}
 }
 
 // QueryRefs implements [RefsQuerier].
@@ -62,7 +86,7 @@ func (b *Builder) Build() (string, *FixtureDB) {
 	}
 	b.insertRows(db)
 
-	f := &FixtureDB{t: t, db: db, path: dbPath}
+	f := &FixtureDB{t: t, db: db, path: dbPath, inline: b.producer == Standalone}
 	if viewInstaller != nil {
 		if err := viewInstaller(f); err != nil {
 			t.Fatalf("fixturedb(%s): install canonical views: %v", b.producer, err)

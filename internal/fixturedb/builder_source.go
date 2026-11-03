@@ -33,10 +33,12 @@ func (b *Builder) ASTNode(id, kind string, in SourceID, span Span, detail ...Det
 	return b
 }
 
-// Source declares a source file. lang may be empty when the test does not care;
-// content may be empty, in which case `_source.content` is NULL — which is what
-// ley-line v0.13.0 writes (it stores bytes in source_blobs and only a path
-// here). Pass content when the test is about snippet extraction.
+// Source declares a source file. lang may be empty when the test does not care.
+// Its content is written as the producer writes it: ley-line leaves
+// `_source.content` NULL and stores the bytes in source_blobs under
+// content_hash; Standalone carries them inline. A source declared without
+// content has no bytes at all, and reading its text is an error. Pass content
+// when the test reads source text (snippets, byte-range slices).
 //
 // Re-declaring a source fills in whichever of lang/content was previously empty
 // rather than replacing it, so ASTNode's implicit declaration never clobbers an
@@ -54,18 +56,6 @@ func (b *Builder) Source(id SourceID, lang, content string) *Builder {
 	if content != "" {
 		s.content = content
 	}
-	return b
-}
-
-// SourceFile declares a source file by PATH — `_source.content` NULL and
-// `_source.path` pointing at a real file, which is what ley-line writes by
-// default and what the projection reads from disk when the row carries no
-// bytes. Re-declaring a source this way overrides the synthetic path a prior
-// [Builder.Source] or [Builder.ASTNode] gave it, so the two can be stated in
-// either order.
-func (b *Builder) SourceFile(id SourceID, lang, path string) *Builder {
-	b.Source(id, lang, "")
-	b.sources[id].path = path
 	return b
 }
 

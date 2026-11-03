@@ -428,12 +428,19 @@ func populateSnippets(qg graph.RefsQuerier, findings []smellFinding) {
 	if len(findings) == 0 {
 		return
 	}
+	// The parsed bytes, which the findings' offsets refer to. Reading only
+	// _source.content left every snippet empty on a real leyline db, where
+	// that column is NULL and the bytes live in source_blobs (mache-46c59d).
+	expr, err := lloschema.SourceBytesExpr(qg)
+	if err != nil {
+		return
+	}
 	sources := make(map[string][]byte)
 	for i := range findings {
 		src, hit := sources[findings[i].SourceID]
 		if !hit {
 			rows, err := qg.QueryRefs(
-				"SELECT content FROM _source WHERE id = ?", findings[i].SourceID,
+				"SELECT "+expr+" FROM _source WHERE id = ?", findings[i].SourceID,
 			)
 			if err != nil {
 				sources[findings[i].SourceID] = nil

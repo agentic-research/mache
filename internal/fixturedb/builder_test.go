@@ -229,19 +229,40 @@ func TestInferSource(t *testing.T) {
 // in source_blobs and leaves _source.content NULL — the assumption
 // smell_test_nodes.go's structural detection is built on.
 func TestSource_ContentIsNULLWhenUnset(t *testing.T) {
-	b := New(t, Leyline)
-	b.Source("a.go", "go", "")
+	for _, p := range []Producer{Leyline, LeylineV6} {
+		t.Run(p.String(), func(t *testing.T) {
+			b := New(t, p)
+			b.Source("a.go", "go", "")
+			b.Source("b.go", "go", "package b\n")
+			_, f := b.Build()
+
+			var content []byte
+			var hash []byte
+			require.NoError(t, f.DB().QueryRow(`SELECT content, content_hash FROM _source WHERE id='a.go'`).Scan(&content, &hash))
+			assert.Nil(t, content, "ley-line leaves _source.content NULL")
+			assert.Nil(t, hash, "a source declared without content has no bytes to name")
+
+			// ley-line keeps the bytes in source_blobs under content_hash, with
+			// content NULL (mache-46c59d).
+			var blob []byte
+			require.NoError(t, f.DB().QueryRow(`SELECT s.content, b.blob_bytes FROM _source s
+				JOIN source_blobs b ON b.blob_hash = s.content_hash WHERE s.id='b.go'`).Scan(&content, &blob))
+			assert.Nil(t, content, "ley-line leaves _source.content NULL even with bytes")
+			assert.Equal(t, "package b\n", string(blob))
+		})
+	}
+}
+
+// TestSource_StandaloneCarriesBytesInline: mache's cache-hydrated db writes a
+// source's bytes inline (buildcache), and has no source_blobs.
+func TestSource_StandaloneCarriesBytesInline(t *testing.T) {
+	b := New(t, Standalone)
 	b.Source("b.go", "go", "package b\n")
 	_, f := b.Build()
 
-	var empty sql.RawBytes
-	var got sql.NullString
-	_ = empty
-	require.NoError(t, f.DB().QueryRow(`SELECT content FROM _source WHERE id='a.go'`).Scan(&got))
-	assert.False(t, got.Valid, "ley-line leaves _source.content NULL")
-
-	require.NoError(t, f.DB().QueryRow(`SELECT content FROM _source WHERE id='b.go'`).Scan(&got))
-	assert.Equal(t, "package b\n", got.String)
+	var content string
+	require.NoError(t, f.DB().QueryRow(`SELECT content FROM _source WHERE id='b.go'`).Scan(&content))
+	assert.Equal(t, "package b\n", content)
 }
 
 // TestBuild_SingleConnection pins the TEMP-object requirement centrally: TEMP

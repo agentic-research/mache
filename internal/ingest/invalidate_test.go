@@ -1,8 +1,6 @@
 package ingest
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
@@ -14,15 +12,12 @@ import (
 // the mount/serve watcher needs so an edit isn't masked by the walker's
 // immortal caches (mache-018eee/mache-024e9c).
 //
-// The `_source` row is path-mode, as ley-line writes it by default, so the
-// edit is the one the watcher actually sees: the file on disk changes under
-// an unchanged row.
+// The edit lands where ley-line puts it, in the projection (a reparse writes a
+// new source_blobs row), since the walker reads the parsed bytes and never the
+// file on disk (mache-46c59d).
 func TestASTWalker_InvalidateSource_ReReadsAfterChange(t *testing.T) {
-	srcPath := filepath.Join(t.TempDir(), "main.go")
-	require.NoError(t, os.WriteFile(srcPath, []byte("package main\n"), 0o644))
-
 	b := fixturedb.New(t, fixturedb.Leyline)
-	b.SourceFile("main.go", "go", srcPath)
+	b.Source("main.go", "go", "package main\n")
 	b.ASTNode("main.go", "source_file", "main.go", fixturedb.Bytes(0, 13))
 	_, f := b.Build()
 	w := NewASTWalker(f.DB())
@@ -30,8 +25,8 @@ func TestASTWalker_InvalidateSource_ReReadsAfterChange(t *testing.T) {
 	require.Equal(t, "go", w.fileLang("main.go"))
 	require.Equal(t, "package main\n", string(w.fileSource("main.go"))) // loads the file's section into indexCache
 
-	// Change the file; the cache still serves the stale bytes.
-	require.NoError(t, os.WriteFile(srcPath, []byte("package main\n\n// edited\n"), 0o644))
+	// Reparse the edited file; the cache still serves the stale bytes.
+	f.Reparse("main.go", "package main\n\n// edited\n")
 	require.Equal(t, "package main\n", string(w.fileSource("main.go")), "cache still serves the pre-change value")
 
 	w.InvalidateSource("main.go")

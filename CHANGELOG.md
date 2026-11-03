@@ -65,6 +65,24 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Source text comes from the parse, never from the file on disk**
+  (`mache-46c59d`). leyline leaves `_source.content` NULL and keeps the parsed
+  bytes in `source_blobs` under `content_hash`. Three readers got this wrong:
+  - The projection's walker read the file at `_source.path`, so a file edited
+    after the parse was sliced with offsets from before the edit. That is what
+    `mache serve`'s watcher re-projected on every edit, since the served parse
+    is frozen until a reparse (`mache-018eee`); it now re-projects the parse
+    consistently.
+  - `mache push` (buildcache) read the same file into its chunks, beside
+    offsets from the parse. A source the projection holds no bytes for is now
+    an error, not silently left out of the cache entry.
+  - `find_smells` snippets read only `_source.content`, so they were empty on
+    every leyline-built db.
+  All three now read the bytes the parse saw (`lloschema.SourceBytesExpr`).
+  fixturedb writes `_source` the way leyline does (`source_blobs`, now in both
+  schema mirrors, derived from the real binaries), which is why the tests had
+  passed: the fixtures stored the bytes inline.
+
 - **Stopping mache's leyline daemon no longer races the goroutine that reaps
   it** (`mache-144496`). Each daemon mache starts has one goroutine waiting on
   it; `StopManaged` also called `Wait` on the process itself and, when the

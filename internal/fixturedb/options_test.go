@@ -3,8 +3,6 @@ package fixturedb
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -230,27 +228,6 @@ func TestSameChildList(t *testing.T) {
 	assert.False(t, sameChildList([]childRow{{h1, ""}}, nil), "arity is content")
 }
 
-// TestSourceFile_IsPathMode: a path-mode row has no bytes and a real path,
-// which the projection reads from disk — the default shape ley-line writes.
-func TestSourceFile_IsPathMode(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.go")
-	require.NoError(t, os.WriteFile(path, []byte("package a\n"), 0o644))
-
-	b := New(t, Leyline)
-	b.ASTNode("a.go/fn_0", "function_declaration", "a.go", Bytes(0, 10))
-	b.SourceFile("a.go", "go", path)
-	_, f := b.Build()
-
-	var lang, got string
-	var content sql.NullString
-	require.NoError(t, f.DB().QueryRow(
-		`SELECT language, content, path FROM _source WHERE id='a.go'`).Scan(&lang, &content, &got))
-	assert.Equal(t, "go", lang)
-	assert.False(t, content.Valid, "path mode stores no bytes")
-	assert.Equal(t, path, got, "and overrides the synthetic path ASTNode gave the source")
-}
-
 // TestImport_OnlyExistsOnLeyline: _imports is producer output, and fatal_call's
 // stdlib-vs-local resolution reads it. A Standalone fixture has no such table,
 // so the call is dropped rather than fabricating a shape mache never sees.
@@ -309,9 +286,9 @@ func TestSource_RedeclarationFillsGaps(t *testing.T) {
 	_, f := b.Build()
 
 	var lang string
-	var content sql.NullString
-	require.NoError(t, f.DB().QueryRow(
-		`SELECT language, content FROM _source WHERE id='a.go'`).Scan(&lang, &content))
+	var content []byte
+	require.NoError(t, f.DB().QueryRow(`SELECT s.language, b.blob_bytes FROM _source s
+		JOIN source_blobs b ON b.blob_hash = s.content_hash WHERE s.id='a.go'`).Scan(&lang, &content))
 	assert.Equal(t, "go", lang)
-	assert.Equal(t, "package a\n", content.String)
+	assert.Equal(t, "package a\n", string(content))
 }
