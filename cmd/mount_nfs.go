@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/linter"
 	"github.com/agentic-research/mache/internal/nfsmount"
 	"github.com/agentic-research/mache/internal/writeback"
@@ -64,106 +66,112 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 // For FUSE mounts, use ley-line-open's `leyline serve`.
 
 // spliceWriteBack is the write-back for a mount over source files: validate,
-// format, splice into the source file, then update the node in place.
+// format, splice into the source file, then update the node in place. The
+// draft, lint and status bookkeeping lives on a MemoryStore; on any other
+// graph it is skipped.
 func spliceWriteBack(g graph.Graph) nfsmount.WriteBackFunc {
-	store, isMemStore := g.(*graph.MemoryStore)
+	store, _ := g.(*graph.MemoryStore)
 	return func(nodeID string, origin graph.SourceOrigin, content []byte) error {
-		// Retrieve node to update DraftData
 		node, err := g.GetNode(nodeID)
 		if err != nil {
 			return fmt.Errorf("node not found: %w", err)
 		}
-
-		// 1. Validate syntax before touching source file. ONE leyline
-		// parse serves both validation and (for Go) the lint rules
-		// below via the returned AST payload — no second parse.
-		astPayload, err := writeback.ValidateWithAST(content, origin.FilePath)
-		var ve *writeback.ValidationError
-		if err != nil && !errors.As(err, &ve) {
-			// The validator itself could not answer (daemon unreachable or
-			// too old). Fail closed: the writer gets an error and no draft
-			// stands in for the edit, so the mount keeps serving the source
-			// as it is on disk. Drafting here reported success while builds
-			// still saw the old code (mache-3a213e).
-			log.Printf("writeback: validator unavailable for %s: %v (write refused)", origin.FilePath, err)
-			if isMemStore {
-				store.WriteStatus.Store(filepath.Dir(nodeID), "validator unavailable (write refused, source untouched): "+err.Error())
-			}
-			return fmt.Errorf("validator unavailable, write refused: %w", err)
+		// 1. Validate before touching the source file. One leyline parse
+		// serves both validation and, for Go, the lint rules below.
+		astPayload, drafted, err := validateOrDraft(store, node, origin, content)
+		if err != nil || drafted {
+			return err
 		}
-		if err != nil {
-			// A syntax error drafts: the edit is kept for the user to fix,
-			// and _diagnostics says why it did not reach the source (#527).
-			diag := err.Error()
-			log.Printf("writeback: validation failed for %s: %v (saving draft)", origin.FilePath, err)
-			// Store diagnostic for _diagnostics/ virtual dir
-			if isMemStore {
-				store.WriteStatus.Store(filepath.Dir(nodeID), diag)
-				// Save as Draft
-				draft := make([]byte, len(content))
-				copy(draft, content)
-				node.DraftData = draft
-			}
-			return nil
-		}
-
-		// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform)
+		// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform).
 		formatted := writeback.FormatBuffer(content, origin.FilePath)
-
-		// Linting (Warning only). Runs on the pre-format AST — for the
-		// snippet writes this path receives, FormatBuffer is a no-op
-		// (format.Source needs a whole file), so line numbers agree;
-		// any residual drift is acceptable for a warning-only signal.
-		if strings.HasSuffix(origin.FilePath, ".go") {
-			if diags, err := linter.LintAST(astPayload); err == nil && len(diags) > 0 {
-				var sb strings.Builder
-				for _, d := range diags {
-					sb.WriteString(d.String() + "\n")
-				}
-				store.WriteStatus.Store(filepath.Dir(nodeID)+"/lint", sb.String())
-			} else {
-				store.WriteStatus.Delete(filepath.Dir(nodeID) + "/lint")
-			}
-		}
-
-		// 3. Splice formatted content into source file
+		recordLint(store, nodeID, origin.FilePath, astPayload)
+		// 3. Splice the formatted content into the source file.
 		oldLen := origin.EndByte - origin.StartByte
 		if err := writeback.Splice(origin, formatted); err != nil {
 			return err
 		}
-
-		// 4. Surgical node update — no re-ingest
-		newOrigin := &graph.SourceOrigin{
-			FilePath:  origin.FilePath,
-			StartByte: origin.StartByte,
-			EndByte:   origin.StartByte + uint32(len(formatted)),
-		}
-		if isMemStore {
-			delta := int32(len(formatted)) - int32(oldLen)
-			if delta != 0 {
-				store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
-			}
-			// Use source file mtime for deterministic timestamps
-			modTime := time.Now()
-			if fi, err := os.Stat(origin.FilePath); err == nil {
-				modTime = fi.ModTime()
-			}
-			if err := store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime); err != nil {
-				// Splice already touched disk; the graph is now stale.
-				// Surface via WriteStatus so the _diagnostics virtual
-				// dir reflects reality (file on disk is correct,
-				// in-memory graph is wrong, re-read to refresh).
-				log.Printf("writeback: graph update failed after splice for %s: %v", nodeID, err)
-				store.WriteStatus.Store(filepath.Dir(nodeID),
-					fmt.Sprintf("graph stale (splice succeeded, graph update failed): %v", err))
-			} else {
-				store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
-			}
-			store.RecordFileMtime(origin.FilePath, modTime)
-		}
-
-		// 5. Invalidate cached size/content
+		// 4. Surgical node update, no re-ingest; 5. invalidate caches.
+		applySplice(store, nodeID, origin, formatted, oldLen)
 		g.Invalidate(nodeID)
 		return nil
 	}
+}
+
+// validateOrDraft validates content. A syntax error keeps the edit as the
+// node's draft, with _diagnostics saying why (#527), and reports drafted. The
+// validator itself not answering (daemon unreachable or too old) fails closed:
+// an error for the writer and no draft, so the mount keeps serving the source
+// as it is on disk. Drafting there reported success while builds still saw
+// the old code (mache-3a213e).
+func validateOrDraft(store *graph.MemoryStore, node *graph.Node, origin graph.SourceOrigin, content []byte) (*leyline.ASTPayload, bool, error) {
+	dir := filepath.Dir(node.ID)
+	astPayload, err := writeback.ValidateWithAST(content, origin.FilePath)
+	if err == nil {
+		return astPayload, false, nil
+	}
+	var ve *writeback.ValidationError
+	if !errors.As(err, &ve) {
+		log.Printf("writeback: validator unavailable for %s: %v (write refused)", origin.FilePath, err)
+		if store != nil {
+			store.WriteStatus.Store(dir, "validator unavailable (write refused, source untouched): "+err.Error())
+		}
+		return nil, false, fmt.Errorf("validator unavailable, write refused: %w", err)
+	}
+	log.Printf("writeback: validation failed for %s: %v (saving draft)", origin.FilePath, err)
+	if store != nil {
+		store.WriteStatus.Store(dir, err.Error())
+		node.DraftData = slices.Clone(content)
+	}
+	return nil, true, nil
+}
+
+// recordLint stores the Go lint findings for a write as a warning in
+// _diagnostics (or clears the last ones). It reads the pre-format AST: for the
+// snippet writes this path receives, FormatBuffer is a no-op (format.Source
+// needs a whole file), so line numbers agree.
+func recordLint(store *graph.MemoryStore, nodeID, filePath string, astPayload *leyline.ASTPayload) {
+	if store == nil || !strings.HasSuffix(filePath, ".go") {
+		return
+	}
+	key := filepath.Dir(nodeID) + "/lint"
+	diags, err := linter.LintAST(astPayload)
+	if err != nil || len(diags) == 0 {
+		store.WriteStatus.Delete(key)
+		return
+	}
+	var sb strings.Builder
+	for _, d := range diags {
+		sb.WriteString(d.String() + "\n")
+	}
+	store.WriteStatus.Store(key, sb.String())
+}
+
+// applySplice updates the node in place after a splice: shifts the origins
+// after it, stores the new content under the source file's mtime, and records
+// the outcome in _diagnostics. The splice has already reached disk, so a
+// failure here leaves the graph stale and says so.
+func applySplice(store *graph.MemoryStore, nodeID string, origin graph.SourceOrigin, formatted []byte, oldLen uint32) {
+	if store == nil {
+		return
+	}
+	newOrigin := &graph.SourceOrigin{
+		FilePath:  origin.FilePath,
+		StartByte: origin.StartByte,
+		EndByte:   origin.StartByte + uint32(len(formatted)),
+	}
+	if delta := int32(len(formatted)) - int32(oldLen); delta != 0 {
+		store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
+	}
+	modTime := time.Now()
+	if fi, err := os.Stat(origin.FilePath); err == nil {
+		modTime = fi.ModTime()
+	}
+	if err := store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime); err != nil {
+		log.Printf("writeback: graph update failed after splice for %s: %v", nodeID, err)
+		store.WriteStatus.Store(filepath.Dir(nodeID),
+			fmt.Sprintf("graph stale (splice succeeded, graph update failed): %v", err))
+	} else {
+		store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
+	}
+	store.RecordFileMtime(origin.FilePath, modTime)
 }
