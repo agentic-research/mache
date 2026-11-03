@@ -72,6 +72,7 @@ func assertMirror(t *testing.T, bin, against, file string, mirrors ...map[string
 	for _, m := range mirrors {
 		maps.Copy(modelled, m)
 	}
+	assertNothingUnaccounted(t, got, modelled, against, file)
 	for _, name := range slices.Sorted(maps.Keys(modelled)) {
 		g, ok := got[name]
 		if !assert.Truef(t, ok, "leyline %s no longer creates %s (it has %v) — re-derive %s",
@@ -80,6 +81,25 @@ func assertMirror(t *testing.T, bin, against, file string, mirrors ...map[string
 		}
 		assert.Equal(t, normalizeDDL(modelled[name]), normalizeDDL(g),
 			"%s drifted from producer %s; re-derive %s", name, against, file)
+	}
+}
+
+// assertNothingUnaccounted refuses an object the binary creates that the mirror
+// neither models nor lists as deliberately unmodelled. Checking only that every
+// modelled object still matches let projection-v7 add two tables unseen.
+func assertNothingUnaccounted(t *testing.T, got, modelled map[string]string, against, file string) {
+	t.Helper()
+	if file != "schema_leyline_v6.go" {
+		return // the v4 mirror models a frozen release; only the pin's grows
+	}
+	for _, name := range slices.Sorted(maps.Keys(got)) {
+		if _, ok := modelled[name]; ok {
+			continue
+		}
+		_, skipped := leylineV6Unmodelled[name]
+		assert.Truef(t, skipped, "leyline %s creates %s, which %s neither models nor lists in "+
+			"leylineV6Unmodelled — model it (copy its DDL from sqlite_master) or say why not",
+			against, name, file)
 	}
 }
 

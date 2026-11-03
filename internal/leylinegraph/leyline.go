@@ -100,12 +100,12 @@ func checkParentDerivable(id, parentID, name string) error {
 	return nil
 }
 
-// ErrProjectionV6 is a refusal to write nodes into a projection-v6 .db
-// (leyline v0.20.x). Its nodes are rows in the producer's own nodes table; in a
-// v6 arena that means allocating nids and interning names inside LLO's
-// numbering, which is the data-plane work the LLO boundary keeps out of mache
-// (mache-e64f36).
-var ErrProjectionV6 = errors.New("nodes are not written into a projection-v6 arena (mache-e64f36)")
+// ErrNidProjection is a refusal to write nodes into a .db keyed by integer
+// node ids: projection-v6 (leyline v0.20.x) or later. Its nodes are rows in the
+// producer's own nodes table; in such an arena that means allocating nids and
+// interning names inside LLO's numbering, which is the data-plane work the LLO
+// boundary keeps out of mache (mache-e64f36).
+var ErrNidProjection = errors.New("nodes are not written into an arena of projection-v6 or later (mache-e64f36)")
 
 // MaterializeVirtuals adds virtual file nodes to the .db, for `mache mount
 // --out`, which writes the .db out in another format and so has no runtime to
@@ -188,7 +188,7 @@ func MaterializeContentSources(dbPath string, schema *api.Topology) error {
 }
 
 // materializeInto runs write in one transaction on the .db at dbPath, refusing
-// a projection-v6 .db (ErrProjectionV6).
+// a projection-v6 .db (ErrNidProjection).
 func materializeInto(dbPath string, write func(nt *nodeTx, now int64) error) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -201,7 +201,7 @@ func materializeInto(dbPath string, write func(nt *nodeTx, now int64) error) err
 		return fmt.Errorf("probe nodes.nid: %w", err)
 	}
 	if v6 {
-		return ErrProjectionV6
+		return ErrNidProjection
 	}
 
 	nt, err := beginNodeTx(db)

@@ -120,7 +120,7 @@ func assertRefusedOnV6(t *testing.T, db *sql.DB, dbPath string, schema *api.Topo
 	t.Helper()
 	var before int
 	require.NoError(t, db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&before))
-	require.ErrorIs(t, MaterializeVirtuals(dbPath, schema, true), ErrProjectionV6)
+	require.ErrorIs(t, MaterializeVirtuals(dbPath, schema, true), ErrNidProjection)
 	var after int
 	require.NoError(t, db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&after))
 	assert.Equal(t, before, after, "a refused materialization writes nothing")

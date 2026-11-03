@@ -224,7 +224,11 @@ func isSocketAlive(sockPath string) bool {
 //	~/.mache/default.arena  — arena file
 //	~/.mache/default.ctrl   — control block
 //	~/.mache/default.sock   — UDS socket (what we connect to)
-//	~/.mache/mount/         — FUSE/NFS mount point
+//
+// It runs headless: mache reads the daemon over its socket and never read the
+// mount it used to ask for, a loopback NFS mount on macOS that leyline v0.21.0
+// refuses below Tahoe 26.7 / Sequoia 15.8 (Apple NFS-client CVEs), where asking
+// for it fails the daemon's start (mache-3a4713).
 //
 // The subprocess is killed when the mache process exits (via atexit cleanup
 // registered on first spawn). Only one managed daemon per process.
@@ -342,7 +346,7 @@ func adoptLiveDaemon() (sock string, found bool, err error) {
 
 // daemonPaths is where a managed daemon lives, and the binary that runs it.
 type daemonPaths struct {
-	bin, dataDir, mountDir, arena, ctrl, sock string
+	bin, dataDir, arena, ctrl, sock string
 }
 
 // resolveDaemonPaths finds the pinned leyline and creates the managed daemon's
@@ -377,18 +381,12 @@ func resolveDaemonPaths() (daemonPaths, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return daemonPaths{}, fmt.Errorf("create %s: %w", dataDir, err)
 	}
-	mountDir := filepath.Join(dataDir, "mount")
-	if err := os.MkdirAll(mountDir, 0o755); err != nil {
-		return daemonPaths{}, fmt.Errorf("create %s: %w", mountDir, err)
-	}
-
 	return daemonPaths{
-		bin:      leylineBin,
-		dataDir:  dataDir,
-		mountDir: mountDir,
-		arena:    filepath.Join(dataDir, "default.arena"),
-		ctrl:     filepath.Join(dataDir, "default.ctrl"),
-		sock:     filepath.Join(dataDir, "default.sock"),
+		bin:     leylineBin,
+		dataDir: dataDir,
+		arena:   filepath.Join(dataDir, "default.arena"),
+		ctrl:    filepath.Join(dataDir, "default.ctrl"),
+		sock:    filepath.Join(dataDir, "default.sock"),
 	}, nil
 }
 
@@ -403,7 +401,6 @@ func daemonCommandArgs(p daemonPaths) ([]string, arenaSpawnConfig) {
 		"--arena", p.arena,
 		"--arena-size-mib", "64",
 		"--control", p.ctrl,
-		"--mount", p.mountDir,
 	}
 	// --source lets the daemon run enrichment passes: op_enrich requires
 	// ctx.source_dir, so without it lsp/embed enrichment fails with "no
@@ -1129,12 +1126,27 @@ func (c *SocketClient) Prioritize(files []string) error {
 // mache-0fed77); v0.20.5 keeps mount edits out of live.db until their flush
 // lands. Projection, wire and IR lineage are unchanged.
 //
+// v0.20.5 -> v0.21.0 is breaking on the write path and the projection, and
+// mache follows it here (mache-bc3c84):
+//   - projection-v7: v6's tables unchanged plus _tree (every entry, explicit
+//     directories included) and _parse_diagnostics; _source lists only parsed
+//     files. LLO refuses a v6 arena and rebuilds it cold. Verified by parsing
+//     with the released binary and re-deriving fixturedb's mirror from it.
+//   - propose is the one write path: base is required (a blob hash from
+//     read_source, "any" or "absent"); success may list merged paths; a
+//     refusal is typed (stale with moved[].conflicts, exists, not_empty, ...).
+//   - the managed daemon runs headless (no --mount; see DiscoverOrStart).
+//
+// The control block stays VERSION 3 with the v0.20.5 publish lock (control.rs
+// changed only in a test), IR lineage stays merkle-ast-v2 at extraction epoch
+// 5, and the schema client moves to clients/go/leyline-schema v0.21.0.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses on a structural
 // mismatch. The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.20.5"
+const leylineBinaryVersion = "v0.21.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

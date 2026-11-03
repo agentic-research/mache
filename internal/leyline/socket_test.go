@@ -1019,6 +1019,18 @@ func TestDiscoverOrStart_CDCSelectsSourceBlobsTarget(t *testing.T) {
 	assert.NotContains(t, argv, "nodes")
 }
 
+// The managed daemon runs headless. mache reads it over the socket and never
+// read the mount it used to request: a loopback NFS mount on macOS, which
+// leyline v0.21.0 refuses below Tahoe 26.7 / Sequoia 15.8, failing the
+// daemon's start there (mache-3a4713). Asserted on the argv actually spawned.
+func TestDiscoverOrStart_SpawnsTheDaemonHeadless(t *testing.T) {
+	argv := captureDaemonArgv(t, nil)
+	require.Contains(t, argv, "daemon", "the argv is the daemon's")
+	assert.NotContains(t, argv, "--mount")
+	assert.NotContains(t, argv, "--nfs-port")
+	assert.NotContains(t, argv, "--backend")
+}
+
 // TestDiscoverOrStart_ResetsArenaOnConfigChange pins the fix for mache serving
 // every project from one fixed ~/.mache/default.arena. leyline refuses to
 // warm-start an arena whose recorded source_root disagrees with --source —

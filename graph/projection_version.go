@@ -40,12 +40,21 @@ var knownProjections = map[string]string{
 	// path-shaped. mache probes the column at runtime rather than keying on
 	// this version, so that reversal needs no change here (mache-bc6ca3).
 	"projection-v4": "leyline v0.19.x: parent_id derived; spans on node_defs/node_refs; _ast.blob_ord",
-	// THE PINNED SHAPE as of leyline v0.20.3 (v0.20.0 introduced it): nodes
+	// The shape leyline v0.20.x writes (v0.20.0 introduced it): nodes
 	// keyed by integer nid with interned names and kinds, paths derived by
 	// LLO's v_node_name rather than stored, _ast/node_defs/node_refs keyed by
 	// nid. Every mache reader handles it through internal/lloschema, checked
 	// against real parses of one tree in both shapes (mache-90cb9f).
-	"projection-v6": "the pinned shape: integer nids, derived paths, interned names and kinds",
+	"projection-v6": "leyline v0.20.x: integer nids, derived paths, interned names and kinds",
+	// THE PINNED SHAPE as of leyline v0.21.0: projection-v6 plus two tables,
+	// with every v6 table unchanged (fixturedb's mirror re-derived from the
+	// released binary). _tree(path, mode, blob_hash, mtime, size) lists every
+	// entry, explicit directories included, while _source lists only the files
+	// a parser projected, with _source.content_hash = _tree.blob_hash;
+	// _parse_diagnostics records a file that parsed with errors (projected=1)
+	// or not at all (binary or oversized, projected=0). The readers mache had
+	// for v6 read v7 unchanged.
+	"projection-v7": "the pinned shape: v6 plus _tree (every entry) and _parse_diagnostics",
 }
 
 // ProjectionVersion returns the projection shape an artifact declares and
