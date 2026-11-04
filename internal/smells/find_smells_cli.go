@@ -335,7 +335,7 @@ func runRatchetGate(qg graph.RefsQuerier, results []ruleRunResult, skipped []ski
 	// rule, and it lands on the same backends, so it is reported on the same
 	// lines (mache-ddf14b / mache-dd45a3).
 	pathKeyed := false
-	if hasHash, hErr := lloschema.TableHasColumn(qg, "_ast", "node_hash"); hErr == nil && !hasHash {
+	if _, hasHash, hErr := lloschema.NodeHashExpr(qg, "_ast", ""); hErr == nil && !hasHash {
 		pathKeyed = true
 	}
 

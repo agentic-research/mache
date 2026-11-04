@@ -1177,12 +1177,22 @@ func (c *SocketClient) Prioritize(files []string) error {
 // compat_min_schema_version stays 0.6.0, and the control block and IR lineage
 // are unchanged.
 //
+// v0.23.0 -> v0.24.0 moves the projection to projection-v10
+// (ley-line-open-738dd9, mache-99324b): _ast, node_defs and node_refs carry
+// node_content's content_id instead of the 32-byte node_hash, which stays in
+// node_content as the identity; idx_ast_node_hash becomes idx_ast_content; LLO
+// adds node_hash views mache does not use (lloschema.NodeHashExpr says why).
+// Verified by diffing sqlite_master of one tree parsed by both binaries.
+// v0.24.0 refuses a v9 arena at parse open, and the arena record and parse
+// cache are keyed on the pin, so both start cold. IR lineage stays
+// merkle-ast-v2, so node_hash values and the smell baseline carry over.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.23.0"
+const leylineBinaryVersion = "v0.24.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

@@ -11,11 +11,11 @@ import (
 	"github.com/agentic-research/mache/internal/fixturedb"
 )
 
-// queryPlan is the query plan of every _ast row of db LEFT JOINed through
-// joins.
-func queryPlan(t *testing.T, db *sql.DB, joins string) string {
+// queryPlan is the query plan of every `_ast a` row of db, its node_hash read
+// as hash, LEFT JOINed through joins.
+func queryPlan(t *testing.T, db *sql.DB, hash, joins string) string {
 	t.Helper()
-	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT a.node_hash, ce.field, cc.raw_kind FROM _ast a ` + joins)
+	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT ` + hash + `, ce.field, cc.raw_kind FROM _ast a ` + joins)
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 	var plan []string
@@ -46,9 +46,11 @@ func TestFieldChildJoins(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := paritySpec(t, tc.producer).DB()
-			joins, err := FieldChildJoins(DB(db), "a.node_hash")
+			hash, _, err := NodeHashExpr(DB(db), "_ast", "a")
 			require.NoError(t, err)
-			plan := queryPlan(t, db, joins)
+			joins, err := FieldChildJoins(DB(db), hash)
+			require.NoError(t, err)
+			plan := queryPlan(t, db, hash, joins)
 			assert.Contains(t, plan, tc.probe, plan)
 			for _, a := range tc.absent {
 				assert.NotContains(t, plan, a, plan)

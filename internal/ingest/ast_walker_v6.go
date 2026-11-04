@@ -23,6 +23,9 @@ func (w *ASTWalker) isV6() bool {
 	defer w.shapeMu.Unlock()
 	if !w.shapeProbed {
 		w.v6, w.shapeProbed = graph.ColumnExists(w.db, "_ast", "nid"), true
+		if w.v6 {
+			w.v6Hash, _, w.shapeErr = lloschema.NodeHashExpr(lloschema.DB(w.db), "_ast", "a")
+		}
 	}
 	return w.v6
 }
@@ -45,9 +48,15 @@ type v6Row struct {
 // _ast row, so the chain of names is never broken; only located nodes enter
 // the index, as the v4 join keeps only those.
 func (w *ASTWalker) loadFileIndexV6(sourceID string) (*fileIndex, error) {
+	w.shapeMu.Lock()
+	hash, shapeErr := w.v6Hash, w.shapeErr
+	w.shapeMu.Unlock()
+	if shapeErr != nil {
+		return nil, fmt.Errorf("file index for %s: %w", sourceID, shapeErr)
+	}
 	rows, err := w.db.Query(`SELECT n.nid, COALESCE(n.parent_nid, 0), v.name, n.kind,
 	        COALESCE(n.record, ''), COALESCE(k.raw_kind, ''), a.nid IS NOT NULL,
-	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0), a.node_hash
+	        COALESCE(a.start_byte, 0), COALESCE(a.end_byte, 0), `+hash+`
 	 FROM nodes n
 	 JOIN v_node_name v ON v.nid = n.nid
 	 LEFT JOIN _ast a ON a.nid = n.nid
@@ -95,7 +104,7 @@ func (w *ASTWalker) loadFileIndexV6(sourceID string) (*fileIndex, error) {
 
 	lists, err := w.queryChildLists(`SELECT parent_hash, child_hash, COALESCE(field, '')
 	 FROM node_child
-	 WHERE parent_hash IN (SELECT node_hash FROM _ast WHERE `+lloschema.V6FileNids("nid")+`)
+	 WHERE parent_hash IN (SELECT `+hash+` FROM _ast a WHERE `+lloschema.V6FileNids("a.nid")+`)
 	 ORDER BY parent_hash, ordinal`, sourceID)
 	if err != nil {
 		return nil, err

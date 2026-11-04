@@ -308,9 +308,9 @@ func enrichNodeHashes(qg graph.RefsQuerier, findings []smellFinding) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	hasHash, err := lloschema.TableHasColumn(qg, "_ast", "node_hash")
+	_, hasHash, err := lloschema.NodeHashExpr(qg, "_ast", "")
 	if err != nil {
-		return fmt.Errorf("enrich node hashes: probe _ast.node_hash: %w", err)
+		return fmt.Errorf("enrich node hashes: %w", err)
 	}
 	if !hasHash {
 		return nil // standalone producer: path keying, by design
