@@ -26,7 +26,7 @@ type WritableTree struct {
 
 // UseWritableTree parses dir and points mache's managed daemon at it, under a
 // private HOME, with the pinned binary named by the override (so the daemon is
-// one this process spawns, and WritableDaemon accepts it). The daemon is
+// one this process spawns, serving dir, so WritableDaemon accepts it). The daemon is
 // stopped at cleanup. Skips when the pinned binary is not cached.
 func UseWritableTree(t *testing.T, dir string) *WritableTree {
 	t.Helper()

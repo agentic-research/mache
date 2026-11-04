@@ -29,6 +29,16 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **A write goes through any pinned daemon that says it serves the tree**
+  (`mache-161c63`). mache used to refuse writing through a daemon it had not
+  started itself, because nothing reported which tree a daemon served and a
+  write must not guess. leyline's `status` now reports `source_root`
+  (ley-line-open-246526), so mache asks every daemon, spawned or adopted, and
+  writes through it exactly when that is the node's tree, symlinks resolved.
+  One serving another tree, or none, is refused with both paths named.
+  mache also decodes `read_source` and `propose` with leyline-schema's own
+  wire types (ley-line-open-247489) instead of a hand-kept copy, and an answer
+  missing a field its outcome needs is an error rather than a zero value.
 - **Writes go through leyline's propose, never straight to disk**
   (`mache-3a0fb9`). A write to a node (the NFS mount or `write_file`) used
   to splice the bytes into the source file. mache now rebuilds the node's

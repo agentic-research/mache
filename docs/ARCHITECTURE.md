@@ -229,7 +229,7 @@ Key types:
 
 - **`SourceOrigin`** (`graph.go`) — Tracks `FilePath`, `StartByte`, `EndByte` for each file node's position in its source, and `Blob`, the parsed bytes those offsets were taken from (the write's base).
 - **`OriginProvider`** (`interfaces.go`) — Optional interface on `Match` to expose byte ranges from tree-sitter captures.
-- **`Propose`** / **`Commit`** (`writeback/propose.go`) — Rebuilds the node's file from its origin's blob with the edit in place and proposes it, against that blob, to the daemon mache spawned on the tree (`leyline.WritableDaemon`); the daemon writes the file, merges, or refuses `stale`. `Commit` updates the graph and names the file's new blob.
+- **`Propose`** / **`Commit`** (`writeback/propose.go`) — Rebuilds the node's file from its origin's blob with the edit in place and proposes it, against that blob, to the pinned daemon whose `status.source_root` is the tree, whether mache spawned it or adopted it (`leyline.WritableDaemon`); the daemon writes the file, merges, or refuses `stale`. `Commit` updates the graph and names the file's new blob.
 - **`Validate`** (`writeback/validate.go`) — Tree-sitter syntax check before touching source.
 - **`FormatBuffer`** (`writeback/format.go`) — In-process formatting: gofumpt for Go, hclwrite for HCL/Terraform (no external CLI, no offset drift).
 - **`writeHandle`** / **`writeFile`** — Per-open-file buffer. On `Release`/`Close`: validate → format → propose → surgical node update → `ShiftOrigins` for siblings.
