@@ -1159,6 +1159,21 @@ func (lg *lazyGraph) ShiftOrigins(filePath string, afterByte uint32, delta int32
 	}
 }
 
+func (lg *lazyGraph) SetFileBlob(filePath string, hash []byte) {
+	g, _ := lg.get()
+	if wb, ok := g.(writeBacker); ok {
+		wb.SetFileBlob(filePath, hash)
+	}
+}
+
+func (lg *lazyGraph) Blobs() graph.BlobSource {
+	g, _ := lg.get()
+	if wb, ok := g.(writeBacker); ok {
+		return wb.Blobs()
+	}
+	return nil
+}
+
 // MountPrefixOf forwards to the inner CompositeGraph so MCP handlers'
 // annotateMounts() can find a mount-prefix resolver even though the
 // registry hands them a lazyGraph wrapper. Returns "" when the inner
@@ -1325,12 +1340,9 @@ type sheafInvalidatorProvider interface {
 // bug where SQLiteGraph's empty in-memory defs map made the
 // search handler return [] for every pattern (bead mache-9cba08).
 
-// writeBacker is the subset of Graph backends that support surgical write-back
-// (validate → format → splice → update node).
-type writeBacker interface {
-	UpdateNodeContent(id string, data []byte, origin *graph.SourceOrigin, modTime time.Time) error
-	ShiftOrigins(filePath string, afterByte uint32, delta int32)
-}
+// writeBacker is the subset of Graph backends that support write-back
+// (validate → format → propose → update node).
+type writeBacker = graph.Writable
 
 // Every opt-in interface above is reached by a `g.(X)` assertion in some
 // handler, and in serve mode `g` is ALWAYS a *lazyGraph — never the

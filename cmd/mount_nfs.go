@@ -30,7 +30,7 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 
 	// Wire write-back if requested (validate → format → splice → surgical update → invalidate)
 	if writable && engine != nil {
-		graphFs.SetWriteBack(spliceWriteBack(g))
+		graphFs.SetWriteBack(proposeWriteBack(g))
 		log.Println("Write-back enabled: edits will splice into source files.")
 	} else if writable {
 		log.Println("Warning: --writable ignored (only supported for non-.db sources)")
@@ -65,33 +65,38 @@ func mountNFS(schema *api.Topology, g graph.Graph, engine *ingest.Engine, mountP
 // FUSE backend removed in v0.7.0 (ADR-0006). NFS is the only mount backend.
 // For FUSE mounts, use ley-line-open's `leyline serve`.
 
-// spliceWriteBack is the write-back for a mount over source files: validate,
-// format, splice into the source file, then update the node in place. The
-// draft, lint and status bookkeeping lives on a MemoryStore; on any other
-// graph it is skipped.
-func spliceWriteBack(g graph.Graph) nfsmount.WriteBackFunc {
+// proposeWriteBack is the write-back for a mount over source files: validate,
+// format, then propose the node's file with the edit through leyline, against
+// the blob the node was read from (writeback.Propose), and update the node in
+// place. The daemon writes the file; mache does not (mache-3a0fb9). The draft,
+// lint and status bookkeeping lives on a MemoryStore; on any other graph there
+// is no base to propose against, and the write is refused.
+func proposeWriteBack(g graph.Graph) nfsmount.WriteBackFunc {
 	store, _ := g.(*graph.MemoryStore)
 	return func(nodeID string, origin graph.SourceOrigin, content []byte) error {
 		node, err := g.GetNode(nodeID)
 		if err != nil {
 			return fmt.Errorf("node not found: %w", err)
 		}
-		// 1. Validate before touching the source file. One leyline parse
-		// serves both validation and, for Go, the lint rules below.
+		// 1. Validate before proposing. One leyline parse serves both
+		// validation and, for Go, the lint rules below.
 		astPayload, drafted, err := validateOrDraft(store, node, origin, content)
 		if err != nil || drafted {
 			return err
 		}
+		if store == nil {
+			return writeback.ErrNoBase
+		}
 		// 2. Format in-process (gofumpt for Go, hclwrite for HCL/Terraform).
 		formatted := writeback.FormatBuffer(content, origin.FilePath)
 		recordLint(store, nodeID, origin.FilePath, astPayload)
-		// 3. Splice the formatted content into the source file.
-		oldLen := origin.EndByte - origin.StartByte
-		if err := writeback.Splice(origin, formatted); err != nil {
+		// 3. Propose; 4. record the accepted write; 5. invalidate caches.
+		a, err := writeback.Propose(origin, formatted, store.Blobs())
+		if err != nil {
+			recordRefusal(store, nodeID, err)
 			return err
 		}
-		// 4. Surgical node update, no re-ingest; 5. invalidate caches.
-		applySplice(store, nodeID, origin, formatted, oldLen)
+		applyProposal(store, nodeID, origin, a)
 		g.Invalidate(nodeID)
 		return nil
 	}
@@ -146,32 +151,40 @@ func recordLint(store *graph.MemoryStore, nodeID, filePath string, astPayload *l
 	store.WriteStatus.Store(key, sb.String())
 }
 
-// applySplice updates the node in place after a splice: shifts the origins
-// after it, stores the new content under the source file's mtime, and records
-// the outcome in _diagnostics. The splice has already reached disk, so a
-// failure here leaves the graph stale and says so.
-func applySplice(store *graph.MemoryStore, nodeID string, origin graph.SourceOrigin, formatted []byte, oldLen uint32) {
-	if store == nil {
-		return
-	}
-	newOrigin := &graph.SourceOrigin{
-		FilePath:  origin.FilePath,
-		StartByte: origin.StartByte,
-		EndByte:   origin.StartByte + uint32(len(formatted)),
-	}
-	if delta := int32(len(formatted)) - int32(oldLen); delta != 0 {
-		store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
-	}
+// applyProposal records an accepted write (writeback.Commit) under the
+// source file's mtime, which the daemon set when it wrote the file, and says
+// how it went in _diagnostics. A merged write is not what mache built: the
+// node keeps the edit, and the file must be re-read before it is written
+// again.
+func applyProposal(store *graph.MemoryStore, nodeID string, origin graph.SourceOrigin, a *writeback.Applied) {
 	modTime := time.Now()
 	if fi, err := os.Stat(origin.FilePath); err == nil {
 		modTime = fi.ModTime()
 	}
-	if err := store.UpdateNodeContent(nodeID, formatted, newOrigin, modTime); err != nil {
-		log.Printf("writeback: graph update failed after splice for %s: %v", nodeID, err)
-		store.WriteStatus.Store(filepath.Dir(nodeID),
-			fmt.Sprintf("graph stale (splice succeeded, graph update failed): %v", err))
-	} else {
-		store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
+	dir := filepath.Dir(nodeID)
+	switch err := writeback.Commit(store, nodeID, origin, a, modTime); {
+	case err != nil:
+		log.Printf("writeback: graph update failed after propose for %s: %v", nodeID, err)
+		store.WriteStatus.Store(dir, fmt.Sprintf("graph stale (write applied, graph update failed): %v", err))
+	case a.Merged:
+		store.WriteStatus.Store(dir, "ok, merged with a change made since this was read: re-read the file before writing it again")
+	default:
+		store.WriteStatus.Store(dir, "ok")
 	}
 	store.RecordFileMtime(origin.FilePath, modTime)
+}
+
+// recordRefusal says in _diagnostics why a write was refused; a stale one
+// names the lines it overlapped another writer's change on (1-based).
+func recordRefusal(store *graph.MemoryStore, nodeID string, err error) {
+	msg := "write refused, source untouched: " + err.Error()
+	var r *writeback.RefusedError
+	if errors.As(err, &r) {
+		for _, m := range r.Refusal.Moved {
+			for _, c := range m.Conflicts {
+				msg += fmt.Sprintf("\n%s: lines %d-%d overlap a change made since it was read", m.Path, c.Start+1, c.End)
+			}
+		}
+	}
+	store.WriteStatus.Store(filepath.Dir(nodeID), msg)
 }

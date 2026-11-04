@@ -491,8 +491,11 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
 					}
 					defer astCleanup()
-					store.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
-					store.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
+					leylinegraph.WireParseDB(store, astDB)
+					// Writes propose through the daemon mache starts on this
+					// tree (writeback.Propose, mache-3a0fb9); a file mount's
+					// tree is its directory, which is what was parsed.
+					leyline.SetDaemonSource(sourceTreeOf(dataPath))
 				}
 
 				if filepath.Ext(dataPath) == ".git" {
@@ -578,4 +581,13 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// sourceTreeOf is the tree a source mount of dataPath writes into: the
+// directory itself, or a file's directory.
+func sourceTreeOf(dataPath string) string {
+	if info, err := os.Stat(dataPath); err == nil && !info.IsDir() {
+		return filepath.Dir(dataPath)
+	}
+	return dataPath
 }

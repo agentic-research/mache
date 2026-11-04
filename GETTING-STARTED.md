@@ -280,11 +280,11 @@ NFS is the only mount backend (FUSE was removed in v0.7.0; for FUSE today, use [
 
 ## Write-back
 
-With `--writable`, edits to `source` files go through a pipeline before touching the actual source on disk:
+With `--writable`, edits to `source` files go through a pipeline, and leyline (not mache) writes the source file:
 
 1. **Validate** — tree-sitter checks syntax
 1. **Format** — gofumpt for Go, hclwrite for HCL/Terraform
-1. **Splice** — atomic byte-range replacement in the source file
+1. **Propose** — the node's whole file, rebuilt from the bytes it was read from with the edit in place, is proposed to the leyline daemon mache started on the tree, against those bytes as its base. The daemon applies it, merges it with a change made since, or refuses it (`stale`, with the overlapping lines) when the two changes overlap
 1. **Update** — node content updated in-place, no re-ingest
 
 If validation fails, the write is saved as a draft. The node path stays stable; errors surface via `_diagnostics/`.

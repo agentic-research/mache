@@ -21,44 +21,22 @@ import (
 // hclwrite) with validation. These tests pin the new contract:
 // validation always runs; formatting is opt-out via format=false.
 
-// fakeValidateDaemon wires a plumbing-fake leyline daemon (mache-73b885:
-// syntax validation rides the daemon's validate op). These tests exercise
-// format/splice mechanics, not parsing, so a brace-balance heuristic is a
-// sufficient verdict for the fixtures here; the real parser is covered by
-// internal/writeback's gated e2e suite.
-func fakeValidateDaemon(t *testing.T) {
-	t.Helper()
-	sock := lltest.FakeDaemon(t, func(req map[string]any) any {
-		content, _ := req["content"].(string)
-		if strings.Count(content, "{") != strings.Count(content, "}") {
-			return map[string]any{
-				"ok": false,
-				"errors": []any{map[string]any{
-					"row": 0, "col": 0, "byte_start": 0, "byte_end": 0, "message": "syntax error",
-				}},
-				"diagnostics": []any{},
-			}
-		}
-		return map[string]any{"ok": true, "errors": []any{}, "diagnostics": []any{}}
-	})
-	t.Setenv("LEYLINE_SOCKET", sock)
-}
-
-// buildWriteGraph creates a MemoryStore plus a real source file on disk
-// so the splice pipeline (validate → optional format → splice → update)
-// has something to write into. Returns the graph, the node path, and
-// the source file path.
+// buildWriteGraph creates a MemoryStore plus a real source file on disk, in a
+// tree the managed pinned daemon serves, so the write pipeline (validate →
+// optional format → propose → update) has something to write into. Returns
+// the graph, the node path, and the source file path.
 func buildWriteGraph(t *testing.T) (*graph.MemoryStore, string, string) {
 	t.Helper()
-	fakeValidateDaemon(t)
 
 	// Source file with deliberately-unformatted Go that gofumpt will
 	// rewrite (extra blank lines + tabs vs spaces in the body).
 	original := "package main\n\nfunc Hello() {\n\treturn\n}\n"
 	srcPath := filepath.Join(t.TempDir(), "main.go")
 	require.NoError(t, os.WriteFile(srcPath, []byte(original), 0o644))
+	tree := lltest.UseWritableTree(t, filepath.Dir(srcPath))
 
 	store := graph.NewMemoryStore()
+	store.SetBlobSource(tree.Blobs)
 	store.AddRoot(&graph.Node{
 		ID:       "pkg",
 		Mode:     fs.ModeDir,
@@ -71,6 +49,7 @@ func buildWriteGraph(t *testing.T) (*graph.MemoryStore, string, string) {
 			FilePath:  srcPath,
 			StartByte: 14, // start of "func Hello() {"
 			EndByte:   uint32(len(original)),
+			Blob:      tree.Blob(t, srcPath),
 		},
 		Data: []byte(original[14:]),
 	})
@@ -111,8 +90,10 @@ func TestWriteFile_FormatTrue_HCLNormalizes(t *testing.T) {
 	original := "resource \"aws_vpc\" \"this\" {\n  cidr_block = \"10.0.0.0/16\"\n}\n"
 	srcPath := filepath.Join(t.TempDir(), "main.tf")
 	require.NoError(t, os.WriteFile(srcPath, []byte(original), 0o644))
+	tree := lltest.UseWritableTree(t, filepath.Dir(srcPath))
 
 	store := graph.NewMemoryStore()
+	store.SetBlobSource(tree.Blobs)
 	store.AddRoot(&graph.Node{
 		ID:       "tf",
 		Mode:     fs.ModeDir,
@@ -125,6 +106,7 @@ func TestWriteFile_FormatTrue_HCLNormalizes(t *testing.T) {
 			FilePath:  srcPath,
 			StartByte: 0,
 			EndByte:   uint32(len(original)),
+			Blob:      tree.Blob(t, srcPath),
 		},
 	})
 
@@ -215,17 +197,17 @@ func TestWriteFile_ValidationStillRunsWhenFormatFalse(t *testing.T) {
 	assert.Equal(t, original, after, "validation failure must not touch the source file")
 }
 
-// TestWriteFile_SurfacesStaleGraphAfterSplice pins the post-splice
-// failure contract: if UpdateNodeContent fails (e.g., the node was
-// concurrently invalidated/deleted between GetNode and the update), the
-// splice has already written disk but the in-memory graph is stale.
+// TestWriteFile_SurfacesStaleGraphAfterSplice pins the post-write failure
+// contract: if UpdateNodeContent fails (e.g., the node was concurrently
+// invalidated/deleted between GetNode and the update), the daemon has already
+// written the file but the in-memory graph is stale.
 // write_file must surface that to the caller via "ok_graph_stale" plus
 // a graph_warning, not silently report "ok".
 func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
-	fakeValidateDaemon(t)
 	original := "package main\n\nfunc Hello() {}\n"
 	srcPath := filepath.Join(t.TempDir(), "main.go")
 	require.NoError(t, os.WriteFile(srcPath, []byte(original), 0o644))
+	tree := lltest.UseWritableTree(t, filepath.Dir(srcPath))
 
 	// staleUpdateGraph reports the node on GetNode but errors on
 	// UpdateNodeContent — simulating the race where the node disappears
@@ -239,14 +221,14 @@ func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
 					FilePath:  srcPath,
 					StartByte: 14,
 					EndByte:   uint32(len(original)),
+					Blob:      tree.Blob(t, srcPath),
 				},
 			},
 		},
+		blobs: tree.Blobs,
 	}
 	handler := makeWriteFileHandler(g)
 
-	// Use the original byte range so Splice succeeds (we already wrote
-	// the source above with that exact length).
 	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
 		"path":    "pkg/Hello",
 		"content": "func Hello() { return }\n",
@@ -262,13 +244,13 @@ func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(testutil.ResultText(t, result)), &resp))
 	assert.Equal(t, "ok_graph_stale", resp.Status,
 		"UpdateNodeContent failure must downgrade status from ok to ok_graph_stale")
-	assert.Contains(t, resp.GraphWarning, "graph update failed after splice",
+	assert.Contains(t, resp.GraphWarning, "graph update failed after the write",
 		"graph_warning must explain the on-disk-correct, graph-stale split")
 
-	// Sanity check: splice DID happen — disk has the new content.
+	// The write DID happen: the daemon put the new content on disk.
 	got, err := os.ReadFile(srcPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(got), "return", "splice must succeed even when the graph update fails")
+	assert.Contains(t, string(got), "return", "the write is applied even when the graph update fails")
 }
 
 // staleUpdateGraph extends readOnlyGraph with writeBacker methods that
@@ -276,12 +258,15 @@ func TestWriteFile_SurfacesStaleGraphAfterSplice(t *testing.T) {
 // UpdateNodeContent returns ErrNotFound to exercise the stale-graph path.
 type staleUpdateGraph struct {
 	readOnlyGraph
+	blobs graph.BlobSource
 }
 
 func (*staleUpdateGraph) UpdateNodeContent(string, []byte, *graph.SourceOrigin, time.Time) error {
 	return graph.ErrNotFound
 }
 func (*staleUpdateGraph) ShiftOrigins(string, uint32, int32) {}
+func (*staleUpdateGraph) SetFileBlob(string, []byte)         {}
+func (g *staleUpdateGraph) Blobs() graph.BlobSource          { return g.blobs }
 
 // TestWriteFile_RejectsNonWriteBackerBackend pins the fail-fast contract:
 // if the graph backend doesn't implement writeBacker (UpdateNodeContent +
@@ -382,7 +367,7 @@ func TestServeWriteFile_InfraFailureStatusDistinct(t *testing.T) {
 	store, nodePath, _ := buildWriteGraph(t)
 
 	// Kill the daemon acquisition path AFTER the graph was built (the
-	// builder wires a working fake; override it).
+	// builder points mache at a working daemon; override it).
 	deadSock := filepath.Join(t.TempDir(), "dead.sock")
 	t.Setenv("LEYLINE_SOCKET", deadSock)
 	t.Setenv("HOME", t.TempDir())

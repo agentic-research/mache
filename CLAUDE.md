@@ -58,14 +58,14 @@ The mount wiring in `cmd/mount.go` selects the data path based on file extension
 | SQLiteResolver    | `graph/sqlite_resolver.go`                                            | Resolves `ContentRef` entries by fetching records from SQLite and re-rendering via injected `TemplateRenderer` func                                                                                                                    |
 | GraphFS           | `internal/nfsmount/graphfs.go`                                        | NFS backend via go-nfs/billy, `callers/` virtual dir, write-back support                                                                                                                                                               |
 | NodesTableReader  | `graph/nodes_table_reader.go`                                         | Shared SQL queries for nodes-table schema (GetNode, ListChildren, ReadContent, GetCallers). Used by SQLiteGraph fast path and WritableGraph.                                                                                           |
-| Splice            | `internal/writeback/splice.go`                                        | Atomic byte-range replacement in source files for write-back                                                                                                                                                                           |
+| Propose           | `internal/writeback/propose.go`                                       | Rebuilds a node's file from its origin's blob and proposes it through leyline                                                                                                                                                            |
 
 ### Key Design Details
 
 - **SQLiteGraph scan**: Single-pass streaming scan pushes field extraction into SQLite via `json_extract()`, builds directory tree (paths only) in `sync.Map`. Content is never bulk-loaded — resolved on-demand per file read.
 - **Template rendering**: `Render()` in `internal/template/render.go` (pure Go, no CGO). `engine.go` re-exports as `RenderTemplate()` for backward compat. Funcs: `json`, `first`, `slice`, `dig`, `dict`, `lookup`, `default`, `replace`, `lower`, `upper`, `title`, `split`, `join`, `unquote`, `hasPrefix`, `hasSuffix`, `trimPrefix`, `trimSuffix`.
 - **ContentRef**: Large content (>4KB) uses lazy `ContentRef` with DBPath/RecordID/Template instead of inline bytes.
-- **Write-back pipeline**: validate (tree-sitter) → format (gofumpt for Go, hclwrite for HCL/Terraform) → splice → surgical node update + `ShiftOrigins`. No re-ingest.
+- **Write-back pipeline**: validate (leyline) → format (gofumpt for Go, hclwrite for HCL/Terraform) → propose (the node's file, rebuilt from the blob its origin names, to the daemon mache spawned on the tree; leyline writes the file, merges, or refuses `stale`) → surgical node update + `ShiftOrigins`. No re-ingest.
 - **Draft mode**: Invalid writes save as drafts; node path stays stable. Errors via `_diagnostics/ast-errors`.
 - **Virtual dirs**: `_schema.json` (root), `_diagnostics/` (writable), `context` (per-dir), `callers/` (cross-refs, self-gating), `callees/` (forward refs, self-gating).
 - **NFS mount**: Only mount backend (FUSE removed in v0.7.0). Pure Go via `go-nfs`.
