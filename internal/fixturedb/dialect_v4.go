@@ -51,8 +51,6 @@ func emitLeylineRefs(e *emitter) {
 
 func (leylineDialect) emitAST(e *emitter) { e.emitNodeChildren(e.insertV4AST()) }
 
-func (leylineDialect) edgeInsert() string { return insertNodeChild }
-
 func (leylineDialect) emitSources(e *emitter) { e.insertV4Sources(true) }
 
 func (leylineDialect) emitImports(e *emitter) {
@@ -107,9 +105,6 @@ func (standaloneDialect) emitSymbols(e *emitter) {
 
 // The hydrated `_ast` carries no merkle child lists.
 func (standaloneDialect) emitAST(e *emitter) { e.insertV4AST() }
-
-// A Standalone fixture writes no merkle edges: emitAST lists no children.
-func (standaloneDialect) edgeInsert() string { return "" }
 
 func (standaloneDialect) emitSources(e *emitter) { e.insertV4Sources(false) }
 

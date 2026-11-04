@@ -28,3 +28,11 @@ type dialect interface {
 	emitSources(e *emitter)
 	emitImports(e *emitter)
 }
+
+// The edge writers are emit.go's statements: the LLO boundary lint allows
+// writes of LLO's tables there and nowhere else.
+func (leylineDialect) edgeInsert() string   { return insertNodeChild }
+func (leylineV6Dialect) edgeInsert() string { return insertNodeEdge }
+
+// A Standalone fixture writes no merkle edges: its emitAST lists no children.
+func (standaloneDialect) edgeInsert() string { return "" }
