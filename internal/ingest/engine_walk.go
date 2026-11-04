@@ -740,25 +740,7 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				}
 			}
 
-			// Set write-back origin from backward scan
-			if hasScope && absSourceFile != "" {
-				fileNode.Origin = &graph.SourceOrigin{
-					FilePath:  absSourceFile,
-					StartByte: extStart,
-					EndByte:   extEnd,
-					Blob:      scopeBlob(match),
-				}
-			} else if op, ok := match.(OriginProvider); ok && absSourceFile != "" {
-				// Fallback for non-sitter matches
-				if start, end, ok := op.CaptureOrigin("scope"); ok { // coverage:ignore
-					fileNode.Origin = &graph.SourceOrigin{ // coverage:ignore
-						FilePath:  absSourceFile,    // coverage:ignore
-						StartByte: start,            // coverage:ignore
-						EndByte:   end,              // coverage:ignore
-						Blob:      scopeBlob(match), // coverage:ignore
-					} // coverage:ignore
-				} // coverage:ignore
-			}
+			fileNode.Origin = e.writeBackOrigin(match, hasScope, absSourceFile, extStart, extEnd)
 
 			fileNodes = append(fileNodes, fileNode)
 			if fileSchema.Name == "source" {
@@ -783,10 +765,33 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 	return nil
 }
 
-// scopeBlob is the parsed blob match's offsets refer to, or nil.
-func scopeBlob(match Match) []byte {
-	if bs, ok := match.(BlobScope); ok {
-		return bs.ScopeBlob()
+// writeBackOrigin is a construct's write-back origin: the doc-extended scope
+// range when the match has a scope, else the "scope" capture's range from a
+// match that only provides origins; nil without a source file. Blob names the
+// parsed bytes the range refers to (mache-631b8b).
+func (e *Engine) writeBackOrigin(match Match, hasScope bool, absSourceFile string, extStart, extEnd uint32) *graph.SourceOrigin {
+	if absSourceFile == "" {
+		return nil
 	}
-	return nil
+	if !hasScope {
+		op, ok := match.(OriginProvider)
+		if !ok {
+			return nil
+		}
+		start, end, ok := op.CaptureOrigin("scope") // coverage:ignore
+		if !ok {                                    // coverage:ignore
+			return nil // coverage:ignore
+		} // coverage:ignore
+		extStart, extEnd = start, end // coverage:ignore
+	}
+	return &graph.SourceOrigin{FilePath: absSourceFile, StartByte: extStart, EndByte: extEnd, Blob: e.fileBlob(absSourceFile)}
+}
+
+// fileBlob is the hash of the parsed bytes the walker holds for absSourceFile,
+// keyed the way ReIngestFile invalidates it; nil without a walker or a hash.
+func (e *Engine) fileBlob(absSourceFile string) []byte {
+	if e.astWalker == nil {
+		return nil
+	}
+	return e.astWalker.fileBlob(e.sourceIDFor(absSourceFile))
 }

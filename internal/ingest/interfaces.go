@@ -58,13 +58,6 @@ type DocScope interface {
 	DocRange() (docStart, scopeStart, scopeEnd uint32, ok bool)
 }
 
-// BlobScope is implemented by matches that know which parsed blob their file's
-// bytes are: the hash of ScopeSource's bytes, which the write path proposes
-// against as its base (mache-631b8b). nil when the projection records none.
-type BlobScope interface {
-	ScopeBlob() []byte
-}
-
 // CallExtractor is implemented by matches that can extract the call tokens and
 // address-refs WITHIN their @scope (per construct) for the callers/callees refs
 // index. Since ADR-0012 step 4 removed in-process tree-sitter, astMatch is the

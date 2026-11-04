@@ -74,6 +74,15 @@ func (w *ASTWalker) filePkg(sourceID string) string {
 }
 
 // fileSource returns the source bytes for sourceID, nil when unavailable.
+// fileBlob is the hash of the bytes fileSource returns: the blob a construct's
+// origin offsets refer to (mache-631b8b). nil when the db records none.
+func (w *ASTWalker) fileBlob(sourceID string) []byte {
+	if idx := w.sectionOrNil(sourceID); idx != nil {
+		return idx.blob
+	}
+	return nil
+}
+
 func (w *ASTWalker) fileSource(sourceID string) []byte {
 	if idx := w.sectionOrNil(sourceID); idx != nil {
 		return idx.source
@@ -346,17 +355,6 @@ func (m *astMatch) ScopeSource() []byte {
 		return nil
 	}
 	return m.w.fileSource(m.ctx.SourceID)
-}
-
-// ScopeBlob implements BlobScope — the hash of the bytes ScopeSource returns.
-func (m *astMatch) ScopeBlob() []byte {
-	if m.w == nil {
-		return nil
-	}
-	if idx := m.w.sectionOrNil(m.ctx.SourceID); idx != nil {
-		return idx.blob
-	}
-	return nil
 }
 
 // DocRange implements DocScope. The scope node's id is ctx.ParentPrefix (set in

@@ -41,10 +41,10 @@ func TestIngest_OriginNamesTheParsedBlob(t *testing.T) {
 	}
 }
 
-// TestASTWalker_ScopeBlob_IsTheRowsHash: the match names the hash of exactly
-// the bytes ScopeSource returns, follows a reparse once the file's caches are
+// TestASTWalker_FileBlob_IsTheRowsHash: the walker names the hash of exactly
+// the bytes fileSource returns, follows a reparse once the file's caches are
 // dropped, and is nil on mache's cache-hydrated db, which records no hash.
-func TestASTWalker_ScopeBlob_IsTheRowsHash(t *testing.T) {
+func TestASTWalker_FileBlob_IsTheRowsHash(t *testing.T) {
 	const src = "package main\n\nfunc F() {}\n"
 	build := func(p fixturedb.Producer) (*fixturedb.FixtureDB, *ASTWalker) {
 		b := fixturedb.New(t, p)
@@ -60,15 +60,14 @@ func TestASTWalker_ScopeBlob_IsTheRowsHash(t *testing.T) {
 	}
 
 	f, w := build(fixturedb.Leyline)
-	m := &astMatch{w: w, ctx: ASTRoot{SourceID: "main.go"}}
 	require.NotNil(t, hashOf(f))
-	assert.Equal(t, hashOf(f), m.ScopeBlob())
+	assert.Equal(t, hashOf(f), w.fileBlob("main.go"))
 
 	f.Reparse("main.go", src+"// edited\n")
 	w.InvalidateSource("main.go")
-	assert.Equal(t, hashOf(f), m.ScopeBlob(), "a reparse names a new blob")
+	assert.Equal(t, hashOf(f), w.fileBlob("main.go"), "a reparse names a new blob")
 
 	_, ws := build(fixturedb.Standalone)
-	assert.Nil(t, (&astMatch{w: ws, ctx: ASTRoot{SourceID: "main.go"}}).ScopeBlob(),
+	assert.Nil(t, ws.fileBlob("main.go"),
 		"no recorded hash names no blob; the write path refuses rather than guess")
 }
