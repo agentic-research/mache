@@ -123,10 +123,6 @@ type managedDaemon struct {
 	mu   sync.Mutex
 	proc *os.Process
 	sock string
-	// source is the canonical --source root the daemon was spawned with, ""
-	// for none. A propose's paths are relative to it, so it decides which
-	// tree a write may target (WritableDaemon).
-	source string
 	// exited is closed when proc has been reaped, by the one goroutine that
 	// waits on it (started with the spawn). Nothing else may Wait on or
 	// Release proc: a second waiter races that goroutine for the child, and
@@ -167,7 +163,6 @@ func (m *managedDaemon) discard() {
 	}
 	m.proc = nil
 	m.sock = ""
-	m.source = ""
 	m.exited = nil
 }
 
@@ -512,7 +507,6 @@ func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig
 	if err != nil {
 		return "", err
 	}
-	managed.source = arenaCfg.SourceRoot
 
 	// The readiness wait runs WITHOUT mu (mache-25f49e). It can last up to
 	// MACHE_LEYLINE_START_TIMEOUT, and a cold start takes seconds; holding the
@@ -667,7 +661,6 @@ func StopManaged() {
 
 	managed.proc = nil
 	managed.sock = ""
-	managed.source = ""
 	managed.exited = nil
 }
 

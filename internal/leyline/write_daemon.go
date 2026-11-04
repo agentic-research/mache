@@ -10,14 +10,15 @@ import (
 var ErrNoWritableDaemon = errors.New("no leyline daemon serves this tree for writing")
 
 // WritableDaemon returns a client for the daemon a write to root proposes
-// through: the one this process spawned with --source root. A propose's paths
-// are relative to the daemon's --source, so a daemon serving another tree
-// would apply the write somewhere else.
+// through: the pinned daemon, provided it says it serves root.
 //
-// A daemon mache adopted is refused: its --source is not reported by any op
-// (ley-line-open-246526 asks for it in status), and a write must not guess.
-// Set root with SetDaemonSource before the daemon starts; a daemon already
-// running for another root is not restarted, and the write is refused.
+// A propose's paths are relative to the daemon's --source, so a daemon serving
+// another tree would apply the write somewhere else. Whether mache spawned the
+// daemon or adopted one already running, it is asked the same question: status
+// reports its source_root, canonical (ley-line-open-246526), and only an exact
+// match with root, resolved the same way, is written through. A daemon with no
+// --source has no tree to propose into. A daemon already running for another
+// root is not restarted; the write is refused, naming both trees.
 func WritableDaemon(root string) (*SocketClient, error) {
 	want := CanonicalSourceRoot(root)
 	if want == "" {
@@ -27,15 +28,21 @@ func WritableDaemon(root string) (*SocketClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	managed.mu.Lock()
-	ownSock, source := managed.sock, managed.source
-	managed.mu.Unlock()
-	switch {
-	case sock != ownSock:
-		return nil, fmt.Errorf("%w: the daemon at %s was not started by this mache, and its --source cannot be asked (ley-line-open-246526)",
-			ErrNoWritableDaemon, sock)
-	case source != want:
-		return nil, fmt.Errorf("%w: the daemon serves %q, the write is to %q", ErrNoWritableDaemon, source, want)
+	c, err := DialSocket(sock)
+	if err != nil {
+		return nil, err
 	}
-	return DialSocket(sock)
+	served, ok, err := c.SourceRoot()
+	switch {
+	case err != nil:
+		_ = c.Close()
+		return nil, err
+	case !ok:
+		_ = c.Close()
+		return nil, fmt.Errorf("%w: the daemon at %s runs without --source, the write is to %q", ErrNoWritableDaemon, sock, want)
+	case served != want:
+		_ = c.Close()
+		return nil, fmt.Errorf("%w: the daemon at %s serves %q, the write is to %q", ErrNoWritableDaemon, sock, served, want)
+	}
+	return c, nil
 }
