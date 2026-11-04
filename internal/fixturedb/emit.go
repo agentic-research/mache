@@ -136,8 +136,8 @@ func (e *emitter) insertV6AST() map[string][]byte {
 		h := e.subtree(a.subtree, a.kind, a.token)
 		hashes[a.nodeID] = h
 		e.exec(`INSERT OR REPLACE INTO _ast
-			(nid, kind_id, start_byte, end_byte, start_row, start_col, end_row, end_col, node_hash)
-			VALUES (?, (SELECT kind_id FROM kinds WHERE raw_kind = ? AND lang = ?), ?, ?, ?, ?, ?, ?, ?)`,
+			(nid, kind_id, start_byte, end_byte, start_row, start_col, end_row, end_col, content_id)
+			VALUES (?, (SELECT kind_id FROM kinds WHERE raw_kind = ? AND lang = ?), ?, ?, ?, ?, ?, ?, (SELECT content_id FROM node_content WHERE node_hash = ?))`,
 			t.byPath[a.nodeID].nid, a.kind, e.b.langOf(a.source),
 			a.span.StartByte, a.span.EndByte, a.span.StartRow, a.span.StartCol, a.span.EndRow, a.span.EndCol, h)
 	}

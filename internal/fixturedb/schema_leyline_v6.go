@@ -13,7 +13,10 @@ package fixturedb
 // node_edge holds the edges node_child held, node_child becoming a view over it.
 // Those four objects are the whole difference from v0.21.1's sqlite_master
 // (mache-72668d). v0.23.0's sqlite_master is identical to v0.22.0's
-// (mache-161c63):
+// (mache-161c63). v0.24.0 writes projection-v10: _ast, node_defs and
+// node_refs carry content_id where they carried node_hash,
+// idx_ast_node_hash becomes idx_ast_content, and three node_hash views are
+// added; nothing else differs (mache-99324b):
 //
 //	$ leyline parse ./src -o out.db
 //	$ sqlite3 out.db "SELECT sql FROM sqlite_master ORDER BY type, name"
@@ -30,7 +33,7 @@ package fixturedb
 // WHY A SECOND MIRROR RATHER THAN REPLACING THE FIRST. mache reads artifacts
 // produced by several leyline versions — lloschema.resolveIdentity exists
 // precisely because a db carries its own answer — so fixtures must be able to
-// model both. This one models the nid-keyed shape at the pin, projection-v9,
+// model both. This one models the nid-keyed shape at the pin, projection-v10,
 // and
 // TestLeylineSchema_MatchesPinnedBinary checks it against the pinned binary.
 // schema_leyline.go stays the v4 model, for artifacts the previous pin built,
@@ -40,7 +43,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.23.0"
+const leylineV6SchemaVersion = "v0.24.0"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
@@ -87,7 +90,7 @@ var leylineV6Tables = map[string]string{
     start_col INTEGER NOT NULL,
     end_row INTEGER NOT NULL,
     end_col INTEGER NOT NULL,
-    node_hash BLOB REFERENCES node_content(node_hash)
+    content_id INTEGER REFERENCES node_content(content_id)
 )`,
 
 	"_imports": `CREATE TABLE _imports (
@@ -167,7 +170,7 @@ var leylineV6Tables = map[string]string{
     end_row INTEGER,
     end_col INTEGER,
     canonical_kind TEXT,
-    node_hash BLOB REFERENCES node_content(node_hash)
+    content_id INTEGER REFERENCES node_content(content_id)
 )`,
 
 	"node_refs": `CREATE TABLE node_refs (
@@ -182,7 +185,7 @@ var leylineV6Tables = map[string]string{
     end_row INTEGER,
     end_col INTEGER,
     qualifier TEXT,
-    node_hash BLOB REFERENCES node_content(node_hash)
+    content_id INTEGER REFERENCES node_content(content_id)
 )`,
 
 	"nodes": `CREATE TABLE nodes (
@@ -207,9 +210,15 @@ var leylineV6Tables = map[string]string{
 // gap nobody sees (projection-v7's _tree and _parse_diagnostics went unnoticed
 // for exactly that reason until the v0.21.0 pin).
 var leylineV6Unmodelled = map[string]string{
-	"_meta":       "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
-	"_queries":    "LLO's tree-sitter query registry",
-	"query_blobs": "LLO's compiled-query store",
+	"_meta": "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
+	// projection-v10's node_hash views. mache reads the hash through
+	// lloschema.NodeHashExpr's scalar lookup instead: these are LEFT JOIN
+	// views, which SQLite materializes whole on the right of a LEFT JOIN.
+	"v_ast_hash":       "LLO's node_hash view over _ast; mache uses lloschema.NodeHashExpr",
+	"v_node_defs_hash": "LLO's node_hash view over node_defs; mache uses lloschema.NodeHashExpr",
+	"v_node_refs_hash": "LLO's node_hash view over node_refs; mache uses lloschema.NodeHashExpr",
+	"_queries":         "LLO's tree-sitter query registry",
+	"query_blobs":      "LLO's compiled-query store",
 }
 
 // leylineV6Views are LLO's OWN views, and modelling them is not optional.
@@ -264,7 +273,7 @@ SELECT nid, path FROM walk WHERE cursor IS NULL`,
 // leylineV6Indexes matter for the same reason the v4 ones do: a fixture
 // missing an index plans queries differently from a real .db.
 var leylineV6Indexes = map[string]string{
-	"idx_ast_node_hash": `CREATE INDEX idx_ast_node_hash ON _ast(node_hash)`,
+	"idx_ast_content": `CREATE INDEX idx_ast_content ON _ast(content_id)`,
 
 	"idx_defs_canonical_kind": `CREATE INDEX idx_defs_canonical_kind ON node_defs(canonical_kind) WHERE canonical_kind IS NOT NULL`,
 

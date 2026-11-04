@@ -202,9 +202,9 @@ func defsViewBody(qg Querier, ids identityColumns) (string, error) {
 	// consumers select explicit column lists (never SELECT *), so the
 	// added trailing column is transparent to them; the rows they read
 	// are byte-identical to before.
-	hasDefsNodeHash, err := TableHasColumn(qg, "node_defs", "node_hash")
+	defsHashExpr, _, err := NodeHashExpr(qg, "node_defs", "")
 	if err != nil {
-		return "", fmt.Errorf("probe node_defs.node_hash: %w", err)
+		return "", err
 	}
 
 	// canonical_kind is LLO's closed κ vocabulary (function / method / type /
@@ -220,10 +220,6 @@ func defsViewBody(qg Querier, ids identityColumns) (string, error) {
 	hasDefsCanonicalKind, err := TableHasColumn(qg, "node_defs", "canonical_kind")
 	if err != nil {
 		return "", fmt.Errorf("probe node_defs.canonical_kind: %w", err)
-	}
-	defsHashExpr := "NULL"
-	if hasDefsNodeHash {
-		defsHashExpr = "node_hash"
 	}
 	defsCanonExpr := "NULL"
 	if hasDefsCanonicalKind {
@@ -249,9 +245,9 @@ type refsColumns struct {
 // probeRefsColumns decides each refsColumns expression from what node_refs
 // carries on this database.
 func probeRefsColumns(qg Querier, ids identityColumns) (refsColumns, error) {
-	hasRefsNodeHash, err := TableHasColumn(qg, "node_refs", "node_hash")
+	refsHashExpr, _, err := NodeHashExpr(qg, "node_refs", "")
 	if err != nil {
-		return refsColumns{}, fmt.Errorf("probe node_refs.node_hash: %w", err)
+		return refsColumns{}, err
 	}
 
 	// referrer_node_id is meant to be the ENCLOSING definition of each ref
@@ -293,10 +289,6 @@ func probeRefsColumns(qg Querier, ids identityColumns) (refsColumns, error) {
 	// doesn't populate it) and for pre-T8.7 capnp records (default
 	// '' per schema-evolution invariant). See mache-6c0d07 for the
 	// fan_out_skew metric that consumes it.
-	refsHashExpr := "NULL"
-	if hasRefsNodeHash {
-		refsHashExpr = "node_hash"
-	}
 	refsReferrerExpr := ids.refsNode
 	if hasRefsContainer {
 		refsReferrerExpr = "COALESCE(NULLIF(" + ids.refsContainer + ", ''), " + ids.refsNode + ")"

@@ -42,6 +42,12 @@ type ASTWalker struct {
 	shapeMu     sync.Mutex
 	shapeProbed bool
 	v6          bool
+	// v6Hash is the expression for an `_ast a` row's node_hash on this db,
+	// probed with v6: stored on the row before projection-v10, one lookup
+	// into node_content from it (lloschema.NodeHashExpr). shapeErr is a
+	// failed probe, which every v6 load returns rather than guessing.
+	v6Hash   string
+	shapeErr error
 	// sourceSQL is the statement that reads one _source row's language and
 	// parsed bytes (lloschema.SourceBytesExpr) — a per-db fact, asked once.
 	sourceMu  sync.Mutex

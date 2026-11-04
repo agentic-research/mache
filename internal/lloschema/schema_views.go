@@ -79,6 +79,10 @@ func ASTSelect(qg Querier) (string, error) {
 		return "", fmt.Errorf("probe _ast.nid: %w", err)
 	}
 	if v6 {
+		hash, _, err := NodeHashExpr(qg, "_ast", "a")
+		if err != nil {
+			return "", err
+		}
 		// nid >> V6FileShift is the interned file id (LLO's nid =
 		// file_id<<24 | ordinal), and _source.file_id is UNIQUE, so the file
 		// is one lookup.
@@ -110,7 +114,7 @@ func ASTSelect(qg Querier) (string, error) {
 		       (SELECT k.raw_kind FROM kinds k WHERE k.kind_id = a.kind_id) AS node_kind,
 		       a.start_byte, a.end_byte,
 		       a.start_row, a.start_col, a.end_row, a.end_col,
-		       a.node_hash,
+		       ` + hash + ` AS node_hash,
 		       a.nid + 1             AS subtree_lo,
 		       COALESCE((SELECT m.nid FROM _ast m
 		                 WHERE m.nid > a.nid AND m.nid < ` + fileEnd + `
@@ -126,13 +130,9 @@ func ASTSelect(qg Querier) (string, error) {
 	if !v4 {
 		return "", nil
 	}
-	hasHash, err := TableHasColumn(qg, "_ast", "node_hash")
+	hashExpr, _, err := NodeHashExpr(qg, "_ast", "")
 	if err != nil {
-		return "", fmt.Errorf("probe _ast.node_hash: %w", err)
-	}
-	hashExpr := "NULL"
-	if hasHash {
-		hashExpr = "node_hash"
+		return "", err
 	}
 	// A v4 node_id is its path, so its descendants are the ids under
 	// node_id + '/': the range up to node_id + '0', the next byte after '/'.

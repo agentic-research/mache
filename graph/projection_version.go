@@ -60,7 +60,7 @@ var knownProjections = map[string]string{
 	// shipped only inside v0.22.0's move to v9, so mache has seen it only as
 	// the step between (mache-72668d).
 	"projection-v8": "unreleased: v7 minus capnp_blobs and _ast_blob",
-	// THE PINNED SHAPE as of leyline v0.22.0: v8 with the merkle edges
+	// The shape leyline v0.22.x and v0.23.x write: v8 with the merkle edges
 	// interned. node_content gains content_id (arena-local, not an identity);
 	// node_edge(parent_id, ordinal, child_id, field) holds the edges; and
 	// node_child is a read-only VIEW over it with v8's columns. A plain read of
@@ -68,7 +68,15 @@ var knownProjections = map[string]string{
 	// right of a LEFT JOIN, so the one such reader joins node_edge on v9
 	// (lloschema.FieldChildJoins). Checked against sqlite_master of one tree
 	// parsed by v0.21.1 and v0.22.0: nothing else differs.
-	"projection-v9": "the pinned shape: v8 with node_edge interning node_child, which becomes a view",
+	"projection-v9": "leyline v0.22-v0.23: v8 with node_edge interning node_child, which becomes a view",
+	// THE PINNED SHAPE as of leyline v0.24.0: v9 with _ast, node_defs and
+	// node_refs carrying node_content's content_id where they carried the
+	// 32-byte node_hash (ley-line-open-738dd9). node_content.node_hash stays
+	// the identity and is byte-identical across the change; mache reads it
+	// through lloschema.NodeHashExpr. Checked against sqlite_master of one tree
+	// parsed by v0.23.0 and v0.24.0: those three columns, the _ast index, and
+	// three LLO node_hash views are the whole difference.
+	"projection-v10": "the pinned shape: v9 with occurrence rows keyed to node_content by content_id",
 }
 
 // ProjectionVersion returns the projection shape an artifact declares and
