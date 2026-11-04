@@ -16,19 +16,12 @@ type BlobSource interface {
 	Remember(filePath string, hash, content []byte)
 }
 
-// SetBlobSource configures the store's BlobSource.
-func (s *MemoryStore) SetBlobSource(b BlobSource) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.blobs = b
-}
+// SetBlobSource configures the store's BlobSource. Like SetCallExtractor, it
+// is set once, where the store's projection is built, before it serves.
+func (s *MemoryStore) SetBlobSource(b BlobSource) { s.blobs = b }
 
 // Blobs returns the store's BlobSource, nil when none is configured.
-func (s *MemoryStore) Blobs() BlobSource {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.blobs
-}
+func (s *MemoryStore) Blobs() BlobSource { return s.blobs }
 
 // SetFileBlob names hash as the blob every origin in filePath refers to: after
 // a write the daemon accepted, the file is those bytes. nil marks the file's

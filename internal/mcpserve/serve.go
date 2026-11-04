@@ -491,7 +491,8 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 			return nil, nil, noop, fmt.Errorf("ley-line parse for source projection: %w", ppErr)
 		}
 		astCleanup = cleanup
-		leylinegraph.WireParseDB(store, astDB)
+		store.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
+		store.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
 	}
 
 	if err := engine.Ingest(dataSource); err != nil {

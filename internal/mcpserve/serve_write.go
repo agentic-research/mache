@@ -58,28 +58,7 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		// the mache write path's contract; we never let invalid bytes
 		// through to the splice.
 		if err := writeback.Validate(newContent, origin.FilePath); err != nil {
-			type valResult struct {
-				Status string `json:"status"`
-				Error  string `json:"error"`
-				Path   string `json:"path"`
-				File   string `json:"file"`
-			}
-			// Syntax failures ("your code is broken") and validator-infra
-			// failures (daemon unreachable / too old) are different facts;
-			// the status field must not claim validation_error for the
-			// latter (#527 review).
-			status := "validation_error"
-			var ve *writeback.ValidationError
-			if !errors.As(err, &ve) {
-				status = "validator_unavailable"
-			}
-			data, _ := json.MarshalIndent(valResult{
-				Status: status,
-				Error:  err.Error(),
-				Path:   path,
-				File:   origin.FilePath,
-			}, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			return validationFailure(err, path, origin.FilePath), nil
 		}
 
 		// 2. Format (gofumpt for Go, hclwrite for HCL) — opt-out.
@@ -99,49 +78,71 @@ func makeWriteFileHandler(g graph.Graph) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("write refused, source untouched: %v", err)), nil
 		}
 
-		// 4. Record it in the graph. The write is applied; if the graph
-		// update fails, "ok_graph_stale" says the file is right and the
-		// graph may not be. A merged write is not what mache built.
-		modTime := time.Now()
-		if fi, err := os.Stat(origin.FilePath); err == nil {
-			modTime = fi.ModTime()
-		}
-		status := "ok"
-		var graphWarning string
-		switch err := writeback.Commit(wb, path, origin, a, modTime); {
-		case err != nil:
-			status = "ok_graph_stale"
-			graphWarning = fmt.Sprintf("graph update failed after the write: %v (the file is correct; re-read to refresh the graph)", err)
-		case a.Merged:
-			status = "ok_merged"
-			graphWarning = "merged with a change made since this was read; re-read the file before writing it again"
-		}
-		g.Invalidate(path)
-
-		type writeResult struct {
-			Status        string              `json:"status"`
-			Path          string              `json:"path"`
-			Origin        *graph.SourceOrigin `json:"origin"`
-			FormatApplied bool                `json:"format_applied"`           // formatter ran (format=true)
-			FormatChanged bool                `json:"format_changed,omitempty"` // formatter actually altered the bytes
-			BytesDelta    int32               `json:"bytes_delta"`
-			GraphWarning  string              `json:"graph_warning,omitempty"`
-		}
-		data, _ := json.MarshalIndent(writeResult{
-			Status: status,
-			Path:   path,
-			Origin: &graph.SourceOrigin{
-				FilePath:  origin.FilePath,
-				StartByte: origin.StartByte,
-				EndByte:   origin.StartByte + uint32(len(a.Content)),
-			},
-			FormatApplied: format,
-			FormatChanged: format && string(formatted) != content,
-			BytesDelta:    int32(len(a.Content)) - int32(origin.EndByte-origin.StartByte),
-			GraphWarning:  graphWarning,
-		}, "", "  ")
-		return mcp.NewToolResultText(string(data)), nil
+		return committed(g, wb, path, origin, a, format, string(formatted) != content), nil
 	}
+}
+
+// validationFailure is a write that did not validate. Syntax failures ("your
+// code is broken") and validator-infra failures (daemon unreachable / too
+// old) are different facts; the status must not claim validation_error for
+// the latter (#527 review).
+func validationFailure(err error, path, file string) *mcp.CallToolResult {
+	status := "validation_error"
+	var ve *writeback.ValidationError
+	if !errors.As(err, &ve) {
+		status = "validator_unavailable"
+	}
+	data, _ := json.MarshalIndent(struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		Path   string `json:"path"`
+		File   string `json:"file"`
+	}{status, err.Error(), path, file}, "", "  ")
+	return mcp.NewToolResultText(string(data))
+}
+
+// committed records an accepted write in the graph and reports it. The write
+// is applied; if the graph update fails, "ok_graph_stale" says the file is
+// right and the graph may not be. A merged write is not what mache built.
+func committed(g graph.Graph, wb writeBacker, path string, origin graph.SourceOrigin, a *writeback.Applied, format, formatChanged bool) *mcp.CallToolResult {
+	modTime := time.Now()
+	if fi, err := os.Stat(origin.FilePath); err == nil {
+		modTime = fi.ModTime()
+	}
+	status := "ok"
+	var graphWarning string
+	switch err := writeback.Commit(wb, path, origin, a, modTime); {
+	case err != nil:
+		status = "ok_graph_stale"
+		graphWarning = fmt.Sprintf("graph update failed after the write: %v (the file is correct; re-read to refresh the graph)", err)
+	case a.Merged:
+		status = "ok_merged"
+		graphWarning = "merged with a change made since this was read; re-read the file before writing it again"
+	}
+	g.Invalidate(path)
+
+	data, _ := json.MarshalIndent(struct {
+		Status        string              `json:"status"`
+		Path          string              `json:"path"`
+		Origin        *graph.SourceOrigin `json:"origin"`
+		FormatApplied bool                `json:"format_applied"`           // formatter ran (format=true)
+		FormatChanged bool                `json:"format_changed,omitempty"` // formatter actually altered the bytes
+		BytesDelta    int32               `json:"bytes_delta"`
+		GraphWarning  string              `json:"graph_warning,omitempty"`
+	}{
+		Status: status,
+		Path:   path,
+		Origin: &graph.SourceOrigin{
+			FilePath:  origin.FilePath,
+			StartByte: origin.StartByte,
+			EndByte:   origin.StartByte + uint32(len(a.Content)),
+		},
+		FormatApplied: format,
+		FormatChanged: format && formatChanged,
+		BytesDelta:    int32(len(a.Content)) - int32(origin.EndByte-origin.StartByte),
+		GraphWarning:  graphWarning,
+	}, "", "  ")
+	return mcp.NewToolResultText(string(data))
 }
 
 // refusalResult is a refused write as the tool reports it: the daemon's

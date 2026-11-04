@@ -491,7 +491,8 @@ var rootCmd = &cobra.Command{
 						return fmt.Errorf("ley-line parse for source projection: %w", ppErr)
 					}
 					defer astCleanup()
-					leylinegraph.WireParseDB(store, astDB)
+					store.SetCallExtractor(leylinegraph.NewASTCallExtractor(astDB))
+					store.SetScopedCallExtractor(leylinegraph.NewASTScopedCallExtractor(astDB))
 					// Writes propose through the daemon mache starts on this
 					// tree (writeback.Propose, mache-3a0fb9); a file mount's
 					// tree is its directory, which is what was parsed.
