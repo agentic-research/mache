@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -462,4 +463,41 @@ func TestWatcher_ReportsFilesAlreadyInAMovedInDirectory(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.NotContains(t, changed, filepath.Join(moved, "notes.txt"), "only source files are reported")
+}
+
+// TestWatcher_AtomicReplaceIsAChange: replacing a watched file by renaming a
+// temp file over it (how leyline's daemon writes an accepted proposal, and how
+// editors save atomically) raises Rename/Remove on the path although the path
+// still holds a file. That is a change to re-index, never a delete: a delete
+// drops the file's nodes under a write_file that is about to update them
+// (mache-7eb099). A path that is gone is still a delete. The events are fed to
+// handleEvent directly so the decision is tested without racing fsnotify.
+func TestWatcher_AtomicReplaceIsAChange(t *testing.T) {
+	tmpDir := t.TempDir()
+	replaced := filepath.Join(tmpDir, "replaced.go")
+	require.NoError(t, os.WriteFile(replaced, []byte("package main\n"), 0o644))
+	gone := filepath.Join(tmpDir, "gone.go")
+
+	var changed, deleted []string
+	var timers []*fakeTimer
+	w, err := NewWatcher(tmpDir,
+		func(p string) { changed = append(changed, p) },
+		func(p string) { deleted = append(deleted, p) },
+		withAfterFunc(func(_ time.Duration, f func()) debounceTimer {
+			ft := &fakeTimer{fn: f}
+			timers = append(timers, ft)
+			return ft
+		}))
+	require.NoError(t, err)
+	defer w.Stop()
+
+	for _, op := range []fsnotify.Op{fsnotify.Rename, fsnotify.Remove} {
+		w.handleEvent(fsnotify.Event{Name: replaced, Op: op})
+		w.handleEvent(fsnotify.Event{Name: gone, Op: op})
+	}
+
+	require.NotEmpty(t, timers, "the replaced file is scheduled for re-indexing")
+	timers[len(timers)-1].fn()
+	assert.Equal(t, []string{replaced}, changed)
+	assert.Equal(t, []string{gone, gone}, deleted, "only the path that is gone is deleted")
 }
