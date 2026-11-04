@@ -41,8 +41,8 @@ func TestIngest_OriginNamesTheParsedBlob(t *testing.T) {
 	}
 }
 
-// TestASTWalker_FileBlob_IsTheRowsHash: the walker names the hash of exactly
-// the bytes fileSource returns, follows a reparse once the file's caches are
+// TestASTWalker_FileBlob_IsTheRowsHash: a file's section names the hash of
+// exactly the bytes it holds, follows a reparse once the file's caches are
 // dropped, and is nil on mache's cache-hydrated db, which records no hash.
 func TestASTWalker_FileBlob_IsTheRowsHash(t *testing.T) {
 	const src = "package main\n\nfunc F() {}\n"
@@ -61,13 +61,22 @@ func TestASTWalker_FileBlob_IsTheRowsHash(t *testing.T) {
 
 	f, w := build(fixturedb.Leyline)
 	require.NotNil(t, hashOf(f))
-	assert.Equal(t, hashOf(f), w.fileBlob("main.go"))
+	assert.Equal(t, hashOf(f), blobOf(w, "main.go"))
 
 	f.Reparse("main.go", src+"// edited\n")
 	w.InvalidateSource("main.go")
-	assert.Equal(t, hashOf(f), w.fileBlob("main.go"), "a reparse names a new blob")
+	assert.Equal(t, hashOf(f), blobOf(w, "main.go"), "a reparse names a new blob")
 
 	_, ws := build(fixturedb.Standalone)
-	assert.Nil(t, ws.fileBlob("main.go"),
+	assert.Nil(t, blobOf(ws, "main.go"),
 		"no recorded hash names no blob; the write path refuses rather than guess")
+}
+
+// blobOf is the blob stampOriginBlob would name for sourceID: none when the
+// walker holds no section for it.
+func blobOf(w *ASTWalker, sourceID string) []byte {
+	if idx := w.sectionOrNil(sourceID); idx != nil {
+		return idx.blob
+	}
+	return nil
 }
