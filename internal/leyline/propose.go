@@ -80,6 +80,11 @@ const (
 	RefusalNoSuchFile    RefusalReason = "no_such_file"
 	RefusalMalformedBase RefusalReason = "malformed_base"
 	RefusalExists        RefusalReason = "exists"
+	RefusalPathConflict  RefusalReason = "path_conflict"
+	// RefusalAliasesExisting: a created path names an entry the daemon's
+	// checkout already holds under another spelling, because its file system
+	// folds case or Unicode normalization. Other is that entry.
+	RefusalAliasesExisting RefusalReason = "aliases_existing"
 )
 
 // LineRange is a 0-based, half-open range of base lines.
@@ -103,6 +108,10 @@ type ProposalRefusal struct {
 	Reason RefusalReason `json:"reason"`
 	Path   string        `json:"path"`
 	Moved  []MovedPath   `json:"moved"`
+	// Other is the second path the refusal names: for path_conflict the file
+	// Path is under, for aliases_existing the entry Path aliases. Empty
+	// otherwise.
+	Other string `json:"other"`
 }
 
 // PathHash is a path and the blob it now holds.

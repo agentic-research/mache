@@ -43,7 +43,9 @@ type arenaSpawnConfig struct {
 	// change can change the projection, and a newer leyline refuses to warm
 	// start an arena an older one wrote: v0.21.0 exits on a projection-v6
 	// arena ("this arena was written by projection-v6; this binary writes
-	// projection-v7"), verified against both released binaries. Without this,
+	// projection-v7"), verified against both released binaries, and v0.22.0
+	// exits the same way on the projection-v7 arena v0.21.1 leaves while
+	// starting with --reset-arena (mache-72668d). Without this,
 	// the first daemon start after upgrading mache failed outright. A record
 	// written before this field existed reads as "", so it resets once.
 	Leyline string `json:"leyline"`

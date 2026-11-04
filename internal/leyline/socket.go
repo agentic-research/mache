@@ -1159,12 +1159,29 @@ func (c *SocketClient) Prioritize(files []string) error {
 // SCHEMA_VERSION stays 0.21.0 and no schema-client tag was cut, so go.mod is
 // unchanged; projection, wire, control block and IR lineage are unchanged.
 //
+// v0.21.1 -> v0.22.0 moves the projection to projection-v9 and the schema
+// client to clients/go/leyline-schema v0.22.0 (mache-72668d):
+//   - projection-v8 drops capnp_blobs and _ast_blob (no mache reader), and
+//     projection-v9 interns the merkle edges: node_content gains content_id,
+//     node_edge(parent_id, ordinal, child_id, field) holds the edges, and
+//     node_child becomes a read-only view over it. v8 was never released.
+//     Verified by diffing sqlite_master of one tree parsed by both binaries;
+//     nothing else changed.
+//   - v0.22.0 refuses to parse into a projection-v7 arena (exit 1, "delete the
+//     .db ... and reparse cold"). arenaSpawnConfig.Leyline and the parse
+//     cache's version key already send both onto a fresh arena.
+//   - propose may refuse with aliases_existing, and a refusal names a second
+//     path in `other` (path_conflict, aliases_existing).
+//
+// SCHEMA_VERSION is 0.22.0 and compat_min_schema_version stays 0.6.0; the
+// control block and IR lineage (merkle-ast-v2) are unchanged.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.21.1"
+const leylineBinaryVersion = "v0.22.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

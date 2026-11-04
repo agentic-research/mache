@@ -8,7 +8,11 @@ package fixturedb
 // projection-v6 and change no table; v0.21.0 writes projection-v7, which
 // changes none of these and adds _tree and _parse_diagnostics, copied from a
 // v0.21.0 parse. v0.21.1 was re-derived the same way and its sqlite_master is
-// identical, all 225 objects (mache-40e8e7):
+// identical, all 225 objects (mache-40e8e7). v0.22.0 writes projection-v9:
+// capnp_blobs and _ast_blob are gone, node_content gains content_id, and
+// node_edge holds the edges node_child held, node_child becoming a view over it.
+// Those four objects are the whole difference from v0.21.1's sqlite_master
+// (mache-72668d):
 //
 //	$ leyline parse ./src -o out.db
 //	$ sqlite3 out.db "SELECT sql FROM sqlite_master ORDER BY type, name"
@@ -25,8 +29,8 @@ package fixturedb
 // WHY A SECOND MIRROR RATHER THAN REPLACING THE FIRST. mache reads artifacts
 // produced by several leyline versions — lloschema.resolveIdentity exists
 // precisely because a db carries its own answer — so fixtures must be able to
-// model both. This one models the nid-keyed shape, projection-v6 and the
-// pinned projection-v7 (v7 is v6 plus two tables), and
+// model both. This one models the nid-keyed shape at the pin, projection-v9,
+// and
 // TestLeylineSchema_MatchesPinnedBinary checks it against the pinned binary.
 // schema_leyline.go stays the v4 model, for artifacts the previous pin built,
 // checked against its own binary by TestLeylineV4Schema_MatchesItsBinary.
@@ -35,7 +39,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.21.1"
+const leylineV6SchemaVersion = "v0.22.0"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
@@ -127,23 +131,28 @@ var leylineV6Tables = map[string]string{
     text TEXT NOT NULL UNIQUE
 )`,
 
-	"node_child": `CREATE TABLE node_child (
-    parent_hash BLOB    NOT NULL REFERENCES node_content(node_hash),
-    ordinal     INTEGER NOT NULL,
-    child_hash  BLOB    NOT NULL REFERENCES node_content(node_hash),
-    field       TEXT,
-    PRIMARY KEY (parent_hash, ordinal)
+	// projection-v9 (v0.22.0): content_id numbers the rows for node_edge. It
+	// is arena-local, not an identity; node_hash stays the FK target.
+	"node_content": `CREATE TABLE node_content (
+    content_id INTEGER PRIMARY KEY,
+    node_hash  BLOB    NOT NULL UNIQUE,
+    node_tag   INTEGER NOT NULL,
+    kind       TEXT    NOT NULL,
+    raw_kind   TEXT    NOT NULL,
+    lang       TEXT    NOT NULL,
+    token      TEXT,
+    arity      INTEGER NOT NULL
 )`,
 
-	"node_content": `CREATE TABLE node_content (
-    node_hash BLOB PRIMARY KEY,
-    node_tag  INTEGER NOT NULL,
-    kind      TEXT    NOT NULL,
-    raw_kind  TEXT    NOT NULL,
-    lang      TEXT    NOT NULL,
-    token     TEXT,
-    arity     INTEGER NOT NULL
-)`,
+	// projection-v9: the merkle edges, interned on content ids. node_child is
+	// now a view over this table (leylineV6Views).
+	"node_edge": `CREATE TABLE node_edge (
+    parent_id INTEGER NOT NULL REFERENCES node_content(content_id),
+    ordinal   INTEGER NOT NULL,
+    child_id  INTEGER NOT NULL REFERENCES node_content(content_id),
+    field     TEXT,
+    PRIMARY KEY (parent_id, ordinal)
+) WITHOUT ROWID`,
 
 	"node_defs": `CREATE TABLE node_defs (
     token TEXT NOT NULL,
@@ -197,10 +206,8 @@ var leylineV6Tables = map[string]string{
 // gap nobody sees (projection-v7's _tree and _parse_diagnostics went unnoticed
 // for exactly that reason until the v0.21.0 pin).
 var leylineV6Unmodelled = map[string]string{
-	"_ast_blob":   "LLO's packed AST storage; mache reads _ast",
 	"_meta":       "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
 	"_queries":    "LLO's tree-sitter query registry",
-	"capnp_blobs": "LLO's capnp payload store",
 	"query_blobs": "LLO's compiled-query store",
 }
 
@@ -210,6 +217,18 @@ var leylineV6Unmodelled = map[string]string{
 // siblings — and lloschema's v_nodes joins it rather than reimplementing it.
 // A fixture without it cannot build v_nodes at all.
 var leylineV6Views = map[string]string{
+	// projection-v9: the v8 table's columns over node_edge, so every plain
+	// node_child read runs unchanged. Not on the right of a LEFT JOIN:
+	// lloschema.FieldChildJoins says why.
+	"node_child": `CREATE VIEW node_child AS
+SELECT p.node_hash AS parent_hash,
+       e.ordinal   AS ordinal,
+       c.node_hash AS child_hash,
+       e.field     AS field
+  FROM node_edge e
+  JOIN node_content p ON p.content_id = e.parent_id
+  JOIN node_content c ON c.content_id = e.child_id`,
+
 	"v_node_name": `CREATE VIEW v_node_name AS
 SELECT n.nid AS nid,
        CASE

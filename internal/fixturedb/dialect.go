@@ -17,6 +17,10 @@ type dialect interface {
 	// point node_hash values at.
 	hasNodeContent(b *Builder) bool
 
+	// edgeInsert is the statement writing one merkle edge from (parent hash,
+	// ordinal, child hash, field), for emitNodeChildren.
+	edgeInsert() string
+
 	emitNodes(e *emitter)
 	// emitSymbols writes node_defs and node_refs.
 	emitSymbols(e *emitter)
@@ -24,3 +28,11 @@ type dialect interface {
 	emitSources(e *emitter)
 	emitImports(e *emitter)
 }
+
+// The edge writers are emit.go's statements: the LLO boundary lint allows
+// writes of LLO's tables there and nowhere else.
+func (leylineDialect) edgeInsert() string   { return insertNodeChild }
+func (leylineV6Dialect) edgeInsert() string { return insertNodeEdge }
+
+// A Standalone fixture writes no merkle edges: its emitAST lists no children.
+func (standaloneDialect) edgeInsert() string { return "" }

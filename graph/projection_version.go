@@ -46,7 +46,7 @@ var knownProjections = map[string]string{
 	// nid. Every mache reader handles it through internal/lloschema, checked
 	// against real parses of one tree in both shapes (mache-90cb9f).
 	"projection-v6": "leyline v0.20.x: integer nids, derived paths, interned names and kinds",
-	// THE PINNED SHAPE as of leyline v0.21.0: projection-v6 plus two tables,
+	// The shape leyline v0.21.x writes: projection-v6 plus two tables,
 	// with every v6 table unchanged (fixturedb's mirror re-derived from the
 	// released binary). _tree(path, mode, blob_hash, mtime, size) lists every
 	// entry, explicit directories included, while _source lists only the files
@@ -54,7 +54,21 @@ var knownProjections = map[string]string{
 	// _parse_diagnostics records a file that parsed with errors (projected=1)
 	// or not at all (binary or oversized, projected=0). The readers mache had
 	// for v6 read v7 unchanged.
-	"projection-v7": "the pinned shape: v6 plus _tree (every entry) and _parse_diagnostics",
+	"projection-v7": "leyline v0.21.x: v6 plus _tree (every entry) and _parse_diagnostics",
+	// v7 minus capnp_blobs and _ast_blob, LLO's second stored copy of the
+	// syntax tree, which mache never read. No leyline release writes it: it
+	// shipped only inside v0.22.0's move to v9, so mache has seen it only as
+	// the step between (mache-72668d).
+	"projection-v8": "unreleased: v7 minus capnp_blobs and _ast_blob",
+	// THE PINNED SHAPE as of leyline v0.22.0: v8 with the merkle edges
+	// interned. node_content gains content_id (arena-local, not an identity);
+	// node_edge(parent_id, ordinal, child_id, field) holds the edges; and
+	// node_child is a read-only VIEW over it with v8's columns. A plain read of
+	// node_child runs unchanged, but SQLite materializes the whole view on the
+	// right of a LEFT JOIN, so the one such reader joins node_edge on v9
+	// (lloschema.FieldChildJoins). Checked against sqlite_master of one tree
+	// parsed by v0.21.1 and v0.22.0: nothing else differs.
+	"projection-v9": "the pinned shape: v8 with node_edge interning node_child, which becomes a view",
 }
 
 // ProjectionVersion returns the projection shape an artifact declares and

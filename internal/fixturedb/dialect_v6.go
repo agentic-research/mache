@@ -21,13 +21,13 @@ func (leylineV6Dialect) schema(b *Builder) []string {
 	stmts = append(stmts, b.lspDDL(true)...)
 	stmts = append(stmts, tableDDL(slices.Sorted(maps.Keys(leylineV6Indexes)), leylineV6Indexes)...)
 	// v_node_path reads v_node_name, so name first.
-	return append(stmts, leylineV6Views["v_node_name"], leylineV6Views["v_node_path"])
+	return append(stmts, leylineV6Views["node_child"], leylineV6Views["v_node_name"], leylineV6Views["v_node_path"])
 }
 
 // leylineV6TableOrder is creation order: interning tables first, then the
 // tables that reference them.
 var leylineV6TableOrder = []string{
-	"names", "kinds", "dirs", "files", "nodes", "node_content", "node_child",
+	"names", "kinds", "dirs", "files", "nodes", "node_content", "node_edge",
 	"_ast", "source_blobs", "_source", "node_defs", "node_refs", "_imports",
 	"_tree", "_parse_diagnostics",
 }

@@ -144,6 +144,17 @@ func (e *emitter) insertV6AST() map[string][]byte {
 	return hashes
 }
 
+// The merkle edge writers, one per producer table, each taking (parent hash,
+// ordinal, child hash, field). projection-v9 keeps the edges in node_edge,
+// numbering each end by its node_content row, and makes node_child a view a
+// write to fails; before v9 node_child is the table.
+const (
+	insertNodeChild = `INSERT INTO node_child (parent_hash, ordinal, child_hash, field) VALUES (?, ?, ?, ?)`
+	insertNodeEdge  = `INSERT INTO node_edge (parent_id, ordinal, child_id, field) VALUES (
+		(SELECT content_id FROM node_content WHERE node_hash = ?), ?,
+		(SELECT content_id FROM node_content WHERE node_hash = ?), ?)`
+)
+
 // emitNodeChildren writes the merkle child list: for every `_ast` node whose
 // id's directory is itself an `_ast` node, one row under the parent's hash at
 // the child's start-byte position among its siblings. ley-line emits a parent's
@@ -151,7 +162,11 @@ func (e *emitter) insertV6AST() map[string][]byte {
 // share one list — and must therefore agree on it: identical content has
 // identical children, so a fixture whose labelled twins disagree is describing
 // a subtree that cannot exist.
+//
+// The producer's dialect names the edge writer: the table differs, the list
+// does not.
 func (e *emitter) emitNodeChildren(hashes map[string][]byte) {
+	insert := e.b.producer.dialect.edgeInsert()
 	byParent := make(map[string][]astSpec)
 	for _, a := range e.b.ast {
 		parent := path.Dir(a.nodeID)
@@ -180,8 +195,7 @@ func (e *emitter) emitNodeChildren(hashes map[string][]byte) {
 		}
 		listed[key] = rows
 		for ord, r := range rows {
-			e.exec(`INSERT INTO node_child (parent_hash, ordinal, child_hash, field) VALUES (?, ?, ?, ?)`,
-				hashes[a.nodeID], ord, r.hash, nullIfEmpty(r.field))
+			e.exec(insert, hashes[a.nodeID], ord, r.hash, nullIfEmpty(r.field))
 		}
 	}
 }
