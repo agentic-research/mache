@@ -1169,12 +1169,20 @@ func (c *SocketClient) Prioritize(files []string) error {
 // SCHEMA_VERSION is 0.22.0 and compat_min_schema_version stays 0.6.0; the
 // control block and IR lineage (merkle-ast-v2) are unchanged.
 //
+// v0.22.0 -> v0.23.0 adds status.source_root (ley-line-open-246526), which
+// WritableDaemon asks of every daemon, and daemon/wire types for read_source
+// and propose (ley-line-open-247489), which replace mache's own copies
+// (mache-161c63). The projection stays projection-v9 with sqlite_master
+// identical to v0.22.0's on one tree; SCHEMA_VERSION is 0.23.0,
+// compat_min_schema_version stays 0.6.0, and the control block and IR lineage
+// are unchanged.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.22.0"
+const leylineBinaryVersion = "v0.23.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
