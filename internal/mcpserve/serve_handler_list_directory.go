@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -17,6 +19,11 @@ type nodeEntry struct {
 	Path string `json:"path"`
 	Type string `json:"type"`
 	Size int64  `json:"size,omitempty"`
+	// Unparsed marks a file leyline saw but no parser projected: it exists,
+	// it has no symbols, and read_file serves its bytes (mache-3a375a).
+	Unparsed bool `json:"unparsed,omitempty"`
+	// Diagnostic is the parse's message for the file, when it recorded one.
+	Diagnostic string `json:"diagnostic,omitempty"`
 }
 
 // containerNames are schema-level dir names that group constructs but are
@@ -69,6 +76,12 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 		// one map iteration and 300 lock acquisitions.
 		stats, err := g.ListChildStats(path)
 		if err != nil {
+			// A directory leyline saw but projected nothing under is in
+			// _tree alone.
+			if tree := withTree(g, path, nil); len(tree) > 0 {
+				data, _ := json.MarshalIndent(tree, "", "  ")
+				return mcp.NewToolResultText(string(data)), nil
+			}
 			return mcp.NewToolResultError(fmt.Sprintf("list %q: %v", path, err)), nil
 		}
 
@@ -89,6 +102,8 @@ func makeListDirHandler(g graph.Graph) server.ToolHandlerFunc {
 				Size: s.ContentSize,
 			})
 		}
+
+		entries = withTree(g, path, entries)
 
 		// Surface virtual entries on construct directories
 		// (skip if already materialized in the db)
@@ -155,4 +170,47 @@ func virtualEntries(g graph.Graph, path string, listed []nodeEntry) []nodeEntry 
 		}
 	}
 	return virtual
+}
+
+// withTree is listed plus the entries of path's `_tree` the projection did not
+// list, in name order: `_tree` is the authority on what exists, and hiding a
+// file no parser projected makes an agent overlook or recreate it. Such a file
+// is marked unparsed. Every file, listed or added, carries the parse's
+// diagnostic when there is one (mache-3a375a). A graph without `_tree` lists
+// as it is.
+func withTree(g graph.Graph, path string, listed []nodeEntry) []nodeEntry {
+	qg, ok := g.(lloschema.Querier)
+	if !ok {
+		return listed
+	}
+	if has, err := lloschema.HasTree(qg); err != nil || !has {
+		return listed
+	}
+	kids, err := lloschema.TreeChildren(qg, path)
+	if err != nil {
+		return listed
+	}
+	at := make(map[string]int, len(listed))
+	for i, e := range listed {
+		at[e.Name] = i
+	}
+	added := false
+	for _, k := range kids {
+		if i, ok := at[k.Name]; ok {
+			listed[i].Diagnostic = k.Diagnostic
+			continue
+		}
+		e := nodeEntry{Name: k.Name, Path: k.Path, Type: "file", Size: k.Size, Diagnostic: k.Diagnostic}
+		if k.IsDir {
+			e.Type = "dir"
+		} else {
+			e.Unparsed = !k.Parsed
+		}
+		listed = append(listed, e)
+		added = true
+	}
+	if added {
+		slices.SortStableFunc(listed, func(a, b nodeEntry) int { return strings.Compare(a.Name, b.Name) })
+	}
+	return listed
 }

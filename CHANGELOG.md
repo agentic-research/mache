@@ -8,6 +8,16 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`list_directory` shows files leyline did not parse** (`mache-3a375a`).
+  On a projection-v7 `.db`, `_tree` records every file and directory leyline
+  saw, and it is now the authority on what a listing shows: a file no parser
+  projected (a binary, a text file in a language leyline has no parser for)
+  is listed with `"unparsed": true` and no symbol children, and a directory
+  holding only such files lists too. Every file carries `"diagnostic"` when
+  the parse recorded one (`_parse_diagnostics`), so a file that parsed with
+  errors says so where it is listed. `read_file` reads an unparsed text file
+  from the bytes leyline stored; a binary one is refused with its size.
+
 - **`get_diagnostics` reports what leyline's parse recorded** (`mache-3a375a`).
   A projection-v7 `.db` carries `_parse_diagnostics`: each file that parsed
   with error nodes (`symbol_kind` `parse`) or could not be projected at all
