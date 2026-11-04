@@ -1,14 +1,17 @@
 package mcpserve
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -51,6 +54,9 @@ func readOneFileWithOrigin(g graph.Graph, path string) (*fileReadResult, error) 
 
 	node, err := g.GetNode(path)
 	if err != nil {
+		if r, ok, terr := readTreeFile(g, path); ok || terr != nil {
+			return r, terr
+		}
 		return readVirtual(g, path)
 	}
 	if node.Mode.IsDir() {
@@ -140,4 +146,27 @@ func makeReadFileHandler(g graph.Graph) server.ToolHandlerFunc {
 		}
 		return mcp.NewToolResultText(r.Content), nil
 	}
+}
+
+// readTreeFile reads a file leyline saw but no parser projected: it is in
+// `_tree` only, and its bytes in source_blobs (mache-3a375a). ok is false when
+// path is no such file, so the caller goes on resolving it. A file that is not
+// text has nothing to read.
+func readTreeFile(g graph.Graph, path string) (*fileReadResult, bool, error) {
+	qg, isQ := g.(lloschema.Querier)
+	if !isQ {
+		return nil, false, nil
+	}
+	if has, err := lloschema.HasTree(qg); err != nil || !has {
+		return nil, false, nil
+	}
+	content, ok, err := lloschema.TreeFileBytes(qg, path)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	// A NUL byte is binary (git's test); so is anything that is not UTF-8.
+	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
+		return nil, true, fmt.Errorf("%s is a binary file (%d bytes) no parser projected; it has no text to read", path, len(content))
+	}
+	return &fileReadResult{Content: string(content)}, true, nil
 }
