@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -373,6 +374,12 @@ func TestServeWriteFile_InfraFailureStatusDistinct(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", "/nonexistent-for-test")
 	t.Setenv("MACHE_NO_LEYLINE", "1")
+	// The builder named the pinned binary through the override, which a
+	// spawn honours whatever MACHE_NO_LEYLINE says; clear it, or mache
+	// starts a fresh daemon and the write goes through. (Locally the long
+	// macOS temp HOME broke the socket path and hid this; CI's did not.)
+	t.Setenv(leyline.BinaryOverrideEnv, "")
+	leyline.StopManaged()
 
 	handler := makeWriteFileHandler(store)
 	result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{
