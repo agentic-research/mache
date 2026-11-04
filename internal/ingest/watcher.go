@@ -176,6 +176,15 @@ func (w *Watcher) handleEvent(ev fsnotify.Event) {
 	}
 
 	if ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
+		// A path that still holds a file was replaced, not deleted: renaming
+		// a new file over it (leyline's daemon applying a proposal, an editor
+		// saving atomically) raises these events on the path too. Re-index
+		// it; deleting its nodes would pull them out from under a write about
+		// to update them (mache-7eb099).
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			w.debouncedOnChange(path)
+			return
+		}
 		// File gone -- fire delete immediately (no debounce needed).
 		w.cancelTimer(path)
 		if w.onDelete != nil {

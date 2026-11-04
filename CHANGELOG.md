@@ -122,6 +122,15 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A write no longer drops its own file's nodes on the watcher path**
+  (`mache-7eb099`). The file watcher treated any rename or remove event on a
+  source file as a delete. leyline's daemon applies a write by replacing the
+  file, which raises those events on a path that still holds a file, so since
+  writes went through propose (`mache-3a0fb9`) every `write_file` on the
+  watcher path (`MACHE_NO_LEYLINE=1`) dropped the file's nodes and answered
+  `ok_graph_stale`. Editors that save atomically hit the same thing. A path
+  that still holds a file is now re-indexed as a change; only a path that is
+  gone deletes its nodes.
 - **Source text comes from the parse, never from the file on disk**
   (`mache-46c59d`). leyline leaves `_source.content` NULL and keeps the parsed
   bytes in `source_blobs` under `content_hash`. Three readers got this wrong:

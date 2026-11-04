@@ -463,3 +463,36 @@ func TestWatcher_ReportsFilesAlreadyInAMovedInDirectory(t *testing.T) {
 	defer mu.Unlock()
 	assert.NotContains(t, changed, filepath.Join(moved, "notes.txt"), "only source files are reported")
 }
+
+// TestWatcher_AtomicReplaceIsAChange: replacing a watched file by renaming a
+// temp file over it (how leyline's daemon writes an accepted proposal, and how
+// editors save atomically) raises Rename/Remove on the path although the path
+// still holds a file. That is a change to re-index, never a delete: a delete
+// drops the file's nodes under a write_file that is about to update them
+// (mache-7eb099).
+func TestWatcher_AtomicReplaceIsAChange(t *testing.T) {
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "replaced.go")
+	require.NoError(t, os.WriteFile(goFile, []byte("package main\n"), 0o644))
+
+	var changes, deletes atomic.Int32
+	w, err := NewWatcher(tmpDir,
+		func(p string) {
+			if p == goFile {
+				changes.Add(1)
+			}
+		},
+		func(string) { deletes.Add(1) },
+		WithDebounce(20*time.Millisecond))
+	require.NoError(t, err)
+	defer w.Stop()
+
+	tmp := filepath.Join(tmpDir, "replaced.go.tmp")
+	require.NoError(t, os.WriteFile(tmp, []byte("package main\n\nfunc New() {}\n"), 0o644))
+	require.NoError(t, os.Rename(tmp, goFile))
+
+	require.Eventually(t, func() bool { return changes.Load() > 0 }, 2*time.Second, 10*time.Millisecond,
+		"the replaced file is re-indexed")
+	time.Sleep(100 * time.Millisecond) // let any stray event land
+	assert.Zero(t, deletes.Load(), "a path that still holds a file was not deleted")
+}
