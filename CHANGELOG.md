@@ -19,6 +19,23 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **Writes go through leyline's propose, never straight to disk**
+  (`mache-3a0fb9`). A write to a node (the NFS mount or `write_file`) used
+  to splice the bytes into the source file. mache now rebuilds the node's
+  whole file from the parsed bytes the node was read from, with the edit in
+  place, and proposes it to the leyline daemon it started on the tree, with
+  those bytes as the base; the daemon writes the file. When someone changed
+  the file since mache read it, the daemon merges the two changes, or, when
+  they overlap, refuses the write: `write_file` answers
+  `{"status": "write_refused", "reason": "stale", "conflicts": [...]}` with
+  the overlapping lines, the mount puts them in
+  `_diagnostics/last-write-status`, and the file keeps the other change.
+  A merged write answers `ok_merged`: the file is then not what mache built,
+  so further writes to it are refused until it is re-read. Writes go only
+  through a daemon mache started on the tree, since no daemon op reports a
+  daemon's source tree (ley-line-open-246526); through a daemon mache found
+  already running, a write is refused and the file is untouched.
+
 - **mache refuses a leyline daemon that is not the pinned release**
   (`mache-a2edb2`). A daemon mache did not start, whether found at
   `LEYLINE_SOCKET` or the well-known socket, used to draw a one-time warning

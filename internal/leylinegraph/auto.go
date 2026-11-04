@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leyline"
 )
@@ -122,6 +123,11 @@ func AttachLeylineASTWalker(dataSource string, engine *ingest.Engine) (*sql.DB, 
 		return nil, nil, fmt.Errorf("open ley-line parse output %s: %w", dbPath, err)
 	}
 	engine.SetASTWalker(ingest.NewASTWalker(db))
+	// The store the engine projects into reads its writes' base bytes from
+	// the same db the projection was built from (mache-3a0fb9).
+	if bs, ok := engine.Store.(interface{ SetBlobSource(graph.BlobSource) }); ok {
+		bs.SetBlobSource(graph.NewParseBlobs(db))
+	}
 	cleanup := func() {
 		_ = db.Close()
 		parseCleanup()

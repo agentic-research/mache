@@ -80,6 +80,9 @@ func setup(t *testing.T) *testFixture {
 	store := graph.NewMemoryStore()
 	engine := ingest.NewEngine(schema, store)
 	lltest.IngestSourceViaLeyline(t, engine, srcDir)
+	// Writes propose through mache's managed daemon on srcDir, rebuilding the
+	// file from the parsed blob each origin names (mache-3a0fb9).
+	store.SetBlobSource(lltest.UseWritableTree(t, srcDir).Blobs)
 
 	// Wire GraphFS with real write-back
 	gfs := nfsmount.NewGraphFS(store, schema)
@@ -93,17 +96,8 @@ func setup(t *testing.T) *testFixture {
 	}
 }
 
-// requireWriteDaemon gates tests that exercise the write-back pipeline: since
-// mache-73b885, validation + lint run through the leyline daemon's validate
-// op. A PRIVATE pinned daemon (never downloaded; skip when absent) is spawned
-// and exposed via LEYLINE_SOCKET so the pipeline under test finds it.
-func requireWriteDaemon(t *testing.T) {
-	t.Helper()
-	lltest.UsePinnedDaemon(t)
-}
-
 // realWriteBack replicates the cmd/mount_nfs.go NFS write-back pipeline:
-// validate(+emit_ast) → format (gofumpt) → lint (same parse) → splice →
+// validate(+emit_ast) → format (gofumpt) → lint (same parse) → propose →
 // surgical update.
 func realWriteBack(store *graph.MemoryStore) func(string, graph.SourceOrigin, []byte) error {
 	return func(nodeID string, origin graph.SourceOrigin, content []byte) error {
@@ -139,23 +133,14 @@ func realWriteBack(store *graph.MemoryStore) func(string, graph.SourceOrigin, []
 			}
 		}
 
-		// 4. Splice into source file
-		oldLen := origin.EndByte - origin.StartByte
-		if err := writeback.Splice(origin, formatted); err != nil {
+		// 4. Propose the file with the edit; 5. record it in the graph.
+		a, err := writeback.Propose(origin, formatted, store.Blobs())
+		if err != nil {
 			return err
 		}
-
-		// 5. Surgical node update
-		newOrigin := &graph.SourceOrigin{
-			FilePath:  origin.FilePath,
-			StartByte: origin.StartByte,
-			EndByte:   origin.StartByte + uint32(len(formatted)),
+		if err := writeback.Commit(store, nodeID, origin, a, time.Now()); err != nil {
+			return err
 		}
-		delta := int32(len(formatted)) - int32(oldLen)
-		if delta != 0 {
-			store.ShiftOrigins(origin.FilePath, origin.EndByte, delta)
-		}
-		_ = store.UpdateNodeContent(nodeID, formatted, newOrigin, time.Now())
 		store.WriteStatus.Store(filepath.Dir(nodeID), "ok")
 		node.DraftData = nil
 
@@ -203,7 +188,6 @@ func TestIntegration_ContextAwareness(t *testing.T) {
 }
 
 func TestIntegration_Truncation(t *testing.T) {
-	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// Write shorter content — old tail must not remain in source file
@@ -218,7 +202,6 @@ func TestIntegration_Truncation(t *testing.T) {
 }
 
 func TestIntegration_Diagnostics(t *testing.T) {
-	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// Write broken syntax
@@ -241,7 +224,6 @@ func TestIntegration_Diagnostics(t *testing.T) {
 }
 
 func TestIntegration_Recovery(t *testing.T) {
-	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// First: write broken syntax to set diagnostic state
@@ -262,7 +244,6 @@ func TestIntegration_Recovery(t *testing.T) {
 }
 
 func TestIntegration_SequentialWrites(t *testing.T) {
-	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// Two sequential writes to the same node — both should land.
@@ -286,7 +267,6 @@ func TestIntegration_SequentialWrites(t *testing.T) {
 }
 
 func TestIntegration_GofumptFormat(t *testing.T) {
-	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// FormatGoBuffer uses format.Source which requires a complete Go file.
@@ -309,7 +289,6 @@ func TestIntegration_GofumptFormat(t *testing.T) {
 }
 
 func TestIntegration_LintDiagnostic_NilSlice(t *testing.T) {
-	requireWriteDaemon(t)
 	fix := setup(t)
 
 	// A valid write containing an uninitialized slice declaration must

@@ -73,6 +73,8 @@ type MemoryStore struct {
 	// prefers this when both are available; see ScopedCallExtractor
 	// (bead mache-fd9982).
 	scopedExtractor ScopedCallExtractor
+	// blobs supplies the parsed bytes a write rebuilds its file from (BlobSource).
+	blobs BlobSource
 
 	// Live graph: file mtime tracking and on-demand refresh.
 	fileMtimes map[string]time.Time        // source file → mtime at index time

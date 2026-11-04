@@ -15,7 +15,7 @@ import (
 // old), a write must fail, not draft. Drafting reported success to the writer
 // while the source file, and so every build, kept the old code; only a virtual
 // _diagnostics file said otherwise (mache-3a213e).
-func TestSpliceWriteBack_UnreachableValidatorRefusesTheWrite(t *testing.T) {
+func TestProposeWriteBack_UnreachableValidatorRefusesTheWrite(t *testing.T) {
 	dead := filepath.Join(t.TempDir(), "dead.sock")
 	require.NoError(t, os.WriteFile(dead, nil, 0o600))
 	t.Setenv("LEYLINE_SOCKET", dead) // a path that is not a socket: no daemon answers
@@ -28,7 +28,7 @@ func TestSpliceWriteBack_UnreachableValidatorRefusesTheWrite(t *testing.T) {
 	origin := &graph.SourceOrigin{FilePath: src, StartByte: 11, EndByte: uint32(len(fn))}
 	store.AddNode(&graph.Node{ID: "a/functions/A/source", Data: original[11:len(fn)], Origin: origin})
 
-	err := spliceWriteBack(store)("a/functions/A/source", *origin, []byte("func A() int { return 2 }"))
+	err := proposeWriteBack(store)("a/functions/A/source", *origin, []byte("func A() int { return 2 }"))
 	require.Error(t, err, "the writer is told the edit did not land")
 	assert.Contains(t, err.Error(), "validator unavailable")
 

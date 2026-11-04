@@ -39,7 +39,7 @@ The code projection is where the engine is deepest. **19 MCP tools** wrap the pr
 | **Navigate** by structure, not string match | `find_definition`, `list_directory`, `read_file`, `resolve_ref`, `search` | base         | Stable                                                |
 | **Trace** reference flow, both directions   | `find_callers`, `find_callees`, `get_impact`, `get_dataflow`              | base         | Stable — edges are explicitly `node_ref` evidence     |
 | **Judge** structural quality                | `find_smells` — 14 rules                                                  | base¹        | Stable — `fan_out_skew` is qualifier-aware            |
-| **Edit** without breaking the file          | `write_file` — validate → format → splice, draft mode on reject           | base         | Stable                                                |
+| **Edit** without breaking the file          | `write_file` — validate → format → propose through leyline, draft mode on reject           | base         | Stable                                                |
 | **Types + diagnostics** from a real LSP     | `get_type_info`, `get_diagnostics`                                        | + LSP pass   | Stable, optional tier                                 |
 | **Search by meaning**, not tokens           | `semantic_search`                                                         | + embeddings | Stable, optional tier                                 |
 | **Check enrichment freshness**              | `get_sheaf_status`                                                        | any²         | Stable                                                |
