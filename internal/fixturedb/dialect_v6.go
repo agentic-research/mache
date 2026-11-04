@@ -140,7 +140,9 @@ func (leylineV6Dialect) emitSymbols(e *emitter) {
 	}
 }
 
-func (leylineV6Dialect) emitAST(e *emitter) { e.emitNodeChildren(e.insertV6AST(), insertNodeEdge) }
+func (leylineV6Dialect) emitAST(e *emitter) { e.emitNodeChildren(e.insertV6AST()) }
+
+func (leylineV6Dialect) edgeInsert() string { return insertNodeEdge }
 
 func (leylineV6Dialect) emitSources(e *emitter) { e.insertV6Sources() }
 

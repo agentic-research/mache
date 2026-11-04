@@ -17,6 +17,10 @@ type dialect interface {
 	// point node_hash values at.
 	hasNodeContent(b *Builder) bool
 
+	// edgeInsert is the statement writing one merkle edge from (parent hash,
+	// ordinal, child hash, field), for emitNodeChildren.
+	edgeInsert() string
+
 	emitNodes(e *emitter)
 	// emitSymbols writes node_defs and node_refs.
 	emitSymbols(e *emitter)

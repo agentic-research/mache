@@ -163,8 +163,10 @@ const (
 // identical children, so a fixture whose labelled twins disagree is describing
 // a subtree that cannot exist.
 //
-// insert is the producer's edge writer: the table differs, the list does not.
-func (e *emitter) emitNodeChildren(hashes map[string][]byte, insert string) {
+// The producer's dialect names the edge writer: the table differs, the list
+// does not.
+func (e *emitter) emitNodeChildren(hashes map[string][]byte) {
+	insert := e.b.producer.dialect.edgeInsert()
 	byParent := make(map[string][]astSpec)
 	for _, a := range e.b.ast {
 		parent := path.Dir(a.nodeID)
