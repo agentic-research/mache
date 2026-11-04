@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	daemonwire "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/daemon/wire"
+
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/lltest"
 )
@@ -20,6 +22,9 @@ const (
 	proposeClash = "package pkg\n\nfunc A() int { return B() }\n\nfunc B() int { return 3 }\n"
 	proposeAll   = "package pkg\n\nfunc A() int { return B() + 1 }\n\nfunc B() int { return 2 }\n"
 )
+
+// text is a proposed write's content, which the wire carries as a pointer.
+func text(s string) *string { return &s }
 
 // requireHash asserts s is a blob hash as the wire spells it: 32 bytes, hex.
 func requireHash(t *testing.T, s string) {
@@ -53,7 +58,7 @@ func TestProposeWire_AgainstThePinnedDaemon(t *testing.T) {
 	requireHash(t, read.TreeRoot)
 	base := read.BlobHash
 
-	applied, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: base, Content: proposeTheir}})
+	applied, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: base, Content: text(proposeTheir)}})
 	require.NoError(t, err)
 	require.Nil(t, applied.Refusal, applied.Message)
 	require.Len(t, applied.Blobs, 1)
@@ -64,7 +69,7 @@ func TestProposeWire_AgainstThePinnedDaemon(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, proposeTheir, string(onDisk), "the daemon writes an accepted proposal into its source dir")
 
-	merged, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: base, Content: proposeOurs}})
+	merged, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: base, Content: text(proposeOurs)}})
 	require.NoError(t, err)
 	require.Nil(t, merged.Refusal, merged.Message)
 	assert.Equal(t, []string{"pkg/a.go"}, merged.Merged)
@@ -73,10 +78,10 @@ func TestProposeWire_AgainstThePinnedDaemon(t *testing.T) {
 	assert.Equal(t, proposeAll, now.Content, "a merge keeps both writers' changes")
 	assert.Equal(t, merged.Blobs[0].BlobHash, now.BlobHash)
 
-	stale, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: base, Content: proposeClash}})
+	stale, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: base, Content: text(proposeClash)}})
 	require.NoError(t, err, "a refusal is a result, not an error")
 	require.NotNil(t, stale.Refusal)
-	assert.Equal(t, leyline.RefusalStale, stale.Refusal.Reason)
+	assert.Equal(t, daemonwire.RefusalStale, stale.Refusal.Reason)
 	require.Len(t, stale.Refusal.Moved, 1)
 	moved := stale.Refusal.Moved[0]
 	assert.Equal(t, "pkg/a.go", moved.Path)
@@ -85,15 +90,15 @@ func TestProposeWire_AgainstThePinnedDaemon(t *testing.T) {
 	assert.Equal(t, []leyline.LineRange{{Start: 4, End: 5}}, moved.Conflicts, "0-based base lines: line 5, func B")
 	assert.NotEmpty(t, stale.Message)
 
-	bad, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: "not-a-hash", Content: proposeClash}})
+	bad, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: "not-a-hash", Content: text(proposeClash)}})
 	require.NoError(t, err)
 	require.NotNil(t, bad.Refusal)
-	assert.Equal(t, leyline.RefusalMalformedBase, bad.Refusal.Reason)
+	assert.Equal(t, daemonwire.RefusalMalformedBase, bad.Refusal.Reason)
 
-	under, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go/b.go", Base: leyline.BaseAbsent, Kind: leyline.WriteCreate, Content: proposeBase}})
+	under, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go/b.go", Base: daemonwire.BaseAbsent, Kind: daemonwire.WriteKindCreate, Content: text(proposeBase)}})
 	require.NoError(t, err)
 	require.NotNil(t, under.Refusal, "a file cannot be created under a file")
-	assert.Equal(t, leyline.RefusalPathConflict, under.Refusal.Reason)
+	assert.Equal(t, daemonwire.RefusalPathConflict, under.Refusal.Reason)
 	assert.Equal(t, "pkg/a.go/b.go", under.Refusal.Path)
 	assert.Equal(t, "pkg/a.go", under.Refusal.Other, "the refusal names the file in the way")
 
@@ -112,7 +117,7 @@ func TestPropose_NotOkWithoutARefusalIsAnError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 
-	_, err = c.Propose([]leyline.ProposedWrite{{Path: "a.go", Base: leyline.BaseAny}})
+	_, err = c.Propose([]leyline.ProposedWrite{{Path: "a.go", Base: daemonwire.BaseAny}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no `content`")
 }
@@ -130,8 +135,8 @@ func TestProposedWrite_SendsTheSchemaSpelling(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 
 	_, err = c.Propose([]leyline.ProposedWrite{
-		{Path: "a.go", Base: "ab", Content: "x"},
-		{Path: "d", Base: leyline.BaseAbsent, Kind: leyline.WriteMkdir},
+		{Path: "a.go", Base: "ab", Content: text("x")},
+		{Path: "d", Base: daemonwire.BaseAbsent, Kind: daemonwire.WriteKindMkdir},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "propose", got["op"])
@@ -156,10 +161,10 @@ func TestProposeWire_AliasesExistingOnAFoldingCheckout(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 
-	res, err := c.Propose([]leyline.ProposedWrite{{Path: "A.go", Base: leyline.BaseAbsent, Kind: leyline.WriteCreate, Content: proposeTheir}})
+	res, err := c.Propose([]leyline.ProposedWrite{{Path: "A.go", Base: daemonwire.BaseAbsent, Kind: daemonwire.WriteKindCreate, Content: text(proposeTheir)}})
 	require.NoError(t, err)
 	require.NotNil(t, res.Refusal, "A.go and a.go are one file here")
-	assert.Equal(t, leyline.RefusalAliasesExisting, res.Refusal.Reason)
+	assert.Equal(t, daemonwire.RefusalAliasesExisting, res.Refusal.Reason)
 	assert.Equal(t, "A.go", res.Refusal.Path)
 	assert.Equal(t, "a.go", res.Refusal.Other)
 	onDisk, err := os.ReadFile(filepath.Join(src, "a.go"))

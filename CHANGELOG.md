@@ -29,6 +29,16 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **A write goes through any pinned daemon that says it serves the tree**
+  (`mache-161c63`). mache used to refuse writing through a daemon it had not
+  started itself, because nothing reported which tree a daemon served and a
+  write must not guess. leyline's `status` now reports `source_root`
+  (ley-line-open-246526), so mache asks every daemon, spawned or adopted, and
+  writes through it exactly when that is the node's tree, symlinks resolved.
+  One serving another tree, or none, is refused with both paths named.
+  mache also decodes `read_source` and `propose` with leyline-schema's own
+  wire types (ley-line-open-247489) instead of a hand-kept copy, and an answer
+  missing a field its outcome needs is an error rather than a zero value.
 - **Writes go through leyline's propose, never straight to disk**
   (`mache-3a0fb9`). A write to a node (the NFS mount or `write_file`) used
   to splice the bytes into the source file. mache now rebuilds the node's
@@ -54,7 +64,7 @@ bumps may include breaking changes.
   shapes while the wire handshake passed. Now every adoption asks the daemon
   its release, and anything but the pin is refused with the socket, the
   daemon's pid when known, and both versions, e.g. "the leyline daemon at
-  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.22.0 — stop it
+  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.23.0 — stop it
   and mache will start the pinned one". A daemon that cannot say, either
   because it reports no binary version, does not answer `leyline_version`, or
   cannot be reached, is refused too. `mache serve`'s startup handshake applies
@@ -62,11 +72,13 @@ bumps may include breaking changes.
   purpose, and its daemon is not refused. The daemon mache spawned itself is
   not asked again on each operation.
 
-- **leyline is pinned to v0.22.0** (`mache-bc3c84`, `mache-40e8e7`,
-  `mache-72668d`), up from v0.20.5, with the schema client at
-  `clients/go/leyline-schema` v0.22.0. A daemon an earlier mache left running
+- **leyline is pinned to v0.23.0** (`mache-bc3c84`, `mache-40e8e7`,
+  `mache-72668d`, `mache-161c63`), up from v0.20.5, with the schema client at
+  `clients/go/leyline-schema` v0.23.0. A daemon an earlier mache left running
   on another release is refused (see above) until it is stopped; the next
-  start runs v0.22.0. New parses are projection-v9. Against v0.21.x's
+  start runs v0.23.0. v0.23.0 adds the daemon's `source_root` and the
+  `read_source`/`propose` wire types (see above) and keeps v0.22.0's
+  projection unchanged. New parses are projection-v9. Against v0.21.x's
   projection-v7 that drops `capnp_blobs` and `_ast_blob`, which mache never
   read, and interns the merkle edges: `node_content` gains `content_id`, the
   edges move to `node_edge`, and `node_child` becomes a view over it with the

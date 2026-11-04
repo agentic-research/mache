@@ -27,7 +27,7 @@ func otherWriter(t *testing.T, srcPath string, edit func(string) string) {
 	t.Cleanup(func() { _ = c.Close() })
 	read, err := c.ReadSource(filepath.Base(srcPath))
 	require.NoError(t, err)
-	res, err := c.Propose([]leyline.ProposedWrite{{Path: filepath.Base(srcPath), Base: read.BlobHash, Content: edit(read.Content)}})
+	res, err := c.Propose([]leyline.ProposedWrite{{Path: filepath.Base(srcPath), Base: read.BlobHash, Content: proposedText(edit(read.Content))}})
 	require.NoError(t, err)
 	require.Nil(t, res.Refusal, res.Message)
 }
@@ -110,19 +110,30 @@ func TestWriteFile_MergesAChangeElsewhereThenAsksForAReRead(t *testing.T) {
 	assert.NotContains(t, string(got), "// again")
 }
 
-// TestWriteFile_RefusesADaemonMacheDidNotStart: a propose's paths are relative
-// to the daemon's --source, which no op reports (ley-line-open-246526), so a
-// daemon mache adopted is not written through, and the file is untouched.
-func TestWriteFile_RefusesADaemonMacheDidNotStart(t *testing.T) {
+// TestWriteFile_ThroughAnAdoptedDaemonOnlyOnItsTree: a daemon mache did not
+// start (reached by LEYLINE_SOCKET) says which tree it serves in status, so a
+// write goes through it when that is the node's tree, and is refused, the file
+// untouched, when it serves another (ley-line-open-246526).
+func TestWriteFile_ThroughAnAdoptedDaemonOnlyOnItsTree(t *testing.T) {
 	store, nodePath, srcPath := buildWriteGraph(t)
-	t.Setenv("LEYLINE_SOCKET", lltest.StartPinnedSourceDaemon(t, filepath.Dir(srcPath)))
 	before, err := os.ReadFile(srcPath)
 	require.NoError(t, err)
 
-	_, text := writeNode(t, store, nodePath, "func Hello() {\n\treturn // mine\n}\n")
-
-	assert.Contains(t, text, "not started by this mache")
+	t.Setenv("LEYLINE_SOCKET", lltest.StartPinnedSourceDaemon(t, t.TempDir()))
+	_, text := writeNode(t, store, nodePath, "func Hello() {\n\treturn // elsewhere\n}\n")
+	assert.Contains(t, text, "serves", "refused, naming the tree the daemon serves")
 	after, err := os.ReadFile(srcPath)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
+
+	t.Setenv("LEYLINE_SOCKET", lltest.StartPinnedSourceDaemon(t, filepath.Dir(srcPath)))
+	r, text := writeNode(t, store, nodePath, "func Hello() {\n\treturn // mine\n}\n")
+	require.Equal(t, "ok", r.Status, text)
+	after, err = os.ReadFile(srcPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(after), "// mine", "the adopted daemon wrote the file")
 }
+
+// proposedText is a proposed write's content, which the wire carries as a
+// pointer.
+func proposedText(s string) *string { return &s }

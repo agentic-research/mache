@@ -73,7 +73,8 @@ func Propose(origin graph.SourceOrigin, newContent []byte, blobs graph.BlobSourc
 		return nil, err
 	}
 	defer func() { _ = c.Close() }()
-	res, err := c.Propose([]leyline.ProposedWrite{{Path: rel, Base: hex.EncodeToString(origin.Blob), Content: string(file)}})
+	body := string(file)
+	res, err := c.Propose([]leyline.ProposedWrite{{Path: rel, Base: hex.EncodeToString(origin.Blob), Content: &body}})
 	if err != nil {
 		return nil, err
 	}

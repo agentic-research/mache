@@ -12,7 +12,8 @@ package fixturedb
 // capnp_blobs and _ast_blob are gone, node_content gains content_id, and
 // node_edge holds the edges node_child held, node_child becoming a view over it.
 // Those four objects are the whole difference from v0.21.1's sqlite_master
-// (mache-72668d):
+// (mache-72668d). v0.23.0's sqlite_master is identical to v0.22.0's
+// (mache-161c63):
 //
 //	$ leyline parse ./src -o out.db
 //	$ sqlite3 out.db "SELECT sql FROM sqlite_master ORDER BY type, name"
@@ -39,7 +40,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.22.0"
+const leylineV6SchemaVersion = "v0.23.0"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
