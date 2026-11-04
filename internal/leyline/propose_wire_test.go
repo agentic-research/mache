@@ -33,7 +33,8 @@ func requireHash(t *testing.T, s string) {
 // mirrors (propose.go) against the pinned binary, end to end: an applied write
 // lands in the source dir, a stale base whose change does not overlap is
 // merged and named, an overlapping one is refused stale with the conflicting
-// base lines, a malformed base is refused with that reason, and reading a file
+// base lines, a malformed base is refused with that reason, a create under a
+// file is refused path_conflict naming that file in Other, and reading a file
 // the store does not hold is an error (mache-3a0fb9).
 func TestProposeWire_AgainstThePinnedDaemon(t *testing.T) {
 	src := t.TempDir()
@@ -89,6 +90,13 @@ func TestProposeWire_AgainstThePinnedDaemon(t *testing.T) {
 	require.NotNil(t, bad.Refusal)
 	assert.Equal(t, leyline.RefusalMalformedBase, bad.Refusal.Reason)
 
+	under, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go/b.go", Base: leyline.BaseAbsent, Kind: leyline.WriteCreate, Content: proposeBase}})
+	require.NoError(t, err)
+	require.NotNil(t, under.Refusal, "a file cannot be created under a file")
+	assert.Equal(t, leyline.RefusalPathConflict, under.Refusal.Reason)
+	assert.Equal(t, "pkg/a.go/b.go", under.Refusal.Path)
+	assert.Equal(t, "pkg/a.go", under.Refusal.Other, "the refusal names the file in the way")
+
 	_, err = c.ReadSource("pkg/missing.go")
 	require.Error(t, err)
 }
@@ -131,4 +139,30 @@ func TestProposedWrite_SendsTheSchemaSpelling(t *testing.T) {
 		map[string]any{"path": "a.go", "base": "ab", "content": "x"},
 		map[string]any{"path": "d", "base": "absent", "kind": "mkdir"},
 	}, got["writes"])
+}
+
+// TestProposeWire_AliasesExistingOnAFoldingCheckout: where the checkout's file
+// system folds case, creating "A.go" beside "a.go" would write one file under
+// two names, and the pinned daemon refuses it aliases_existing, naming the
+// entry it aliases in Other. Linux runners do not fold; macOS ones do, so the
+// case runs there.
+func TestProposeWire_AliasesExistingOnAFoldingCheckout(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "a.go"), []byte(proposeBase), 0o644))
+	if _, err := os.Stat(filepath.Join(src, "A.go")); err != nil {
+		t.Skipf("%s does not fold case, so nothing aliases", src)
+	}
+	c, err := leyline.DialSocket(lltest.StartPinnedSourceDaemon(t, src))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	res, err := c.Propose([]leyline.ProposedWrite{{Path: "A.go", Base: leyline.BaseAbsent, Kind: leyline.WriteCreate, Content: proposeTheir}})
+	require.NoError(t, err)
+	require.NotNil(t, res.Refusal, "A.go and a.go are one file here")
+	assert.Equal(t, leyline.RefusalAliasesExisting, res.Refusal.Reason)
+	assert.Equal(t, "A.go", res.Refusal.Path)
+	assert.Equal(t, "a.go", res.Refusal.Other)
+	onDisk, err := os.ReadFile(filepath.Join(src, "a.go"))
+	require.NoError(t, err)
+	assert.Equal(t, proposeBase, string(onDisk), "a refused proposal writes nothing")
 }

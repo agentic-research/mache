@@ -54,7 +54,7 @@ bumps may include breaking changes.
   shapes while the wire handshake passed. Now every adoption asks the daemon
   its release, and anything but the pin is refused with the socket, the
   daemon's pid when known, and both versions, e.g. "the leyline daemon at
-  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.21.1 — stop it
+  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.22.0 — stop it
   and mache will start the pinned one". A daemon that cannot say, either
   because it reports no binary version, does not answer `leyline_version`, or
   cannot be reached, is refused too. `mache serve`'s startup handshake applies
@@ -62,13 +62,27 @@ bumps may include breaking changes.
   purpose, and its daemon is not refused. The daemon mache spawned itself is
   not asked again on each operation.
 
-- **leyline is pinned to v0.21.1** (`mache-bc3c84`, `mache-40e8e7`), up from
-  v0.20.5, with the schema client at `clients/go/leyline-schema` v0.21.0.
-  v0.21.1 differs from v0.21.0 only in leyline's execution runtime, which mache
-  does not use; everything below is v0.21.0's. A daemon an earlier mache left
-  running on v0.21.0 is refused (see above) until it is stopped; the next
-  start runs v0.21.1. New parses are
-  projection-v7: every projection-v6 table is unchanged, and two are added,
+- **leyline is pinned to v0.22.0** (`mache-bc3c84`, `mache-40e8e7`,
+  `mache-72668d`), up from v0.20.5, with the schema client at
+  `clients/go/leyline-schema` v0.22.0. A daemon an earlier mache left running
+  on another release is refused (see above) until it is stopped; the next
+  start runs v0.22.0. New parses are projection-v9. Against v0.21.x's
+  projection-v7 that drops `capnp_blobs` and `_ast_blob`, which mache never
+  read, and interns the merkle edges: `node_content` gains `content_id`, the
+  edges move to `node_edge`, and `node_child` becomes a view over it with the
+  old columns. Plain `node_child` reads run unchanged; FCA inference
+  (`--infer`), the one reader that LEFT JOINs it, joins `node_edge` instead,
+  since SQLite materializes the whole view there. On one 188-file tree parsed
+  by both releases the edges and contents are byte-identical, and FCA records
+  and `list_directory`, `find_definition`, `find_callers`, `find_callees`,
+  `get_impact`, `search`, `read_file` and `get_overview` answer identically.
+  The managed arena and the parse cache are already keyed on the pin, so a
+  v0.21.x arena is cold-started rather than refused; a `.db` passed to
+  `build.Parse` that v0.21.x wrote is refused by leyline ("delete the .db
+  ... and reparse cold"). The propose client decodes v0.22.0's new
+  `aliases_existing` refusal and the second path a refusal names (`other`).
+  projection-v7, from v0.21.0,
+  is the base of all this: every projection-v6 table is unchanged, and two are added,
   `_tree` (every entry, explicit directories included) and
   `_parse_diagnostics`. mache's v6 readers read v7 as they are; fixturedb's
   mirror was re-derived from the released binary and now models both new

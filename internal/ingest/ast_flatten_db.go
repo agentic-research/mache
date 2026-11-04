@@ -14,8 +14,8 @@ import (
 //
 //	{"type": node_kind, "has_<field>": true, "field_<field>_type": <child raw_kind>}
 //
-// for every node_child entry carrying a tree-sitter field name. node_child
-// includes anonymous children too (e.g. the `func` keyword, the `+` operator);
+// for every child edge carrying a tree-sitter field name. The edges
+// include anonymous children too (e.g. the `func` keyword, the `+` operator);
 // fieldless ones carry a NULL field and are skipped, while anonymous children
 // WITH a field (e.g. binary_expression's `operator`) are recorded with their
 // raw_kind — exactly matching FlattenAST, whose child.Type() for an anonymous
@@ -35,11 +35,10 @@ import (
 // replicated here. HCL inference via `_ast` therefore lacks that enrichment
 // until it is ported; Go and every other language are unaffected.
 func FlattenASTDB(db *sql.DB, sourceLike string, limit int) ([]any, error) {
-	// LEFT JOIN keeps field-less nodes (they still yield a bare {"type": ...}
-	// record). The field filter lives in the JOIN condition, not WHERE, so it
-	// prunes fieldless child rows without dropping the parent node. `field`
-	// is NULL for fieldless children in leyline's schema; the != '' guard is
-	// defensive belt-and-suspenders.
+	// The child joins (lloschema.FieldChildJoins) are LEFT JOINs, so
+	// field-less nodes still yield a bare {"type": ...} record; the field
+	// filter lives in the join condition, pruning fieldless children without
+	// dropping the parent.
 	//
 	// ORDER BY reproduces FlattenAST's pre-order document traversal:
 	// start_byte ascending, end_byte descending (a parent sharing its first
@@ -60,13 +59,16 @@ func FlattenASTDB(db *sql.DB, sourceLike string, limit int) ([]any, error) {
 	if body == "" {
 		return nil, fmt.Errorf("flatten _ast: the database has no _ast table mache can read")
 	}
+	children, err := lloschema.FieldChildJoins(lloschema.DB(db), "a.node_hash")
+	if err != nil {
+		return nil, fmt.Errorf("flatten _ast: %w", err)
+	}
 	q := `
-SELECT a.node_id, a.node_kind, COALESCE(nc.field, ''), COALESCE(cc.raw_kind, '')
+SELECT a.node_id, a.node_kind, COALESCE(ce.field, ''), COALESCE(cc.raw_kind, '')
 FROM (` + body + `) a
-LEFT JOIN node_child nc ON nc.parent_hash = a.node_hash AND nc.field IS NOT NULL AND nc.field != ''
-LEFT JOIN node_content cc ON cc.node_hash = nc.child_hash
+` + children + `
 WHERE (? = '' OR a.source_id LIKE ?)
-ORDER BY a.source_id, a.start_byte, a.end_byte DESC, a.node_id, nc.ordinal`
+ORDER BY a.source_id, a.start_byte, a.end_byte DESC, a.node_id, ce.ordinal`
 
 	rows, err := db.Query(q, sourceLike, sourceLike)
 	if err != nil {

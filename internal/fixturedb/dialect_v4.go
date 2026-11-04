@@ -49,7 +49,7 @@ func emitLeylineRefs(e *emitter) {
 	}
 }
 
-func (leylineDialect) emitAST(e *emitter) { e.emitNodeChildren(e.insertV4AST()) }
+func (leylineDialect) emitAST(e *emitter) { e.emitNodeChildren(e.insertV4AST(), insertNodeChild) }
 
 func (leylineDialect) emitSources(e *emitter) { e.insertV4Sources(true) }
 
