@@ -317,8 +317,24 @@ func (e *Engine) processSourceFileResult(result *parsedSourceFile) error {
 		return e.routeToProjectFiles(result) // coverage:ignore
 	} // coverage:ignore
 
+	stampOriginBlob(bt.bufferedNodes, w.sectionOrNil(sourceID))
 	e.commitFileNodes(result.realPath, bt.bufferedNodes)
 	return nil
+}
+
+// stampOriginBlob names, on every origin in nodes, the parsed blob idx holds:
+// the bytes those offsets were taken from, and the base a write to them
+// proposes against (mache-631b8b). A file the walker could not load, or whose
+// row records no hash, names none.
+func stampOriginBlob(nodes []*graph.Node, idx *fileIndex) {
+	if idx == nil || idx.blob == nil {
+		return
+	}
+	for _, n := range nodes {
+		if n.Origin != nil {
+			n.Origin.Blob = idx.blob
+		}
+	}
 }
 
 // extractFileLevel fills result's file-level extracts (context, imports,

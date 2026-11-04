@@ -121,7 +121,7 @@ func TestReadSource_ReadsTheParsedBytesNotTheFile(t *testing.T) {
 			_, statErr := os.Stat(path)
 			require.True(t, os.IsNotExist(statErr), "the row's path names no file, so only the projection can answer")
 
-			lang, got, err := NewASTWalker(f.DB()).readSource("x.go")
+			lang, got, _, err := NewASTWalker(f.DB()).readSource("x.go")
 			require.NoError(t, err)
 			assert.Equal(t, "go", lang)
 			assert.Equal(t, "package parsed\n", string(got))
@@ -182,7 +182,7 @@ func TestReadSource_NoContentNoPath(t *testing.T) {
 	b.Source("empty.go", "go", "")
 	_, f := b.Build()
 
-	_, _, err := NewASTWalker(f.DB()).readSource("empty.go")
+	_, _, _, err := NewASTWalker(f.DB()).readSource("empty.go")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no content")
 }
