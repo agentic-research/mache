@@ -12,11 +12,10 @@ import (
 	"github.com/agentic-research/mache/internal/fixturedb"
 )
 
-// sourceBytes reads one _source row through SourceColumns and SourceScan.
-func sourceBytes(t *testing.T, f *fixturedb.FixtureDB, id string) (*SourceScan, []byte, error) {
+// sourceBytes reads one _source row through cols (SourceColumns) and a
+// SourceScan.
+func sourceBytes(t *testing.T, f *fixturedb.FixtureDB, cols, id string) (*SourceScan, []byte, error) {
 	t.Helper()
-	cols, err := SourceColumns(f)
-	require.NoError(t, err)
 	var s SourceScan
 	require.NoError(t, f.DB().QueryRow("SELECT "+cols+" FROM _source WHERE id = ?", id).Scan(s.Targets()...))
 	b, err := s.Bytes()
@@ -33,7 +32,9 @@ func TestSourceScan_ReadsTheParsedBytes(t *testing.T) {
 			b := fixturedb.New(t, p)
 			b.Source("a.go", "go", "package a\n")
 			_, f := b.Build()
-			_, got, err := sourceBytes(t, f, "a.go")
+			cols, cerr := SourceColumns(f)
+			require.NoError(t, cerr)
+			_, got, err := sourceBytes(t, f, cols, "a.go")
 			require.NoError(t, err)
 			assert.Equal(t, []byte("package a\n"), got)
 		})
@@ -48,7 +49,9 @@ func TestSourceScan_NoBytesIsRefused(t *testing.T) {
 			b := fixturedb.New(t, p)
 			b.Source("a.go", "go", "")
 			_, f := b.Build()
-			_, got, err := sourceBytes(t, f, "a.go")
+			cols, cerr := SourceColumns(f)
+			require.NoError(t, cerr)
+			_, got, err := sourceBytes(t, f, cols, "a.go")
 			require.ErrorIs(t, err, ErrNoSourceBytes)
 			assert.Nil(t, got)
 		})
@@ -62,7 +65,9 @@ func TestSourceScan_FollowsAReparse(t *testing.T) {
 	b.Source("a.go", "go", "package a\n")
 	_, f := b.Build()
 	f.Reparse("a.go", "package a // edited\n")
-	_, got, err := sourceBytes(t, f, "a.go")
+	cols, cerr := SourceColumns(f)
+	require.NoError(t, cerr)
+	_, got, err := sourceBytes(t, f, cols, "a.go")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("package a // edited\n"), got)
 }
@@ -75,7 +80,9 @@ func TestSourceScan_NamesTheBlob(t *testing.T) {
 			b := fixturedb.New(t, p)
 			b.Source("a.go", "go", "package a\n")
 			_, f := b.Build()
-			s, got, err := sourceBytes(t, f, "a.go")
+			cols, cerr := SourceColumns(f)
+			require.NoError(t, cerr)
+			s, got, err := sourceBytes(t, f, cols, "a.go")
 			require.NoError(t, err)
 			assert.Len(t, s.Hash(), 32)
 			assert.NoError(t, VerifyBlob(s.Hash(), got), "the hash names exactly the parsed bytes")
@@ -126,7 +133,9 @@ func TestStoredBytes_AreVerifiedOnEveryRead(t *testing.T) {
 			_, err := f.DB().Exec(tc.damage, h)
 			require.NoError(t, err)
 
-			_, _, err = sourceBytes(t, f, "a.go")
+			cols, cerr := SourceColumns(f)
+			require.NoError(t, cerr)
+			_, _, err = sourceBytes(t, f, cols, "a.go")
 			assert.ErrorIs(t, err, tc.want, "the _source path")
 			_, err = ReadBlob(f, h)
 			assert.ErrorIs(t, err, tc.want, "ReadBlob")
