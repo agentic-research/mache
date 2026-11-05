@@ -1,7 +1,6 @@
 package fixturedb
 
 import (
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"path"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/agentic-research/mache/internal/sqlintro"
+	"github.com/zeebo/blake3"
 )
 
 // Emission: the ONE place a spec becomes columns.
@@ -292,10 +292,13 @@ func (e *emitter) insertV6Sources() {
 }
 
 // storeBlob writes content's source_blobs row through exec and returns its
-// hash: SHA-256 of the bytes. ley-line's own hash is over its canonical stream
-// and mache never recomputes it, so a fixture needs only a stable key.
+// hash: BLAKE3 of the bytes, as leyline keys source_blobs and _tree.blob_hash
+// (checked against a real parse; ADR-0047 leaves it the one unkeyed
+// construction). A fixture blob carries the hash a real arena would, so code
+// that compares or verifies blob hashes sees the same thing on both
+// (mache-10a306).
 func storeBlob(exec func(string, ...any), content string) []byte {
-	h := sha256.Sum256([]byte(content))
+	h := blake3.Sum256([]byte(content))
 	exec(`INSERT OR IGNORE INTO source_blobs (blob_hash, blob_bytes) VALUES (?, ?)`, h[:], []byte(content))
 	return h[:]
 }
