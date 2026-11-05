@@ -193,9 +193,9 @@ func TestReadSource_RefusesTamperedBytes(t *testing.T) {
 	b := fixturedb.New(t, fixturedb.LeylineV6)
 	b.Source("a.go", "go", "package a\n")
 	_, f := b.Build()
-	_, err := f.DB().Exec(`UPDATE source_blobs SET blob_bytes = CAST('package b' AS BLOB)
-		WHERE blob_hash = (SELECT content_hash FROM _source WHERE id = 'a.go')`)
-	require.NoError(t, err)
+	var h []byte
+	require.NoError(t, f.DB().QueryRow(`SELECT content_hash FROM _source WHERE id = 'a.go'`).Scan(&h))
+	fixturedb.TamperBlob(t, f.DB(), h, []byte("package b"))
 
 	_, content, _, err := NewASTWalker(f.DB()).readSource("a.go")
 	require.ErrorIs(t, err, lloschema.ErrBlobTampered)

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/agentic-research/mache/internal/lltest"
 )
@@ -92,9 +93,9 @@ func TestTreeFileBytes_VerifiesTheStoredBytes(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "hello\n", string(got), "leyline's blob_hash verifies under mache's BLAKE3")
 
-	_, err = db.Exec(`UPDATE source_blobs SET blob_bytes = CAST('goodbye' AS BLOB)
-		WHERE blob_hash = (SELECT blob_hash FROM _tree WHERE path = 'notes.txt')`)
-	require.NoError(t, err)
+	var h []byte
+	require.NoError(t, db.QueryRow(`SELECT blob_hash FROM _tree WHERE path = 'notes.txt'`).Scan(&h))
+	fixturedb.TamperBlob(t, db, h, []byte("goodbye"))
 	got, ok, err = lloschema.TreeFileBytes(qg, "notes.txt")
 	require.ErrorIs(t, err, lloschema.ErrBlobTampered)
 	assert.Contains(t, err.Error(), "notes.txt")

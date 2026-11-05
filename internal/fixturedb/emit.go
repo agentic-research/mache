@@ -6,6 +6,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"testing"
 
 	"github.com/agentic-research/mache/internal/sqlintro"
 	"github.com/zeebo/blake3"
@@ -301,4 +302,52 @@ func storeBlob(exec func(string, ...any), content string) []byte {
 	h := blake3.Sum256([]byte(content))
 	exec(`INSERT OR IGNORE INTO source_blobs (blob_hash, blob_bytes) VALUES (?, ?)`, h[:], []byte(content))
 	return h[:]
+}
+
+// Damage to a stored blob, for tests of mache's read-time verification
+// (mache-c1eb7a). They live here, beside storeBlob, because the LLO boundary
+// lint lets only fixturedb write leyline's tables; they take a *sql.DB so a
+// real leyline parse can be damaged the same way as a fixture.
+
+// TamperBlob replaces the bytes stored under hash, leaving the hash: what a
+// corrupted or hostile store would serve.
+func TamperBlob(t testing.TB, db *sql.DB, hash, content []byte) {
+	t.Helper()
+	mustExec(t, db, `UPDATE source_blobs SET blob_bytes = ? WHERE blob_hash = ?`, content, hash)
+}
+
+// ChunkBlob makes the row under hash hold NULL bytes, as a chunk-activated
+// store does. leyline's DDL declares blob_bytes NOT NULL, so the table is
+// rebuilt without that constraint first.
+func ChunkBlob(t testing.TB, db *sql.DB, hash []byte) {
+	t.Helper()
+	for _, stmt := range []string{
+		`CREATE TABLE source_blobs_chunked (blob_hash BLOB PRIMARY KEY, blob_bytes BLOB)`,
+		`INSERT INTO source_blobs_chunked SELECT blob_hash, blob_bytes FROM source_blobs`,
+		`DROP TABLE source_blobs`,
+		`ALTER TABLE source_blobs_chunked RENAME TO source_blobs`,
+	} {
+		mustExec(t, db, stmt)
+	}
+	mustExec(t, db, `UPDATE source_blobs SET blob_bytes = NULL WHERE blob_hash = ?`, hash)
+}
+
+// DropBlob deletes the row under hash: a hash the store does not hold.
+func DropBlob(t testing.TB, db *sql.DB, hash []byte) {
+	t.Helper()
+	mustExec(t, db, `DELETE FROM source_blobs WHERE blob_hash = ?`, hash)
+}
+
+// AddBlob stores content under its BLAKE3 hash, as leyline keys it, and
+// returns the hash.
+func AddBlob(t testing.TB, db *sql.DB, content []byte) []byte {
+	t.Helper()
+	return storeBlob(func(q string, args ...any) { mustExec(t, db, q, args...) }, string(content))
+}
+
+func mustExec(t testing.TB, db *sql.DB, q string, args ...any) {
+	t.Helper()
+	if _, err := db.Exec(q, args...); err != nil {
+		t.Fatalf("fixturedb: %v\n%s", err, q)
+	}
 }

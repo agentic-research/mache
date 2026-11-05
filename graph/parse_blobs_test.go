@@ -49,8 +49,7 @@ func TestNewParseBlobs_RefusesTamperedBytes(t *testing.T) {
 	_, f := b.Build()
 	var parsed []byte
 	require.NoError(t, f.DB().QueryRow(`SELECT content_hash FROM _source WHERE id = 'a.go'`).Scan(&parsed))
-	_, err := f.DB().Exec(`UPDATE source_blobs SET blob_bytes = CAST('package b' AS BLOB) WHERE blob_hash = ?`, parsed)
-	require.NoError(t, err)
+	fixturedb.TamperBlob(t, f.DB(), parsed, []byte("package b"))
 
 	got, err := graph.NewParseBlobs(f.DB()).Blob(parsed)
 	require.ErrorIs(t, err, lloschema.ErrBlobTampered)

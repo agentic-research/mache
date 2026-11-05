@@ -108,34 +108,21 @@ func blobFixture(t *testing.T) (*fixturedb.FixtureDB, []byte) {
 func TestStoredBytes_AreVerifiedOnEveryRead(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		damage string
+		damage func(*testing.T, *fixturedb.FixtureDB, []byte)
 		want   error
 	}{
-		{"tampered", `UPDATE source_blobs SET blob_bytes = CAST('package b' AS BLOB) WHERE blob_hash = ?`, ErrBlobTampered},
-		{"chunked", `UPDATE source_blobs SET blob_bytes = NULL WHERE blob_hash = ?`, ErrBlobChunked},
-		{"missing", `DELETE FROM source_blobs WHERE blob_hash = ?`, ErrNoBlob},
+		{"tampered", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) {
+			fixturedb.TamperBlob(t, f.DB(), h, []byte("package b"))
+		}, ErrBlobTampered},
+		{"chunked", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) { fixturedb.ChunkBlob(t, f.DB(), h) }, ErrBlobChunked},
+		{"missing", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) { fixturedb.DropBlob(t, f.DB(), h) }, ErrNoBlob},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, h := blobFixture(t)
-			if tc.name == "chunked" {
-				// leyline's real table declares blob_bytes NOT NULL; a chunk-
-				// activated store relaxes it. Rebuild the table without it.
-				for _, stmt := range []string{
-					`CREATE TABLE sb2 (blob_hash BLOB PRIMARY KEY, blob_bytes BLOB)`,
-					`INSERT INTO sb2 SELECT blob_hash, blob_bytes FROM source_blobs`,
-					`DROP TABLE source_blobs`,
-					`ALTER TABLE sb2 RENAME TO source_blobs`,
-				} {
-					_, err := f.DB().Exec(stmt)
-					require.NoError(t, err, stmt)
-				}
-			}
-			_, err := f.DB().Exec(tc.damage, h)
-			require.NoError(t, err)
-
+			tc.damage(t, f, h)
 			cols, cerr := SourceColumns(f)
 			require.NoError(t, cerr)
-			_, _, err = sourceBytes(t, f, cols, "a.go")
+			_, _, err := sourceBytes(t, f, cols, "a.go")
 			assert.ErrorIs(t, err, tc.want, "the _source path")
 			_, err = ReadBlob(f, h)
 			assert.ErrorIs(t, err, tc.want, "ReadBlob")
@@ -150,10 +137,10 @@ func TestStoredBytes_AreVerifiedOnEveryRead(t *testing.T) {
 // file, verified like any other; only NULL is "held as chunks".
 func TestReadBlob_EmptyFileIsEmptyNotChunked(t *testing.T) {
 	f, _ := blobFixture(t)
-	h := blake3.Sum256(nil)
-	_, err := f.DB().Exec(`INSERT INTO source_blobs (blob_hash, blob_bytes) VALUES (?, x'')`, h[:])
-	require.NoError(t, err)
-	got, err := ReadBlob(f, h[:])
+	h := fixturedb.AddBlob(t, f.DB(), []byte{})
+	want := blake3.Sum256(nil)
+	require.Equal(t, want[:], h, "keyed as leyline keys it")
+	got, err := ReadBlob(f, h)
 	require.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Empty(t, got)
