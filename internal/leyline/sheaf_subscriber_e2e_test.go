@@ -118,21 +118,7 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 	}, 5*time.Second, 25*time.Millisecond,
 		"subscriber must connect before we can fairly assert event delivery")
 
-	// Push a synthetic 2-region topology with δ⁰ inputs engaged.
-	// Smaller than the cascade e2e test (3 regions there) because we
-	// only need ONE invalidate to assert the event-bus path; the
-	// cascade semantics themselves are covered by the existing e2e.
-	regions := []region{
-		{ID: 1, Hash: strings.Repeat("aa", 32), Data: bench32D(1.0)},
-		{ID: 2, Hash: strings.Repeat("bb", 32), Data: bench32D(2.0)},
-	}
-	// leyline >= v0.25.0 refuses any hash that is not 64 lowercase hex; the
-	// boundary is the two region hashes XORed (0xaa ^ 0xbb = 0x11).
-	restrictions := []restriction{
-		{A: 1, B: 2, BoundaryHash: strings.Repeat("11", 32), CoChangeRate: 0.5, AgreementDim: agreementDim},
-	}
-	require.NoError(t, pushTopologyForE2E(sc, regions, restrictions),
-		"sheaf_set_topology against live daemon")
+	pushTwoRegionTopology(t, sc)
 
 	// Now the trigger: push sheaf_invalidate. Daemon response carrying
 	// the cascade is unrelated to the event bus — we only need it to
@@ -179,6 +165,25 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 		"Status.LastGeneration must match the last event's generation")
 	assert.False(t, status.LastEvent.IsZero(),
 		"Status.LastEvent must be populated after first event")
+}
+
+// pushTwoRegionTopology pushes a synthetic 2-region topology with δ⁰ inputs
+// engaged. Smaller than the cascade e2e test (3 regions there) because one
+// invalidate is enough to assert the event-bus path; the cascade semantics
+// themselves are covered by that test.
+func pushTwoRegionTopology(t *testing.T, sc *SheafClient) {
+	t.Helper()
+	regions := []region{
+		{ID: 1, Hash: strings.Repeat("aa", 32), Data: bench32D(1.0)},
+		{ID: 2, Hash: strings.Repeat("bb", 32), Data: bench32D(2.0)},
+	}
+	// leyline >= v0.25.0 refuses any hash that is not 64 lowercase hex; the
+	// boundary is the two region hashes XORed (0xaa ^ 0xbb = 0x11).
+	restrictions := []restriction{
+		{A: 1, B: 2, BoundaryHash: strings.Repeat("11", 32), CoChangeRate: 0.5, AgreementDim: agreementDim},
+	}
+	require.NoError(t, pushTopologyForE2E(sc, regions, restrictions),
+		"sheaf_set_topology against live daemon")
 }
 
 // startDaemonForE2E is the *testing.T equivalent of startDaemonForBench.
