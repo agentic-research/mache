@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -87,36 +86,7 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 
 	// Wire the subscriber FIRST, before any invalidate, so we can't
 	// miss an event the daemon emits between push and subscribe.
-	var (
-		handled  atomic.Int32
-		eventMu  sync.Mutex
-		lastEvt  SheafInvalidateEvent
-		evHandle = func(ev SheafInvalidateEvent) {
-			eventMu.Lock()
-			lastEvt = ev
-			eventMu.Unlock()
-			handled.Add(1)
-		}
-	)
-	sub := NewSheafSubscriber(sockPath, evHandle)
-	// Tight backoff so a stillborn daemon recycle doesn't waste the
-	// test budget. Production uses 1s..30s; here we want the test
-	// to finish fast on real failures.
-	sub.SetBackoffForTest(50*time.Millisecond, 200*time.Millisecond)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	sub.Start(ctx)
-	t.Cleanup(sub.Stop)
-
-	// Wait for the subscriber to actually reach Connected — otherwise
-	// the invalidate might fire before subscribe has been activated
-	// daemon-side, which would look like the bug we're testing for
-	// but would actually be a race in the test setup.
-	require.Eventually(t, func() bool {
-		return sub.Status().State == StateConnected
-	}, 5*time.Second, 25*time.Millisecond,
-		"subscriber must connect before we can fairly assert event delivery")
+	sub, lastEvent := recordingSubscriber(t, sockPath)
 
 	pushTwoRegionTopology(t, sc)
 
@@ -127,23 +97,15 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 	_, err = sc.InvalidateWithStalk(1, "", mutatedStalk) // omitted: "changed"
 	require.NoError(t, err, "sheaf_invalidate against live daemon")
 
-	// The contract: within a generous budget (the cascade itself is
-	// ~20µs on this hardware, but we allow for goroutine wakeup +
-	// JSON decode on the read path), the subscriber's handler MUST
-	// have fired at least once.
-	//
-	// PRE-LLO-FIX: this times out at handled == 0, which is the
-	// signal the daemon's event bus isn't publishing sheaf.invalidate.
-	// POST-LLO-FIX: handler fires inside ~10ms and the assertions
-	// below pin the payload shape.
+	// The handler must fire within a generous budget (the cascade itself is
+	// ~20µs); timing out means the daemon's event bus never published it.
 	require.Eventuallyf(t, func() bool {
-		return handled.Load() > 0
+		_, ok := lastEvent()
+		return ok
 	}, 3*time.Second, 25*time.Millisecond,
 		"subscriber.handler never fired — daemon did not publish sheaf.invalidate to the event bus (see ley-line-open-5caa59)")
 
-	eventMu.Lock()
-	got := lastEvt
-	eventMu.Unlock()
+	got, _ := lastEvent()
 
 	assert.Contains(t, got.Invalidated, 1,
 		"invalidated region 1 must appear in the pushed event payload")
@@ -165,6 +127,41 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 		"Status.LastGeneration must match the last event's generation")
 	assert.False(t, status.LastEvent.IsZero(),
 		"Status.LastEvent must be populated after first event")
+}
+
+// recordingSubscriber starts a subscriber on sockPath that keeps the last
+// event it receives, and returns once the subscriber is Connected: an
+// invalidate pushed earlier could fire before subscribe is active
+// daemon-side, which would look like the bug under test but would be a race
+// in the setup. lastEvent reports the last event and whether one arrived.
+func recordingSubscriber(t *testing.T, sockPath string) (*SheafSubscriber, func() (SheafInvalidateEvent, bool)) {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		last SheafInvalidateEvent
+		seen bool
+	)
+	sub := NewSheafSubscriber(sockPath, func(ev SheafInvalidateEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		last, seen = ev, true
+	})
+	// Tight backoff so a stillborn daemon recycle doesn't waste the test
+	// budget. Production uses 1s..30s.
+	sub.SetBackoffForTest(50*time.Millisecond, 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sub.Start(ctx)
+	t.Cleanup(sub.Stop)
+	require.Eventually(t, func() bool {
+		return sub.Status().State == StateConnected
+	}, 5*time.Second, 25*time.Millisecond,
+		"subscriber must connect before we can fairly assert event delivery")
+	return sub, func() (SheafInvalidateEvent, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		return last, seen
+	}
 }
 
 // pushTwoRegionTopology pushes a synthetic 2-region topology with δ⁰ inputs
