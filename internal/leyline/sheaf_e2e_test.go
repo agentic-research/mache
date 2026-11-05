@@ -2,10 +2,7 @@ package leyline
 
 import (
 	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
-	"syscall"
 	"testing"
 	"time"
 
@@ -48,106 +45,17 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 	}
 	t.Setenv("HOME", t.TempDir()) // isolate ~/.mache/ from sibling tests
 
-	// Each subtest gets its own isolated daemon. The daemon derives the
-	// UDS socket path from --control (replaces .ctrl with .sock), and
-	// macOS caps sun_path at ~104 bytes — go test's TempDir
-	// (`/var/folders/.../TestName/NNN/`) blows that budget every time
-	// the daemon tries to bind. Put ALL daemon paths (arena, ctrl,
-	// hence sock) in a short /tmp subdir; clean it up explicitly since
-	// it lives outside t.TempDir's reach.
-	tdir, err := os.MkdirTemp("/tmp", "sheaf-e2e-")
-	require.NoError(t, err)
-	// Registered FIRST so it runs LAST (t.Cleanup is LIFO) — after the daemon
-	// cleanup below has signalled, so it observes the post-reap state.
-	t.Cleanup(func() { assertNoSurvivorsFor(t, tdir) })
-	t.Cleanup(func() { _ = os.RemoveAll(tdir) })
-	arena := filepath.Join(tdir, "arena.bin")
-	ctrl := filepath.Join(tdir, "test.ctrl")
-	sockPath := filepath.Join(tdir, "test.sock")
-
-	// Bound the daemon lifetime so a hung test doesn't leak processes
-	// — the daemon self-terminates after 60s of idle even if the test
-	// goroutine panics before SIGTERM lands.
-	daemon := exec.Command(leylineBin, "daemon",
-		"--arena", arena,
-		"--control", ctrl,
-		"--timeout", "60s",
-	)
-	// Detach stdio — the daemon writes startup chatter that would
-	// otherwise interleave with go test's output. Keep stderr captured
-	// for the failure path (see below).
-	logFile, err := os.Create(filepath.Join(tdir, "daemon.log"))
-	require.NoError(t, err)
-	defer func() { _ = logFile.Close() }()
-	daemon.Stdout = logFile
-	daemon.Stderr = logFile
-
-	setProcessGroup(daemon) // daemon spawns `mache serve --control` as a child; group it so cleanup reaps both
-	require.NoError(t, daemon.Start(), "leyline daemon failed to start")
-	t.Cleanup(func() {
-		if daemon.Process == nil {
-			return
-		}
-		// SIGTERM first so the daemon unmounts/cleans up; SIGKILL after
-		// a grace period so a wedged daemon never blocks test teardown.
-		_ = signalProcessGroup(daemon.Process, syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() {
-			_, _ = daemon.Process.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			_ = signalProcessGroup(daemon.Process, syscall.SIGKILL)
-			<-done
-		}
-		// On any failure, dump the daemon log so the failure mode
-		// (unknown op, socket bind error, panic) is in the test output
-		// instead of in a file the CI worker has already discarded.
-		if t.Failed() {
-			if b, readErr := os.ReadFile(filepath.Join(tdir, "daemon.log")); readErr == nil {
-				t.Logf("daemon.log (on failure):\n%s", b)
-			}
-		}
-	})
-
-	// Poll for the socket to appear — the daemon binds after the first
-	// snapshot write, which is well under 5s even on cold-start arenas.
+	// startDaemonForE2E keeps every daemon path under a short /tmp dir
+	// (macOS caps sun_path at ~104 bytes), reaps the daemon's process group,
+	// and dumps its log on failure.
+	sockPath, stop := startDaemonForE2E(t, leylineBin)
+	t.Cleanup(stop)
 	sock := dialWithRetry(t, sockPath, 5*time.Second)
 	t.Cleanup(func() { _ = sock.Close() })
 
 	sc := NewSheafClient(sock)
 
-	// Synthetic 3-community a↔b↔c chain. The cross-token map produces
-	// exactly two restriction edges (a-b via `shared_ab`, b-c via
-	// `shared_bc`). Mutating b's stalk should cascade to both a and c
-	// through the changed boundaries; d would have been a useful
-	// "did not change" sentinel but adding a fourth community here
-	// would require a third edge that confuses the cascade-depth
-	// reasoning. The 3-community shape is the smallest topology that
-	// distinguishes "cascade fired" from "no-op heuristic" responses.
-	cr := &graph.CommunityResult{
-		Communities: []graph.Community{
-			{ID: 1, Members: []string{"a/fn1", "a/fn2"}},
-			{ID: 2, Members: []string{"b/fn1", "b/fn2"}},
-			{ID: 3, Members: []string{"c/fn1", "c/fn2"}},
-		},
-		Membership: map[string]int{
-			"a/fn1": 1, "a/fn2": 1,
-			"b/fn1": 2, "b/fn2": 2,
-			"c/fn1": 3, "c/fn2": 3,
-		},
-	}
-	refs := map[string][]string{
-		"shared_ab": {"a/fn1", "b/fn1"},
-		"shared_bc": {"b/fn2", "c/fn1"},
-		// Intra-community refs are filtered by crossCommunityTokens and
-		// shouldn't create restriction edges — including them here is
-		// the regression guard for that filter behavior under live wire.
-		"local_a": {"a/fn1", "a/fn2"},
-		"local_c": {"c/fn1", "c/fn2"},
-	}
+	cr, refs := chainTopology()
 
 	// PushTopology engages δ⁰ mode on v0.4.1+ daemons. If this errors
 	// the most likely cause is a daemon older than v0.4.1 (no sheaf
@@ -203,6 +111,38 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 // dialWithRetry waits for the daemon's UDS socket file to appear
 // (newly-spawned daemons bind asynchronously) and then DialSocket.
 // Fails the test if the socket doesn't appear within deadline — the
+
+// chainTopology is a synthetic 3-community a↔b↔c chain. The cross-token map
+// produces exactly two restriction edges (a-b via `shared_ab`, b-c via
+// `shared_bc`). Mutating b's stalk should cascade to both a and c through the
+// changed boundaries; a fourth community would need a third edge that
+// confuses the cascade-depth reasoning, so 3 is the smallest topology that
+// distinguishes "cascade fired" from "no-op heuristic" responses.
+func chainTopology() (*graph.CommunityResult, map[string][]string) {
+	cr := &graph.CommunityResult{
+		Communities: []graph.Community{
+			{ID: 1, Members: []string{"a/fn1", "a/fn2"}},
+			{ID: 2, Members: []string{"b/fn1", "b/fn2"}},
+			{ID: 3, Members: []string{"c/fn1", "c/fn2"}},
+		},
+		Membership: map[string]int{
+			"a/fn1": 1, "a/fn2": 1,
+			"b/fn1": 2, "b/fn2": 2,
+			"c/fn1": 3, "c/fn2": 3,
+		},
+	}
+	refs := map[string][]string{
+		"shared_ab": {"a/fn1", "b/fn1"},
+		"shared_bc": {"b/fn2", "c/fn1"},
+		// Intra-community refs are filtered by crossCommunityTokens and
+		// shouldn't create restriction edges — including them here is
+		// the regression guard for that filter behavior under live wire.
+		"local_a": {"a/fn1", "a/fn2"},
+		"local_c": {"c/fn1", "c/fn2"},
+	}
+	return cr, refs
+}
+
 // daemon either crashed at startup or its arena init wedged.
 func dialWithRetry(t *testing.T, sockPath string, deadline time.Duration) *SocketClient {
 	t.Helper()

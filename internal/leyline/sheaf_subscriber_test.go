@@ -746,17 +746,26 @@ func TestSheafSubscriber_DeliversAnInvalidationWhoseRootIsUnknown(t *testing.T) 
 			},
 		}},
 	})
-	got := make(chan SheafInvalidateEvent, 1)
-	sub := NewSheafSubscriber(sockPath, func(ev SheafInvalidateEvent) { got <- ev })
+	var (
+		mu  sync.Mutex
+		got []SheafInvalidateEvent
+	)
+	sub := NewSheafSubscriber(sockPath, func(ev SheafInvalidateEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, ev)
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	sub.Start(ctx)
 	t.Cleanup(sub.Stop)
-	select {
-	case ev := <-got:
-		assert.Equal(t, []int{7}, ev.Invalidated)
-		assert.Equal(t, EventRoot{Err: "open controller: no such file"}, ev.Root)
-	case <-time.After(2 * time.Second):
-		t.Fatal("the invalidation was not delivered")
-	}
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got) > 0
+	}, 2*time.Second, 10*time.Millisecond, "the invalidation was not delivered")
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []int{7}, got[0].Invalidated)
+	assert.Equal(t, EventRoot{Err: "open controller: no such file"}, got[0].Root)
 }
