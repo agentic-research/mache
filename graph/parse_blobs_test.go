@@ -1,6 +1,7 @@
 package graph_test
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // TestNewParseBlobs_ServesParsedAndAcceptedBytes: a write's base is either a
@@ -21,19 +23,36 @@ func TestNewParseBlobs_ServesParsedAndAcceptedBytes(t *testing.T) {
 	require.NoError(t, f.DB().QueryRow(`SELECT content_hash FROM _source WHERE id = 'a.go'`).Scan(&parsed))
 	p := graph.NewParseBlobs(f.DB())
 
-	got, ok := p.Blob(parsed)
-	require.True(t, ok)
+	got, err := p.Blob(parsed)
+	require.NoError(t, err)
 	assert.Equal(t, "package a\n", string(got))
-	_, ok = p.Blob([]byte("unknown"))
-	assert.False(t, ok)
-	_, ok = p.Blob(nil)
-	assert.False(t, ok)
+	_, err = p.Blob([]byte("unknown"))
+	assert.ErrorIs(t, err, lloschema.ErrNoBlob)
+	_, err = p.Blob(nil)
+	assert.ErrorIs(t, err, lloschema.ErrNoBlob)
 
 	p.Remember("/x/a.go", []byte("h1"), []byte("first"))
 	p.Remember("/x/a.go", []byte("h2"), []byte("second"))
-	_, ok = p.Blob([]byte("h1"))
-	assert.False(t, ok, "only a file's latest accepted bytes can be a base")
-	got, ok = p.Blob([]byte("h2"))
-	require.True(t, ok)
+	_, err = p.Blob([]byte("h1"))
+	assert.ErrorIs(t, err, lloschema.ErrNoBlob, "only a file's latest accepted bytes can be a base")
+	got, err = p.Blob([]byte("h2"))
+	require.NoError(t, err)
 	assert.Equal(t, "second", string(got))
+}
+
+// TestNewParseBlobs_RefusesTamperedBytes: parsed bytes changed under their
+// hash are refused, naming the hash, never served as a write's base
+// (mache-c1eb7a).
+func TestNewParseBlobs_RefusesTamperedBytes(t *testing.T) {
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("a.go", "go", "package a\n")
+	_, f := b.Build()
+	var parsed []byte
+	require.NoError(t, f.DB().QueryRow(`SELECT content_hash FROM _source WHERE id = 'a.go'`).Scan(&parsed))
+	fixturedb.DamageBlob(t, f.DB(), parsed, fixturedb.BlobTampered)
+
+	got, err := graph.NewParseBlobs(f.DB()).Blob(parsed)
+	require.ErrorIs(t, err, lloschema.ErrBlobTampered)
+	assert.Contains(t, err.Error(), hex.EncodeToString(parsed))
+	assert.Nil(t, got)
 }

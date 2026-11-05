@@ -431,7 +431,8 @@ func populateSnippets(qg graph.RefsQuerier, findings []smellFinding) {
 	// The parsed bytes, which the findings' offsets refer to. Reading only
 	// _source.content left every snippet empty on a real leyline db, where
 	// that column is NULL and the bytes live in source_blobs (mache-46c59d).
-	expr, err := lloschema.SourceBytesExpr(qg)
+	// Bytes that fail verification give no snippet (mache-c1eb7a).
+	cols, err := lloschema.SourceColumns(qg)
 	if err != nil {
 		return
 	}
@@ -440,16 +441,18 @@ func populateSnippets(qg graph.RefsQuerier, findings []smellFinding) {
 		src, hit := sources[findings[i].SourceID]
 		if !hit {
 			rows, err := qg.QueryRefs(
-				"SELECT "+expr+" FROM _source WHERE id = ?", findings[i].SourceID,
+				"SELECT "+cols+" FROM _source WHERE id = ?", findings[i].SourceID,
 			)
 			if err != nil {
 				sources[findings[i].SourceID] = nil
 				continue
 			}
 			if rows.Next() {
-				var content []byte
-				if scanErr := rows.Scan(&content); scanErr == nil {
-					src = content
+				var s lloschema.SourceScan
+				if scanErr := rows.Scan(s.Targets()...); scanErr == nil {
+					if content, bErr := s.Bytes(); bErr == nil {
+						src = content
+					}
 				}
 			}
 			_ = rows.Close()

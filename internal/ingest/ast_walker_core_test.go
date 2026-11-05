@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -183,6 +184,20 @@ func TestReadSource_NoContentNoPath(t *testing.T) {
 	_, f := b.Build()
 
 	_, _, _, err := NewASTWalker(f.DB()).readSource("empty.go")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no content")
+	require.ErrorIs(t, err, lloschema.ErrNoSourceBytes)
+}
+
+// TestReadSource_RefusesTamperedBytes: bytes changed under their hash are
+// refused, naming the hash, and the walker never slices them (mache-c1eb7a).
+func TestReadSource_RefusesTamperedBytes(t *testing.T) {
+	b := fixturedb.New(t, fixturedb.LeylineV6)
+	b.Source("a.go", "go", "package a\n")
+	_, f := b.Build()
+	var h []byte
+	require.NoError(t, f.DB().QueryRow(`SELECT content_hash FROM _source WHERE id = 'a.go'`).Scan(&h))
+	fixturedb.DamageBlob(t, f.DB(), h, fixturedb.BlobTampered)
+
+	_, content, _, err := NewASTWalker(f.DB()).readSource("a.go")
+	require.ErrorIs(t, err, lloschema.ErrBlobTampered)
+	assert.Nil(t, content)
 }

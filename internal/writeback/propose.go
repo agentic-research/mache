@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // A write to a node goes through leyline's propose (mache-3a0fb9): mache
@@ -55,9 +56,14 @@ func Propose(origin graph.SourceOrigin, newContent []byte, blobs graph.BlobSourc
 	if blobs == nil || origin.Blob == nil {
 		return nil, ErrNoBase
 	}
-	base, ok := blobs.Blob(origin.Blob)
-	if !ok {
+	base, err := blobs.Blob(origin.Blob)
+	switch {
+	case errors.Is(err, lloschema.ErrNoBlob):
 		return nil, ErrNoBase
+	case err != nil:
+		// Held but not servable (tampered, or held as chunks): never build a
+		// write on it.
+		return nil, fmt.Errorf("the base of %s: %w", origin.FilePath, err)
 	}
 	file, content, err := replaceRange(base, origin, newContent)
 	if err != nil {

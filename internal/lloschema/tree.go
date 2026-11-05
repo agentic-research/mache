@@ -2,6 +2,8 @@ package lloschema
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -65,23 +67,32 @@ func TreeChildren(qg Querier, dir string) ([]TreeEntry, error) {
 	return out, rows.Err()
 }
 
-// TreeFileBytes is the stored bytes of the file at path in `_tree`: leyline
-// keeps every file's bytes in source_blobs, parsed or not. ok is false when
-// path is not a file in `_tree` or its bytes are not held.
+// TreeFileBytes is the stored bytes of the file at path in `_tree`, verified
+// against their hash (ReadBlob): leyline keeps every file's bytes in
+// source_blobs, parsed or not. ok is false when path is not a file in `_tree`
+// or its bytes are not held; bytes held as chunks or tampered are an error.
 func TreeFileBytes(qg Querier, path string) (content []byte, ok bool, err error) {
-	rows, err := qg.QueryRefs(`SELECT b.blob_bytes FROM _tree t
-		JOIN source_blobs b ON b.blob_hash = t.blob_hash
-		WHERE t.path = ? AND t.mode != ?`, path, treeModeDir)
+	rows, err := qg.QueryRefs(`SELECT blob_hash FROM _tree WHERE path = ? AND mode != ?`, path, treeModeDir)
 	if err != nil {
 		return nil, false, err
 	}
-	defer func() { _ = rows.Close() }()
-	if !rows.Next() {
-		return nil, false, rows.Err()
+	var hash []byte
+	found := rows.Next()
+	if found {
+		err = rows.Scan(&hash)
 	}
-	var b sql.RawBytes
-	if err := rows.Scan(&b); err != nil {
+	if cerr := rows.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil || !found {
 		return nil, false, err
 	}
-	return append([]byte(nil), b...), true, nil
+	content, err = ReadBlob(qg, hash)
+	if errors.Is(err, ErrNoBlob) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("%s: %w", path, err)
+	}
+	return content, true, nil
 }

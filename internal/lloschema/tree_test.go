@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/agentic-research/mache/internal/lltest"
 )
@@ -74,4 +75,30 @@ func keys(m map[string]lloschema.TreeEntry) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestTreeFileBytes_VerifiesTheStoredBytes, on a real pinned-leyline parse:
+// read_file's bytes are verified against the hash leyline stored them under,
+// so an untouched file reads back (leyline's hash and mache's verification
+// agree), and the same file with its bytes changed under that hash is refused,
+// naming the hash, instead of served (mache-c1eb7a).
+func TestTreeFileBytes_VerifiesTheStoredBytes(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "notes.txt"), []byte("hello\n"), 0o644))
+	db, _ := lltest.ParseSourceViaLeyline(t, src)
+	qg := lloschema.DB(db)
+
+	got, ok, err := lloschema.TreeFileBytes(qg, "notes.txt")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "hello\n", string(got), "leyline's blob_hash verifies under mache's BLAKE3")
+
+	var h []byte
+	require.NoError(t, db.QueryRow(`SELECT blob_hash FROM _tree WHERE path = 'notes.txt'`).Scan(&h))
+	fixturedb.DamageBlob(t, db, h, fixturedb.BlobTampered)
+	got, ok, err = lloschema.TreeFileBytes(qg, "notes.txt")
+	require.ErrorIs(t, err, lloschema.ErrBlobTampered)
+	assert.Contains(t, err.Error(), "notes.txt")
+	assert.False(t, ok)
+	assert.Nil(t, got)
 }

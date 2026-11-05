@@ -2,7 +2,10 @@ package graph
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
+
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // ParseBlobs is a BlobSource over a leyline parse db: the parsed bytes
@@ -27,24 +30,22 @@ func NewParseBlobs(db *sql.DB) *ParseBlobs {
 	return &ParseBlobs{db: db, own: map[string]ownBlob{}}
 }
 
-// Blob implements BlobSource.
-func (p *ParseBlobs) Blob(hash []byte) ([]byte, bool) {
+// Blob implements BlobSource. A remembered write's bytes are mache's own, held
+// in memory under the hash the daemon returned; the parse db's are read
+// through lloschema.ReadBlob, which verifies them (mache-c1eb7a).
+func (p *ParseBlobs) Blob(hash []byte) ([]byte, error) {
 	if len(hash) == 0 {
-		return nil, false
+		return nil, fmt.Errorf("no blob hash: %w", lloschema.ErrNoBlob)
 	}
 	p.mu.Lock()
 	for _, o := range p.own {
 		if o.hash == string(hash) {
 			p.mu.Unlock()
-			return o.content, true
+			return o.content, nil
 		}
 	}
 	p.mu.Unlock()
-	var content []byte
-	if err := p.db.QueryRow(`SELECT blob_bytes FROM source_blobs WHERE blob_hash = ?`, hash).Scan(&content); err != nil {
-		return nil, false
-	}
-	return content, true
+	return lloschema.ReadBlob(lloschema.DB(p.db), hash)
 }
 
 // Remember implements BlobSource.
