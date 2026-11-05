@@ -1187,12 +1187,28 @@ func (c *SocketClient) Prioritize(files []string) error {
 // cache are keyed on the pin, so both start cold. IR lineage stays
 // merkle-ast-v2, so node_hash values and the smell baseline carry over.
 //
+// v0.24.0 -> v0.25.0 keeps projection-v10 (sqlite_master differs only by
+// append-only triggers on the interning tables) and changes the daemon wire
+// (ley-line-open-80f037, -1c5d28; mache-997b7f):
+//   - every root-carrying message, the sheaf invalidate event included, says
+//     root_published; current_root appears exactly when it is true, and an
+//     unreadable controller sends root_error instead. SheafInvalidateEvent.Root
+//     decodes those three states; 64 zeros and "" never read as a root.
+//   - a sheaf stalk hash, when present, must be 64 lowercase hex, and an
+//     omitted one means "changed". InvalidateWithStalk refuses anything else
+//     before sending, and mache keeps omitting it until the region hash is the
+//     content fold (mache-1c7038).
+//   - find_* never name a node by a bare nid; such a node fails the request,
+//     which mache surfaces as an error.
+// Release binaries print a bare X.Y.Z and non-tag builds X.Y.Z-dev+<sha>, so
+// the exact pin now tells them apart.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.24.0"
+const leylineBinaryVersion = "v0.25.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

@@ -123,11 +123,13 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 	// only need ONE invalidate to assert the event-bus path; the
 	// cascade semantics themselves are covered by the existing e2e.
 	regions := []region{
-		{ID: 1, Hash: "aaaaaaaa", Data: bench32D(1.0)},
-		{ID: 2, Hash: "bbbbbbbb", Data: bench32D(2.0)},
+		{ID: 1, Hash: strings.Repeat("aa", 32), Data: bench32D(1.0)},
+		{ID: 2, Hash: strings.Repeat("bb", 32), Data: bench32D(2.0)},
 	}
+	// leyline >= v0.25.0 refuses any hash that is not 64 lowercase hex; the
+	// boundary is the two region hashes XORed (0xaa ^ 0xbb = 0x11).
 	restrictions := []restriction{
-		{A: 1, B: 2, BoundaryHash: "ab", CoChangeRate: 0.5, AgreementDim: agreementDim},
+		{A: 1, B: 2, BoundaryHash: strings.Repeat("11", 32), CoChangeRate: 0.5, AgreementDim: agreementDim},
 	}
 	require.NoError(t, pushTopologyForE2E(sc, regions, restrictions),
 		"sheaf_set_topology against live daemon")
@@ -136,7 +138,7 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 	// the cascade is unrelated to the event bus — we only need it to
 	// succeed so the daemon ran the op at all.
 	mutatedStalk := bench32D(99.0)
-	_, err = sc.InvalidateWithStalk(1, "post-mutation", mutatedStalk)
+	_, err = sc.InvalidateWithStalk(1, "", mutatedStalk) // omitted: "changed"
 	require.NoError(t, err, "sheaf_invalidate against live daemon")
 
 	// The contract: within a generous budget (the cascade itself is
@@ -163,6 +165,10 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 		"event generation must reflect at least one cascade")
 	assert.GreaterOrEqual(t, got.Count, 1,
 		"event count must reflect at least the directly-invalidated region")
+	// leyline >= v0.25.0 names the root state on every event
+	// (mache-997b7f): this daemon reads its controller, so the state is
+	// known, published or not, and never decoded from a missing field.
+	assert.NotEqual(t, RootUnknown, got.Root.State, "the live daemon names its root state: %+v", got.Root)
 
 	// Subscriber's Status() should mirror what we just observed —
 	// the surface get_sheaf_status reports through MCP.

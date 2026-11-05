@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,7 +138,8 @@ const (
 // Payload shape:
 //
 //	{invalidated | region_ids, count, scope, changed_files,
-//	 current_root, generation, prior_generation, timestamp_ms}
+//	 root_published, current_root | root_error,
+//	 generation, prior_generation, timestamp_ms}
 //
 // The parser reads both `invalidated` and `region_ids` for the region
 // list so a wire-name flip in LLO doesn't break decode — the
@@ -189,14 +191,82 @@ type SheafInvalidateEvent struct {
 	// mache's own `op_sheaf_invalidate` calls) leave it empty.
 	ChangedFiles []string
 
-	// CurrentRoot is the 64-hex BLAKE3 root of the substrate state
-	// after the emit. Watcher-driven emits populate this; may be empty
-	// when the daemon's controller read failed (best-effort, degrades
-	// honestly per LLO PR #140).
-	CurrentRoot string
+	// Root is the published arena root the event reports, in one of the
+	// three states the wire defines (see EventRoot).
+	Root EventRoot
 
 	// TimestampMs is now_ms() at emit time. Watcher-driven emits only.
 	TimestampMs int64
+}
+
+// RootState is which of the sheaf event's three root states a payload is in
+// (ley-line-open-80f037, leyline v0.25.0).
+type RootState int
+
+const (
+	// RootUnknown: the daemon could not read its controller (`root_error`),
+	// or the payload's root fields are missing, contradictory or malformed.
+	// EventRoot.Err says which.
+	RootUnknown RootState = iota
+	// RootNone: nothing is published (`root_published: false`, no
+	// `current_root`).
+	RootNone
+	// RootPublished: `root_published: true` with `current_root`, the BLAKE3
+	// of the published arena as 64 lowercase hex.
+	RootPublished
+)
+
+// EventRoot is the root a sheaf event reports. Current is set only when
+// State is RootPublished, and Err only when State is RootUnknown.
+type EventRoot struct {
+	State   RootState
+	Current string
+	Err     string
+}
+
+// eventRoot reads a payload's root fields under the v0.25.0 rule:
+// `root_published` is always present, `current_root` exactly when it is true,
+// and an unreadable controller sends `root_error` in place of both. 64 zeros
+// and "" never appear. Anything else is reported as RootUnknown, never as a
+// root: the root is information about the event, while the invalidation is
+// what keeps caches correct, so a malformed root never drops the event.
+func eventRoot(p *daemonwire.SheafInvalidatePayload) EventRoot {
+	switch {
+	case p.RootError != nil:
+		if p.RootPublished != nil || p.CurrentRoot != nil {
+			return EventRoot{Err: "root_error sent beside root fields: " + *p.RootError}
+		}
+		return EventRoot{Err: *p.RootError}
+	case p.RootPublished == nil:
+		return EventRoot{Err: "the daemon reported neither root_published nor root_error"}
+	case !*p.RootPublished:
+		if p.CurrentRoot != nil {
+			return EventRoot{Err: "current_root sent although root_published is false"}
+		}
+		return EventRoot{State: RootNone}
+	case p.CurrentRoot == nil:
+		return EventRoot{Err: "root_published is true but current_root is missing"}
+	case !isLowerHex64(*p.CurrentRoot):
+		return EventRoot{Err: fmt.Sprintf("current_root %q is not 64 lowercase hex digits", *p.CurrentRoot)}
+	case *p.CurrentRoot == strings.Repeat("0", 64):
+		// The pre-v0.25.0 spelling of "nothing published". The rule says it
+		// never appears; if it does, it is not a root.
+		return EventRoot{Err: "current_root is 64 zeros, the retired no-root sentinel"}
+	default:
+		return EventRoot{State: RootPublished, Current: *p.CurrentRoot}
+	}
+}
+
+func isLowerHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // SubscriberState classifies the subscriber's connection state.
@@ -508,19 +578,19 @@ func (s *SheafSubscriber) dispatch(ev map[string]any) error {
 	// Coarse-v1 fields (watcher-driven emit). Absent on
 	// consumer-driven emits; the zero values are the correct default
 	// for the routing layer to infer ScopeChangedOnly.
-	var routing struct {
-		Scope        string   `json:"scope"`
-		ChangedFiles []string `json:"changed_files"`
-		CurrentRoot  string   `json:"current_root"`
-		TimestampMs  int64    `json:"timestamp_ms,string"`
+	if payload.Scope != nil {
+		parsed.Scope = *payload.Scope
 	}
-	if err := json.Unmarshal(envelope.Data, &routing); err != nil {
-		return fmt.Errorf("decode invalidate routing fields: %w", err)
+	parsed.ChangedFiles = payload.ChangedFiles
+	parsed.Root = eventRoot(&payload)
+	// timestamp_ms is not in the published payload type.
+	var stamp struct {
+		TimestampMs int64 `json:"timestamp_ms,string"`
 	}
-	parsed.Scope = routing.Scope
-	parsed.ChangedFiles = routing.ChangedFiles
-	parsed.CurrentRoot = routing.CurrentRoot
-	parsed.TimestampMs = routing.TimestampMs
+	if err := json.Unmarshal(envelope.Data, &stamp); err != nil {
+		return fmt.Errorf("decode invalidate timestamp: %w", err)
+	}
+	parsed.TimestampMs = stamp.TimestampMs
 
 	s.mu.Lock()
 	s.lastEvent = time.Now()
