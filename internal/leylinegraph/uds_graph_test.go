@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -450,4 +451,21 @@ func TestGetCallees_EmptyResultIsNotAnError(t *testing.T) {
 	callees, err := g.GetCallees("/unknown")
 	require.NoError(t, err)
 	require.Empty(t, callees)
+}
+
+// TestGetCallers_ARefusalIsAnErrorNotNoCallers: leyline >= v0.25.0 refuses a
+// find_callers answer that would name a node by a bare nid, failing the whole
+// request (ley-line-open-80f037). mache must surface that refusal, never
+// read it as "this token has no callers" (mache-997b7f).
+func TestGetCallers_ARefusalIsAnErrorNotNoCallers(t *testing.T) {
+	sock := stubDaemon(t, func(map[string]any) map[string]any {
+		return map[string]any{"ok": false, "error": "find_callers: node 1677721 has no path and no _source anchor"}
+	})
+	g, err := NewUDSGraph(sock)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+	nodes, err := g.GetCallers("Foo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no _source anchor")
+	assert.Nil(t, nodes)
 }
