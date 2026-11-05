@@ -112,10 +112,14 @@ func TestStoredBytes_AreVerifiedOnEveryRead(t *testing.T) {
 		want   error
 	}{
 		{"tampered", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) {
-			fixturedb.TamperBlob(t, f.DB(), h, []byte("package b"))
+			fixturedb.DamageBlob(t, f.DB(), h, fixturedb.BlobTampered)
 		}, ErrBlobTampered},
-		{"chunked", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) { fixturedb.ChunkBlob(t, f.DB(), h) }, ErrBlobChunked},
-		{"missing", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) { fixturedb.DropBlob(t, f.DB(), h) }, ErrNoBlob},
+		{"chunked", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) {
+			fixturedb.DamageBlob(t, f.DB(), h, fixturedb.BlobChunked)
+		}, ErrBlobChunked},
+		{"missing", func(t *testing.T, f *fixturedb.FixtureDB, h []byte) {
+			fixturedb.DamageBlob(t, f.DB(), h, fixturedb.BlobDropped)
+		}, ErrNoBlob},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, h := blobFixture(t)

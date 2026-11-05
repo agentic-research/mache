@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agentic-research/mache/internal/sqlintro"
 	"github.com/zeebo/blake3"
 )
 
@@ -18,61 +17,6 @@ import (
 // caller and never in a `CREATE TABLE` a test wrote. That is what makes "which
 // producer did this test mean?" a question with an answer. This file holds the
 // row writers the dialects share.
-
-// emitter carries the per-build state the row writers share.
-type emitter struct {
-	// derivedParent is true when the producer's nodes.parent_id is a GENERATED
-	// column, which ley-line-open made it in projection-v4 (v0.19.0). Naming a
-	// generated column in an INSERT is rejected at PREPARE time, so the column
-	// LIST has to differ — the value does not, since the derivation reproduces
-	// exactly what this emitter would have written.
-	derivedParent bool
-	b             *Builder
-	db            *sql.Tx
-	// hasNodeContent reports whether this fixture has a node_content table to
-	// point node_hash values at. Ley-line always does; a Standalone fixture only
-	// does when it modelled the cache-hydration path.
-	hasNodeContent bool
-
-	// v6 and v6Sites are the projection-v6 dialect's tree and its call-site
-	// nodes (one per ref, in b.refs order), built once on first use. Unused by
-	// the v4 dialects.
-	v6      *v6Tree
-	v6Sites []*v6Node
-}
-
-// insertRows writes every spec inside ONE transaction: a fixture is
-// all-or-nothing, and a benchmark-sized one (thousands of `_ast` rows) costs
-// a single fsync rather than one per row.
-func (b *Builder) insertRows(db *sql.DB) {
-	b.t.Helper()
-	tx, err := db.Begin()
-	if err != nil {
-		b.t.Fatalf("fixturedb(%s): begin: %v", b.producer, err)
-	}
-	d := b.producer.dialect
-	e := &emitter{
-		b: b, db: tx,
-		hasNodeContent: d.hasNodeContent(b),
-		derivedParent:  sqlintro.ColumnIsGenerated(tx, "nodes", "parent_id"),
-	}
-	d.emitNodes(e)
-	d.emitSymbols(e)
-	d.emitAST(e)
-	d.emitSources(e)
-	d.emitImports(e)
-	e.emitLSP()
-	if err := tx.Commit(); err != nil {
-		b.t.Fatalf("fixturedb(%s): commit: %v", b.producer, err)
-	}
-}
-
-func (e *emitter) exec(q string, args ...any) {
-	e.b.t.Helper()
-	if _, err := e.db.Exec(q, args...); err != nil {
-		e.b.t.Fatalf("fixturedb(%s): %v\n%s", e.b.producer, err, q)
-	}
-}
 
 // subtree records a deduped merkle subtree in node_content and returns the hash
 // occurrences point at. Returns nil when the fixture has no node_content table,
@@ -305,37 +249,33 @@ func storeBlob(exec func(string, ...any), content string) []byte {
 }
 
 // Damage to a stored blob, for tests of mache's read-time verification
-// (mache-c1eb7a). They live here, beside storeBlob, because the LLO boundary
-// lint lets only fixturedb write leyline's tables; they take a *sql.DB so a
-// real leyline parse can be damaged the same way as a fixture.
+// (mache-c1eb7a). The writes live here, beside storeBlob, because the LLO
+// boundary lint lets only this file write leyline's tables; they take a
+// *sql.DB so a real leyline parse can be damaged the same way as a fixture.
 
-// TamperBlob replaces the bytes stored under hash, leaving the hash: what a
-// corrupted or hostile store would serve.
-func TamperBlob(t testing.TB, db *sql.DB, hash, content []byte) {
+// DamageBlob damages the row stored under hash in the way d names.
+func DamageBlob(t testing.TB, db *sql.DB, hash []byte, d BlobDamage) {
 	t.Helper()
-	mustExec(t, db, `UPDATE source_blobs SET blob_bytes = ? WHERE blob_hash = ?`, content, hash)
-}
-
-// ChunkBlob makes the row under hash hold NULL bytes, as a chunk-activated
-// store does. leyline's DDL declares blob_bytes NOT NULL, so the table is
-// rebuilt without that constraint first.
-func ChunkBlob(t testing.TB, db *sql.DB, hash []byte) {
-	t.Helper()
-	for _, stmt := range []string{
-		`CREATE TABLE source_blobs_chunked (blob_hash BLOB PRIMARY KEY, blob_bytes BLOB)`,
-		`INSERT INTO source_blobs_chunked SELECT blob_hash, blob_bytes FROM source_blobs`,
-		`DROP TABLE source_blobs`,
-		`ALTER TABLE source_blobs_chunked RENAME TO source_blobs`,
-	} {
-		mustExec(t, db, stmt)
+	switch d {
+	case BlobTampered:
+		mustExec(t, db, `UPDATE source_blobs SET blob_bytes = CAST('tampered' AS BLOB) WHERE blob_hash = ?`, hash)
+	case BlobChunked:
+		// leyline's DDL declares blob_bytes NOT NULL; a chunk-activated store
+		// relaxes it, so the table is rebuilt without the constraint first.
+		for _, stmt := range []string{
+			`CREATE TABLE source_blobs_chunked (blob_hash BLOB PRIMARY KEY, blob_bytes BLOB)`,
+			`INSERT INTO source_blobs_chunked SELECT blob_hash, blob_bytes FROM source_blobs`,
+			`DROP TABLE source_blobs`,
+			`ALTER TABLE source_blobs_chunked RENAME TO source_blobs`,
+		} {
+			mustExec(t, db, stmt)
+		}
+		mustExec(t, db, `UPDATE source_blobs SET blob_bytes = NULL WHERE blob_hash = ?`, hash)
+	case BlobDropped:
+		mustExec(t, db, `DELETE FROM source_blobs WHERE blob_hash = ?`, hash)
+	default:
+		t.Fatalf("fixturedb: unknown BlobDamage %d", d)
 	}
-	mustExec(t, db, `UPDATE source_blobs SET blob_bytes = NULL WHERE blob_hash = ?`, hash)
-}
-
-// DropBlob deletes the row under hash: a hash the store does not hold.
-func DropBlob(t testing.TB, db *sql.DB, hash []byte) {
-	t.Helper()
-	mustExec(t, db, `DELETE FROM source_blobs WHERE blob_hash = ?`, hash)
 }
 
 // AddBlob stores content under its BLAKE3 hash, as leyline keys it, and
@@ -343,11 +283,4 @@ func DropBlob(t testing.TB, db *sql.DB, hash []byte) {
 func AddBlob(t testing.TB, db *sql.DB, content []byte) []byte {
 	t.Helper()
 	return storeBlob(func(q string, args ...any) { mustExec(t, db, q, args...) }, string(content))
-}
-
-func mustExec(t testing.TB, db *sql.DB, q string, args ...any) {
-	t.Helper()
-	if _, err := db.Exec(q, args...); err != nil {
-		t.Fatalf("fixturedb: %v\n%s", err, q)
-	}
 }

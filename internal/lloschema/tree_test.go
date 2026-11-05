@@ -95,7 +95,7 @@ func TestTreeFileBytes_VerifiesTheStoredBytes(t *testing.T) {
 
 	var h []byte
 	require.NoError(t, db.QueryRow(`SELECT blob_hash FROM _tree WHERE path = 'notes.txt'`).Scan(&h))
-	fixturedb.TamperBlob(t, db, h, []byte("goodbye"))
+	fixturedb.DamageBlob(t, db, h, fixturedb.BlobTampered)
 	got, ok, err = lloschema.TreeFileBytes(qg, "notes.txt")
 	require.ErrorIs(t, err, lloschema.ErrBlobTampered)
 	assert.Contains(t, err.Error(), "notes.txt")
