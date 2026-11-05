@@ -43,7 +43,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.24.0"
+const leylineV6SchemaVersion = "v0.25.0"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
@@ -217,8 +217,19 @@ var leylineV6Unmodelled = map[string]string{
 	"v_ast_hash":       "LLO's node_hash view over _ast; mache uses lloschema.NodeHashExpr",
 	"v_node_defs_hash": "LLO's node_hash view over node_defs; mache uses lloschema.NodeHashExpr",
 	"v_node_refs_hash": "LLO's node_hash view over node_refs; mache uses lloschema.NodeHashExpr",
-	"_queries":         "LLO's tree-sitter query registry",
-	"query_blobs":      "LLO's compiled-query store",
+	// v0.25.0 (ley-line-open-80f037 F9): the interning tables are
+	// append-only, refusing DELETE and an id-changing UPDATE. Fixtures only
+	// insert into them, and mache writes none of them outside fixtures.
+	"dirs_append_only_delete":  "LLO's append-only guard on dirs; fixtures only insert",
+	"dirs_append_only_update":  "LLO's append-only guard on dirs; fixtures only insert",
+	"files_append_only_delete": "LLO's append-only guard on files; fixtures only insert",
+	"files_append_only_update": "LLO's append-only guard on files; fixtures only insert",
+	"kinds_append_only_delete": "LLO's append-only guard on kinds; fixtures only insert",
+	"kinds_append_only_update": "LLO's append-only guard on kinds; fixtures only insert",
+	"names_append_only_delete": "LLO's append-only guard on names; fixtures only insert",
+	"names_append_only_update": "LLO's append-only guard on names; fixtures only insert",
+	"_queries":                 "LLO's tree-sitter query registry",
+	"query_blobs":              "LLO's compiled-query store",
 }
 
 // leylineV6Views are LLO's OWN views, and modelling them is not optional.

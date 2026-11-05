@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	daemonwire "github.com/agentic-research/ley-line-open/clients/go/leyline-schema/daemon/wire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -420,6 +421,7 @@ func TestSheafSubscriber_DispatchesWatcherDrivenEvent(t *testing.T) {
 					"count":            3.0,
 					"scope":            "all-known",
 					"changed_files":    []any{"pkg/a.rs", "pkg/b.rs"},
+					"root_published":   true,
 					"current_root":     strings.Repeat("a", 64),
 					"generation":       "12", // quoted-string Int64
 					"prior_generation": "11",
@@ -462,7 +464,7 @@ func TestSheafSubscriber_DispatchesWatcherDrivenEvent(t *testing.T) {
 	assert.Equal(t, 3, got.Count, "count round-trips")
 	assert.Equal(t, ScopeAllKnown, got.Scope, "coarse-v1 scope decodes verbatim")
 	assert.Equal(t, []string{"pkg/a.rs", "pkg/b.rs"}, got.ChangedFiles, "changed_files decode")
-	assert.Equal(t, strings.Repeat("a", 64), got.CurrentRoot, "current_root decodes")
+	assert.Equal(t, EventRoot{State: RootPublished, Current: strings.Repeat("a", 64)}, got.Root, "the published root decodes")
 	assert.Equal(t, int64(1720000000000), got.TimestampMs, "quoted-string timestamp_ms parses")
 
 	assert.Equal(t, uint64(12), sub.Status().LastGeneration,
@@ -538,7 +540,7 @@ func TestSheafSubscriber_ConsumerDrivenPayloadShape(t *testing.T) {
 		"consumer-driven emit has no scope — leave empty so router infers changed-only")
 	assert.Nil(t, got.ChangedFiles,
 		"consumer-driven emit has no changed_files — must decode to nil, not a fabricated slice")
-	assert.Equal(t, "", got.CurrentRoot, "consumer-driven emit has no current_root")
+	assert.Equal(t, RootUnknown, got.Root.State, "a payload naming no root state is unknown, never a root")
 	assert.Equal(t, int64(0), got.TimestampMs, "consumer-driven emit has no timestamp_ms")
 }
 
@@ -679,4 +681,82 @@ func handleSubscribeSession(conn net.Conn, session int, b mockBehavior) {
 	// Keep session alive (blocking read) so the subscriber doesn't
 	// see a hangup just because we ran out of events.
 	_, _ = rd.ReadString('\n')
+}
+
+// TestEventRoot reads the sheaf event's root under leyline v0.25.0's rule
+// (mache-997b7f): exactly three states, spelled as LLO documents them, and
+// every other combination reported as unknown with a reason rather than read
+// as a root. 64 zeros in particular is not a root.
+func TestEventRoot(t *testing.T) {
+	root := strings.Repeat("ab", 32)
+	yes, no := true, false
+	str := func(s string) *string { return &s }
+	for _, tc := range []struct {
+		name string
+		p    daemonwire.SheafInvalidatePayload
+		want EventRoot
+		err  string
+	}{
+		{
+			name: "published", p: daemonwire.SheafInvalidatePayload{RootPublished: &yes, CurrentRoot: &root},
+			want: EventRoot{State: RootPublished, Current: root},
+		},
+		{
+			name: "nothing published", p: daemonwire.SheafInvalidatePayload{RootPublished: &no},
+			want: EventRoot{State: RootNone},
+		},
+		{
+			name: "controller unreadable", p: daemonwire.SheafInvalidatePayload{RootError: str("open controller: denied")},
+			want: EventRoot{Err: "open controller: denied"},
+		},
+		{name: "no root state at all", err: "neither root_published nor root_error"},
+		{name: "published without a root", p: daemonwire.SheafInvalidatePayload{RootPublished: &yes}, err: "current_root is missing"},
+		{name: "a root although unpublished", p: daemonwire.SheafInvalidatePayload{RootPublished: &no, CurrentRoot: &root}, err: "root_published is false"},
+		{name: "64 zeros is not a root", p: daemonwire.SheafInvalidatePayload{RootPublished: &yes, CurrentRoot: str(strings.Repeat("0", 64))}, err: "retired no-root sentinel"},
+		{name: "malformed hex", p: daemonwire.SheafInvalidatePayload{RootPublished: &yes, CurrentRoot: str(strings.Repeat("0", 63) + "z")}, err: "not 64 lowercase hex"},
+		{name: "uppercase hex", p: daemonwire.SheafInvalidatePayload{RootPublished: &yes, CurrentRoot: str(strings.ToUpper(root))}, err: "not 64 lowercase hex"},
+		{name: "error beside root fields", p: daemonwire.SheafInvalidatePayload{RootError: str("x"), RootPublished: &yes}, err: "beside root fields"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := eventRoot(&tc.p)
+			if tc.err == "" {
+				assert.Equal(t, tc.want, got)
+				return
+			}
+			assert.Equal(t, RootUnknown, got.State)
+			assert.Empty(t, got.Current, "an unknown root carries no root")
+			assert.Contains(t, got.Err, tc.err)
+		})
+	}
+}
+
+// TestSheafSubscriber_DeliversAnInvalidationWhoseRootIsUnknown: a daemon that
+// cannot read its controller sends root_error in place of the root fields,
+// and the invalidation must still reach the handler. The root is information;
+// dropping the event would leave caches stale.
+func TestSheafSubscriber_DeliversAnInvalidationWhoseRootIsUnknown(t *testing.T) {
+	sockPath := startSubscribeMockServer(t, mockBehavior{
+		acceptSubscribe: true,
+		pushEvents: []map[string]any{{
+			"event": true, "seq": "1", "source": "leyline", "topic": "daemon.sheaf.invalidate",
+			"data": map[string]any{
+				"invalidated": []any{7.0}, "count": 1.0,
+				"root_error": "open controller: no such file",
+				"generation": "3", "prior_generation": "2",
+			},
+		}},
+	})
+	got := make(chan SheafInvalidateEvent, 1)
+	sub := NewSheafSubscriber(sockPath, func(ev SheafInvalidateEvent) { got <- ev })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sub.Start(ctx)
+	t.Cleanup(sub.Stop)
+	select {
+	case ev := <-got:
+		assert.Equal(t, []int{7}, ev.Invalidated)
+		assert.Equal(t, EventRoot{Err: "open controller: no such file"}, ev.Root)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the invalidation was not delivered")
+	}
 }

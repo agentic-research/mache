@@ -166,7 +166,10 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 	// (a, b) and (b, c) boundary projections moved, and the BFS should
 	// return b plus both reachable neighbors.
 	mutatedStalk := ComputeStalk(2, []string{"new_token_x", "new_token_y"})
-	affected, err := sc.InvalidateWithStalk(2, "post-mutation", mutatedStalk)
+	// No hash: leyline >= v0.25.0 reads an omitted hash as an explicit
+	// "changed" (ley-line-open-1c5d28), so every boundary of b fires and δ⁰
+	// decides; a present hash must be 64 lowercase hex.
+	affected, err := sc.InvalidateWithStalk(2, "", mutatedStalk)
 	require.NoError(t, err, "InvalidateWithStalk against live daemon")
 
 	// The cascade must include the directly-changed region AND both

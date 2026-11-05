@@ -64,7 +64,7 @@ bumps may include breaking changes.
   shapes while the wire handshake passed. Now every adoption asks the daemon
   its release, and anything but the pin is refused with the socket, the
   daemon's pid when known, and both versions, e.g. "the leyline daemon at
-  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.24.0 — stop it
+  ~/.mache/default.sock (pid 4242) is v0.20.5, mache needs v0.25.0 — stop it
   and mache will start the pinned one". A daemon that cannot say, either
   because it reports no binary version, does not answer `leyline_version`, or
   cannot be reached, is refused too. `mache serve`'s startup handshake applies
@@ -72,11 +72,17 @@ bumps may include breaking changes.
   purpose, and its daemon is not refused. The daemon mache spawned itself is
   not asked again on each operation.
 
-- **leyline is pinned to v0.24.0** (`mache-bc3c84`, `mache-40e8e7`,
-  `mache-72668d`, `mache-161c63`, `mache-99324b`), up from v0.20.5, with the
-  schema client at `clients/go/leyline-schema` v0.24.0. A daemon an earlier
-  mache left running on another release is refused (see above) until it is
-  stopped; the next start runs v0.24.0. v0.23.0 added the daemon's
+- **leyline is pinned to v0.25.0** (`mache-bc3c84`, `mache-40e8e7`,
+  `mache-72668d`, `mache-161c63`, `mache-99324b`, `mache-997b7f`), up from
+  v0.20.5, with the schema client at `clients/go/leyline-schema` v0.25.0. A
+  daemon an earlier mache left running on another release is refused (see
+  above) until it is stopped; the next start runs v0.25.0. v0.25.0 keeps
+  v0.24.0's projection. Sheaf invalidation events now say whether a root is
+  published, and mache reads that as published / none / unknown instead of
+  taking a missing or all-zero root as a root; an invalidation is delivered
+  whatever its root says. A sheaf hash mache sends must be 64 lowercase hex
+  (it refuses anything else before sending), and a node leyline cannot name
+  now fails `find_callers` with an error rather than a bare number. v0.23.0 added the daemon's
   `source_root` and the `read_source`/`propose` wire types (see above).
   v0.24.0 writes projection-v10: `_ast`, `node_defs` and `node_refs` carry
   `node_content`'s `content_id` instead of the 32-byte `node_hash`, which
