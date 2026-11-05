@@ -7,9 +7,11 @@ import "time"
 // node's offsets were taken from (SourceOrigin.Blob), never from the file on
 // disk (mache-3a0fb9).
 type BlobSource interface {
-	// Blob returns the bytes hash names, and false when the source does not
-	// hold them.
-	Blob(hash []byte) ([]byte, bool)
+	// Blob returns the bytes hash names, verified against it. An error
+	// wrapping lloschema.ErrNoBlob means the source does not hold them; any
+	// other error (tampered, held as chunks) means it holds bytes it will not
+	// serve.
+	Blob(hash []byte) ([]byte, error)
 	// Remember records content under hash as filePath's bytes: what a write
 	// produced and the daemon accepted, which the next write to that file
 	// builds on. It replaces what was remembered for filePath before.

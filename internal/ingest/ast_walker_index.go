@@ -250,26 +250,29 @@ func (w *ASTWalker) fileSection(sourceID string) (*fileIndex, error) {
 	return idx, nil
 }
 
-// readSource reads one _source row: the language and the bytes the parse saw
-// (lloschema.SourceBytesExpr). Every node's byte offsets refer to exactly
-// those bytes. It used to read the file at _source.path when the row carried
-// no inline content, which is leyline's default, so a file edited after the
-// parse was sliced with offsets from before the edit (mache-46c59d). A row
-// whose bytes the projection does not hold is an error, not a disk read. blob
-// is the hash naming those bytes (lloschema.SourceHashExpr), nil when the db
-// records none.
+// readSource reads one _source row: the language and the bytes the parse saw,
+// verified against their hash (lloschema.SourceScan). Every node's byte
+// offsets refer to exactly those bytes. It used to read the file at
+// _source.path when the row carried no inline content, which is leyline's
+// default, so a file edited after the parse was sliced with offsets from
+// before the edit (mache-46c59d). A row whose bytes the projection does not
+// hold, or holds tampered or as chunks, is an error, not a disk read
+// (mache-c1eb7a). blob is the hash naming those bytes, nil when the db records
+// none.
 func (w *ASTWalker) readSource(sourceID string) (lang string, content, blob []byte, err error) {
 	q, err := w.sourceQuery()
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if err := w.db.QueryRow(q, sourceID).Scan(&lang, &content, &blob); err != nil {
+	var s lloschema.SourceScan
+	if err := w.db.QueryRow(q, sourceID).Scan(append([]any{&lang}, s.Targets()...)...); err != nil {
 		return "", nil, nil, err
 	}
-	if content == nil {
-		return lang, nil, nil, fmt.Errorf("_source %s: the projection holds no content for it", sourceID)
+	content, err = s.Bytes()
+	if err != nil {
+		return lang, nil, nil, fmt.Errorf("_source %s: %w", sourceID, err)
 	}
-	return lang, content, blob, nil
+	return lang, content, s.Hash(), nil
 }
 
 // sourceQuery is the statement readSource runs, built once per db: which
@@ -278,16 +281,11 @@ func (w *ASTWalker) sourceQuery() (string, error) {
 	w.sourceMu.Lock()
 	defer w.sourceMu.Unlock()
 	if w.sourceSQL == "" {
-		qg := lloschema.DB(w.db)
-		bytesExpr, err := lloschema.SourceBytesExpr(qg)
+		cols, err := lloschema.SourceColumns(lloschema.DB(w.db))
 		if err != nil {
 			return "", err
 		}
-		hashExpr, err := lloschema.SourceHashExpr(qg)
-		if err != nil {
-			return "", err
-		}
-		w.sourceSQL = "SELECT language, " + bytesExpr + ", " + hashExpr + " FROM _source WHERE id = ?"
+		w.sourceSQL = "SELECT language, " + cols + " FROM _source WHERE id = ?"
 	}
 	return w.sourceSQL, nil
 }

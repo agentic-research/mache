@@ -49,7 +49,7 @@ type ASTWalker struct {
 	v6Hash   string
 	shapeErr error
 	// sourceSQL is the statement that reads one _source row's language and
-	// parsed bytes (lloschema.SourceBytesExpr) — a per-db fact, asked once.
+	// parsed bytes (lloschema.SourceColumns) — a per-db fact, asked once.
 	sourceMu  sync.Mutex
 	sourceSQL string
 }

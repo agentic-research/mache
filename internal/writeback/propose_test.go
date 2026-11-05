@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // Issue #6: an agent writing through echo/heredoc adds a trailing newline the
@@ -45,11 +46,11 @@ func TestReplaceRange_RefusesARangeOutsideTheBase(t *testing.T) {
 // fixedBlobs is a BlobSource holding one blob.
 type fixedBlobs struct{ hash, content []byte }
 
-func (f fixedBlobs) Blob(h []byte) ([]byte, bool) {
+func (f fixedBlobs) Blob(h []byte) ([]byte, error) {
 	if string(h) == string(f.hash) {
-		return f.content, true
+		return f.content, nil
 	}
-	return nil, false
+	return nil, lloschema.ErrNoBlob
 }
 func (fixedBlobs) Remember(string, []byte, []byte) {}
 

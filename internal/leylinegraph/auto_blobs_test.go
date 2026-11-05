@@ -43,7 +43,7 @@ func TestAttachLeylineASTWalker_GivesTheStoreItsBlobs(t *testing.T) {
 	require.NotNil(t, store.Blobs())
 	n, err := store.GetNode("fns/F/source")
 	require.NoError(t, err)
-	got, ok := store.Blobs().Blob(n.Origin.Blob)
-	require.True(t, ok, "the origin's blob is one the store can read")
+	got, err := store.Blobs().Blob(n.Origin.Blob)
+	require.NoError(t, err, "the origin's blob is one the store can read")
 	assert.Equal(t, src, string(got))
 }

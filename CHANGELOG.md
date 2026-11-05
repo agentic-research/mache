@@ -129,6 +129,17 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Stored file bytes are verified before mache serves them** (`mache-c1eb7a`,
+  mirroring LLO's `ley-line-open-12d305`). leyline keeps every file's bytes in
+  `source_blobs` under their BLAKE3 hash, and three mache readers served those
+  bytes as stored: the base a write is built on, `read_file` of an unparsed
+  file, and the parsed source the AST walker, the build cache and smell
+  snippets read. Bytes changed under their hash would have been served as the
+  file. Every read now goes through one verifier in `internal/lloschema` that
+  rehashes the bytes and refuses a mismatch, naming the hash; bytes held as
+  chunks are refused too, never served as an empty file. A tampered write base
+  refuses the write instead of reading as "no base". A lint test fails if a
+  new raw read of `blob_bytes` appears anywhere else.
 - **A write no longer drops its own file's nodes on the watcher path**
   (`mache-7eb099`). The file watcher treated any rename or remove event on a
   source file as a delete. leyline's daemon applies a write by replacing the

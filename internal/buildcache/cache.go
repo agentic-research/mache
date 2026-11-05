@@ -378,16 +378,17 @@ func writeChunks(chunksDir string, entries []chunkEntry) error {
 }
 
 func readSources(db *sql.DB) ([]sourceRow, error) {
-	// The bytes are the ones the parse saw (lloschema.SourceBytesExpr), so the
-	// chunk is self-contained and agrees with the offsets beside it. They used
-	// to be read from the file at _source.path when the row had no inline
-	// content, leyline's default, which put post-parse edits into a chunk keyed
-	// by the parse (mache-46c59d).
-	expr, err := lloschema.SourceBytesExpr(lloschema.DB(db))
+	// The bytes are the ones the parse saw, verified against their hash
+	// (lloschema.SourceScan), so the chunk is self-contained and agrees with
+	// the offsets beside it. They used to be read from the file at
+	// _source.path when the row had no inline content, leyline's default,
+	// which put post-parse edits into a chunk keyed by the parse
+	// (mache-46c59d); tampered or chunked bytes are refused (mache-c1eb7a).
+	cols, err := lloschema.SourceColumns(lloschema.DB(db))
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query("SELECT id, path, language, " + expr + " FROM _source ORDER BY id")
+	rows, err := db.Query("SELECT id, path, language, " + cols + " FROM _source ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -396,14 +397,17 @@ func readSources(db *sql.DB) ([]sourceRow, error) {
 	for rows.Next() {
 		var r sourceRow
 		var pathN, langN sql.NullString
-		if err := rows.Scan(&r.id, &pathN, &langN, &r.content); err != nil {
+		var s lloschema.SourceScan
+		if err := rows.Scan(append([]any{&r.id, &pathN, &langN}, s.Targets()...)...); err != nil {
 			return nil, err
 		}
 		r.path = pathN.String
 		r.language = langN.String
-		if r.content == nil {
-			return nil, fmt.Errorf("_source %s: the projection holds no content for it", r.id)
+		content, err := s.Bytes()
+		if err != nil {
+			return nil, fmt.Errorf("_source %s: %w", r.id, err)
 		}
+		r.content = content
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {

@@ -1,0 +1,151 @@
+package lloschema
+
+import (
+	"encoding/hex"
+	"testing"
+
+	"github.com/zeebo/blake3"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/fixturedb"
+)
+
+// sourceBytes reads one _source row through SourceColumns and SourceScan.
+func sourceBytes(t *testing.T, f *fixturedb.FixtureDB, id string) (*SourceScan, []byte, error) {
+	t.Helper()
+	cols, err := SourceColumns(f)
+	require.NoError(t, err)
+	var s SourceScan
+	require.NoError(t, f.DB().QueryRow("SELECT "+cols+" FROM _source WHERE id = ?", id).Scan(s.Targets()...))
+	b, err := s.Bytes()
+	return &s, b, err
+}
+
+// TestSourceScan_ReadsTheParsedBytes is mache-46c59d. ley-line leaves
+// _source.content NULL and keeps the parsed bytes in source_blobs under
+// content_hash; mache's cache-hydrated db (Standalone) carries them inline and
+// has no source_blobs, where naming that table would fail the statement.
+func TestSourceScan_ReadsTheParsedBytes(t *testing.T) {
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6, fixturedb.Standalone} {
+		t.Run(p.String(), func(t *testing.T) {
+			b := fixturedb.New(t, p)
+			b.Source("a.go", "go", "package a\n")
+			_, f := b.Build()
+			_, got, err := sourceBytes(t, f, "a.go")
+			require.NoError(t, err)
+			assert.Equal(t, []byte("package a\n"), got)
+		})
+	}
+}
+
+// TestSourceScan_NoBytesIsRefused: a source the projection holds no bytes for
+// is an error, which callers surface; nothing reads the file in its place.
+func TestSourceScan_NoBytesIsRefused(t *testing.T) {
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.Standalone} {
+		t.Run(p.String(), func(t *testing.T) {
+			b := fixturedb.New(t, p)
+			b.Source("a.go", "go", "")
+			_, f := b.Build()
+			_, got, err := sourceBytes(t, f, "a.go")
+			require.ErrorIs(t, err, ErrNoSourceBytes)
+			assert.Nil(t, got)
+		})
+	}
+}
+
+// TestSourceScan_FollowsAReparse: the bytes are whichever blob the row names
+// now, so a reparse is seen without anything reading the file.
+func TestSourceScan_FollowsAReparse(t *testing.T) {
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Source("a.go", "go", "package a\n")
+	_, f := b.Build()
+	f.Reparse("a.go", "package a // edited\n")
+	_, got, err := sourceBytes(t, f, "a.go")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("package a // edited\n"), got)
+}
+
+// TestSourceScan_NamesTheBlob: a leyline row names the blob its bytes are
+// (the propose base, mache-631b8b), and the bytes hash to it.
+func TestSourceScan_NamesTheBlob(t *testing.T) {
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
+		t.Run(p.String(), func(t *testing.T) {
+			b := fixturedb.New(t, p)
+			b.Source("a.go", "go", "package a\n")
+			_, f := b.Build()
+			s, got, err := sourceBytes(t, f, "a.go")
+			require.NoError(t, err)
+			assert.Len(t, s.Hash(), 32)
+			assert.NoError(t, VerifyBlob(s.Hash(), got), "the hash names exactly the parsed bytes")
+		})
+	}
+}
+
+// blobFixture is a leyline fixture holding a.go, and a.go's blob hash.
+func blobFixture(t *testing.T) (*fixturedb.FixtureDB, []byte) {
+	t.Helper()
+	b := fixturedb.New(t, fixturedb.LeylineV6)
+	b.Source("a.go", "go", "package a\n")
+	_, f := b.Build()
+	var h []byte
+	require.NoError(t, f.DB().QueryRow(`SELECT content_hash FROM _source WHERE id = 'a.go'`).Scan(&h))
+	return f, h
+}
+
+// TestStoredBytes_AreVerifiedOnEveryRead is mache-c1eb7a: bytes changed under
+// their hash, bytes moved into chunks (NULL), and a missing row are three
+// distinct refusals on every read path, never served. A chunked row is never
+// an empty file.
+func TestStoredBytes_AreVerifiedOnEveryRead(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		damage string
+		want   error
+	}{
+		{"tampered", `UPDATE source_blobs SET blob_bytes = CAST('package b' AS BLOB) WHERE blob_hash = ?`, ErrBlobTampered},
+		{"chunked", `UPDATE source_blobs SET blob_bytes = NULL WHERE blob_hash = ?`, ErrBlobChunked},
+		{"missing", `DELETE FROM source_blobs WHERE blob_hash = ?`, ErrNoBlob},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, h := blobFixture(t)
+			if tc.name == "chunked" {
+				// leyline's real table declares blob_bytes NOT NULL; a chunk-
+				// activated store relaxes it. Rebuild the table without it.
+				for _, stmt := range []string{
+					`CREATE TABLE sb2 (blob_hash BLOB PRIMARY KEY, blob_bytes BLOB)`,
+					`INSERT INTO sb2 SELECT blob_hash, blob_bytes FROM source_blobs`,
+					`DROP TABLE source_blobs`,
+					`ALTER TABLE sb2 RENAME TO source_blobs`,
+				} {
+					_, err := f.DB().Exec(stmt)
+					require.NoError(t, err, stmt)
+				}
+			}
+			_, err := f.DB().Exec(tc.damage, h)
+			require.NoError(t, err)
+
+			_, _, err = sourceBytes(t, f, "a.go")
+			assert.ErrorIs(t, err, tc.want, "the _source path")
+			_, err = ReadBlob(f, h)
+			assert.ErrorIs(t, err, tc.want, "ReadBlob")
+			if err != nil {
+				assert.Contains(t, err.Error(), hex.EncodeToString(h), "the refusal names the hash")
+			}
+		})
+	}
+}
+
+// TestReadBlob_EmptyFileIsEmptyNotChunked: a zero-length blob is an empty
+// file, verified like any other; only NULL is "held as chunks".
+func TestReadBlob_EmptyFileIsEmptyNotChunked(t *testing.T) {
+	f, _ := blobFixture(t)
+	h := blake3.Sum256(nil)
+	_, err := f.DB().Exec(`INSERT INTO source_blobs (blob_hash, blob_bytes) VALUES (?, x'')`, h[:])
+	require.NoError(t, err)
+	got, err := ReadBlob(f, h[:])
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
+}
