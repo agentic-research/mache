@@ -173,6 +173,8 @@ Both resolve through mache's pin-checked chokepoint, so a non-pinned `leyline` e
 
 `MACHE_NO_LEYLINE=1` still disables provisioning; `MACHE_LEYLINE_BINARY` still overrides the pin for LLO development.
 
+`MACHE_HOME` (an absolute path) moves everything mache keeps under `~/.mache`: the project registry, parse cache, leyline arena, control block, sockets and the pinned-binary cache (`$MACHE_HOME/bin`). `task install:verify` and the smell gate run with it pointed at a per-checkout directory under `/tmp`, so they never write your own `~/.mache`.
+
 </details>
 
 ## Portable cache (mache-aeb262)

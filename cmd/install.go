@@ -44,6 +44,7 @@ import (
 	"strings"
 
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/machehome"
 	"github.com/spf13/cobra"
 )
 
@@ -456,11 +457,11 @@ func removePinnedLeyline(out io.Writer, opts installOpts) error {
 		logf(out, "leaving the cached leyline in place (--keep-leyline)\n")
 		return nil
 	}
-	home, err := os.UserHomeDir()
+	bin, err := machehome.BinDir()
 	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
+		return err
 	}
-	pinned := filepath.Join(home, ".mache", "bin", "leyline-"+leyline.BinaryVersion)
+	pinned := filepath.Join(bin, "leyline-"+leyline.BinaryVersion)
 	switch _, statErr := os.Lstat(pinned); {
 	case errors.Is(statErr, os.ErrNotExist):
 		logf(out, "no cached leyline %s to remove\n", leyline.BinaryVersion)

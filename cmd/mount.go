@@ -20,6 +20,7 @@ import (
 	"github.com/agentic-research/mache/internal/lattice"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/leylinegraph"
+	"github.com/agentic-research/mache/internal/machehome"
 	"github.com/agentic-research/mache/internal/materialize"
 	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/agentic-research/mache/internal/procsig"
@@ -155,18 +156,19 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("create mount point %s: %w", mountPoint, err)
 		}
 
-		// 1. Resolve Configuration Paths
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to get home dir: %w", err)
-		}
-		defaultDir := filepath.Join(home, ".mache")
-
-		if schemaPath == "" {
-			schemaPath = filepath.Join(defaultDir, "mache.json")
-		}
-		if dataPath == "" {
-			dataPath = filepath.Join(defaultDir, "data.json")
+		// 1. Resolve Configuration Paths: mache's home holds only the
+		// defaults, so it is consulted only for a path not given.
+		if schemaPath == "" || dataPath == "" {
+			defaultDir, err := machehome.Dir()
+			if err != nil {
+				return fmt.Errorf("resolve mache home: %w", err)
+			}
+			if schemaPath == "" {
+				schemaPath = filepath.Join(defaultDir, "mache.json")
+			}
+			if dataPath == "" {
+				dataPath = filepath.Join(defaultDir, "data.json")
+			}
 		}
 
 		// 2. Load Schema (or infer from data)

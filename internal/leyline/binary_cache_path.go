@@ -1,9 +1,10 @@
 package leyline
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 // The leyline binary cache is namespaced BY PINNED VERSION.
@@ -33,13 +34,7 @@ import (
 // version gate that was working correctly the whole time.
 
 // cacheDir is where pinned leyline binaries live.
-func cacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	return filepath.Join(home, ".mache", "bin"), nil
-}
+func cacheDir() (string, error) { return machehome.BinDir() }
 
 // pinnedCachePath is the version-namespaced cache location for THIS build's
 // pin. Two mache builds with different pins resolve to different files, so

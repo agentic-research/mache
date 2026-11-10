@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/machehome"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -257,10 +258,11 @@ func leylinePinTag(t *testing.T) string {
 }
 
 // scrubbedEnv is the ambient environment minus every variable that could
-// pre-decide leyline resolution or relocate HOME.
+// pre-decide leyline resolution or relocate HOME. MACHE_HOME relocates mache's
+// home as surely as HOME does, and `task install:verify` sets it.
 func scrubbedEnv(t *testing.T) []string {
 	t.Helper()
-	drop := []string{"HOME=", "PATH=", leyline.BinaryOverrideEnv + "="}
+	drop := []string{"HOME=", "PATH=", leyline.BinaryOverrideEnv + "=", machehome.Env + "="}
 	out := make([]string, 0, len(os.Environ()))
 	for _, kv := range os.Environ() {
 		skip := false

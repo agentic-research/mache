@@ -29,6 +29,18 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **`MACHE_HOME` relocates mache's home, and tests and `task ci` leave
+  `~/.mache` alone** (`mache-6d5e62`). mache resolved `~/.mache` separately at
+  about ten sites, and only the project registry refused a test's write to
+  the real one. So tests and `task ci` filled a developer's `~/.mache` with
+  fixture projects, a reset arena and parse caches of hundreds of MB per
+  checkout. One resolver (`internal/machehome`) now serves every state path
+  and honours `MACHE_HOME`; under `go test` it refuses the real `~/.mache`
+  for state (the pinned-binary cache stays shared). `task install:verify`
+  and the smell gate run with `MACHE_HOME` set to a per-checkout directory
+  under `/tmp` whose `bin/` links the real binary cache. `mache mount` no
+  longer reads `~/.mache` when given both a schema and a data path.
+
 - **`mache mount --control` holds leyline's control-block lease**
   (`mache-6b6a90`). From leyline v0.28.0, `--reset-arena` replaces a control
   block's file, refusing while anyone holds the shared lease on

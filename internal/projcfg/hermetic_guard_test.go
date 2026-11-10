@@ -7,7 +7,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
+
+// realHomeAtInit is the developer's home as this test binary started, before
+// any t.Setenv: what the guard must refuse.
+var realHomeAtInit, _ = os.UserHomeDir()
 
 // TestMacheHomeDir_RefusesRealHomeUnderTest pins the hermeticity guard
 // (mache-3e78d2): 106 of 118 entries in a developer's REAL
@@ -18,6 +24,7 @@ func TestMacheHomeDir_RefusesRealHomeUnderTest(t *testing.T) {
 	// This test binary started with the real HOME, so realHomeAtInit holds
 	// it. Restore it for the failing direction.
 	t.Setenv("HOME", realHomeAtInit)
+	t.Setenv(machehome.Env, "")
 	_, err := macheHomeDir()
 	require.Error(t, err, "resolving the REAL home under `go test` must refuse")
 	assert.Contains(t, err.Error(), "t.TempDir", "the error must name the fix")
@@ -37,6 +44,7 @@ func TestMacheHomeDir_RefusesRealHomeUnderTest(t *testing.T) {
 // home — never the real one.
 func TestRegisterProject_CannotTouchRealRegistry(t *testing.T) {
 	t.Setenv("HOME", realHomeAtInit)
+	t.Setenv(machehome.Env, "")
 	_, err := RegisterProject(t.TempDir())
 	require.Error(t, err, "an unhermetic registry write must be refused")
 

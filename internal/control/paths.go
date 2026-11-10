@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 func validatePath(path string) error {
@@ -13,8 +15,7 @@ func validatePath(path string) error {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	if home, err := os.UserHomeDir(); err == nil {
-		safeHome := filepath.Join(home, ".mache")
+	if safeHome, err := machehome.Dir(); err == nil {
 		if isUnder(abs, safeHome) {
 			return nil
 		}
