@@ -29,6 +29,15 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **`get_overview` and `get_architecture` answer about twice as fast on a
+  source tree** (`mache-86c666`). The db leyline parses a tree into belongs to
+  the serving session, so mache now keeps SQLite's read lock on it for the
+  session instead of taking and releasing it around every statement, which
+  was two thirds of the CPU those tools spent. On mache's own repo
+  `get_overview` went from 2.6 s to 1.1 s and `get_architecture` from 12 s to
+  6.4 s, with identical answers. A prebuilt `.db` passed to `mache serve` is
+  read as before, since something else may write it.
+
 - **`get_architecture` and `get_overview` count the source tree's files**
   (`mache-7fed6a`). On a leyline `.db` a source file is a directory of syntax
   nodes, so both tools counted the wrong things: on mache's own repo

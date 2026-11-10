@@ -418,9 +418,19 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	}
 
 	if filepath.Ext(dataSource) == ".db" {
-		return openDBGraph(dataSource, schema, noop)
+		return openDBGraph(dataSource, schema, graph.LockPerStatement, noop)
 	}
 
+	if g, si, cleanup, ok := serveAutoLeyline(dataSource, schema); ok {
+		return g, si, cleanup, nil
+	}
+	return buildMemoryServeGraph(dataSource, schema)
+}
+
+// serveAutoLeyline serves a source directory from the db `leyline parse`
+// writes for it, reporting ok=false when that path does not apply or fails
+// and the caller should ingest in-process instead.
+func serveAutoLeyline(dataSource string, schema *api.Topology) (graph.Graph, *graph.SheafInvalidator, func(), bool) {
 	// Auto-invoke leyline: when the source is a directory and `leyline` is
 	// available, run `leyline parse <dir> -o <tmp.db>` and open the result.
 	// This eliminates a second leyline invocation at mount time. Falls back
@@ -445,26 +455,35 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	// for the followup; the current behavior is honest documented
 	// degradation — agents using auto-leyline get fast cold-start but
 	// stale results after edits until the daemon-mode rewrite ships.
-	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() &&
-		os.Getenv("MACHE_NO_LEYLINE") == "" {
-		if dbPath, dbCleanup, err := leylinegraph.AutoInvokeLeylineParse(dataSource); err == nil {
-			g, si, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
-			if gerr == nil {
-				// The MACHE_NO_LEYLINE hint carries a precondition worth
-				// stating: that path's walker is ASTWalker, which needs
-				// leyline to pre-parse, and the same flag stops mache
-				// downloading one (internal/leyline/socket.go). So it only
-				// works with a pinned leyline already installed.
-				log.Printf("auto-leyline: serving from %s (frozen .db — live source edits are NOT reparsed and the sheaf cascade is not engaged; tracked as mache-6c9e1d). MACHE_NO_LEYLINE=1 selects the in-process watcher path instead, which requires leyline %s already on PATH — that flag also disables auto-download.",
-					filepath.Base(dbPath), leyline.BinaryVersion)
-				return g, si, gCleanup, nil
-			}
-			log.Printf("auto-leyline: opened .db failed (%v); falling back to in-process ingest", gerr)
-			dbCleanup()
-		} else {
-			log.Printf("auto-leyline: skipping (%v); using in-process ingest", err)
-		}
+	if info, statErr := os.Stat(dataSource); statErr != nil || !info.IsDir() ||
+		os.Getenv("MACHE_NO_LEYLINE") != "" {
+		return nil, nil, nil, false
 	}
+	dbPath, dbCleanup, err := leylinegraph.AutoInvokeLeylineParse(dataSource)
+	if err != nil {
+		log.Printf("auto-leyline: skipping (%v); using in-process ingest", err)
+		return nil, nil, nil, false
+	}
+	// The parse db is this session's: held under the parse-cache lock, or a
+	// private temp file, until dbCleanup runs after the graph closes.
+	g, si, gCleanup, gerr := openDBGraph(dbPath, schema, graph.LockForLife, dbCleanup)
+	if gerr != nil {
+		log.Printf("auto-leyline: opened .db failed (%v); falling back to in-process ingest", gerr)
+		dbCleanup()
+		return nil, nil, nil, false
+	}
+	// The MACHE_NO_LEYLINE hint carries a precondition worth stating: that
+	// path's walker is ASTWalker, which needs leyline to pre-parse, and the
+	// same flag stops mache downloading one (internal/leyline/socket.go). So
+	// it only works with a pinned leyline already installed.
+	log.Printf("auto-leyline: serving from %s (frozen .db — live source edits are NOT reparsed and the sheaf cascade is not engaged; tracked as mache-6c9e1d). MACHE_NO_LEYLINE=1 selects the in-process watcher path instead, which requires leyline %s already on PATH — that flag also disables auto-download.",
+		filepath.Base(dbPath), leyline.BinaryVersion)
+	return g, si, gCleanup, true
+}
+
+// buildMemoryServeGraph ingests dataSource into a MemoryStore and watches it.
+func buildMemoryServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *graph.SheafInvalidator, func(), error) {
+	noop := func() {}
 
 	// MemoryStore path for JSON/source files. This is also the live-edit
 	// watcher + SheafInvalidator path (preserved by ADR-0012 step 4 / Option A).
@@ -510,6 +529,23 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 		log.Printf("Warning: refs flush: %v", err)
 	}
 
+	fw, si := startServeWatcher(dataSource, store, engine)
+
+	return store, si, func() {
+		if fw != nil {
+			fw.Stop()
+		}
+		_ = store.Close()
+		resolver.Close()
+		// Close the ley-line _ast db AFTER the watcher/store stop so any
+		// in-flight ReIngestFile finishes against a live handle.
+		astCleanup()
+	}, nil
+}
+
+// startServeWatcher starts the file watcher and its SheafInvalidator when
+// dataSource is a directory; both are nil otherwise.
+func startServeWatcher(dataSource string, store *graph.MemoryStore, engine *ingest.Engine) (*ingest.Watcher, *graph.SheafInvalidator) {
 	// Start file watcher for incremental re-index if source is a directory.
 	// The SheafInvalidator is constructed *only* on this path — it has no
 	// purpose without a watcher to fire it. cmd/serve_handlers.go's
@@ -570,16 +606,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 		}
 	}
 
-	return store, si, func() {
-		if fw != nil {
-			fw.Stop()
-		}
-		_ = store.Close()
-		resolver.Close()
-		// Close the ley-line _ast db AFTER the watcher/store stop so any
-		// in-flight ReIngestFile finishes against a live handle.
-		astCleanup()
-	}, nil
+	return fw, si
 }
 
 // unionStringSlices returns the deduped union of a and b. Order
@@ -687,13 +714,14 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 
 // openDBGraph opens a .db file as a SQLiteGraph after materializing virtual
 // nodes. The extra cleanup callback runs after the graph is closed (used to
-// delete an auto-generated temp .db).
+// delete an auto-generated temp .db). lock is graph.LockForLife only for a
+// db this session owns.
 // openDBGraph returns (graph, nil, cleanup, err) — the *SheafInvalidator
 // slot is always nil here because .db sources don't run a file watcher
 // and have no need for cascade wiring (the contents are frozen at the
 // time the .db was built). Callers (e.g. buildServeGraph) propagate the
 // nil to their own returns.
-func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (graph.Graph, *graph.SheafInvalidator, func(), error) {
+func openDBGraph(dbPath string, schema *api.Topology, lock graph.ReadLock, extraCleanup func()) (graph.Graph, *graph.SheafInvalidator, func(), error) {
 	if extraCleanup == nil {
 		extraCleanup = func() {}
 	}
@@ -707,7 +735,7 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 		extraCleanup()
 		return nil, nil, func() {}, fmt.Errorf("materialize content sources: %w", err)
 	}
-	sg, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
+	sg, err := graph.OpenSQLiteGraphWith(dbPath, schema, machetmpl.Render, lock)
 	if err != nil {
 		extraCleanup()
 		return nil, nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)

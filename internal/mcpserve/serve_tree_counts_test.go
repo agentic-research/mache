@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/lltest"
 )
 
@@ -49,7 +50,7 @@ func TestArchitectureAndOverview_CountTheSourceTree(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "out.db")
 	out, err := exec.Command(ll.Path, "parse", src, "-o", dbPath).CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	g, _, cleanup, err := openDBGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, nil)
+	g, _, cleanup, err := openDBGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, graph.LockPerStatement, nil)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 
