@@ -1,6 +1,5 @@
 {
   "version": "v1",
-  "table": "issues",
   "file_sets": {
     "bead_core": [
       {"name": "title", "content_template": "{{.title}}"},
@@ -8,14 +7,14 @@
       {"name": "status", "content_template": "{{.status}}"},
       {"name": "priority", "content_template": "{{.priority}}"},
       {"name": "issue_type", "content_template": "{{.issue_type}}"},
-      {"name": "owner", "content_template": "{{.owner}}"},
+      {"name": "owner", "content_template": "{{default .owner \"\"}}"},
       {"name": "created_at", "content_template": "{{.created_at}}"},
       {"name": "raw.json", "content_template": "{{. | json}}"}
     ],
     "bead_refs": [
-      {"name": "external_ref", "content_template": "{{.external_ref}}"},
-      {"name": "branch", "content_template": "{{.branch}}"},
-      {"name": "pr_url", "content_template": "{{.pr_url}}"}
+      {"name": "external_ref", "content_template": "{{default .external_ref \"\"}}"},
+      {"name": "branch", "content_template": "{{default .branch \"\"}}"},
+      {"name": "pr_url", "content_template": "{{default .pr_url \"\"}}"}
     ]
   },
   "nodes": [
@@ -77,13 +76,13 @@
       "selector": "$",
       "children": [
         {
-          "name": "{{.source_repo}}",
+          "name": "{{.repo}}",
           "selector": "$[*]",
           "children": [
             {
               "name": "{{.id}}",
               "selector": "$",
-              "refs": ["repo-{{.source_repo}}", "xref-{{.external_ref}}"],
+              "refs": ["repo-{{.repo}}"],
               "include": ["bead_core", "bead_refs"]
             }
           ]
@@ -96,7 +95,7 @@
       "children": [
         {
           "name": "{{.external_ref}}",
-          "selector": "$[?(@.external_ref)]",
+          "selector": "$[?(@.external_ref != null)]",
           "refs": ["thread-{{.external_ref}}"],
           "children": [
             {

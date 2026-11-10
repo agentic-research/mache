@@ -33,6 +33,7 @@ copy-paste templates:
 | [`fatal_call_in_library.json`](fatal_call_in_library.json)       | Binary rule (`0 AS metric`), cross-reference tables only, `%%` escaping, the empty-`source_file` trap |
 | [`long_test_function.json`](long_test_function.json)             | Metric rule with `DefaultMinMetric`, `v_ast`-backed, auto-skips on backends without an AST             |
 | [`long_unexported_function.json`](long_unexported_function.json) | Joining `v_ast` spans to `v_nodes` for name-based filtering                                              |
+| [`uncanonicalized-path-identity.json`](uncanonicalized-path-identity.json) | `v_refs.referrer_node_id` (the enclosing definition) vs `node_id` (the ref site), `NOT EXISTS` over a sibling ref, an `_ast`-backed location |
 
 The shape:
 

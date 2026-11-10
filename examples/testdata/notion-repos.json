@@ -1,0 +1,12 @@
+[
+  {
+    "schema": "notion",
+    "identifier": "repo-mache",
+    "item": {"Name": "mache", "Layer": "projection", "Purpose": "Projects structured data as a filesystem", "Path": "~/src/mache", "Language": "Go", "Status": "Active"}
+  },
+  {
+    "schema": "notion",
+    "identifier": "repo-ley-line",
+    "item": {"Name": "ley-line", "Layer": "substrate", "Purpose": "Content-addressed parse substrate", "Path": "~/src/ley-line", "Language": "Rust", "Status": "Active"}
+  }
+]

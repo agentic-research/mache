@@ -1,0 +1,28 @@
+[
+  {
+    "schema": "kev",
+    "identifier": "CVE-2021-44228",
+    "item": {
+      "cveID": "CVE-2021-44228",
+      "vendorProject": "Apache",
+      "product": "Log4j2",
+      "vulnerabilityName": "Apache Log4j2 Remote Code Execution Vulnerability",
+      "shortDescription": "Apache Log4j2 contains a vulnerability where JNDI features do not protect against attacker-controlled JNDI-related endpoints.",
+      "dateAdded": "2021-12-10",
+      "dueDate": "2021-12-24"
+    }
+  },
+  {
+    "schema": "kev",
+    "identifier": "CVE-2023-4966",
+    "item": {
+      "cveID": "CVE-2023-4966",
+      "vendorProject": "Citrix",
+      "product": "NetScaler ADC and NetScaler Gateway",
+      "vulnerabilityName": "Citrix NetScaler Buffer Overflow Vulnerability",
+      "shortDescription": "Citrix NetScaler ADC and NetScaler Gateway contain a buffer overflow vulnerability that allows for sensitive information disclosure.",
+      "dateAdded": "2023-10-18",
+      "dueDate": "2023-11-08"
+    }
+  }
+]

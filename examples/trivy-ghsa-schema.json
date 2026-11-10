@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "description": "Projects venturi GitHub Advisory data into trivy-db BoltDB layout. Usage: mache <mp> --data github.db --schema trivy-ghsa-schema.json --out trivy.db --format boltdb",
+  "description": "Projects venturi GitHub Advisory data into the trivy-db BoltDB layout. Usage: mache --schema trivy-ghsa-schema.json --data github.db --out trivy-index.db <mountpoint> (the mountpoint is required but unused with --out), then convert trivy-index.db with ext/boltdb Materialize.",
   "nodes": [
     {
       "name": "advisories",
