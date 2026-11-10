@@ -20,6 +20,9 @@ type Controller struct {
 	// shared lock taken on file itself would quietly convert this process's
 	// own exclusive publish lock instead of contending with it.
 	probe *os.File
+	// lease is the shared flock this handle holds on <path>.lock for as long
+	// as it maps the control block (see takeLease).
+	lease *os.File
 	data  []byte
 	// last is this handle's last consistent read, which it answers with when
 	// a publisher died mid-publish. In memory only, and set only by a
@@ -40,6 +43,41 @@ func OpenOrCreate(path string) (*Controller, error) {
 		return nil, fmt.Errorf("mkdir: %w", err)
 	}
 
+	lease, err := takeLease(path)
+	if err != nil {
+		return nil, err
+	}
+	c, err := openMapped(path)
+	if err != nil {
+		_ = lease.Close()
+		return nil, err
+	}
+	c.lease = lease
+	return c, nil
+}
+
+// takeLease takes leyline's shared lease on the control block: a shared
+// flock on <path>.lock, created if absent and never removed. Every leyline
+// daemon holds it (ley-line-open #551, v0.28.0), and `--reset-arena` takes it
+// exclusive and refuses while anyone holds it, because a reset replaces the
+// control file with a new inode. A mapping that did not hold it would go on
+// reading the replaced file and never see another publish (mache-6b6a90).
+// It is taken before the control file is opened, so a reset cannot slip in
+// between; a reset in progress holds it only briefly, so this waits for it.
+func takeLease(path string) (*os.File, error) {
+	f, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open control block lease: %w", err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("take control block lease: %w", err)
+	}
+	return f, nil
+}
+
+// openMapped opens and maps the control file at path.
+func openMapped(path string) (*Controller, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open control file: %w", err)
@@ -81,7 +119,7 @@ func OpenOrCreate(path string) (*Controller, error) {
 			return nil, fmt.Errorf(
 				"control block version mismatch: file is v%d, expected v%d — "+
 					"v3 publishes under a seqlock (ley-line-open ≥ 0.20.1); "+
-					"remove the stale .ctrl file and let a current writer recreate it",
+					"start leyline (≥ 0.28.0) with --reset-arena to rebuild it",
 				existingVersion, Version,
 			)
 		}
@@ -152,5 +190,10 @@ func (c *Controller) Close() error {
 		return err
 	}
 	_ = c.probe.Close()
-	return c.file.Close()
+	err := c.file.Close()
+	// Closing the lease file drops the shared flock, after the mapping is
+	// gone, so a reset can replace the control file only once nothing here
+	// reads it.
+	_ = c.lease.Close()
+	return err
 }
