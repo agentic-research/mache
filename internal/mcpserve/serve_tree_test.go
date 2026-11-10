@@ -37,7 +37,7 @@ func treeDB(t *testing.T) graph.Graph {
 	var seq int
 	var name, file string
 	require.NoError(t, db.QueryRow(`PRAGMA database_list`).Scan(&seq, &name, &file))
-	g, _, cleanup, err := openDBGraph(file, &api.Topology{Version: api.SchemaVersion}, nil)
+	g, _, cleanup, err := openDBGraph(file, &api.Topology{Version: api.SchemaVersion}, graph.LockPerStatement, nil)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 	return g

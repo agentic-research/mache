@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/agentic-research/mache/internal/leyline"
 	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/testutil"
@@ -670,4 +671,40 @@ func listRegisteredTools(t *testing.T, s *server.MCPServer) map[string]bool {
 		names[tool.Name] = true
 	}
 	return names
+}
+
+// The auto-leyline parse db belongs to the session that parsed it, so it is
+// opened owned: its read lock is held while the graph is open rather than
+// taken per statement (mache-86c666). A prebuilt .db named on the command
+// line is not mache's, so its lock is not held between statements.
+func TestBuildServeGraph_OwnsOnlyTheDbItParsed(t *testing.T) {
+	ll := lltest.ResolveBinaryOrSkip(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(leyline.BinaryOverrideEnv, ll.Path)
+	schema := &api.Topology{Version: api.SchemaVersion}
+
+	g, _, cleanup, err := buildServeGraph(writeSourceDir(t, "Foo"), schema)
+	require.NoError(t, err)
+	sg, ok := g.(*graph.SQLiteGraph)
+	require.True(t, ok, "auto-leyline must serve the parse db, got %T", g)
+	parsed := sg.DBPath()
+	require.NotEmpty(t, sg.LookupDef("Foo"))
+	assert.Error(t, fixturedb.TryCommit(parsed), "the parse db's read lock was released between statements")
+	cleanup()
+
+	g, _, cleanup, err = buildServeGraph(fixturePrebuiltDB(t), schema)
+	require.NoError(t, err)
+	defer cleanup()
+	sg, ok = g.(*graph.SQLiteGraph)
+	require.True(t, ok, "a .db source serves as a SQLiteGraph, got %T", g)
+	_ = sg.LookupDef("Only")
+	assert.NoError(t, fixturedb.TryCommit(sg.DBPath()), "a prebuilt .db's read lock was held between statements")
+}
+
+func fixturePrebuiltDB(t *testing.T) string {
+	t.Helper()
+	b := fixturedb.New(t, fixturedb.Leyline)
+	b.Def("Only", "pkg/file.go/function_declaration_0", "function")
+	path, _ := b.Build()
+	return path
 }
