@@ -407,6 +407,23 @@ func (g *SQLiteGraph) RefsMap() map[string][]string {
 	return filterSentinelRefs(g.refsMapFromBitmaps())
 }
 
+var _ RefTokenCounter = (*SQLiteGraph)(nil)
+
+// RefTokenCount implements [RefTokenCounter]: one counting query on a nodes
+// table instead of rendering a path for every reference, which on mache's own
+// repo was 85% of get_overview (mache-a6c283).
+func (g *SQLiteGraph) RefTokenCount() (int, error) {
+	if !g.useNodesTable {
+		return len(g.RefsMap()), nil
+	}
+	var n int
+	// Per token, stop at its first row that resolves: most tokens' first does,
+	// so this evaluates the predicate about once per token, not once per row.
+	err := g.db.QueryRow(`SELECT COUNT(*) FROM (SELECT DISTINCT token FROM node_refs) t
+		WHERE EXISTS(SELECT 1 FROM node_refs r WHERE r.token = t.token AND ` + g.shape().refResolves() + `)`).Scan(&n)
+	return n, err
+}
+
 func (g *SQLiteGraph) refsMapFromNodesTable() map[string][]string {
 	pairs, err := g.queryTokenIDs("SELECT token, " + g.shape().refSite() + " FROM node_refs")
 	if err != nil {

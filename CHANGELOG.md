@@ -42,6 +42,12 @@ bumps may include breaking changes.
   directory. Reading it is one query, so `get_architecture` on mache's repo
   went from 12 s to 2.5 s. A `.db` without `_tree` is counted as before.
 
+- **`get_overview` answers in a third of a second on a large repo**
+  (`mache-a6c283`). Its `ref_tokens` was the length of the full references
+  map, which named every one of a repo's references (158,442 on mache's own)
+  just to count the distinct tokens. It is now counted in SQL, with the same
+  value; `get_overview` on mache's repo went from 2.5 s to 0.34 s.
+
 - **A write goes through any pinned daemon that says it serves the tree**
   (`mache-161c63`). mache used to refuse writing through a daemon it had not
   started itself, because nothing reported which tree a daemon served and a

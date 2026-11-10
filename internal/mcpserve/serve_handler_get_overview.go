@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -95,9 +96,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		ov.TotalDirs, ov.TotalFiles = overviewCounts(g, children)
 
 		// Count refs/defs if available
-		if rp, ok := g.(graph.RefsMapper); ok {
-			ov.RefTokens = len(rp.RefsMap())
-		}
+		ov.RefTokens = refTokenCount(g)
 		if dp, ok := g.(graph.DefsMapper); ok {
 			ov.DefTokens = len(dp.DefsMap())
 		}
@@ -153,4 +152,22 @@ func overviewCounts(g graph.Graph, children []string) (dirs, files int) {
 		}
 	}
 	return dirs, files
+}
+
+// refTokenCount is how many tokens the graph's references name: counted by the
+// graph when it can, else the length of its refs map, and 0 when it has
+// neither. A failed count is logged and reported as 0, as RefsMap reports a
+// failed read as an empty map.
+func refTokenCount(g graph.Graph) int {
+	if c, ok := g.(graph.RefTokenCounter); ok {
+		n, err := c.RefTokenCount()
+		if err != nil {
+			log.Printf("get_overview: count reference tokens: %v", err)
+		}
+		return n
+	}
+	if rp, ok := g.(graph.RefsMapper); ok {
+		return len(rp.RefsMap())
+	}
+	return 0
 }
