@@ -100,15 +100,17 @@ func HTTP(t testing.TB, endpoint string, b Behavior) *Session {
 	}
 	var opts []transport.StreamableHTTPCOption
 	if b.Listen {
-		opts = append(opts, transport.WithContinuousListening())
+		// Deprecated because 2026-07-28 has no GET stream; a legacy client
+		// holding one is exactly what this models.
+		opts = append(opts, transport.WithContinuousListening()) //nolint:staticcheck // models a legacy client on purpose
 	}
 	tr, err := transport.NewStreamableHTTP(endpoint, opts...)
 	require.NoError(t, err)
 	return start(t, client.NewClient(tr, clientOptions(b)...), b)
 }
 
-// Handler serves h on a test server and connects to it at path over HTTP.
-func Handler(t testing.TB, h http.Handler, path string, b Behavior) *Session {
+// Served serves h on a test server and connects to it at path over HTTP.
+func Served(t testing.TB, h http.Handler, path string, b Behavior) *Session {
 	t.Helper()
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)

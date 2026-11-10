@@ -2,6 +2,8 @@ package mcpharness
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -46,11 +48,28 @@ func TestInProcess_CallsAndAnswersRoots(t *testing.T) {
 
 // Over HTTP a server request outside the POST reaches the client only on the
 // GET stream, which Listen holds open for the whole session.
-func TestHandler_ListenCarriesServerRequests(t *testing.T) {
+func TestServed_ListenCarriesServerRequests(t *testing.T) {
 	h := server.NewStreamableHTTPServer(toyServer())
-	s := Handler(t, h, "/mcp", Behavior{Roots: []string{"/w/b"}, Listen: true})
+	s := Served(t, h, "/mcp", Behavior{Roots: []string{"/w/b"}, Listen: true})
 	assert.Equal(t, "hi", s.Text("echo", map[string]any{"say": "hi"}))
 	assert.Equal(t, "file:///w/b", s.Text("roots", nil))
+}
+
+// HTTP reaches an endpoint by URL and carries the ?project= token in it, the
+// way `mache init` writes a client's config.
+func TestHTTP_CarriesTheProjectToken(t *testing.T) {
+	var got string
+	h := server.NewStreamableHTTPServer(toyServer(), server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+		if q := r.URL.Query().Get("project"); q != "" {
+			got = q
+		}
+		return ctx
+	}))
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	s := HTTP(t, ts.URL+"/mcp", Behavior{Project: "tok123"})
+	assert.Equal(t, "hi", s.Text("echo", map[string]any{"say": "hi"}))
+	assert.Equal(t, "tok123", got)
 }
 
 // The stdio transport runs this test binary as the server.

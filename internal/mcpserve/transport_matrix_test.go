@@ -75,13 +75,13 @@ func TestTransportMatrix_SameAnswerAcrossTransportsAndClients(t *testing.T) {
 			return mcpharness.InProcess(t, serveServer(t), mcpharness.Behavior{Roots: []string{root}})
 		},
 		"http, roots, GET stream held": func(t *testing.T) *mcpharness.Session {
-			return mcpharness.Handler(t, fresh(t), "/mcp", mcpharness.Behavior{Roots: []string{root}, Listen: true})
+			return mcpharness.Served(t, fresh(t), "/mcp", mcpharness.Behavior{Roots: []string{root}, Listen: true})
 		},
 		"http, ?project= token": func(t *testing.T) *mcpharness.Session {
-			return mcpharness.Handler(t, fresh(t), "/mcp", mcpharness.Behavior{Project: token})
+			return mcpharness.Served(t, fresh(t), "/mcp", mcpharness.Behavior{Project: token})
 		},
 		"http, ?project= token, protocol 2026-07-28": func(t *testing.T) *mcpharness.Session {
-			return mcpharness.Handler(t, fresh(t), "/mcp", mcpharness.Behavior{Project: token, Protocol: mcpharness.Modern})
+			return mcpharness.Served(t, fresh(t), "/mcp", mcpharness.Behavior{Project: token, Protocol: mcpharness.Modern})
 		},
 	}
 	want := 4
@@ -104,7 +104,7 @@ func TestTransportMatrix_NoWorkspaceIsRefusedWithGuidance(t *testing.T) {
 		"roots offered, protocol 2026-07-28": {Roots: []string{root}, Protocol: mcpharness.Modern},
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := mcpharness.Handler(t, newHTTPServer(serveServer(t)).Handler, "/mcp", b)
+			s := mcpharness.Served(t, newHTTPServer(serveServer(t)).Handler, "/mcp", b)
 			text, isError := s.Call("get_overview", nil)
 			require.True(t, isError, "served a workspace it was never given: %s", text)
 			assert.Contains(t, text, "mache init")
@@ -122,7 +122,7 @@ func TestTransportMatrix_RootsWithoutAGETStreamGetNoWorkspace_mache_ab00c9(t *te
 	lltest.ResolveBinaryOrSkip(t)
 	mcpharness.IsolatedHome(t)
 	root := matrixTree(t)
-	s := mcpharness.Handler(t, newHTTPServer(serveServer(t)).Handler, "/mcp", mcpharness.Behavior{Roots: []string{root}})
+	s := mcpharness.Served(t, newHTTPServer(serveServer(t)).Handler, "/mcp", mcpharness.Behavior{Roots: []string{root}})
 	text, isError := s.Call("get_overview", nil)
 	require.True(t, isError, "roots without a GET stream now resolve: mache-ab00c9 is fixed upstream; move this case into the matrix")
 	assert.Contains(t, text, "workspace root unavailable")
