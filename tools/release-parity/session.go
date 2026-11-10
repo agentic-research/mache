@@ -13,15 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/agentic-research/mache/internal/mcpharness"
 )
 
 // session serves a private copy of the corpus with bin over stdio, under a
 // private HOME. The copy matters because write_file edits the corpus: without
 // it, one run's edits would become the next run's input.
 type session struct {
-	c    *client.Client
+	c    *mcpharness.Conn
 	home string
 	root string
 }
@@ -55,18 +54,15 @@ func openSession(ctx context.Context, bin, corpus string) (*session, error) {
 	if schema != "" {
 		args = append(args, "--schema", schema)
 	}
-	c, err := client.NewStdioMCPClient(bin, env, append(args, root)...)
+	// The protocol is pinned rather than left to the harness default, so the
+	// gate keeps comparing the revision it always has.
+	c, err := mcpharness.ConnectStdio(ctx, bin, env, append(args, root), mcpharness.Behavior{Protocol: mcpharness.Modern})
 	if err != nil {
 		_ = os.RemoveAll(home)
 		return nil, err
 	}
-	if err := initializeSession(ctx, c); err != nil {
-		_ = c.Close()
-		_ = os.RemoveAll(home)
-		return nil, fmt.Errorf("initialize: %w", err)
-	}
 	s := &session{c: c, home: home, root: root}
-	if r, ok := client.GetStderr(c); ok {
+	if r, ok := c.Stderr(); ok {
 		if f, err := os.Create(s.serverLog()); err == nil {
 			go func() {
 				_, _ = io.Copy(f, r)
@@ -199,13 +195,4 @@ func isolatedHome() (string, error) {
 		}
 	}
 	return home, nil
-}
-
-// initializeSession performs the MCP initialize handshake.
-func initializeSession(ctx context.Context, c *client.Client) error {
-	init := mcp.InitializeRequest{}
-	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	init.Params.ClientInfo = mcp.Implementation{Name: "release-parity", Version: "1"}
-	_, err := c.Initialize(ctx, init)
-	return err
 }

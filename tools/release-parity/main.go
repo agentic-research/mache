@@ -162,12 +162,12 @@ func listTools(bin, root string, timeout time.Duration) (tools []mcp.Tool, err e
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, s.close()) }()
-	res, err := s.c.ListTools(ctx, mcp.ListToolsRequest{})
+	tools, err = s.c.Tools(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("tools/list: %w", err)
+		return nil, err
 	}
-	slices.SortFunc(res.Tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
-	return res.Tools, nil
+	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
+	return tools, nil
 }
 
 func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers []answer, err error) {
@@ -178,12 +178,12 @@ func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers [
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, s.close()) }()
-	listed, err := s.c.ListTools(ctx, mcp.ListToolsRequest{})
+	listed, err := s.c.Tools(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("tools/list: %w", err)
+		return nil, err
 	}
 	has := map[string]bool{}
-	for _, t := range listed.Tools {
+	for _, t := range listed {
 		has[t.Name] = true
 	}
 
@@ -193,29 +193,16 @@ func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers [
 			out[i] = answer{Missing: true}
 			continue
 		}
-		req := mcp.CallToolRequest{}
-		req.Params.Name = c.Tool
-		req.Params.Arguments = c.Args
-		res, err := s.c.CallTool(ctx, req)
+		text, isError, err := s.c.Call(ctx, c.Tool, c.Args)
 		if err != nil {
 			// A transport-level failure is an answer too: the comparison is
 			// about what a client sees.
 			out[i] = answer{IsError: true, Body: normalizeText(err.Error(), s.root, s.home)}
 			continue
 		}
-		out[i] = answer{IsError: res.IsError, Body: normalizeText(textOf(res), s.root, s.home)}
+		out[i] = answer{IsError: isError, Body: normalizeText(text, s.root, s.home)}
 	}
 	return out, nil
-}
-
-func textOf(res *mcp.CallToolResult) string {
-	var parts []string
-	for _, c := range res.Content {
-		if t, ok := mcp.AsTextContent(c); ok {
-			parts = append(parts, t.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 // normalizeText replaces the run-specific roots, then decodes JSON when the
