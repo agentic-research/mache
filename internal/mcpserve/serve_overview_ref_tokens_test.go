@@ -33,7 +33,7 @@ func TestGetOverview_RefTokensIsTheRefsMapLength(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "out.db")
 	out, err := exec.Command(ll.Path, "parse", src, "-o", dbPath).CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	g, _, cleanup, err := openDBGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, nil)
+	g, _, cleanup, err := openDBGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, graph.LockPerStatement, nil)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 
