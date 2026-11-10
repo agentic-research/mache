@@ -12,13 +12,13 @@ require (
 	github.com/go-task/task/v3 v3.54.0
 	github.com/google/go-cmp v0.7.0
 	github.com/hashicorp/hcl/v2 v2.25.0
-	github.com/mark3labs/mcp-go v1.4.0
-	github.com/ohler55/ojg v1.28.7
+	github.com/mark3labs/mcp-go v1.5.0
+	github.com/ohler55/ojg v1.28.9
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	github.com/willscott/go-nfs v0.0.4
 	github.com/zeebo/blake3 v0.2.4
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
