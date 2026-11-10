@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 // arenaSpawnConfig is the subset of daemon startup configuration that a warm
@@ -172,11 +174,11 @@ type ArenaState struct {
 // diagnostic must describe, and only a failure to locate the home directory
 // is a genuine error.
 func InspectArena() (ArenaState, error) {
-	home, err := os.UserHomeDir()
+	dir, err := machehome.Dir()
 	if err != nil {
 		return ArenaState{}, err
 	}
-	arena := filepath.Join(home, ".mache", "default.arena")
+	arena := filepath.Join(dir, "default.arena")
 	st := ArenaState{Path: arena, ConfigPath: arenaConfigPath(arena)}
 
 	if _, statErr := os.Stat(arena); statErr == nil {

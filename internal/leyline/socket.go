@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 // SocketClient communicates with a running ley-line daemon over its
@@ -368,9 +370,9 @@ func resolveDaemonPaths() (daemonPaths, error) {
 	// above) is still honored as-is — it is the user's own; the wire
 	// handshake and per-op probes cover that case. ResolveBinary respects
 	// MACHE_NO_LEYLINE before downloading.
-	home, err := os.UserHomeDir()
+	dataDir, err := machehome.Dir()
 	if err != nil {
-		return daemonPaths{}, fmt.Errorf("cannot determine home directory: %w", err)
+		return daemonPaths{}, err
 	}
 	leylineBin, err := ResolveBinary(true)
 	if err != nil {
@@ -382,7 +384,6 @@ func resolveDaemonPaths() (daemonPaths, error) {
 	// This was invisible before, which made the stale-cached-0.4.1 skew
 	// (mache-0acdf6) an archaeology dig instead of a one-line answer.
 	recordResolvedLeyline(leylineBin, source)
-	dataDir := filepath.Join(home, ".mache")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return daemonPaths{}, fmt.Errorf("create %s: %w", dataDir, err)
 	}
@@ -696,9 +697,8 @@ func findExistingSocket() (string, error) {
 		return "", fmt.Errorf("LEYLINE_SOCKET=%s: %w", env, os.ErrNotExist)
 	}
 
-	home, err := os.UserHomeDir()
-	if err == nil {
-		wellKnown := filepath.Join(home, ".mache", "default.sock")
+	if dir, err := machehome.Dir(); err == nil {
+		wellKnown := filepath.Join(dir, "default.sock")
 		if _, err := os.Stat(wellKnown); err == nil {
 			return wellKnown, nil
 		}

@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 // OwnerRecord is who started a leyline daemon, with what, and when — written
@@ -77,11 +80,11 @@ func ReadOwnerRecord(sockPath string) (OwnerRecord, bool) {
 // Exported for `mache doctor`, which reports provenance beside the daemon's
 // self-reported version.
 func WellKnownOwnerRecord() (OwnerRecord, bool) {
-	home, err := os.UserHomeDir()
+	dir, err := machehome.Dir()
 	if err != nil {
 		return OwnerRecord{}, false
 	}
-	return ReadOwnerRecord(home + "/.mache/default.sock")
+	return ReadOwnerRecord(filepath.Join(dir, "default.sock"))
 }
 
 // Orphaned reports whether the daemon has outlived its spawner: daemon alive,

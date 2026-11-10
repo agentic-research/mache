@@ -5,6 +5,13 @@ version: '3'
 
 vars:
   BINARY_NAME: bin/mache
+  # The mache home the gates that run the built binary use (MACHE_HOME), so
+  # their projects, parse caches, arena and sockets stay out of the
+  # developer's ~/.mache (mache-6d5e62). Per checkout and stable, so the smell
+  # gate's parse cache still hits run to run. Under /tmp, not TMPDIR: the
+  # daemon binds a socket under it, and macOS caps socket paths at 104 bytes.
+  CI_MACHE_HOME:
+    sh: 'R="$(pwd -P)"; printf "/tmp/mache-ci-home%s" "${R//\//_}"'
 
 tasks:
   default:
@@ -37,6 +44,18 @@ tasks:
       # correctly on disk.
       - ./{{.BINARY_NAME}} install
 
+  ci:mache-home:
+    internal: true
+    desc: Create the gates' mache home; its bin/ is the real pinned-binary cache
+    cmds:
+      # bin/ is linked, not copied: the gates verify and use the leyline the
+      # developer's install resolves, from the same cache.
+      - |
+        set -euo pipefail
+        REAL="${MACHE_HOME:-$HOME/.mache}"
+        mkdir -p "{{.CI_MACHE_HOME}}" "$REAL/bin"
+        ln -sfn "$REAL/bin" "{{.CI_MACHE_HOME}}/bin"
+
   install:verify:
     desc: |
       Install gate — verify a REAL mache installation instead of assuming one.
@@ -56,9 +75,11 @@ tasks:
 
       The clean-HOME (no ~/.mache, no checkout, no Taskfile) leg lives in
       `task install:verify:docker`; a dev box cannot honestly simulate it.
-    deps: [build, leyline:ensure]
+    deps: [build, leyline:ensure, ci:mache-home]
     vars:
       BIN: '{{.BIN | default .BINARY_NAME}}'
+    env:
+      MACHE_HOME: '{{.CI_MACHE_HOME}}'
     cmds:
       # `go` needs no preflight guard (toolchain-safe), and the binary under
       # test is asserted to exist by the suite itself rather than by a
@@ -721,7 +742,9 @@ tasks:
   # root, so every finding mismatched the baseline and showed as NEW).
   smells:run:
     internal: true
-    deps: [build]
+    deps: [build, ci:mache-home]
+    env:
+      MACHE_HOME: '{{.CI_MACHE_HOME}}'
     cmds:
       - |
         set -euo pipefail

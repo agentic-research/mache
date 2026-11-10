@@ -44,6 +44,7 @@ import (
 	"strings"
 
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/machehome"
 	"github.com/spf13/cobra"
 )
 
@@ -263,9 +264,26 @@ func runInstall(out io.Writer, opts installOpts) error {
 	// session keeps getting the previous build. Only when the binary actually
 	// changed: sameFile and --dry-run must not disturb a running daemon.
 	if replaced {
-		restartDaemonAgent(out)
+		restartIfSupervised(out, dst)
 	}
 	return reportPATH(out, binDir, opts)
+}
+
+// restartIfSupervised restarts the supervised daemon when the binary just
+// replaced at dst is the one it runs. A copy installed elsewhere (--bin-dir)
+// is not, and restarting the daemon then only interrupts every session for
+// nothing: installverify's self-install tests restarted a developer's real
+// daemon on every `task ci` that way (mache-6d5e62). A job whose program
+// cannot be read is restarted, as before.
+func restartIfSupervised(w io.Writer, dst string) {
+	if !daemonAgentAutoload {
+		return
+	}
+	if job := querySupervisorJob(); job.Running && job.Program != "" && !sameFile(job.Program, dst) {
+		logf(w, "the supervised daemon runs %s, not %s: left it running\n", job.Program, dst)
+		return
+	}
+	restartDaemonAgent(w)
 }
 
 // provisionLeyline fetches the pinned release into the version-namespaced
@@ -456,11 +474,10 @@ func removePinnedLeyline(out io.Writer, opts installOpts) error {
 		logf(out, "leaving the cached leyline in place (--keep-leyline)\n")
 		return nil
 	}
-	home, err := os.UserHomeDir()
+	pinned, err := machehome.BinPath("leyline-" + leyline.BinaryVersion)
 	if err != nil {
-		return fmt.Errorf("cannot determine home directory: %w", err)
+		return err
 	}
-	pinned := filepath.Join(home, ".mache", "bin", "leyline-"+leyline.BinaryVersion)
 	switch _, statErr := os.Lstat(pinned); {
 	case errors.Is(statErr, os.ErrNotExist):
 		logf(out, "no cached leyline %s to remove\n", leyline.BinaryVersion)

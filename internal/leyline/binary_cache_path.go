@@ -1,9 +1,9 @@
 package leyline
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 // The leyline binary cache is namespaced BY PINNED VERSION.
@@ -32,37 +32,18 @@ import (
 // this is the mechanism behind that bead, and mache-608a3c, which tightened the
 // version gate that was working correctly the whole time.
 
-// cacheDir is where pinned leyline binaries live.
-func cacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	return filepath.Join(home, ".mache", "bin"), nil
-}
-
 // pinnedCachePath is the version-namespaced cache location for THIS build's
 // pin. Two mache builds with different pins resolve to different files, so
 // neither can invalidate the other.
 func pinnedCachePath() (string, error) {
-	dir, err := cacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "leyline-"+leylineBinaryVersion), nil
+	return machehome.BinPath("leyline-" + leylineBinaryVersion)
 }
 
 // legacyCachePath is the pre-namespacing location. It is still READ — if it
 // happens to hold this build's pin there is no reason to re-download — but it
 // is never WRITTEN, so a build with a different pin can no longer clobber it
 // and the contention ends after one migration pass.
-func legacyCachePath() (string, error) {
-	dir, err := cacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "leyline"), nil
-}
+func legacyCachePath() (string, error) { return machehome.BinPath("leyline") }
 
 // resolveCachedPinned returns a cached binary matching this build's pin,
 // preferring the namespaced path and falling back to the legacy unversioned one.

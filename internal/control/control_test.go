@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/machehome"
 	"golang.org/x/sys/unix"
 )
 
@@ -521,13 +523,15 @@ func TestClose_ConcurrentClose(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestValidatePath_UnderUserHomeMache(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("UserHomeDir unavailable on this platform")
-	}
-
-	// ~/.mache/foo.ctrl is explicitly permitted — even if the dir doesn't
-	// exist yet, validatePath only consults the abs path string.
+	// A path under mache's home is permitted, even if the dir doesn't exist
+	// yet: validatePath only consults the abs path string. The home is a
+	// throwaway under /tmp, never the developer's; on macOS /tmp is outside
+	// os.TempDir(), so there only the mache-home branch admits it.
+	home, err := os.MkdirTemp("/tmp", "vph")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	t.Setenv(machehome.Env, "")
 	path := filepath.Join(home, ".mache", "validatepath-test.ctrl")
 	require.NoError(t, validatePath(path), "~/.mache paths must validate")
 }

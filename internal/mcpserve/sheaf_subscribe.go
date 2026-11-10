@@ -9,6 +9,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 // sheafEventRouter holds the process-wide registry of SheafInvalidators
@@ -259,9 +260,9 @@ func resolveSubscriberSocketPath() string {
 	if env := os.Getenv("LEYLINE_SOCKET"); env != "" {
 		return env
 	}
-	home, err := os.UserHomeDir() // coverage:ignore — defensive home-dir resolution; reduction tracked in mache-89b5dd.
-	if err != nil {               // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
-		return "" // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
-	} // coverage:ignore — defensive guard; reduction tracked in mache-89b5dd.
-	return filepath.Join(home, ".mache", "default.sock") // coverage:ignore — fallback path resolution; reduction tracked in mache-89b5dd.
+	dir, err := machehome.Dir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "default.sock")
 }
