@@ -33,8 +33,8 @@ func main() {
 	}
 }
 
-// options is a parsed command line.
-type options struct {
+// probeOptions is a parsed command line.
+type probeOptions struct {
 	endpoint  string
 	stdio     string
 	stdioArgs []string
@@ -61,8 +61,8 @@ func execute(ctx context.Context, args []string, out io.Writer) error {
 
 // parseArgs reads the flags, the plan (an inline JSON argument or -plan
 // file) and, after --, a stdio server's own arguments.
-func parseArgs(args []string) (options, error) {
-	var o options
+func parseArgs(args []string) (probeOptions, error) {
+	var o probeOptions
 	if i := indexOf(args, "--"); i >= 0 {
 		args, o.stdioArgs = args[:i], args[i+1:]
 	}
@@ -116,7 +116,7 @@ func planSource(file string, rest []string) ([]byte, error) {
 	}
 }
 
-func dial(ctx context.Context, o options) (*mcpharness.Conn, error) {
+func dial(ctx context.Context, o probeOptions) (*mcpharness.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, o.timeout)
 	defer cancel()
 	if o.endpoint != "" {
@@ -127,7 +127,7 @@ func dial(ctx context.Context, o options) (*mcpharness.Conn, error) {
 
 // probe makes each call and writes its time, status, call and answer size;
 // the answer itself with -show, and always for an error.
-func probe(ctx context.Context, o options, conn *mcpharness.Conn, out io.Writer) error {
+func probe(ctx context.Context, o probeOptions, conn *mcpharness.Conn, out io.Writer) error {
 	for _, c := range o.plan {
 		cctx, cancel := context.WithTimeout(ctx, o.timeout)
 		start := time.Now()
