@@ -29,6 +29,14 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **leyline v0.27.0 is the pinned backend** (`mache-f859ba`). It bundles
+  SQLite 3.54.1 (a CVE fix); nothing mache reads changed: projection-v12, IR
+  `merkle-ast-v3`, wire major 2 and the daemon wire are the same, and one tree
+  parsed by v0.26.0 and v0.27.0 gives the same schema, metadata, row counts
+  and `node_hash` values, so smell baselines carry over. The leyline-schema Go
+  module moves to v0.27.0 with it. SQLite writes its version into a db's
+  header, so a db's `current_root` differs from v0.26.0's for identical rows.
+
 - **`get_overview` and `get_architecture` answer about twice as fast on a
   source tree** (`mache-86c666`). The db leyline parses a tree into belongs to
   the serving session, so mache now keeps SQLite's read lock on it for the
