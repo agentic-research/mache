@@ -1233,6 +1233,63 @@ func (lg *lazyGraph) SearchRefs(pattern, segment string, limit int) ([]graph.Ref
 	return rs.SearchRefs(pattern, segment, limit)
 }
 
+// RefTokenCount forwards graph.RefTokenCounter to the base graph, the graph
+// RefsMap reads; a base that cannot count is counted by the length of its refs
+// map, as RefsMap would answer. Without it get_overview took that fallback on
+// every serve-mode call (mache-a6c283).
+func (lg *lazyGraph) RefTokenCount() (int, error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return 0, err
+	}
+	if c, ok := g.(graph.RefTokenCounter); ok {
+		return c.RefTokenCount()
+	}
+	return len(lg.RefsMap()), nil
+}
+
+// LookupDefNodes forwards graph.DefsNodeLookuper to the base graph. A base
+// that is not one returns no nodes.
+func (lg *lazyGraph) LookupDefNodes(token string) ([]*graph.Node, error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil, err
+	}
+	dn, ok := g.(graph.DefsNodeLookuper)
+	if !ok {
+		return nil, nil
+	}
+	return dn.LookupDefNodes(token)
+}
+
+// RefRangeOf forwards graph.RefResolver to the base graph. A base that is not
+// one carries no spans: nil, as the interface documents.
+func (lg *lazyGraph) RefRangeOf(nodeID string) (*graph.RefRange, error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil, err
+	}
+	rr, ok := g.(graph.RefResolver)
+	if !ok {
+		return nil, nil
+	}
+	return rr.RefRangeOf(nodeID)
+}
+
+// ResolveRef forwards graph.RefResolver to the base graph. A base that is not
+// one cannot classify a reference, which is an error rather than an answer.
+func (lg *lazyGraph) ResolveRef(nodeID string) (*graph.RefTarget, error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return nil, err
+	}
+	rr, ok := g.(graph.RefResolver)
+	if !ok {
+		return nil, fmt.Errorf("resolving a reference requires a SQLite-backed graph")
+	}
+	return rr.ResolveRef(nodeID)
+}
+
 // DefTokenOf forwards graph.DefTokener to the base graph. A base that is not
 // a DefTokener knows no definitions: no token.
 func (lg *lazyGraph) DefTokenOf(id string) (string, bool, error) {
