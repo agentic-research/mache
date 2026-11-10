@@ -38,6 +38,14 @@ bumps may include breaking changes.
   version-mismatch error now points at `--reset-arena` instead of asking
   you to delete the file.
 
+- **A leyline daemon that fails to start says why** (`mache-e70109`). mache
+  used to discard the managed daemon's stderr, so a startup failure read
+  only "exit status 1". After an upgrade, a control block left by an older
+  leyline stopped the daemon on every session with nothing saying so. The
+  error now carries what leyline printed. With leyline v0.28.0 that case
+  recovers by itself: the upgrade makes mache cold-start the arena, and
+  `--reset-arena` now rebuilds the old control block.
+
 - **leyline v0.28.0 is the pinned backend** (`mache-d3ff53`). Nothing mache
   reads changed: one tree parsed by v0.27.0 and v0.28.0 gives the same schema,
   metadata, row counts and `node_hash` values, and the leyline-schema Go
