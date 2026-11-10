@@ -13,7 +13,7 @@ import (
 
 // startFailingDaemon runs DiscoverOrStart against a pinned-version stub whose
 // daemon invocation runs body, and returns the error and how long it took.
-func startFailingDaemon(t *testing.T, body string) (error, time.Duration) {
+func startFailingDaemon(t *testing.T, body string) (time.Duration, error) {
 	t.Helper()
 	resetManaged(t)
 	t.Cleanup(func() { resetManaged(t) })
@@ -30,7 +30,7 @@ func startFailingDaemon(t *testing.T, body string) (error, time.Duration) {
 	t.Setenv("MACHE_LEYLINE_START_TIMEOUT", "30s")
 	start := time.Now()
 	_, err := DiscoverOrStart()
-	return err, time.Since(start)
+	return time.Since(start), err
 }
 
 // A daemon that dies at startup is reported with what it said. The message is
@@ -38,7 +38,7 @@ func startFailingDaemon(t *testing.T, body string) (error, time.Duration) {
 // predated control block v3, where mache reported only "exit status 1" on
 // every session (mache-e70109).
 func TestDiscoverOrStart_StartupFailureCarriesTheDaemonsStderr(t *testing.T) {
-	err, _ := startFailingDaemon(t, `printf 'Error: open controller\n\nCaused by:\n    control block VERSION mismatch: file has v2, this binary expects v3\n' >&2
+	_, err := startFailingDaemon(t, `printf 'Error: open controller\n\nCaused by:\n    control block VERSION mismatch: file has v2, this binary expects v3\n' >&2
 exit 1`)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exited during startup")
@@ -49,7 +49,7 @@ exit 1`)
 // serve --control`). One still holding it after the daemon exits must not hold
 // up the report until that child exits too.
 func TestDiscoverOrStart_StartupFailureIsNotHeldByAChildOnTheStderrPipe(t *testing.T) {
-	err, took := startFailingDaemon(t, `/bin/sleep 30 &
+	took, err := startFailingDaemon(t, `/bin/sleep 30 &
 echo 'Error: arena locked' >&2
 exit 1`)
 	require.Error(t, err)
