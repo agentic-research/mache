@@ -12,18 +12,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentic-research/mache/internal/control"
+
+	"github.com/agentic-research/mache/internal/machehome"
 )
 
 // A control block written by ley-line-open itself opens in mache and reads
 // back the arena it names (mache-3451a1). mache keeps its own Go copy of the
 // control block, so the two implementations agreeing on the layout and the
-// v3 seqlock is something only the real binary can show. Runs when a leyline
-// that writes v3 (v0.20.1 or later) is on PATH, as it is in CI on the pin.
+// v3 seqlock is something only the real binary can show. Runs against the
+// pinned leyline, as the other e2e tests do, never whatever is first on PATH:
+// that was a stale v0.26.0 on one machine, which still published discovery
+// symlinks and repointed the developer's ~/.mache/default.sock at this test's
+// socket (mache-6d5e62). The daemon also runs under a throwaway HOME, so no
+// leyline version can reach the real one.
 func TestControlBlock_ReadsWhatLeylineWrites(t *testing.T) {
-	bin, err := exec.LookPath("leyline")
+	bin, err := ResolveBinary(false) // before HOME isolation, as the e2e tests do
 	if err != nil {
-		t.Skip("leyline not on PATH")
+		t.Skipf("pinned leyline unavailable: %v", err)
 	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(machehome.Env, "")
 	out, err := exec.Command(bin, "--version").Output()
 	require.NoError(t, err)
 	fields := strings.Fields(string(out)) // "leyline 0.28.0 (open)"
