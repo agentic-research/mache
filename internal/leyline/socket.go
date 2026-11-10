@@ -491,10 +491,17 @@ func startReaped(cmd *exec.Cmd, sock string) (<-chan error, error) {
 // managed.mu on entry and on return; it is released for the wait.
 func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig) (string, error) {
 	cmd := exec.Command(p.bin, daemonArgs...)
-	// Detach from our stdio so it doesn't interfere with MCP transport
+	// Detach from our stdio so it doesn't interfere with MCP transport. The
+	// daemon's stderr is kept as a bounded tail, to report why it died if it
+	// does so at startup.
+	stderr := newStderrTail(daemonStderrTailBytes)
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Stderr = stderr
 	cmd.Stdin = nil
+	// The `mache serve --control` child inherits the stderr pipe, so Wait
+	// would otherwise block until that child exits too; this bounds the wait
+	// for the pipe once the daemon itself is gone.
+	cmd.WaitDelay = daemonStderrWaitDelay
 
 	// Run the daemon as a process-group leader so that the `mache serve
 	// --control` child it spawns is reaped together with it — otherwise
@@ -547,9 +554,9 @@ func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig
 			// Clean exit (status 0) before binding is still a failure —
 			// nothing is listening on the socket. Return an explicit error
 			// rather than wrapping nil (which renders "%!w(<nil>)").
-			return "", fmt.Errorf("leyline daemon exited cleanly (status 0) during startup before socket %s appeared", p.sock)
+			return "", fmt.Errorf("leyline daemon exited cleanly (status 0) during startup before socket %s appeared%s", p.sock, daemonSaid(stderr))
 		}
-		return "", fmt.Errorf("leyline daemon exited during startup before socket %s appeared: %w", p.sock, werr)
+		return "", fmt.Errorf("leyline daemon exited during startup before socket %s appeared: %w%s", p.sock, werr, daemonSaid(stderr))
 	}
 
 	// Timed out with the process still running — initializing too slowly or
@@ -557,6 +564,22 @@ func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig
 	// point at the knob to extend the wait and the likely-contended arena.
 	return "", fmt.Errorf("leyline daemon started but socket %s did not appear within %s — it may still be initializing or contending for %s; raise MACHE_LEYLINE_START_TIMEOUT to allow longer",
 		p.sock, timeout, p.arena)
+}
+
+// daemonStderrTailBytes is how much of the managed daemon's stderr is kept.
+const daemonStderrTailBytes = 4096
+
+// daemonStderrWaitDelay bounds how long Wait drains the daemon's stderr pipe
+// after the daemon exits (see spawnAndAwait).
+const daemonStderrWaitDelay = 2 * time.Second
+
+// daemonSaid is the daemon's own stderr for an error message, or "" when it
+// printed nothing.
+func daemonSaid(t *stderrTail) string {
+	if s := t.String(); s != "" {
+		return "; leyline said: " + s
+	}
+	return ""
 }
 
 // awaitDaemonSocket polls until sockPath accepts a connection (ready), the
