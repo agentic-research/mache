@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -23,15 +25,18 @@ func echoServer() *server.MCPServer {
 	return s
 }
 
-func TestRun_CallsEachToolAndReportsTheAnswer(t *testing.T) {
+func echoURL(t *testing.T) string {
 	ts := httptest.NewServer(server.NewStreamableHTTPServer(echoServer()))
 	t.Cleanup(ts.Close)
+	return ts.URL + "/mcp"
+}
+
+func TestExecute_CallsEachToolAndReportsTheAnswer(t *testing.T) {
 	var out bytes.Buffer
-	err := run(context.Background(), []string{
-		"-url", ts.URL + "/mcp", "-show",
-		`[["echo",{"say":"hello"}],["echo",{"say":"fail"}]]`,
-	}, &out)
-	require.NoError(t, err)
+	require.NoError(t, execute(context.Background(), []string{
+		"-url", echoURL(t), "-show",
+		`[{"tool":"echo","args":{"say":"hello"}},{"tool":"echo","args":{"say":"fail"}}]`,
+	}, &out))
 	got := out.String()
 	assert.Contains(t, got, `ok  echo {"say":"hello"} 5B`)
 	assert.Contains(t, got, "    hello")
@@ -39,11 +44,33 @@ func TestRun_CallsEachToolAndReportsTheAnswer(t *testing.T) {
 	assert.Contains(t, got, "    asked to fail")
 }
 
-func TestRun_RefusesAnAmbiguousOrMissingTarget(t *testing.T) {
+// A release-parity plan file runs as it is.
+func TestExecute_RunsAPlanFile(t *testing.T) {
+	plan := filepath.Join(t.TempDir(), "plan.json")
+	require.NoError(t, os.WriteFile(plan, []byte(`[{"tool":"echo","args":{"say":"from-file"}}]`), 0o644))
 	var out bytes.Buffer
-	assert.ErrorContains(t, run(context.Background(), []string{`[["echo"]]`}, &out), "exactly one of -url or -stdio")
-	assert.ErrorContains(t, run(context.Background(), []string{"-url", "x", "-stdio", "y", `[["echo"]]`}, &out), "exactly one of -url or -stdio")
-	assert.ErrorContains(t, run(context.Background(), []string{"-url", "x"}, &out), "want the calls")
-	assert.ErrorContains(t, run(context.Background(), []string{"-url", "x", "-protocol", "v9", `[["echo"]]`}, &out), "want legacy or modern")
-	assert.ErrorContains(t, run(context.Background(), []string{"-url", "x", `[[1,2,3]]`}, &out), "a call is")
+	require.NoError(t, execute(context.Background(), []string{"-url", echoURL(t), "-plan", plan}, &out))
+	assert.Contains(t, out.String(), `ok  echo {"say":"from-file"} 9B`)
+}
+
+func TestParseArgs_RefusesWhatItCannotRun(t *testing.T) {
+	for want, args := range map[string][]string{
+		"exactly one of -url or -stdio": {`[{"tool":"echo"}]`},
+		"want one plan":                 {"-url", "x"},
+		"want legacy or modern":         {"-url", "x", "-protocol", "v9", `[{"tool":"echo"}]`},
+		"plan is empty":                 {"-url", "x", `[]`},
+	} {
+		_, err := parseArgs(args)
+		assert.ErrorContains(t, err, want, "%v", args)
+	}
+	_, err := parseArgs([]string{"-url", "x", "-stdio", "y", `[{"tool":"echo"}]`})
+	assert.ErrorContains(t, err, "exactly one of -url or -stdio")
+}
+
+// Arguments after -- go to the stdio server, not to the probe's flags.
+func TestParseArgs_PassesStdioArgumentsThrough(t *testing.T) {
+	o, err := parseArgs([]string{"-stdio", "bin/mache", `[{"tool":"echo"}]`, "--", "serve", "--stdio", "."})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"serve", "--stdio", "."}, o.stdioArgs)
+	assert.Equal(t, "bin/mache", o.stdio)
 }

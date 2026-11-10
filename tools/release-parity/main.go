@@ -41,18 +41,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentic-research/mache/internal/mcpharness"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // schema is passed through to `mache serve --schema` when set, so a plan can
 // exercise a schema projection as well as the raw one.
 var schema string
-
-// call is one entry in a plan.
-type call struct {
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
-}
 
 // answer is what one binary returned for one call, normalized.
 type answer struct {
@@ -111,7 +106,7 @@ func main() {
 // compareReleases executes the plan on both binaries and writes the report. The exit code
 // is 0 when every answer matches, 1 when any differs, and 2 when the plan does
 // not cover the head binary's registry.
-func compareReleases(base, head, root string, plan []call, out string, timeout time.Duration) (int, error) {
+func compareReleases(base, head, root string, plan []mcpharness.Call, out string, timeout time.Duration) (int, error) {
 	headTools, err := listTools(head, root, timeout)
 	if err != nil {
 		return 0, fmt.Errorf("head: %w", err)
@@ -170,7 +165,7 @@ func listTools(bin, root string, timeout time.Duration) (tools []mcp.Tool, err e
 	return tools, nil
 }
 
-func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers []answer, err error) {
+func answerPlan(bin, root string, plan []mcpharness.Call, timeout time.Duration) (answers []answer, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	s, err := openSession(ctx, bin, root)
@@ -224,7 +219,7 @@ func normalizeText(s, root, home string) any {
 	return s
 }
 
-func uncoveredTools(tools []mcp.Tool, plan []call) []string {
+func uncoveredTools(tools []mcp.Tool, plan []mcpharness.Call) []string {
 	called := map[string]bool{}
 	for _, c := range plan {
 		called[c.Tool] = true
@@ -238,17 +233,14 @@ func uncoveredTools(tools []mcp.Tool, plan []call) []string {
 	return missing
 }
 
-func readPlan(path string) ([]call, error) {
+func readPlan(path string) ([]mcpharness.Call, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var plan []call
-	if err := json.Unmarshal(b, &plan); err != nil {
+	plan, err := mcpharness.ParsePlan(b)
+	if err != nil {
 		return nil, fmt.Errorf("plan %s: %w", path, err)
-	}
-	if len(plan) == 0 {
-		return nil, errors.New("plan is empty")
 	}
 	return plan, nil
 }
@@ -256,7 +248,7 @@ func readPlan(path string) ([]call, error) {
 // answerSide runs the plan runsPerSide times with one binary and returns its
 // answers with run-to-run noise masked, plus notes for any tolerated leaks
 // (see classifyRunError).
-func answerSide(name, bin, root string, plan []call, timeout time.Duration) ([]answer, []string, error) {
+func answerSide(name, bin, root string, plan []mcpharness.Call, timeout time.Duration) ([]answer, []string, error) {
 	var masked []answer
 	var notes []string
 	for run := range runsPerSide {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentic-research/mache/internal/mcpharness"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,9 +63,9 @@ func TestMaskEither_LeavesRealDifferences(t *testing.T) {
 
 func TestUncoveredTools(t *testing.T) {
 	tools := []mcp.Tool{{Name: "search"}, {Name: "read_file"}, {Name: "write_file"}}
-	plan := []call{{Tool: "search"}, {Tool: "read_file"}, {Tool: "read_file"}}
+	plan := []mcpharness.Call{{Tool: "search"}, {Tool: "read_file"}, {Tool: "read_file"}}
 	assert.Equal(t, []string{"write_file"}, uncoveredTools(tools, plan))
-	assert.Empty(t, uncoveredTools(tools, append(plan, call{Tool: "write_file"})))
+	assert.Empty(t, uncoveredTools(tools, append(plan, mcpharness.Call{Tool: "write_file"})))
 }
 
 // mache reports canonical paths, so on macOS a corpus under /var arrives as
