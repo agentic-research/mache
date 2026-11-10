@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/agentic-research/mache/internal/lloschema"
+	"github.com/agentic-research/mache/internal/sqlintro"
 	"github.com/agentic-research/mache/internal/sqlstmt"
 )
 
@@ -29,7 +30,7 @@ type v6Shape struct{ paths *lloschema.V6Paths }
 // nil otherwise. The column is the test, not a declared version: the reader
 // already decides every other column by probing (see ColumnExists).
 func newV6Shape(r *NodesTableReader) *v6Shape {
-	if !ColumnExists(r.db, "nodes", "nid") {
+	if !sqlintro.ColumnExists(r.db, "nodes", "nid") {
 		return nil
 	}
 	return &v6Shape{paths: lloschema.NewV6Paths(r.db)}

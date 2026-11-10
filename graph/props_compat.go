@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/agentic-research/mache/internal/sqlintro"
 )
 
 // ErrStalePropsSchema is returned for a nodes table mache itself wrote before
@@ -23,10 +25,10 @@ var ErrStalePropsSchema = errors.New("nodes table predates the props column")
 // case refused — a blanket refusal would reject every leyline .db, which since
 // v0.18.0 is mache's primary input.
 func RequireProps(db *sql.DB) error {
-	if !ColumnExists(db, "nodes", "context") {
+	if !sqlintro.ColumnExists(db, "nodes", "context") {
 		return nil // leyline-produced: never carried Properties, nothing to lose
 	}
-	if ColumnExists(db, "nodes", "props") {
+	if sqlintro.ColumnExists(db, "nodes", "props") {
 		return nil
 	}
 	return fmt.Errorf(

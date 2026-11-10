@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentic-research/mache/internal/sqlintro"
 	"github.com/agentic-research/mache/internal/sqlstmt"
 )
 
@@ -69,11 +70,11 @@ func NewNodesTableReader(db *sql.DB, tableName string, render TemplateRenderer,
 		fileMode:   fileMode,
 		dirMode:    dirMode,
 		cache:      NewContentCache(cacheSize),
-		hasContext: ColumnExists(db, "nodes", "context"),
-		hasProps:   ColumnExists(db, "nodes", "props"),
+		hasContext: sqlintro.ColumnExists(db, "nodes", "context"),
+		hasProps:   sqlintro.ColumnExists(db, "nodes", "props"),
 		// _ast is ley-line-open's; a standalone mache-built .db has no such
 		// table and simply yields nodes without a source location.
-		hasAST: ColumnExists(db, "_ast", "start_row"),
+		hasAST: sqlintro.ColumnExists(db, "_ast", "start_row"),
 	}
 	// After the flags: nodeSelect reads them, and the statement text is fixed
 	// from here on.

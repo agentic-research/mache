@@ -1,11 +1,5 @@
 package graph
 
-import (
-	"database/sql"
-
-	"github.com/agentic-research/mache/internal/sqlintro"
-)
-
 // What the nodes table looks like on disk, as distinct from how it is read
 // (nodes_table_reader.go) or written (sqlite_writer.go).
 
@@ -25,21 +19,3 @@ const (
 	NodeKindFile = 0
 	NodeKindDir  = 1
 )
-
-// ColumnExists reports whether table has a column named col. Readers use it
-// to stay compatible with nodes tables written before a column was added
-// (e.g. `context`, mache-b8fe72) or produced by leyline, and writers use it
-// to decide whether an ALTER is needed.
-//
-// Deliberately pragma_table_xinfo, NOT pragma_table_info: table_info omits
-// GENERATED columns entirely, so it answers "missing" for a column that is
-// present, readable, indexed, and returned by SELECT *. ley-line-open already
-// ships one (`source_blobs.byte_len` STORED) and projection-v4 makes
-// `nodes.parent_id` another (mache-bc6ca3). Under table_info a reader would
-// silently downgrade to a compatibility path for a column it can read, and a
-// writer would emit an ALTER that fails with "duplicate column name". xinfo
-// reports the same rows as info plus generated and hidden ones, so no existing
-// probe changes its answer.
-func ColumnExists(db *sql.DB, table, col string) bool {
-	return sqlintro.ColumnExists(db, table, col)
-}

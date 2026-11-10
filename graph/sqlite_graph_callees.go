@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/agentic-research/mache/internal/sqlintro"
 )
 
 // GetCallees implements Graph. It resolves each call made by the construct to
@@ -50,7 +52,7 @@ func (g *SQLiteGraph) GetCallees(id string) ([]*Node, error) {
 	// Determine langName + AST scope mapping from construct node Properties
 	// (the props column since mache-90b89b) in a single query.
 	var langName, astSourceID, astScopeID string
-	if g.useNodesTable && ColumnExists(g.db, "nodes", "props") {
+	if g.useNodesTable && sqlintro.ColumnExists(g.db, "nodes", "props") {
 		var propsJSON sql.NullString
 		// kind = 1 → graph.NodeKindDir (constructs are dirs).
 		if err := g.db.QueryRow("SELECT props FROM nodes WHERE id = ? AND kind = 1", id).Scan(&propsJSON); err != nil && err != sql.ErrNoRows {
@@ -359,7 +361,7 @@ func (g *SQLiteGraph) calleeTokensFromContainer(nodeID string) ([]string, error)
 	// read as "this function calls nothing" — which is precisely what
 	// calleeTokensFromRefs' doc comment, three functions below, warns against.
 	container := g.shape().refContainer()
-	if !ColumnExists(g.db, "node_refs", container) {
+	if !sqlintro.ColumnExists(g.db, "node_refs", container) {
 		return nil, nil
 	}
 	key, ok, err := g.key(nodeID)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/sqlintro"
 	_ "modernc.org/sqlite"
 )
 
@@ -151,13 +152,13 @@ func NewSQLiteWriter(dbPath string) (*SQLiteWriter, error) {
 	// Backward-compat: an incremental build may open a nodes table written
 	// before the context column existed. CREATE TABLE IF NOT EXISTS won't
 	// add it, so ALTER it in (mache-b8fe72). Fresh tables already have it.
-	if !graph.ColumnExists(db, "nodes", "context") {
+	if !sqlintro.ColumnExists(db, "nodes", "context") {
 		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN context BLOB`); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("add nodes.context column: %w", err)
 		}
 	}
-	if !graph.ColumnExists(db, "nodes", "props") {
+	if !sqlintro.ColumnExists(db, "nodes", "props") {
 		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN props JSON`); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("add nodes.props column: %w", err)
