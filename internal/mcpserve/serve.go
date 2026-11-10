@@ -418,7 +418,7 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	}
 
 	if filepath.Ext(dataSource) == ".db" {
-		return openDBGraph(dataSource, schema, noop)
+		return openDBGraph(dataSource, schema, graph.OpenSQLiteGraph, noop)
 	}
 
 	// Auto-invoke leyline: when the source is a directory and `leyline` is
@@ -448,7 +448,10 @@ func buildServeGraph(dataSource string, schema *api.Topology) (graph.Graph, *gra
 	if info, statErr := os.Stat(dataSource); statErr == nil && info.IsDir() &&
 		os.Getenv("MACHE_NO_LEYLINE") == "" {
 		if dbPath, dbCleanup, err := leylinegraph.AutoInvokeLeylineParse(dataSource); err == nil {
-			g, si, gCleanup, gerr := openDBGraph(dbPath, schema, dbCleanup)
+			// The parse db is this session's: held under the parse-cache
+			// lock, or a private temp file, until dbCleanup runs after the
+			// graph closes.
+			g, si, gCleanup, gerr := openDBGraph(dbPath, schema, graph.OpenOwnedSQLiteGraph, dbCleanup)
 			if gerr == nil {
 				// The MACHE_NO_LEYLINE hint carries a precondition worth
 				// stating: that path's walker is ASTWalker, which needs
@@ -685,15 +688,19 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 	return composite, nil, runAll, nil
 }
 
+// sqliteOpener is graph.OpenSQLiteGraph's signature.
+type sqliteOpener func(dbPath string, schema *api.Topology, render graph.TemplateRenderer) (*graph.SQLiteGraph, error)
+
 // openDBGraph opens a .db file as a SQLiteGraph after materializing virtual
 // nodes. The extra cleanup callback runs after the graph is closed (used to
-// delete an auto-generated temp .db).
+// delete an auto-generated temp .db). open is graph.OpenOwnedSQLiteGraph for
+// a db this session owns, graph.OpenSQLiteGraph for one it does not.
 // openDBGraph returns (graph, nil, cleanup, err) — the *SheafInvalidator
 // slot is always nil here because .db sources don't run a file watcher
 // and have no need for cascade wiring (the contents are frozen at the
 // time the .db was built). Callers (e.g. buildServeGraph) propagate the
 // nil to their own returns.
-func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (graph.Graph, *graph.SheafInvalidator, func(), error) {
+func openDBGraph(dbPath string, schema *api.Topology, open sqliteOpener, extraCleanup func()) (graph.Graph, *graph.SheafInvalidator, func(), error) {
 	if extraCleanup == nil {
 		extraCleanup = func() {}
 	}
@@ -707,7 +714,7 @@ func openDBGraph(dbPath string, schema *api.Topology, extraCleanup func()) (grap
 		extraCleanup()
 		return nil, nil, func() {}, fmt.Errorf("materialize content sources: %w", err)
 	}
-	sg, err := graph.OpenSQLiteGraph(dbPath, schema, machetmpl.Render)
+	sg, err := open(dbPath, schema, machetmpl.Render)
 	if err != nil {
 		extraCleanup()
 		return nil, nil, func() {}, fmt.Errorf("open sqlite graph: %w", err)

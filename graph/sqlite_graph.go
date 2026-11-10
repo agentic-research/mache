@@ -125,9 +125,27 @@ func (g *SQLiteGraph) EagerScan() error {
 }
 
 // OpenSQLiteGraph opens a connection to the source DB and compiles the schema.
+// The db is opened read-only, and every statement takes and releases SQLite's
+// shared file lock, so another process may write it between statements.
 func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
-	// Source DB opened read-only — source data is immutable.
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	return openSQLiteGraph(dbPath, dbPath+"?mode=ro", schema, render)
+}
+
+// OpenOwnedSQLiteGraph opens a db that nothing writes while the graph is open,
+// such as the parse db mache holds under its parse-cache lock. Each connection
+// keeps SQLite's shared lock from its first read until it closes
+// (locking_mode=EXCLUSIVE) instead of taking it per statement: a tool that
+// resolves tens of thousands of paths spent two thirds of its CPU in fcntl
+// lock calls (mache-86c666). A writer that appears anyway gets SQLITE_BUSY
+// rather than changing the data under the graph. Journal recovery is
+// unchanged, so a db left with a hot journal fails to open read-only instead
+// of being read without it.
+func OpenOwnedSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
+	return openSQLiteGraph(dbPath, dbPath+"?mode=ro&_pragma=locking_mode(EXCLUSIVE)", schema, render)
+}
+
+func openSQLiteGraph(dbPath, dsn string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err) // coverage:ignore
 	} // coverage:ignore

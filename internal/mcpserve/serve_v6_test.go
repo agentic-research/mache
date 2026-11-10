@@ -37,7 +37,7 @@ func calledFunctionDB(t *testing.T, p fixturedb.Producer) string {
 // (mache-abaf17), and the graph serves without them.
 func TestOpenDBGraph_ServesBothProjections(t *testing.T) {
 	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
-		g, _, cleanup, err := openDBGraph(calledFunctionDB(t, p), &api.Topology{Version: api.SchemaVersion}, nil)
+		g, _, cleanup, err := openDBGraph(calledFunctionDB(t, p), &api.Topology{Version: api.SchemaVersion}, graph.OpenSQLiteGraph, nil)
 		require.NoError(t, err, "%v", p)
 		kids, err := g.ListChildren("a.go")
 		require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestOpenDBGraph_ServesBothProjections(t *testing.T) {
 // looks callers up by must come from node_defs (mache-cb4369).
 func TestListDirectory_OffersCallersOnALeylineConstruct(t *testing.T) {
 	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
-		g, _, cleanup, err := openDBGraph(calledFunctionDB(t, p), &api.Topology{Version: api.SchemaVersion}, nil)
+		g, _, cleanup, err := openDBGraph(calledFunctionDB(t, p), &api.Topology{Version: api.SchemaVersion}, graph.OpenSQLiteGraph, nil)
 		require.NoError(t, err)
 		res, err := makeListDirHandler(g)(context.Background(),
 			testutil.MakeRequest(map[string]any{"path": "a.go/function_declaration_0"}))
@@ -85,7 +85,7 @@ func virtualAnswers(t *testing.T, p fixturedb.Producer) map[string]string {
 	t.Helper()
 	dbPath := calledFunctionDB(t, p)
 	schema := &api.Topology{Version: api.SchemaVersion}
-	sg, _, cleanup, err := openDBGraph(dbPath, schema, nil)
+	sg, _, cleanup, err := openDBGraph(dbPath, schema, graph.OpenSQLiteGraph, nil)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 	g := withSchema{SQLiteGraph: sg.(*graph.SQLiteGraph), schema: schema}
