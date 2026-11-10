@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -95,9 +96,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		ov.TotalDirs, ov.TotalFiles = overviewCounts(g, children)
 
 		// Count refs/defs if available
-		if rp, ok := g.(graph.RefsMapper); ok {
-			ov.RefTokens = len(rp.RefsMap())
-		}
+		ov.RefTokens = refTokenCount(g)
 		if dp, ok := g.(graph.DefsMapper); ok {
 			ov.DefTokens = len(dp.DefsMap())
 		}
@@ -106,15 +105,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		// This teaches the LLM which tool to use for each task without bloating the
 		// system prompt — guidance is only in context after get_overview is called.
 		if ov.RefTokens > 0 {
-			ov.Usage = map[string]string{
-				"find_callers":    "who calls a symbol — use instead of grep for 'who uses X?'",
-				"find_definition": "where a symbol is declared — use for 'where is X defined?'",
-				"find_callees":    "what a function invokes — note: generic names (String, New, Error) may have false positives",
-				"search":          "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
-				"list_directory":  "browse the tree structure — use instead of ls/find",
-				"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
-				"get_impact":      "blast radius of changing a symbol — traces callers/callees to a configurable depth",
-			}
+			ov.Usage = toolRoutingHints()
 		}
 
 		data, _ := json.MarshalIndent(ov, "", "  ")
@@ -153,4 +144,36 @@ func overviewCounts(g graph.Graph, children []string) (dirs, files int) {
 		}
 	}
 	return dirs, files
+}
+
+// refTokenCount is how many tokens the graph's references name: counted by the
+// graph when it can, else the length of its refs map, and 0 when it has
+// neither. A failed count is logged and reported as 0, as RefsMap reports a
+// failed read as an empty map.
+func refTokenCount(g graph.Graph) int {
+	if c, ok := g.(graph.RefTokenCounter); ok {
+		n, err := c.RefTokenCount()
+		if err != nil {
+			log.Printf("get_overview: count reference tokens: %v", err)
+		}
+		return n
+	}
+	if rp, ok := g.(graph.RefsMapper); ok {
+		return len(rp.RefsMap())
+	}
+	return 0
+}
+
+// toolRoutingHints tells the agent which tool answers which question, once a
+// code graph with cross-references is indexed.
+func toolRoutingHints() map[string]string {
+	return map[string]string{
+		"find_callers":    "who calls a symbol — use instead of grep for 'who uses X?'",
+		"find_definition": "where a symbol is declared — use for 'where is X defined?'",
+		"find_callees":    "what a function invokes — note: generic names (String, New, Error) may have false positives",
+		"search":          "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
+		"list_directory":  "browse the tree structure — use instead of ls/find",
+		"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
+		"get_impact":      "blast radius of changing a symbol — traces callers/callees to a configurable depth",
+	}
 }

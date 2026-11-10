@@ -289,3 +289,13 @@ func AddBlob(t testing.TB, db *sql.DB, content []byte) []byte {
 	t.Helper()
 	return storeBlob(func(q string, args ...any) { mustExec(t, db, q, args...) }, string(content))
 }
+
+// AddDanglingV6Ref adds a projection-v6 node_refs row for token whose nid
+// names no node and lies in no interned file: a row a reader must drop, as it
+// anchors to nothing (mache-a6c283). Files are numbered file_id<<24, as in
+// v6tree.go, so one past the highest file_id is a file nothing interned.
+func AddDanglingV6Ref(t testing.TB, db *sql.DB, token string) {
+	t.Helper()
+	mustExec(t, db, `INSERT INTO node_refs (token, nid)
+		VALUES (?, (((SELECT COALESCE(MAX(file_id), 0) FROM _source) + 1) << 24) | 5)`, token)
+}

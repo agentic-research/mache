@@ -64,6 +64,12 @@ type RefsMapper interface {
 	RefsMap() map[string][]string
 }
 
+// RefTokenCounter is len(RefsMap()) answered without building the map, for a
+// caller that wants only the count (get_overview's ref_tokens, mache-a6c283).
+type RefTokenCounter interface {
+	RefTokenCount() (int, error)
+}
+
 // RefsQuerier runs SQL directly against the backing database — the escape
 // hatch for questions the typed accessors above do not cover, including the
 // `_ast` and `_lsp*` tables ley-line-open produces.
