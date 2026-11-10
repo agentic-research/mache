@@ -1200,6 +1200,7 @@ func (c *SocketClient) Prioritize(files []string) error {
 //     content fold (mache-1c7038).
 //   - find_* never name a node by a bare nid; such a node fails the request,
 //     which mache surfaces as an error.
+//
 // Release binaries print a bare X.Y.Z and non-tag builds X.Y.Z-dev+<sha>, so
 // the exact pin now tells them apart.
 //
