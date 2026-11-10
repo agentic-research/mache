@@ -19,7 +19,7 @@ func TestCheckLeylineVersionCompat(t *testing.T) {
 	}{
 		{
 			name: "compatible — matching wire + client >= compat_min",
-			resp: map[string]any{"wire_format_major": float64(2), "compat_min": "0.4.1", "schema_version": "0.27.0"},
+			resp: map[string]any{"wire_format_major": float64(2), "compat_min": "0.4.1", "schema_version": "0.28.0"},
 		},
 		{
 			// leyline v0.26.0 moved the wire to major 2 (tree_root became
@@ -31,7 +31,7 @@ func TestCheckLeylineVersionCompat(t *testing.T) {
 		},
 		{
 			name:    "a newer wire major refuses (M3)",
-			resp:    map[string]any{"wire_format_major": float64(3), "compat_min": "0.4.1", "schema_version": "0.28.0"},
+			resp:    map[string]any{"wire_format_major": float64(3), "compat_min": "0.4.1", "schema_version": "0.29.0"},
 			wantErr: "wire-format is v3 but this mache build speaks v2",
 		},
 		{

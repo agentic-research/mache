@@ -29,6 +29,15 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **leyline v0.28.0 is the pinned backend** (`mache-d3ff53`). Nothing mache
+  reads changed: one tree parsed by v0.27.0 and v0.28.0 gives the same schema,
+  metadata, row counts and `node_hash` values, and the leyline-schema Go
+  module (moved with it) has no code changes. The daemon did change: only
+  the default instance binds `~/.mache/default.sock` (a daemon on any other
+  arena no longer touches it), and `--reset-arena` now rebuilds a control
+  block left by an older leyline when no other process holds it, which is
+  what kept the managed daemon from starting after an upgrade.
+
 - **The HTTP endpoint refuses a request body over 4 MiB** (`mache-a1c114`).
   mcp-go 1.5.0 bounds a Streamable HTTP POST at 4 MiB, where 1.4.0 read any
   size, and mache keeps that bound: `write_file` sends one node's content,

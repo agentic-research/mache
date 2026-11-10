@@ -1250,12 +1250,22 @@ func (c *SocketClient) Prioritize(files []string) error {
 // header, so identical rows give a different current_root than under v0.26.0;
 // that is not content drift.
 //
+// v0.27.0 -> v0.28.0 keeps projection-v12, merkle-ast-v3 and wire major 2; one
+// tree parses to the same sqlite_master, _meta, row counts and node_hash set
+// (mache-d3ff53). The daemon changed: only the default instance binds
+// ~/.mache/default.sock and there are no discovery symlinks; every daemon
+// holds a shared flock on <ctrl>.lock; --reset-arena reinitialises a control
+// block of an older version when no other process holds that lease, and
+// otherwise refuses with "--reset-arena refused: another process holds"
+// (ley-line-open #551). The query op's virtual-table allow-list does not
+// touch mache, which reads parse dbs directly.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.27.0"
+const leylineBinaryVersion = "v0.28.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
