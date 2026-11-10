@@ -52,7 +52,7 @@ func enrichedDB(t *testing.T, p fixturedb.Producer) string {
 
 func openEnriched(t *testing.T, p fixturedb.Producer) graph.Graph {
 	t.Helper()
-	g, _, cleanup, err := openDBGraph(enrichedDB(t, p), &api.Topology{Version: api.SchemaVersion}, graph.OpenSQLiteGraph, nil)
+	g, _, cleanup, err := openDBGraph(enrichedDB(t, p), &api.Topology{Version: api.SchemaVersion}, graph.LockPerStatement, nil)
 	require.NoError(t, err, "%v", p)
 	t.Cleanup(cleanup)
 	return g
@@ -191,7 +191,7 @@ func TestGetDiagnostics_ReportsWhatTheParseRecorded(t *testing.T) {
 	out, err := exec.Command(ll.Path, "parse", src, "-o", dbPath).CombinedOutput()
 	require.NoError(t, err, "%s", out)
 
-	g, _, cleanup, err := openDBGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, graph.OpenSQLiteGraph, nil)
+	g, _, cleanup, err := openDBGraph(dbPath, &api.Topology{Version: api.SchemaVersion}, graph.LockPerStatement, nil)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 	if _, present, err := lookupParseDiagnostics(graphLSPSource(g.(graph.RefsQuerier)), "", ""); err != nil || !present {

@@ -124,133 +124,93 @@ func (g *SQLiteGraph) EagerScan() error {
 	return nil
 }
 
+// ReadLock is how a SQLiteGraph's connections hold SQLite's shared file lock.
+type ReadLock int
+
+const (
+	// LockPerStatement takes and releases the lock around every statement,
+	// so another process may write the db between statements.
+	LockPerStatement ReadLock = iota
+	// LockForLife keeps each connection's lock from its first read until it
+	// closes (locking_mode=EXCLUSIVE), for a db nothing writes while the
+	// graph is open, such as the parse db mache holds under its parse-cache
+	// lock. A tool that resolves tens of thousands of paths spent two thirds
+	// of its CPU in per-statement fcntl lock calls (mache-86c666). A writer
+	// that appears anyway gets SQLITE_BUSY rather than changing the data
+	// under the graph. Journal recovery is unchanged, so a db left with a hot
+	// journal fails to open read-only instead of being read without it.
+	LockForLife
+)
+
+// dsn is the read-only DSN for dbPath under this lock.
+func (l ReadLock) dsn(dbPath string) string {
+	if l == LockForLife {
+		return dbPath + "?mode=ro&_pragma=locking_mode(EXCLUSIVE)"
+	}
+	return dbPath + "?mode=ro"
+}
+
 // OpenSQLiteGraph opens a connection to the source DB and compiles the schema.
-// The db is opened read-only, and every statement takes and releases SQLite's
-// shared file lock, so another process may write it between statements.
+// The db is opened read-only, LockPerStatement.
 func OpenSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
-	return openSQLiteGraph(dbPath, dbPath+"?mode=ro", schema, render)
+	return OpenSQLiteGraphWith(dbPath, schema, render, LockPerStatement)
 }
 
-// OpenOwnedSQLiteGraph opens a db that nothing writes while the graph is open,
-// such as the parse db mache holds under its parse-cache lock. Each connection
-// keeps SQLite's shared lock from its first read until it closes
-// (locking_mode=EXCLUSIVE) instead of taking it per statement: a tool that
-// resolves tens of thousands of paths spent two thirds of its CPU in fcntl
-// lock calls (mache-86c666). A writer that appears anyway gets SQLITE_BUSY
-// rather than changing the data under the graph. Journal recovery is
-// unchanged, so a db left with a hot journal fails to open read-only instead
-// of being read without it.
-func OpenOwnedSQLiteGraph(dbPath string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
-	return openSQLiteGraph(dbPath, dbPath+"?mode=ro&_pragma=locking_mode(EXCLUSIVE)", schema, render)
-}
-
-func openSQLiteGraph(dbPath, dsn string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
-	db, err := sql.Open("sqlite", dsn)
+// OpenSQLiteGraphWith is OpenSQLiteGraph holding the read lock as lock says.
+func OpenSQLiteGraphWith(dbPath string, schema *api.Topology, render TemplateRenderer, lock ReadLock) (*SQLiteGraph, error) {
+	db, err := sql.Open("sqlite", lock.dsn(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", dbPath, err) // coverage:ignore
 	} // coverage:ignore
 	db.SetMaxOpenConns(4)
-
-	// Check if "nodes" table exists (Fast Path)
-	var count int
-	useNodesTable := false
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&count); err == nil && count > 0 {
-		useNodesTable = true
-	}
 
 	tableName := schema.Table
 	if tableName == "" {
 		tableName = "results"
 	}
 
-	// When the main DB has a nodes table (built by mache build), node_refs
-	// is already present with (token, node_id) pairs. No sidecar needed.
-	if useNodesTable {
-		if err := RequireProps(db); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("open %s: %w", dbPath, err)
-		}
-		// One indexed single-row lookup: constant cost, independent of
-		// projection size, so it does not disturb Open's laziness guarantee
-		// (see TestOpen_CostDoesNotScaleWithProjectionSize).
-		warnUnknownProjection(db, dbPath)
-		levels := compileLevels(schema)
-		ntr := NewNodesTableReader(db, tableName, render, levels, 0o444, 0o555, 2048)
-		return &SQLiteGraph{
-			db:            db,
-			dbPath:        dbPath,
-			tableName:     tableName,
-			schema:        schema,
-			render:        render,
-			levels:        levels,
-			ntr:           ntr,
-			useNodesTable: true,
-		}, nil
+	// Check if "nodes" table exists (Fast Path). When the main DB has a nodes
+	// table (built by mache build), node_refs is already present with
+	// (token, node_id) pairs. No sidecar needed.
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&count); err == nil && count > 0 {
+		return openNodesTableGraph(db, dbPath, tableName, schema, render)
 	}
+	return openLegacyGraph(db, dbPath, tableName, schema, render)
+}
 
-	// Legacy path: sidecar DB for cross-reference index (token→bitmap, path→fileID).
-	// Kept separate so we never write to the source database.
-	refsPath := dbPath + ".refs.db"
-	// Wipe stale sidecar — refs are a derived index, rebuilt each run.
-	// The in-memory nextFileID counter starts at 0 on every open; if a
-	// previous .refs.db exists with IDs 0..N mapped to different paths,
-	// INSERT OR IGNORE silently drops the new mappings.
-	_ = os.Remove(refsPath) // best-effort cleanup
+// openNodesTableGraph serves a db that has a nodes table.
+func openNodesTableGraph(db *sql.DB, dbPath, tableName string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
+	if err := RequireProps(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open %s: %w", dbPath, err)
+	}
+	// One indexed single-row lookup: constant cost, independent of
+	// projection size, so it does not disturb Open's laziness guarantee
+	// (see TestOpen_CostDoesNotScaleWithProjectionSize).
+	warnUnknownProjection(db, dbPath)
+	levels := compileLevels(schema)
+	ntr := NewNodesTableReader(db, tableName, render, levels, 0o444, 0o555, 2048)
+	return &SQLiteGraph{
+		db:            db,
+		dbPath:        dbPath,
+		tableName:     tableName,
+		schema:        schema,
+		render:        render,
+		levels:        levels,
+		ntr:           ntr,
+		useNodesTable: true,
+	}, nil
+}
 
-	// Register the mache_refs vtab module globally before opening refsDB.
-	// sql.Open is lazy (no connection until first query), so registering
-	// before the first Exec ensures the new connection sees the module.
-	refsMod, err := refsvtab.Register()
+// openLegacyGraph serves a schema-projected db with no nodes table, indexing
+// its cross-references in a sidecar db.
+func openLegacyGraph(db *sql.DB, dbPath, tableName string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
+	refsDB, dbID, err := openRefsSidecar(dbPath)
 	if err != nil {
 		_ = db.Close()  // ignore error // coverage:ignore
 		return nil, err // coverage:ignore
 	} // coverage:ignore
-
-	refsDB, err := sql.Open("sqlite", refsPath)
-	if err != nil {
-		_ = db.Close()                                               // ignore error // coverage:ignore
-		return nil, fmt.Errorf("open refs db %s: %w", refsPath, err) // coverage:ignore
-	} // coverage:ignore
-	// Allow 2 connections: one for normal queries, one for vtab Filter callbacks.
-	// The mache_refs vtab's xFilter runs inside the SQLite engine on the outer
-	// connection; it needs a second connection to query node_refs/file_ids.
-	// WAL mode ensures concurrent readers don't conflict.
-	refsDB.SetMaxOpenConns(2)
-
-	if _, err := refsDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()                                             // ignore error // coverage:ignore
-		_ = refsDB.Close()                                         // ignore error // coverage:ignore
-		return nil, fmt.Errorf("set WAL mode on refs db: %w", err) // coverage:ignore
-	} // coverage:ignore
-
-	_, err = refsDB.Exec(`
-		CREATE TABLE IF NOT EXISTS node_refs (
-			token TEXT PRIMARY KEY,
-			bitmap BLOB
-		);
-		CREATE TABLE IF NOT EXISTS file_ids (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			path TEXT UNIQUE NOT NULL
-		);
-	`)
-	if err != nil {
-		_ = db.Close()                                         // ignore error // coverage:ignore
-		_ = refsDB.Close()                                     // ignore error // coverage:ignore
-		return nil, fmt.Errorf("create index tables: %w", err) // coverage:ignore
-	} // coverage:ignore
-
-	// Point the vtab module at this refsDB and create the virtual table.
-	dbID := fmt.Sprintf("sqlite_%d", time.Now().UnixNano())
-	refsMod.RegisterDB(dbID, refsDB)
-
-	query := fmt.Sprintf("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs(%s)", dbID)
-	if _, err := refsDB.Exec(query); err != nil {
-		refsMod.UnregisterDB(dbID)                                // coverage:ignore
-		_ = db.Close()                                            // ignore error // coverage:ignore
-		_ = refsDB.Close()                                        // ignore error // coverage:ignore
-		return nil, fmt.Errorf("create mache_refs vtab: %w", err) // coverage:ignore
-	} // coverage:ignore
-
 	return &SQLiteGraph{
 		db:            db,
 		dbPath:        dbPath,
@@ -265,6 +225,69 @@ func openSQLiteGraph(dbPath, dsn string, schema *api.Topology, render TemplateRe
 		cache:         NewContentCache(2048),
 		useNodesTable: false,
 	}, nil
+}
+
+// openRefsSidecar creates the sidecar DB for the cross-reference index
+// (token→bitmap, path→fileID), kept separate so we never write to the source
+// database, and registers its mache_refs vtab under the returned id.
+func openRefsSidecar(dbPath string) (*sql.DB, string, error) {
+	refsPath := dbPath + ".refs.db"
+	// Wipe stale sidecar — refs are a derived index, rebuilt each run.
+	// The in-memory nextFileID counter starts at 0 on every open; if a
+	// previous .refs.db exists with IDs 0..N mapped to different paths,
+	// INSERT OR IGNORE silently drops the new mappings.
+	_ = os.Remove(refsPath) // best-effort cleanup
+
+	// Register the mache_refs vtab module globally before opening refsDB.
+	// sql.Open is lazy (no connection until first query), so registering
+	// before the first Exec ensures the new connection sees the module.
+	refsMod, err := refsvtab.Register()
+	if err != nil {
+		return nil, "", err // coverage:ignore
+	} // coverage:ignore
+
+	refsDB, err := sql.Open("sqlite", refsPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("open refs db %s: %w", refsPath, err) // coverage:ignore
+	} // coverage:ignore
+	// Allow 2 connections: one for normal queries, one for vtab Filter callbacks.
+	// The mache_refs vtab's xFilter runs inside the SQLite engine on the outer
+	// connection; it needs a second connection to query node_refs/file_ids.
+	// WAL mode ensures concurrent readers don't conflict.
+	refsDB.SetMaxOpenConns(2)
+
+	if _, err := refsDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		_ = refsDB.Close()                                             // ignore error // coverage:ignore
+		return nil, "", fmt.Errorf("set WAL mode on refs db: %w", err) // coverage:ignore
+	} // coverage:ignore
+
+	_, err = refsDB.Exec(`
+		CREATE TABLE IF NOT EXISTS node_refs (
+			token TEXT PRIMARY KEY,
+			bitmap BLOB
+		);
+		CREATE TABLE IF NOT EXISTS file_ids (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			path TEXT UNIQUE NOT NULL
+		);
+	`)
+	if err != nil {
+		_ = refsDB.Close()                                         // ignore error // coverage:ignore
+		return nil, "", fmt.Errorf("create index tables: %w", err) // coverage:ignore
+	} // coverage:ignore
+
+	// Point the vtab module at this refsDB and create the virtual table.
+	dbID := fmt.Sprintf("sqlite_%d", time.Now().UnixNano())
+	refsMod.RegisterDB(dbID, refsDB)
+
+	query := fmt.Sprintf("CREATE VIRTUAL TABLE IF NOT EXISTS mache_refs USING mache_refs(%s)", dbID)
+	if _, err := refsDB.Exec(query); err != nil {
+		refsMod.UnregisterDB(dbID)                                    // coverage:ignore
+		_ = refsDB.Close()                                            // ignore error // coverage:ignore
+		return nil, "", fmt.Errorf("create mache_refs vtab: %w", err) // coverage:ignore
+	} // coverage:ignore
+
+	return refsDB, dbID, nil
 }
 
 // ---------------------------------------------------------------------------

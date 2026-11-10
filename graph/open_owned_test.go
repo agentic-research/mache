@@ -21,7 +21,7 @@ func TestOpenOwned_HoldsTheReadLockForTheGraphsLife(t *testing.T) {
 	b.Def("Only", "pkg/file.go/function_declaration_0", "function")
 	path, _ := b.Build()
 
-	g, err := OpenOwnedSQLiteGraph(path, &api.Topology{}, machetmpl.Render)
+	g, err := OpenSQLiteGraphWith(path, &api.Topology{}, machetmpl.Render, LockForLife)
 	require.NoError(t, err)
 	require.NotEmpty(t, g.LookupDef("Only"), "the owned graph must still answer")
 
