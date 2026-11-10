@@ -41,18 +41,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentic-research/mache/internal/mcpharness"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // schema is passed through to `mache serve --schema` when set, so a plan can
 // exercise a schema projection as well as the raw one.
 var schema string
-
-// call is one entry in a plan.
-type call struct {
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
-}
 
 // answer is what one binary returned for one call, normalized.
 type answer struct {
@@ -111,7 +106,7 @@ func main() {
 // compareReleases executes the plan on both binaries and writes the report. The exit code
 // is 0 when every answer matches, 1 when any differs, and 2 when the plan does
 // not cover the head binary's registry.
-func compareReleases(base, head, root string, plan []call, out string, timeout time.Duration) (int, error) {
+func compareReleases(base, head, root string, plan []mcpharness.Call, out string, timeout time.Duration) (int, error) {
 	headTools, err := listTools(head, root, timeout)
 	if err != nil {
 		return 0, fmt.Errorf("head: %w", err)
@@ -162,15 +157,15 @@ func listTools(bin, root string, timeout time.Duration) (tools []mcp.Tool, err e
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, s.close()) }()
-	res, err := s.c.ListTools(ctx, mcp.ListToolsRequest{})
+	tools, err = s.c.Tools(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("tools/list: %w", err)
+		return nil, err
 	}
-	slices.SortFunc(res.Tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
-	return res.Tools, nil
+	slices.SortFunc(tools, func(a, b mcp.Tool) int { return strings.Compare(a.Name, b.Name) })
+	return tools, nil
 }
 
-func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers []answer, err error) {
+func answerPlan(bin, root string, plan []mcpharness.Call, timeout time.Duration) (answers []answer, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	s, err := openSession(ctx, bin, root)
@@ -178,12 +173,12 @@ func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers [
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, s.close()) }()
-	listed, err := s.c.ListTools(ctx, mcp.ListToolsRequest{})
+	listed, err := s.c.Tools(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("tools/list: %w", err)
+		return nil, err
 	}
 	has := map[string]bool{}
-	for _, t := range listed.Tools {
+	for _, t := range listed {
 		has[t.Name] = true
 	}
 
@@ -193,29 +188,16 @@ func answerPlan(bin, root string, plan []call, timeout time.Duration) (answers [
 			out[i] = answer{Missing: true}
 			continue
 		}
-		req := mcp.CallToolRequest{}
-		req.Params.Name = c.Tool
-		req.Params.Arguments = c.Args
-		res, err := s.c.CallTool(ctx, req)
+		text, isError, err := s.c.Call(ctx, c.Tool, c.Args)
 		if err != nil {
 			// A transport-level failure is an answer too: the comparison is
 			// about what a client sees.
 			out[i] = answer{IsError: true, Body: normalizeText(err.Error(), s.root, s.home)}
 			continue
 		}
-		out[i] = answer{IsError: res.IsError, Body: normalizeText(textOf(res), s.root, s.home)}
+		out[i] = answer{IsError: isError, Body: normalizeText(text, s.root, s.home)}
 	}
 	return out, nil
-}
-
-func textOf(res *mcp.CallToolResult) string {
-	var parts []string
-	for _, c := range res.Content {
-		if t, ok := mcp.AsTextContent(c); ok {
-			parts = append(parts, t.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 // normalizeText replaces the run-specific roots, then decodes JSON when the
@@ -237,7 +219,7 @@ func normalizeText(s, root, home string) any {
 	return s
 }
 
-func uncoveredTools(tools []mcp.Tool, plan []call) []string {
+func uncoveredTools(tools []mcp.Tool, plan []mcpharness.Call) []string {
 	called := map[string]bool{}
 	for _, c := range plan {
 		called[c.Tool] = true
@@ -251,17 +233,14 @@ func uncoveredTools(tools []mcp.Tool, plan []call) []string {
 	return missing
 }
 
-func readPlan(path string) ([]call, error) {
+func readPlan(path string) ([]mcpharness.Call, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var plan []call
-	if err := json.Unmarshal(b, &plan); err != nil {
+	plan, err := mcpharness.ParsePlan(b)
+	if err != nil {
 		return nil, fmt.Errorf("plan %s: %w", path, err)
-	}
-	if len(plan) == 0 {
-		return nil, errors.New("plan is empty")
 	}
 	return plan, nil
 }
@@ -269,7 +248,7 @@ func readPlan(path string) ([]call, error) {
 // answerSide runs the plan runsPerSide times with one binary and returns its
 // answers with run-to-run noise masked, plus notes for any tolerated leaks
 // (see classifyRunError).
-func answerSide(name, bin, root string, plan []call, timeout time.Duration) ([]answer, []string, error) {
+func answerSide(name, bin, root string, plan []mcpharness.Call, timeout time.Duration) ([]answer, []string, error) {
 	var masked []answer
 	var notes []string
 	for run := range runsPerSide {

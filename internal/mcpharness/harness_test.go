@@ -94,3 +94,39 @@ func TestIsolatedHome_MovesMacheHomeAndKeepsTheBinaryCache(t *testing.T) {
 	assert.Equal(t, home, os.Getenv("MACHE_HOME"))
 	assert.DirExists(t, home)
 }
+
+// The core API returns errors for a tool to report, where the test API fails
+// the test.
+func TestConnect_ReturnsErrorsAndConnects(t *testing.T) {
+	ctx := context.Background()
+
+	c, err := ConnectInProcess(ctx, toyServer(), Behavior{})
+	require.NoError(t, err)
+	tools, err := c.Tools(ctx)
+	require.NoError(t, err)
+	assert.Len(t, tools, 2)
+	text, isError, err := c.Call(ctx, "echo", map[string]any{"say": "core"})
+	require.NoError(t, err)
+	assert.False(t, isError)
+	assert.Equal(t, "core", text)
+	require.NoError(t, c.Close())
+
+	ts := httptest.NewServer(server.NewStreamableHTTPServer(toyServer()))
+	url := ts.URL + "/mcp"
+	ts.Close()
+	_, err = ConnectHTTP(ctx, url, Behavior{})
+	assert.Error(t, err, "a server that is not there")
+
+	_, err = ConnectStdio(ctx, "/nonexistent/mcp-server", nil, nil, Behavior{})
+	assert.Error(t, err, "a binary that is not there")
+}
+
+func TestParsePlan(t *testing.T) {
+	plan, err := ParsePlan([]byte(`[{"tool":"echo","args":{"say":"x"}},{"tool":"roots"}]`))
+	require.NoError(t, err)
+	assert.Equal(t, []Call{{Tool: "echo", Args: map[string]any{"say": "x"}}, {Tool: "roots"}}, plan)
+	_, err = ParsePlan([]byte(`[]`))
+	assert.ErrorContains(t, err, "plan is empty")
+	_, err = ParsePlan([]byte(`{`))
+	assert.Error(t, err)
+}

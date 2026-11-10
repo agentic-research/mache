@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"maps"
+	"slices"
 	"sort"
 )
 
@@ -334,20 +336,23 @@ func computeModularity(adj []map[int]float64, community []int, degree []float64,
 	if m2 == 0 {
 		return 0
 	}
+	// Every sum runs in sorted key order. Float addition is not associative,
+	// so summing in Go's randomized map order gave the same partition a
+	// different modularity in the last digits run to run (mache-a76e43).
 	inW := make(map[int]float64, n)     // internal edge weight per community
 	commDeg := make(map[int]float64, n) // summed degree per community
 	for i := range n {
 		c := community[i]
 		commDeg[c] += degree[i]
-		for j, w := range adj[i] {
+		for _, j := range slices.Sorted(maps.Keys(adj[i])) {
 			if community[j] == c {
-				inW[c] += w
+				inW[c] += adj[i][j]
 			}
 		}
 	}
 	q := 0.0
-	for c, cd := range commDeg {
-		frac := cd / m2
+	for _, c := range slices.Sorted(maps.Keys(commDeg)) {
+		frac := commDeg[c] / m2
 		q += inW[c]/m2 - frac*frac // inW[c] is 0 for edgeless communities
 	}
 	return q

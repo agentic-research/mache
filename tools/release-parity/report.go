@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/agentic-research/mache/internal/mcpharness"
 	"github.com/google/go-cmp/cmp"
 )
 
-func writeAnswers(out string, plan []call, answers map[string][]answer) error {
+func writeAnswers(out string, plan []mcpharness.Call, answers map[string][]answer) error {
 	for side, as := range answers {
 		dir := filepath.Join(out, side)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -19,8 +20,8 @@ func writeAnswers(out string, plan []call, answers map[string][]answer) error {
 		}
 		for i, a := range as {
 			b, err := json.MarshalIndent(struct {
-				Call   call   `json:"call"`
-				Answer answer `json:"answer"`
+				Call   mcpharness.Call `json:"call"`
+				Answer answer          `json:"answer"`
 			}{plan[i], a}, "", "  ")
 			if err != nil {
 				return err
@@ -35,7 +36,7 @@ func writeAnswers(out string, plan []call, answers map[string][]answer) error {
 }
 
 // writeReport writes report.md and returns how many calls differ.
-func writeReport(out, base, head, root string, plan []call, answers map[string][]answer, notes []string) (int, error) {
+func writeReport(out, base, head, root string, plan []mcpharness.Call, answers map[string][]answer, notes []string) (int, error) {
 	f, err := os.Create(filepath.Join(out, "report.md"))
 	if err != nil {
 		return 0, err
@@ -44,7 +45,7 @@ func writeReport(out, base, head, root string, plan []call, answers map[string][
 	return writeDiffReport(f, base, head, root, plan, answers, notes)
 }
 
-func writeDiffReport(w io.Writer, base, head, root string, plan []call, answers map[string][]answer, notes []string) (int, error) {
+func writeDiffReport(w io.Writer, base, head, root string, plan []mcpharness.Call, answers map[string][]answer, notes []string) (int, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Release parity\n\n- base: `%s`\n- head: `%s`\n- corpus: `%s`\n- schema: `%s`\n- calls: %d\n\n", base, head, root, schemaLabel(), len(plan))
 	if len(notes) > 0 {

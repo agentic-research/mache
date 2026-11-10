@@ -29,6 +29,12 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **`get_communities` reports the same modularity every time** (`mache-a76e43`).
+  The modularity sum ran in Go's randomized map order, so the same
+  communities came back with a modularity differing in the last digits from
+  run to run. Release parity of a binary against itself caught it. The sum
+  now runs in a fixed order.
+
 - **`MACHE_HOME` relocates mache's home, and tests and `task ci` leave
   `~/.mache` alone** (`mache-6d5e62`). mache resolved `~/.mache` separately at
   about ten sites, and only the project registry refused a test's write to
