@@ -15,24 +15,16 @@ import (
 // with only sentinels, and a row naming no node, while keeping an occurrence
 // in an injected language. RefsMap is the oracle, on every producer.
 func TestRefTokenCount_IsTheLengthOfRefsMap(t *testing.T) {
-	for _, tc := range []struct {
-		p        fixturedb.Producer
-		dangling string
-	}{
-		// node_id is NOT NULL text on v4, so every row names its node.
-		{fixturedb.Standalone, ""},
-		{fixturedb.Leyline, ""},
-		{fixturedb.LeylineV6, `INSERT INTO node_refs (token, nid) VALUES ('Dangling', (999 << 24) + 5)`},
-	} {
-		t.Run(tc.p.String(), func(t *testing.T) {
-			b := fixturedb.New(t, tc.p).
+	for _, p := range []fixturedb.Producer{fixturedb.Standalone, fixturedb.Leyline, fixturedb.LeylineV6} {
+		t.Run(p.String(), func(t *testing.T) {
+			b := fixturedb.New(t, p).
 				Source("pkg/a.go", "go", "").
 				Source("pkg/b.go", "go", "").
 				Ref("Handler", "pkg/a.go/function_declaration", "", "").
 				Ref("Handler", "pkg/b.go/function_declaration", "", "").
 				Ref("Marshal", "pkg/b.go/function_declaration", "", "").
 				InjectedRef("Embedded", "pkg/a.go/function_declaration", "code_span_0")
-			if tc.p != fixturedb.LeylineV6 {
+			if p != fixturedb.LeylineV6 {
 				// Sentinels are written only by mache's engine, into path-keyed
 				// dbs; LLO, the only producer of v6, writes none.
 				b.Ref("Handler", FileLevelSentinelPrefix+"/abs/pkg/cmd.go", "", "").
@@ -40,9 +32,9 @@ func TestRefTokenCount_IsTheLengthOfRefsMap(t *testing.T) {
 			}
 			path, f := b.
 				Build()
-			if tc.dangling != "" {
-				_, err := f.DB().Exec(tc.dangling)
-				require.NoError(t, err)
+			if p == fixturedb.LeylineV6 {
+				// node_id is NOT NULL text on v4, so only v6 can dangle.
+				fixturedb.AddDanglingV6Ref(t, f.DB(), "Dangling")
 			}
 
 			g, err := OpenSQLiteGraph(path, &api.Topology{}, nil)
