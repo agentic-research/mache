@@ -374,66 +374,10 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		return errGraph.(*lazyGraph)
 	}
 
-	// --mount mode serves the composite of its mounts to every session, so
-	// a client's workspace root is neither needed nor used: resolving one
-	// either failed or became a positional source that --mount refuses
-	// (mache-e0605e).
-	if len(serveMounts) > 0 {
-		r.registerSession(sid, mountsRoot())
-		return r.getOrCreateGraph(mountsRoot())
-	}
-
-	// ?project= token from HTTP context — checked BEFORE ListRoots; see
-	// resolveProjectSession's doc comment (mache-6ec106).
-	if lg, ok := r.resolveProjectSession(ctx, sid); ok {
+	// A server configuration that fixes what every session sees (--mount, a
+	// ?project= token, a hosted or CLI repo) wins over the client's roots.
+	if lg, ok := r.resolveFixedSession(ctx, sid); ok {
 		return lg
-	}
-
-	// Hosted mode: ?repo= URL from HTTP context.
-	// This runs BEFORE CLI repo mode check because hosted mode has per-repo
-	// clones, not a single global repoCloneDir.
-	if repoURL, ok := repoFromContext(ctx); ok {
-		baseDir, err := r.getOrCreateRepoClone(repoURL)
-		if err != nil {
-			log.Printf("clone %s for session %s: %v", repoURL, sid, err)
-			// Return an error-producing graph — don't silently serve wrong repo.
-			errLg := newErrorLazyGraph(fmt.Errorf("clone %s: %w", repoURL, err))
-			return errLg
-		}
-		r.sessionRepos.Store(sid, repoURL)
-		// Track baseDir per session for correct worktree cleanup.
-		r.sessionBaseDirs.Store(sid, baseDir)
-
-		// Create worktree with per-session serialization.
-		wtDir, err := r.ensureHostedWorktree(sid, baseDir)
-		if err != nil {
-			log.Printf("worktree for session %s: %v (using base clone)", sid, err)
-			r.registerSession(sid, baseDir)
-			return r.getOrCreateGraph(baseDir)
-		}
-		r.registerSession(sid, wtDir)
-		log.Printf("hosted session %s → %s (repo: %s)", sid, wtDir, repoURL)
-
-		lg := r.getOrCreateGraph(wtDir)
-		if preset, ok := schemaFromContext(ctx); ok {
-			lg.schemaPreset = preset
-		}
-		return lg
-	}
-
-	// Repo HTTP mode: each session gets its own worktree.
-	// Short-circuit BEFORE ListRoots — in repo mode, client workspace roots
-	// are irrelevant; we always serve from the cloned repo.
-	if r.repoCloneDir != "" {
-		wtDir, err := r.ensureRepoWorktree(sid)
-		if err != nil {
-			log.Printf("create worktree for session %s: %v (using base clone)", sid, err)
-			r.registerSession(sid, r.repoCloneDir)
-			return r.getOrCreateGraph(r.repoCloneDir)
-		}
-		r.registerSession(sid, wtDir)
-		log.Printf("session %s → worktree %s", sid, wtDir)
-		return r.getOrCreateGraph(wtDir)
 	}
 
 	rootPath, rootsErr := discoverSessionRoot(ctx, session)
@@ -447,6 +391,79 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 	// Fall back only to an explicit --path. In shared-daemon mode, an empty
 	// base path must not inherit the supervisor's CWD (often filesystem root).
 	return r.fallbackGraphForSession(sid, rootsErr)
+}
+
+// resolveFixedSession maps a session whose graph the server's configuration
+// fixes, before any client roots are asked for. ok is false when the session
+// should resolve from the client's roots instead.
+func (r *graphRegistry) resolveFixedSession(ctx context.Context, sid string) (*lazyGraph, bool) {
+	// --mount mode serves the composite of its mounts to every session, so
+	// a client's workspace root is neither needed nor used: resolving one
+	// either failed or became a positional source that --mount refuses
+	// (mache-e0605e).
+	if len(serveMounts) > 0 {
+		r.registerSession(sid, mountsRoot())
+		return r.getOrCreateGraph(mountsRoot()), true
+	}
+	// ?project= token from HTTP context — checked BEFORE ListRoots; see
+	// resolveProjectSession's doc comment (mache-6ec106).
+	if lg, ok := r.resolveProjectSession(ctx, sid); ok {
+		return lg, true
+	}
+	// Hosted mode: ?repo= URL from HTTP context. This runs BEFORE CLI repo
+	// mode because hosted mode has per-repo clones, not one repoCloneDir.
+	if repoURL, ok := repoFromContext(ctx); ok {
+		return r.resolveHostedSession(ctx, sid, repoURL), true
+	}
+	// Repo HTTP mode: each session gets its own worktree; client workspace
+	// roots are irrelevant, we always serve from the cloned repo.
+	if r.repoCloneDir != "" {
+		return r.resolveRepoSession(sid), true
+	}
+	return nil, false
+}
+
+// resolveHostedSession serves a session from a worktree of the ?repo= clone.
+func (r *graphRegistry) resolveHostedSession(ctx context.Context, sid, repoURL string) *lazyGraph {
+	baseDir, err := r.getOrCreateRepoClone(repoURL)
+	if err != nil {
+		log.Printf("clone %s for session %s: %v", repoURL, sid, err)
+		// Return an error-producing graph — don't silently serve wrong repo.
+		return newErrorLazyGraph(fmt.Errorf("clone %s: %w", repoURL, err))
+	}
+	r.sessionRepos.Store(sid, repoURL)
+	// Track baseDir per session for correct worktree cleanup.
+	r.sessionBaseDirs.Store(sid, baseDir)
+
+	// Create worktree with per-session serialization.
+	wtDir, err := r.ensureHostedWorktree(sid, baseDir)
+	if err != nil {
+		log.Printf("worktree for session %s: %v (using base clone)", sid, err)
+		r.registerSession(sid, baseDir)
+		return r.getOrCreateGraph(baseDir)
+	}
+	r.registerSession(sid, wtDir)
+	log.Printf("hosted session %s → %s (repo: %s)", sid, wtDir, repoURL)
+
+	lg := r.getOrCreateGraph(wtDir)
+	if preset, ok := schemaFromContext(ctx); ok {
+		lg.schemaPreset = preset
+	}
+	return lg
+}
+
+// resolveRepoSession serves a session from its own worktree of the CLI
+// --repo clone.
+func (r *graphRegistry) resolveRepoSession(sid string) *lazyGraph {
+	wtDir, err := r.ensureRepoWorktree(sid)
+	if err != nil {
+		log.Printf("create worktree for session %s: %v (using base clone)", sid, err)
+		r.registerSession(sid, r.repoCloneDir)
+		return r.getOrCreateGraph(r.repoCloneDir)
+	}
+	r.registerSession(sid, wtDir)
+	log.Printf("session %s → worktree %s", sid, wtDir)
+	return r.getOrCreateGraph(wtDir)
 }
 
 // resolveProjectSession resolves a session from a ?project= token, if the
@@ -814,124 +831,127 @@ func (lg *lazyGraph) resolvedBasePath() string {
 
 func (lg *lazyGraph) init() {
 	lg.once.Do(func() {
-		var dataSource string
-		var schema *api.Topology
-		base := lg.resolvedBasePath()
-
-		// --control mode: skip all source detection, read from arena.
-		if serveControl != "" {
-			g, si, cleanup, err := buildServeGraph("", &api.Topology{Version: api.SchemaVersion})
-			if err != nil {
-				lg.err = err
-				return
-			}
-			lg.inner = g
-			lg.sheafInv = si                                            // expected nil in control mode; stored for uniformity // coverage:ignore — control-mode wiring; reduction tracked in mache-89b5dd.
-			lg.cleanup = lg.wrapCleanupWithSheafUnregister(cleanup, si) // coverage:ignore — control-mode wiring; reduction tracked in mache-89b5dd.
-			lg.schema = &api.Topology{Version: api.SchemaVersion}
-			lg.registerSheafInvalidator() // coverage:ignore — control-mode wiring; reduction tracked in mache-89b5dd.
-			log.Println("graph ready (arena control mode)")
-			return
-		}
-
-		// --mount mode: the composite of the mounts, each with its own
-		// schema; there is no positional source.
-		if len(serveMounts) > 0 {
+		empty := &api.Topology{Version: api.SchemaVersion}
+		switch {
+		case serveControl != "":
+			// --control mode: skip all source detection, read from arena.
+			g, si, cleanup, err := buildServeGraph("", empty)
+			lg.adopt(g, si, cleanup, err, empty, "arena control mode")
+		case len(serveMounts) > 0:
+			// --mount mode: the composite of the mounts, each with its own
+			// schema; there is no positional source (mache-e0605e).
 			g, si, cleanup, err := buildMaybeMultiGraph("", nil)
+			lg.adopt(g, si, cleanup, err, empty, "--mount composite")
+		default:
+			dataSource, schema, err := lg.resolveSource()
 			if err != nil {
 				lg.err = err
 				return
 			}
-			lg.inner = g
-			lg.sheafInv = si
-			lg.cleanup = lg.wrapCleanupWithSheafUnregister(cleanup, si)
-			lg.schema = &api.Topology{Version: api.SchemaVersion}
-			log.Println("graph ready (--mount composite)")
-			return
+			g, si, cleanup, err := buildMaybeMultiGraph(dataSource, schema)
+			lg.adopt(g, si, cleanup, err, schema, "")
 		}
+	})
+}
 
-		if len(lg.args) == 0 {
-			// If a schema preset was provided (e.g., from ?schema= query param),
-			// use it directly — skip config loading and auto-detection.
-			if lg.schemaPreset != "" {
-				resolved, err := projcfg.ResolveSchema(lg.schemaPreset, base)
-				if err != nil {
-					lg.err = fmt.Errorf("resolve schema preset %q: %w", lg.schemaPreset, err)
-					return
-				}
-				schema = resolved
-				dataSource = base
-				log.Printf("using schema preset %q (from query param)", lg.schemaPreset)
-			} else if cfg, err := projcfg.LoadProjectConfig(base); err != nil {
-				if !os.IsNotExist(err) {
-					lg.err = err
-					return
-				}
-				log.Printf("No %s found; auto-detecting project languages...", projcfg.ConfigFileName)
-				dataSource = base
-				schema, err = schemainfer.InferDirSchema(base)
-				if err != nil {
-					lg.err = fmt.Errorf("auto-detect schema: %w", err)
-					return
-				}
-			} else {
-				if len(cfg.Sources) > 1 {
-					log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", projcfg.ConfigFileName, len(cfg.Sources))
-				}
-				src := cfg.Sources[0]
-				dataSource, err = projcfg.ResolveDataSource(src.Path, base)
-				if err != nil {
-					lg.err = fmt.Errorf("resolve data source: %w", err)
-					return
-				}
-				schema, err = projcfg.ResolveSchema(src.Schema, base)
-				if err != nil {
-					lg.err = fmt.Errorf("resolve schema: %w", err)
-					return
-				}
-				if schema == nil {
-					schema = &api.Topology{Version: api.SchemaVersion}
-				}
-				log.Printf("Loaded config from %s (source: %s)", projcfg.ConfigFileName, dataSource)
+// adopt installs a built graph, or records why it could not be built.
+func (lg *lazyGraph) adopt(g graph.Graph, si *graph.SheafInvalidator, cleanup func(), err error, schema *api.Topology, mode string) {
+	if err != nil {
+		lg.err = err
+		return
+	}
+	lg.inner = g
+	lg.sheafInv = si
+	lg.schema = schema
+	lg.cleanup = lg.wrapCleanupWithSheafUnregister(cleanup, si)
+	lg.registerSheafInvalidator()
+	if mode == "" {
+		log.Println("graph ready")
+		return
+	}
+	log.Printf("graph ready (%s)", mode)
+}
+
+// resolveSource decides what a session's graph is built from: the server's
+// positional argument when there is one, else the session's base path.
+func (lg *lazyGraph) resolveSource() (dataSource string, schema *api.Topology, err error) {
+	if len(lg.args) > 0 {
+		return lg.resolveArgSource()
+	}
+	return lg.resolveBaseSource()
+}
+
+// resolveBaseSource serves the session's base path: with the ?schema= preset,
+// else its project config's first source, else an inferred schema.
+func (lg *lazyGraph) resolveBaseSource() (dataSource string, schema *api.Topology, err error) {
+	base := lg.resolvedBasePath()
+	// If a schema preset was provided (e.g., from ?schema= query param),
+	// use it directly — skip config loading and auto-detection.
+	if lg.schemaPreset != "" {
+		resolved, err := projcfg.ResolveSchema(lg.schemaPreset, base)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolve schema preset %q: %w", lg.schemaPreset, err)
+		}
+		schema = resolved
+		dataSource = base
+		log.Printf("using schema preset %q (from query param)", lg.schemaPreset)
+	} else if cfg, err := projcfg.LoadProjectConfig(base); err != nil {
+		if !os.IsNotExist(err) {
+			return "", nil, err
+		}
+		log.Printf("No %s found; auto-detecting project languages...", projcfg.ConfigFileName)
+		dataSource = base
+		schema, err = schemainfer.InferDirSchema(base)
+		if err != nil {
+			return "", nil, fmt.Errorf("auto-detect schema: %w", err)
+		}
+	} else {
+		if len(cfg.Sources) > 1 {
+			log.Printf("Warning: %s has %d sources but serve only uses the first; additional sources ignored", projcfg.ConfigFileName, len(cfg.Sources))
+		}
+		src := cfg.Sources[0]
+		dataSource, err = projcfg.ResolveDataSource(src.Path, base)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolve data source: %w", err)
+		}
+		schema, err = projcfg.ResolveSchema(src.Schema, base)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolve schema: %w", err)
+		}
+		if schema == nil {
+			schema = &api.Topology{Version: api.SchemaVersion}
+		}
+		log.Printf("Loaded config from %s (source: %s)", projcfg.ConfigFileName, dataSource)
+	}
+	return dataSource, schema, nil
+}
+
+// resolveArgSource serves the server's positional argument, with --schema,
+// else an inferred schema for a directory, else an empty one.
+func (lg *lazyGraph) resolveArgSource() (dataSource string, schema *api.Topology, err error) {
+	base := lg.resolvedBasePath()
+	dataSource = lg.args[0]
+
+	if serveSchema != "" {
+		resolved, err := projcfg.ResolveSchema(serveSchema, base)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolve schema: %w", err)
+		}
+		schema = resolved
+	} else if filepath.Ext(dataSource) != ".db" {
+		info, err := os.Stat(dataSource)
+		if err == nil && info.IsDir() {
+			schema, err = schemainfer.InferDirSchema(dataSource)
+			if err != nil {
+				return "", nil, fmt.Errorf("auto-detect schema: %w", err)
 			}
 		} else {
-			dataSource = lg.args[0]
-
-			if serveSchema != "" {
-				resolved, err := projcfg.ResolveSchema(serveSchema, base)
-				if err != nil {
-					lg.err = fmt.Errorf("resolve schema: %w", err)
-					return
-				}
-				schema = resolved
-			} else if filepath.Ext(dataSource) != ".db" {
-				info, err := os.Stat(dataSource)
-				if err == nil && info.IsDir() {
-					schema, err = schemainfer.InferDirSchema(dataSource)
-					if err != nil {
-						lg.err = fmt.Errorf("auto-detect schema: %w", err)
-						return
-					}
-				} else {
-					schema = &api.Topology{Version: api.SchemaVersion}
-				}
-			} else {
-				schema = &api.Topology{Version: api.SchemaVersion}
-			}
+			schema = &api.Topology{Version: api.SchemaVersion}
 		}
-
-		g, si, cleanup, err := buildMaybeMultiGraph(dataSource, schema)
-		if err != nil {
-			lg.err = err
-			return
-		}
-		lg.inner = g
-		lg.sheafInv = si
-		lg.schema = schema
-		lg.cleanup = lg.wrapCleanupWithSheafUnregister(cleanup, si)
-		lg.registerSheafInvalidator()
-		log.Println("graph ready")
-	})
+	} else {
+		schema = &api.Topology{Version: api.SchemaVersion}
+	}
+	return dataSource, schema, nil
 }
 
 // registerSheafInvalidator hooks lg.sheafInv into the registry's
