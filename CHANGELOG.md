@@ -29,6 +29,15 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **`mache mount --control` holds leyline's control-block lease**
+  (`mache-6b6a90`). From leyline v0.28.0, `--reset-arena` replaces a control
+  block's file, refusing while anyone holds the shared lease on
+  `<control>.lock`. Every leyline daemon holds it, and now mache does too
+  while it maps a control block, so a reset can no longer swap the file out
+  from under a running mount, which then never saw another publish. The
+  version-mismatch error now points at `--reset-arena` instead of asking
+  you to delete the file.
+
 - **A leyline daemon that fails to start says why** (`mache-e70109`). mache
   used to discard the managed daemon's stderr, so a startup failure read
   only "exit status 1". After an upgrade, a control block left by an older
