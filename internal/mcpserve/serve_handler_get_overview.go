@@ -105,15 +105,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 		// This teaches the LLM which tool to use for each task without bloating the
 		// system prompt — guidance is only in context after get_overview is called.
 		if ov.RefTokens > 0 {
-			ov.Usage = map[string]string{
-				"find_callers":    "who calls a symbol — use instead of grep for 'who uses X?'",
-				"find_definition": "where a symbol is declared — use for 'where is X defined?'",
-				"find_callees":    "what a function invokes — note: generic names (String, New, Error) may have false positives",
-				"search":          "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
-				"list_directory":  "browse the tree structure — use instead of ls/find",
-				"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
-				"get_impact":      "blast radius of changing a symbol — traces callers/callees to a configurable depth",
-			}
+			ov.Usage = toolRoutingHints()
 		}
 
 		data, _ := json.MarshalIndent(ov, "", "  ")
@@ -170,4 +162,18 @@ func refTokenCount(g graph.Graph) int {
 		return len(rp.RefsMap())
 	}
 	return 0
+}
+
+// toolRoutingHints tells the agent which tool answers which question, once a
+// code graph with cross-references is indexed.
+func toolRoutingHints() map[string]string {
+	return map[string]string{
+		"find_callers":    "who calls a symbol — use instead of grep for 'who uses X?'",
+		"find_definition": "where a symbol is declared — use for 'where is X defined?'",
+		"find_callees":    "what a function invokes — note: generic names (String, New, Error) may have false positives",
+		"search":          "find symbols by name pattern, e.g. '%auth%' or 'Parse%' — use instead of grep -r",
+		"list_directory":  "browse the tree structure — use instead of ls/find",
+		"get_communities": "find clusters of related code (use summary=true for large repos; requires dense cross-references)",
+		"get_impact":      "blast radius of changing a symbol — traces callers/callees to a configurable depth",
+	}
 }

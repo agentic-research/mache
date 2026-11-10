@@ -103,24 +103,6 @@ func (s *v6Shape) defNode() string { return s.pick("node_id", "nid") }
 
 func (s *v6Shape) refSite() string { return s.pick("node_id", "nid") }
 
-// refResolves is a SQL predicate over a node_refs row (aliased r) that holds
-// exactly when RefsMap keeps the row: idFunc names its node column, and the
-// id is not a file-level sentinel. On v4 the column names a node when it is
-// text. On v6 its nid names a node in nodes, or an occurrence in an interned
-// file (OccurrencePath); a nid whose node is present has its ancestors too,
-// as LLO writes every node's parent chain. Sentinels are v4 only: mache's own
-// engine writes them, into path-keyed dbs, and LLO, the only producer of v6,
-// writes none.
-func (s *v6Shape) refResolves() string {
-	if s == nil {
-		return "typeof(r.node_id) = 'text' AND substr(r.node_id, 1, " +
-			strconv.Itoa(len(FileLevelSentinelPrefix)) + ") != '" + FileLevelSentinelPrefix + "'"
-	}
-	shift := strconv.Itoa(lloschema.V6FileShift)
-	return "typeof(r.nid) = 'integer' AND (EXISTS(SELECT 1 FROM nodes n WHERE n.nid = r.nid)" +
-		" OR (r.nid >= 1 << " + shift + " AND EXISTS(SELECT 1 FROM _source s WHERE s.file_id = r.nid >> " + shift + ")))"
-}
-
 func (s *v6Shape) refContainer() string { return s.pick("container_node_id", "container_nid") }
 
 func (s *v6Shape) refSource() string {
