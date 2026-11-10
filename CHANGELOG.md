@@ -55,7 +55,11 @@ bumps may include breaking changes.
   (`mache-a6c283`). Its `ref_tokens` was the length of the full references
   map, which named every one of a repo's references (158,442 on mache's own)
   just to count the distinct tokens. It is now counted in SQL, with the same
-  value; `get_overview` on mache's repo went from 2.5 s to 0.34 s.
+  value; `get_overview` on mache's repo went from 2.5 s to 0.34 s. The
+  `mache serve` daemon gets it too: every session's graph now passes the
+  count, and every other optional capability its backend has, through to
+  the tools, which a test now enforces; before, the daemon still built the
+  whole map (1.1 s against 0.24 s in process).
 
 - **A write goes through any pinned daemon that says it serves the tree**
   (`mache-161c63`). mache used to refuse writing through a daemon it had not
