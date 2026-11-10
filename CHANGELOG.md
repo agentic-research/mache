@@ -248,6 +248,30 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Every schema and smell rule in `examples/` is now exercised, and the
+  broken ones are fixed** (`mache-eb26eb`). `examples_test.go` used to
+  unmarshal the schemas and ingest four of them. It now projects every
+  `*-schema.json` over a bundled sample through the path its documented
+  command takes and walks the whole tree, failing on a `<no value>` name or
+  leaf, an empty leaf, or a missing expected path; holds the preset copies
+  (`go`, `python`, `cli`, `rust`, `terraform`, `mcp`, `mcp-registry`) equal
+  to `schema/presets/`; and runs each `smell-rules/` rule through
+  `find-smells --rules-dir` on a leyline build, asserting its one finding
+  by file and line. Fixed: `llm-conversations` read `.item.*` from a sample
+  that is not Venturi-wrapped (one `<no value>` directory); `bdr` declared
+  `"table": "issues"`, which mache reads as a Venturi `record` column a
+  beads db does not have, and now projects the bead JSONL contract
+  (`rsry bead export --jsonl | jq -s .`) with nullable fields defaulted;
+  `markdown` rendered `{{.record}}`, which no walker sets, and now projects
+  sections and code blocks from `@scope`; `uncanonicalized_path_identity`
+  named `r.container_node_id`, which `v_refs` does not expose, and failed
+  with `no such column` on every build: it now joins on `referrer_node_id`;
+  `rust` and `terraform` had drifted from their presets; `trivy-ghsa`'s
+  usage named a `--format boltdb` the CLI does not have. Still open:
+  `bdr-hierarchy` (`mache-fabfec`), the presets' `{{.index}}` names
+  (`mache-fa8b02`), and `serve` dropping `include`s and misresolving a
+  relative `--schema` for a JSON source (`mache-fe04ff`).
+
 - **Stored file bytes are verified before mache serves them** (`mache-c1eb7a`,
   mirroring LLO's `ley-line-open-12d305`). leyline keeps every file's bytes in
   `source_blobs` under their BLAKE3 hash, and three mache readers served those

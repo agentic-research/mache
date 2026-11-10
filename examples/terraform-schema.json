@@ -125,6 +125,22 @@
           ]
         }
       ]
+    },
+    {
+      "name": "terraform",
+      "selector": "$",
+      "children": [
+        {
+          "name": "terraform",
+          "selector": "(block (identifier) @_type (body) @scope (#eq? @_type \"terraform\"))",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

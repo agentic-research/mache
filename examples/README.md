@@ -29,16 +29,29 @@ navigable tree.
 
 ### Data sources (JSON / SQLite)
 
-These schemas map structured JSON data into directory trees. They use
-the `.item.` accessor because the primary data source is Venturi
-SQLite databases where records are wrapped as
-`{"schema":"...", "identifier":"...", "item":{...}}`.
+These schemas map structured data into directory trees. Two shapes:
+
+- **Venturi records** (`kev`, `nvd`, `notion`, `notion-repos`,
+  `mcp-registry`, `trivy-ghsa`) use the `.item.` accessor: the source is a
+  SQLite db whose `results(id, record)` table holds records wrapped as
+  `{"schema":"...", "identifier":"...", "item":{...}}` (Venturi and
+  [`tools/mcp-fetch`](../tools/mcp-fetch) write this). Serve one with
+  `mache serve --schema "$PWD/examples/kev-schema.json" kev.db`.
+- **Plain JSON documents** (`llm-conversations`, `mcp`, `audit`, `bdr`)
+  read fields directly. Their data is a `.json` file.
+
+Each has a sample in [`testdata/`](testdata) or next to it, and
+[`examples_test.go`](examples_test.go) projects every schema over its
+sample (the Venturi samples are the records as a JSON array; the test
+writes them into a `results` table). A field that is optional in the data is wrapped in
+`default` (see below) so a missing value renders empty, not `<no value>`.
 
 #### NVD Schema
 
 [`nvd-schema.json`](nvd-schema.json) — Maps the National Vulnerability Database (NVD) JSON feed into a hierarchy of `Year/Month/ID`.
 
 - **Source:** [NVD JSON Feed](https://nvd.nist.gov/vuln/data-feeds) (via Venturi)
+- **Sample Data:** [`testdata/nvd.json`](testdata/nvd.json)
 - **Structure:**
   - `/by-cve`
     - `/:year` (e.g., `2024`)
@@ -51,6 +64,7 @@ SQLite databases where records are wrapped as
 [`kev-schema.json`](kev-schema.json) — Maps the CISA Known Exploited Vulnerabilities catalog.
 
 - **Source:** [CISA KEV Catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) (via Venturi)
+- **Sample Data:** [`testdata/kev.json`](testdata/kev.json)
 - **Structure:**
   - `/vulns`
     - `/:cve_id` (e.g., `CVE-2021-1234`)
@@ -58,7 +72,7 @@ SQLite databases where records are wrapped as
 
 #### LLM Conversations
 
-[`llm-conversations-schema.json`](llm-conversations-schema.json) — Projects LLM conversation exports into a structured archive.
+[`llm-conversations-schema.json`](llm-conversations-schema.json) — Projects LLM conversation exports (a plain JSON array of conversations, not Venturi-wrapped) into a structured archive.
 
 - **Sample Data:** [`llm-conversations-sample.json`](llm-conversations-sample.json)
 - **Structure:**
@@ -68,11 +82,35 @@ SQLite databases where records are wrapped as
         - `/:conversation_id`
           - `title`, `transcript`, `system-prompt`, `token-usage`, `raw.json`
 
+#### Beads
+
+[`bdr-schema.json`](bdr-schema.json) — Projects a beads export (the
+JSONL bead contract, one object per bead) as `by-status/`, `by-type/`,
+`by-priority/`, `by-repo/` and `threads/` (beads grouped by
+`external_ref`), with `title`, `description`, `status`, `priority`,
+`owner`, `branch`, `pr_url`, … per bead. The engine reads a JSON array,
+so slurp the JSONL first:
+
+```bash
+rsry bead export --status all --jsonl | jq -s . > beads.json
+```
+
+It does not read a beads `.db`: SQLite sources are read as Venturi
+`results(id, record)` tables, and a beads `issues` table has neither
+column.
+
+- **Sample Data:** [`testdata/beads.json`](testdata/beads.json)
+
+[`bdr-hierarchy-schema.json`](bdr-hierarchy-schema.json) — a
+decade/thread/bead view. **Does not project today** (`mache-fabfec`): it
+reads `source_adr`, `channel` and `thread_group`, which no bead export
+carries, and ranges a per-decade `.beads` list the engine never builds.
+`examples_test.go` pins it as known-broken until that bead lands.
+
 #### Other data schemas
 
-- [`bdr-schema.json`](bdr-schema.json) / [`bdr-hierarchy-schema.json`](bdr-hierarchy-schema.json) — Project a beads issue database (`issues` table) as flat and dependency-hierarchy trees respectively (`title`, `description`, `status`, `priority` per bead).
-- [`notion-schema.json`](notion-schema.json) / [`notion-repos-schema.json`](notion-repos-schema.json) — Project Notion page exports: a flat pages view, and a layered repo-catalog view (`/repos/:layer/:name` with `purpose`/`path` leaves).
-- [`trivy-ghsa-schema.json`](trivy-ghsa-schema.json) — Projects Venturi GitHub Advisory data into the trivy-db BoltDB layout (`--format boltdb` output path).
+- [`notion-schema.json`](notion-schema.json) / [`notion-repos-schema.json`](notion-repos-schema.json) — Project Notion page exports ([`tools/notion-fetch`](../tools/notion-fetch)): a flat pages view, and a layered repo-catalog view (`/repos/:layer/:name` with `purpose`/`path` leaves). Samples: [`testdata/notion.json`](testdata/notion.json), [`testdata/notion-repos.json`](testdata/notion-repos.json).
+- [`trivy-ghsa-schema.json`](trivy-ghsa-schema.json) — Projects Venturi GitHub Advisory data into the trivy-db BoltDB layout. It reads `._parent` across records, so it runs through the engine, not the direct SQL backend: `mache --schema examples/trivy-ghsa-schema.json --data github.db --out trivy-index.db /tmp/unused` (the mountpoint is required but unused with `--out`), then convert `trivy-index.db` with [`ext/boltdb`](../ext/boltdb)'s `Materialize`. Sample: [`testdata/trivy-ghsa.json`](testdata/trivy-ghsa.json).
 
 ### MCP (Model Context Protocol)
 
@@ -101,6 +139,7 @@ The `input-schema.json` file is the key artifact — it contains the JSON Schema
 [`mcp-registry-schema.json`](mcp-registry-schema.json) — Projects the MCP server registry (thousands of servers) into a namespace/server hierarchy.
 
 - **Source:** MCP registry SQLite database (fetched via `tools/mcp-fetch`)
+- **Sample Data:** [`testdata/mcp-registry.json`](testdata/mcp-registry.json)
 - **Structure:**
   - `/servers`
     - `/:namespace` (e.g., `anthropic`)
@@ -112,7 +151,15 @@ This schema uses `Refs` cross-references on server names, enabling the `callers/
 ### Source code (tree-sitter)
 
 These schemas use tree-sitter S-expression queries to project source
-code ASTs into logical views.
+code ASTs into logical views, over the `_ast` the pinned leyline parses.
+
+`go`, `python`, `cli`, `rust` and `terraform` are copies of the presets
+of the same name in [`../schema/presets/`](../schema/presets) —
+`--schema go` and `--schema examples/go-schema.json` project the same
+tree, and `TestExamplesMirrorPresets` fails if one drifts. `sql` and
+`markdown` deliberately differ: the presets name some nodes
+`{{.index}}`, which no walker provides (`mache-fa8b02`), and these
+examples keep only the nodes that render.
 
 #### Go Schema
 
@@ -143,6 +190,7 @@ code ASTs into logical views.
 - **Structure:**
   - `tables/` — `CREATE TABLE` statements
   - `views/` — `CREATE VIEW` statements
+  - (the preset also has `functions/`, `types/`, `indexes/`, …, named `{{.index}}` — see above)
 - **Sample Data:** [`testdata/sql_sample.sql`](testdata/sql_sample.sql)
 
 #### Cobra CLI Schema
@@ -160,7 +208,11 @@ code ASTs into logical views.
 
 - [`rust-schema.json`](rust-schema.json) — Rust functions/types with LSP-backed leaves (`hover`, `diagnostics`, `definitions`, `references` from the `_lsp*` tables a ley-line build produces).
 - [`terraform-schema.json`](terraform-schema.json) — Terraform/HCL resources with the same LSP file set.
-- [`markdown-schema.json`](markdown-schema.json) — Markdown sections by heading (tree-sitter `markdown` grammar).
+- [`markdown-schema.json`](markdown-schema.json) — Markdown `sections/` by heading and fenced `code/` blocks by language, each with its `source`.
+
+Samples for these three are the preset fixtures in
+[`../internal/testutil/testdata/preset_fixtures/`](../internal/testutil/testdata/preset_fixtures)
+(`rust/`, `terraform/`, `markdown/`).
 
 ## Template functions
 
@@ -237,7 +289,11 @@ baseline, wiring the
 [`find-smells` composite action](../.github/actions/find-smells/README.md)
 in CI, and the ratchet model. Unlike everything else in `examples/`,
 smell rules are not topology schemas — they're SQL queries over the
-`.db` that `mache build` produces.
+`.db` that `mache build` produces. The rules:
+[`fatal_call_in_library.json`](smell-rules/fatal_call_in_library.json),
+[`long_test_function.json`](smell-rules/long_test_function.json),
+[`long_unexported_function.json`](smell-rules/long_unexported_function.json),
+[`uncanonicalized-path-identity.json`](smell-rules/uncanonicalized-path-identity.json).
 
 ## Audit tooling
 
@@ -246,7 +302,7 @@ queryable filesystem:
 
 - [`audit-indexer.py`](audit-indexer.py) — Parses an `.audit/`
   directory of coordination files (`STATUS.md`, `MASTER-TRIAGE.md`,
-  `SCORECARD.md`, `BEAD-PLAN.md`, per-dimension audits) into a single
+  `SCORECARD.md`, `BEAD-PLAN.md`, `CYCLE-LOG.md`, per-dimension audits) into a single
   `.index.json`.
 - [`audit-schema.json`](audit-schema.json) — The topology schema that
   mounts that index (`findings/` with `title`/`severity`/`status`/`dimension`
@@ -254,36 +310,64 @@ queryable filesystem:
 - [`test-audit/`](test-audit) — Sample `.audit/` input files for
   trying the indexer end-to-end:
 
-```bash
-python examples/audit-indexer.py examples/test-audit/
+- [`test-audit/.index.json`](test-audit/.index.json) — the indexer's
+  output for `test-audit/`, committed so the schema has a sample
+  without running Python.
 
-# Serve it as MCP tools…
-mache serve --schema examples/audit-schema.json examples/test-audit/.index.json
+```bash
+python3 examples/audit-indexer.py examples/test-audit/
+
+# Serve it as MCP tools. The schema path must be absolute: serve resolves a
+# relative --schema under the data file (mache-fe04ff).
+mache serve --schema "$PWD/examples/audit-schema.json" examples/test-audit/.index.json
 
 # …or mount it. Mounting is the ROOT command (`mache [mountpoint]`), so the
 # source goes in --data and the mountpoint is the single positional.
 mache --schema examples/audit-schema.json --data examples/test-audit/.index.json /tmp/audit
 ```
 
+Until `mache-fe04ff` lands, `serve` also drops `file_sets` includes, so
+the `findings/`, `scores/` and `beads/` leaves (which come from
+`include`) are missing there; `agents/` and `timeline/` are complete.
+The mount expands includes.
+
 ## Test fixtures
 
-- [`testdata/`](testdata) — Sample source files (`go_sample.go`,
-  `python_sample.py`, `sql_sample.sql`, `cli_sample.go`) the
-  tree-sitter schemas are validated against.
+- [`testdata/`](testdata) — one sample per schema:
+  - source: `go_sample.go`, `python_sample.py`, `sql_sample.sql`,
+    `cli_sample.go`;
+  - Venturi records: `kev.json`, `nvd.json`, `notion.json`,
+    `notion-repos.json`, `mcp-registry.json`, `trivy-ghsa.json`;
+  - beads: `beads.json` (two beads, one with every optional field null).
 - [`mcp-sample-manifest.json`](mcp-sample-manifest.json),
   [`llm-conversations-sample.json`](llm-conversations-sample.json) —
   Sample JSON inputs for the MCP and LLM-conversation schemas.
+- [`test-audit/`](test-audit) — the audit schema's input (see above).
 
 ## Testing
 
-Tree-sitter examples are validated by
-[`examples_test.go`](examples_test.go) using the sample data in
-`testdata/`. JSON/SQLite schemas are tested by the integration tests
-in `internal/ingest/`. The example smell rules are load-tested by
-`cmd/serve_find_smells_load_test.go`.
+[`examples_test.go`](examples_test.go) is what keeps everything here
+honest:
+
+- `TestExampleSchemasProject` projects every `*-schema.json` over its
+  sample through the path its documented command takes (the direct SQL
+  backend for Venturi dbs, the engine for JSON, a pinned-leyline parse
+  for source), walks the whole tree, and fails on a node or leaf
+  rendered from a missing field (`<no value>`), on an empty leaf, and on
+  a missing expected path. `TestEveryExampleHasACase` fails when a schema
+  is added without a case.
+- `TestExamplesMirrorPresets` holds the preset copies to the presets.
+- `TestSmellRulesKit` builds a small Go package with the pinned leyline
+  and runs each rule in [`smell-rules/`](smell-rules) through
+  `find-smells --rules-dir`, asserting the one finding it is written for,
+  at its file and line.
+
+[`publicapi/`](publicapi) ([`browse_test.go`](publicapi/browse_test.go))
+is a separate proof: it uses only the public `build` and `graph`
+packages, to show an external consumer can do the browsing on its own.
 
 ```bash
-task test -- -run TestTreeSitterExamples ./examples/...
-task test -- -run TestSchemasParse ./examples/...
-go test ./cmd/ -run TestLoadExternalSmellRules_ShippedExamplesLoadCleanly
+go test ./examples/...
+go test -run TestSmellRulesKit ./examples/
+go test ./internal/smells/ -run TestLoadExternalSmellRules_ShippedExamplesLoadCleanly
 ```

@@ -1,0 +1,12 @@
+[
+  {
+    "schema": "mcp-registry",
+    "identifier": "io.github.example/weather",
+    "item": {"name": "io.github.example/weather", "namespace": "io.github.example", "shortName": "weather", "description": "Weather forecasts as MCP tools", "version": "1.2.0", "status": "active", "repository": "https://github.com/example/weather-mcp"}
+  },
+  {
+    "schema": "mcp-registry",
+    "identifier": "io.github.example/notes",
+    "item": {"name": "io.github.example/notes", "namespace": "io.github.example", "shortName": "notes", "description": "Read and write notes", "version": "0.3.1", "status": "active", "repository": "https://github.com/example/notes-mcp"}
+  }
+]

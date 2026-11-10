@@ -10,6 +10,42 @@
   },
   "nodes": [
     {
+      "name": "imports",
+      "selector": "$",
+      "children": [
+        {
+          "name": "{{.name}}",
+          "selector": "(use_declaration argument: (scoped_identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(use_declaration argument: (identifier) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        },
+        {
+          "name": "{{.name}}",
+          "selector": "(use_declaration argument: (scoped_use_list) @name) @scope",
+          "files": [
+            {
+              "name": "source",
+              "content_template": "{{.scope}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "functions",
       "selector": "$",
       "children": [
