@@ -29,6 +29,13 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **The HTTP endpoint refuses a request body over 4 MiB** (`mache-a1c114`).
+  mcp-go 1.5.0 bounds a Streamable HTTP POST at 4 MiB, where 1.4.0 read any
+  size, and mache keeps that bound: `write_file` sends one node's content,
+  far below it, and an unbounded read let any local client make the daemon
+  buffer an arbitrary body. Dependencies: mcp-go 1.4.0 → 1.5.0, ojg 1.28.7 →
+  1.28.9, yaml/v3 3.0.5 → 3.0.6.
+
 - **leyline v0.27.0 is the pinned backend** (`mache-f859ba`). It bundles
   SQLite 3.54.1 (a CVE fix); nothing mache reads changed: projection-v12, IR
   `merkle-ast-v3`, wire major 2 and the daemon wire are the same, and one tree
