@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -87,75 +86,26 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 
 	// Wire the subscriber FIRST, before any invalidate, so we can't
 	// miss an event the daemon emits between push and subscribe.
-	var (
-		handled  atomic.Int32
-		eventMu  sync.Mutex
-		lastEvt  SheafInvalidateEvent
-		evHandle = func(ev SheafInvalidateEvent) {
-			eventMu.Lock()
-			lastEvt = ev
-			eventMu.Unlock()
-			handled.Add(1)
-		}
-	)
-	sub := NewSheafSubscriber(sockPath, evHandle)
-	// Tight backoff so a stillborn daemon recycle doesn't waste the
-	// test budget. Production uses 1s..30s; here we want the test
-	// to finish fast on real failures.
-	sub.SetBackoffForTest(50*time.Millisecond, 200*time.Millisecond)
+	sub, lastEvent := recordingSubscriber(t, sockPath)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	sub.Start(ctx)
-	t.Cleanup(sub.Stop)
-
-	// Wait for the subscriber to actually reach Connected — otherwise
-	// the invalidate might fire before subscribe has been activated
-	// daemon-side, which would look like the bug we're testing for
-	// but would actually be a race in the test setup.
-	require.Eventually(t, func() bool {
-		return sub.Status().State == StateConnected
-	}, 5*time.Second, 25*time.Millisecond,
-		"subscriber must connect before we can fairly assert event delivery")
-
-	// Push a synthetic 2-region topology with δ⁰ inputs engaged.
-	// Smaller than the cascade e2e test (3 regions there) because we
-	// only need ONE invalidate to assert the event-bus path; the
-	// cascade semantics themselves are covered by the existing e2e.
-	regions := []region{
-		{ID: 1, Hash: "aaaaaaaa", Data: bench32D(1.0)},
-		{ID: 2, Hash: "bbbbbbbb", Data: bench32D(2.0)},
-	}
-	restrictions := []restriction{
-		{A: 1, B: 2, BoundaryHash: "ab", CoChangeRate: 0.5, AgreementDim: agreementDim},
-	}
-	require.NoError(t, pushTopologyForE2E(sc, regions, restrictions),
-		"sheaf_set_topology against live daemon")
+	pushTwoRegionTopology(t, sc)
 
 	// Now the trigger: push sheaf_invalidate. Daemon response carrying
 	// the cascade is unrelated to the event bus — we only need it to
 	// succeed so the daemon ran the op at all.
 	mutatedStalk := bench32D(99.0)
-	_, err = sc.InvalidateWithStalk(1, "post-mutation", mutatedStalk)
+	_, err = sc.InvalidateWithStalk(1, "", mutatedStalk) // omitted: "changed"
 	require.NoError(t, err, "sheaf_invalidate against live daemon")
 
-	// The contract: within a generous budget (the cascade itself is
-	// ~20µs on this hardware, but we allow for goroutine wakeup +
-	// JSON decode on the read path), the subscriber's handler MUST
-	// have fired at least once.
-	//
-	// PRE-LLO-FIX: this times out at handled == 0, which is the
-	// signal the daemon's event bus isn't publishing sheaf.invalidate.
-	// POST-LLO-FIX: handler fires inside ~10ms and the assertions
-	// below pin the payload shape.
+	// The handler must fire within a generous budget (the cascade itself is
+	// ~20µs); timing out means the daemon's event bus never published it.
 	require.Eventuallyf(t, func() bool {
-		return handled.Load() > 0
+		_, ok := lastEvent()
+		return ok
 	}, 3*time.Second, 25*time.Millisecond,
 		"subscriber.handler never fired — daemon did not publish sheaf.invalidate to the event bus (see ley-line-open-5caa59)")
 
-	eventMu.Lock()
-	got := lastEvt
-	eventMu.Unlock()
+	got, _ := lastEvent()
 
 	assert.Contains(t, got.Invalidated, 1,
 		"invalidated region 1 must appear in the pushed event payload")
@@ -163,6 +113,10 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 		"event generation must reflect at least one cascade")
 	assert.GreaterOrEqual(t, got.Count, 1,
 		"event count must reflect at least the directly-invalidated region")
+	// leyline >= v0.25.0 names the root state on every event
+	// (mache-997b7f): this daemon reads its controller, so the state is
+	// known, published or not, and never decoded from a missing field.
+	assert.NotEqual(t, RootUnknown, got.Root.State, "the live daemon names its root state: %+v", got.Root)
 
 	// Subscriber's Status() should mirror what we just observed —
 	// the surface get_sheaf_status reports through MCP.
@@ -173,6 +127,60 @@ func TestE2E_SheafSubscriber_AgainstLiveDaemon(t *testing.T) {
 		"Status.LastGeneration must match the last event's generation")
 	assert.False(t, status.LastEvent.IsZero(),
 		"Status.LastEvent must be populated after first event")
+}
+
+// recordingSubscriber starts a subscriber on sockPath that keeps the last
+// event it receives, and returns once the subscriber is Connected: an
+// invalidate pushed earlier could fire before subscribe is active
+// daemon-side, which would look like the bug under test but would be a race
+// in the setup. lastEvent reports the last event and whether one arrived.
+func recordingSubscriber(t *testing.T, sockPath string) (*SheafSubscriber, func() (SheafInvalidateEvent, bool)) {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		last SheafInvalidateEvent
+		seen bool
+	)
+	sub := NewSheafSubscriber(sockPath, func(ev SheafInvalidateEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		last, seen = ev, true
+	})
+	// Tight backoff so a stillborn daemon recycle doesn't waste the test
+	// budget. Production uses 1s..30s.
+	sub.SetBackoffForTest(50*time.Millisecond, 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sub.Start(ctx)
+	t.Cleanup(sub.Stop)
+	require.Eventually(t, func() bool {
+		return sub.Status().State == StateConnected
+	}, 5*time.Second, 25*time.Millisecond,
+		"subscriber must connect before we can fairly assert event delivery")
+	return sub, func() (SheafInvalidateEvent, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		return last, seen
+	}
+}
+
+// pushTwoRegionTopology pushes a synthetic 2-region topology with δ⁰ inputs
+// engaged. Smaller than the cascade e2e test (3 regions there) because one
+// invalidate is enough to assert the event-bus path; the cascade semantics
+// themselves are covered by that test.
+func pushTwoRegionTopology(t *testing.T, sc *SheafClient) {
+	t.Helper()
+	regions := []region{
+		{ID: 1, Hash: strings.Repeat("aa", 32), Data: bench32D(1.0)},
+		{ID: 2, Hash: strings.Repeat("bb", 32), Data: bench32D(2.0)},
+	}
+	// leyline >= v0.25.0 refuses any hash that is not 64 lowercase hex; the
+	// boundary is the two region hashes XORed (0xaa ^ 0xbb = 0x11).
+	restrictions := []restriction{
+		{A: 1, B: 2, BoundaryHash: strings.Repeat("11", 32), CoChangeRate: 0.5, AgreementDim: agreementDim},
+	}
+	require.NoError(t, pushTopologyForE2E(sc, regions, restrictions),
+		"sheaf_set_topology against live daemon")
 }
 
 // startDaemonForE2E is the *testing.T equivalent of startDaemonForBench.

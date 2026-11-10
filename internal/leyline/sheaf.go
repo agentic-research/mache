@@ -67,11 +67,8 @@ type restriction struct {
 	AgreementDim int     `json:"agreement_dim,omitempty"`
 }
 
-// stalk is the JSON shape sent in sheaf_invalidate. Hash is omitempty
-// so callers that don't have a content-hash can rely on the daemon's
-// "infer from data" path (see sheaf_ops.rs::op_sheaf_invalidate) rather
-// than sending an empty string that would have to be re-parsed
-// daemon-side as zero bytes.
+// stalk is the JSON shape sent in sheaf_invalidate. Hash is omitempty:
+// leyline >= v0.25.0 reads an omitted hash as "changed" and refuses "".
 type stalk struct {
 	ID           int       `json:"id"`
 	Hash         string    `json:"hash,omitempty"`
@@ -135,9 +132,11 @@ func (sc *SheafClient) Invalidate(regionID int) ([]int, error) {
 // recorded at sheaf_set_topology time. Returns the BFS-ordered list
 // of regions the daemon determined are transitively affected.
 //
-// newHash may be empty — the daemon will infer the hash from data
-// when both `hash` and `data` are present. When both hash and data
-// are empty, this is equivalent to Invalidate.
+// newHash is either empty, which omits it, or 64 lowercase hex digits.
+// leyline >= v0.25.0 refuses anything else, and reads an omitted hash as
+// an explicit "changed": every boundary of the region fires
+// (ley-line-open-1c5d28). Omitting is therefore the sound default while the
+// region hash is not content-derived (mache-1c7038).
 //
 // Returns an error when newData is non-empty but len(newData) is
 // not stalkDim — a wrong-sized vector would either be rejected
@@ -149,6 +148,9 @@ func (sc *SheafClient) InvalidateWithStalk(regionID int, newHash string, newData
 		return nil, nil
 	}
 
+	if newHash != "" && !isLowerHex64(newHash) {
+		return nil, fmt.Errorf("sheaf_invalidate: hash must be omitted or 64 lowercase hex digits (got %q)", newHash)
+	}
 	if len(newData) > 0 && len(newData) != stalkDim {
 		return nil, fmt.Errorf("sheaf_invalidate: stalk data must be %d floats (got %d)", stalkDim, len(newData))
 	}

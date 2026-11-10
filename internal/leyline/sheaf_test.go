@@ -746,7 +746,8 @@ func TestInvalidateWithStalk_SendsData(t *testing.T) {
 
 	sc := NewSheafClient(sock)
 	stalkData := ComputeStalk(3, []string{"x", "y"})
-	affected, err := sc.InvalidateWithStalk(1, "deadbeef", stalkData)
+	hash := strings.Repeat("de", 32)
+	affected, err := sc.InvalidateWithStalk(1, hash, stalkData)
 	require.NoError(t, err)
 	assert.Equal(t, []int{1}, affected)
 
@@ -757,7 +758,7 @@ func TestInvalidateWithStalk_SendsData(t *testing.T) {
 	require.True(t, ok, "stalks[0].data missing")
 	assert.Len(t, data, stalkDim)
 	assert.Equal(t, float64(agreementDim), s["agreement_dim"])
-	assert.Equal(t, "deadbeef", s["hash"])
+	assert.Equal(t, hash, s["hash"])
 }
 
 // TestInvalidate_NoStalkDataOmitted asserts the legacy Invalidate(id)
@@ -785,7 +786,7 @@ func TestInvalidate_NoStalkDataOmitted(t *testing.T) {
 	_, hasHash := s["hash"]
 	_, hasData := s["data"]
 	_, hasDim := s["agreement_dim"]
-	assert.False(t, hasHash, "hash must be omitted when caller passes empty (daemon's infer-from-data path is the contract)")
+	assert.False(t, hasHash, "hash must be omitted when the caller has none: leyline reads that as \"changed\" and refuses \"\"")
 	assert.False(t, hasData, "data must be omitted when no stalk pushed")
 	assert.False(t, hasDim, "agreement_dim must be omitted when no stalk pushed")
 }
@@ -808,13 +809,13 @@ func TestInvalidateWithStalk_RejectsWrongDim(t *testing.T) {
 	sc := NewSheafClient(sock)
 
 	// Too short.
-	_, err = sc.InvalidateWithStalk(1, "h", []float32{1, 2, 3})
+	_, err = sc.InvalidateWithStalk(1, "", []float32{1, 2, 3})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stalk data must be")
 
 	// Too long.
 	tooLong := make([]float32, stalkDim+1)
-	_, err = sc.InvalidateWithStalk(1, "h", tooLong)
+	_, err = sc.InvalidateWithStalk(1, "", tooLong)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stalk data must be")
 
@@ -828,4 +829,24 @@ func TestInvalidateWithStalk_RejectsWrongDim(t *testing.T) {
 	// case — re-using the outer sock would call the fail-fatal handler
 	// above, so we skip the live send here. The handler-rejects-wrong-
 	// dim contract is already pinned by the two cases above.)
+}
+
+// TestInvalidateWithStalk_RefusesAHashLeylineWouldRefuse: leyline >= v0.25.0
+// refuses a present hash that is not 64 lowercase hex, and refuses the whole
+// request with it (ley-line-open-1c5d28). mache refuses it first, naming the
+// hash, and never sends it.
+func TestInvalidateWithStalk_RefusesAHashLeylineWouldRefuse(t *testing.T) {
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		t.Errorf("the daemon must not be called with %v", req["stalks"])
+		return nil
+	})
+	sock, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer sock.Close() //nolint:errcheck
+	sc := NewSheafClient(sock)
+	for _, h := range []string{"deadbeef", strings.Repeat("DE", 32), strings.Repeat("de", 31) + "zz", strings.Repeat("de", 33)} {
+		_, err := sc.InvalidateWithStalk(1, h, nil)
+		require.Error(t, err, h)
+		assert.Contains(t, err.Error(), "64 lowercase hex", h)
+	}
 }
