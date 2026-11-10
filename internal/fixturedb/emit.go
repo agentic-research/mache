@@ -26,8 +26,13 @@ func (e *emitter) subtree(label, kind, token string) []byte {
 		return nil
 	}
 	h := subtreeHash(label)
-	e.exec(`INSERT OR IGNORE INTO node_content (node_hash, node_tag, kind, raw_kind, lang, token, arity)
-		VALUES (?, 0, ?, ?, '', ?, 0)`, h, kind, kind, nullIfEmpty(token))
+	if e.contentKinds {
+		e.exec(`INSERT OR IGNORE INTO node_content (node_hash, node_tag, kind, raw_kind, lang, token, arity)
+			VALUES (?, 0, ?, ?, '', ?, 0)`, h, kind, kind, nullIfEmpty(token))
+		return h
+	}
+	e.exec(`INSERT OR IGNORE INTO node_content (node_hash, node_tag, kind, token, arity)
+		VALUES (?, 0, ?, ?, 0)`, h, kind, nullIfEmpty(token))
 	return h
 }
 

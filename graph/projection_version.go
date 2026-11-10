@@ -69,14 +69,27 @@ var knownProjections = map[string]string{
 	// (lloschema.FieldChildJoins). Checked against sqlite_master of one tree
 	// parsed by v0.21.1 and v0.22.0: nothing else differs.
 	"projection-v9": "leyline v0.22-v0.23: v8 with node_edge interning node_child, which becomes a view",
-	// THE PINNED SHAPE as of leyline v0.24.0: v9 with _ast, node_defs and
+	// The shape leyline v0.24.x-v0.25.x write: v9 with _ast, node_defs and
 	// node_refs carrying node_content's content_id where they carried the
 	// 32-byte node_hash (ley-line-open-738dd9). node_content.node_hash stays
 	// the identity and is byte-identical across the change; mache reads it
 	// through lloschema.NodeHashExpr. Checked against sqlite_master of one tree
 	// parsed by v0.23.0 and v0.24.0: those three columns, the _ast index, and
 	// three LLO node_hash views are the whole difference.
-	"projection-v10": "the pinned shape: v9 with occurrence rows keyed to node_content by content_id",
+	"projection-v10": "leyline v0.24-v0.25: v9 with occurrence rows keyed to node_content by content_id",
+	// v10 with no table or column change: _meta.derived_from becomes
+	// "v2 <storeRoot> <parserId> <projection>", and the daemon wire's
+	// tree_root becomes a parser-free store_root (ley-line-open-73c6ee,
+	// mache-107423). Shipped only inside v0.26.0's move to v12.
+	"projection-v11": "unreleased alone: v10 with derived_from v2 (storeRoot)",
+	// THE PINNED SHAPE as of leyline v0.26.0: v11 with node_hash keyed
+	// (IR merkle-ast-v3, so every hash value differs from v2), raw_kind and
+	// lang moved off node_content to the occurrence, and node_defs/node_refs
+	// gaining kind_id (mache-108e26). A fielded child's grammar kind comes
+	// from its occurrence (lloschema.FieldChildJoins). Checked against
+	// sqlite_master of one tree parsed by v0.25.0 and v0.26.0: those columns
+	// and the two views' kind_id are the whole difference.
+	"projection-v12": "the pinned shape: keyed node_hash (merkle-ast-v3); kind and language per occurrence",
 }
 
 // ProjectionVersion returns the projection shape an artifact declares and

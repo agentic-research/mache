@@ -19,21 +19,29 @@ func TestCheckLeylineVersionCompat(t *testing.T) {
 	}{
 		{
 			name: "compatible — matching wire + client >= compat_min",
-			resp: map[string]any{"wire_format_major": float64(1), "compat_min": "0.4.1", "schema_version": "0.5.7"},
+			resp: map[string]any{"wire_format_major": float64(2), "compat_min": "0.4.1", "schema_version": "0.26.0"},
 		},
 		{
-			name:    "wire-format major mismatch refuses (M3)",
-			resp:    map[string]any{"wire_format_major": float64(2), "compat_min": "0.4.1", "schema_version": "0.6.0"},
-			wantErr: "wire-format is v2 but this mache build speaks v1",
+			// leyline v0.26.0 moved the wire to major 2 (tree_root became
+			// store_root, mache-107423): a v1 daemon speaks shapes this build
+			// no longer decodes.
+			name:    "an older wire major refuses",
+			resp:    map[string]any{"wire_format_major": float64(1), "compat_min": "0.4.1", "schema_version": "0.25.0"},
+			wantErr: "wire-format is v1 but this mache build speaks v2",
+		},
+		{
+			name:    "a newer wire major refuses (M3)",
+			resp:    map[string]any{"wire_format_major": float64(3), "compat_min": "0.4.1", "schema_version": "0.27.0"},
+			wantErr: "wire-format is v3 but this mache build speaks v2",
 		},
 		{
 			name:    "wire major as JSON string still refuses (capnp-json int-as-string)",
-			resp:    map[string]any{"wire_format_major": "2"},
-			wantErr: "wire-format is v2",
+			resp:    map[string]any{"wire_format_major": "3"},
+			wantErr: "wire-format is v3",
 		},
 		{
 			name:    "client older than compat_min refuses",
-			resp:    map[string]any{"wire_format_major": float64(1), "compat_min": "0.9.0"},
+			resp:    map[string]any{"wire_format_major": float64(2), "compat_min": "0.9.0"},
 			wantErr: "requires >= 0.9.0",
 		},
 		{
@@ -42,7 +50,7 @@ func TestCheckLeylineVersionCompat(t *testing.T) {
 		},
 		{
 			name: "matching wire, no compat_min — ok",
-			resp: map[string]any{"wire_format_major": float64(1)},
+			resp: map[string]any{"wire_format_major": float64(2)},
 		},
 	}
 	for _, c := range cases {

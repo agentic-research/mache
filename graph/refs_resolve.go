@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/agentic-research/mache/internal/lloschema"
+	"github.com/agentic-research/mache/internal/sqlintro"
 )
 
 // Resolution says WHY a reference did or did not reach a definition. It exists
@@ -204,7 +205,7 @@ func (g *SQLiteGraph) ResolveRef(nodeID string) (*RefTarget, error) {
 // matches an import, which is exactly the discrimination wanted: a variable
 // receiver yields "" and the caller learns nothing false.
 func (g *SQLiteGraph) importFor(qualifier, sourceID string) string {
-	if qualifier == "" || !ColumnExists(g.db, "_imports", "alias") {
+	if qualifier == "" || !sqlintro.ColumnExists(g.db, "_imports", "alias") {
 		return ""
 	}
 	var path string

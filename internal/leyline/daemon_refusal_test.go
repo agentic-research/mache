@@ -41,7 +41,7 @@ func versionResponse(binaryVersion string) map[string]any {
 		"ok":                true,
 		"binary_version":    binaryVersion,
 		"schema_version":    wireSchemaVersion,
-		"wire_format_major": float64(1),
+		"wire_format_major": float64(2),
 		"compat_min":        "0.4.1",
 	}
 }

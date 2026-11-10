@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/lloschema"
+	"github.com/agentic-research/mache/internal/sqlintro"
 )
 
 // ley-line-open's projection-v6 (v0.20.x) keys _ast and nodes by integer nid
@@ -22,7 +22,7 @@ func (w *ASTWalker) isV6() bool {
 	w.shapeMu.Lock()
 	defer w.shapeMu.Unlock()
 	if !w.shapeProbed {
-		w.v6, w.shapeProbed = graph.ColumnExists(w.db, "_ast", "nid"), true
+		w.v6, w.shapeProbed = sqlintro.ColumnExists(w.db, "_ast", "nid"), true
 		if w.v6 {
 			w.v6Hash, _, w.shapeErr = lloschema.NodeHashExpr(lloschema.DB(w.db), "_ast", "a")
 		}

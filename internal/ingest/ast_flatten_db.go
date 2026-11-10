@@ -59,14 +59,16 @@ func FlattenASTDB(db *sql.DB, sourceLike string, limit int) ([]any, error) {
 	if body == "" {
 		return nil, fmt.Errorf("flatten _ast: the database has no _ast table mache can read")
 	}
-	children, err := lloschema.FieldChildJoins(lloschema.DB(db), "a.node_hash")
+	// a.node_id is the occurrence: the nid on projection-v6 and later, which
+	// is what the v12 child-kind lookup needs.
+	children, err := lloschema.FieldChildJoins(lloschema.DB(db), "a.node_hash", "a.node_id")
 	if err != nil {
 		return nil, fmt.Errorf("flatten _ast: %w", err)
 	}
 	q := `
-SELECT a.node_id, a.node_kind, COALESCE(ce.field, ''), COALESCE(cc.raw_kind, '')
+SELECT a.node_id, a.node_kind, COALESCE(ce.field, ''), COALESCE(` + children.Kind + `, '')
 FROM (` + body + `) a
-` + children + `
+` + children.Joins + `
 WHERE (? = '' OR a.source_id LIKE ?)
 ORDER BY a.source_id, a.start_byte, a.end_byte DESC, a.node_id, ce.ordinal`
 

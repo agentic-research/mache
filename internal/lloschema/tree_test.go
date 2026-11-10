@@ -102,3 +102,22 @@ func TestTreeFileBytes_VerifiesTheStoredBytes(t *testing.T) {
 	assert.False(t, ok)
 	assert.Nil(t, got)
 }
+
+// TestIRLineage reads the IR lineage leyline stamped on a real pinned parse
+// (_meta.ir_schema_version), which the smell baseline records so it is never
+// compared across lineages (mache-99568c); a db with no _meta records none.
+func TestIRLineage(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "a.go"), []byte("package a\n"), 0o644))
+	db, _ := lltest.ParseSourceViaLeyline(t, src)
+	got, err := lloschema.IRLineage(lloschema.DB(db))
+	require.NoError(t, err)
+	assert.Equal(t, "merkle-ast-v3", got, "the pinned leyline's lineage")
+
+	b := fixturedb.New(t, fixturedb.Standalone)
+	b.Source("a.go", "go", "package a\n")
+	_, f := b.Build()
+	got, err = lloschema.IRLineage(f)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}

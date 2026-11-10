@@ -39,3 +39,24 @@ func ColumnIsGenerated(q RowQuerier, table, col string) bool {
 	}
 	return hidden == 2 || hidden == 3
 }
+
+// ColumnExists reports whether table has a column named col; a missing table
+// reads as no column. Readers use it to stay compatible with tables written
+// before a column was added (e.g. `context`, mache-b8fe72) or produced by
+// leyline, and writers use it to decide whether an ALTER is needed. It takes
+// a RowQuerier, so a *sql.DB and a *sql.Tx both work (fixturedb probes the
+// table it is writing into, inside its transaction).
+//
+// Deliberately pragma_table_xinfo, NOT pragma_table_info: table_info omits
+// GENERATED columns entirely, so it answers "missing" for a column that is
+// present, readable, indexed, and returned by SELECT *. ley-line-open already
+// ships one (`source_blobs.byte_len` STORED) and projection-v4 made
+// `nodes.parent_id` another (mache-bc6ca3). Under table_info a reader would
+// silently downgrade to a compatibility path for a column it can read, and a
+// writer would emit an ALTER that fails with "duplicate column name". xinfo
+// reports the same rows as info plus generated and hidden ones, so no existing
+// probe changes its answer.
+func ColumnExists(q RowQuerier, table, col string) bool {
+	var one int
+	return q.QueryRow("SELECT 1 FROM pragma_table_xinfo(?) WHERE name = ?", table, col).Scan(&one) == nil
+}

@@ -43,7 +43,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.25.0"
+const leylineV6SchemaVersion = "v0.26.0"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,
@@ -142,8 +142,6 @@ var leylineV6Tables = map[string]string{
     node_hash  BLOB    NOT NULL UNIQUE,
     node_tag   INTEGER NOT NULL,
     kind       TEXT    NOT NULL,
-    raw_kind   TEXT    NOT NULL,
-    lang       TEXT    NOT NULL,
     token      TEXT,
     arity      INTEGER NOT NULL
 )`,
@@ -170,7 +168,8 @@ var leylineV6Tables = map[string]string{
     end_row INTEGER,
     end_col INTEGER,
     canonical_kind TEXT,
-    content_id INTEGER REFERENCES node_content(content_id)
+    content_id INTEGER REFERENCES node_content(content_id),
+    kind_id INTEGER
 )`,
 
 	"node_refs": `CREATE TABLE node_refs (
@@ -185,7 +184,8 @@ var leylineV6Tables = map[string]string{
     end_row INTEGER,
     end_col INTEGER,
     qualifier TEXT,
-    content_id INTEGER REFERENCES node_content(content_id)
+    content_id INTEGER REFERENCES node_content(content_id),
+    kind_id INTEGER
 )`,
 
 	"nodes": `CREATE TABLE nodes (

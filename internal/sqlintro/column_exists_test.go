@@ -1,4 +1,4 @@
-package graph
+package sqlintro
 
 import (
 	"database/sql"

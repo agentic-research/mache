@@ -12,10 +12,10 @@ import (
 )
 
 // queryPlan is the query plan of every `_ast a` row of db, its node_hash read
-// as hash, LEFT JOINed through joins.
-func queryPlan(t *testing.T, db *sql.DB, hash, joins string) string {
+// as hash, LEFT JOINed through edges and reading each child's kind as they say.
+func queryPlan(t *testing.T, db *sql.DB, hash string, edges ChildEdges) string {
 	t.Helper()
-	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT ` + hash + `, ce.field, cc.raw_kind FROM _ast a ` + joins)
+	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT ` + hash + `, ce.field, ` + edges.Kind + ` FROM _ast a ` + edges.Joins)
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 	var plan []string
@@ -48,9 +48,9 @@ func TestFieldChildJoins(t *testing.T) {
 			db := paritySpec(t, tc.producer).DB()
 			hash, _, err := NodeHashExpr(DB(db), "_ast", "a")
 			require.NoError(t, err)
-			joins, err := FieldChildJoins(DB(db), hash)
+			edges, err := FieldChildJoins(DB(db), hash, "a.nid")
 			require.NoError(t, err)
-			plan := queryPlan(t, db, hash, joins)
+			plan := queryPlan(t, db, hash, edges)
 			assert.Contains(t, plan, tc.probe, plan)
 			for _, a := range tc.absent {
 				assert.NotContains(t, plan, a, plan)

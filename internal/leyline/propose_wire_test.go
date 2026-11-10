@@ -55,7 +55,7 @@ func TestProposeWire_AgainstThePinnedDaemon(t *testing.T) {
 	assert.Equal(t, proposeBase, read.Content)
 	assert.Equal(t, "100644", read.Mode)
 	requireHash(t, read.BlobHash)
-	requireHash(t, read.TreeRoot)
+	requireHash(t, read.StoreRoot)
 	base := read.BlobHash
 
 	applied, err := c.Propose([]leyline.ProposedWrite{{Path: "pkg/a.go", Base: base, Content: text(proposeTheir)}})
@@ -128,7 +128,7 @@ func TestProposedWrite_SendsTheSchemaSpelling(t *testing.T) {
 	var got map[string]any
 	sock := lltest.FakeDaemon(t, func(req map[string]any) any {
 		got = req
-		return map[string]any{"ok": true, "tree_root": "t", "blobs": []any{}}
+		return map[string]any{"ok": true, "store_root": "t", "blobs": []any{}}
 	})
 	c, err := leyline.DialSocket(sock)
 	require.NoError(t, err)

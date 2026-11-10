@@ -30,8 +30,8 @@ func TestProposeResult(t *testing.T) {
 	}{
 		{
 			name: "applied",
-			line: `{"ok":true,"tree_root":"r","blobs":[{"path":"a.go","blob_hash":"h"}],"merged":["a.go"]}`,
-			want: &ProposeResult{TreeRoot: "r", Blobs: []PathHash{{Path: "a.go", BlobHash: "h"}}, Merged: []string{"a.go"}},
+			line: `{"ok":true,"store_root":"r","blobs":[{"path":"a.go","blob_hash":"h"}],"merged":["a.go"]}`,
+			want: &ProposeResult{StoreRoot: "r", Blobs: []PathHash{{Path: "a.go", BlobHash: "h"}}, Merged: []string{"a.go"}},
 		},
 		{
 			name: "stale, with conflicts",

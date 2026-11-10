@@ -13,7 +13,7 @@ import (
 // version::WIRE_FORMAT_MAJOR. A daemon advertising a different major means the
 // capnp/JSON shapes have structurally diverged — the schema-client would decode
 // garbage — so mache refuses rather than proceeding (mache-8kif / M3).
-const expectedLeylineWireFormatMajor uint64 = 1
+const expectedLeylineWireFormatMajor uint64 = 2
 
 // VerifyReachableDaemonVersion is the startup handshake: if a leyline daemon
 // is ALREADY listening (it never auto-starts one), it must be the pinned release

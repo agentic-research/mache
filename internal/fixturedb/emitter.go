@@ -21,6 +21,11 @@ type emitter struct {
 	// point node_hash values at. Ley-line always does; a Standalone fixture only
 	// does when it modelled the cache-hydration path.
 	hasNodeContent bool
+	// contentKinds is true when node_content carries raw_kind and lang, as it
+	// did before projection-v12 moved them to the occurrence (mache-108e26).
+	// Probed from the table, like derivedParent, so a writer can't disagree
+	// with the DDL it writes into.
+	contentKinds bool
 
 	// v6 and v6Sites are the projection-v6 dialect's tree and its call-site
 	// nodes (one per ref, in b.refs order), built once on first use. Unused by
@@ -43,6 +48,7 @@ func (b *Builder) insertRows(db *sql.DB) {
 		b: b, db: tx,
 		hasNodeContent: d.hasNodeContent(b),
 		derivedParent:  sqlintro.ColumnIsGenerated(tx, "nodes", "parent_id"),
+		contentKinds:   sqlintro.ColumnExists(tx, "node_content", "raw_kind"),
 	}
 	d.emitNodes(e)
 	d.emitSymbols(e)
