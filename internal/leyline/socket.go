@@ -1220,12 +1220,19 @@ func (c *SocketClient) Prioritize(files []string) error {
 // Checked by diffing sqlite_master of one tree parsed by v0.25.0 and v0.26.0.
 // compat_min stays 0.6.0.
 //
+// v0.26.0 -> v0.27.0 changes nothing mache reads (mache-f859ba): projection-v12,
+// IR merkle-ast-v3, wire major 2 and the daemon wire are unchanged. One tree
+// parsed by both gives the same sqlite_master, _meta, row counts and node_hash
+// set. Bundled SQLite is 3.54.1, and SQLite writes its version into the db
+// header, so identical rows give a different current_root than under v0.26.0;
+// that is not content drift.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.26.0"
+const leylineBinaryVersion = "v0.27.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
