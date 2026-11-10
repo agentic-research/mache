@@ -127,3 +127,30 @@ func TestTransportMatrix_RootsWithoutAGETStreamGetNoWorkspace_mache_ab00c9(t *te
 	require.True(t, isError, "roots without a GET stream now resolve: mache-ab00c9 is fixed upstream; move this case into the matrix")
 	assert.Contains(t, text, "workspace root unavailable")
 }
+
+// `mache serve --mount` serves the composite of its mounts to every session,
+// whatever the client does about roots. Every session used to fail: a client
+// without roots got no workspace, and one with roots had its root turned
+// into a positional source that --mount refuses (mache-e0605e).
+func TestTransportMatrix_MountModeServesTheCompositeToEveryClient(t *testing.T) {
+	lltest.ResolveBinaryOrSkip(t)
+	mcpharness.IsolatedHome(t)
+	dirA, dirB := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dirA, "a.go"), []byte("package a\n\nfunc A() { B() }\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dirB, "b.go"), []byte("package b\n\nfunc B() {}\n"), 0o644))
+	withServeMounts(t, []string{"alpha=" + dirA, "beta=" + dirB})
+
+	for name, b := range map[string]mcpharness.Behavior{
+		"client without roots":   {},
+		"client answering roots": {Roots: []string{dirA}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := mcpharness.Served(t, newHTTPServer(serveServer(t)).Handler, "/mcp", b)
+			listing := s.Text("list_directory", map[string]any{"path": ""})
+			assert.Contains(t, listing, `"alpha"`)
+			assert.Contains(t, listing, `"beta"`)
+			callers := s.Text("find_callers", map[string]any{"token": "B"})
+			assert.Contains(t, callers, "alpha/", "find_callers did not cross into the calling mount: %s", callers)
+		})
+	}
+}
