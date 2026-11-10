@@ -29,6 +29,14 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **`mache serve --mount` works again** (`mache-e0605e`). Every session of
+  a `--mount` server failed. A client without MCP roots got "workspace root
+  unavailable", and one that answered roots had its root turned into a
+  positional source, which `--mount` refuses. Mount mode now serves the
+  composite of its mounts to every session, without asking for a root, and
+  each mount gets the schema inferred for its own tree (or `--schema`)
+  instead of one shared schema.
+
 - **`get_communities` reports the same modularity every time** (`mache-a76e43`).
   The modularity sum ran in Go's randomized map order, so the same
   communities came back with a modularity differing in the last digits from

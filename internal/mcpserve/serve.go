@@ -22,6 +22,8 @@ import (
 	"github.com/agentic-research/mache/internal/leylinegraph"
 	"github.com/agentic-research/mache/internal/mountmeta"
 	"github.com/agentic-research/mache/internal/procsig"
+	"github.com/agentic-research/mache/internal/projcfg"
+	"github.com/agentic-research/mache/internal/schemainfer"
 	"github.com/agentic-research/mache/internal/smells"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/mark3labs/mcp-go/server"
@@ -697,7 +699,12 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 			runAll()
 			return nil, nil, func() {}, fmt.Errorf("invalid --mount spec %q (expected NAME=PATH)", spec)
 		}
-		g, _, cleanup, err := buildServeGraph(path, schema)
+		ms, err := mountSchema(path, schema)
+		if err != nil {
+			runAll()
+			return nil, nil, func() {}, fmt.Errorf("mount %s=%s: %w", name, path, err)
+		}
+		g, _, cleanup, err := buildServeGraph(path, ms)
 		if err != nil {
 			runAll()
 			return nil, nil, func() {}, fmt.Errorf("mount %s=%s: %w", name, path, err)
@@ -710,6 +717,27 @@ func buildMaybeMultiGraph(dataSource string, schema *api.Topology) (graph.Graph,
 		log.Printf("mounted %s -> %s", name, path)
 	}
 	return composite, nil, runAll, nil
+}
+
+// mountsRoot is the registry key every --mount session shares: the mount set
+// itself, since there is no single source tree to name the graph after.
+func mountsRoot() string { return "mounts:" + strings.Join(serveMounts, ",") }
+
+// mountSchema is the schema one mount is served with: schema when the caller
+// gives one, else --schema when set, else the schema inferred for that
+// mount's own tree, so a Go repo mounted beside a Rust one is not forced
+// through one language's schema.
+func mountSchema(path string, schema *api.Topology) (*api.Topology, error) {
+	if schema != nil {
+		return schema, nil
+	}
+	if serveSchema != "" {
+		return projcfg.ResolveSchema(serveSchema, path)
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return schemainfer.InferDirSchema(path)
+	}
+	return &api.Topology{Version: api.SchemaVersion}, nil
 }
 
 // openDBGraph opens a .db file as a SQLiteGraph after materializing virtual

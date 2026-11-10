@@ -374,6 +374,15 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		return errGraph.(*lazyGraph)
 	}
 
+	// --mount mode serves the composite of its mounts to every session, so
+	// a client's workspace root is neither needed nor used: resolving one
+	// either failed or became a positional source that --mount refuses
+	// (mache-e0605e).
+	if len(serveMounts) > 0 {
+		r.registerSession(sid, mountsRoot())
+		return r.getOrCreateGraph(mountsRoot())
+	}
+
 	// ?project= token from HTTP context — checked BEFORE ListRoots; see
 	// resolveProjectSession's doc comment (mache-6ec106).
 	if lg, ok := r.resolveProjectSession(ctx, sid); ok {
@@ -822,6 +831,22 @@ func (lg *lazyGraph) init() {
 			lg.schema = &api.Topology{Version: api.SchemaVersion}
 			lg.registerSheafInvalidator() // coverage:ignore — control-mode wiring; reduction tracked in mache-89b5dd.
 			log.Println("graph ready (arena control mode)")
+			return
+		}
+
+		// --mount mode: the composite of the mounts, each with its own
+		// schema; there is no positional source.
+		if len(serveMounts) > 0 {
+			g, si, cleanup, err := buildMaybeMultiGraph("", nil)
+			if err != nil {
+				lg.err = err
+				return
+			}
+			lg.inner = g
+			lg.sheafInv = si
+			lg.cleanup = lg.wrapCleanupWithSheafUnregister(cleanup, si)
+			lg.schema = &api.Topology{Version: api.SchemaVersion}
+			log.Println("graph ready (--mount composite)")
 			return
 		}
 
