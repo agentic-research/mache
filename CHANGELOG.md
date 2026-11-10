@@ -39,7 +39,11 @@ bumps may include breaking changes.
   for state (the pinned-binary cache stays shared). `task install:verify`
   and the smell gate run with `MACHE_HOME` set to a per-checkout directory
   under `/tmp` whose `bin/` links the real binary cache. `mache mount` no
-  longer reads `~/.mache` when given both a schema and a data path.
+  longer reads `~/.mache` when given both a schema and a data path, and
+  `mache install` restarts the supervised daemon only when it replaced the
+  binary that daemon runs. Installing a copy elsewhere (`--bin-dir`)
+  restarted your daemon for nothing, and install-verify did that on every
+  `task ci`.
 
 - **`mache mount --control` holds leyline's control-block lease**
   (`mache-6b6a90`). From leyline v0.28.0, `--reset-arena` replaces a control
