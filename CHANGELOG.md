@@ -38,6 +38,19 @@ bumps may include breaking changes.
   6.4 s, with identical answers. A prebuilt `.db` passed to `mache serve` is
   read as before, since something else may write it.
 
+- **`get_architecture` and `get_overview` count the source tree's files**
+  (`mache-7fed6a`). On a leyline `.db` a source file is a directory of syntax
+  nodes, so both tools counted the wrong things: on mache's own repo
+  `get_architecture` reported 11,015 files (syntax leaves, cut off after a
+  50,000-node walk) and no test files, and `get_overview` reported 0 files.
+  Both now read the tree leyline recorded (`_tree`): `file_count` and
+  `total_files` are its files, `total_dirs` its directories,
+  `top_level_breakdown` counts files per top-level entry, and `test_files`
+  lists files named as tests by their language's convention (`*_test.go`,
+  `test_*.py`, `*.spec.ts`, ...) or under a `test`/`tests`/`__tests__`/`spec`
+  directory. Reading it is one query, so `get_architecture` on mache's repo
+  went from 12 s to 2.5 s. A `.db` without `_tree` is counted as before.
+
 - **A write goes through any pinned daemon that says it serves the tree**
   (`mache-161c63`). mache used to refuse writing through a daemon it had not
   started itself, because nothing reported which tree a daemon served and a

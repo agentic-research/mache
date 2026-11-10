@@ -82,21 +82,17 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 
 		for _, childID := range children {
 			node, err := g.GetNode(childID)
-			if err != nil {
+			if err != nil || !node.Mode.IsDir() {
 				continue
 			}
-			if node.Mode.IsDir() {
-				ov.TotalDirs++
-				subChildren, _ := g.ListChildren(childID)
-				ov.TopLevel = append(ov.TopLevel, dirInfo{
-					Name:     filepath.Base(childID),
-					Path:     childID,
-					Children: len(subChildren),
-				})
-			} else {
-				ov.TotalFiles++
-			}
+			subChildren, _ := g.ListChildren(childID)
+			ov.TopLevel = append(ov.TopLevel, dirInfo{
+				Name:     filepath.Base(childID),
+				Path:     childID,
+				Children: len(subChildren),
+			})
 		}
+		ov.TotalDirs, ov.TotalFiles = overviewCounts(g, children)
 
 		// Count refs/defs if available
 		if rp, ok := g.(graph.RefsMapper); ok {
@@ -121,25 +117,40 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
-		// Walk one level deeper to count total dirs/files
-		for _, childID := range children {
-			node, _ := g.GetNode(childID)
-			if node != nil && node.Mode.IsDir() {
-				subChildren, _ := g.ListChildren(childID)
-				for _, subID := range subChildren {
-					subNode, _ := g.GetNode(subID)
-					if subNode != nil {
-						if subNode.Mode.IsDir() {
-							ov.TotalDirs++
-						} else {
-							ov.TotalFiles++
-						}
-					}
-				}
-			}
-		}
-
 		data, _ := json.MarshalIndent(ov, "", "  ")
 		return mcp.NewToolResultText(string(data)), nil
 	}
+}
+
+// overviewCounts is get_overview's directory and file totals. A projection
+// with `_tree` counts its whole source tree; there a source file is a
+// directory of syntax nodes, so counting the graph's file nodes two levels
+// down reported 0 files (mache-7fed6a). Other graphs count the graph's own
+// nodes in the top two levels.
+func overviewCounts(g graph.Graph, children []string) (dirs, files int) {
+	if treeFiles, treeDirs, ok := treeSummary(g); ok {
+		return treeDirs, len(treeFiles)
+	}
+	for _, childID := range children {
+		node, _ := g.GetNode(childID)
+		if node == nil {
+			continue
+		}
+		if !node.Mode.IsDir() {
+			files++
+			continue
+		}
+		dirs++
+		subChildren, _ := g.ListChildren(childID)
+		for _, subID := range subChildren {
+			if subNode, _ := g.GetNode(subID); subNode != nil {
+				if subNode.Mode.IsDir() {
+					dirs++
+				} else {
+					files++
+				}
+			}
+		}
+	}
+	return dirs, files
 }

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/lang"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -60,9 +61,36 @@ type archLayer struct {
 	Note       string   `json:"note,omitempty"`
 }
 
-// walkTree BFS-walks the graph to count files, tally top-level segments, and
-// find test files.
+// walkTree counts files, tallies top-level segments and finds test files.
+// A projection with `_tree` answers from it in one query: there a source file
+// is a directory of syntax nodes, so walking the graph counted syntax leaves
+// and stopped at maxNodes (mache-7fed6a).
 func (a *archReport) walkTree(g graph.Graph) error {
+	if files, _, ok := treeSummary(g); ok {
+		a.countFiles(files)
+		return nil
+	}
+	return a.walkProjection(g)
+}
+
+// countFiles fills the file counts from the source tree's file paths.
+func (a *archReport) countFiles(files []string) {
+	var testFiles []string
+	for _, f := range files {
+		a.FileCount++
+		a.TopLevelBreakdown[strings.SplitN(f, "/", 2)[0]]++
+		if len(testFiles) < maxArchTestFiles && lang.IsTestPath(f) {
+			testFiles = append(testFiles, f)
+		}
+	}
+	a.TestFiles = testFiles
+}
+
+// maxArchTestFiles caps get_architecture's test_files list.
+const maxArchTestFiles = 50
+
+// walkProjection BFS-walks a graph without `_tree`, counting its file nodes.
+func (a *archReport) walkProjection(g graph.Graph) error {
 	var testFiles []string
 	roots, err := g.ListChildren("")
 	if err != nil {
@@ -111,8 +139,8 @@ func (a *archReport) walkTree(g graph.Graph) error {
 			testFiles = append(testFiles, strings.TrimSuffix(id, "/source"))
 		}
 	}
-	if len(testFiles) > 50 {
-		testFiles = testFiles[:50]
+	if len(testFiles) > maxArchTestFiles {
+		testFiles = testFiles[:maxArchTestFiles]
 	}
 	a.TestFiles = testFiles
 	return nil

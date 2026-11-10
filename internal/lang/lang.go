@@ -5,6 +5,7 @@
 package lang
 
 import (
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,29 +24,30 @@ type Language struct {
 	Extensions    []string // file extensions including dot: ".go", ".py"
 	PresetSchema  string   // embedded schema key (empty = no preset)
 	SentinelFiles []string // files that identify a project: "go.mod", "Cargo.toml"
+	TestFiles     []string // base-name globs (path.Match) naming a test file: "*_test.go"
 }
 
 // Registry is the authoritative list of all supported languages.
 // Add a language here and every consumer picks it up automatically.
 var Registry = []Language{
-	{Name: "go", DisplayName: "Go", Extensions: []string{".go"}, PresetSchema: "go", SentinelFiles: []string{"go.mod", "go.sum"}},
-	{Name: "python", DisplayName: "Python", Extensions: []string{".py"}, PresetSchema: "python", SentinelFiles: []string{"pyproject.toml", "requirements.txt", "setup.py"}},
-	{Name: "javascript", DisplayName: "JavaScript", Extensions: []string{".js"}, PresetSchema: "javascript", SentinelFiles: []string{"package.json"}},
-	{Name: "typescript", DisplayName: "TypeScript", Extensions: []string{".ts", ".tsx"}, PresetSchema: "typescript"},
+	{Name: "go", DisplayName: "Go", Extensions: []string{".go"}, PresetSchema: "go", SentinelFiles: []string{"go.mod", "go.sum"}, TestFiles: []string{"*_test.go"}},
+	{Name: "python", DisplayName: "Python", Extensions: []string{".py"}, PresetSchema: "python", SentinelFiles: []string{"pyproject.toml", "requirements.txt", "setup.py"}, TestFiles: []string{"test_*.py", "*_test.py"}},
+	{Name: "javascript", DisplayName: "JavaScript", Extensions: []string{".js"}, PresetSchema: "javascript", SentinelFiles: []string{"package.json"}, TestFiles: []string{"*.test.js", "*.spec.js"}},
+	{Name: "typescript", DisplayName: "TypeScript", Extensions: []string{".ts", ".tsx"}, PresetSchema: "typescript", TestFiles: []string{"*.test.ts", "*.spec.ts", "*.test.tsx", "*.spec.tsx"}},
 	{Name: "sql", DisplayName: "SQL", Extensions: []string{".sql"}, PresetSchema: "sql"},
 	{Name: "terraform", Aliases: []string{"hcl"}, DisplayName: "HCL/Terraform", Extensions: []string{".tf", ".hcl"}, PresetSchema: "terraform"},
 	{Name: "yaml", DisplayName: "YAML", Extensions: []string{".yaml", ".yml"}, PresetSchema: "yaml"},
 	{Name: "rust", DisplayName: "Rust", Extensions: []string{".rs"}, PresetSchema: "rust", SentinelFiles: []string{"Cargo.toml"}},
 	{Name: "toml", DisplayName: "TOML", Extensions: []string{".toml"}, PresetSchema: "toml"},
-	{Name: "elixir", DisplayName: "Elixir", Extensions: []string{".ex", ".exs"}, PresetSchema: "elixir", SentinelFiles: []string{"mix.exs"}},
-	{Name: "java", DisplayName: "Java", Extensions: []string{".java"}, PresetSchema: "java", SentinelFiles: []string{"pom.xml", "build.gradle"}},
+	{Name: "elixir", DisplayName: "Elixir", Extensions: []string{".ex", ".exs"}, PresetSchema: "elixir", SentinelFiles: []string{"mix.exs"}, TestFiles: []string{"*_test.exs"}},
+	{Name: "java", DisplayName: "Java", Extensions: []string{".java"}, PresetSchema: "java", SentinelFiles: []string{"pom.xml", "build.gradle"}, TestFiles: []string{"*Test.java", "*Tests.java"}},
 	{Name: "c", DisplayName: "C", Extensions: []string{".c", ".h"}, PresetSchema: "c"},
 	{Name: "cpp", DisplayName: "C++", Extensions: []string{".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh"}, PresetSchema: "cpp", SentinelFiles: []string{"CMakeLists.txt"}},
-	{Name: "ruby", DisplayName: "Ruby", Extensions: []string{".rb"}, PresetSchema: "ruby", SentinelFiles: []string{"Gemfile"}},
-	{Name: "php", DisplayName: "PHP", Extensions: []string{".php"}, PresetSchema: "php", SentinelFiles: []string{"composer.json"}},
-	{Name: "kotlin", DisplayName: "Kotlin", Extensions: []string{".kt", ".kts"}, PresetSchema: "kotlin"},
-	{Name: "swift", DisplayName: "Swift", Extensions: []string{".swift"}, PresetSchema: "swift", SentinelFiles: []string{"Package.swift"}},
-	{Name: "scala", DisplayName: "Scala", Extensions: []string{".scala", ".sc"}, PresetSchema: "scala", SentinelFiles: []string{"build.sbt"}},
+	{Name: "ruby", DisplayName: "Ruby", Extensions: []string{".rb"}, PresetSchema: "ruby", SentinelFiles: []string{"Gemfile"}, TestFiles: []string{"*_test.rb", "*_spec.rb"}},
+	{Name: "php", DisplayName: "PHP", Extensions: []string{".php"}, PresetSchema: "php", SentinelFiles: []string{"composer.json"}, TestFiles: []string{"*Test.php"}},
+	{Name: "kotlin", DisplayName: "Kotlin", Extensions: []string{".kt", ".kts"}, PresetSchema: "kotlin", TestFiles: []string{"*Test.kt", "*Tests.kt"}},
+	{Name: "swift", DisplayName: "Swift", Extensions: []string{".swift"}, PresetSchema: "swift", SentinelFiles: []string{"Package.swift"}, TestFiles: []string{"*Tests.swift", "*Test.swift"}},
+	{Name: "scala", DisplayName: "Scala", Extensions: []string{".scala", ".sc"}, PresetSchema: "scala", SentinelFiles: []string{"build.sbt"}, TestFiles: []string{"*Test.scala", "*Spec.scala", "*Suite.scala"}},
 	// --- Added languages (preset schemas live alongside the core set) ---
 	{Name: "bash", DisplayName: "Bash", Extensions: []string{".sh", ".bash"}, PresetSchema: "bash"},
 	{Name: "csharp", DisplayName: "C#", Extensions: []string{".cs"}, PresetSchema: "csharp"},
@@ -106,6 +108,33 @@ func ForPath(path string) *Language {
 // (tree-sitter languages + .json).
 func IsSourceExt(ext string) bool {
 	return srcSet[strings.ToLower(ext)]
+}
+
+// testDirs are directory names whose contents are tests in every language
+// that uses them (Rust's integration tests/, Jest's __tests__/, RSpec's
+// spec/). Go's testdata/ holds fixtures, not tests, and is not one.
+var testDirs = map[string]bool{"test": true, "tests": true, "__tests__": true, "spec": true}
+
+// IsTestPath reports whether the slash-separated path names a test file: its
+// base name matches its language's TestFiles, or a directory on the path is a
+// test directory.
+func IsTestPath(p string) bool {
+	dir, name := path.Split(p)
+	for _, seg := range strings.Split(strings.TrimSuffix(dir, "/"), "/") {
+		if testDirs[seg] {
+			return true
+		}
+	}
+	l := ForPath(name)
+	if l == nil {
+		return false
+	}
+	for _, glob := range l.TestFiles {
+		if ok, _ := path.Match(glob, name); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Extensions returns all recognized file extensions in sorted order.

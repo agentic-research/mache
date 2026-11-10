@@ -121,3 +121,25 @@ func TestIRLineage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+// TreeSummary, on a real pinned-leyline parse, is every file in the tree,
+// parsed or not, in path order, and every directory but the root.
+func TestTreeSummary_IsTheWholeTree(t *testing.T) {
+	src := t.TempDir()
+	for name, body := range map[string]string{
+		"main.go":        "package main\n",
+		"pkg/a.go":       "package pkg\n",
+		"pkg/sub/n.txt":  "n\n",
+		"pkg/sub/b.go":   "package sub\n",
+		"empty/dir/x.md": "x\n",
+	} {
+		p := filepath.Join(src, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+	}
+	db, _ := lltest.ParseSourceViaLeyline(t, src)
+	files, dirs, err := lloschema.TreeSummary(lloschema.DB(db))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"empty/dir/x.md", "main.go", "pkg/a.go", "pkg/sub/b.go", "pkg/sub/n.txt"}, files)
+	assert.Equal(t, 4, dirs, "empty, empty/dir, pkg, pkg/sub")
+}

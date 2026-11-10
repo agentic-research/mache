@@ -96,3 +96,27 @@ func TreeFileBytes(qg Querier, path string) (content []byte, ok bool, err error)
 	}
 	return content, true, nil
 }
+
+// TreeSummary is every file path in `_tree`, in path order, and how many
+// directories it holds besides the root: one scan, for a caller that wants
+// the tree's shape without walking the projection (mache-7fed6a).
+func TreeSummary(qg Querier) (files []string, dirs int, err error) {
+	rows, err := qg.QueryRefs(`SELECT path, mode = ? FROM _tree WHERE path != '' ORDER BY path`, treeModeDir)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var p string
+		var isDir bool
+		if err := rows.Scan(&p, &isDir); err != nil {
+			return nil, 0, err
+		}
+		if isDir {
+			dirs++
+		} else {
+			files = append(files, p)
+		}
+	}
+	return files, dirs, rows.Err()
+}

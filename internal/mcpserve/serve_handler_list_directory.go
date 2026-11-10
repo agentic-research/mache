@@ -172,6 +172,23 @@ func virtualEntries(g graph.Graph, path string, listed []nodeEntry) []nodeEntry 
 	return virtual
 }
 
+// treeSummary is the source tree's file paths and directory count from the
+// graph's `_tree`; ok is false for a graph without one.
+func treeSummary(g graph.Graph) (files []string, dirs int, ok bool) {
+	qg, isQ := g.(lloschema.Querier)
+	if !isQ {
+		return nil, 0, false
+	}
+	if has, err := lloschema.HasTree(qg); err != nil || !has {
+		return nil, 0, false
+	}
+	files, dirs, err := lloschema.TreeSummary(qg)
+	if err != nil {
+		return nil, 0, false
+	}
+	return files, dirs, true
+}
+
 // withTree is listed plus the entries of path's `_tree` the projection did not
 // list, in name order: `_tree` is the authority on what exists, and hiding a
 // file no parser projected makes an agent overlook or recreate it. Such a file
