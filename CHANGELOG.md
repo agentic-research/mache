@@ -6,6 +6,20 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Documentation
+
+- **README and GETTING-STARTED match the build again** (`mache-f091d3`).
+  Each claim was checked against the binary, `--help` and live tool output.
+  The tool list is the 19 tools mache registers, with `semantic_search` marked
+  unavailable on the pinned leyline; a directory source is frozen per session,
+  not live; `_lsp` comes from `leyline lsp --merge-db`, not `leyline parse`;
+  layouts and `find_callers` output show real shapes; `--control` takes a
+  control block and does not reload the schema; FUSE runs through
+  `leyline daemon --backend fuse`; `--infer` is opt-in and tries presets
+  first; `serve --schema` on a directory is documented as ignored
+  (`mache-eade2e`). README gains a commands and environment-variable
+  reference (`MACHE_HOME`, `MACHE_NO_LEYLINE`, `MACHE_LEYLINE_BINARY`, ...).
+
 ### Added
 
 - **`list_directory` shows files leyline did not parse** (`mache-3a375a`).

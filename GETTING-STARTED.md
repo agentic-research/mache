@@ -62,8 +62,8 @@ Running mache as an MCP server is **two decisions**: *what to point it at* (the 
 
 | Source                        | Command                                                          | Parsing tier                                                                                                                                                   | Freshness                                                                                                  | Best for                                                      |
 | ----------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| **Directory**                 | `mache serve .`                                                  | `leyline parse` → `_ast` → Mache's pure-Go `ASTWalker`. The exact pinned Leyline release is resolved from `PATH`, the local cache, or a SHA-verified download. | Live — re-parses as files change.                                                                          | The simplest source-code path.                                |
-| **ley-line `.db` (snapshot)** | `leyline parse .` → `mache serve ./that.db`                      | semantic. `_ast` + `_lsp` tables make `find_callers`, `get_type_info`, `get_diagnostics` accurate **across all languages**.                                    | Static — reflects the code as of the last `leyline parse`. Re-run to refresh.                              | Rust/Python/TS, or any time you want compiler-grade accuracy. |
+| **Directory**                 | `mache serve .`                                                  | `leyline parse` → `_ast` → Mache's pure-Go `ASTWalker`. The exact pinned Leyline release is resolved from `PATH`, the local cache, or a SHA-verified download. | Frozen — parsed once when the session's graph is first built; start a new session to see edits.          | The simplest source-code path.                                |
+| **ley-line `.db` (snapshot)** | `leyline parse .` → `mache serve ./that.db`                      | Same `_ast` as a directory. Add `_lsp` tables with `leyline lsp --merge-db` to light up `get_type_info` and LSP diagnostics.                                  | Static — reflects the code as of the last `leyline parse`. Re-run to refresh.                              | Rust/Python/TS, or any time you want compiler-grade accuracy. |
 | **ley-line live (hot-swap)**  | `mache serve --control <block>` with the ley-line daemon running | semantic (same as above).                                                                                                                                      | Live — the daemon re-parses on edit and mache **hot-swaps** the graph on each generation bump (zero-copy). | The best of both: semantic accuracy *and* live updates.       |
 
 Rule of thumb: **use a directory for the automatic base projection; use a pre-built Leyline `.db` when you want reproducible snapshot, LSP, or embedding enrichment; use the live daemon for hot-swap.** Pointing stdio at a Leyline-produced `.db` (for example, `mache serve --stdio ./code.db`) is correct and recommended. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) for which tools need which tables.
@@ -80,6 +80,11 @@ claude mcp add --transport http mache http://localhost:7532/mcp
 ```
 
 > ⚠️ `mache serve` (HTTP) is a **foreground daemon** — it blocks the terminal and must stay alive for the client to connect. If the client reports `localhost:7532/mcp` **connection refused**, the daemon isn't running — that's the #1 first-run gotcha. The fix is a one-time `mache init --global`, which installs a per-user supervisor (**launchd** LaunchAgent on macOS, **systemd `--user`** unit on Linux) that starts the daemon at login and keeps it alive across restarts — no terminal to babysit. For an ad-hoc run instead, background it (`mache serve . &`) in a second terminal.
+
+One daemon serves many projects. Run `mache init` in a project to register it:
+it writes `.mache.json` and a `.claude/mcp.json` whose URL carries
+`?project=<token>`, so each session is routed to that project's source without
+depending on the client to report its workspace roots.
 
 **Codex** uses the same Streamable HTTP endpoint:
 
@@ -150,14 +155,15 @@ fresh Mache runtime directories so neither run can reuse a daemon:
 
 ```bash
 cdc_off_home=$(mktemp -d)
-HOME="$cdc_off_home" mache serve --stdio --path .
+MACHE_HOME="$cdc_off_home" mache serve --stdio --path .
 
 cdc_on_home=$(mktemp -d)
-HOME="$cdc_on_home" mache serve --stdio --cdc --path .
+MACHE_HOME="$cdc_on_home" mache serve --stdio --cdc --path .
 ```
 
-Each assignment gives that invocation its own Mache runtime under
-`$HOME/.mache`; do not reuse either directory for the other run. `--path .`
+`MACHE_HOME` (default `~/.mache`) moves the whole Mache runtime: daemon
+arena, control block, parse cache, and pinned binaries. Each assignment gives
+that invocation its own runtime; do not reuse either directory for the other run. `--path .`
 both selects the rootless graph fallback and associates that directory with
 the managed daemon as its `--source`. Initialize each stdio session and call a
 graph tool such as `get_overview` to trigger lazy graph access. The managed
@@ -165,7 +171,8 @@ spawn log must contain the same `--source` in both runs and `--cdc` only in the
 second run. The daemon-argv lifecycle tests pin the same boundary.
 
 Do not compare `get_dataflow` and call that a CDC ablation. For a directory
-source, Mache auto-parses a frozen temporary SQLite graph; `get_dataflow` reads
+source, Mache parses into a frozen SQLite graph (cached by content under
+`$MACHE_HOME/parse`); `get_dataflow` reads
 that graph's `node_refs` reference projection, not the managed daemon arena.
 Equal responses therefore say nothing about CDC behavior. Likewise,
 `get_sheaf_status` reports the reachable daemon's current cache state, not a
@@ -206,7 +213,7 @@ Add `--scope user|project|local` to either `claude mcp add` to control where the
 }
 ```
 
-Once connected, the agent can call `list_directory`, `read_file`, `find_callers`, `find_callees`, `find_definition`, `search`, `get_communities`, `get_overview`, `get_impact`, `get_architecture`, `get_diagram`, `write_file`, `find_smells`, and `resolve_ref`. With a ley-line-built `.db` (or the live daemon), three more light up: `semantic_search`, `get_type_info`, `get_diagnostics`.
+Once connected, the agent sees 19 tools: `list_directory`, `read_file`, `search`, `find_definition`, `find_callers`, `find_callees`, `get_overview`, `get_communities`, `get_impact`, `get_architecture`, `get_diagram`, `get_dataflow`, `find_smells`, `resolve_ref`, `write_file`, `get_diagnostics`, `get_type_info`, `get_sheaf_status`, and `semantic_search`. All are always registered. `get_diagnostics` reports Leyline's parse diagnostics on any source, plus language-server diagnostics when the `.db` has `_lsp` tables. `get_type_info` needs those `_lsp` tables. `semantic_search` needs a Leyline daemon with embeddings, which the pinned release does not provide, so it currently reports that it is unavailable.
 
 See the [MCP Server section in ARCHITECTURE.md](docs/ARCHITECTURE.md#core-abstractions) for the full tool inventory and the [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open) section for which tools require a `.db` built by ley-line-open.
 
@@ -218,13 +225,15 @@ To span multiple codebases from one MCP endpoint, use repeatable `--mount NAME=P
 mache serve --mount auth=./auth-svc --mount billing=./billing-svc
 ```
 
-Each mount becomes a top-level virtual directory. `find_callers Validate` walks both repos and returns results annotated with their mount of origin:
+Each mount becomes a top-level virtual directory. `find_callers Validate` walks both repos and returns results annotated with their mount of origin (here `billing/c.go` calls `auth.Validate()`):
 
 ```json
 {
   "callers": [
-    {"path": "auth/functions/AuthCaller/source", "mount": "auth"},
-    {"path": "billing/functions/Charge/source",  "mount": "billing"}
+    {
+      "path": "billing/c.go/function_declaration/block/statement_list/expression_statement/call_expression",
+      "mount": "billing"
+    }
   ]
 }
 ```
@@ -245,21 +254,25 @@ Layout:
 
 ```
 /tmp/mache-src/
-  functions/
-    HandleRequest/
-      source        # the function body
-      context       # imports, types visible to this scope
-      callers/      # who calls this function
-      callees/      # what this function calls
-    ValidateToken/
-      source
-  types/
-    Config/
-      source        # type Config struct { ... }
-  _project_files/
-    README.md
-    go.mod
+  _schema.json      # the topology in use
+  main/             # Go preset: one directory per package
+    functions/
+      HandleRequest/
+        source      # the function body
+        context     # imports, types visible to this scope
+        callers/    # who calls this function
+        callees/    # what this function calls
+    types/
+      Config/
+        source      # type Config struct { ... }
 ```
+
+`--infer` uses the language preset when the source has one (Go here) and falls
+back to FCA inference otherwise. Without a preset or `--schema`, the tree
+follows Leyline's file and AST layout instead (`main.go/function_declaration_0/...`),
+which is also what `mache serve <dir>` projects.
+
+NFS mounts call `sudo mount`, so expect a password prompt on macOS.
 
 Navigate by function name, not file path. `callers/` and `callees/` are virtual directories that appear only when references exist.
 
@@ -272,17 +285,23 @@ mache --agent -d ~/my-project
 # Mount a SQLite database directly (zero-copy, no ingestion)
 mache --schema examples/nvd-schema.json --data results.db /tmp/nvd
 
-# Hot-reload schema while mounted
-mache --control /tmp/control.sock --infer -d ./src /tmp/mount
+# Hot-swap the graph from a running Leyline daemon's control block
+mache --control ~/.mache/default.ctrl /tmp/mount
 ```
 
-NFS is the only mount backend (FUSE was removed in v0.7.0; for FUSE today, use [ley-line-open's `leyline serve`](https://github.com/agentic-research/ley-line-open)).
+`--control` takes a Leyline control block (a `.ctrl` file, not a socket). Mache
+re-opens the arena each time the daemon bumps its generation. The schema is
+not reloaded.
+
+NFS is the only mache mount backend (FUSE was removed in v0.7.0). For FUSE, run
+Leyline directly: `mache leyline exec -- daemon --backend fuse --mount <dir> ...`,
+which needs a Leyline build with the `fuse` feature.
 
 ## Write-back
 
 With `--writable`, edits to `source` files go through a pipeline, and leyline (not mache) writes the source file:
 
-1. **Validate** — tree-sitter checks syntax
+1. **Validate** — Leyline parses the edited file and rejects syntax errors
 1. **Format** — gofumpt for Go, hclwrite for HCL/Terraform
 1. **Propose** — the node's whole file, rebuilt from the bytes it was read from with the edit in place, is proposed to the leyline daemon mache started on the tree, against those bytes as its base. The daemon applies it, merges it with a change made since, or refuses it (`stale`, with the overlapping lines) when the two changes overlap
 1. **Update** — node content updated in-place, no re-ingest
@@ -293,11 +312,11 @@ For the full pipeline design, see [ADR-0009: AST-Aware Write Pipeline](docs/adr/
 
 ## Schema inference
 
-Mache auto-infers a topology from your source if you don't provide a schema (`--infer` is the default for source mounts). The inference pipeline:
+Pass `--infer` to a mount to pick a topology for you; it is off by default. The order:
 
-1. **FCA** (Formal Concept Analysis) — reservoir-samples records, builds a concept lattice, projects to a `Topology`
+1. **Language preset** — a source tree in a supported language gets that language's preset (`go`, `python`, `rust`, ...)
+1. **FCA** (Formal Concept Analysis) — otherwise, reservoir-samples records, builds a concept lattice, projects to a `Topology`
 1. **Greedy entropy** — information-theoretic field scoring picks identifier columns, temporal shards, leaf files
-1. Schema-driven projection mounts the result
 
 To inspect the inferred schema after mount:
 
@@ -305,25 +324,30 @@ To inspect the inferred schema after mount:
 cat /tmp/mache-src/_schema.json
 ```
 
-Or pass an explicit schema if the inferred one isn't right:
+Or pass an explicit schema to the mount if the inferred one isn't right:
 
 ```bash
-mache serve --schema examples/go-schema.json ./src
+mache --schema examples/go-schema.json -d ./src /tmp/mache-src
 ```
+
+`mache serve --schema` applies to a `.db` source. For a directory source it is
+currently ignored and the Leyline layout is served (tracked as mache-eade2e).
 
 See [ADR-0005](docs/adr/0005-fca-schema-inference.md) and [ADR-0008](docs/adr/0008-greedy-entropy-schema-inference.md) for the inference design.
 
 ## Troubleshooting
 
-**`get_diagnostics` returns "no \_lsp table in database"** — the LSP-enrichment tools require the optional Leyline LSP pass. Either pre-enrich the `.db`, pass a `file` parameter to trigger live enrichment, or use the base tools over the `_ast` projection. The parser itself is still Leyline in every source-code mode. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
+**`get_diagnostics` returns only parse diagnostics, or `get_type_info` finds nothing** — language-server data comes from the optional Leyline LSP pass. Either pre-enrich the `.db` (`mache leyline exec -- lsp --server gopls --input <file> --output <out.db> --merge-db ./code.db`), or pass `file` to `get_diagnostics` to enrich through the Leyline daemon. The parser itself is still Leyline in every source-code mode. See [Interplay with ley-line-open](docs/ARCHITECTURE.md#interplay-with-ley-line-open).
 
 **`find_smells` reports a missing `_ast` table** — the input is not a complete Leyline source projection. Rebuild from the source directory or point Mache at a Leyline-produced `.db`. Mache no longer has a standalone in-process parser fallback.
 
-**Mount stuck or `umount` complains "device busy"** — see `mache unmount <mountpoint>` and the open-bead ergonomics in `mache-fsi`. macOS sometimes needs `diskutil unmount force`.
+**Mount stuck or `umount` complains "device busy"** — run `mache unmount <mountpoint>`; `mache clean` removes stale mounts. macOS sometimes needs `diskutil unmount force`.
 
 **NFS mount fails on Linux with "no such device"** — install `nfs-common` (`apt-get install nfs-common`).
 
-**No pinned Leyline binary is available** — run `task leyline:ensure`. It refreshes `~/.mache/bin/leyline` from the exact published release after verifying the platform SHA-256. `MACHE_NO_LEYLINE=1` intentionally disables that download and therefore cannot be used for source projection.
+**No pinned Leyline binary is available** — run `task leyline:ensure` (or `mache install`). It downloads the exact published release to `$MACHE_HOME/bin/leyline-v<version>` after verifying the platform SHA-256; `mache leyline path` prints which binary is used. `MACHE_NO_LEYLINE=1` disables the download only: a pinned binary already on `PATH` or in the cache is still used, and without one source projection fails.
+
+**Something is wrong and you don't know what** — `mache doctor` checks the daemon, arena, and project registration. `mache daemon status|start|stop|restart` operates the supervised HTTP daemon that `mache init --global` installed.
 
 ## Where to next
 
