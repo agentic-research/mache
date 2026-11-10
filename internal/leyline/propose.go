@@ -22,10 +22,10 @@ type ProposedWrite = daemonwire.ProposedWrite
 // SourceRead is the daemon's stored copy of one file: the bytes, and the hash
 // a propose names as that file's base.
 type SourceRead struct {
-	Content  string
-	BlobHash string
-	Mode     string
-	TreeRoot string
+	Content   string
+	BlobHash  string
+	Mode      string
+	StoreRoot string
 }
 
 // ReadSource reads path (relative to the daemon's --source root) as the daemon
@@ -44,10 +44,10 @@ func (c *SocketClient) ReadSource(path string) (*SourceRead, error) {
 		return nil, fmt.Errorf("leyline read_source %s: the answer names no content or blob hash", path)
 	}
 	return &SourceRead{
-		Content:  *resp.Content,
-		BlobHash: *resp.BlobHash,
-		Mode:     deref(resp.Mode),
-		TreeRoot: deref(resp.TreeRoot),
+		Content:   *resp.Content,
+		BlobHash:  *resp.BlobHash,
+		Mode:      deref(resp.Mode),
+		StoreRoot: deref(resp.StoreRoot),
 	}, nil
 }
 
@@ -81,7 +81,7 @@ type PathHash struct{ Path, BlobHash string }
 // PostCommitError is a step after the commit that failed; the proposal is
 // still applied.
 type ProposeResult struct {
-	TreeRoot        string
+	StoreRoot       string
 	Blobs           []PathHash
 	Merged          []string
 	PostCommitError string
@@ -112,7 +112,7 @@ func (c *SocketClient) Propose(writes []ProposedWrite) (*ProposeResult, error) {
 // error is set.
 func proposeResult(resp *daemonwire.ProposeResponse) (*ProposeResult, error) {
 	res := &ProposeResult{
-		TreeRoot:        deref(resp.TreeRoot),
+		StoreRoot:       deref(resp.StoreRoot),
 		Merged:          resp.Merged,
 		PostCommitError: deref(resp.PostCommitError),
 		Message:         deref(resp.Error),

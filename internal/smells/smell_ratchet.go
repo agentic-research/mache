@@ -3,6 +3,7 @@ package smells
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,6 +40,13 @@ func relativizeFindings(findings []smellFinding, root string) []smellFinding {
 // Bead mache-491b9f (analysis-substrate/W5).
 type smellBaseline struct {
 	Version int `json:"version"`
+	// IRLineage is the IR lineage (leyline's ir_schema_version, e.g.
+	// merkle-ast-v3) the node_hash keys below were taken under. node_hash is
+	// the ratchet's key, and a lineage change moves every value, so a baseline
+	// from another lineage cannot be compared: the gate refuses it rather than
+	// report every finding as new (mache-99568c). Empty in a baseline written
+	// before the field existed, which gates as before.
+	IRLineage string `json:"ir_lineage,omitempty"`
 	// RulesSkipped records which rules could NOT run against the backend this
 	// baseline was generated from, so a later gate run can tell a matching
 	// degradation from a new one. A skipped rule contributes no findings, which
@@ -264,4 +272,20 @@ func renderNewDebt(w io.Writer, debt []smellFinding) {
 		}
 		_, _ = fmt.Fprintf(w, "  [%s] %s\n", f.RuleID, loc)
 	}
+}
+
+// errLineage is a baseline whose node_hash keys were taken under another IR
+// lineage than the scan's.
+var errLineage = errors.New("the smell baseline's node_hash keys are from another IR lineage")
+
+// lineageMismatch refuses a baseline recorded under an IR lineage other than
+// the scan's: every node_hash differs across a lineage change, so the
+// comparison would report every grandfathered finding as new and every new one
+// as covered. A baseline or a db that records no lineage cannot be checked.
+func lineageMismatch(base smellBaseline, current string) error {
+	if base.IRLineage == "" || current == "" || base.IRLineage == current {
+		return nil
+	}
+	return fmt.Errorf("%w: baseline %s, scan %s; regenerate it under %s with `task smells:baseline`",
+		errLineage, base.IRLineage, current, current)
 }

@@ -124,19 +124,19 @@ func (leylineV6Dialect) emitSymbols(e *emitter) {
 		h := e.subtree(d.subtree, string(d.kind), d.token)
 		sp := e.b.spanOf(string(d.nodeID))
 		e.exec(`INSERT INTO node_defs (token, nid, container_nid, node_kind,
-			start_byte, end_byte, start_row, start_col, end_row, end_col, canonical_kind, content_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT content_id FROM node_content WHERE node_hash = ?))`,
+			start_byte, end_byte, start_row, start_col, end_row, end_col, canonical_kind, content_id, kind_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT content_id FROM node_content WHERE node_hash = ?), (SELECT kind_id FROM nodes WHERE nid = ?))`,
 			d.token, n.nid, container, nullIfEmpty(n.kind),
 			sp.startByte, sp.endByte, sp.startRow, sp.startCol, sp.endRow, sp.endCol,
-			nullIfEmpty(string(d.kind)), h)
+			nullIfEmpty(string(d.kind)), h, n.nid)
 	}
 	for i, r := range e.b.refs {
 		site := e.v6Sites[i]
 		h := e.subtree(r.subtree, "call_expression", r.token)
-		e.exec(`INSERT INTO node_refs (token, nid, container_nid, node_kind, qualifier, content_id)
-			VALUES (?, ?, ?, ?, ?, (SELECT content_id FROM node_content WHERE node_hash = ?))`,
+		e.exec(`INSERT INTO node_refs (token, nid, container_nid, node_kind, qualifier, content_id, kind_id)
+			VALUES (?, ?, ?, ?, ?, (SELECT content_id FROM node_content WHERE node_hash = ?), (SELECT kind_id FROM nodes WHERE nid = ?))`,
 			r.token, site.nid, t.byPath[string(r.from)].nid, nullIfEmpty(site.kind),
-			nullIfEmpty(r.qualifier), h)
+			nullIfEmpty(r.qualifier), h, site.nid)
 	}
 }
 

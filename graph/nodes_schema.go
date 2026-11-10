@@ -1,6 +1,10 @@
 package graph
 
-import "database/sql"
+import (
+	"database/sql"
+
+	"github.com/agentic-research/mache/internal/sqlintro"
+)
 
 // What the nodes table looks like on disk, as distinct from how it is read
 // (nodes_table_reader.go) or written (sqlite_writer.go).
@@ -37,10 +41,5 @@ const (
 // reports the same rows as info plus generated and hidden ones, so no existing
 // probe changes its answer.
 func ColumnExists(db *sql.DB, table, col string) bool {
-	rows, err := db.Query("SELECT 1 FROM pragma_table_xinfo(?) WHERE name = ?", table, col)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = rows.Close() }()
-	return rows.Next()
+	return sqlintro.ColumnExists(db, table, col)
 }

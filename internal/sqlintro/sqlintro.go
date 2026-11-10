@@ -39,3 +39,11 @@ func ColumnIsGenerated(q RowQuerier, table, col string) bool {
 	}
 	return hidden == 2 || hidden == 3
 }
+
+// ColumnExists reports whether table has a column named col, generated
+// columns included (pragma_table_xinfo lists them). A missing table reads as
+// no column.
+func ColumnExists(q RowQuerier, table, col string) bool {
+	var one int
+	return q.QueryRow("SELECT 1 FROM pragma_table_xinfo(?) WHERE name = ?", table, col).Scan(&one) == nil
+}

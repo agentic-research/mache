@@ -1204,12 +1204,28 @@ func (c *SocketClient) Prioritize(files []string) error {
 // Release binaries print a bare X.Y.Z and non-tag builds X.Y.Z-dev+<sha>, so
 // the exact pin now tells them apart.
 //
+// v0.25.0 -> v0.26.0 is an identity release (ADR-0047 M1 + M2; mache-107423,
+// mache-108e26). Arenas do not carry over: LLO refuses anything below
+// projection-v12 at parse open, and the arena record and parse cache are keyed
+// on the pin, so both start cold.
+//   - M1 (projection-v11): read_source and propose answer store_root, a
+//     parser-free directory-Merkle root, where they answered tree_root; the
+//     wire major is 2. mache's SourceRead/ProposeResult carry StoreRoot.
+//   - M2 (projection-v12): node_hash is keyed (IR merkle-ast-v3), so every
+//     value differs from v2; raw_kind and lang leave node_content for the
+//     occurrence; node_defs and node_refs gain kind_id. A fielded child's
+//     grammar kind is read from its occurrence (lloschema.FieldChildJoins).
+//     The smell baseline records its IR lineage and was re-keyed once.
+//
+// Checked by diffing sqlite_master of one tree parsed by v0.25.0 and v0.26.0.
+// compat_min stays 0.6.0.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.25.0"
+const leylineBinaryVersion = "v0.26.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's

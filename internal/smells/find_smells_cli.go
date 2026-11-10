@@ -339,8 +339,14 @@ func runRatchetGate(qg graph.RefsQuerier, results []ruleRunResult, skipped []ski
 		pathKeyed = true
 	}
 
+	lineage, err := lloschema.IRLineage(qg)
+	if err != nil {
+		return ratchetErr(errw, 4, fmt.Errorf("read the db's IR lineage: %w", err))
+	}
+
 	if findSmellsWriteBaseline != "" {
 		base := computeBaseline(scanned)
+		base.IRLineage = lineage
 		// Record what this backend could not assess, so a later gate run can
 		// tell a matching degradation from a newly-lost rule. sortedIDs is
 		// always non-nil, which this depends on: an empty list here means
@@ -351,7 +357,7 @@ func runRatchetGate(qg graph.RefsQuerier, results []ruleRunResult, skipped []ski
 		// reporting.
 		base.RulesSkipped = sortedIDs(skipped, func(s skippedRule) string { return s.ID })
 		if err := writeBaseline(findSmellsWriteBaseline, base); err != nil {
-			return ratchetErr(4, fmt.Errorf("write baseline %s: %w", findSmellsWriteBaseline, err))
+			return ratchetErr(errw, 4, fmt.Errorf("write baseline %s: %w", findSmellsWriteBaseline, err))
 		}
 		_, _ = fmt.Fprintf(errw, "wrote smell baseline: %s\n", findSmellsWriteBaseline)
 		renderCoverage(errw, len(results), skipped, pathKeyed)
@@ -360,7 +366,10 @@ func runRatchetGate(qg graph.RefsQuerier, results []ruleRunResult, skipped []ski
 	if findSmellsBaseline != "" {
 		base, err := loadBaseline(findSmellsBaseline)
 		if err != nil {
-			return ratchetErr(4, fmt.Errorf("load baseline %s: %w", findSmellsBaseline, err))
+			return ratchetErr(errw, 4, fmt.Errorf("load baseline %s: %w", findSmellsBaseline, err))
+		}
+		if err := lineageMismatch(base, lineage); err != nil {
+			return ratchetErr(errw, 4, err)
 		}
 		// Coverage first: if a rule that contributed to this baseline did not
 		// run, "no new debt" is not a claim this run is entitled to make, and
@@ -384,8 +393,8 @@ func runRatchetGate(qg graph.RefsQuerier, results []ruleRunResult, skipped []ski
 
 // ratchetErr mirrors printAndCode inside the ratchet, which returns
 // (code, handled) rather than (code, error).
-func ratchetErr(code int, err error) (int, bool) {
-	fmt.Fprintln(os.Stderr, err)
+func ratchetErr(errw io.Writer, code int, err error) (int, bool) {
+	_, _ = fmt.Fprintln(errw, err)
 	return code, true
 }
 

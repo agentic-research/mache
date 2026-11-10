@@ -90,7 +90,7 @@ func TestProjectionVersion_ReportsWhatTheArtifactDeclares(t *testing.T) {
 // and "nobody looked", so an entry going missing must fail rather than silently
 // widen the warning to shapes mache does in fact support.
 func TestKnownProjections_CoverTheShapesMacheActuallyReads(t *testing.T) {
-	for _, v := range []string{"projection-v2", "projection-v4", "projection-v6", "projection-v7", "projection-v8", "projection-v9", "projection-v10"} {
+	for _, v := range []string{"projection-v2", "projection-v4", "projection-v6", "projection-v7", "projection-v8", "projection-v9", "projection-v10", "projection-v11", "projection-v12"} {
 		_, ok := knownProjections[v]
 		assert.True(t, ok, "%s is a shape mache has been checked against", v)
 	}
@@ -99,7 +99,7 @@ func TestKnownProjections_CoverTheShapesMacheActuallyReads(t *testing.T) {
 			"independently and it became v4 before release, so claiming it would name a "+
 			"shape that never existed")
 
-	_, future := knownProjections["projection-v11"]
+	_, future := knownProjections["projection-v13"]
 	assert.False(t, future, "the set must not be a wildcard")
 }
 
@@ -125,8 +125,10 @@ func TestWarnUnknownProjection_IsQuietOnEverythingMacheSupports(t *testing.T) {
 		{"projection-v7", map[string]string{ProjectionSchemaVersionKey: "projection-v7"}, false},
 		{"projection-v8", map[string]string{ProjectionSchemaVersionKey: "projection-v8"}, false},
 		{"projection-v9", map[string]string{ProjectionSchemaVersionKey: "projection-v9"}, false},
-		{"projection-v10, the pin", map[string]string{ProjectionSchemaVersionKey: "projection-v10"}, false},
-		{"a shape from the future", map[string]string{ProjectionSchemaVersionKey: "projection-v11"}, true},
+		{"projection-v10", map[string]string{ProjectionSchemaVersionKey: "projection-v10"}, false},
+		{"projection-v11", map[string]string{ProjectionSchemaVersionKey: "projection-v11"}, false},
+		{"projection-v12, the pin", map[string]string{ProjectionSchemaVersionKey: "projection-v12"}, false},
+		{"a shape from the future", map[string]string{ProjectionSchemaVersionKey: "projection-v13"}, true},
 		{"a fork's own string", map[string]string{ProjectionSchemaVersionKey: "acme-projection-1"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
