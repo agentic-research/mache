@@ -16,9 +16,9 @@ func TestDir_IsHomeDotMacheByDefault(t *testing.T) {
 	dir, err := Dir()
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".mache"), dir)
-	bin, err := BinDir()
+	bin, err := BinPath("leyline-v1")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, ".mache", "bin"), bin)
+	assert.Equal(t, filepath.Join(home, ".mache", "bin", "leyline-v1"), bin)
 }
 
 // MACHE_HOME moves every state path and the binary cache together.
@@ -28,7 +28,7 @@ func TestDir_FollowsMacheHome(t *testing.T) {
 	dir, err := Dir()
 	require.NoError(t, err)
 	assert.Equal(t, over, dir)
-	bin, err := BinDir()
+	bin, err := BinPath("")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(over, "bin"), bin)
 }
@@ -51,7 +51,7 @@ func TestDir_RefusesTheRealMacheUnderTest(t *testing.T) {
 	t.Setenv(Env, "")
 	_, err = Dir()
 	assert.ErrorContains(t, err, "t.TempDir")
-	_, err = BinDir()
+	_, err = BinPath("")
 	assert.NoError(t, err, "the binary cache is not guarded")
 
 	t.Setenv(Env, realDefault)

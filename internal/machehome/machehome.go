@@ -2,7 +2,7 @@
 // ~/.mache, or wherever MACHE_HOME points. Every path mache keeps per-machine
 // state under (the project registry, parse cache, leyline arena, control
 // block, sockets and owner records) goes through Dir; the pinned leyline
-// binaries go through BinDir.
+// binaries go through BinPath.
 //
 // One resolver is what makes the override and the test guard complete. When
 // each site joined $HOME/.mache itself, only the project registry refused a
@@ -65,13 +65,14 @@ func Dir() (string, error) {
 	return dir, nil
 }
 
-// BinDir is where the pinned leyline binaries are cached: Dir's bin/. Unlike
-// Dir it is not guarded under test. The cache is shared, version-named and
-// read-only to tests, which resolve the pinned leyline from it.
-func BinDir() (string, error) {
+// BinPath is name in the cache of pinned leyline binaries, the home's bin/
+// (BinPath("") is the directory itself). Unlike Dir it is not guarded under
+// test: the cache is shared, version-named and read-only to tests, which
+// resolve the pinned leyline from it.
+func BinPath(name string) (string, error) {
 	dir, err := resolve()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "bin"), nil
+	return filepath.Join(dir, "bin", name), nil
 }

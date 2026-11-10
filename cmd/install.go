@@ -457,11 +457,10 @@ func removePinnedLeyline(out io.Writer, opts installOpts) error {
 		logf(out, "leaving the cached leyline in place (--keep-leyline)\n")
 		return nil
 	}
-	bin, err := machehome.BinDir()
+	pinned, err := machehome.BinPath("leyline-" + leyline.BinaryVersion)
 	if err != nil {
 		return err
 	}
-	pinned := filepath.Join(bin, "leyline-"+leyline.BinaryVersion)
 	switch _, statErr := os.Lstat(pinned); {
 	case errors.Is(statErr, os.ErrNotExist):
 		logf(out, "no cached leyline %s to remove\n", leyline.BinaryVersion)
