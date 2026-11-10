@@ -13,7 +13,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/mark3labs/mcp-go v1.4.0
-	github.com/ohler55/ojg v1.28.7
+	github.com/ohler55/ojg v1.28.9
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	github.com/willscott/go-nfs v0.0.4
