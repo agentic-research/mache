@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -280,6 +281,53 @@ func TestConnectedComponents_MembersAreSorted(t *testing.T) {
 	components := ConnectedComponents(refs)
 	require.Len(t, components, 1)
 	assert.Equal(t, []string{"apple", "mango", "zebra"}, components[0])
+}
+
+// TestConnectedComponents_EqualSizesHaveOneOrder pins the order of components
+// that size alone cannot separate: smallest member first. Sorting by size
+// only left equal-sized components in whatever order the BFS found them, which
+// is the node-index order the projection assigned from the TOKEN names — so
+// the position of a component (and any ID a caller derives from it) depended
+// on what the tokens happened to be called (mache-82ded3).
+//
+// The tokens here sort in the opposite direction to the members they name, so
+// the BFS finds the components in reverse of the documented order and a sort
+// that cannot tell them apart leaves them that way.
+func TestConnectedComponents_EqualSizesHaveOneOrder(t *testing.T) {
+	const n = 40
+	var want [][]string
+	refs := map[string][]string{}
+	for i := range n {
+		a, b := fmt.Sprintf("n%02da", i), fmt.Sprintf("n%02db", i)
+		refs[fmt.Sprintf("t%02d", n-1-i)] = []string{b, a}
+		want = append(want, []string{a, b})
+	}
+
+	assert.Equal(t, want, ConnectedComponents(refs))
+}
+
+// TestConnectedComponents_OrderIsInputIndependent presents one graph two ways
+// — tokens named in member order, and tokens named against it — and requires
+// identical output: the order is a function of the graph, not of how it was
+// presented.
+func TestConnectedComponents_OrderIsInputIndependent(t *testing.T) {
+	const n = 30
+	forward := map[string][]string{}
+	reverse := map[string][]string{}
+	for i := range n {
+		a, b, c := fmt.Sprintf("x%02d", i), fmt.Sprintf("y%02d", i), fmt.Sprintf("z%02d", i)
+		forward[fmt.Sprintf("f%02d", i)] = []string{a, b}
+		forward[fmt.Sprintf("g%02d", i)] = []string{b, c}
+		reverse[fmt.Sprintf("f%02d", n-1-i)] = []string{c, b}
+		reverse[fmt.Sprintf("g%02d", n-1-i)] = []string{b, a}
+	}
+
+	got := ConnectedComponents(forward)
+	assert.Equal(t, got, ConnectedComponents(reverse))
+	require.Len(t, got, n)
+	for i := 1; i < len(got); i++ {
+		assert.Less(t, got[i-1][0], got[i][0], "component %d is out of order", i)
+	}
 }
 
 // ---------------------------------------------------------------------------

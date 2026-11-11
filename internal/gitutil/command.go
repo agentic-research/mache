@@ -28,6 +28,41 @@ func HermeticGitCommand(args ...string) *exec.Cmd {
 	return cmd
 }
 
+// IsolatedGitCommand is HermeticGitCommand for a read of repository HISTORY
+// whose output must be a function of the repository alone: it also switches
+// off the user's global config, the system config, and replace refs.
+//
+// Each of those changes what `git log` prints for the same commits. A global
+// `i18n.logOutputEncoding` re-encodes every message; `log.*` and `pretty.*`
+// keys reshape output; a `refs/replace/` entry substitutes another object's
+// content under the original SHA. None of that is the repository's history,
+// and mache ingests history as data (internal/ingest.LoadGitCommits), so two
+// machines projecting the same repository must get the same records.
+//
+// It is deliberately NOT folded into HermeticGitCommand, because its other
+// callers need the user's configuration. The `git clone` calls in
+// internal/mcpserve fetch from URLs: `credential.helper`, `url.*.insteadOf`,
+// `http.*` and `core.sshCommand` are how a private repository is reachable
+// at all. cmd/agent's `rev-parse` and `remote get-url` run on the developer's
+// own checkout, where `safe.directory` and `remote.*` are theirs to set.
+//
+// The one cost: a repository the user can read only through a global
+// `safe.directory` entry is refused here with git's own "dubious ownership"
+// error, instead of silently reading it under a config mache cannot see.
+func IsolatedGitCommand(args ...string) *exec.Cmd {
+	cmd := HermeticGitCommand(args...)
+	// Later entries win in exec.Cmd.Env, so these override whatever the
+	// developer's shell set. GIT_NO_REPLACE_OBJECTS is one of the local
+	// variables WithoutLocalEnv strips (a parent hook's value must not leak
+	// in), so it is set afresh here rather than inherited.
+	cmd.Env = append(cmd.Env,
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_NO_REPLACE_OBJECTS=1",
+	)
+	return cmd
+}
+
 // WithoutLocalEnv removes the variables listed by
 // `git rev-parse --local-env-vars`.
 func WithoutLocalEnv(env []string) []string {
