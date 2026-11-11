@@ -55,6 +55,10 @@ func OpenWritableGraph(masterDBPath string, schema *api.Topology, render Templat
 		_ = db.Close()
 		return nil, fmt.Errorf("open %s: %w", masterDBPath, err)
 	}
+	if err := CheckProjection(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open %s: %w", masterDBPath, err)
+	}
 
 	return &WritableGraph{
 		ntr:     NewNodesTableReader(db, tableName, render, compileLevels(schema), 0o644, 0o755, 2048),

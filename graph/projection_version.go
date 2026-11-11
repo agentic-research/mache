@@ -2,7 +2,8 @@ package graph
 
 import (
 	"database/sql"
-	"log"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -12,9 +13,16 @@ import (
 // shape of the projection it wrote.
 const ProjectionSchemaVersionKey = "projection_schema_version"
 
+// ErrUnknownProjection is returned for an artifact that declares a projection
+// shape mache has not been checked against. Exposed so callers can distinguish
+// "rebuild this with the pinned leyline" from a genuine open failure, the way
+// ErrStalePropsSchema marks the stale-props case.
+var ErrUnknownProjection = errors.New("unknown leyline projection")
+
 // knownProjections are the ley-line-open projection shapes mache has been
 // checked against. Absence from this map is not a claim that a projection is
-// broken — only that nobody has looked.
+// broken — only that nobody has looked, and CheckProjection refuses it on
+// exactly that ground.
 //
 // An arena that declares NOTHING is the common case, not an error. The `_meta`
 // channel does not exist in v0.18.0 / v0.18.1 / v0.18.2, so every currently
@@ -118,35 +126,36 @@ func ProjectionVersion(db *sql.DB) (string, bool) {
 	return v, v != ""
 }
 
-// warnUnknownProjection logs when an artifact declares a projection shape mache
-// has never been checked against.
+// CheckProjection refuses an artifact that declares a projection shape mache
+// has never been checked against, with ErrUnknownProjection. An artifact that
+// declares no shape, or one of knownProjections, passes.
 //
-// mache validates the leyline BINARY by an exact version pin but, until this,
-// validated the ARTIFACT not at all. The pin alone is demonstrably not enough:
-// ley-line-open's projection-v4 branch reports version 0.18.2 — byte-identical
-// to the release whose schema it changes — so the pin accepts it as the pinned
-// binary (ley-line-open-cbd3c9). Reading the shape the FILE declares closes that
-// gap, because it is a property of the artifact rather than of whatever claimed
-// to produce it, and it holds for a .db that was copied, cached, or built by
-// somebody else's leyline entirely.
+// mache validates the leyline BINARY by an exact version pin, but the pin
+// protects only the db that binary writes for the daemon path. A .db handed
+// to a library caller, kept in a cache, or supplied by a user may come from
+// any leyline at all — including ley-line-open's projection-v4 branch, which
+// reported version 0.18.2, byte-identical to the release whose schema it
+// changed (ley-line-open-cbd3c9). Reading the shape the FILE declares closes
+// that gap, because it is a property of the artifact rather than of whatever
+// claimed to produce it.
 //
-// It warns rather than refusing, deliberately. Every projection bump so far has
-// been additive for readers, and mache's readers already probe per column via
-// ColumnExists rather than assuming a shape, so refusing would turn arenas mache
-// can in fact read into arenas it rejects — including for library callers
-// assembling many projections at once, where a single newer shard would sink the
-// whole corpus. When a projection appears that mache genuinely CANNOT read, that
-// is the moment to refuse it by name, the way RequireProps refuses exactly the
-// stale-props case and nothing else.
-func warnUnknownProjection(db *sql.DB, dbPath string) {
+// It refuses rather than warns. Until projection-v13 every bump was additive
+// for readers, and this check only logged; but a reader that does not know a
+// shape cannot tell an additive change from one that moves meaning. LLO's
+// projection-v14 adds a class model for comments, shebangs and directives
+// that a v13 reader would fold as plain comments, silently, and LLO's ADR-0048
+// relies on "a v13 consumer refuses v14" to make that safe (mache-86e215).
+// The cost is one indexed single-row lookup, constant in projection size, so
+// it does not disturb Open's laziness (TestOpen_CostDoesNotScaleWithProjectionSize).
+func CheckProjection(db *sql.DB) error {
 	v, declared := ProjectionVersion(db)
 	if !declared {
-		return // pre-_meta arena or mache's own projection: the common case
+		return nil // pre-_meta arena or mache's own projection: the common case
 	}
 	if _, ok := knownProjections[v]; ok {
-		return
+		return nil
 	}
-	log.Printf("warn: %s declares projection %q, which this mache has not been checked "+
-		"against (known: %s) — reads may be silently incomplete if the shape changed",
-		dbPath, v, strings.Join(slices.Sorted(maps.Keys(knownProjections)), ", "))
+	return fmt.Errorf("%w %q: this mache reads %s; rebuild the db with the pinned leyline: "+
+		"$(mache leyline path) parse <source> -o <db>",
+		ErrUnknownProjection, v, strings.Join(slices.Sorted(maps.Keys(knownProjections)), ", "))
 }

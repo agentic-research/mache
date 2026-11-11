@@ -130,91 +130,22 @@ ships at Severity=warn (which is every rule today) when --fail-on=error.`,
 // Error printing for non-zero codes still happens here (mirroring the
 // old cliExit), so cobra doesn't double-print.
 func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
-	// Resolve the active rule set (built-ins + external) fresh on every
-	// invocation so a rule JSON added to the dir since the last run is
-	// picked up with no rebuild. projectDir is the process working
-	// directory: the CLI is run from the repo root in CI (where
-	// .mache.json lives), matching how `mache serve` treats its base
-	// path. Precedence: --rules-dir > MACHE_SMELL_RULES_DIR > .mache.json.
-	cwd, _ := os.Getwd()
-	rulesDir := ResolveSmellRulesDir(findSmellsRulesDir, cwd)
-	activeRules, err := activeSmellRules(rulesDir)
-	if err != nil {
-		// The CLI surfaces external-load errors loudly (a bad rule file
-		// should fail the run, not be silently dropped). Exit 4 = the
-		// general db/config error class.
-		return printAndCode(4, fmt.Errorf("load external smell rules from %s: %w", rulesDir, err))
+	matched, code, err := selectRules(cmd)
+	if matched == nil {
+		return code, err
 	}
 
-	// Discovery mode: no rule glob -> dump the listing. No db required.
-	// Tags filter is intentionally NOT applied to discovery — listing
-	// is meant to show every registered rule so an agent can decide
-	// which tags to pass.
-	if findSmellsRule == "" {
-		return 0, renderListing(cmd.OutOrStdout(), activeRules, findSmellsFormat)
-	}
-
-	// Validate --fail-on early so a typo surfaces before we open the db.
-	if !validFailOn(findSmellsFailOn) {
-		return printAndCode(4, fmt.Errorf(
-			"invalid --fail-on=%q; must be one of: none, warn, error", findSmellsFailOn,
-		))
-	}
-
-	// Resolve rule selection: glob + tags filter against the registry.
-	// allRuleIDs() returns alphabetical; matchRules preserves registry
-	// order so multiple-match runs are deterministic.
-	tagSet := parseTags(findSmellsTags)
-	matched, err := matchRules(activeRules, findSmellsRule, tagSet)
-	if err != nil {
-		return printAndCode(3, fmt.Errorf(
-			"invalid --rule glob %q: %w", findSmellsRule, err,
-		))
-	}
-	if len(matched) == 0 {
-		return printAndCode(3, fmt.Errorf(
-			"no rules match --rule=%q --tags=%q — available: %s — run with no --rule for full descriptions",
-			findSmellsRule, findSmellsTags, strings.Join(allRuleIDs(activeRules), ", "),
-		))
-	}
-
-	// Running rules requires a db. SQLite would silently create
-	// missing files on Open, so existence-check first to give a
-	// clear error rather than running against an empty auto-created file.
+	// Running rules requires a db.
 	if findSmellsDBPath == "" {
 		return 0, fmt.Errorf("--db PATH is required when --rule is set")
 	}
-	if _, err := os.Stat(findSmellsDBPath); err != nil {
-		return printAndCode(4, fmt.Errorf("db file: %w", err))
-	}
-	db, err := sql.Open("sqlite", findSmellsDBPath)
+	db, err := openSmellDB(findSmellsDBPath)
 	if err != nil {
-		return printAndCode(4, fmt.Errorf("open db: %w", err))
+		return printAndCode(4, err)
 	}
 	defer func() { _ = db.Close() }()
-	if err := db.Ping(); err != nil {
-		return printAndCode(4, fmt.Errorf("ping db: %w", err))
-	}
-	// SetMaxOpenConns(1) pins all queries to a single connection so
-	// the TEMP _capnp_binding_refs table created by EnsureCanonicalViews
-	// + LoadCapnpBindings stays visible to subsequent queries.
-	// modernc/sqlite spreads queries across the pool by default,
-	// which would put the TEMP-table population on a connection
-	// the rule SELECT never sees.
-	db.SetMaxOpenConns(1)
 	qg := &dbQuerier{db: db, path: findSmellsDBPath}
 
-	// Mirror the MCP handler's threshold-default semantics. If
-	// the caller passed --min-metric explicitly, that value wins
-	// (including 0 for "show me everything sorted"). If the flag
-	// wasn't set, fall back to rule.DefaultMinMetric per rule.
-	minMetricChanged := cmd.Flags().Changed("min-metric")
-
-	// Run every matched rule and concatenate results. Each finding
-	// already carries its RuleID so downstream consumers can split
-	// by rule. Output is one envelope per rule in JSON/MD modes; CI
-	// mode interleaves lines (per the gh/ripgrep convention).
-	//
 	// ensureSmellQueryContext runs ONCE here rather than once per rule
 	// inside the loop: it materializes v_test_nodes/v_doc_refs as TEMP
 	// TABLEs specifically so their cost is paid once per invocation
@@ -223,82 +154,12 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	if err := ensureSmellQueryContext(qg); err != nil {
 		return printAndCode(4, fmt.Errorf("prepare smell query context: %w", err))
 	}
-	results := make([]ruleRunResult, 0, len(matched))
-	// Skips are collected, not just warned about: the ratchet and SARIF both
-	// need to say what this run did NOT assess (mache-ddf14b).
-	var skipped []skippedRule
-
-	for _, rule := range matched {
-		// Pre-flight required tables, same shape as the MCP handler.
-		if missing, mErr := missingTables(qg, rule.Requires); mErr != nil {
-			return printAndCode(4, fmt.Errorf("pre-flight: %w", mErr))
-		} else if len(missing) > 0 {
-			// A glob/tag matched multiple rules: skip the ones whose tables
-			// aren't present (e.g. _ast rules on a pure-Go tree-sitter .db)
-			// rather than aborting the whole run — the gate assesses what it
-			// CAN. An explicitly-named single rule still errors (you asked for
-			// exactly it). Bead mache-4da90e (W5.3).
-			if len(matched) > 1 {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
-					"find-smells: skipping rule %q — requires absent tables [%s]\n",
-					rule.ID, strings.Join(missing, ", "))
-				skipped = append(skipped, skippedRule{ID: rule.ID, Missing: missing})
-				continue
-			}
-			backendNote := ""
-			if backend := queryBuildBackend(qg); backend != "" {
-				backendNote = fmt.Sprintf(" (built with backend=%q)", backend)
-			}
-			return printAndCode(2, fmt.Errorf(
-				"rule %q requires SQL tables [%s] which aren't present in %s%s — "+
-					"_ast / _source / _imports / _lsp* come from ley-line-open's `leyline parse`; "+
-					"node_defs / node_refs / nodes come from both standalone mache and LLO; "+
-					"see docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full capability matrix",
-				rule.ID, strings.Join(missing, ", "), findSmellsDBPath, backendNote,
-			))
-		}
-
-		findings, rErr := runSmellRuleQuery(qg, rule, findSmellsSourceID, findSmellsLimit)
-		if rErr != nil {
-			return printAndCode(4, fmt.Errorf("rule %q: %w", rule.ID, rErr))
-		}
-
-		minMetric := findSmellsMinMetric
-		if !minMetricChanged {
-			minMetric = rule.DefaultMinMetric
-		}
-		if minMetric > 0 {
-			filtered := findings[:0]
-			for _, f := range findings {
-				if f.Metric >= minMetric {
-					filtered = append(filtered, f)
-				}
-			}
-			findings = filtered
-		}
-		populateSnippets(qg, findings)
-		results = append(results, ruleRunResult{rule: rule, findings: findings})
+	results, skipped, code, err := runMatchedRules(cmd, qg, matched)
+	if results == nil {
+		return code, err
 	}
-
-	// Render — CI + SARIF render once across all rules; JSON/MD emit one
-	// envelope per rule so the legacy single-rule shape is preserved.
-	switch findSmellsFormat {
-	case "ci":
-		for _, r := range results {
-			if err := renderFindingsCI(cmd.OutOrStdout(), r.rule, r.findings); err != nil {
-				return 0, err
-			}
-		}
-	case "sarif":
-		if err := renderSARIF(cmd.OutOrStdout(), results, findSmellsBaselineRoot, skipped); err != nil {
-			return 0, err
-		}
-	default:
-		for _, r := range results {
-			if err := renderFindings(cmd.OutOrStdout(), r.rule.ID, r.findings, findSmellsFormat, findSmellsLimit); err != nil {
-				return 0, err
-			}
-		}
+	if err := renderResults(cmd.OutOrStdout(), results, skipped); err != nil {
+		return 0, err
 	}
 
 	// W5 ratchet (mache-4d155c): --write-baseline regenerates the committed
@@ -314,8 +175,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	// error fails only on findings from rules opted-in via
 	// Severity=error. Today every shipped rule is warn, so the
 	// effective default behavior with --fail-on=error is "exit 0".
-	exitCode := gateDecision(findSmellsFailOn, results)
-	return exitCode, nil
+	return gateDecision(findSmellsFailOn, results), nil
 }
 
 // runRatchetGate applies --write-baseline / --baseline to a completed scan and
@@ -398,9 +258,6 @@ func ratchetErr(errw io.Writer, code int, err error) (int, bool) {
 	return code, true
 }
 
-// printAndCode mirrors the historical cliExit side effect (write the
-// error to stderr) but returns the intended exit code instead of
-// calling os.Exit, so tests can assert it.
 func printAndCode(code int, err error) (int, error) {
 	fmt.Fprintln(os.Stderr, err)
 	return code, nil

@@ -6,6 +6,26 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **A `.db` whose leyline projection mache does not know is refused, not
+  warned about** (`mache-86e215`). Opening a db whose `_meta` declares a
+  `projection_schema_version` outside the shapes mache has been checked
+  against (projection-v2 through v13) now fails with
+  `graph.ErrUnknownProjection`, naming the shape found, the shapes this mache
+  reads, and the rebuild (`$(mache leyline path) parse`). It used to log a
+  warning and read the db anyway, so a db built by a newer leyline — from a
+  library caller, a cache, or a user — was read silently with the wrong shape;
+  LLO's projection-v14 adds a comment/shebang/directive class model a v13
+  reader would misfold, and LLO's ADR-0048 assumes a v13 consumer refuses it.
+  The check runs once, in `graph.CheckProjection`, at every entry point that
+  opens a db: `graph.Open`/`OpenSQLiteGraph` (`mache serve`, where a session's
+  tools report it as a tool error and the daemon keeps running; the NFS mount;
+  `mache pack`), `graph.OpenWritableGraph` (the writable arena mount), and
+  `mache find-smells --db` (exit 4). A db that declares no projection (every
+  pre-`_meta` arena and `mache build` output) and every known projection open
+  as before.
+
 ### Documentation
 
 - **Schema syntax reference** (`mache-4c6120`). `docs/reference/schema.md`

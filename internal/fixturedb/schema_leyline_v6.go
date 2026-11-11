@@ -210,7 +210,7 @@ var leylineV6Tables = map[string]string{
 // gap nobody sees (projection-v7's _tree and _parse_diagnostics went unnoticed
 // for exactly that reason until the v0.21.0 pin).
 var leylineV6Unmodelled = map[string]string{
-	"_meta": "projection stamps; graph.ProjectionVersion reads one row, tested on its own",
+	"_meta": "projection stamps; graph.ProjectionVersion reads one row, tested on its own; DeclareProjection writes it on request",
 	// projection-v10's node_hash views. mache reads the hash through
 	// lloschema.NodeHashExpr's scalar lookup instead: these are LEFT JOIN
 	// views, which SQLite materializes whole on the right of a LEFT JOIN.

@@ -164,6 +164,14 @@ func OpenSQLiteGraphWith(dbPath string, schema *api.Topology, render TemplateRen
 	} // coverage:ignore
 	db.SetMaxOpenConns(4)
 
+	// Before choosing a path through the file: a db of a shape mache does
+	// not know is refused whole, not served by whichever branch its tables
+	// happen to satisfy.
+	if err := CheckProjection(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open %s: %w", dbPath, err)
+	}
+
 	tableName := schema.Table
 	if tableName == "" {
 		tableName = "results"
@@ -185,10 +193,6 @@ func openNodesTableGraph(db *sql.DB, dbPath, tableName string, schema *api.Topol
 		_ = db.Close()
 		return nil, fmt.Errorf("open %s: %w", dbPath, err)
 	}
-	// One indexed single-row lookup: constant cost, independent of
-	// projection size, so it does not disturb Open's laziness guarantee
-	// (see TestOpen_CostDoesNotScaleWithProjectionSize).
-	warnUnknownProjection(db, dbPath)
 	levels := compileLevels(schema)
 	ntr := NewNodesTableReader(db, tableName, render, levels, 0o444, 0o555, 2048)
 	return &SQLiteGraph{
