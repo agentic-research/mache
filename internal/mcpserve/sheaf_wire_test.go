@@ -2,9 +2,11 @@ package mcpserve
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -312,6 +314,19 @@ type testGraphWithSI struct {
 }
 
 func (t *testGraphWithSI) SheafInvalidator() *graph.SheafInvalidator { return t.si }
+
+// The handler pushes a topology only for a graph that can hash its members
+// (graph.ContentHasher); a MemoryStore cannot, so the stand-in answers as a
+// ley-line projection would: a parserId and a node_hash per member.
+func (t *testGraphWithSI) ParserID() (string, error) { return strings.Repeat("5a", 32), nil }
+
+func (t *testGraphWithSI) NodeHashes(ids []string) (map[string][32]byte, error) {
+	out := make(map[string][32]byte, len(ids))
+	for _, id := range ids {
+		out[id] = sha256.Sum256([]byte(id))
+	}
+	return out, nil
+}
 
 // TestGetCommunities_PopulatesInvalidator_WithDaemon pins the consumer-
 // side wire the audit identified as load-bearing: when the handler can

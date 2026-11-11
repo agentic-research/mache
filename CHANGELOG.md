@@ -305,6 +305,28 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Sheaf region hashes follow ley-line's region-hash contract, so
+  `get_sheaf_status.defect` means something** (`mache-a0d487`). The daemon
+  counts a restriction edge as a defect when `regionHash(a) XOR regionHash(b)`
+  is not the edge's `boundary_hash`, and stops a cascade at a boundary only
+  when it still is. mache hashed a region as SHA-256 over its member ids and
+  set `boundary_hash` to SHA-256 over the shared tokens, which can never
+  satisfy that, so every pushed edge was a defect from the first push and no
+  boundary ever held. A region's hash is now the published fold
+  (`leyline-schema` `vectors/sheaf-region-v1.json`, LLO
+  `rs/ll-open/sheaf/src/region.rs`): BLAKE3 `derive_key` over the members'
+  `node_hash` multiset under the parse's parserId, with `boundary_hash` the
+  XOR of the two region hashes. The hashes come from the graph
+  (`graph.ContentHasher`: `_meta.derived_from`'s parserId, `_ast` and
+  `node_refs` node hashes, the latter for injected-language sites that have
+  no `_ast` row). A topology whose member has no `node_hash` (a directory under
+  `granularity=dir`, mache's own projection, an in-memory graph) is refused
+  with the member named rather than pushed as a defect by construction, and
+  the daemon is not dialed for a graph that records no parserId. Against the
+  pinned v0.29.0 daemon a real parse now pushes with defect 0, re-announcing
+  an unchanged region holds it at 0, and announcing a region whose member
+  changed makes the daemon count the boundary.
+
 - **`mache build --schema` reuses a projection only under the same parser**
   (`mache-3465b9`). The reuse fingerprint named the pinned leyline version,
   which stays the same when the binary that runs does not
