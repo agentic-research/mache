@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"strings"
@@ -225,29 +226,83 @@ func (idx *fileIndex) packageName() string {
 	return ""
 }
 
-// docExtendStart walks backward from scopeID over contiguous preceding comment
-// siblings (same parent, <= 2 byte gap), returning the doc-extended start
-// byte. A scope the index does not hold (the "$" grouping match has none)
-// extends nothing. Note that leyline writes no comment rows (mache-a83451),
-// so against today's substrate this always returns scopeStart.
+// docExtendStart returns where scopeID's doc comment starts: the run of
+// comment siblings directly above it, with no blank line inside the run or
+// before the construct, or scopeStart when there is none. A scope the index
+// does not hold (the "$" grouping match has none), or a file whose source the
+// projection does not hold, extends nothing.
+//
+// It is LLO's recipe for a definition's doc comment (TABLE_CONTRACT, "Comments
+// at projection-v13"), which comment occurrences make possible from leyline
+// v0.29.0 (mache-1e3d11; before it _ast had no comment rows, mache-a83451).
+// A comment is any comment kind (lloschema.IsCommentKind), so Rust's and
+// Java's line_comment and block_comment are docs as Go's comment is. Rust
+// attributes sit between an item and its doc (`/// doc` `#[derive]` `struct`),
+// so the run reaches over attribute_item siblings to a comment above them; an
+// attribute with no comment above it extends nothing. An inner doc comment
+// (`//!`, `/*!`) documents what encloses it, not what follows, so it ends the
+// run.
 func (idx *fileIndex) docExtendStart(scopeID string, scopeStart uint32) uint32 {
 	i, ok := idx.byID[scopeID]
-	if !ok {
+	if !ok || idx.source == nil {
 		return scopeStart
 	}
-	cs := idx.comments[idx.all[i].parentID]
-	start := int(scopeStart)
-	// Candidates end at or before start; end_byte is monotone along cs (see
-	// the field comment), so the closest one is the last of that prefix.
-	k := sort.Search(len(cs), func(j int) bool { return idx.all[cs[j]].endByte > start })
-	for ; k > 0; k-- {
-		c := idx.all[cs[k-1]]
-		if start-c.endByte > 2 {
-			break
+	parent := idx.all[i].parentID
+	comments, siblings := idx.comments[parent], idx.children[parent]
+	doc, cur := int(scopeStart), int(scopeStart)
+	for {
+		// The nearest comment and the nearest code sibling ending at or
+		// before cur. Siblings never overlap, so end_byte is monotone along
+		// both lists and each is a bisection.
+		c := sort.Search(len(comments), func(j int) bool { return comments[j].end > cur })
+		k := sort.Search(len(siblings), func(j int) bool { return idx.all[siblings[j]].endByte > cur })
+		switch {
+		case c > 0 && (k == 0 || comments[c-1].end > idx.all[siblings[k-1]].endByte):
+			prev := comments[c-1]
+			if !idx.adjoins(prev.end, cur) || idx.innerDoc(prev) {
+				return uint32(doc)
+			}
+			doc, cur = prev.start, prev.start
+		case k > 0 && idx.all[siblings[k-1]].astKind == "attribute_item":
+			prev := idx.all[siblings[k-1]]
+			if !idx.adjoins(prev.endByte, cur) {
+				return uint32(doc)
+			}
+			cur = prev.startByte
+		default:
+			return uint32(doc)
 		}
-		start = c.startByte
 	}
-	return uint32(start)
+}
+
+// innerDoc reports whether the comment at c is an inner doc comment.
+func (idx *fileIndex) innerDoc(c span) bool {
+	text := idx.source[c.start:c.end]
+	return bytes.HasPrefix(text, []byte("//!")) || bytes.HasPrefix(text, []byte("/*!"))
+}
+
+// adjoins reports whether the text ending at end and the text starting at next
+// are on consecutive or the same lines with only whitespace between: no blank
+// line. A Rust line_comment's span ends after its newline, so that newline
+// counts as the one between them.
+func (idx *fileIndex) adjoins(end, next int) bool {
+	if end < 0 || end > next || next > len(idx.source) {
+		return false
+	}
+	breaks := 0
+	if end > 0 && idx.source[end-1] == '\n' {
+		breaks++
+	}
+	for _, b := range idx.source[end:next] {
+		switch b {
+		case '\n':
+			breaks++
+		case ' ', '\t', '\r':
+		default:
+			return false
+		}
+	}
+	return breaks <= 1
 }
 
 // contextText concatenates the source text of every node whose kind is in

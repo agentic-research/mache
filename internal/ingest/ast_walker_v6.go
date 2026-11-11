@@ -40,13 +40,20 @@ type v6Row struct {
 // loadFileIndexV6 reads every node of one file in a single query, by nid
 // range, and builds the same index loadFileIndex builds from a v4 file.
 //
-// Nodes are read in nid order. LLO numbers a file's nodes in preorder by
-// sibling position, so that order is start_byte order with a parent ahead of
-// a first child that starts where it does: the order the index needs, and the
-// order v4's ORDER BY start_byte gives. It also means a parent's path is known
-// before its children are reached. Every node is read, not only those with an
-// _ast row, so the chain of names is never broken; only located nodes enter
-// the index, as the v4 join keeps only those.
+// Nodes are read in nid order. LLO numbers a file's code in preorder by
+// sibling position, so among code that order is start_byte order with a parent
+// ahead of a first child that starts where it does: the order the index needs,
+// and the order v4's ORDER BY start_byte gives. It also means a parent's path
+// is known before its children are reached. Every node is read, not only those
+// with an _ast row, so the chain of names is never broken; only located nodes
+// enter the index, as the v4 join keeps only those.
+//
+// From projection-v13 nid order is not document order across code and
+// comments: a file's comments are numbered after all of its code, in source
+// order among themselves, each under a code parent (mache-1e3d11). The index
+// never mixes the two. A comment goes only to its parent's comment list
+// (fileIndex.add), where nid order is source order, and everything that
+// orders nodes reads the code.
 func (w *ASTWalker) loadFileIndexV6(sourceID string) (*fileIndex, error) {
 	w.shapeMu.Lock()
 	hash, shapeErr := w.v6Hash, w.shapeErr

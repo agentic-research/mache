@@ -17,7 +17,8 @@
 // This package translates. It installs TEMP views over whatever the producer
 // wrote, giving consumers a STABLE VOCABULARY:
 //
-//	v_ast    node_id, source_id, node_kind, start_byte … end_col, node_hash
+//	v_ast    node_id, source_id, node_kind, start_byte … end_col, node_hash,
+//	         subtree_lo, subtree_hi, is_comment
 //	v_nodes  node_id, parent_id, name, kind, source_file
 //	v_defs   token, node_id, fidelity, node_hash, canonical_kind
 //	v_refs   referrer_node_id, node_id, token, target_node_id, …

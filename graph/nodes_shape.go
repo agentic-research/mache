@@ -140,18 +140,21 @@ func (s *v6Shape) statements(r *NodesTableReader) readerStmts {
 	}
 	// A child's name comes from LLO's v_node_name, so the naming rule has one
 	// owner. The root is the directory whose nid is fixed by the layout, so
-	// its listing needs no lookup.
+	// its listing needs no lookup. A comment occurrence (projection-v13) is
+	// not a child: mache folds comments rather than listing them
+	// (mache-1e3d11), and V6Paths resolves no path to one either.
 	root := strconv.Itoa(lloschema.V6RootNid)
+	code := " AND " + lloschema.NotCommentNode("n")
 	return readerStmts{
 		node: sqlstmt.NewLazy(r.nodeSelect()),
 		children: sqlstmt.NewLazy(`SELECT v.name FROM nodes n JOIN v_node_name v ON v.nid = n.nid
-WHERE n.parent_nid = ? ORDER BY v.name`),
+WHERE n.parent_nid = ?` + code + ` ORDER BY v.name`),
 		childrenRoot: sqlstmt.NewLazy(`SELECT v.name FROM nodes n JOIN v_node_name v ON v.nid = n.nid
-WHERE n.parent_nid = ` + root + ` ORDER BY v.name`),
+WHERE n.parent_nid = ` + root + code + ` ORDER BY v.name`),
 		stats: sqlstmt.NewLazy(`SELECT v.name, n.kind, n.size, n.mtime FROM nodes n JOIN v_node_name v ON v.nid = n.nid
-WHERE n.parent_nid = ? ORDER BY v.name`),
+WHERE n.parent_nid = ?` + code + ` ORDER BY v.name`),
 		statsRoot: sqlstmt.NewLazy(`SELECT v.name, n.kind, n.size, n.mtime FROM nodes n JOIN v_node_name v ON v.nid = n.nid
-WHERE n.parent_nid = ` + root + ` ORDER BY v.name`),
+WHERE n.parent_nid = ` + root + code + ` ORDER BY v.name`),
 		content: sqlstmt.NewLazy("SELECT record, record_id FROM nodes WHERE nid = ?"),
 		record:  sqlstmt.NewLazy("SELECT record FROM " + r.tableName + " WHERE id = ?"),
 		// The site of each reference, as projection-v4's node_refs.node_id is.

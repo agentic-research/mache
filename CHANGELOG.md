@@ -43,6 +43,21 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **Comments fold into the construct they document** (`mache-1e3d11`,
+  `mache-a83451`). From leyline v0.29.0 (projection-v13) every comment is an
+  `_ast` and `nodes` occurrence. mache does not show them as nodes:
+  `list_directory`, `get_overview` and the mount list no `comment_N`,
+  `line_comment_N` or `block_comment` entries, and no path resolves to one. A
+  doc comment (the comment run directly above a construct, with no blank
+  line, of any comment kind: Go's `comment`, Rust's and Java's
+  `line_comment`/`block_comment`, reaching over Rust attributes) extends the
+  construct: its `source` leaf, `location` and write-back origin start at the
+  doc comment, as they did before leyline became the only parser. `v_ast`
+  gains `is_comment`; a comment's `subtree_lo`/`subtree_hi` range is empty and
+  a code node's range holds no comment, since a comment's nid follows all of
+  its file's code. `duplicate_code` erases every comment kind, and schema
+  inference ignores comments.
+
 - **`mache serve --mount` works again** (`mache-e0605e`). Every session of
   a `--mount` server failed. A client without MCP roots got "workspace root
   unavailable", and one that answered roots had its root turned into a

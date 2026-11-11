@@ -40,7 +40,14 @@ type fileIndex struct {
 	// comments lists each node's comment children, start_byte-ordered — the
 	// doc-comment scan's candidates. Sibling nodes never overlap, so end_byte
 	// is monotone along this list and docExtendStart can bisect it.
-	comments map[string][]int
+	//
+	// A comment is held here and nowhere else (mache-1e3d11). From
+	// projection-v13 leyline writes comments as occurrences, and mache folds
+	// them: a comment is never a node the projection selects, lists or
+	// navigates, only the doc that extends the construct below it. It has no
+	// node_child row either (no node_edge reaches a comment), so it has no
+	// field to assign.
+	comments map[string][]span
 
 	// The _source row, loaded on first need: the serve-path callee extraction
 	// reads calls only and never pays for the bytes. source is the parsed
@@ -75,6 +82,9 @@ type idxNode struct {
 	// is not in the index (the file's root node).
 	field string
 }
+
+// span is a byte range of the file's source.
+type span struct{ start, end int }
 
 func (n idxNode) toAST() astNode {
 	return astNode{
@@ -217,21 +227,23 @@ func newFileIndex() *fileIndex {
 		byKind:   make(map[string][]int),
 		byID:     make(map[string]int),
 		children: make(map[string][]int),
-		comments: make(map[string][]int),
+		comments: make(map[string][]span),
 	}
 }
 
 // add appends n, which must follow every node added before it in start_byte
-// order (the load query's ORDER BY), and indexes it.
+// order (the load query's ORDER BY), and indexes it: a comment as its
+// parent's comment (see fileIndex.comments), anything else as a node.
 func (idx *fileIndex) add(n idxNode) {
+	if lloschema.IsCommentKind(n.astKind) {
+		idx.comments[n.parentID] = append(idx.comments[n.parentID], span{n.startByte, n.endByte})
+		return
+	}
 	i := len(idx.all)
 	idx.all = append(idx.all, n)
 	idx.byKind[n.astKind] = append(idx.byKind[n.astKind], i)
 	idx.byID[n.id] = i
 	idx.children[n.parentID] = append(idx.children[n.parentID], i)
-	if n.astKind == "comment" {
-		idx.comments[n.parentID] = append(idx.comments[n.parentID], i)
-	}
 }
 
 // fileSection returns sourceID's index with its _source row loaded. The row's

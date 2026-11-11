@@ -199,3 +199,28 @@ func TestLeylineV6_AFileNodeIsItsGrammarsRoot(t *testing.T) {
 	assert.Equal(t, "source_file", kindOf("a.go"), "an undeclared root is Go's")
 	assert.Equal(t, "main.tf/body", pathOf(t, f.DB(), nidOf(t, f.DB(), "main.tf/body")))
 }
+
+// From projection-v13 (leyline v0.29.0) comments are occurrences numbered after
+// every code node of their file, in source order, while ord still places
+// them among their siblings (mache-1e3d11). Read from a real v0.29.0 parse:
+// a comment above the first function and one after the last take the two
+// ordinals after the code, and the code keeps its preorder ordinals.
+func TestLeylineV6_CommentsAreNumberedAfterTheCode(t *testing.T) {
+	b := New(t, LeylineV6)
+	b.Source("a.go", "go", "")
+	b.ASTNode("a.go/comment_0", "comment", "a.go", Bytes(0, 10))
+	b.ASTNode("a.go/function_declaration", "function_declaration", "a.go", Bytes(11, 40))
+	b.ASTNode("a.go/function_declaration/identifier", "identifier", "a.go", Bytes(16, 17), Detail{Token: "F"})
+	b.ASTNode("a.go/comment_1", "comment", "a.go", Bytes(41, 50))
+	_, f := b.Build()
+	db := f.DB()
+
+	ordinal := func(path string) int64 { return nidOf(t, db, path) & (1<<24 - 1) }
+	assert.Equal(t, int64(1), ordinal("a.go/function_declaration"), "code keeps its preorder ordinals")
+	assert.Equal(t, int64(2), ordinal("a.go/function_declaration/identifier"))
+	assert.Equal(t, int64(3), ordinal("a.go/comment_0"), "the first comment follows all the code")
+	assert.Equal(t, int64(4), ordinal("a.go/comment_1"))
+	var ord int
+	require.NoError(t, db.QueryRow(`SELECT ord FROM nodes WHERE nid = ?`, nidOf(t, db, "a.go/function_declaration")).Scan(&ord))
+	assert.Equal(t, 1, ord, "ord still counts the comment above it")
+}
