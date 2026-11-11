@@ -43,6 +43,17 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **leyline v0.29.0 is the pinned backend** (`mache-7bdcc6`). Its
+  projection-v13 writes every comment as an occurrence and its extraction
+  epoch 7 carries value refs; mache reads both (the two entries below and
+  `mache-3465b9`). One tree parsed by v0.28.0 and v0.29.0 has the same
+  tables, `node_hash` values and `storeRoot`; the `parserId` moves, and
+  each release refuses the other's arena, so the parse cache and the managed
+  daemon's arena start cold once. A control block now has one daemon
+  (`<stem>.daemon-lock`); mache's adopt-or-spawn and its `<ctrl>.lock` lease
+  are unchanged. The leyline-schema Go module moves with it (additive:
+  `sigma.ClaimOf`, the execution error envelope).
+
 - **Value references count as uses, not as calls** (`mache-c5e2f9`). From
   leyline v0.29.0 (extraction epoch 6 and on) `node_refs` also records a name
   in value position: `var h = helper`, `register(helper)`, `return err`, a

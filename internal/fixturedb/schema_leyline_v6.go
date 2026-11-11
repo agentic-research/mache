@@ -43,7 +43,7 @@ package fixturedb
 //
 // leylineV6SchemaVersion is the ley-line-open release these statements were
 // derived from.
-const leylineV6SchemaVersion = "v0.28.0"
+const leylineV6SchemaVersion = "v0.29.0"
 
 // leylineV6Tables is the ley-line-owned subset fixtures model, keyed by table
 // name. Includes the four INTERNING tables v6 added — names, kinds, dirs,

@@ -1260,12 +1260,28 @@ func (c *SocketClient) Prioritize(files []string) error {
 // (ley-line-open #551). The query op's virtual-table allow-list does not
 // touch mache, which reads parse dbs directly.
 //
+// v0.28.0 -> v0.29.0 moves the projection to projection-v13 (mache-7bdcc6):
+// every comment is an _ast and nodes occurrence with no node_edge, numbered
+// after its file's code (EXTRACTION_EPOCH 7, ley-line-open-aa1634), and
+// node_refs carries value refs anchored at their container (epoch 6,
+// ley-line-open-a9ff82). sqlite_master of one tree is identical under both;
+// node_hash, merkle-ast-v3, storeRoot and wire major 2 are unchanged;
+// parserId moves. v0.29.0 refuses a projection-v12 arena at parse open and
+// v0.28.0 refuses a v13 one, and the arena record and parse cache are keyed on
+// the pin, so both start cold. mache folds comments (mache-1e3d11), tells
+// value refs from calls (mache-c5e2f9) and keys projection reuse on parserId
+// (mache-3465b9). The daemon takes <stem>.daemon-lock exclusively, so a
+// control block has one daemon; mache adopts a live daemon or spawns one when
+// none answers, and its <ctrl>.lock LOCK_SH is unchanged. The Go client adds
+// sigma.ClaimOf (refusing a head digest v2 head, ErrRetiredDigestV2) and the
+// execution error envelope; mache uses neither.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.28.0"
+const leylineBinaryVersion = "v0.29.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
