@@ -184,8 +184,8 @@ func TestFindSmells_DuplicateCode_ExcludesGenerated(t *testing.T) {
 // TestFindSmells_DuplicateCode_IgnoresComments pins that comment nodes
 // do not participate in the structural signature: two functions that are
 // identical except for an inline comment must still be detected as
-// clones (Copilot review on #442). Comments live in _ast as
-// node_kind='comment'; leaving them in the signature makes detection
+// clones (Copilot review on #442). Comments live in _ast under their
+// grammar's comment kinds, which v_ast marks is_comment; leaving them in the signature makes detection
 // comment-sensitive and produces false negatives that contradict the
 // rule's "comments are erased" contract.
 func TestFindSmells_DuplicateCode_IgnoresComments(t *testing.T) {
@@ -199,7 +199,7 @@ func TestFindSmells_DuplicateCode_IgnoresComments(t *testing.T) {
 			start_row INTEGER, start_col INTEGER, end_row INTEGER, end_col INTEGER
 		);
 		CREATE TABLE _source (id TEXT PRIMARY KEY, language TEXT NOT NULL, content BLOB NOT NULL);
-		INSERT INTO _source VALUES ('d.go','go',x'0a'), ('e.go','go',x'0a');
+		INSERT INTO _source VALUES ('d.go','go',x'0a'), ('e.go','go',x'0a'), ('f.rs','rust',x'0a');
 	`)
 	require.NoError(t, err)
 
@@ -219,6 +219,15 @@ func TestFindSmells_DuplicateCode_IgnoresComments(t *testing.T) {
 		{"e/body/cmt", "e.go", "comment", 15},
 		{"e/body/ret", "e.go", "return_statement", 20},
 		{"e/body/ret/id", "e.go", "identifier", 25},
+		// fnF — the same structure with Rust's comment kinds: every kind
+		// lloschema.IsCommentKind names is erased, not only `comment`
+		// (mache-1e3d11).
+		{"f", "f.rs", "function_declaration", 0},
+		{"f/body", "f.rs", "block", 10},
+		{"f/body/doc", "f.rs", "line_comment", 12},
+		{"f/body/blk", "f.rs", "block_comment", 15},
+		{"f/body/ret", "f.rs", "return_statement", 20},
+		{"f/body/ret/id", "f.rs", "identifier", 25},
 	}
 	for _, a := range rows {
 		_, err = db.Exec(
@@ -249,9 +258,10 @@ func TestFindSmells_DuplicateCode_IgnoresComments(t *testing.T) {
 		got[f.NodeID] = true
 		assert.Equal(t, int64(4), f.Metric, "metric counts structural nodes only — the comment is erased")
 	}
-	require.Equal(t, 2, resp.Total, "fnD and fnE are clones despite the comment-only difference")
+	require.Equal(t, 3, resp.Total, "fnD, fnE and fnF are clones despite the comment-only differences")
 	assert.True(t, got["d"], "fnD must be flagged")
 	assert.True(t, got["e"], "fnE must be flagged")
+	assert.True(t, got["f"], "fnF must be flagged: line_comment and block_comment are comments too")
 }
 
 // TestFindSmells_DuplicateCode_DefaultFloorDropsTrivial pins that the

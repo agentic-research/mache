@@ -21,7 +21,8 @@ import (
 // that v6 exists to remove (mache-3688da). What is stable is the VOCABULARY,
 // not the representation:
 //
-//	v_ast    node_id, source_id, node_kind, start_byte … end_col, node_hash
+//	v_ast    node_id, source_id, node_kind, start_byte … end_col, node_hash,
+//	         subtree_lo, subtree_hi, is_comment
 //	v_nodes  node_id, parent_id, name, kind, source_file
 //
 // `node_id` is whatever the producer uses — a path string on v4, an integer on
@@ -79,48 +80,7 @@ func ASTSelect(qg Querier) (string, error) {
 		return "", fmt.Errorf("probe _ast.nid: %w", err)
 	}
 	if v6 {
-		hash, _, err := NodeHashExpr(qg, "_ast", "a")
-		if err != nil {
-			return "", err
-		}
-		// nid >> V6FileShift is the interned file id (LLO's nid =
-		// file_id<<24 | ordinal), and _source.file_id is UNIQUE, so the file
-		// is one lookup.
-		//
-		// One table, with the file and the kind as scalar lookups rather
-		// than joins. SQLite will not flatten a JOIN that is the right
-		// operand of a LEFT JOIN, and rules put v_ast exactly there ("this
-		// function, LEFT JOIN its branches"): as a three-way join the view
-		// was materialized and scanned whole per outer row, 143 s for
-		// cyclomatic_complexity on a 492k-node parse. As one table it
-		// flattens, and the inner side is a primary-key range: 0.2 s.
-		//
-		// subtree_lo/subtree_hi bound the node's descendants: a node d is a
-		// descendant of a exactly when a.subtree_lo <= d.node_id <
-		// a.subtree_hi. Rules ask "inside this function?" (cyclomatic,
-		// duplicate_code), and on v4 they answered it by reading node_id as
-		// a path prefix, which an opaque id cannot be (mache-2dc105). v6
-		// numbers a file's nodes in preorder, so a subtree is the run of
-		// nids after the node that start before it ends: the first later
-		// node of the file to start at or after end_byte is the first
-		// outside it. That holds for any properly nested parse; the one
-		// exception is a zero-width node exactly at end_byte, which only
-		// error recovery emits. The subquery is evaluated only for rows that
-		// read the column, and it stops at the subtree's end.
-		shift := strconv.Itoa(V6FileShift)
-		fileEnd := "((a.nid >> " + shift + ") + 1) << " + shift
-		return `SELECT a.nid                  AS node_id,
-		       (SELECT s.id FROM _source s WHERE s.file_id = (a.nid >> ` + shift + `)) AS source_id,
-		       (SELECT k.raw_kind FROM kinds k WHERE k.kind_id = a.kind_id) AS node_kind,
-		       a.start_byte, a.end_byte,
-		       a.start_row, a.start_col, a.end_row, a.end_col,
-		       ` + hash + ` AS node_hash,
-		       a.nid + 1             AS subtree_lo,
-		       COALESCE((SELECT m.nid FROM _ast m
-		                 WHERE m.nid > a.nid AND m.nid < ` + fileEnd + `
-		                   AND m.start_byte >= a.end_byte
-		                 ORDER BY m.nid LIMIT 1), ` + fileEnd + `) AS subtree_hi
-		FROM _ast a`, nil
+		return astSelectV6(qg)
 	}
 
 	v4, err := TableHasColumn(qg, "_ast", "node_id")
@@ -142,8 +102,66 @@ func ASTSelect(qg Querier) (string, error) {
 	       start_byte, end_byte, start_row, start_col, end_row, end_col,
 	       ` + hashExpr + ` AS node_hash,
 	       node_id || '/' AS subtree_lo,
-	       node_id || '0' AS subtree_hi
+	       node_id || '0' AS subtree_hi,
+	       ` + CommentKindSQL("node_kind") + ` AS is_comment
 	FROM _ast`, nil
+}
+
+// astSelectV6 is ASTSelect over projection-v6 and later, keyed by integer nid.
+func astSelectV6(qg Querier) (string, error) {
+	hash, _, err := NodeHashExpr(qg, "_ast", "a")
+	if err != nil {
+		return "", err
+	}
+	// nid >> V6FileShift is the interned file id (LLO's nid =
+	// file_id<<24 | ordinal), and _source.file_id is UNIQUE, so the file
+	// is one lookup.
+	//
+	// One table, with the file and the kind as scalar lookups rather
+	// than joins. SQLite will not flatten a JOIN that is the right
+	// operand of a LEFT JOIN, and rules put v_ast exactly there ("this
+	// function, LEFT JOIN its branches"): as a three-way join the view
+	// was materialized and scanned whole per outer row, 143 s for
+	// cyclomatic_complexity on a 492k-node parse. As one table it
+	// flattens, and the inner side is a primary-key range: 0.2 s.
+	//
+	// subtree_lo/subtree_hi bound the node's descendants: a node d is a
+	// descendant of a exactly when a.subtree_lo <= d.node_id <
+	// a.subtree_hi. Rules ask "inside this function?" (cyclomatic,
+	// duplicate_code), and on v4 they answered it by reading node_id as
+	// a path prefix, which an opaque id cannot be (mache-2dc105). v6
+	// numbers a file's CODE nodes in preorder, so a subtree is the run
+	// of nids after the node that start before it ends: the first later
+	// node of the file to start at or after end_byte is the first
+	// outside it. That holds for any properly nested parse; the one
+	// exception is a zero-width node exactly at end_byte, which only
+	// error recovery emits. The subquery is evaluated only for rows that
+	// read the column, and it stops at the subtree's end.
+	//
+	// From projection-v13 a file's comments are numbered after all of
+	// its code (mache-1e3d11), so the run also ends at the first
+	// comment: a comment's nid says nothing about where it sits, and
+	// letting the scan reach the comments put every comment that came
+	// before a trailing one inside the file's last construct. A comment
+	// is terminal, so its own range is empty, and it is inside a node
+	// exactly when its parent (v_nodes.parent_id) is the node or inside
+	// it. is_comment marks those rows (IsCommentKind).
+	shift := strconv.Itoa(V6FileShift)
+	fileEnd := "((a.nid >> " + shift + ") + 1) << " + shift
+	return `SELECT a.nid                  AS node_id,
+	       (SELECT s.id FROM _source s WHERE s.file_id = (a.nid >> ` + shift + `)) AS source_id,
+	       (SELECT k.raw_kind FROM kinds k WHERE k.kind_id = a.kind_id) AS node_kind,
+	       a.start_byte, a.end_byte,
+	       a.start_row, a.start_col, a.end_row, a.end_col,
+	       ` + hash + ` AS node_hash,
+	       a.nid + 1             AS subtree_lo,
+	       CASE WHEN a.kind_id IN ` + CommentKindIDs() + ` THEN a.nid + 1
+	       ELSE COALESCE((SELECT m.nid FROM _ast m
+	                 WHERE m.nid > a.nid AND m.nid < ` + fileEnd + `
+	                   AND (m.start_byte >= a.end_byte OR m.kind_id IN ` + CommentKindIDs() + `)
+	                 ORDER BY m.nid LIMIT 1), ` + fileEnd + `) END AS subtree_hi,
+	       a.kind_id IN ` + CommentKindIDs() + ` AS is_comment
+	FROM _ast a`, nil
 }
 
 // nodesViewBody returns the SELECT for v_nodes, or "" when there is no `nodes`

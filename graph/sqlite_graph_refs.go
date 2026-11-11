@@ -11,6 +11,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 
 	"github.com/agentic-research/mache/internal/lloschema"
+	"github.com/agentic-research/mache/internal/sqlintro"
 )
 
 // ---------------------------------------------------------------------------
@@ -403,6 +404,12 @@ func (g *SQLiteGraph) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 // data depending on which producer wrote the .db.
 //
 // The rows stay in node_refs. dead_code reads them directly and needs them.
+//
+// On a nodes table it leaves value refs out (notValueRef): from leyline
+// extraction epoch 6 node_refs also holds a ref for every name passed,
+// returned or assigned, locals included, and the map's consumers rank and
+// cluster by what is called — most-referenced symbols, dependency layers,
+// communities, the pack's entry points (mache-c5e2f9).
 func (g *SQLiteGraph) RefsMap() map[string][]string {
 	if g.useNodesTable {
 		return filterSentinelRefs(g.refsMapFromNodesTable())
@@ -423,8 +430,19 @@ func (g *SQLiteGraph) RefTokenCount() (int, error) {
 	// Per token, stop at its first row that resolves: most tokens' first does,
 	// so this evaluates the predicate about once per token, not once per row.
 	err := g.db.QueryRow(`SELECT COUNT(*) FROM (SELECT DISTINCT token FROM node_refs) t
-		WHERE EXISTS(SELECT 1 FROM node_refs r WHERE r.token = t.token AND ` + refResolves(g.shape()) + `)`).Scan(&n)
+		WHERE EXISTS(SELECT 1 FROM node_refs r WHERE r.token = t.token AND ` + refResolves(g.shape()) +
+		` AND ` + g.notValueRef("r") + `)`).Scan(&n)
 	return n, err
+}
+
+// notValueRef is a SQL condition on a node_refs row aliased r that holds
+// unless the row is a value ref (lloschema.ValueRefSQL). A node_refs without
+// node_kind and kind_id records no value refs mache can tell apart.
+func (g *SQLiteGraph) notValueRef(r string) string {
+	if !sqlintro.ColumnExists(g.db, "node_refs", "node_kind") || !sqlintro.ColumnExists(g.db, "node_refs", "kind_id") {
+		return "1"
+	}
+	return "NOT " + lloschema.ValueRefSQL(r+".node_kind", "(SELECT k.lang FROM kinds k WHERE k.kind_id = "+r+".kind_id)")
 }
 
 // refResolves is a SQL predicate over a node_refs row (aliased r) that holds
@@ -446,7 +464,7 @@ func refResolves(s *v6Shape) string {
 }
 
 func (g *SQLiteGraph) refsMapFromNodesTable() map[string][]string {
-	pairs, err := g.queryTokenIDs("SELECT token, " + g.shape().refSite() + " FROM node_refs")
+	pairs, err := g.queryTokenIDs("SELECT token, " + g.shape().refSite() + " FROM node_refs r WHERE " + g.notValueRef("r"))
 	if err != nil {
 		return nil
 	}

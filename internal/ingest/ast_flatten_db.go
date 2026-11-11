@@ -30,6 +30,10 @@ import (
 // limit bounds the number of RECORDS returned (0 = unlimited). Ordering is
 // deterministic document order (source, then position, pre-order on ties).
 //
+// Comments are not records. From projection-v13 they are `_ast` occurrences,
+// and mache folds them rather than projecting them as nodes (mache-1e3d11),
+// so a schema inferred from the records must not grow a comment concept.
+//
 // Caveat: language-specific enrichment (lang.Language.EnrichNode — currently
 // only HCL/Terraform's enrichHCLNode, which is sitter-typed) is NOT
 // replicated here. HCL inference via `_ast` therefore lacks that enrichment
@@ -69,7 +73,7 @@ func FlattenASTDB(db *sql.DB, sourceLike string, limit int) ([]any, error) {
 SELECT a.node_id, a.node_kind, COALESCE(ce.field, ''), COALESCE(` + children.Kind + `, '')
 FROM (` + body + `) a
 ` + children.Joins + `
-WHERE (? = '' OR a.source_id LIKE ?)
+WHERE (? = '' OR a.source_id LIKE ?) AND NOT a.is_comment
 ORDER BY a.source_id, a.start_byte, a.end_byte DESC, a.node_id, ce.ordinal`
 
 	rows, err := db.Query(q, sourceLike, sourceLike)

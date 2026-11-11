@@ -1,63 +1,103 @@
 package ingest
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// docIndex is a file whose nodes, in start_byte order, are:
-//
-//	[0,10)  comment          "// A"      ─┐ contiguous (gap 1)
-//	[11,21) comment          "// B"      ─┘
-//	[22,60) function_declaration  Fn     ← scope; gap 1 to B
-//	[70,80) comment          "// far"    (gap 10 to Gn: not a doc)
-//	[90,120) function_declaration_1  Gn
-//	[121,130) comment        "// inner"  child of Gn, not a sibling of anything scoped
-//
-// all under source_file — the shape SitterWalker's PrevSibling scan and the
-// SQL that replaced it both read.
-func docIndex() *fileIndex {
+// indexSource builds an index over src from nodes given by the text they span:
+// each node is placed at the first occurrence of its text at or after the
+// previous node's start, so a test reads as the source it describes.
+func indexSource(t *testing.T, src string, nodes []idxNode, texts []string) *fileIndex {
+	t.Helper()
 	idx := newFileIndex()
-	for _, n := range []idxNode{
-		{id: "sf", astKind: "source_file", startByte: 0, endByte: 130},
-		{id: "sf/comment_0", parentID: "sf", astKind: "comment", startByte: 0, endByte: 10},
-		{id: "sf/comment_1", parentID: "sf", astKind: "comment", startByte: 11, endByte: 21},
-		{id: "sf/function_declaration_0", parentID: "sf", astKind: "function_declaration", startByte: 22, endByte: 60},
-		{id: "sf/comment_2", parentID: "sf", astKind: "comment", startByte: 70, endByte: 80},
-		{id: "sf/function_declaration_1", parentID: "sf", astKind: "function_declaration", startByte: 90, endByte: 120},
-		{id: "sf/function_declaration_1/comment", parentID: "sf/function_declaration_1", astKind: "comment", startByte: 121, endByte: 130},
-	} {
+	idx.source = []byte(src)
+	from := 0
+	for i, n := range nodes {
+		at := strings.Index(src[from:], texts[i])
+		require.GreaterOrEqual(t, at, 0, "%q not in the source after byte %d", texts[i], from)
+		n.startByte, n.endByte = from+at, from+at+len(texts[i])
+		from = n.startByte
 		idx.add(n)
 	}
 	return idx
 }
 
-// TestFileIndex_DocExtendStart pins the in-memory doc-comment scan: it walks
-// back over CONTIGUOUS preceding comment siblings (gap <= 2 bytes) and stops
-// at the first gap, exactly like the SQL loop it replaced (mache-40ce82).
+// TestFileIndex_DocExtendStart pins the doc-comment scan (mache-1e3d11): the
+// run of comment siblings directly above a construct, with no blank line in
+// the run or before the construct, of any comment kind, reaching over Rust
+// attributes.
 func TestFileIndex_DocExtendStart(t *testing.T) {
-	idx := docIndex()
-
-	assert.Equal(t, uint32(0), idx.docExtendStart("sf/function_declaration_0", 22),
-		"both comments are contiguous with Fn and each other: extend to the first")
-	assert.Equal(t, uint32(90), idx.docExtendStart("sf/function_declaration_1", 90),
-		"a comment 10 bytes above Gn is not its doc")
-	assert.Equal(t, uint32(22), idx.docExtendStart("no-such-node", 22),
+	const goSrc = "// A\n// B\nfunc Fn() {}\n\n// far\n\nfunc Gn() {\n\t// inner\n}\n"
+	goIdx := indexSource(t, goSrc, []idxNode{
+		{id: "sf", astKind: "source_file"},
+		{id: "sf/comment_0", parentID: "sf", astKind: "comment"},
+		{id: "sf/comment_1", parentID: "sf", astKind: "comment"},
+		{id: "sf/function_declaration_0", parentID: "sf", astKind: "function_declaration"},
+		{id: "sf/comment_2", parentID: "sf", astKind: "comment"},
+		{id: "sf/function_declaration_1", parentID: "sf", astKind: "function_declaration"},
+		{id: "sf/function_declaration_1/comment", parentID: "sf/function_declaration_1", astKind: "comment"},
+	}, []string{goSrc, "// A", "// B", "func Fn() {}", "// far", "func Gn() {\n\t// inner\n}", "// inner"})
+	fn, gn := uint32(strings.Index(goSrc, "func Fn")), uint32(strings.Index(goSrc, "func Gn"))
+	assert.Equal(t, uint32(0), goIdx.docExtendStart("sf/function_declaration_0", fn),
+		"both comments sit on the lines directly above Fn: extend to the first")
+	assert.Equal(t, gn, goIdx.docExtendStart("sf/function_declaration_1", gn),
+		"a comment with a blank line below it is not Gn's doc")
+	assert.Equal(t, fn, goIdx.docExtendStart("no-such-node", fn),
 		"a scope the file does not hold (the \"$\" grouping match) extends nothing")
+	assert.NotContains(t, goIdx.byKind, "comment", "a comment is not a node of the index")
+	assert.Len(t, goIdx.children["sf"], 2, "nor anyone's child: only the two functions are")
 
-	// The nearest comment is contiguous but the one above it is not.
-	idx2 := newFileIndex()
-	for _, n := range []idxNode{
-		{id: "sf", astKind: "source_file", startByte: 0, endByte: 100},
-		{id: "sf/comment_0", parentID: "sf", astKind: "comment", startByte: 0, endByte: 10},
-		{id: "sf/comment_1", parentID: "sf", astKind: "comment", startByte: 20, endByte: 30},
-		{id: "sf/function_declaration", parentID: "sf", astKind: "function_declaration", startByte: 31, endByte: 100},
-	} {
-		idx2.add(n)
-	}
-	assert.Equal(t, uint32(20), idx2.docExtendStart("sf/function_declaration", 31),
-		"the scan stops at the first gap wider than 2 bytes")
+	// A blank line inside the run ends it at the comment below the blank.
+	const runSrc = "// far\n\n// near\nfunc F() {}\n"
+	runIdx := indexSource(t, runSrc, []idxNode{
+		{id: "sf", astKind: "source_file"},
+		{id: "sf/comment_0", parentID: "sf", astKind: "comment"},
+		{id: "sf/comment_1", parentID: "sf", astKind: "comment"},
+		{id: "sf/function_declaration", parentID: "sf", astKind: "function_declaration"},
+	}, []string{runSrc, "// far", "// near", "func F() {}"})
+	assert.Equal(t, uint32(strings.Index(runSrc, "// near")),
+		runIdx.docExtendStart("sf/function_declaration", uint32(strings.Index(runSrc, "func F"))))
+
+	// Rust: line_comment spans its newline, the doc sits above an attribute,
+	// and a method's doc is indented in its impl.
+	const rsSrc = "/// Doc.\n/// More.\n#[inline]\nfn f() {}\n\n#[test]\nfn g() {}\n\nimpl S {\n    /** Block. */\n    fn m() {}\n}\n"
+	rsIdx := indexSource(t, rsSrc, []idxNode{
+		{id: "sf", astKind: "source_file"},
+		{id: "sf/line_comment_0", parentID: "sf", astKind: "line_comment"},
+		{id: "sf/line_comment_1", parentID: "sf", astKind: "line_comment"},
+		{id: "sf/attribute_item_0", parentID: "sf", astKind: "attribute_item"},
+		{id: "sf/function_item_0", parentID: "sf", astKind: "function_item"},
+		{id: "sf/attribute_item_1", parentID: "sf", astKind: "attribute_item"},
+		{id: "sf/function_item_1", parentID: "sf", astKind: "function_item"},
+		{id: "sf/impl_item", parentID: "sf", astKind: "impl_item"},
+		{id: "sf/impl_item/declaration_list", parentID: "sf/impl_item", astKind: "declaration_list"},
+		{id: "sf/impl_item/declaration_list/block_comment", parentID: "sf/impl_item/declaration_list", astKind: "block_comment"},
+		{id: "sf/impl_item/declaration_list/function_item", parentID: "sf/impl_item/declaration_list", astKind: "function_item"},
+	}, []string{rsSrc, "/// Doc.\n", "/// More.\n", "#[inline]", "fn f() {}", "#[test]", "fn g() {}", "impl S {", "{\n    /**", "/** Block. */", "fn m() {}"})
+	assert.Equal(t, uint32(0), rsIdx.docExtendStart("sf/function_item_0", uint32(strings.Index(rsSrc, "fn f"))),
+		"a line_comment run above an attribute is the item's doc")
+	g := uint32(strings.Index(rsSrc, "fn g"))
+	assert.Equal(t, g, rsIdx.docExtendStart("sf/function_item_1", g),
+		"an attribute with no comment above it extends nothing")
+	inner := indexSource(t, "//! Crate.\n/// Item.\nfn f() {}\n", []idxNode{
+		{id: "sf", astKind: "source_file"},
+		{id: "sf/line_comment_0", parentID: "sf", astKind: "line_comment"},
+		{id: "sf/line_comment_1", parentID: "sf", astKind: "line_comment"},
+		{id: "sf/function_item", parentID: "sf", astKind: "function_item"},
+	}, []string{"//! Crate.\n/// Item.\nfn f() {}\n", "//! Crate.\n", "/// Item.\n", "fn f() {}"})
+	assert.Equal(t, uint32(len("//! Crate.\n")), inner.docExtendStart("sf/function_item", uint32(len("//! Crate.\n/// Item.\n"))),
+		"an inner doc comment documents what encloses it: it ends the run")
+	assert.Equal(t, uint32(strings.Index(rsSrc, "/** Block")),
+		rsIdx.docExtendStart("sf/impl_item/declaration_list/function_item", uint32(strings.Index(rsSrc, "fn m"))),
+		"an indented block_comment directly above a method is its doc")
+
+	goIdx.source = nil
+	assert.Equal(t, fn, goIdx.docExtendStart("sf/function_declaration_0", fn),
+		"without the file's source there is nothing to measure a gap in")
 }
 
 // TestFileIndex_CallRows_QualifierIsEverySibling pins the qualified-call

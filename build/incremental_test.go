@@ -69,6 +69,28 @@ func TestIncrementalBuild_FingerprintMismatchRebuilds(t *testing.T) {
 		"a schema change did not force a clean rebuild")
 }
 
+// TestIncrementalBuild_AnotherParserRebuilds: a projection is reusable only by
+// a build derived under the same parser. The fingerprint names the parse's
+// parserId, not the pinned leyline version, which stays the same when the
+// binary that runs does not (MACHE_LEYLINE_BINARY) or when its rules change
+// (LLO_EXTRACTION_EPOCH, which one release uses to act as two) (mache-3465b9).
+func TestIncrementalBuild_AnotherParserRebuilds(t *testing.T) {
+	corpus := testutil.GoldenCorpusDir(t)
+	out := filepath.Join(t.TempDir(), "out.db")
+
+	require.NoError(t, ParseWithSchemaRef(corpus, out, "go", "."))
+	first, err := readFingerprint(out)
+	require.NoError(t, err)
+	require.NotEmpty(t, reusableIndex(out, first), "the same build may reuse it")
+
+	t.Setenv("LLO_EXTRACTION_EPOCH", "6")
+	require.NoError(t, ParseWithSchemaRef(corpus, out, "go", "."))
+	second, err := readFingerprint(out)
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second, "another parser's build is another projection")
+	assert.Nil(t, reusableIndex(out, first), "so the first parser's build may not reuse it")
+}
+
 // TestReusableIndex_RequiresAMatchingFingerprint pins the reuse decision
 // directly: no file, no fingerprint row, and a stale fingerprint each mean
 // "project everything".

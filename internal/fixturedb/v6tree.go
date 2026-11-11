@@ -27,7 +27,10 @@ import (
 //   - every syntax node is file_id<<24 | ordinal, numbered in preorder by
 //     sibling order, with no stored name: v_node_name renders it as its raw
 //     kind, plus "_k" (the k-th sibling of that kind by ord) when the parent
-//     has more than one child of that kind.
+//     has more than one child of that kind;
+//   - from projection-v13 (leyline v0.29.0) a comment takes an ordinal after
+//     every code node of its file, comments in source order among themselves,
+//     while ord still places it among its siblings (mache-1e3d11).
 
 // v6Node is one row of a projection-v6 nodes table.
 type v6Node struct {
@@ -204,15 +207,21 @@ func (tr *v6Tree) assignIDs() {
 	for i, f := range tr.files {
 		f.fileID = i + 1
 		next := int64(0)
-		var walk func(*v6Node)
-		walk = func(n *v6Node) {
-			n.nid = int64(f.fileID)<<24 | next
-			next++
+		var walk func(n *v6Node, comments bool)
+		walk = func(n *v6Node, comments bool) {
+			// LLO's own test for a comment (cmd_parse.rs is_comment_extra).
+			// fixturedb models the producer, so it does not borrow mache's
+			// reader-side predicate (lloschema.IsCommentKind).
+			if strings.Contains(n.kind, "comment") == comments {
+				n.nid = int64(f.fileID)<<24 | next
+				next++
+			}
 			for _, c := range n.kids {
-				walk(c)
+				walk(c, comments)
 			}
 		}
-		walk(f)
+		walk(f, false)
+		walk(f, true)
 	}
 }
 

@@ -82,14 +82,25 @@ var knownProjections = map[string]string{
 	// tree_root becomes a parser-free store_root (ley-line-open-73c6ee,
 	// mache-107423). Shipped only inside v0.26.0's move to v12.
 	"projection-v11": "unreleased alone: v10 with derived_from v2 (storeRoot)",
-	// THE PINNED SHAPE as of leyline v0.26.0: v11 with node_hash keyed
+	// The shape leyline v0.26.0-v0.28.0 write: v11 with node_hash keyed
 	// (IR merkle-ast-v3, so every hash value differs from v2), raw_kind and
 	// lang moved off node_content to the occurrence, and node_defs/node_refs
 	// gaining kind_id (mache-108e26). A fielded child's grammar kind comes
 	// from its occurrence (lloschema.FieldChildJoins). Checked against
 	// sqlite_master of one tree parsed by v0.25.0 and v0.26.0: those columns
 	// and the two views' kind_id are the whole difference.
-	"projection-v12": "the pinned shape: keyed node_hash (merkle-ast-v3); kind and language per occurrence",
+	"projection-v12": "leyline v0.26-v0.28: keyed node_hash (merkle-ast-v3); kind and language per occurrence",
+	// THE PINNED SHAPE as of leyline v0.29.0: v12 with every comment an _ast
+	// and nodes occurrence (extraction epoch 7, ley-line-open-aa1634). No
+	// table or column moved; two invariants a v12 reader relied on did: a
+	// comment has no node_edge from its parent, and a file's comments are
+	// numbered after its code, so nid order is document order among code
+	// only. mache folds comments: the file index holds them apart from the
+	// nodes, v_ast gives them no subtree and marks them is_comment, listings
+	// and path resolution skip them, and a doc comment extends the construct
+	// below it (mache-1e3d11). Checked against sqlite_master of one tree
+	// parsed by v0.28.0 and v0.29.0: identical.
+	"projection-v13": "the pinned shape: v12 with comments as _ast occurrences (extraction epoch 7)",
 }
 
 // ProjectionVersion returns the projection shape an artifact declares and

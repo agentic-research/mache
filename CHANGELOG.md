@@ -43,6 +43,49 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **leyline v0.29.0 is the pinned backend** (`mache-7bdcc6`). Its
+  projection-v13 writes every comment as an occurrence and its extraction
+  epoch 7 carries value refs; mache reads both (the two entries below and
+  `mache-3465b9`). One tree parsed by v0.28.0 and v0.29.0 has the same
+  tables, `node_hash` values and `storeRoot`; the `parserId` moves, and
+  each release refuses the other's arena, so the parse cache and the managed
+  daemon's arena start cold once. A control block now has one daemon
+  (`<stem>.daemon-lock`); mache's adopt-or-spawn and its `<ctrl>.lock` lease
+  are unchanged. The leyline-schema Go module moves with it (additive:
+  `sigma.ClaimOf`, the execution error envelope).
+
+- **Value references count as uses, not as calls** (`mache-c5e2f9`). From
+  leyline v0.29.0 (extraction epoch 6 and on) `node_refs` also records a name
+  in value position: `var h = helper`, `register(helper)`, `return err`, a
+  literal element, a method value. `v_refs` gains `node_kind` and `is_value`
+  (a ref in Go, Rust, Python, JavaScript, TypeScript, Java, C or C++ whose
+  kind is not a call anchor). `dead_code` and `untested_function` read every
+  ref, so a function used only as a value is live, and a function a test
+  takes as a value is tested. `fan_out_skew` and the most-referenced ranking
+  (`get_architecture`'s `most_referenced` and dependency layers, `get_overview`'s
+  `ref_tokens`, `mache pack`, communities) leave value refs out, so a local
+  passed to a callee is not a receiver or a hub. That includes Go's argument
+  and composite-literal identifiers, which leyline recorded before epoch 6 and
+  these counted until now. `find_callees` (and `get_impact`'s callees) leave
+  them out too: a function's callees are what it invokes, not the names it
+  passes. `find_callers` is unchanged: a value site is a caller, anchored at
+  its container.
+
+- **Comments fold into the construct they document** (`mache-1e3d11`,
+  `mache-a83451`). From leyline v0.29.0 (projection-v13) every comment is an
+  `_ast` and `nodes` occurrence. mache does not show them as nodes:
+  `list_directory`, `get_overview` and the mount list no `comment_N`,
+  `line_comment_N` or `block_comment` entries, and no path resolves to one. A
+  doc comment (the comment run directly above a construct, with no blank
+  line, of any comment kind: Go's `comment`, Rust's and Java's
+  `line_comment`/`block_comment`, reaching over Rust attributes) extends the
+  construct: its `source` leaf, `location` and write-back origin start at the
+  doc comment, as they did before leyline became the only parser. `v_ast`
+  gains `is_comment`; a comment's `subtree_lo`/`subtree_hi` range is empty and
+  a code node's range holds no comment, since a comment's nid follows all of
+  its file's code. `duplicate_code` erases every comment kind, and schema
+  inference ignores comments.
+
 - **`mache serve --mount` works again** (`mache-e0605e`). Every session of
   a `--mount` server failed. A client without MCP roots got "workspace root
   unavailable", and one that answered roots had its root turned into a
@@ -261,6 +304,14 @@ bumps may include breaking changes.
   upgrading a real v0.20.5 arena with the v0.21.0 binary.
 
 ### Fixed
+
+- **`mache build --schema` reuses a projection only under the same parser**
+  (`mache-3465b9`). The reuse fingerprint named the pinned leyline version,
+  which stays the same when the binary that runs does not
+  (`MACHE_LEYLINE_BINARY`) or when its extraction rules change
+  (`LLO_EXTRACTION_EPOCH`), so a projection derived by another parser was
+  merged into. It now names the parse's `parserId` (`_meta.derived_from`),
+  and a parse that records none (leyline before v0.26.0) is refused.
 
 - **Every schema and smell rule in `examples/` is now exercised, and the
   broken ones are fixed** (`mache-eb26eb`). `examples_test.go` used to

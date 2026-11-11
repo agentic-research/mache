@@ -371,7 +371,11 @@ func (g *SQLiteGraph) calleeTokensFromContainer(nodeID string) ([]string, error)
 	if !ok {
 		return nil, nil
 	}
-	rows, err := g.db.Query("SELECT DISTINCT token FROM node_refs WHERE "+container+" = ?", key)
+	// What a construct invokes, so not the names it only passes, assigns or
+	// returns: from leyline extraction epoch 6 those are value refs in the
+	// same container, and a local sharing a definition's name would resolve
+	// to it (mache-c5e2f9).
+	rows, err := g.db.Query("SELECT DISTINCT token FROM node_refs WHERE "+container+" = ? AND "+g.notValueRef("node_refs"), key)
 	if err != nil {
 		return nil, fmt.Errorf("query callee tokens for %s: %w", nodeID, err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/agentic-research/mache/internal/fsutil"
 	internalingest "github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/leylinegraph"
+	"github.com/agentic-research/mache/internal/lloschema"
 	publicschema "github.com/agentic-research/mache/schema"
 
 	_ "modernc.org/sqlite"
@@ -122,7 +123,11 @@ func requireSchemaCoverage(db *sql.DB, topology *api.Topology, source string, ex
 // survive the process. Publishing a finished file removes all three, and is
 // what makes it sound for a reader to treat a published database as immutable.
 func publishProjection(db *sql.DB, topology *api.Topology, source, output string, finalize func(string) error) error {
-	fingerprint, err := projectionFingerprint(topology)
+	parserID, err := lloschema.ParserID(lloschema.DB(db))
+	if err != nil {
+		return fmt.Errorf("leyline parse output: %w", err)
+	}
+	fingerprint, err := projectionFingerprint(topology, parserID)
 	if err != nil {
 		return err
 	}

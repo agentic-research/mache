@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentic-research/mache/internal/ingest"
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/agentic-research/mache/internal/lltest"
 )
 
@@ -39,4 +40,27 @@ func TestFlattenASTDB_FieldChildKindsOnARealParse(t *testing.T) {
 	assert.Equal(t, "struct_type", byType["type_spec"]["field_type_type"],
 		"the grammar kind, not node_content's κ kind (type)")
 	assert.Equal(t, "identifier", byType["function_declaration"]["field_name_type"])
+}
+
+// TestFlattenASTDB_CommentsAreNotRecords: from projection-v13 comments are
+// _ast occurrences, and inference must not see them as constructs
+// (mache-1e3d11).
+func TestFlattenASTDB_CommentsAreNotRecords(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "a.go"),
+		[]byte("// Package a.\npackage a\n\n// F.\nfunc F() {\n\t// inside\n}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "lib.rs"),
+		[]byte("/// Doc.\npub fn f() {\n    /* inside */\n}\n"), 0o644))
+	db, _ := lltest.ParseSourceViaLeyline(t, src)
+	var occurrences int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM _ast a JOIN kinds k ON k.kind_id = a.kind_id
+		WHERE `+lloschema.CommentKindSQL("k.raw_kind")).Scan(&occurrences))
+	require.Equal(t, 5, occurrences, "the parse holds the comments (leyline >= v0.29.0)")
+
+	recs, err := ingest.FlattenASTDB(db, "", 0)
+	require.NoError(t, err)
+	require.NotEmpty(t, recs)
+	for _, r := range recs {
+		assert.False(t, lloschema.IsCommentKind(r.(map[string]any)["type"].(string)), "record %v", r)
+	}
 }

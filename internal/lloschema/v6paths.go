@@ -84,12 +84,14 @@ WHERE f.dir_id = ? AND n.text = ?`),
 		dir: sqlstmt.NewLazy(`SELECT d.dir_id FROM dirs d JOIN names n ON n.name_id = d.name_id
 WHERE d.parent_dir_id = ? AND n.text = ?`),
 		// A bare kind names a node only when exactly one sibling has it: the
-		// writer suffixes every one of them otherwise.
+		// writer suffixes every one of them otherwise. A comment occurrence
+		// (projection-v13) resolves from no path: mache folds comments
+		// rather than serving them as nodes (mache-1e3d11).
 		single: sqlstmt.NewLazy(`SELECT CASE WHEN COUNT(*) = 1 THEN MIN(n.nid) END
 FROM nodes n JOIN kinds k ON k.kind_id = n.kind_id
-WHERE n.parent_nid = ? AND k.raw_kind = ?`),
+WHERE n.parent_nid = ? AND k.raw_kind = ? AND NOT ` + CommentKindSQL("k.raw_kind")),
 		nth: sqlstmt.NewLazy(`SELECT n.nid FROM nodes n JOIN kinds k ON k.kind_id = n.kind_id
-WHERE n.parent_nid = ? AND k.raw_kind = ?
+WHERE n.parent_nid = ? AND k.raw_kind = ? AND NOT ` + CommentKindSQL("k.raw_kind") + `
 ORDER BY n.ord LIMIT 1 OFFSET ?`),
 		hop:      sqlstmt.NewLazy(hopSQL),
 		sourceOf: sqlstmt.NewLazy(sourceOfSQL + `?`),

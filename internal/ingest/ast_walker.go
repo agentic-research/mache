@@ -102,10 +102,10 @@ func (w *ASTWalker) sectionOrNil(sourceID string) *fileIndex {
 	return idx
 }
 
-// docExtendStart is fileIndex.docExtendStart for the match's file; a file the
-// db does not hold extends nothing.
+// docExtendStart is fileIndex.docExtendStart for the match's file, which reads
+// the file's source; a file the db does not hold extends nothing.
 func (w *ASTWalker) docExtendStart(sourceID, scopeID string, scopeStart uint32) uint32 {
-	idx, err := w.fileIndex(sourceID)
+	idx, err := w.fileSection(sourceID)
 	if err != nil {
 		return scopeStart
 	}
