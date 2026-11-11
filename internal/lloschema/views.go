@@ -240,6 +240,33 @@ func defsViewBody(qg Querier, ids identityColumns) (string, error) {
 // back to a constant where this producer did not write the column.
 type refsColumns struct {
 	referrer, hash, qualifier, source string
+	// kind is the occurrence's grammar kind and value whether it is a value
+	// ref.
+	kind, value string
+}
+
+// refsKindColumns returns v_refs' node_kind and is_value expressions.
+// node_refs.node_kind (projection-v3 on) and kind_id (projection-v12 on, the
+// occurrence's language through kinds) tell a value ref from the rest
+// (ValueRefSQL, mache-c5e2f9). A producer without them records no value refs
+// mache could tell apart, and none of its rows is one.
+func refsKindColumns(qg Querier) (kind, value string, err error) {
+	hasKind, err := TableHasColumn(qg, "node_refs", "node_kind")
+	if err != nil {
+		return "", "", fmt.Errorf("probe node_refs.node_kind: %w", err)
+	}
+	hasKindID, err := TableHasColumn(qg, "node_refs", "kind_id")
+	if err != nil {
+		return "", "", fmt.Errorf("probe node_refs.kind_id: %w", err)
+	}
+	kind, value = "NULL", "0"
+	if hasKind {
+		kind = "node_kind"
+	}
+	if hasKind && hasKindID {
+		value = ValueRefSQL("node_kind", "(SELECT k.lang FROM kinds k WHERE k.kind_id = node_refs.kind_id)")
+	}
+	return kind, value, nil
 }
 
 // probeRefsColumns decides each refsColumns expression from what node_refs
@@ -301,9 +328,14 @@ func probeRefsColumns(qg Querier, ids identityColumns) (refsColumns, error) {
 	if err != nil {
 		return refsColumns{}, err
 	}
+	refsKindExpr, refsValueExpr, err := refsKindColumns(qg)
+	if err != nil {
+		return refsColumns{}, err
+	}
 	return refsColumns{
 		referrer: refsReferrerExpr, hash: refsHashExpr,
 		qualifier: refsQualExpr, source: refsSourceExpr,
+		kind: refsKindExpr, value: refsValueExpr,
 	}, nil
 }
 
@@ -330,7 +362,9 @@ func refsViewBody(qg Querier, ids identityColumns) (string, error) {
 	       'mention' AS fidelity,
 	       ` + cols.qualifier + ` AS qualifier,
 	       ` + cols.hash + ` AS node_hash,
-	       ` + cols.source + ` AS source_id
+	       ` + cols.source + ` AS source_id,
+	       ` + cols.kind + ` AS node_kind,
+	       ` + cols.value + ` AS is_value
 	FROM node_refs`
 	// Binding-fidelity rows come from the per-connection
 	// _capnp_binding_refs TEMP table, populated from the sibling
@@ -363,7 +397,11 @@ func refsViewBody(qg Querier, ids identityColumns) (string, error) {
 		       'binding' AS fidelity,
 		       qualifier,
 		       NULL AS node_hash,
-		       NULL AS source_id
+		       NULL AS source_id,
+		       -- A BindingRecord is a call site resolved to its
+		       -- definition: it carries no grammar kind, and is no value.
+		       NULL AS node_kind,
+		       0 AS is_value
 		FROM _capnp_binding_refs`
 
 	return refsBody, nil

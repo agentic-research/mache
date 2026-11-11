@@ -43,6 +43,23 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **Value references count as uses, not as calls** (`mache-c5e2f9`). From
+  leyline v0.29.0 (extraction epoch 6 and on) `node_refs` also records a name
+  in value position: `var h = helper`, `register(helper)`, `return err`, a
+  literal element, a method value. `v_refs` gains `node_kind` and `is_value`
+  (a ref in Go, Rust, Python, JavaScript, TypeScript, Java, C or C++ whose
+  kind is not a call anchor). `dead_code` and `untested_function` read every
+  ref, so a function used only as a value is live, and a function a test
+  takes as a value is tested. `fan_out_skew` and the most-referenced ranking
+  (`get_architecture`'s `most_referenced` and dependency layers, `get_overview`'s
+  `ref_tokens`, `mache pack`, communities) leave value refs out, so a local
+  passed to a callee is not a receiver or a hub. That includes Go's argument
+  and composite-literal identifiers, which leyline recorded before epoch 6 and
+  these counted until now. `find_callees` (and `get_impact`'s callees) leave
+  them out too: a function's callees are what it invokes, not the names it
+  passes. `find_callers` is unchanged: a value site is a caller, anchored at
+  its container.
+
 - **Comments fold into the construct they document** (`mache-1e3d11`,
   `mache-a83451`). From leyline v0.29.0 (projection-v13) every comment is an
   `_ast` and `nodes` occurrence. mache does not show them as nodes:
