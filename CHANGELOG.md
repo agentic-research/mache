@@ -294,6 +294,14 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`mache build --schema` reuses a projection only under the same parser**
+  (`mache-3465b9`). The reuse fingerprint named the pinned leyline version,
+  which stays the same when the binary that runs does not
+  (`MACHE_LEYLINE_BINARY`) or when its extraction rules change
+  (`LLO_EXTRACTION_EPOCH`), so a projection derived by another parser was
+  merged into. It now names the parse's `parserId` (`_meta.derived_from`),
+  and a parse that records none (leyline before v0.26.0) is refused.
+
 - **Every schema and smell rule in `examples/` is now exercised, and the
   broken ones are fixed** (`mache-eb26eb`). `examples_test.go` used to
   unmarshal the schemas and ingest four of them. It now projects every

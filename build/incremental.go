@@ -11,7 +11,6 @@ import (
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/internal/buildinfo"
 	internalingest "github.com/agentic-research/mache/internal/ingest"
-	"github.com/agentic-research/mache/internal/leyline"
 )
 
 // fingerprintKey is the _mache_meta row naming what produced a projection.
@@ -29,19 +28,23 @@ const fingerprintKey = "projection_fingerprint"
 //   - the mache version, because reusing across versions is old projection
 //     logic serving under a new binary — the failure mache-6c9e1d records,
 //     which mount already keys against;
-//   - the pinned leyline version, because a different parser writes a
-//     different `_ast` and the projection is derived from it.
+//   - the parserId the parse was derived under (lloschema.ParserID), because
+//     a different parser writes a different `_ast` and the projection is
+//     derived from it. It was the pinned leyline version, which names the
+//     binary mache asks for and not the one that ran: under
+//     MACHE_LEYLINE_BINARY, or LLO_EXTRACTION_EPOCH, a projection derived by
+//     another parser passed as this one and was merged into (mache-3465b9).
 //
 // A mismatch is not an error. It just means a full rebuild, which is what
 // every build did before this.
-func projectionFingerprint(topology *api.Topology) (string, error) {
+func projectionFingerprint(topology *api.Topology, parserID string) (string, error) {
 	canonical, err := json.Marshal(topology)
 	if err != nil {
 		return "", fmt.Errorf("fingerprint schema: %w", err)
 	}
 	sum := sha256.Sum256(canonical)
-	return fmt.Sprintf("schema=%s mache=%s leyline=%s",
-		hex.EncodeToString(sum[:8]), buildinfo.Version, leyline.BinaryVersion), nil
+	return fmt.Sprintf("schema=%s mache=%s parser=%s",
+		hex.EncodeToString(sum[:8]), buildinfo.Version, parserID), nil
 }
 
 // reusableIndex returns the file index of an existing projection at output
