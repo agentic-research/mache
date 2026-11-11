@@ -17,8 +17,10 @@ this map:
 section below — every schema is the same pattern: `nodes` describe
 directories, `files`/`file_sets` describe the rendered leaf files, and
 selectors (JSONPath for data, tree-sitter queries for code) pick what
-lands where. Smell rules are a separate mechanism (SQL over the built
-`.db`, not schemas) — see
+lands where. The field-by-field reference, with the selector and
+template rules for each source kind, is
+[`docs/reference/schema.md`](../docs/reference/schema.md). Smell rules
+are a separate mechanism (SQL over the built `.db`, not schemas) — see
 [`smell-rules/README.md`](smell-rules/README.md).
 
 ## Topology schemas

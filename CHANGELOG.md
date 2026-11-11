@@ -8,6 +8,24 @@ bumps may include breaking changes.
 
 ### Documentation
 
+- **Schema syntax reference** (`mache-4c6120`). `docs/reference/schema.md`
+  documents every field `api/schema.go` accepts — `version`, `table`,
+  `diagrams`, `file_sets`, `nodes`; `name`, `selector`, `refs`,
+  `skip_self_match`, `language`, `include`, `children`, `files`; `name`,
+  `content_template`, `content_source`, `attributes` — with the source kinds
+  it applies to, then selectors and the template context per source kind
+  (JSON engine, direct SQLite, leyline-parsed source), naming and dedup
+  (`.from_<file>`, `.N`), file sets and include, and why data projections
+  are read-only. `docs/reference/schema_test.go` fails when `api/schema.go`
+  gains a field the page does not describe, and projects every schema
+  snippet over the samples on the page, requiring the listed tree. Writing
+  it surfaced five defects, each named where it applies: `attributes.mode`
+  never applied (`mache-5689b3`), `version` never checked (`mache-56b800`),
+  `table` ignored by the engine's `.db` path (`mache-56d7dc`), the direct
+  path ignoring `selector`/`refs`/templated leaf names/`_parent`
+  (`mache-56ff85`), and `{{.doc}}` rendering `<no value>` on an undocumented
+  construct (`mache-5a1f21`). The projection helpers `examples_test.go`
+  used move to `internal/projtest`, shared by both tests.
 - **README and GETTING-STARTED match the build again** (`mache-f091d3`).
   Each claim was checked against the binary, `--help` and live tool output.
   The tool list is the 19 tools mache registers, with `semantic_search` marked
