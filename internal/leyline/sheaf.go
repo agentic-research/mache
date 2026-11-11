@@ -8,7 +8,6 @@ package leyline
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sort"
 
@@ -79,27 +78,41 @@ type stalk struct {
 // PushTopology converts Louvain community detection output into a
 // sheaf_set_topology op and sends it to the daemon.
 //
-// Each community maps to a region whose hash is the SHA-256 of the
-// sorted, concatenated member node IDs. Each region also carries a
-// 32-D f32 stalk: the first 30 dims are SHA-256 of the region's
-// cross-community tokens (so two regions agree iff they share the
-// same set of cross-boundary refs), and the trailing 2 dims are
-// private discriminators (member count + cross-degree). Restriction
-// edges carry `agreement_dim=30` so the daemon's δ⁰ check projects
-// the agreement subspace.
+// Each community maps to a region whose hash is RegionHash over its
+// members' node_hash values under the parse's parserId, both read from
+// content; each restriction edge's boundary_hash is the XOR of its two
+// region hashes (sheaf_region.go). That is the contract the daemon's
+// XOR pre-filter and sheaf_defect compare against. A topology is
+// refused, not pushed, when content is nil (ErrNoContentHashes), when
+// the database records no parserId (lloschema.ErrNoParserID), or when a
+// member has no node_hash (ErrMemberWithoutNodeHash): a region whose
+// content cannot be hashed has no boundary the daemon could ever find
+// unchanged, and pushing it would report a defect by construction. A
+// directory, as `granularity=dir` makes a member, has no node_hash.
+//
+// Each region also carries a 32-D f32 stalk: the first 30 dims are
+// SHA-256 of the region's cross-community tokens (so two regions agree
+// iff they share the same set of cross-boundary refs), and the trailing
+// 2 dims are private discriminators (member count + cross-degree).
+// Restriction edges carry `agreement_dim=30` so the daemon's δ⁰ check
+// projects the agreement subspace.
 //
 // With these inputs the daemon engages δ⁰-driven invalidation
 // (response advertises `delta_zero_mode: true`). Without the f32
 // data the daemon silently falls back to heuristic-only mode, which
 // is correct but loses the precision guarantee from LLO PR #16.
-func (sc *SheafClient) PushTopology(cr *graph.CommunityResult, refs map[string][]string) error {
+func (sc *SheafClient) PushTopology(cr *graph.CommunityResult, refs map[string][]string, content graph.ContentHasher) error {
 	if sc == nil || sc.sock == nil || cr == nil {
 		return nil
 	}
 
+	hashes, err := regionHashes(cr, content)
+	if err != nil {
+		return fmt.Errorf("sheaf_set_topology: %w", err)
+	}
 	crossTokens := crossCommunityTokens(cr, refs)
-	regions := buildRegions(cr, crossTokens)
-	restrictions := buildRestrictions(cr, refs)
+	regions := buildRegions(cr, crossTokens, hashes)
+	restrictions := buildRestrictions(cr, refs, hashes)
 
 	req := map[string]any{
 		"op":             "sheaf_set_topology",
@@ -132,11 +145,16 @@ func (sc *SheafClient) Invalidate(regionID int) ([]int, error) {
 // recorded at sheaf_set_topology time. Returns the BFS-ordered list
 // of regions the daemon determined are transitively affected.
 //
-// newHash is either empty, which omits it, or 64 lowercase hex digits.
-// leyline >= v0.25.0 refuses anything else, and reads an omitted hash as
-// an explicit "changed": every boundary of the region fires
-// (ley-line-open-1c5d28). Omitting is therefore the sound default while the
-// region hash is not content-derived (mache-1c7038).
+// newHash is either empty, which omits it, or the region's new hash:
+// HashHex of RegionHash over the region's current members, under the
+// same parserId the topology was pushed with. That is the one hash the
+// daemon can compare against the boundaries recorded at topology time;
+// any other 64 hex digits fire every boundary of the region as surely
+// as an omitted hash does, and leave sheaf_defect counting them.
+// leyline >= v0.25.0 refuses anything but 64 lowercase hex digits, and
+// reads an omitted hash as an explicit "changed": every boundary of the
+// region fires (ley-line-open-1c5d28). Omitting is therefore the sound
+// default for a caller that has not re-read the members' node hashes.
 //
 // Returns an error when newData is non-empty but len(newData) is
 // not stalkDim — a wrong-sized vector would either be rejected
@@ -267,6 +285,45 @@ func ComputeStalk(memberCount int, crossTokens []string) []float32 {
 
 // --- helpers ---
 
+// regionHashes computes every community's RegionHash from content: the
+// parserId the database was derived under and each member's node_hash.
+func regionHashes(cr *graph.CommunityResult, content graph.ContentHasher) (map[int][32]byte, error) {
+	if content == nil {
+		return nil, ErrNoContentHashes
+	}
+	parserHex, err := content.ParserID()
+	if err != nil {
+		return nil, err
+	}
+	parserID, err := parseHash32(parserHex)
+	if err != nil {
+		return nil, fmt.Errorf("parserId %q: %w", parserHex, err)
+	}
+
+	var ids []string
+	for _, c := range cr.Communities {
+		ids = append(ids, c.Members...)
+	}
+	nodeHashes, err := content.NodeHashes(ids)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[int][32]byte, len(cr.Communities))
+	for _, c := range cr.Communities {
+		members := make([][32]byte, len(c.Members))
+		for i, m := range c.Members {
+			h, ok := nodeHashes[m]
+			if !ok {
+				return nil, fmt.Errorf("region %d: member %q: %w", c.ID, m, ErrMemberWithoutNodeHash)
+			}
+			members[i] = h
+		}
+		out[c.ID] = RegionHash(parserID, members)
+	}
+	return out, nil
+}
+
 // crossCommunityTokens groups the refs map by region: for each region
 // ID, return the sorted, deduped list of tokens that appear in at
 // least one member of that region AND also appear in at least one
@@ -304,18 +361,18 @@ func crossCommunityTokens(cr *graph.CommunityResult, refs map[string][]string) m
 	return sorted
 }
 
-// buildRegions produces the region list for sheaf_set_topology.
-// Each region's hash is SHA-256 of sorted member IDs joined by newlines.
+// buildRegions produces the region list for sheaf_set_topology: each
+// community's RegionHash (hashes, keyed by community ID) and its stalk.
 // crossTokens[id] may be nil (region with no cross-boundary refs) —
 // ComputeStalk handles the empty case by returning a 32-D vector
 // whose agreement coords are the SHA-256 of zero input (a fixed
 // "empty bucket") plus the region's private dims.
-func buildRegions(cr *graph.CommunityResult, crossTokens map[int][]string) []region {
+func buildRegions(cr *graph.CommunityResult, crossTokens map[int][]string, hashes map[int][32]byte) []region {
 	regions := make([]region, len(cr.Communities))
 	for i, c := range cr.Communities {
 		regions[i] = region{
 			ID:   c.ID,
-			Hash: hashMembers(c.Members),
+			Hash: HashHex(hashes[c.ID]),
 			Data: ComputeStalk(len(c.Members), crossTokens[c.ID]),
 		}
 	}
@@ -325,12 +382,12 @@ func buildRegions(cr *graph.CommunityResult, crossTokens map[int][]string) []reg
 // buildRestrictions discovers cross-community edges from the refs map.
 // For each token referenced by nodes in more than one community, we
 // create a restriction edge between each pair of those communities.
-// For a given (A,B) edge, boundary_hash is the SHA-256 of the sorted list
-// of all tokens contributing to that edge (joined with 0-byte separators).
-// The co_change_rate is proportional to how many cross-community node pairs
-// share those tokens. AgreementDim is set on every edge so the daemon's
-// δ⁰ check projects the matching agreement subspace.
-func buildRestrictions(cr *graph.CommunityResult, refs map[string][]string) []restriction {
+// For a given (A,B) edge, boundary_hash is BoundaryHash of the two
+// regions' hashes (hashes, keyed by community ID). The co_change_rate
+// is proportional to how many cross-community node pairs share those
+// tokens. AgreementDim is set on every edge so the daemon's δ⁰ check
+// projects the matching agreement subspace.
+func buildRestrictions(cr *graph.CommunityResult, refs map[string][]string, hashes map[int][32]byte) []restriction {
 	if refs == nil {
 		return nil
 	}
@@ -338,9 +395,8 @@ func buildRestrictions(cr *graph.CommunityResult, refs map[string][]string) []re
 	// Collect unique edges with accumulated weight.
 	type edgeKey struct{ a, b int }
 	edges := map[edgeKey]float64{}
-	edgeTokens := map[edgeKey][]string{}
 
-	for token, nodeIDs := range refs {
+	for _, nodeIDs := range refs {
 		// Collect distinct communities for this token.
 		commSet := map[int]int{} // communityID → count of members referencing this token
 		for _, nid := range nodeIDs {
@@ -363,7 +419,6 @@ func buildRestrictions(cr *graph.CommunityResult, refs map[string][]string) []re
 			for j := i + 1; j < len(comms); j++ {
 				key := edgeKey{comms[i], comms[j]}
 				edges[key] += float64(commSet[comms[i]] * commSet[comms[j]])
-				edgeTokens[key] = append(edgeTokens[key], token)
 			}
 		}
 	}
@@ -373,19 +428,10 @@ func buildRestrictions(cr *graph.CommunityResult, refs map[string][]string) []re
 		// Normalize co_change_rate to [0, 1] using a simple sigmoid-ish cap.
 		rate := weight / (weight + 1.0)
 
-		// Boundary hash from sorted cross-community tokens.
-		tokens := edgeTokens[key]
-		sort.Strings(tokens)
-		h := sha256.New()
-		for _, t := range tokens {
-			h.Write([]byte(t))
-			h.Write([]byte{0})
-		}
-
 		result = append(result, restriction{
 			A:            key.a,
 			B:            key.b,
-			BoundaryHash: hex.EncodeToString(h.Sum(nil)),
+			BoundaryHash: HashHex(BoundaryHash(hashes[key.a], hashes[key.b])),
 			CoChangeRate: rate,
 			AgreementDim: agreementDim,
 		})
@@ -400,20 +446,4 @@ func buildRestrictions(cr *graph.CommunityResult, refs map[string][]string) []re
 	})
 
 	return result
-}
-
-// hashMembers returns hex-encoded SHA-256 of sorted node IDs joined by newlines.
-func hashMembers(members []string) string {
-	sorted := make([]string, len(members))
-	copy(sorted, members)
-	sort.Strings(sorted)
-
-	h := sha256.New()
-	for i, m := range sorted {
-		if i > 0 {
-			h.Write([]byte("\n"))
-		}
-		h.Write([]byte(m))
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }

@@ -85,198 +85,220 @@ func makeGetCommunitiesHandlerWithDone(g graph.Graph, pushDone chan<- struct{}) 
 		// sheaf_set_topology. None of those are actionable for the
 		// user mid-call; log only once per process to avoid the
 		// every-call spam during benchmarks and non-LLO setups.
-		//
-		// Snapshot the inputs PushTopology reads (Communities + each
-		// community's Members) so the goroutine sees a stable view —
-		// the full-output branch below mutates result.Communities in
-		// place (sort + truncate slice + truncate per-community Members)
-		// and would otherwise race buildRegions inside PushTopology.
-		// Membership is read-only after DetectCommunities returns, so
-		// reusing it without cloning is safe.
-		snapComms := make([]graph.Community, len(result.Communities))
-		for i, c := range result.Communities {
-			snapComms[i] = graph.Community{
-				ID:      c.ID,
-				Members: append([]string(nil), c.Members...),
-			}
-		}
-		snap := &graph.CommunityResult{
-			Communities: snapComms,
-			Membership:  result.Membership,
-		}
-
-		// Resolve the SheafInvalidator (if this graph has one) up front
-		// so the goroutine below can install state atomically once it
-		// successfully reaches the daemon.
-		//
-		// Graph backends without a watcher (control-mode lazyGraph,
-		// composite mounts) don't implement sheafInvalidatorProvider —
-		// the type-assert degrades silently, which is the documented
-		// behavior for those modes (see buildServeGraph).
-		//
-		// DELIBERATELY DEFER state install until PushTopology succeeds.
-		// Installing SetCommunityResult synchronously here (the prior
-		// shape) paired NEW membership with the OLD sheaf/topology
-		// during the dial+push window — watcher events in that window
-		// looked up regions in the new membership but sent them to a
-		// daemon that still held the prior topology. Fixed by atomic
-		// SetState below; see PR #383 Copilot #6.
-		var sip sheafInvalidatorProvider
-		if sp, ok := g.(sheafInvalidatorProvider); ok {
-			sip = sp
-		}
+		snap := snapshotCommunities(result)
 
 		go func() {
 			if pushDone != nil {
 				defer close(pushDone)
 			}
-			sockPath, err := leyline.DiscoverOrStart()
-			if err != nil {
-				return // no daemon — skip silently
-			}
-			sock, err := leyline.DialSocket(sockPath)
-			if err != nil {
-				return
-			}
-			// Track whether we handed off socket ownership to the
-			// invalidator. If we did, the SheafClient inside the
-			// invalidator owns the socket and we MUST NOT close it
-			// here — the watcher's later cascade calls reuse the
-			// connection. If we didn't hand off, close it normally
-			// to avoid leaking a socket per failed get_communities
-			// run. See PR #383 Copilot #1: the prior code deferred
-			// sock.Close() unconditionally, so the SheafClient
-			// stored on the invalidator was talking to a closed
-			// socket from the goroutine's return onward.
-			var handedOff bool
-			defer func() {
-				if !handedOff {
-					_ = sock.Close()
-				}
-			}()
-
-			sc := leyline.NewSheafClient(sock)
-			if pushErr := sc.PushTopology(snap, refs); pushErr != nil {
-				logSheafPushOnce(pushErr)
-				return
-			}
-			// PushTopology succeeded — atomically swap BOTH the new
-			// CommunityResult and the new SheafClient onto the
-			// invalidator. From here on, subsequent watcher fires
-			// engage the cross-region cascade. The prior backend
-			// (if any) is returned so we can close its socket and
-			// avoid leaking one UDS connection per get_communities
-			// call across the process lifetime.
-			if sip != nil {
-				if si := sip.SheafInvalidator(); si != nil {
-					prior := si.SetState(snap, sc)
-					handedOff = true
-					if closer, ok := prior.(io.Closer); ok {
-						_ = closer.Close()
-					}
-				}
-			}
+			pushSheafTopology(g, snap, refs)
 		}()
 
 		if summary {
-			type communitySummary struct {
-				ID         int      `json:"id"`
-				Size       int      `json:"size"`
-				TopMembers []string `json:"top_members"`
-			}
-			type summaryResult struct {
-				NumCommunities    int                 `json:"num_communities"`
-				Returned          int                 `json:"returned"`
-				NumNodes          int                 `json:"num_nodes"`
-				NumEdges          int                 `json:"num_edges"`
-				Modularity        float64             `json:"modularity"`
-				EffectiveMaxFanIn int                 `json:"effective_max_fan_in"`
-				ProjectedPairs    int                 `json:"projected_pairs"`
-				PrunedTokens      []graph.PrunedToken `json:"pruned_tokens,omitempty"`
-				Communities       []communitySummary  `json:"communities"`
-			}
-			shown := result.Communities
-			if limit > 0 && len(shown) > limit {
-				shown = shown[:limit]
-			}
-			sr := summaryResult{
-				NumCommunities:    len(result.Communities),
-				Returned:          len(shown),
-				NumNodes:          result.NumNodes,
-				NumEdges:          result.NumEdges,
-				Modularity:        result.Modularity,
-				EffectiveMaxFanIn: result.EffectiveMaxFanIn,
-				ProjectedPairs:    result.ProjectedPairs,
-				PrunedTokens:      topPruned(result.PrunedTokens, 10),
-			}
-			for _, c := range shown {
-				top := c.Members
-				if len(top) > 5 {
-					top = top[:5]
-				}
-				// Strip trailing /source from member paths — it's noise in summaries
-				cleaned := make([]string, len(top))
-				for i, m := range top {
-					cleaned[i] = strings.TrimSuffix(m, "/source")
-				}
-				sr.Communities = append(sr.Communities, communitySummary{
-					ID:         c.ID,
-					Size:       len(c.Members),
-					TopMembers: cleaned,
-				})
-			}
-			data, _ := json.MarshalIndent(sr, "", "  ")
-			return mcp.NewToolResultText(string(data)), nil
+			return summarizeCommunities(result, limit), nil
 		}
-
-		// Non-summary full output. Bead mache-9cd921: previously
-		// marshaled the full Communities slice, blowing past the MCP
-		// response budget (720K chars on 28K LOC). Cap to the top N
-		// largest communities + top N members within each. Truncation
-		// is in-place on the result; the marshaled JSON keeps its
-		// existing CommunityResult shape (PascalCase) so consumers
-		// that already parse this output don't break.
-		const maxCommunities = 25
-		const maxMembersPerCommunity = 20
-
-		sort.Slice(result.Communities, func(i, j int) bool {
-			return len(result.Communities[i].Members) > len(result.Communities[j].Members)
-		})
-		eliddedCommunities := 0
-		if len(result.Communities) > maxCommunities {
-			eliddedCommunities = len(result.Communities) - maxCommunities
-			result.Communities = result.Communities[:maxCommunities]
-		}
-		eliddedMembers := 0
-		for i := range result.Communities {
-			if len(result.Communities[i].Members) > maxMembersPerCommunity {
-				eliddedMembers += len(result.Communities[i].Members) - maxMembersPerCommunity
-				result.Communities[i].Members = result.Communities[i].Members[:maxMembersPerCommunity]
-			}
-		}
-
-		// Anonymous wrapper embeds *CommunityResult so existing
-		// consumers see the same field names; truncation metadata
-		// rides as additive optional fields.
-		out := struct {
-			*graph.CommunityResult
-			ElidedCommunities int    `json:",omitempty"`
-			ElidedMembers     int    `json:",omitempty"`
-			TruncationNote    string `json:",omitempty"`
-		}{
-			CommunityResult:   result,
-			ElidedCommunities: eliddedCommunities,
-			ElidedMembers:     eliddedMembers,
-		}
-		if eliddedCommunities > 0 || eliddedMembers > 0 {
-			out.TruncationNote = fmt.Sprintf(
-				"output truncated to %d communities (×%d members each) to fit MCP response budget; use summary=true for an even tighter view",
-				maxCommunities, maxMembersPerCommunity,
-			)
-		}
-		data, _ := json.MarshalIndent(out, "", "  ")
-		return mcp.NewToolResultText(string(data)), nil
+		return truncatedCommunities(result), nil
 	}
+}
+
+// snapshotCommunities copies the fields PushTopology reads (Communities +
+// each community's Members) so the push goroutine sees a stable view — the
+// full-output branch mutates result.Communities in place (sort + truncate
+// slice + truncate per-community Members) and would otherwise race
+// buildRegions inside PushTopology. Membership is read-only after
+// DetectCommunities returns, so reusing it without cloning is safe.
+func snapshotCommunities(result *graph.CommunityResult) *graph.CommunityResult {
+	snapComms := make([]graph.Community, len(result.Communities))
+	for i, c := range result.Communities {
+		snapComms[i] = graph.Community{
+			ID:      c.ID,
+			Members: append([]string(nil), c.Members...),
+		}
+	}
+	return &graph.CommunityResult{
+		Communities: snapComms,
+		Membership:  result.Membership,
+	}
+}
+
+// pushSheafTopology pushes result to the ley-line daemon as a sheaf topology
+// and, when that succeeds, installs result and the SheafClient on the graph's
+// SheafInvalidator in one swap. Errors are logged once per process.
+//
+// A region's hash folds its members' node_hash under the parse's parserId
+// (leyline.RegionHash), which only a ley-line projection records
+// (graph.ContentHasher). A graph without them has no topology to push, so
+// the daemon is not even dialed for it: the parserId is one row to read,
+// and a lazyGraph over a base that has none answers that here rather than
+// after a daemon was found or spawned.
+//
+// Graph backends without a watcher (control-mode lazyGraph, composite
+// mounts) don't implement sheafInvalidatorProvider — the type-assert
+// degrades silently, which is the documented behavior for those modes (see
+// buildServeGraph). State is installed only after PushTopology succeeds:
+// installing SetCommunityResult synchronously in the handler (the prior
+// shape) paired NEW membership with the OLD sheaf/topology during the
+// dial+push window — watcher events in that window looked up regions in the
+// new membership but sent them to a daemon that still held the prior
+// topology. Fixed by the atomic SetState below; see PR #383 Copilot #6.
+func pushSheafTopology(g graph.Graph, result *graph.CommunityResult, refs map[string][]string) {
+	content, ok := g.(graph.ContentHasher)
+	if !ok {
+		logSheafPushOnce(leyline.ErrNoContentHashes)
+		return
+	}
+	if _, err := content.ParserID(); err != nil {
+		logSheafPushOnce(fmt.Errorf("sheaf_set_topology: %w", err))
+		return
+	}
+	sockPath, err := leyline.DiscoverOrStart()
+	if err != nil {
+		return // no daemon — skip silently
+	}
+	sock, err := leyline.DialSocket(sockPath)
+	if err != nil {
+		return
+	}
+	// Track whether we handed off socket ownership to the invalidator. If
+	// we did, the SheafClient inside the invalidator owns the socket and we
+	// MUST NOT close it here — the watcher's later cascade calls reuse the
+	// connection. If we didn't hand off, close it normally to avoid leaking
+	// a socket per failed get_communities run. See PR #383 Copilot #1: the
+	// prior code deferred sock.Close() unconditionally, so the SheafClient
+	// stored on the invalidator was talking to a closed socket from the
+	// goroutine's return onward.
+	var handedOff bool
+	defer func() {
+		if !handedOff {
+			_ = sock.Close()
+		}
+	}()
+
+	sc := leyline.NewSheafClient(sock)
+	if pushErr := sc.PushTopology(result, refs, content); pushErr != nil {
+		logSheafPushOnce(pushErr)
+		return
+	}
+	// PushTopology succeeded — atomically swap BOTH the new CommunityResult
+	// and the new SheafClient onto the invalidator. From here on, subsequent
+	// watcher fires engage the cross-region cascade. The prior backend (if
+	// any) is returned so we can close its socket and avoid leaking one UDS
+	// connection per get_communities call across the process lifetime.
+	sip, ok := g.(sheafInvalidatorProvider)
+	if !ok {
+		return
+	}
+	if si := sip.SheafInvalidator(); si != nil {
+		prior := si.SetState(result, sc)
+		handedOff = true
+		if closer, ok := prior.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
+}
+
+// summarizeCommunities is the summary=true response: at most limit
+// communities, each with its size and five members.
+func summarizeCommunities(result *graph.CommunityResult, limit int) *mcp.CallToolResult {
+	type communitySummary struct {
+		ID         int      `json:"id"`
+		Size       int      `json:"size"`
+		TopMembers []string `json:"top_members"`
+	}
+	type summaryResult struct {
+		NumCommunities    int                 `json:"num_communities"`
+		Returned          int                 `json:"returned"`
+		NumNodes          int                 `json:"num_nodes"`
+		NumEdges          int                 `json:"num_edges"`
+		Modularity        float64             `json:"modularity"`
+		EffectiveMaxFanIn int                 `json:"effective_max_fan_in"`
+		ProjectedPairs    int                 `json:"projected_pairs"`
+		PrunedTokens      []graph.PrunedToken `json:"pruned_tokens,omitempty"`
+		Communities       []communitySummary  `json:"communities"`
+	}
+	shown := result.Communities
+	if limit > 0 && len(shown) > limit {
+		shown = shown[:limit]
+	}
+	sr := summaryResult{
+		NumCommunities:    len(result.Communities),
+		Returned:          len(shown),
+		NumNodes:          result.NumNodes,
+		NumEdges:          result.NumEdges,
+		Modularity:        result.Modularity,
+		EffectiveMaxFanIn: result.EffectiveMaxFanIn,
+		ProjectedPairs:    result.ProjectedPairs,
+		PrunedTokens:      topPruned(result.PrunedTokens, 10),
+	}
+	for _, c := range shown {
+		top := c.Members
+		if len(top) > 5 {
+			top = top[:5]
+		}
+		// Strip trailing /source from member paths — it's noise in summaries
+		cleaned := make([]string, len(top))
+		for i, m := range top {
+			cleaned[i] = strings.TrimSuffix(m, "/source")
+		}
+		sr.Communities = append(sr.Communities, communitySummary{
+			ID:         c.ID,
+			Size:       len(c.Members),
+			TopMembers: cleaned,
+		})
+	}
+	data, _ := json.MarshalIndent(sr, "", "  ")
+	return mcp.NewToolResultText(string(data))
+}
+
+// truncatedCommunities is the full response, capped to fit the MCP budget.
+func truncatedCommunities(result *graph.CommunityResult) *mcp.CallToolResult {
+	// Non-summary full output. Bead mache-9cd921: previously
+	// marshaled the full Communities slice, blowing past the MCP
+	// response budget (720K chars on 28K LOC). Cap to the top N
+	// largest communities + top N members within each. Truncation
+	// is in-place on the result; the marshaled JSON keeps its
+	// existing CommunityResult shape (PascalCase) so consumers
+	// that already parse this output don't break.
+	const maxCommunities = 25
+	const maxMembersPerCommunity = 20
+
+	sort.Slice(result.Communities, func(i, j int) bool {
+		return len(result.Communities[i].Members) > len(result.Communities[j].Members)
+	})
+	eliddedCommunities := 0
+	if len(result.Communities) > maxCommunities {
+		eliddedCommunities = len(result.Communities) - maxCommunities
+		result.Communities = result.Communities[:maxCommunities]
+	}
+	eliddedMembers := 0
+	for i := range result.Communities {
+		if len(result.Communities[i].Members) > maxMembersPerCommunity {
+			eliddedMembers += len(result.Communities[i].Members) - maxMembersPerCommunity
+			result.Communities[i].Members = result.Communities[i].Members[:maxMembersPerCommunity]
+		}
+	}
+
+	// Anonymous wrapper embeds *CommunityResult so existing
+	// consumers see the same field names; truncation metadata
+	// rides as additive optional fields.
+	out := struct {
+		*graph.CommunityResult
+		ElidedCommunities int    `json:",omitempty"`
+		ElidedMembers     int    `json:",omitempty"`
+		TruncationNote    string `json:",omitempty"`
+	}{
+		CommunityResult:   result,
+		ElidedCommunities: eliddedCommunities,
+		ElidedMembers:     eliddedMembers,
+	}
+	if eliddedCommunities > 0 || eliddedMembers > 0 {
+		out.TruncationNote = fmt.Sprintf(
+			"output truncated to %d communities (×%d members each) to fit MCP response budget; use summary=true for an even tighter view",
+			maxCommunities, maxMembersPerCommunity,
+		)
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	return mcp.NewToolResultText(string(data))
 }
 
 // topPruned returns at most n pruned tokens. The full list can run to hundreds

@@ -137,6 +137,22 @@ type DefTokener interface {
 	DefTokenOf(id string) (token string, ok bool, err error)
 }
 
+// ContentHasher reports the content identity ley-line-open's sheaf region
+// hash folds over (LLO rs/ll-open/sheaf/src/region.rs, bead
+// ley-line-open-1c5d28): the parserId the projection was derived under, and the
+// merkle node_hash of each node. Both exist only on a ley-line projection
+// (_meta.derived_from, node_content.node_hash); mache's own projection and the
+// in-memory store write neither, and do not implement this.
+type ContentHasher interface {
+	// ParserID returns the parserId of _meta.derived_from, 64 lowercase hex
+	// digits, or an error wrapping lloschema.ErrNoParserID when the database
+	// records none.
+	ParserID() (string, error)
+	// NodeHashes returns the 32-byte node_hash of every id that has one. An id
+	// naming no node, or a node the producer wrote no hash for, is absent.
+	NodeHashes(ids []string) (map[string][32]byte, error)
+}
+
 // DefsNodeLookuper is [DefsLookuper]'s node-returning twin, for consumers that
 // want the definition itself rather than its id.
 //

@@ -34,6 +34,7 @@ var capabilityInterfaces = map[string]reflect.Type{
 	"ASTKinder":        reflect.TypeFor[graph.ASTKinder](),
 	"DefTokener":       reflect.TypeFor[graph.DefTokener](),
 	"DefsNodeLookuper": reflect.TypeFor[graph.DefsNodeLookuper](),
+	"ContentHasher":    reflect.TypeFor[graph.ContentHasher](),
 }
 
 // The list above is every interface capabilities.go declares, so one added

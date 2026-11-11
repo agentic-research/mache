@@ -2,9 +2,8 @@ package leyline
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"sort"
+	"errors"
 	"strings"
 	"testing"
 
@@ -20,7 +19,7 @@ import (
 func TestSheafClient_NilIsNoOp(t *testing.T) {
 	var sc *SheafClient
 
-	err := sc.PushTopology(&graph.CommunityResult{}, nil)
+	err := sc.PushTopology(&graph.CommunityResult{}, nil, nil)
 	assert.NoError(t, err)
 
 	ids, err := sc.Invalidate(0)
@@ -39,7 +38,7 @@ func TestSheafClient_NilIsNoOp(t *testing.T) {
 func TestSheafClient_NilSocketIsNoOp(t *testing.T) {
 	sc := NewSheafClient(nil)
 
-	err := sc.PushTopology(&graph.CommunityResult{}, nil)
+	err := sc.PushTopology(&graph.CommunityResult{}, nil, nil)
 	assert.NoError(t, err)
 
 	ids, err := sc.Invalidate(0)
@@ -48,24 +47,55 @@ func TestSheafClient_NilSocketIsNoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// hashMembers
+// Test content: a graph.ContentHasher whose node hashes are a function of
+// the id, so a test can name a member and know what RegionHash folds.
 // ---------------------------------------------------------------------------
 
-func TestHashMembers_Deterministic(t *testing.T) {
-	h1 := hashMembers([]string{"b", "a", "c"})
-	h2 := hashMembers([]string{"c", "a", "b"})
-	assert.Equal(t, h1, h2, "hash should be order-independent")
-
-	// Verify it's a valid hex-encoded SHA-256.
-	raw, err := hex.DecodeString(h1)
-	require.NoError(t, err)
-	assert.Len(t, raw, sha256.Size)
+type fakeContent struct {
+	parser    string
+	parserErr error
+	missing   map[string]bool
 }
 
-func TestHashMembers_DifferentSets(t *testing.T) {
-	h1 := hashMembers([]string{"a", "b"})
-	h2 := hashMembers([]string{"a", "c"})
-	assert.NotEqual(t, h1, h2)
+func (f fakeContent) ParserID() (string, error) {
+	if f.parserErr != nil {
+		return "", f.parserErr
+	}
+	return f.parser, nil
+}
+
+func (f fakeContent) NodeHashes(ids []string) (map[string][32]byte, error) {
+	out := make(map[string][32]byte, len(ids))
+	for _, id := range ids {
+		if f.missing[id] {
+			continue
+		}
+		out[id] = fakeNodeHash(id)
+	}
+	return out, nil
+}
+
+func fakeNodeHash(id string) [32]byte { return sha256.Sum256([]byte(id)) }
+
+var testContent = fakeContent{parser: strings.Repeat("5a", 32)}
+
+// expectRegionHash is RegionHash over testContent's hashes of members.
+func expectRegionHash(t *testing.T, members ...string) [32]byte {
+	t.Helper()
+	parser, err := parseHash32(testContent.parser)
+	require.NoError(t, err)
+	hs := make([][32]byte, len(members))
+	for i, m := range members {
+		hs[i] = fakeNodeHash(m)
+	}
+	return RegionHash(parser, hs)
+}
+
+func hashesOf(t *testing.T, cr *graph.CommunityResult) map[int][32]byte {
+	t.Helper()
+	hashes, err := regionHashes(cr, testContent)
+	require.NoError(t, err)
+	return hashes
 }
 
 // ---------------------------------------------------------------------------
@@ -80,12 +110,12 @@ func TestBuildRegions(t *testing.T) {
 		},
 	}
 
-	regions := buildRegions(cr, nil)
+	regions := buildRegions(cr, nil, hashesOf(t, cr))
 	require.Len(t, regions, 2)
 	assert.Equal(t, 0, regions[0].ID)
 	assert.Equal(t, 1, regions[1].ID)
-	assert.Equal(t, hashMembers([]string{"x", "y"}), regions[0].Hash)
-	assert.Equal(t, hashMembers([]string{"a", "b", "c"}), regions[1].Hash)
+	assert.Equal(t, HashHex(expectRegionHash(t, "x", "y")), regions[0].Hash)
+	assert.Equal(t, HashHex(expectRegionHash(t, "a", "b", "c")), regions[1].Hash)
 	// δ⁰ stalk shape: always stalkDim floats with no cross-tokens
 	// (private dims still populated so per-region vectors differ).
 	assert.Len(t, regions[0].Data, stalkDim)
@@ -111,7 +141,7 @@ func TestBuildRestrictions_NoCrossLinks(t *testing.T) {
 		"t2": {"c", "d"},
 	}
 
-	restrictions := buildRestrictions(cr, refs)
+	restrictions := buildRestrictions(cr, refs, hashesOf(t, cr))
 	assert.Empty(t, restrictions)
 }
 
@@ -131,12 +161,13 @@ func TestBuildRestrictions_WithCrossLink(t *testing.T) {
 		"bridge": {"a", "c"},
 	}
 
-	restrictions := buildRestrictions(cr, refs)
+	restrictions := buildRestrictions(cr, refs, hashesOf(t, cr))
 	require.Len(t, restrictions, 1)
 	assert.Equal(t, 0, restrictions[0].A)
 	assert.Equal(t, 1, restrictions[0].B)
 	assert.Greater(t, restrictions[0].CoChangeRate, 0.0)
-	assert.NotEmpty(t, restrictions[0].BoundaryHash)
+	assert.Equal(t, HashHex(BoundaryHash(expectRegionHash(t, "a", "b"), expectRegionHash(t, "c", "d"))),
+		restrictions[0].BoundaryHash, "boundary_hash is the XOR of the two region hashes")
 }
 
 func TestBuildRestrictions_NilRefs(t *testing.T) {
@@ -144,7 +175,7 @@ func TestBuildRestrictions_NilRefs(t *testing.T) {
 		Communities: []graph.Community{{ID: 0, Members: []string{"a"}}},
 		Membership:  map[string]int{"a": 0},
 	}
-	restrictions := buildRestrictions(cr, nil)
+	restrictions := buildRestrictions(cr, nil, hashesOf(t, cr))
 	assert.Nil(t, restrictions)
 }
 
@@ -163,7 +194,7 @@ func TestBuildRestrictions_ThreeCommunities(t *testing.T) {
 		"shared": {"a", "b", "c"},
 	}
 
-	restrictions := buildRestrictions(cr, refs)
+	restrictions := buildRestrictions(cr, refs, hashesOf(t, cr))
 	// Should have 3 edges: (0,1), (0,2), (1,2)
 	require.Len(t, restrictions, 3)
 
@@ -203,7 +234,7 @@ func TestPushTopology_SendsCorrectOp(t *testing.T) {
 		"bridge": {"a", "c"},
 	}
 
-	err = sc.PushTopology(cr, refs)
+	err = sc.PushTopology(cr, refs, testContent)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 
@@ -222,7 +253,7 @@ func TestPushTopology_SendsCorrectOp(t *testing.T) {
 
 func TestPushTopology_NilCommunityResult(t *testing.T) {
 	sc := NewSheafClient(nil)
-	assert.NoError(t, sc.PushTopology(nil, nil))
+	assert.NoError(t, sc.PushTopology(nil, nil, nil))
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +423,7 @@ func TestTopologyJSON_WireFormat(t *testing.T) {
 		Membership: map[string]int{"a": 0, "b": 0},
 	}
 
-	regions := buildRegions(cr, nil)
+	regions := buildRegions(cr, nil, hashesOf(t, cr))
 	data, err := json.Marshal(regions)
 	require.NoError(t, err)
 
@@ -401,12 +432,11 @@ func TestTopologyJSON_WireFormat(t *testing.T) {
 	assert.Len(t, parsed, 1)
 	assert.Equal(t, 0.0, parsed[0]["id"])
 
-	// Hash should be hex-encoded SHA-256.
+	// The hash is the region hash as the wire carries it: 64 lowercase hex.
 	hashStr, ok := parsed[0]["hash"].(string)
 	require.True(t, ok)
-	raw, err := hex.DecodeString(hashStr)
-	require.NoError(t, err)
-	assert.Len(t, raw, sha256.Size)
+	assert.True(t, isLowerHex64(hashStr), hashStr)
+	assert.Equal(t, HashHex(expectRegionHash(t, "a", "b")), hashStr)
 }
 
 func TestRestrictionJSON_WireFormat(t *testing.T) {
@@ -447,7 +477,7 @@ func TestBuildRestrictions_CoChangeRateScales(t *testing.T) {
 	weakRefs := map[string][]string{
 		"weak": {"a1", "b1"},
 	}
-	weakR := buildRestrictions(cr, weakRefs)
+	weakR := buildRestrictions(cr, weakRefs, hashesOf(t, cr))
 	require.Len(t, weakR, 1)
 
 	// Many tokens shared by many nodes from each community.
@@ -456,28 +486,11 @@ func TestBuildRestrictions_CoChangeRateScales(t *testing.T) {
 		"s2": {"a1", "a3", "b1", "b3"},
 		"s3": {"a2", "a3", "b2", "b3"},
 	}
-	strongR := buildRestrictions(cr, strongRefs)
+	strongR := buildRestrictions(cr, strongRefs, hashesOf(t, cr))
 	require.Len(t, strongR, 1)
 
 	assert.Greater(t, strongR[0].CoChangeRate, weakR[0].CoChangeRate,
 		"more cross-links should produce a higher co_change_rate")
-}
-
-// ---------------------------------------------------------------------------
-// hashMembers edge cases
-// ---------------------------------------------------------------------------
-
-func TestHashMembers_Empty(t *testing.T) {
-	h := hashMembers(nil)
-	// SHA-256 of empty input.
-	expected := sha256.Sum256(nil)
-	assert.Equal(t, hex.EncodeToString(expected[:]), h)
-}
-
-func TestHashMembers_SingleMember(t *testing.T) {
-	h := hashMembers([]string{"only"})
-	expected := sha256.Sum256([]byte("only"))
-	assert.Equal(t, hex.EncodeToString(expected[:]), h)
 }
 
 // ---------------------------------------------------------------------------
@@ -498,9 +511,10 @@ func TestBuildRestrictions_DeterministicOrder(t *testing.T) {
 	}
 
 	// Run multiple times to ensure ordering is stable.
+	hashes := hashesOf(t, cr)
 	var prev []restriction
 	for range 5 {
-		r := buildRestrictions(cr, refs)
+		r := buildRestrictions(cr, refs, hashes)
 		if prev != nil {
 			for j := range r {
 				assert.Equal(t, prev[j].A, r[j].A)
@@ -564,7 +578,7 @@ func TestSheafClient_EndToEnd_WithCommunities(t *testing.T) {
 	sc := NewSheafClient(sock)
 
 	// Push topology.
-	err = sc.PushTopology(cr, refs)
+	err = sc.PushTopology(cr, refs, testContent)
 	require.NoError(t, err)
 	require.NotNil(t, topologyReq)
 
@@ -581,10 +595,10 @@ func TestSheafClient_EndToEnd_WithCommunities(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers for verifying hash consistency with community detection
+// Region hashes fold the members' node hashes, and refuse what they cannot
 // ---------------------------------------------------------------------------
 
-func TestBuildRegions_HashMatchesCommunityMembers(t *testing.T) {
+func TestBuildRegions_HashIsRegionHashOfTheMembersNodeHashes(t *testing.T) {
 	refs := map[string][]string{
 		"t1": {"a", "b", "c"},
 		"t2": {"d", "e", "f"},
@@ -592,23 +606,87 @@ func TestBuildRegions_HashMatchesCommunityMembers(t *testing.T) {
 	cr := graph.DetectCommunities(refs, 2)
 	require.GreaterOrEqual(t, len(cr.Communities), 1)
 
-	regions := buildRegions(cr, nil)
+	regions := buildRegions(cr, nil, hashesOf(t, cr))
 	for i, r := range regions {
-		members := cr.Communities[i].Members
-		sorted := make([]string, len(members))
-		copy(sorted, members)
-		sort.Strings(sorted)
-
-		h := sha256.New()
-		for j, m := range sorted {
-			if j > 0 {
-				h.Write([]byte("\n"))
-			}
-			h.Write([]byte(m))
-		}
-		expected := hex.EncodeToString(h.Sum(nil))
-		assert.Equal(t, expected, r.Hash, "region %d hash should match manual computation", i)
+		assert.Equal(t, HashHex(expectRegionHash(t, cr.Communities[i].Members...)), r.Hash,
+			"region %d hash is RegionHash over its members' node hashes", i)
 	}
+}
+
+// pushNeverReaches is a daemon that fails the test if any op reaches it:
+// a refused topology is refused before the wire.
+func pushNeverReaches(t *testing.T) *SheafClient {
+	t.Helper()
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		t.Errorf("the daemon must not be sent %v", req["op"])
+		return map[string]any{"ok": true}
+	})
+	sock, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sock.Close() })
+	return NewSheafClient(sock)
+}
+
+func twoRegionTopology() (*graph.CommunityResult, map[string][]string) {
+	cr := &graph.CommunityResult{
+		Communities: []graph.Community{
+			{ID: 0, Members: []string{"a", "b"}},
+			{ID: 1, Members: []string{"c", "d"}},
+		},
+		Membership: map[string]int{"a": 0, "b": 0, "c": 1, "d": 1},
+	}
+	return cr, map[string][]string{"bridge": {"a", "c"}}
+}
+
+func TestPushTopology_RefusesAMemberWithoutNodeHash(t *testing.T) {
+	cr, refs := twoRegionTopology()
+	content := fakeContent{parser: testContent.parser, missing: map[string]bool{"c": true}}
+	err := pushNeverReaches(t).PushTopology(cr, refs, content)
+	require.ErrorIs(t, err, ErrMemberWithoutNodeHash)
+	assert.Contains(t, err.Error(), `region 1: member "c"`, "the refusal names the region and the member")
+}
+
+func TestPushTopology_RefusesWithoutContentHashes(t *testing.T) {
+	cr, refs := twoRegionTopology()
+	err := pushNeverReaches(t).PushTopology(cr, refs, nil)
+	require.ErrorIs(t, err, ErrNoContentHashes)
+}
+
+func TestPushTopology_RefusesWhatTheParserIDReaderRefuses(t *testing.T) {
+	cr, refs := twoRegionTopology()
+	noParser := errors.New("the database records no parserId")
+	err := pushNeverReaches(t).PushTopology(cr, refs, fakeContent{parserErr: noParser})
+	require.ErrorIs(t, err, noParser)
+
+	err = pushNeverReaches(t).PushTopology(cr, refs, fakeContent{parser: "not-a-hash"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `parserId "not-a-hash"`)
+}
+
+// TestPushTopology_WireCarriesRegionHashesAndTheirXOR: what reaches the
+// daemon is RegionHash per region and BoundaryHash per edge, so the daemon's
+// XOR pre-filter finds every boundary unchanged at topology time.
+func TestPushTopology_WireCarriesRegionHashesAndTheirXOR(t *testing.T) {
+	var captured map[string]any
+	sockPath := mockServer(t, func(req map[string]any) map[string]any {
+		captured = req
+		return map[string]any{"ok": true}
+	})
+	sock, err := DialSocket(sockPath)
+	require.NoError(t, err)
+	defer sock.Close() //nolint:errcheck
+
+	cr, refs := twoRegionTopology()
+	require.NoError(t, NewSheafClient(sock).PushTopology(cr, refs, testContent))
+
+	h0, h1 := expectRegionHash(t, "a", "b"), expectRegionHash(t, "c", "d")
+	regionsRaw := captured["regions"].([]any)
+	require.Len(t, regionsRaw, 2)
+	assert.Equal(t, HashHex(h0), regionsRaw[0].(map[string]any)["hash"])
+	assert.Equal(t, HashHex(h1), regionsRaw[1].(map[string]any)["hash"])
+	restrictionsRaw := captured["restrictions"].([]any)
+	require.Len(t, restrictionsRaw, 1)
+	assert.Equal(t, HashHex(BoundaryHash(h0, h1)), restrictionsRaw[0].(map[string]any)["boundary_hash"])
 }
 
 // ---------------------------------------------------------------------------
@@ -703,7 +781,7 @@ func TestPushTopology_EngagesDeltaZero(t *testing.T) {
 	refs := map[string][]string{
 		"bridge": {"a", "c"},
 	}
-	require.NoError(t, sc.PushTopology(cr, refs))
+	require.NoError(t, sc.PushTopology(cr, refs, testContent))
 	require.NotNil(t, captured)
 
 	// node_stalk_dim must be present and equal to stalkDim.

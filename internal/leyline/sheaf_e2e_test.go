@@ -60,7 +60,7 @@ func TestE2E_SheafCascade_AgainstLiveDaemon(t *testing.T) {
 	// PushTopology engages δ⁰ mode on v0.4.1+ daemons. If this errors
 	// the most likely cause is a daemon older than v0.4.1 (no sheaf
 	// ops) or v0.4.0 (cache.entries population gap fixed in PR #27).
-	require.NoError(t, sc.PushTopology(cr, refs), "PushTopology against live daemon")
+	require.NoError(t, sc.PushTopology(cr, refs, testContent), "PushTopology against live daemon")
 
 	// Status before invalidation: generation should be at the baseline
 	// (0 on a fresh daemon). Reading it confirms the typed-decode path
