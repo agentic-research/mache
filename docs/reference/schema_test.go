@@ -113,7 +113,7 @@ func jsonFields(root reflect.Type) map[string][]string {
 	out := map[string][]string{}
 	var visit func(t reflect.Type)
 	visit = func(t reflect.Type) {
-		for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
+		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
 			t = t.Elem()
 		}
 		if t.Kind() != reflect.Struct || t.PkgPath() != root.PkgPath() {
