@@ -49,3 +49,7 @@ type Leaf struct {
 - **Read-Only:** This design assumes a read-only projection. Writing back to the source (reverse-templating) is out of scope for v1.
 - **Performance:** Eager loading requires parsing the full dataset at startup.
   - *Mitigation:* We will move to "Just-In-Time" (Lazy) Inode creation in v2, where `Readdir` triggers the parsing for that specific branch.
+
+## Reference
+
+The schema as it is today — every field, selector and template rule per source kind — is documented in [docs/reference/schema.md](../reference/schema.md); this ADR records the decision, not the current syntax.

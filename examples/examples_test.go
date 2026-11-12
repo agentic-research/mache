@@ -1,31 +1,27 @@
 package examples_test
 
 import (
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
-	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/agentic-research/mache/internal/lltest"
 	"github.com/agentic-research/mache/internal/mcpharness"
+	"github.com/agentic-research/mache/internal/projtest"
 	"github.com/agentic-research/mache/internal/smells"
-	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
 	publicschema "github.com/agentic-research/mache/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	_ "modernc.org/sqlite"
 )
 
 // projector builds the graph a schema projects from its sample, through the
-// path the documented command takes for that kind of source.
+// path the documented command takes for that kind of source. The machinery
+// is internal/projtest, shared with docs/reference/schema_test.go.
 type projector func(t *testing.T, topo *api.Topology) graph.Graph
 
 // exampleCase is one schema in this directory and the sample it is rendered
@@ -47,27 +43,27 @@ type exampleCase struct {
 var exampleCases = map[string]exampleCase{
 	// Venturi data: records wrapped as {schema, identifier, item}.
 	"kev-schema.json": {
-		project: venturiDB("testdata/kev.json"),
+		project: venturi("testdata/kev.json", projtest.VenturiDirect),
 		want:    []string{"vulns/CVE-2021-44228/vendor", "vulns/CVE-2023-4966/due-date"},
 	},
 	"nvd-schema.json": {
-		project: venturiDB("testdata/nvd.json"),
+		project: venturi("testdata/nvd.json", projtest.VenturiDirect),
 		want:    []string{"by-cve/2024/03/CVE-2024-3094/description", "by-cve/2024/07/CVE-2024-6387/status"},
 	},
 	"notion-schema.json": {
-		project: venturiDB("testdata/notion.json"),
+		project: venturi("testdata/notion.json", projtest.VenturiDirect),
 		want:    []string{"pages/Roadmap/properties.json", "pages/Onboarding/raw.json"},
 	},
 	"notion-repos-schema.json": {
-		project: venturiDB("testdata/notion-repos.json"),
+		project: venturi("testdata/notion-repos.json", projtest.VenturiDirect),
 		want:    []string{"repos/projection/mache/purpose", "repos/substrate/ley-line/path"},
 	},
 	"mcp-registry-schema.json": {
-		project: venturiDB("testdata/mcp-registry.json"),
+		project: venturi("testdata/mcp-registry.json", projtest.VenturiDirect),
 		want:    []string{"servers/io.github.example/weather/version", "servers/io.github.example/notes/repository"},
 	},
 	"trivy-ghsa-schema.json": {
-		project: venturiEngine("testdata/trivy-ghsa.json"),
+		project: venturi("testdata/trivy-ghsa.json", projtest.VenturiEngine),
 		want: []string{
 			"advisories/Maven::ghsa/org.apache.logging.log4j:log4j-core/CVE-2021-44228",
 			"advisories/Npm::ghsa/left-pad/GHSA-xxxx-yyyy-zzzz",
@@ -159,11 +155,7 @@ func loadExample(t *testing.T, name string) *api.Topology {
 // --schema S data.json` does.
 func jsonFile(sample string) projector {
 	return func(t *testing.T, topo *api.Topology) graph.Graph {
-		store := graph.NewMemoryStore()
-		abs, err := filepath.Abs(sample)
-		require.NoError(t, err)
-		require.NoError(t, ingest.NewEngine(topo, store).Ingest(abs))
-		return store
+		return projtest.JSONDocument(t, topo, sample)
 	}
 }
 
@@ -173,43 +165,16 @@ func venturiResults(t *testing.T, sample string) string {
 	t.Helper()
 	raw, err := os.ReadFile(sample)
 	require.NoError(t, err)
-	var records []map[string]any
-	require.NoError(t, json.Unmarshal(raw, &records))
-	require.NotEmpty(t, records)
-
-	dbPath := filepath.Join(t.TempDir(), "data.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, db.Close()) }()
-	_, err = db.Exec(`CREATE TABLE results (id TEXT PRIMARY KEY, record TEXT NOT NULL)`)
-	require.NoError(t, err)
-	for _, rec := range records {
-		body, err := json.Marshal(rec)
-		require.NoError(t, err)
-		_, err = db.Exec(`INSERT INTO results (id, record) VALUES (?, ?)`, rec["identifier"], string(body))
-		require.NoError(t, err)
-	}
-	return dbPath
+	return projtest.VenturiResults(t, raw, "")
 }
 
-// venturiDB serves a Venturi results db over the direct SQL backend, as
-// `mache serve --schema S data.db` and the mount do.
-func venturiDB(sample string) projector {
-	return func(t *testing.T, topo *api.Topology) graph.Graph {
-		sg, err := graph.OpenSQLiteGraph(venturiResults(t, sample), topo, machetmpl.Render)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = sg.Close() })
-		return sg
-	}
-}
-
-// venturiEngine streams a Venturi results db through the engine, the path
+// venturi projects a Venturi results db built from sample through open:
+// projtest.VenturiDirect is the direct SQL backend `mache serve --schema S
+// data.db` and the mount use; projtest.VenturiEngine is the engine stream
 // `mache --data data.db --out` takes (trivy-ghsa's documented use).
-func venturiEngine(sample string) projector {
+func venturi(sample string, open func(*testing.T, *api.Topology, string) graph.Graph) projector {
 	return func(t *testing.T, topo *api.Topology) graph.Graph {
-		store := graph.NewMemoryStore()
-		require.NoError(t, ingest.NewEngine(topo, store).Ingest(venturiResults(t, sample)))
-		return store
+		return open(t, topo, venturiResults(t, sample))
 	}
 }
 
@@ -219,7 +184,7 @@ func leylineSource(sample string) projector {
 	return func(t *testing.T, topo *api.Topology) graph.Graph {
 		abs, err := filepath.Abs(sample)
 		require.NoError(t, err)
-		return leylineProject(t, topo, abs)
+		return projtest.LeylineSource(t, topo, abs)
 	}
 }
 
@@ -227,54 +192,8 @@ func leylineSource(sample string) projector {
 // of the same name is tested against.
 func presetFixture(lang string) projector {
 	return func(t *testing.T, topo *api.Topology) graph.Graph {
-		return leylineProject(t, topo, filepath.Join(testutil.PresetFixturesDir(t), lang))
+		return projtest.LeylineSource(t, topo, filepath.Join(testutil.PresetFixturesDir(t), lang))
 	}
-}
-
-func leylineProject(t *testing.T, topo *api.Topology, src string) graph.Graph {
-	t.Helper()
-	mcpharness.IsolatedHome(t)
-	store := graph.NewMemoryStore()
-	lltest.IngestSourceViaLeyline(t, ingest.NewEngine(topo, store), src)
-	return store
-}
-
-// walkProjection visits every node under the root, as a reader of the mount
-// would, and returns the leaf paths it read and what it found wrong: a node
-// named from a field the record does not have (`<no value>`), a leaf whose
-// content contains one, and a leaf that renders empty.
-func walkProjection(t *testing.T, g graph.Graph, nullable []string) (leaves, problems []string) {
-	t.Helper()
-	var walk func(id string)
-	walk = func(id string) {
-		children, err := g.ListChildren(id)
-		require.NoError(t, err, "list %q", id)
-		for _, child := range children {
-			name := filepath.Base(child)
-			if strings.Contains(name, "<no value>") {
-				problems = append(problems, child+": named from a missing field")
-			}
-			node, err := g.GetNode(child)
-			require.NoError(t, err, "get %q", child)
-			if node.Mode.IsDir() {
-				walk(child)
-				continue
-			}
-			leaves = append(leaves, child)
-			buf := make([]byte, node.ContentSize())
-			n, err := g.ReadContent(child, buf, 0)
-			require.NoError(t, err, "read %q", child)
-			content := string(buf[:n])
-			switch {
-			case strings.Contains(content, "<no value>"):
-				problems = append(problems, child+": content rendered from a missing field")
-			case strings.TrimSpace(content) == "" && !slices.Contains(nullable, name):
-				problems = append(problems, child+": renders empty")
-			}
-		}
-	}
-	walk("")
-	return leaves, problems
 }
 
 // TestEveryExampleHasACase: a schema in this directory that no case renders
@@ -302,7 +221,7 @@ func TestExampleSchemasProject(t *testing.T) {
 			topo := loadExample(t, sf)
 			assert.Equal(t, api.SchemaVersion, topo.Version)
 			g := tc.project(t, topo)
-			leaves, problems := walkProjection(t, g, tc.nullable)
+			_, leaves, problems := projtest.Walk(t, g, tc.nullable)
 			if bead, broken := knownBroken[sf]; broken {
 				assert.NotEmpty(t, problems, "%s now projects cleanly: remove it from knownBroken (%s)", sf, bead)
 				return
@@ -323,11 +242,8 @@ func TestMCPInputSchemaIsJSON(t *testing.T) {
 	g := jsonFile("mcp-sample-manifest.json")(t, loadExample(t, "mcp-schema.json"))
 	node, err := g.GetNode("tools/search-issues/input-schema.json")
 	require.NoError(t, err)
-	buf := make([]byte, node.ContentSize())
-	n, err := g.ReadContent(node.ID, buf, 0)
-	require.NoError(t, err)
 	var inputSchema map[string]any
-	require.NoError(t, json.Unmarshal(buf[:n], &inputSchema))
+	require.NoError(t, json.Unmarshal([]byte(projtest.Read(t, g, node)), &inputSchema))
 	assert.Equal(t, "object", inputSchema["type"])
 }
 

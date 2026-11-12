@@ -315,6 +315,7 @@ the orchestrator).
 - [ADRs](docs/adr/) — Architectural Decision Records
 - [Competitive landscape & prior art](docs/reference/competitive-landscape.md) — what mache builds on, how it compares
 - [Example schemas](examples/README.md) — NVD, KEV, Notion, Trivy, Terraform, Markdown, LLM conversations, Go/Python/Rust/SQL source, MCP registry
+- [Schema reference](docs/reference/schema.md) — every field of a topology schema, selectors and template context per source kind, naming and dedup, file sets
 - [Contributing](CONTRIBUTING.md)
 
 ## License
