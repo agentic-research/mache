@@ -1,14 +1,17 @@
 package graph
 
 import (
-	"bytes"
 	"database/sql"
-	"log"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
+
+	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/internal/fixturedb"
 )
 
 // metaDB builds the `_meta` key/value table ley-line-open writes. Shape copied
@@ -88,7 +91,7 @@ func TestProjectionVersion_ReportsWhatTheArtifactDeclares(t *testing.T) {
 // TestKnownProjections_CoverTheShapesMacheActuallyReads guards the set itself.
 // It is the only thing standing between "mache was checked against this shape"
 // and "nobody looked", so an entry going missing must fail rather than silently
-// widen the warning to shapes mache does in fact support.
+// turn a shape mache does in fact support into a refusal.
 func TestKnownProjections_CoverTheShapesMacheActuallyReads(t *testing.T) {
 	for _, v := range []string{"projection-v2", "projection-v4", "projection-v6", "projection-v7", "projection-v8", "projection-v9", "projection-v10", "projection-v11", "projection-v12", "projection-v13"} {
 		_, ok := knownProjections[v]
@@ -103,69 +106,101 @@ func TestKnownProjections_CoverTheShapesMacheActuallyReads(t *testing.T) {
 	assert.False(t, future, "the set must not be a wildcard")
 }
 
-// TestWarnUnknownProjection_IsQuietOnEverythingMacheSupports pins the property
-// that decides whether this check is usable at all. It runs on every Open,
-// including a library caller assembling many projections, so a warning on the
-// normal path would be pure noise and would train readers to ignore it.
-//
-// Asserted via the log sink rather than by reading the function: "does it warn"
-// is the whole behaviour, and a version of this that returned early for every
-// input would pass any test that only checked the supported cases.
-func TestWarnUnknownProjection_IsQuietOnEverythingMacheSupports(t *testing.T) {
+// TestCheckProjection_RefusesOnlyWhatMacheHasNotRead pins both halves of the
+// check. It runs on every Open, including a library caller assembling many
+// projections, so an error on the normal path would make every known shape
+// unreadable; and a version of it that passed everything would read a
+// projection-v14 db as v13 and misfold its comment classes (mache-86e215).
+func TestCheckProjection_RefusesOnlyWhatMacheHasNotRead(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		rows     map[string]string
-		wantWarn bool
+		name   string
+		rows   map[string]string
+		refuse bool
 	}{
 		{"no _meta (mache build)", nil, false},
 		{"released leyline, no projection row", map[string]string{"parse_time": "1"}, false},
-		{"pinned shape", map[string]string{ProjectionSchemaVersionKey: "projection-v2"}, false},
-		{"projection-v4", map[string]string{ProjectionSchemaVersionKey: "projection-v4"}, false},
-		{"projection-v6", map[string]string{ProjectionSchemaVersionKey: "projection-v6"}, false},
-		{"projection-v7", map[string]string{ProjectionSchemaVersionKey: "projection-v7"}, false},
-		{"projection-v8", map[string]string{ProjectionSchemaVersionKey: "projection-v8"}, false},
-		{"projection-v9", map[string]string{ProjectionSchemaVersionKey: "projection-v9"}, false},
-		{"projection-v10", map[string]string{ProjectionSchemaVersionKey: "projection-v10"}, false},
-		{"projection-v11", map[string]string{ProjectionSchemaVersionKey: "projection-v11"}, false},
-		{"projection-v12", map[string]string{ProjectionSchemaVersionKey: "projection-v12"}, false},
-		{"projection-v13, the pin", map[string]string{ProjectionSchemaVersionKey: "projection-v13"}, false},
+		{"a projection row present but empty", map[string]string{ProjectionSchemaVersionKey: ""}, false},
 		{"a shape from the future", map[string]string{ProjectionSchemaVersionKey: "projection-v14"}, true},
 		{"a fork's own string", map[string]string{ProjectionSchemaVersionKey: "acme-projection-1"}, true},
+		{"projection-v3, which never shipped", map[string]string{ProjectionSchemaVersionKey: "projection-v3"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logged := captureWarnLog(t, func() {
-				warnUnknownProjection(metaDB(t, tc.rows), "/tmp/some.db")
-			})
-			if !tc.wantWarn {
-				assert.Empty(t, logged, "must stay silent on a shape mache supports")
+			err := CheckProjection(metaDB(t, tc.rows))
+			if !tc.refuse {
+				assert.NoError(t, err, "must open a shape mache supports")
 				return
 			}
-			assert.Contains(t, logged, "warn:")
-			assert.Contains(t, logged, tc.rows[ProjectionSchemaVersionKey],
-				"the warning must name the shape that was found")
-			assert.Contains(t, logged, "/tmp/some.db",
-				"and which artifact declared it, since a caller may hold many")
-			assert.Contains(t, logged, "projection-v4",
+			require.ErrorIs(t, err, ErrUnknownProjection,
+				"callers match the refusal by sentinel, not by message")
+			assert.Contains(t, err.Error(), `"`+tc.rows[ProjectionSchemaVersionKey]+`"`,
+				"the refusal must name the shape that was found")
+			assert.Contains(t, err.Error(), "projection-v13",
 				"and what mache does know, so the reader can judge the gap")
+			assert.Contains(t, err.Error(), "mache leyline path",
+				"and how to get a db this mache reads")
+		})
+	}
+	// Every known shape, by the table rather than a hand-kept list, so adding
+	// an entry cannot leave it untested.
+	for _, v := range slices.Sorted(maps.Keys(knownProjections)) {
+		t.Run(v, func(t *testing.T) {
+			assert.NoError(t, CheckProjection(metaDB(t, map[string]string{ProjectionSchemaVersionKey: v})))
 		})
 	}
 }
 
-// captureWarnLog redirects the standard logger for the duration of fn and returns
-// what it wrote. warnUnknownProjection reports through log.Printf because it is
-// advisory — there is no error to return from a path that deliberately does not
-// fail — so the log IS the observable behaviour and has to be asserted directly.
-func captureWarnLog(t *testing.T, fn func()) string {
+// leylineFixture is one leyline-shaped db with a construct in it, the artifact
+// the open tests declare projections on.
+func leylineFixture(t *testing.T) (string, *fixturedb.FixtureDB) {
 	t.Helper()
-	var buf bytes.Buffer
-	out, flags, prefix := log.Writer(), log.Flags(), log.Prefix()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(out)
-		log.SetFlags(flags)
-		log.SetPrefix(prefix)
+	return fixturedb.New(t, fixturedb.Leyline).
+		Def("F", "a.go/function_declaration_0", "function").
+		Build()
+}
+
+// TestOpen_RefusesAnUnknownProjection is the refusal at the one place every
+// reader of a .db goes through. No graph comes back: a partial graph over a
+// shape mache does not know is the silent failure this replaces.
+func TestOpen_RefusesAnUnknownProjection(t *testing.T) {
+	path, f := leylineFixture(t)
+	fixturedb.DeclareProjection(t, f.DB(), "projection-v14")
+
+	g, err := Open(path)
+	require.ErrorIs(t, err, ErrUnknownProjection)
+	assert.Nil(t, g, "no graph is returned for a refused db")
+	assert.Contains(t, err.Error(), path, "the error names the artifact, since a caller may hold many")
+	assert.Contains(t, err.Error(), `"projection-v14"`)
+
+	wg, err := OpenWritableGraph(path, &api.Topology{}, stubRender, nil)
+	require.ErrorIs(t, err, ErrUnknownProjection, "the writable open reads the same tables and refuses the same")
+	assert.Nil(t, wg)
+}
+
+// TestOpen_AcceptsEveryKnownProjectionAndNone is the other half: the refusal
+// is for unknown shapes only. An undeclared db (every pre-_meta arena and
+// mache's own build) and every shape in knownProjections open and answer.
+func TestOpen_AcceptsEveryKnownProjectionAndNone(t *testing.T) {
+	open := func(t *testing.T, path string) {
+		t.Helper()
+		g, err := Open(path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = g.Close() })
+		assert.NotEmpty(t, g.LookupDef("F"), "an opened graph answers")
+	}
+	t.Run("undeclared", func(t *testing.T) {
+		path, f := leylineFixture(t)
+		_, declared := ProjectionVersion(f.DB())
+		require.False(t, declared, "the fixture declares nothing unless asked to")
+		open(t, path)
 	})
-	fn()
-	return buf.String()
+	for _, v := range slices.Sorted(maps.Keys(knownProjections)) {
+		t.Run(v, func(t *testing.T) {
+			path, f := leylineFixture(t)
+			fixturedb.DeclareProjection(t, f.DB(), v)
+			got, declared := ProjectionVersion(f.DB())
+			require.True(t, declared)
+			require.Equal(t, v, got, "DeclareProjection writes the row ProjectionVersion reads")
+			open(t, path)
+		})
+	}
 }

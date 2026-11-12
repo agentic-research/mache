@@ -299,3 +299,16 @@ func AddDanglingV6Ref(t testing.TB, db *sql.DB, token string) {
 	mustExec(t, db, `INSERT INTO node_refs (token, nid)
 		VALUES (?, (((SELECT COALESCE(MAX(file_id), 0) FROM _source) + 1) << 24) | 5)`, token)
 }
+
+// DeclareProjection stamps the fixture with the `_meta` row ley-line-open
+// writes from v0.19.0 on, naming the projection shape the artifact claims to
+// be (graph.ProjectionSchemaVersionKey, which graph.ProjectionVersion reads).
+// No dialect writes it on its own: an undeclared fixture is the common case,
+// every arena before the _meta channel and mache's own build. The table's DDL
+// is copied from a real arena. Declaring a shape mache does not know is how a
+// test models a db from a newer leyline (mache-86e215).
+func DeclareProjection(t testing.TB, db *sql.DB, version string) {
+	t.Helper()
+	mustExec(t, db, `CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+	mustExec(t, db, `INSERT OR REPLACE INTO _meta (key, value) VALUES ('projection_schema_version', ?)`, version)
+}
