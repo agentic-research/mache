@@ -323,6 +323,27 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Community IDs and git history are the same on every run and every
+  machine** (`mache-82ded3`). `ConnectedComponents` sorted components by size
+  alone with an unstable sort, and `get_communities`' full response re-sorted
+  the detected communities the same way, so equal-sized communities (and the
+  IDs a caller keys on) could swap between two calls on the same graph. Both
+  now use one total order: larger first, ties on the smallest member; the
+  handler no longer re-sorts. `buildProjection` inserts edges in sorted token
+  order, and the two remaining map-order float sums are documented as safe
+  only while weights are exact integers. `Modularity`'s doc now gives its real
+  range, `[-1/2, 1)`, not `0 to 1`. Git ingestion (`mache mount repo/.git`)
+  ran `git log --all`, so the records depended on which local branches,
+  remote-tracking refs and stashes a machine happened to hold; it now walks
+  `--first-parent HEAD` (or the revisions a caller passes) under
+  `gitutil.IsolatedGitCommand`, which also switches off global and system
+  config (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`) and replace
+  refs (`GIT_NO_REPLACE_OBJECTS=1`), each of which changed what `git log`
+  printed for the same commits. `HermeticGitCommand`'s clone and rev-parse
+  callers keep the user's config, which is how a private remote is reachable.
+  Commits reachable only through a merged branch are no longer ingested;
+  name the branch or a range to get them.
+
 - **Sheaf region hashes follow ley-line's region-hash contract, so
   `get_sheaf_status.defect` means something** (`mache-a0d487`). The daemon
   counts a restriction edge as a defect when `regionHash(a) XOR regionHash(b)`

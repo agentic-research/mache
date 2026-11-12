@@ -3,6 +3,7 @@ package gitutil
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,40 @@ func TestHermeticGitCommand(t *testing.T) {
 	cmd := HermeticGitCommand("--version")
 	assert.NotContains(t, cmd.Env, "GIT_DIR=/tmp/poison.git")
 	require.NoError(t, cmd.Run())
+}
+
+// TestIsolatedGitCommand pins the three switches that make a history read a
+// function of the repository alone, and that they WIN over the developer's
+// shell: a GIT_CONFIG_GLOBAL pointing at a real file is overridden, and
+// GIT_NO_REPLACE_OBJECTS — which WithoutLocalEnv strips as a local variable
+// — is set afresh rather than lost.
+func TestIsolatedGitCommand(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", "/tmp/poison.gitconfig")
+	t.Setenv("GIT_NO_REPLACE_OBJECTS", "")
+
+	cmd := IsolatedGitCommand("--version")
+	// exec.Cmd takes the LAST value of a duplicated key, so that is the one
+	// git will see.
+	assert.Equal(t, os.DevNull, lastEnv(cmd.Env, "GIT_CONFIG_GLOBAL"))
+	assert.Equal(t, "1", lastEnv(cmd.Env, "GIT_CONFIG_NOSYSTEM"))
+	assert.Equal(t, "1", lastEnv(cmd.Env, "GIT_NO_REPLACE_OBJECTS"))
+	// Hooks stay off: it is HermeticGitCommand plus the three, not instead.
+	assert.Equal(t, []string{"git", "-c", "core.hooksPath=" + os.DevNull, "--version"}, cmd.Args)
+	require.NoError(t, cmd.Run())
+}
+
+// lastEnv is the value exec.Cmd uses for name: the last entry that sets it.
+func lastEnv(env []string, name string) string {
+	value, found := "", false
+	for _, entry := range env {
+		if v, ok := strings.CutPrefix(entry, name+"="); ok {
+			value, found = v, true
+		}
+	}
+	if !found {
+		return "<unset>"
+	}
+	return value
 }
 
 func TestWithoutLocalEnv(t *testing.T) {

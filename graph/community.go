@@ -14,11 +14,16 @@ type Community struct {
 
 // CommunityResult holds the output of community detection.
 type CommunityResult struct {
-	Communities []Community    // Detected communities, sorted by size descending
+	Communities []Community    // Detected communities, in lessBySizeThenFirst order
 	Membership  map[string]int // Node ID → community ID
-	Modularity  float64        // Final modularity score (0 to 1, higher = better partition)
-	NumNodes    int            // Total nodes in the graph
-	NumEdges    int            // Total edges (undirected)
+	// Modularity is the final modularity score. It lies in [-1/2, 1), not
+	// [0, 1]: negative when the communities hold less internal weight than
+	// a random graph with the same degrees would, 0 when no better than
+	// chance, and 1 approached but never reached. Higher is a better
+	// partition.
+	Modularity float64
+	NumNodes   int // Total nodes in the graph
+	NumEdges   int // Total edges (undirected)
 	// PrunedTokens are hub tokens excluded from the projection, most-referenced
 	// first. Reported rather than dropped silently: a caller reading these
 	// communities is entitled to know which references did not shape them.
@@ -105,7 +110,78 @@ func DetectCommunitiesWithFanIn(refs map[string][]string, minCommunitySize, maxF
 
 	// Step 2: Pre-compute node degrees (static — adjacency never changes)
 	// and total edge weight (2*m in modularity formula).
-	degree := make([]float64, n)
+	degree, totalWeight := nodeDegrees(adj)
+	if totalWeight == 0 {
+		return &CommunityResult{PrunedTokens: pruned, EffectiveMaxFanIn: maxFanIn, ProjectedPairs: projected}
+	}
+
+	// Steps 3 and 4: Louvain phase 1 from the singleton partition.
+	community := louvainPhase1(adj, degree, totalWeight)
+
+	// Step 4.5: Member-gated connected-components post-split.
+	// Louvain phase-1 local moving can leave a community internally
+	// disconnected — its members split into pieces that only connect through
+	// nodes OUTSIDE the community (Traag et al. 2019, "From Louvain to
+	// Leiden"). Because a community is the sheaf cache-invalidation unit, a
+	// disconnected one is a correctness hazard. Split any such community into
+	// its connected components: monotonically finer, deterministic, split-only
+	// (never merges), and NOT full Leiden (no coarsening/aggregation, no
+	// randomness). Runs BEFORE minCommunitySize filtering and BEFORE the final
+	// modularity computation so both reflect the post-split partition.
+	community = splitDisconnectedCommunities(adj, community, n)
+
+	// Step 5: Collect results
+	communities, membership := collectCommunities(community, indexToNode, minCommunitySize)
+
+	// Compute final modularity
+	mod := computeModularity(adj, community, degree, totalWeight, n)
+
+	numEdges := 0
+	for _, neighbors := range adj {
+		numEdges += len(neighbors)
+	}
+	numEdges /= 2 // undirected
+
+	return &CommunityResult{
+		Communities:  communities,
+		Membership:   membership,
+		Modularity:   mod,
+		NumNodes:     n,
+		NumEdges:     numEdges,
+		PrunedTokens: pruned,
+
+		EffectiveMaxFanIn: maxFanIn,
+		ProjectedPairs:    projected,
+	}
+}
+
+// lessBySizeThenFirst is the order every member list this package returns is
+// sorted in: larger first, ties broken on the smallest member. Both operands
+// must be sorted and non-empty, which holds for every caller (members are
+// sorted on collection, and a community or component has at least one node).
+//
+// It is a TOTAL order because two distinct communities or components are
+// disjoint, so their smallest members differ. Size alone is not: `sort.Slice`
+// is unstable and the input order on ties is a map walk, so two equal-sized
+// groups could swap between runs on identical input, and with them the IDs a
+// caller keys on (mache-82ded3).
+func lessBySizeThenFirst(a, b []string) bool {
+	if len(a) != len(b) {
+		return len(a) > len(b)
+	}
+	return a[0] < b[0]
+}
+
+// nodeDegrees is each node's weighted degree and their total (2m).
+//
+// This sum, and the neighbour-community sum in louvainPhase1, run in Go's
+// randomized map order. That is safe ONLY because every weight is a count of
+// shared tokens: an exact small integer in a float64, so the sum is exact in
+// any order. A fractional weight would make these sums order-dependent and
+// the partition non-deterministic — sort the keys (as computeModularity does)
+// before introducing one (mache-82ded3).
+func nodeDegrees(adj []map[int]float64) ([]float64, float64) {
+	degree := make([]float64, len(adj))
 	totalWeight := 0.0
 	for i, neighbors := range adj {
 		for _, w := range neighbors {
@@ -113,13 +189,17 @@ func DetectCommunitiesWithFanIn(refs map[string][]string, minCommunitySize, maxF
 		}
 		totalWeight += degree[i]
 	}
-	if totalWeight == 0 {
-		return &CommunityResult{PrunedTokens: pruned, EffectiveMaxFanIn: maxFanIn, ProjectedPairs: projected}
-	}
+	return degree, totalWeight
+}
 
-	// Step 3: Initialize — each node in its own community.
-	// Also build commDegree: sum of degrees for each community,
-	// maintained incrementally to avoid O(n) scans per candidate.
+// louvainPhase1 is Louvain's local-moving phase: starting from every node in
+// its own community, each node moves to the neighbouring community with the
+// best modularity gain until no move improves. Returns the community label of
+// each node index; labels are node indices, not yet renumbered.
+func louvainPhase1(adj []map[int]float64, degree []float64, totalWeight float64) []int {
+	n := len(adj)
+	// Each node in its own community. commDegree is the summed degree per
+	// community, maintained incrementally to avoid O(n) scans per candidate.
 	community := make([]int, n)
 	commDegree := make(map[int]float64, n)
 	for i := range community {
@@ -127,7 +207,6 @@ func DetectCommunitiesWithFanIn(refs map[string][]string, minCommunitySize, maxF
 		commDegree[i] = degree[i]
 	}
 
-	// Step 4: Louvain phase 1 — local modularity optimization
 	improved := true
 	for improved {
 		improved = false
@@ -141,7 +220,8 @@ func DetectCommunitiesWithFanIn(refs map[string][]string, minCommunitySize, maxF
 			community[node] = -1
 			commDegree[oldComm] -= ki
 
-			// Try each neighboring community
+			// Try each neighboring community. Exact-integer weights make
+			// this map-order sum order-independent (see nodeDegrees).
 			neighborComms := make(map[int]float64) // community → sum of edge weights to that community
 			for neighbor, w := range adj[node] {
 				c := community[neighbor]
@@ -179,81 +259,43 @@ func DetectCommunitiesWithFanIn(refs map[string][]string, minCommunitySize, maxF
 			}
 		}
 	}
+	return community
+}
 
-	// Step 4.5: Member-gated connected-components post-split.
-	// Louvain phase-1 local moving can leave a community internally
-	// disconnected — its members split into pieces that only connect through
-	// nodes OUTSIDE the community (Traag et al. 2019, "From Louvain to
-	// Leiden"). Because a community is the sheaf cache-invalidation unit, a
-	// disconnected one is a correctness hazard. Split any such community into
-	// its connected components: monotonically finer, deterministic, split-only
-	// (never merges), and NOT full Leiden (no coarsening/aggregation, no
-	// randomness). Runs BEFORE minCommunitySize filtering and BEFORE the final
-	// modularity computation so both reflect the post-split partition.
-	community = splitDisconnectedCommunities(adj, community, n)
-
-	// Step 5: Collect results
+// collectCommunities turns per-node labels into the returned communities:
+// members named and sorted, communities under minCommunitySize dropped, the
+// rest in lessBySizeThenFirst order with IDs assigned in that order, and the
+// node → ID membership map to match.
+//
+// The order is TOTAL, so equal-sized communities get stable, input-order-
+// independent IDs; sorting by size alone would preserve the random map
+// iteration order on ties. (mache-ff7e31)
+func collectCommunities(community []int, indexToNode []string, minCommunitySize int) ([]Community, map[string]int) {
 	commMap := map[int][]string{}
 	for idx, c := range community {
 		commMap[c] = append(commMap[c], indexToNode[idx])
 	}
 
-	// Renumber communities and filter by size
 	var communities []Community
-	id := 0
-	membership := make(map[string]int, n)
 	for _, members := range commMap {
 		if len(members) < minCommunitySize {
 			continue
 		}
 		sort.Strings(members)
-		comm := Community{ID: id, Members: members}
-		for _, m := range members {
-			membership[m] = id
-		}
-		communities = append(communities, comm)
-		id++
+		communities = append(communities, Community{Members: members})
 	}
-
-	// Sort by size descending, breaking ties on the (already-sorted) first
-	// member — a TOTAL order, so equal-sized communities get stable, input-
-	// order-independent IDs. `sort.Slice` alone would preserve the random
-	// commMap iteration order on ties. Members is non-empty (len >=
-	// minCommunitySize >= 1). (mache-ff7e31)
 	sort.Slice(communities, func(i, j int) bool {
-		if len(communities[i].Members) != len(communities[j].Members) {
-			return len(communities[i].Members) > len(communities[j].Members)
-		}
-		return communities[i].Members[0] < communities[j].Members[0]
+		return lessBySizeThenFirst(communities[i].Members, communities[j].Members)
 	})
-	// Re-assign IDs after sort
+
+	membership := make(map[string]int, len(community))
 	for i := range communities {
 		communities[i].ID = i
 		for _, m := range communities[i].Members {
 			membership[m] = i
 		}
 	}
-
-	// Compute final modularity
-	mod := computeModularity(adj, community, degree, totalWeight, n)
-
-	numEdges := 0
-	for _, neighbors := range adj {
-		numEdges += len(neighbors)
-	}
-	numEdges /= 2 // undirected
-
-	return &CommunityResult{
-		Communities:  communities,
-		Membership:   membership,
-		Modularity:   mod,
-		NumNodes:     n,
-		NumEdges:     numEdges,
-		PrunedTokens: pruned,
-
-		EffectiveMaxFanIn: maxFanIn,
-		ProjectedPairs:    projected,
-	}
+	return communities, membership
 }
 
 // buildProjection converts bipartite refs (token→[]nodeID) into an undirected
@@ -286,8 +328,12 @@ func buildProjection(refs map[string][]string) ([]map[int]float64, map[string]in
 		adj[i] = make(map[int]float64)
 	}
 
-	// For each token, all pairs of nodes that share it get an edge
-	for _, nodes := range refs {
+	// For each token, all pairs of nodes that share it get an edge. The
+	// token order is the sorted one from above, so the whole projection is a
+	// pure function of `refs` by construction, not only because the `++`
+	// increments happen to be exact in any order (mache-82ded3).
+	for _, tok := range tokens {
+		nodes := refs[tok]
 		if len(nodes) < 2 {
 			continue
 		}
@@ -418,7 +464,9 @@ func splitDisconnectedCommunities(adj []map[int]float64, community []int, n int)
 
 // ConnectedComponents finds connected components in the refs graph projection.
 // Simpler than Louvain — useful as a baseline or when modularity optimization
-// is overkill (e.g., disconnected subgraphs).
+// is overkill (e.g., disconnected subgraphs). Each component's members are
+// sorted and the components come back in lessBySizeThenFirst order, so the
+// result is a pure function of refs.
 func ConnectedComponents(refs map[string][]string) [][]string {
 	adj, _, indexToNode := buildProjection(refs)
 	n := len(indexToNode)
@@ -452,9 +500,8 @@ func ConnectedComponents(refs map[string][]string) [][]string {
 		components = append(components, component)
 	}
 
-	// Sort by size descending
 	sort.Slice(components, func(i, j int) bool {
-		return len(components[i]) > len(components[j])
+		return lessBySizeThenFirst(components[i], components[j])
 	})
 
 	return components

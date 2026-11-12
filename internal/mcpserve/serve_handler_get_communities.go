@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/agentic-research/mache/graph"
@@ -262,9 +261,11 @@ func truncatedCommunities(result *graph.CommunityResult) *mcp.CallToolResult {
 	const maxCommunities = 25
 	const maxMembersPerCommunity = 20
 
-	sort.Slice(result.Communities, func(i, j int) bool {
-		return len(result.Communities[i].Members) > len(result.Communities[j].Members)
-	})
+	// result.Communities already arrives largest-first in a TOTAL order
+	// (size, then smallest member) with IDs assigned in that order. It is
+	// NOT re-sorted here: an unstable re-sort on size alone let equal-sized
+	// communities swap on the way out, so the same graph answered with its
+	// IDs in a different order from one call to the next (mache-82ded3).
 	eliddedCommunities := 0
 	if len(result.Communities) > maxCommunities {
 		eliddedCommunities = len(result.Communities) - maxCommunities
