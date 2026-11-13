@@ -1276,12 +1276,26 @@ func (c *SocketClient) Prioritize(files []string) error {
 // sigma.ClaimOf (refusing a head digest v2 head, ErrRetiredDigestV2) and the
 // execution error envelope; mache uses neither.
 //
+// v0.29.0 -> v0.30.0 changes nothing mache reads (mache-d7b8db). It is an
+// execution-boundary release (rootfs manifest v2, WorkspaceGrant.writeScope,
+// RunGrant/RunReceipt connection fields): projection-v13, EXTRACTION_EPOCH 7,
+// merkle-ast-v3, wire major 2 and the daemon ops mache calls are unchanged.
+// One tree parsed by both gives the same sqlite_master, _meta (derived_from
+// included, so storeRoot and parserId are the same and nothing re-derives),
+// row counts and rows; only nodes.mtime, a wall clock, differs. The
+// leyline_version op reports schema_version 0.30.0 because execution/v1
+// grew, not because the schema client changed: clients/go is untouched
+// between the tags. ADR-0049 ships as the config.leyline/v1 specification and
+// a library resolver only; the binaries still read LEYLINE_* variables and
+// the removed-variable refusal (mache-0be425) is not in this release. The
+// epoch-8 lineage bump (ADR-0048, mache-46d36d) is not in it either.
+//
 // This binary pin bounds the schema-client version accepted by the startup
 // wire-compat handshake (VerifyReachableDaemonVersion, mache-8kif): mache
 // queries the daemon's leyline_version op and refuses a daemon that is not this
 // release or speaks a wire it cannot decode (mache-a2edb2). The actual client version is the independently tagged go.mod
 // dependency described below.
-const leylineBinaryVersion = "v0.29.0"
+const leylineBinaryVersion = "v0.30.0"
 
 // leylineSchemaCompatFloor is the OLDEST leyline-schema Go client version
 // whose wire format the pinned binary still accepts (ley-line-open's
