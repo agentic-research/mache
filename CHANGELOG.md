@@ -29,6 +29,27 @@ bumps may include breaking changes.
 
 ### Changed
 
+- **leyline v0.30.0 is the pinned backend** (`mache-d7b8db`). Tags `v0.30.0`
+  and `clients/go/leyline-schema/v0.30.0` (commit `de638aea`); the four
+  binary digests come from the release's `SHA256SUMS`, checked against the
+  downloaded assets. It is an execution-boundary release on LLO's side
+  (rootfs manifest v2, `WorkspaceGrant.writeScope`, connection fields) and
+  changes nothing mache reads: the projection stays `projection-v13` and
+  extraction epoch 7, the IR `merkle-ast-v3`, the wire major 2 and
+  `compat_min` 0.6.0. One tree parsed by v0.29.0 and v0.30.0 has the same
+  `sqlite_master`, the same `_meta` (`derived_from` included, so the
+  storeRoot and parserId are unchanged and no projection or sheaf hash
+  re-derives), the same row counts and the same rows; only `nodes.mtime`, a
+  wall clock, differs. `leyline_version` reports `schema_version` 0.30.0
+  because `execution/v1` grew; `clients/go` is untouched between the tags.
+  LLO's ADR-0049 (deployment configuration) ships in this release as the
+  `config.leyline/v1` specification and a library resolver only: the daemons
+  still read `LEYLINE_*` variables, so the removed-variable refusal
+  (`mache-0be425`) and the epoch-8 lineage bump (`mache-46d36d`) both wait
+  for a later release. Release parity against the v0.29.0 pin differs only in
+  `get_sheaf_status.leyline` (the expected version, the resolved path and the
+  version string); smells across the pin on an unchanged tree: 0 new, 0
+  vanished. The baseline was not regenerated.
 - **A `.db` whose leyline projection mache does not know is refused, not
   warned about** (`mache-86e215`). Opening a db whose `_meta` declares a
   `projection_schema_version` outside the shapes mache has been checked
