@@ -12,6 +12,9 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/procscan"
 )
 
 // toyServer has two tools: echo, and roots, which asks the calling client
@@ -93,6 +96,29 @@ func TestIsolatedHome_MovesMacheHomeAndKeepsTheBinaryCache(t *testing.T) {
 	home := IsolatedHome(t)
 	assert.Equal(t, home, os.Getenv("MACHE_HOME"))
 	assert.DirExists(t, home)
+}
+
+// A daemon started under an isolated home does not outlive the test that
+// started it. The inner test spawns one the way a serve-mode graph does; once
+// it has ended, the daemon is gone and the home with it (mache-252d27).
+// Removing IsolatedHome's StopManaged cleanup fails this test on both counts.
+func TestIsolatedHome_StopsTheDaemonStartedUnderIt(t *testing.T) {
+	if _, err := leyline.ResolveBinary(false); err != nil {
+		t.Skipf("pinned leyline unavailable: %v", err)
+	}
+	var home string
+	t.Run("a test that starts a daemon", func(t *testing.T) {
+		home = IsolatedHome(t)
+		_, err := leyline.DiscoverOrStart()
+		require.NoError(t, err)
+		running, err := procscan.Referencing(home)
+		require.NoError(t, err)
+		require.NotEmpty(t, running, "no process names the isolated home: the daemon did not start under it")
+	})
+	survivors, err := procscan.Referencing(home)
+	require.NoError(t, err)
+	assert.Empty(t, survivors, "the daemon outlived the test that started it")
+	assert.NoDirExists(t, home)
 }
 
 // The core API returns errors for a tool to report, where the test API fails

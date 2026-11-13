@@ -54,10 +54,11 @@ func TestManagedDaemon_AllTerminationViaSeam(t *testing.T) {
 // machine before anyone noticed (~1.1 GB resident).
 //
 // A structural scan catches this at the SITE, before any process is spawned —
-// unlike assertNoSurvivorsFor, which can only observe the damage afterwards
-// and only in tests that remember to call it. Both are kept: this one prevents
-// the class, that one catches a leak arriving by some route this cannot see
-// (e.g. a daemon that spawns a grandchild we never group).
+// unlike procscan.AssertNoneReferencing, which can only observe the damage
+// afterwards, from the cleanups of the helpers that create daemon homes. Both
+// are kept: this one prevents the class, that one catches a leak arriving by
+// some route this cannot see (e.g. a daemon that spawns a grandchild we never
+// group).
 //
 // Files that legitimately hold a raw process handle can opt out by name, with
 // a reason — the list is the audit trail.

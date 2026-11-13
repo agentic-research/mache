@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/procscan"
 )
 
 // UsePinnedDaemon spawns a private pinned daemon (see StartPinnedDaemon) and
@@ -58,6 +59,9 @@ func startPinned(t *testing.T, src string) string {
 	if err != nil {
 		t.Fatalf("lltest: create pinned daemon dir: %v", err)
 	}
+	// Runs after the kill below: the daemon and anything it spawned must not
+	// have outlived the test (mache-252d27).
+	t.Cleanup(func() { procscan.AssertNoneReferencing(t, dir) })
 
 	args := []string{
 		"daemon",
