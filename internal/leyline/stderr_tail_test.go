@@ -80,7 +80,7 @@ func TestDiscoverOrStart_RecoversAControlBlockAnOlderLeylineLeft(t *testing.T) {
 		t.Skipf("pinned leyline unavailable: %v", err)
 	}
 	resetManaged(t)
-	t.Cleanup(func() { StopManaged(); resetManaged(t) })
+	t.Cleanup(func() { resetManaged(t) }) // e2eHome stops the daemon
 	home := e2eHome(t)
 	dot := filepath.Join(home, ".mache")
 	require.NoError(t, os.MkdirAll(filepath.Join(dot, "bin"), 0o755))

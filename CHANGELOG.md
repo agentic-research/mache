@@ -6,6 +6,27 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tests no longer leak leyline daemons, and stop them in under a second**
+  (`mache-252d27`). Every test helper that gives a daemon a private home
+  (`mcpharness.IsolatedHome`, the leyline package's `e2eHome`,
+  `lltest.UseWritableTree`, `lltest.StartPinnedDaemon`) now stops the daemon
+  it started before removing that home, and fails the test if any process
+  still names the home afterwards (`internal/procscan`). `IsolatedHome`
+  registered no stop at all, so the daemon a serve-mode test's background
+  embedding trigger spawned led its own process group and outlived the test
+  binary: one orphan per package per run, found as `/tmp/mh*` daemons with
+  ppid 1 up to a day old. The leyline tests did stop theirs, but `t.Cleanup`
+  is last-in-first-out and the stop was registered before the home's
+  `os.RemoveAll`, so SIGTERM reached a daemon whose live db was already
+  unlinked; the v0.29.0 daemon then spends 30s in a pool checkout before its
+  final snapshot fails (measured 30.02s, against 0.04–0.48s with the
+  directory intact), mache's 3s budget expires, and the stop ends in SIGKILL.
+  Stopped first, the daemon exits in under half a second. The `tests/`
+  install gate stops its `mache serve` with SIGTERM instead of SIGKILL, so the
+  server runs its own daemon shutdown as it does under a supervisor.
+
 ### Changed
 
 - **leyline v0.30.0 is the pinned backend** (`mache-d7b8db`). Tags `v0.30.0`

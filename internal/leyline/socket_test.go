@@ -22,6 +22,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/procscan"
 )
 
 // mockServer starts a UDS server that echoes back canned responses.
@@ -937,11 +939,21 @@ func TestDiscoverOrStart_ConcurrentCallersDoNotDoubleSpawn(t *testing.T) {
 // /var/folders/.../TestName/NNN/ which blows that budget every time. Put
 // HOME under /tmp/<short> and clean it explicitly since it lives outside
 // t.TempDir's reach. Same constraint observed in sheaf_e2e_test.go.
+//
+// It also owns the managed daemon's lifetime: the daemon is stopped, then the
+// home is removed, then nothing may still name it. Cleanups run in reverse
+// registration order, which is why the stop is registered last. Tests used to
+// register StopManaged themselves before calling this, so the home was deleted
+// first and SIGTERM reached a daemon whose live db was gone — a 30s pool
+// timeout in the daemon, a SIGKILL from mache after 3s, and an orphan under
+// /tmp/leyline-disc-* whenever the test binary died first (mache-252d27).
 func e2eHome(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "leyline-disc-")
 	require.NoError(t, err)
+	t.Cleanup(func() { procscan.AssertNoneReferencing(t, dir) })
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(StopManaged)
 	return dir
 }
 
@@ -1355,10 +1367,7 @@ func TestDiscoverOrStart_E2E_HappyPath(t *testing.T) {
 		t.Skip("leyline binary not on PATH — skipping E2E DiscoverOrStart")
 	}
 	resetManaged(t)
-	t.Cleanup(func() {
-		StopManaged()
-		resetManaged(t)
-	})
+	t.Cleanup(func() { resetManaged(t) }) // e2eHome stops the daemon
 
 	home := e2eHome(t)
 	t.Setenv("HOME", home)
@@ -1412,10 +1421,7 @@ func TestDiscoverOrStart_E2E_ManagedReusedAcrossCalls(t *testing.T) {
 		t.Skip("leyline binary not on PATH — skipping E2E DiscoverOrStart")
 	}
 	resetManaged(t)
-	t.Cleanup(func() {
-		StopManaged()
-		resetManaged(t)
-	})
+	t.Cleanup(func() { resetManaged(t) }) // e2eHome stops the daemon
 
 	home := e2eHome(t)
 	t.Setenv("HOME", home)
@@ -1470,10 +1476,7 @@ func TestDiscoverOrStart_E2E_DaemonCrashRecovery(t *testing.T) {
 		t.Skip("leyline binary not on PATH — skipping E2E DiscoverOrStart")
 	}
 	resetManaged(t)
-	t.Cleanup(func() {
-		StopManaged()
-		resetManaged(t)
-	})
+	t.Cleanup(func() { resetManaged(t) }) // e2eHome stops the daemon
 
 	home := e2eHome(t)
 	t.Setenv("HOME", home)
