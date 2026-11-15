@@ -1,6 +1,7 @@
 package smells
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -70,11 +71,17 @@ func ensureSmellQueryContext(qg graph.RefsQuerier) error {
 }
 
 // RunSmellRule executes the rule's SQL, optionally scoped to one source.
-// Single-rule callers (the MCP find_smells tool, one rule per request) use
-// this directly. Callers that run multiple rules against the same qg in one
-// process must call ensureSmellQueryContext once before the loop and use
-// runSmellRuleQuery per rule instead — see ensureSmellQueryContext.
+// It reserves a connection when qg implements graph.RefsConnectionProvider.
+// Other queriers must already guarantee connection affinity. Callers doing
+// preflight or running multiple rules must reserve a connection first, call
+// ensureSmellQueryContext once, then use runSmellRuleQuery for each rule.
 func RunSmellRule(qg graph.RefsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
+	qg, release, err := pinSmellConnection(context.Background(), qg)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	if err := ensureSmellQueryContext(qg); err != nil {
 		return nil, err
 	}

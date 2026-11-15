@@ -26,6 +26,17 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`find_smells` runs every rule on the connection its views were installed on**
+  (`mache-ee4375`). The canonical views and the materialized `v_test_nodes` /
+  `v_doc_refs` tables are TEMP, so they exist only on the connection that
+  created them. The server's graph pool holds four, and a preflight or a rule
+  could land on another one: `no such table`, or a rule silently skipped as
+  unsupported (seen intermittently in the LLO v0.30.0 parity check, #813). The
+  MCP tool, the digest and the CLI now each open one scan, a reserved
+  connection with the vocabulary installed once, and every runner takes that
+  scan. The CLI no longer caps its pool at one connection to get the same
+  effect.
+
 - **Tests no longer leak leyline daemons, and stop them in under a second**
   (`mache-252d27`). Every test helper that gives a daemon a private home
   (`mcpharness.IsolatedHome`, the leyline package's `e2eHome`,

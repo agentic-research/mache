@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/agentic-research/mache/graph"
@@ -36,3 +37,6 @@ func (s *SmellTestGraph) QueryRefs(query string, args ...any) (*sql.Rows, error)
 // test graph into capnp readthrough (mache-190508 step 3 / mache-6bd4d8).
 // Tests that don't set Path keep the legacy mention-only view shape.
 func (s *SmellTestGraph) DBPath() string { return s.Path }
+
+// RefsConn reserves the database used by QueryRefs.
+func (s *SmellTestGraph) RefsConn(ctx context.Context) (*sql.Conn, error) { return s.DB.Conn(ctx) }

@@ -21,6 +21,9 @@ import (
 // all of them — production and the 26 tests that build fixtures by hand. Rules
 // reference the derived views unconditionally, so a caller that installed the
 // vocabulary but not these produces "no such table" at query time.
+//
+// The caller must keep qg on one connection through setup and all consumers;
+// creating TEMP views alone does not make them available to a connection pool.
 func EnsureCanonicalViews(qg graph.RefsQuerier) error {
 	if err := lloschema.EnsureViews(qg); err != nil {
 		return err

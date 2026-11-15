@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
 	"github.com/agentic-research/mache/internal/smells"
@@ -58,10 +59,8 @@ func runSmellMCPJSON(t *testing.T, dbPath, rule string) string {
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	// Same single-connection pinning the CLI applies: the TEMP tables that
-	// ensureSmellQueryContext creates are per-connection, so a pool that hands
-	// out a second connection loses them non-deterministically.
-	db.SetMaxOpenConns(1)
+	// Match the production graph pool; the handler reserves its own connection.
+	db.SetMaxOpenConns(4)
 
 	// testutil.SmellTestGraph is the serve-mode backend shape this package already
 	// has: a graph.Graph carrying a SQL handle plus the .db path that opts it
@@ -130,4 +129,25 @@ func TestFindSmells_MCPAndCLI_ByteForByteParity(t *testing.T) {
 		assert.Contains(t, cliOut, `"findings": []`,
 			`zero findings must serialize as [] on both paths, never null`)
 	})
+}
+
+func TestFindSmells_SQLiteGraphPoolThroughLazyGraph(t *testing.T) {
+	path := writeSmellParityFixture(t)
+	g, err := graph.OpenSQLiteGraph(path, &api.Topology{}, nil)
+	require.NoError(t, err)
+	defer func() { _ = g.Close() }()
+	lg := newTestLazyGraph(g, "")
+	// Keep another graph connection busy while requests reserve their own.
+	other, err := g.RefsConn(context.Background())
+	require.NoError(t, err)
+	defer func() { _ = other.Close() }()
+	handler := smells.MakeFindSmellsHandler(lg)
+	for range 10 {
+		result, err := handler(context.Background(), testutil.MakeRequest(map[string]any{"rule": "dead_code"}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "%s", testutil.ResultText(t, result))
+		require.Contains(t, testutil.ResultText(t, result), "pkg/Dead")
+	}
+	require.Equal(t, 4, g.DB().Stats().MaxOpenConnections)
+	require.Equal(t, 1, g.DB().Stats().InUse)
 }

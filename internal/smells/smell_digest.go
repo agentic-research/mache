@@ -1,6 +1,7 @@
 package smells
 
 import (
+	"context"
 	"sort"
 
 	"github.com/agentic-research/mache/graph"
@@ -50,6 +51,12 @@ type smellDigest struct {
 // active set (built-ins + external) resolved by the caller, so externally-loaded
 // rules participate in the digest.
 func buildSmellDigest(qg graph.RefsQuerier, rules []SmellRule, worstN, fileTopN int) (smellDigest, error) {
+	qg, release, err := pinSmellConnection(context.Background(), qg)
+	if err != nil {
+		return smellDigest{}, err
+	}
+	defer release()
+
 	d := smellDigest{
 		DrillHelp: "drill down with rule=<id> (+ optional source_id=<file>) for the full findings of one rule, each with its real file:line from _ast.",
 	}

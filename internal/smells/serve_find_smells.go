@@ -29,7 +29,7 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 	if len(rulesDir) > 0 {
 		dir = rulesDir[0]
 	}
-	return func(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		rules, err := activeSmellRules(dir)
 		if err != nil {
 			log.Printf("smell rules: using built-ins only; external load from %s failed: %v", dir, err)
@@ -55,6 +55,11 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier
 				return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
 			} // coverage:ignore
+			qg, release, err := pinSmellConnection(ctx, qg)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("digest: reserve connection: %v", err)), nil
+			}
+			defer release()
 			digest, err := buildSmellDigest(qg, rules, 5, 10)
 			if err != nil { // coverage:ignore — buildSmellDigest only errors on DB IO; unreachable with in-memory fixtures
 				return mcp.NewToolResultError(fmt.Sprintf("digest: %v", err)), nil // coverage:ignore
@@ -97,16 +102,14 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
 		} // coverage:ignore
 
-		// The canonical views must exist BEFORE the pre-flight below, not
-		// merely before the query. Since mache-be17ce a rule's Requires names
-		// v_ast / v_nodes / v_defs / v_refs rather than ley-line-open's
-		// physical tables, and those are TEMP views installed per connection —
-		// so checking Requires first asks whether the boundary exists before
-		// anything installs it, and every migrated rule reports as unsupported.
-		// That failure is SILENT on the `--rule '*'` path, where an unsupported
-		// rule is skipped rather than failed. Idempotent, so calling it here
-		// and again at query time is safe.
-		if err := EnsureCanonicalViews(qg); err != nil {
+		qg, release, err := pinSmellConnection(ctx, qg)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("rule %q: reserve connection: %v", ruleID, err)), nil
+		}
+		defer release()
+		// Install TEMP objects before preflight and keep them on this request's
+		// connection through rule execution and enrichment.
+		if err := ensureSmellQueryContext(qg); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("rule %q: installing canonical views failed: %v", ruleID, err)), nil
 		}
 
@@ -128,10 +131,11 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			} // coverage:ignore
 			return mcp.NewToolResultError(fmt.Sprintf(
 				"rule %q requires SQL tables [%s] which aren't present on the active backend%s. _ast / _source / _imports / _lsp* are produced by ley-line-open's `leyline parse`; node_defs / node_refs / nodes are produced by both standalone mache and LLO. See docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full table.",
-				ruleID, strings.Join(missing, ", "), backendNote)), nil
+				ruleID, strings.Join(missing, ", "), backendNote,
+			)), nil
 		}
 
-		findings, err := RunSmellRule(qg, rule, sourceID, limit)
+		findings, err := runSmellRuleQuery(qg, rule, sourceID, limit)
 		if err != nil { // coverage:ignore — RunSmellRule errors require malformed SQL or DB IO failure; pre-flight (missingTables) catches schema gaps, so this branch is unreachable in tests
 			return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", ruleID, err)), nil // coverage:ignore
 		} // coverage:ignore

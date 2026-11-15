@@ -1474,3 +1474,15 @@ var (
 	_ writeBacker              = (*lazyGraph)(nil)
 	_ graph.Graph              = (*lazyGraph)(nil)
 )
+
+// RefsConn forwards connection affinity through the server's lazy wrapper.
+func (lg *lazyGraph) RefsConn(ctx context.Context) (*sql.Conn, error) {
+	g, err := lg.get()
+	if err != nil {
+		return nil, err
+	}
+	if p, ok := g.(graph.RefsConnectionProvider); ok {
+		return p.RefsConn(ctx)
+	}
+	return nil, fmt.Errorf("backend does not support RefsConn")
+}
