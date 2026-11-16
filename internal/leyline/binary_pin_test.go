@@ -79,7 +79,7 @@ func TestExtractSemver(t *testing.T) {
 // and refreshing leylinePinnedSHA256. Updating this line without those is the
 // mistake it exists to make loud.
 func TestPinnedBinaryReleaseMatchesAdoptedContract(t *testing.T) {
-	assert.Equal(t, "v0.29.0", leylineBinaryVersion)
+	assert.Equal(t, "v0.30.0", leylineBinaryVersion)
 }
 
 func TestPinnedBinarySHA256CoversSupportedPlatforms(t *testing.T) {
