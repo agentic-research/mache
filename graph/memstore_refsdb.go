@@ -2,7 +2,6 @@ package graph
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -91,6 +90,7 @@ func (s *MemoryStore) InitRefsDB() error {
 
 	s.refsDB = db
 	s.refsDBPath = refsPath
+	s.scanPool = newScanPool(refsPath)
 	s.dbID = dbID
 	return nil
 }
@@ -197,6 +197,9 @@ func (s *MemoryStore) Close() error {
 		}
 
 		err := s.refsDB.Close()
+		if err2 := s.closeScans(); err == nil {
+			err = err2
+		}
 		if s.refsDBPath != "" {
 			_ = os.Remove(s.refsDBPath) // best-effort cleanup
 			_ = os.Remove(s.refsDBPath + "-wal")
@@ -205,12 +208,4 @@ func (s *MemoryStore) Close() error {
 		return err
 	}
 	return nil
-}
-
-// RefsConn reserves the database used by QueryRefs.
-func (s *MemoryStore) RefsConn(ctx context.Context) (*sql.Conn, error) {
-	if s.refsDB == nil {
-		return nil, fmt.Errorf("refsDB not initialized: call InitRefsDB first")
-	}
-	return s.refsDB.Conn(ctx)
 }

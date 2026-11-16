@@ -2,7 +2,6 @@ package graph
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -522,15 +521,4 @@ func (g *SQLiteGraph) refsMapFromBitmaps() map[string][]string {
 		}
 	}
 	return refs
-}
-
-// RefsConn reserves the database used by QueryRefs.
-func (g *SQLiteGraph) RefsConn(ctx context.Context) (*sql.Conn, error) {
-	if g.useNodesTable {
-		return g.db.Conn(ctx)
-	}
-	if g.refsDB == nil {
-		return nil, fmt.Errorf("refs database not initialized")
-	}
-	return g.refsDB.Conn(ctx)
 }

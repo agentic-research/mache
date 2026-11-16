@@ -61,9 +61,12 @@ type MemoryStore struct {
 	// pool connection that can see the same tables — :memory: isolates per-connection.
 	refsDB     *sql.DB
 	refsDBPath string // temp file path, cleaned up on Close
-	dbID       string // unique ID for vtab registry
-	flushOnce  sync.Once
-	flushErr   error
+	// The refs database in a pool of its own, from which the promoted
+	// RefsConn reserves: long scans never hold QueryRefs' connections.
+	*scanPool
+	dbID      string // unique ID for vtab registry
+	flushOnce sync.Once
+	flushErr  error
 
 	extractor CallExtractor
 
