@@ -1,6 +1,7 @@
 package smells
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -17,7 +18,7 @@ import (
 // content addresses up by the key, so a shape-agnostic rule reports the same
 // findings from either projection.
 
-func smellSpec(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
+func smellSpec(t *testing.T, p fixturedb.Producer) *dbQuerier {
 	b := fixturedb.New(t, p)
 	b.Source("pkg/a.go", "go", "")
 	b.Source("pkg/b.go", "go", "")
@@ -30,7 +31,7 @@ func smellSpec(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
 	b.ASTNode("pkg/b.go/method_declaration", "method_declaration", "pkg/b.go",
 		fixturedb.Span{StartByte: 10, EndByte: 80, StartRow: 1, EndRow: 8})
 	_, f := b.Build()
-	return f
+	return fixtureQuerier(f)
 }
 
 func TestSmells_ShapeAgnosticRulesSameFindingsFromProjectionV4AndV6(t *testing.T) {
@@ -38,7 +39,7 @@ func TestSmells_ShapeAgnosticRulesSameFindingsFromProjectionV4AndV6(t *testing.T
 		t.Run(id, func(t *testing.T) {
 			run := func(p fixturedb.Producer) []smellFinding {
 				f := smellSpec(t, p)
-				out, err := RunSmellRule(f, embeddedRule(t, id), "", 100)
+				out, err := RunSmellRule(context.Background(), f, embeddedRule(t, id), "", 100)
 				require.NoError(t, err)
 				for i := range out {
 					out[i].key = nil // the raw key is a nid on one side by design
@@ -55,7 +56,7 @@ func TestSmells_ShapeAgnosticRulesSameFindingsFromProjectionV4AndV6(t *testing.T
 // A finding on v6 names its node by path, carries the node's content address,
 // and is located from _ast through the key.
 func TestSmells_V6FindingIsAPathWithAHashAndALocation(t *testing.T) {
-	out, err := RunSmellRule(smellSpec(t, fixturedb.LeylineV6), embeddedRule(t, "long_function"), "", 100)
+	out, err := RunSmellRule(context.Background(), smellSpec(t, fixturedb.LeylineV6), embeddedRule(t, "long_function"), "", 100)
 	require.NoError(t, err)
 	require.NotEmpty(t, out)
 	top := out[0]
@@ -74,12 +75,12 @@ func TestSmells_PathShapedRuleIsRefusedOnV6Only(t *testing.T) {
 	rule := *embeddedRule(t, "long_function")
 	rule.ID, rule.PathShapedIDs = "path_shaped_external", true
 
-	_, err := RunSmellRule(smellSpec(t, fixturedb.LeylineV6), &rule, "", 100)
+	_, err := RunSmellRule(context.Background(), smellSpec(t, fixturedb.LeylineV6), &rule, "", 100)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrPathShapedRule), "got %v", err)
 	assert.Contains(t, err.Error(), "mache-2dc105", "the error names the work that lifts it")
 
-	_, err = RunSmellRule(smellSpec(t, fixturedb.Leyline), &rule, "", 100)
+	_, err = RunSmellRule(context.Background(), smellSpec(t, fixturedb.Leyline), &rule, "", 100)
 	assert.NoError(t, err)
 }
 
@@ -90,7 +91,7 @@ func TestSmells_PathShapedRuleIsRefusedOnV6Only(t *testing.T) {
 func TestRenderNodeIDs_ANidWithNoNode(t *testing.T) {
 	f := smellSpec(t, fixturedb.LeylineV6)
 	var fileID int64
-	require.NoError(t, f.DB().QueryRow(`SELECT file_id FROM _source WHERE id = 'pkg/a.go'`).Scan(&fileID))
+	require.NoError(t, f.DB.QueryRow(`SELECT file_id FROM _source WHERE id = 'pkg/a.go'`).Scan(&fileID))
 	injected := fileID<<lloschema.V6FileShift | 9999
 	findings := []smellFinding{{key: int64(1) << 40}, {key: "kept/as/is"}, {key: injected}}
 	require.NoError(t, renderNodeIDs(f, findings))
@@ -103,14 +104,14 @@ func TestRenderNodeIDs_ANidWithNoNode(t *testing.T) {
 // is located from _ast by its key: on v6, the nid.
 func TestEnrichLocations_V6BackfillsByKey(t *testing.T) {
 	f := smellSpec(t, fixturedb.LeylineV6)
-	require.NoError(t, ensureSmellQueryContext(f))
+	s := scanOf(t, f)
 	var nid int64
-	require.NoError(t, f.DB().QueryRow(`SELECT nid FROM v_node_path WHERE path = ?`,
+	require.NoError(t, s.conn.QueryRowContext(s.ctx, `SELECT nid FROM v_node_path WHERE path = ?`,
 		"pkg/a.go/function_declaration_1").Scan(&nid))
 
 	findings := []smellFinding{{key: nid}}
-	require.NoError(t, renderNodeIDs(f, findings))
-	require.NoError(t, enrichLocations(f, findings))
+	require.NoError(t, renderNodeIDs(s, findings))
+	require.NoError(t, enrichLocations(s, findings))
 	assert.Equal(t, "pkg/a.go/function_declaration_1", findings[0].NodeID)
 	assert.Equal(t, "pkg/a.go", findings[0].SourceID, "the file comes from _ast, through the nid")
 	assert.Equal(t, 410, findings[0].StartByte)

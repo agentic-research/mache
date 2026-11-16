@@ -214,11 +214,4 @@ func parseSmellRuleJSON(raw []byte) (SmellRule, error) {
 // RegisteredRule returns the registered rule with the given ID, or nil.
 // The registry itself stays unexported — consumers outside the package get
 // lookup, not mutation.
-func RegisteredRule(id string) *SmellRule {
-	for i := range smellRegistry {
-		if smellRegistry[i].ID == id {
-			return &smellRegistry[i]
-		}
-	}
-	return nil
-}
+func RegisteredRule(id string) *SmellRule { return findRule(smellRegistry, id) }

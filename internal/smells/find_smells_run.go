@@ -92,13 +92,6 @@ func openSmellDB(path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
-	// SetMaxOpenConns(1) pins all queries to a single connection so
-	// the TEMP _capnp_binding_refs table created by EnsureCanonicalViews
-	// + LoadCapnpBindings stays visible to subsequent queries.
-	// modernc/sqlite spreads queries across the pool by default,
-	// which would put the TEMP-table population on a connection
-	// the rule SELECT never sees.
-	db.SetMaxOpenConns(1)
 	// The rules read _ast, node_defs and node_refs by column, so a db of a
 	// shape mache has not been checked against is refused here as it is on
 	// every graph open, rather than scored against the wrong meaning.
@@ -115,7 +108,7 @@ func openSmellDB(path string) (*sql.DB, error) {
 // both need to say what this run did NOT assess (mache-ddf14b). A nil result
 // means the run is over with the error printed, and code and err are what
 // runFindSmells returns.
-func runMatchedRules(cmd *cobra.Command, qg *dbQuerier, matched []*SmellRule) ([]ruleRunResult, []skippedRule, int, error) {
+func runMatchedRules(cmd *cobra.Command, qg *smellScan, matched []*SmellRule) ([]ruleRunResult, []skippedRule, int, error) {
 	// Mirror the MCP handler's threshold-default semantics. If
 	// the caller passed --min-metric explicitly, that value wins
 	// (including 0 for "show me everything sorted"). If the flag
@@ -157,7 +150,7 @@ func runMatchedRules(cmd *cobra.Command, qg *dbQuerier, matched []*SmellRule) ([
 // missing tables are returned for the skip record. An explicitly-named
 // single rule still errors (you asked for exactly it), with exit 2. Bead
 // mache-4da90e (W5.3). A nonzero code ends the run.
-func preflightRule(cmd *cobra.Command, qg *dbQuerier, rule *SmellRule, multi bool) ([]string, int, error) {
+func preflightRule(cmd *cobra.Command, qg *smellScan, rule *SmellRule, multi bool) ([]string, int, error) {
 	missing, mErr := missingTables(qg, rule.Requires)
 	if mErr != nil {
 		code, err := printAndCode(4, fmt.Errorf("pre-flight: %w", mErr))

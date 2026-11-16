@@ -2,6 +2,7 @@ package graph
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -204,4 +205,12 @@ func (s *MemoryStore) Close() error {
 		return err
 	}
 	return nil
+}
+
+// RefsConn reserves the database used by QueryRefs.
+func (s *MemoryStore) RefsConn(ctx context.Context) (*sql.Conn, error) {
+	if s.refsDB == nil {
+		return nil, fmt.Errorf("refsDB not initialized: call InitRefsDB first")
+	}
+	return s.refsDB.Conn(ctx)
 }

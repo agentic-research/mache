@@ -121,7 +121,7 @@ func TestStripSkippedCTE_RealRuleBody(t *testing.T) {
 	require.NoError(t, err)
 
 	// Need v_defs / v_refs for the rule to compile after PR A.
-	qg := &sqlDBQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	// LIMIT 0 — we just want the parser to walk through. Close each
@@ -205,10 +205,47 @@ func TestFalsifiabilityA_SyntheticHarness(t *testing.T) {
 	// hardcoded list and (no qualifier suffix matches Test/Benchmark)
 	// → not skip-listed → would be flagged dead in BOTH paths
 	// (production and ablation produce the same finding for it).
+	db, dbPath := syntheticAblationDB(t)
+
+	qg := &dbQuerier{SQLDB: lloschema.DB(db), path: dbPath}
+	require.NoError(t, EnsureCanonicalViews(qg))
+	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
+
+	withSkip, withoutSkip := runDeadCodeWithAndWithout(t, db)
+
+	// 'Read' is in the skip-list → not in withSkip. Ablation drops
+	// the skip-list, so the alive-check has to make the call. With
+	// the LSP binding row, target_node_id = pkg/methods/MyType.Read
+	// matches d.node_id → 'Read' is alive → still not in withoutSkip.
+	assert.NotContains(t, withSkip, "pkg/methods/MyType.Read",
+		"production skip-list keeps 'Read' off the list")
+	assert.NotContains(t, withoutSkip, "pkg/methods/MyType.Read",
+		"ablation: LSP binding row keeps 'Read' alive without the skip-list")
+
+	// 'Quux' isn't in the skip-list and has no LSP coverage → flagged
+	// dead in BOTH runs.
+	assert.Contains(t, withSkip, "pkg/methods/MyType.Quux",
+		"'Quux' is not skip-listed and has no refs → dead in production")
+	assert.Contains(t, withoutSkip, "pkg/methods/MyType.Quux",
+		"'Quux' is not skip-listed and has no refs → dead in ablation too")
+
+	// The headline assertion: ablation MUST NOT flag 'Read' (the LSP-
+	// covered case). The diff (withoutSkip \ withSkip) is empty —
+	// LSP successfully replaced the skip-list for cases it sees.
+	diff := stringSetDiff(withSkip, withoutSkip)
+	assert.NotContains(t, diff, "pkg/methods/MyType.Read",
+		"Falsifiability A: ablation must not flag 'Read' as dead — LSP saw the call site")
+}
+
+// syntheticAblationDB builds the TestFalsifiabilityA_SyntheticHarness
+// fixture: methods Read and Quux on MyType, both defined, neither referenced
+// by name, and one LSP binding record (in the sibling capnp log) for Read.
+func syntheticAblationDB(t *testing.T) (*sql.DB, string) {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "ablation.db")
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	t.Cleanup(func() { _ = db.Close() })
 	db.SetMaxOpenConns(1) // pin connection so TEMP views from EnsureCanonicalViews persist
 
 	_, err = db.Exec(`
@@ -259,35 +296,7 @@ func TestFalsifiabilityA_SyntheticHarness(t *testing.T) {
 		"Read",                    // refToken
 		"pkg/functions/Caller",    // constructNodeId (referrer)
 		"file:///caller.go")       // refUri
-
-	qg := &sqlDBQuerier{db: db, path: dbPath}
-	require.NoError(t, EnsureCanonicalViews(qg))
-	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
-
-	withSkip, withoutSkip := runDeadCodeWithAndWithout(t, db)
-
-	// 'Read' is in the skip-list → not in withSkip. Ablation drops
-	// the skip-list, so the alive-check has to make the call. With
-	// the LSP binding row, target_node_id = pkg/methods/MyType.Read
-	// matches d.node_id → 'Read' is alive → still not in withoutSkip.
-	assert.NotContains(t, withSkip, "pkg/methods/MyType.Read",
-		"production skip-list keeps 'Read' off the list")
-	assert.NotContains(t, withoutSkip, "pkg/methods/MyType.Read",
-		"ablation: LSP binding row keeps 'Read' alive without the skip-list")
-
-	// 'Quux' isn't in the skip-list and has no LSP coverage → flagged
-	// dead in BOTH runs.
-	assert.Contains(t, withSkip, "pkg/methods/MyType.Quux",
-		"'Quux' is not skip-listed and has no refs → dead in production")
-	assert.Contains(t, withoutSkip, "pkg/methods/MyType.Quux",
-		"'Quux' is not skip-listed and has no refs → dead in ablation too")
-
-	// The headline assertion: ablation MUST NOT flag 'Read' (the LSP-
-	// covered case). The diff (withoutSkip \ withSkip) is empty —
-	// LSP successfully replaced the skip-list for cases it sees.
-	diff := stringSetDiff(withSkip, withoutSkip)
-	assert.NotContains(t, diff, "pkg/methods/MyType.Read",
-		"Falsifiability A: ablation must not flag 'Read' as dead — LSP saw the call site")
+	return db, dbPath
 }
 
 func TestFalsifiabilityA_IntegrationOnLeylineParse(t *testing.T) {
@@ -331,7 +340,7 @@ func TestFalsifiabilityA_IntegrationOnLeylineParse(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(1) // pin connection so TEMP views from EnsureCanonicalViews persist
-	qg := &sqlDBQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	withSkip, withoutSkip := runDeadCodeWithAndWithout(t, db)

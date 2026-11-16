@@ -20,7 +20,7 @@ import (
 // unreferenced exported function, a function with branches and a magic
 // number, two structurally identical functions, a token defined in two files,
 // and a test file that sleeps.
-func parityCorpus(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
+func parityCorpus(t *testing.T, p fixturedb.Producer) *dbQuerier {
 	b := fixturedb.New(t, p)
 	b.Source("pkg/a.go", "go", "")
 	b.Source("pkg/b.go", "go", "")
@@ -80,7 +80,7 @@ func parityCorpus(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
 		b.Def(fmt.Sprintf("F%d", i), fixturedb.ConstructID(fn), fixturedb.Function)
 	}
 	_, f := b.Build()
-	return f
+	return fixtureQuerier(f)
 }
 
 // parityExempt are the rules this corpus cannot exercise, with why. Each is
@@ -95,12 +95,11 @@ var parityExempt = map[string]string{
 
 func TestEveryBuiltinRule_SameFindingsFromProjectionV4AndV6(t *testing.T) {
 	v4db, v6db := parityCorpus(t, fixturedb.Leyline), parityCorpus(t, fixturedb.LeylineV6)
-	require.NoError(t, ensureSmellQueryContext(v4db))
-	require.NoError(t, ensureSmellQueryContext(v6db))
+	v4scan, v6scan := scanOf(t, v4db), scanOf(t, v6db)
 	for _, rule := range mustLoadEmbeddedRules() {
 		t.Run(rule.ID, func(t *testing.T) {
 			require.False(t, rule.PathShapedIDs, "a built-in rule must read node ids as opaque")
-			run := func(db *fixturedb.FixtureDB) []smellFinding {
+			run := func(db *smellScan) []smellFinding {
 				out, err := runSmellRuleQuery(db, &rule, "", 1000)
 				require.NoError(t, err)
 				for i := range out {
@@ -108,11 +107,11 @@ func TestEveryBuiltinRule_SameFindingsFromProjectionV4AndV6(t *testing.T) {
 				}
 				return out
 			}
-			v4 := run(v4db)
+			v4 := run(v4scan)
 			if _, exempt := parityExempt[rule.ID]; !exempt {
 				require.NotEmpty(t, v4, "the corpus must give %s something to find, or parity is vacuous", rule.ID)
 			}
-			assert.Equal(t, v4, run(v6db))
+			assert.Equal(t, v4, run(v6scan))
 		})
 	}
 }

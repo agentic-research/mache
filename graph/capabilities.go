@@ -1,6 +1,9 @@
 package graph
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+)
 
 // The optional capability interfaces a backend may implement beyond [Graph].
 //
@@ -163,4 +166,11 @@ type ContentHasher interface {
 // downstream wrappers around this surface.
 type DefsNodeLookuper interface {
 	LookupDefNodes(token string) ([]*Node, error)
+}
+
+// RefsConnectionProvider reserves a connection from the same database used by
+// QueryRefs. The caller must close it. Connection-local TEMP objects must be
+// created and consumed through this connection for the whole operation.
+type RefsConnectionProvider interface {
+	RefsConn(context.Context) (*sql.Conn, error)
 }

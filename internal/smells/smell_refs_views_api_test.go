@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -26,6 +27,6 @@ func TestEnsureCanonicalViews_ExportedEntry(t *testing.T) {
 		"the registered installer must have created the canonical views")
 	assert.Equal(t, 1, n)
 
-	require.NoError(t, EnsureCanonicalViews(&sqlDBQuerier{db: f.DB()}),
+	require.NoError(t, EnsureCanonicalViews(lloschema.DB(f.DB())),
 		"re-install over an already-installed fixture must be idempotent")
 }

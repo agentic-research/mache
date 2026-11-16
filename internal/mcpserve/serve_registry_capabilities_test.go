@@ -22,19 +22,20 @@ import (
 // whose fallback made the live daemon's get_overview 4x slower than the same
 // code in process.
 var capabilityInterfaces = map[string]reflect.Type{
-	"DefsLookuper":     reflect.TypeFor[graph.DefsLookuper](),
-	"DefsSearcher":     reflect.TypeFor[graph.DefsSearcher](),
-	"DefsMapper":       reflect.TypeFor[graph.DefsMapper](),
-	"RefsMapper":       reflect.TypeFor[graph.RefsMapper](),
-	"RefTokenCounter":  reflect.TypeFor[graph.RefTokenCounter](),
-	"RefsQuerier":      reflect.TypeFor[graph.RefsQuerier](),
-	"DBPathProvider":   reflect.TypeFor[graph.DBPathProvider](),
-	"MountPrefixer":    reflect.TypeFor[graph.MountPrefixer](),
-	"RefResolver":      reflect.TypeFor[graph.RefResolver](),
-	"ASTKinder":        reflect.TypeFor[graph.ASTKinder](),
-	"DefTokener":       reflect.TypeFor[graph.DefTokener](),
-	"DefsNodeLookuper": reflect.TypeFor[graph.DefsNodeLookuper](),
-	"ContentHasher":    reflect.TypeFor[graph.ContentHasher](),
+	"RefsConnectionProvider": reflect.TypeFor[graph.RefsConnectionProvider](),
+	"DefsLookuper":           reflect.TypeFor[graph.DefsLookuper](),
+	"DefsSearcher":           reflect.TypeFor[graph.DefsSearcher](),
+	"DefsMapper":             reflect.TypeFor[graph.DefsMapper](),
+	"RefsMapper":             reflect.TypeFor[graph.RefsMapper](),
+	"RefTokenCounter":        reflect.TypeFor[graph.RefTokenCounter](),
+	"RefsQuerier":            reflect.TypeFor[graph.RefsQuerier](),
+	"DBPathProvider":         reflect.TypeFor[graph.DBPathProvider](),
+	"MountPrefixer":          reflect.TypeFor[graph.MountPrefixer](),
+	"RefResolver":            reflect.TypeFor[graph.RefResolver](),
+	"ASTKinder":              reflect.TypeFor[graph.ASTKinder](),
+	"DefTokener":             reflect.TypeFor[graph.DefTokener](),
+	"DefsNodeLookuper":       reflect.TypeFor[graph.DefsNodeLookuper](),
+	"ContentHasher":          reflect.TypeFor[graph.ContentHasher](),
 }
 
 // The list above is every interface capabilities.go declares, so one added

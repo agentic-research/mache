@@ -29,135 +29,115 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 	if len(rulesDir) > 0 {
 		dir = rulesDir[0]
 	}
-	return func(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		rules, err := activeSmellRules(dir)
 		if err != nil {
 			log.Printf("smell rules: using built-ins only; external load from %s failed: %v", dir, err)
 		}
 		ruleID := strings.TrimSpace(request.GetString("rule", ""))
-		sourceID := strings.TrimSpace(request.GetString("source_id", ""))
-		limitFloat := request.GetFloat("limit", 200)
-		limit := int(limitFloat)
-		if limit <= 0 { // coverage:ignore — defensive default; tests always pass limit>0
-			limit = 200 // coverage:ignore
-		} // coverage:ignore
-
 		if ruleID == "" {
 			// Discovery mode — list rules.
 			return mcp.NewToolResultText(jsonOrPanic(rulesListing(rules))), nil
 		}
+		var rule *SmellRule
+		if ruleID != "*" {
+			if rule = findRule(rules, ruleID); rule == nil {
+				return mcp.NewToolResultError(fmt.Sprintf(
+					"unknown rule %q — available: %s. Call this tool with no rule for full descriptions.",
+					ruleID, strings.Join(allRuleIDs(rules), ", "),
+				)), nil
+			}
+		}
 
-		if ruleID == "*" {
+		qg, ok := g.(graph.RefsQuerier)
+		if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier; non-SQL backend can't be exercised in-process
+			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
+		} // coverage:ignore
+		// One reserved connection for the whole request: setup, preflight,
+		// the rule SQL and snippet enrichment all read TEMP objects that
+		// exist only on the connection that installed them (mache-ee4375).
+		scan, err := openSmellScan(ctx, qg)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", ruleID, err)), nil
+		}
+		defer func() { _ = scan.Close() }()
+
+		if rule == nil {
 			// L1 digest mode — "shape without weight": per-rule counts +
 			// per-file rollup + a few worst exemplars, instead of a flat
 			// (capped) dump. Drill to L2 with rule=<id> (+ source_id).
-			qg, ok := g.(graph.RefsQuerier)
-			if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier
-				return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
-			} // coverage:ignore
-			digest, err := buildSmellDigest(qg, rules, 5, 10)
+			digest, err := buildSmellDigest(scan, rules, 5, 10)
 			if err != nil { // coverage:ignore — buildSmellDigest only errors on DB IO; unreachable with in-memory fixtures
 				return mcp.NewToolResultError(fmt.Sprintf("digest: %v", err)), nil // coverage:ignore
 			} // coverage:ignore
 			return mcp.NewToolResultText(jsonOrPanic(digest)), nil
 		}
-
-		var rule *SmellRule
-		for i := range rules {
-			if rules[i].ID == ruleID {
-				rule = &rules[i]
-				break
-			}
-		}
-		if rule == nil {
-			return mcp.NewToolResultError(fmt.Sprintf(
-				"unknown rule %q — available: %s. Call this tool with no rule for full descriptions.",
-				ruleID, strings.Join(allRuleIDs(rules), ", "),
-			)), nil
-		}
-
-		// Resolve min_metric AFTER rule lookup so we can fall back
-		// to the rule's DefaultMinMetric when the request omits it.
-		// An explicit `min_metric=0` from the caller still wins —
-		// it disables the default and returns everything sorted by
-		// metric. Only an absent key activates the default.
-		minMetric := int64(0)
-		if v, ok := request.GetArguments()["min_metric"]; ok {
-			if f, ok := v.(float64); ok {
-				minMetric = int64(f)
-			}
-		} else {
-			minMetric = rule.DefaultMinMetric
-		}
-
-		// Need a *sql.DB to run the rule. Today we hand-shake via the
-		// graph.RefsQuerier interface that other handlers already use.
-		qg, ok := g.(graph.RefsQuerier)
-		if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier; non-SQL backend can't be exercised in-process
-			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
-		} // coverage:ignore
-
-		// The canonical views must exist BEFORE the pre-flight below, not
-		// merely before the query. Since mache-be17ce a rule's Requires names
-		// v_ast / v_nodes / v_defs / v_refs rather than ley-line-open's
-		// physical tables, and those are TEMP views installed per connection —
-		// so checking Requires first asks whether the boundary exists before
-		// anything installs it, and every migrated rule reports as unsupported.
-		// That failure is SILENT on the `--rule '*'` path, where an unsupported
-		// rule is skipped rather than failed. Idempotent, so calling it here
-		// and again at query time is safe.
-		if err := EnsureCanonicalViews(qg); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("rule %q: installing canonical views failed: %v", ruleID, err)), nil
-		}
-
-		// Pre-flight: every rule declares the tables it reads in
-		// rule.Requires. If any are missing on this backend, return a
-		// friendly tool error instead of letting the SQL fail with
-		// "no such table" — agents can then call the tool again with
-		// a different rule, or stop.
-		if missing, err := missingTables(qg, rule.Requires); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("rule %q: pre-flight table check failed: %v", ruleID, err)), nil
-		} else if len(missing) > 0 {
-			// If the active .db was built by `mache build`, the
-			// _mache_meta marker tells us which backend produced it.
-			// Splice that into the error so agents don't have to run
-			// `.tables` to figure out why _ast is missing.
-			backendNote := ""
-			if backend := queryBuildBackend(qg); backend != "" { // coverage:ignore — _mache_meta absent in test fixtures; backend splice exercised only in real `mache build` outputs
-				backendNote = fmt.Sprintf(" (this .db was built with backend=%q)", backend) // coverage:ignore
-			} // coverage:ignore
-			return mcp.NewToolResultError(fmt.Sprintf(
-				"rule %q requires SQL tables [%s] which aren't present on the active backend%s. _ast / _source / _imports / _lsp* are produced by ley-line-open's `leyline parse`; node_defs / node_refs / nodes are produced by both standalone mache and LLO. See docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full table.",
-				ruleID, strings.Join(missing, ", "), backendNote)), nil
-		}
-
-		findings, err := RunSmellRule(qg, rule, sourceID, limit)
-		if err != nil { // coverage:ignore — RunSmellRule errors require malformed SQL or DB IO failure; pre-flight (missingTables) catches schema gaps, so this branch is unreachable in tests
-			return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", ruleID, err)), nil // coverage:ignore
-		} // coverage:ignore
-
-		// Server-side metric threshold. Drops findings below the cutoff
-		// before snippet population so we don't waste reads on rows the
-		// agent will discard. min_metric=0 keeps the historical default.
-		if minMetric > 0 {
-			filtered := findings[:0]
-			for _, f := range findings {
-				if f.Metric >= minMetric {
-					filtered = append(filtered, f)
-				}
-			}
-			findings = filtered
-		}
-
-		// Snippet population is best-effort. If `_source` isn't there
-		// (older .dbs) we just leave Snippet empty.
-		populateSnippets(qg, findings)
-
-		// Shared with the find-smells CLI (newSmellResponse) so the two
-		// consumers of the same rules over the same .db cannot serialize the
-		// same answer differently.
-		return mcp.NewToolResultText(jsonOrPanic(newSmellResponse(rule.ID, findings, limit))), nil
+		return findSmellsForRule(scan, rule, request), nil
 	}
+}
+
+// findSmellsForRule answers a find_smells request for one rule on scan.
+func findSmellsForRule(scan *smellScan, rule *SmellRule, request mcp.CallToolRequest) *mcp.CallToolResult {
+	sourceID := strings.TrimSpace(request.GetString("source_id", ""))
+	limit := int(request.GetFloat("limit", 200))
+	if limit <= 0 { // coverage:ignore — defensive default; tests always pass limit>0
+		limit = 200 // coverage:ignore
+	} // coverage:ignore
+	// An explicit `min_metric` wins, including 0, which disables the
+	// threshold and returns everything sorted by metric. Only an absent key
+	// falls back to the rule's DefaultMinMetric.
+	minMetric := rule.DefaultMinMetric
+	if v, ok := request.GetArguments()["min_metric"]; ok {
+		minMetric = 0
+		if f, ok := v.(float64); ok {
+			minMetric = int64(f)
+		}
+	}
+
+	// Pre-flight: every rule declares the tables it reads in rule.Requires.
+	// If any are missing on this backend, return a friendly tool error
+	// instead of letting the SQL fail with "no such table" — agents can then
+	// call the tool again with a different rule, or stop.
+	if missing, err := missingTables(scan, rule.Requires); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("rule %q: pre-flight table check failed: %v", rule.ID, err))
+	} else if len(missing) > 0 {
+		// If the active .db was built by `mache build`, the _mache_meta
+		// marker names the backend that produced it, so agents don't have to
+		// run `.tables` to find out why _ast is missing.
+		backendNote := ""
+		if backend := queryBuildBackend(scan); backend != "" { // coverage:ignore — _mache_meta absent in test fixtures; backend splice exercised only in real `mache build` outputs
+			backendNote = fmt.Sprintf(" (this .db was built with backend=%q)", backend) // coverage:ignore
+		} // coverage:ignore
+		return mcp.NewToolResultError(fmt.Sprintf(
+			"rule %q requires SQL tables [%s] which aren't present on the active backend%s. _ast / _source / _imports / _lsp* are produced by ley-line-open's `leyline parse`; node_defs / node_refs / nodes are produced by both standalone mache and LLO. See docs/ARCHITECTURE.md#interplay-with-ley-line-open for the full table.",
+			rule.ID, strings.Join(missing, ", "), backendNote,
+		))
+	}
+
+	findings, err := runSmellRuleQuery(scan, rule, sourceID, limit)
+	if err != nil { // coverage:ignore — rule errors require malformed SQL or DB IO failure; pre-flight (missingTables) catches schema gaps, so this branch is unreachable in tests
+		return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", rule.ID, err)) // coverage:ignore
+	} // coverage:ignore
+	// Threshold before snippets, so no reads are spent on rows the agent
+	// would discard. Snippets are best-effort: without `_source` (older
+	// .dbs) Snippet stays empty.
+	findings = aboveMinMetric(findings, minMetric)
+	populateSnippets(scan, findings)
+
+	// Shared with the find-smells CLI (newSmellResponse) so the two
+	// consumers of the same rules over the same .db cannot serialize the
+	// same answer differently.
+	return mcp.NewToolResultText(jsonOrPanic(newSmellResponse(rule.ID, findings, limit)))
+}
+
+// findRule returns the rule in rules whose ID is id, or nil.
+func findRule(rules []SmellRule, id string) *SmellRule {
+	for i := range rules {
+		if rules[i].ID == id {
+			return &rules[i]
+		}
+	}
+	return nil
 }
 
 // allRuleIDs returns the given rules' IDs in alphabetical order.

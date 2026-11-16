@@ -49,6 +49,7 @@
 package lloschema
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
@@ -64,13 +65,19 @@ type Querier interface {
 
 // DB adapts a *sql.DB to Querier, for a caller holding the database itself
 // rather than a graph backend.
-func DB(db *sql.DB) Querier { return sqlDB{db} }
+func DB(db *sql.DB) SQLDB { return SQLDB{db} }
 
-type sqlDB struct{ db *sql.DB }
+// SQLDB serves Querier, and graph.RefsConnectionProvider's RefsConn, from one
+// *sql.DB.
+type SQLDB struct{ DB *sql.DB }
 
-func (d sqlDB) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	return d.db.Query(query, args...)
+func (d SQLDB) QueryRefs(query string, args ...any) (*sql.Rows, error) {
+	return d.DB.Query(query, args...)
 }
+
+// RefsConn reserves a connection of the database QueryRefs reads, for a run
+// whose TEMP objects must stay on one connection.
+func (d SQLDB) RefsConn(ctx context.Context) (*sql.Conn, error) { return d.DB.Conn(ctx) }
 
 // exec runs a statement for its side effect, closing the rowset the Querier
 // interface forces it to return.

@@ -1,9 +1,11 @@
 package testutil
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // SmellTestGraph is a tiny graph backend that delegates QueryRefs to a
@@ -36,3 +38,9 @@ func (s *SmellTestGraph) QueryRefs(query string, args ...any) (*sql.Rows, error)
 // test graph into capnp readthrough (mache-190508 step 3 / mache-6bd4d8).
 // Tests that don't set Path keep the legacy mention-only view shape.
 func (s *SmellTestGraph) DBPath() string { return s.Path }
+
+// RefsConn reserves a connection of the database QueryRefs reads. Spelled
+// out because the embedded MemoryStore has its own, over its refs database.
+func (s *SmellTestGraph) RefsConn(ctx context.Context) (*sql.Conn, error) {
+	return lloschema.DB(s.DB).RefsConn(ctx)
+}
