@@ -62,7 +62,9 @@ repos:
     hooks:
       - id: gofumpt
         name: gofumpt
-        entry: gofumpt -w -extra
+        # The Taskfile pins the version (GOFUMPT_VERSION); the gofumpt on PATH
+        # may differ from CI's (mache-198250).
+        entry: task gofumpt -- -w -extra
         language: system
         files: \.go$
         pass_filenames: true

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -205,6 +206,13 @@ func startServe(t *testing.T, bin, dbPath, basePath string) *mcpClient {
 	ctx, cancel := context.WithCancel(t.Context())
 	c := exec.CommandContext(ctx, bin, "serve", dbPath,
 		"--http", fmt.Sprintf("localhost:%d", port), "--path", basePath)
+	// Stop the server as its supervisor does, with SIGTERM: it drains and
+	// stops the leyline daemon it manages on the way out. The default cancel
+	// is SIGKILL, after which no process stops that daemon (mache-252d27).
+	// WaitDelay covers the server's 10s drain and the daemon's 3s stop budget
+	// before falling back to the kill.
+	c.Cancel = func() error { return c.Process.Signal(syscall.SIGTERM) }
+	c.WaitDelay = 20 * time.Second
 
 	// Child output goes to a FILE, not an in-process buffer. The readiness
 	// loop reads it while the child is still writing, and a shared
@@ -226,8 +234,8 @@ func startServe(t *testing.T, bin, dbPath, basePath string) *mcpClient {
 	done := make(chan struct{})
 	go func() { _ = c.Wait(); close(done) }()
 	t.Cleanup(func() {
-		// CommandContext kills the child on cancel, so Wait always returns and
-		// this needs no timeout of its own.
+		// Cancel signals the child and WaitDelay bounds its exit, so Wait
+		// always returns and this needs no timeout of its own.
 		cancel()
 		<-done
 		if t.Failed() {

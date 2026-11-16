@@ -492,6 +492,10 @@ func startReaped(cmd *exec.Cmd, sock string) (<-chan error, error) {
 // managed.mu on entry and on return; it is released for the wait.
 func spawnAndAwait(p daemonPaths, daemonArgs []string, arenaCfg arenaSpawnConfig) (string, error) {
 	cmd := exec.Command(p.bin, daemonArgs...)
+	// A daemon runs in its own state directory, not wherever mache was started:
+	// leyline before v0.31.0 can write an arena grow file relative to its
+	// working directory (ley-line-open-f68a3a, mache-173446).
+	cmd.Dir = p.dataDir
 	// Detach from our stdio so it doesn't interfere with MCP transport. The
 	// daemon's stderr is kept as a bounded tail, to report why it died if it
 	// does so at startup.
