@@ -41,6 +41,15 @@ func TestHelperFakeLeylineDaemon(t *testing.T) {
 	// Announce that the handlers are installed. Until then SIGUSR1's default
 	// action would kill the process, so the test waits for this file.
 	dir := filepath.Join(os.Getenv("HOME"), ".mache")
+	// Record the working directory the daemon was started in, for
+	// TestSpawn_DaemonRunsInItsStateDir.
+	wd, err := os.Getwd()
+	if err != nil {
+		os.Exit(3)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fake-cwd"), []byte(wd), 0o644); err != nil {
+		os.Exit(3)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "fake-listening"), nil, 0o644); err != nil {
 		os.Exit(3)
 	}

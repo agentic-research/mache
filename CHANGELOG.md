@@ -8,6 +8,15 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **The managed leyline daemon runs in its own state directory** (`mache-173446`).
+  It used to inherit the working directory of whatever started mache. leyline
+  before v0.31.0 can write an arena grow file at a path relative to that
+  directory (ley-line-open-f68a3a), which put a 2 MiB arena at
+  `internal/mcpserve/.grow` under `go test`, and could put one in a user's
+  repository. The daemon now always starts in `$MACHE_HOME`.
+
+### Fixed
+
 - **Tests no longer leak leyline daemons, and stop them in under a second**
   (`mache-252d27`). Every test helper that gives a daemon a private home
   (`mcpharness.IsolatedHome`, the leyline package's `e2eHome`,
