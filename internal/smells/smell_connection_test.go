@@ -16,6 +16,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// scanOf opens a smell scan over qg for the rest of the test.
+func scanOf(t testing.TB, qg graph.RefsQuerier) *smellScan {
+	t.Helper()
+	s, err := openSmellScan(context.Background(), qg)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
 func pooledSmellFixture(t *testing.T) *testutil.SmellTestGraph {
 	t.Helper()
 	path, f := fixturedb.New(t, fixturedb.Standalone).
@@ -87,18 +96,16 @@ func TestFindSmells_PooledConnectionRegression(t *testing.T) {
 func TestSmellConnection_TEMPObjectsAreConnectionLocal(t *testing.T) {
 	g := pooledSmellFixture(t)
 	ctx := context.Background()
-	first, err := g.DB.Conn(ctx)
+	q, err := openSmellScan(ctx, g)
 	require.NoError(t, err)
-	defer func() { _ = first.Close() }()
-	q := &smellConnection{conn: first, ctx: ctx, path: g.Path}
-	require.NoError(t, ensureSmellQueryContext(q))
+	defer func() { _ = q.Close() }()
 	missing, err := missingTables(q, []string{"v_nodes", "v_test_nodes"})
 	require.NoError(t, err)
 	require.Empty(t, missing)
 	second, err := g.DB.Conn(ctx)
 	require.NoError(t, err)
 	defer func() { _ = second.Close() }()
-	other := &smellConnection{conn: second, ctx: ctx, path: g.Path}
+	other := &smellScan{conn: second, ctx: ctx, path: g.Path} // never prepared
 	missing, err = missingTables(other, []string{"v_nodes", "v_test_nodes"})
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"v_nodes", "v_test_nodes"}, missing)
@@ -178,4 +185,42 @@ func TestFindSmells_CanceledConnectionReservation(t *testing.T) {
 	require.True(t, result.IsError)
 	require.Contains(t, testutil.ResultText(t, result), "context canceled")
 	require.Zero(t, g.DB.Stats().InUse)
+}
+
+// Many agents call find_smells on one served graph at once, more of them than
+// the pool has connections. A request holds its scan's connection to the end,
+// so a request that asked the pool for a SECOND connection while holding it
+// would wait on connections held by requests waiting on it in turn: a
+// deadlock. With a pool of ONE, the first such request blocks forever, so
+// this fails (on its deadline) if any step of a scan, from the digest, the
+// rule SQL and its preflight to the snippet and location reads, leaves it.
+func TestFindSmells_ConcurrentRequestsBeyondPoolSize(t *testing.T) {
+	g := pooledSmellFixture(t)
+	g.DB.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const agents = 16
+	var wg sync.WaitGroup
+	for i := range agents {
+		rule := "dead_code"
+		if i%2 == 1 {
+			rule = "*"
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := MakeFindSmellsHandler(g)(ctx, testutil.MakeRequest(map[string]any{"rule": rule}))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if result.IsError {
+				t.Errorf("rule %s: %s", rule, testutil.ResultText(t, result))
+			}
+		}()
+	}
+	wg.Wait()
+	require.NoError(t, ctx.Err(), "requests deadlocked on the pool")
+	require.Zero(t, g.DB.Stats().InUse, "a scan did not return its connection")
 }

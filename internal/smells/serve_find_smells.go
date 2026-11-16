@@ -47,38 +47,38 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			return mcp.NewToolResultText(jsonOrPanic(rulesListing(rules))), nil
 		}
 
-		if ruleID == "*" {
+		var rule *SmellRule
+		if ruleID != "*" {
+			if rule = findRule(rules, ruleID); rule == nil {
+				return mcp.NewToolResultError(fmt.Sprintf(
+					"unknown rule %q — available: %s. Call this tool with no rule for full descriptions.",
+					ruleID, strings.Join(allRuleIDs(rules), ", "),
+				)), nil
+			}
+		}
+
+		qg, ok := g.(graph.RefsQuerier)
+		if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier; non-SQL backend can't be exercised in-process
+			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
+		} // coverage:ignore
+		// One reserved connection for the whole request: setup, preflight,
+		// the rule SQL and snippet enrichment all read TEMP objects that
+		// exist only on the connection that installed them (mache-ee4375).
+		scan, err := openSmellScan(ctx, qg)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", ruleID, err)), nil
+		}
+		defer func() { _ = scan.Close() }()
+
+		if rule == nil {
 			// L1 digest mode — "shape without weight": per-rule counts +
 			// per-file rollup + a few worst exemplars, instead of a flat
 			// (capped) dump. Drill to L2 with rule=<id> (+ source_id).
-			qg, ok := g.(graph.RefsQuerier)
-			if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier
-				return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
-			} // coverage:ignore
-			qg, release, err := pinSmellConnection(ctx, qg)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("digest: reserve connection: %v", err)), nil
-			}
-			defer release()
-			digest, err := buildSmellDigest(qg, rules, 5, 10)
+			digest, err := buildSmellDigest(scan, rules, 5, 10)
 			if err != nil { // coverage:ignore — buildSmellDigest only errors on DB IO; unreachable with in-memory fixtures
 				return mcp.NewToolResultError(fmt.Sprintf("digest: %v", err)), nil // coverage:ignore
 			} // coverage:ignore
 			return mcp.NewToolResultText(jsonOrPanic(digest)), nil
-		}
-
-		var rule *SmellRule
-		for i := range rules {
-			if rules[i].ID == ruleID {
-				rule = &rules[i]
-				break
-			}
-		}
-		if rule == nil {
-			return mcp.NewToolResultError(fmt.Sprintf(
-				"unknown rule %q — available: %s. Call this tool with no rule for full descriptions.",
-				ruleID, strings.Join(allRuleIDs(rules), ", "),
-			)), nil
 		}
 
 		// Resolve min_metric AFTER rule lookup so we can fall back
@@ -95,30 +95,12 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			minMetric = rule.DefaultMinMetric
 		}
 
-		// Need a *sql.DB to run the rule. Today we hand-shake via the
-		// graph.RefsQuerier interface that other handlers already use.
-		qg, ok := g.(graph.RefsQuerier)
-		if !ok { // coverage:ignore — all test graphs implement graph.RefsQuerier; non-SQL backend can't be exercised in-process
-			return mcp.NewToolResultError("the active graph backend doesn't expose a SQL handle; find_smells requires a leyline-parsed .db"), nil // coverage:ignore
-		} // coverage:ignore
-
-		qg, release, err := pinSmellConnection(ctx, qg)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("rule %q: reserve connection: %v", ruleID, err)), nil
-		}
-		defer release()
-		// Install TEMP objects before preflight and keep them on this request's
-		// connection through rule execution and enrichment.
-		if err := ensureSmellQueryContext(qg); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("rule %q: installing canonical views failed: %v", ruleID, err)), nil
-		}
-
 		// Pre-flight: every rule declares the tables it reads in
 		// rule.Requires. If any are missing on this backend, return a
 		// friendly tool error instead of letting the SQL fail with
 		// "no such table" — agents can then call the tool again with
 		// a different rule, or stop.
-		if missing, err := missingTables(qg, rule.Requires); err != nil {
+		if missing, err := missingTables(scan, rule.Requires); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("rule %q: pre-flight table check failed: %v", ruleID, err)), nil
 		} else if len(missing) > 0 {
 			// If the active .db was built by `mache build`, the
@@ -126,7 +108,7 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			// Splice that into the error so agents don't have to run
 			// `.tables` to figure out why _ast is missing.
 			backendNote := ""
-			if backend := queryBuildBackend(qg); backend != "" { // coverage:ignore — _mache_meta absent in test fixtures; backend splice exercised only in real `mache build` outputs
+			if backend := queryBuildBackend(scan); backend != "" { // coverage:ignore — _mache_meta absent in test fixtures; backend splice exercised only in real `mache build` outputs
 				backendNote = fmt.Sprintf(" (this .db was built with backend=%q)", backend) // coverage:ignore
 			} // coverage:ignore
 			return mcp.NewToolResultError(fmt.Sprintf(
@@ -135,7 +117,7 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 			)), nil
 		}
 
-		findings, err := runSmellRuleQuery(qg, rule, sourceID, limit)
+		findings, err := runSmellRuleQuery(scan, rule, sourceID, limit)
 		if err != nil { // coverage:ignore — RunSmellRule errors require malformed SQL or DB IO failure; pre-flight (missingTables) catches schema gaps, so this branch is unreachable in tests
 			return mcp.NewToolResultError(fmt.Sprintf("rule %q: %v", ruleID, err)), nil // coverage:ignore
 		} // coverage:ignore
@@ -155,13 +137,23 @@ func MakeFindSmellsHandler(g graph.Graph, rulesDir ...string) server.ToolHandler
 
 		// Snippet population is best-effort. If `_source` isn't there
 		// (older .dbs) we just leave Snippet empty.
-		populateSnippets(qg, findings)
+		populateSnippets(scan, findings)
 
 		// Shared with the find-smells CLI (newSmellResponse) so the two
 		// consumers of the same rules over the same .db cannot serialize the
 		// same answer differently.
 		return mcp.NewToolResultText(jsonOrPanic(newSmellResponse(rule.ID, findings, limit))), nil
 	}
+}
+
+// findRule returns the rule in rules whose ID is id, or nil.
+func findRule(rules []SmellRule, id string) *SmellRule {
+	for i := range rules {
+		if rules[i].ID == id {
+			return &rules[i]
+		}
+	}
+	return nil
 }
 
 // allRuleIDs returns the given rules' IDs in alphabetical order.

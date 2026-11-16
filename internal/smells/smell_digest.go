@@ -1,10 +1,7 @@
 package smells
 
 import (
-	"context"
 	"sort"
-
-	"github.com/agentic-research/mache/graph"
 )
 
 // digestScanCap bounds how many findings each rule contributes to a digest
@@ -50,23 +47,11 @@ type smellDigest struct {
 // graceful-degradation the per-rule pre-flight uses. The rules argument is the
 // active set (built-ins + external) resolved by the caller, so externally-loaded
 // rules participate in the digest.
-func buildSmellDigest(qg graph.RefsQuerier, rules []SmellRule, worstN, fileTopN int) (smellDigest, error) {
-	qg, release, err := pinSmellConnection(context.Background(), qg)
-	if err != nil {
-		return smellDigest{}, err
-	}
-	defer release()
-
+func buildSmellDigest(qg *smellScan, rules []SmellRule, worstN, fileTopN int) (smellDigest, error) {
 	d := smellDigest{
 		DrillHelp: "drill down with rule=<id> (+ optional source_id=<file>) for the full findings of one rule, each with its real file:line from _ast.",
 	}
 	byFile := map[string]int{}
-
-	// Once for the whole digest, not once per rule — see
-	// ensureSmellQueryContext's doc comment.
-	if err := ensureSmellQueryContext(qg); err != nil {
-		return smellDigest{}, err
-	}
 
 	for i := range rules {
 		rule := &rules[i]
@@ -114,7 +99,7 @@ func buildSmellDigest(qg graph.RefsQuerier, rules []SmellRule, worstN, fileTopN 
 // finding counts, for the caller to merge into the running by-file rollup.
 // Split out of buildSmellDigest to keep that function under the long_function
 // gate threshold.
-func digestOneRule(qg graph.RefsQuerier, rule *SmellRule, worstN int) (rd ruleDigest, fileCounts map[string]int, ok bool, err error) {
+func digestOneRule(qg *smellScan, rule *SmellRule, worstN int) (rd ruleDigest, fileCounts map[string]int, ok bool, err error) {
 	findings, err := runSmellRuleQuery(qg, rule, "", digestScanCap)
 	if err != nil {
 		return ruleDigest{}, nil, false, err

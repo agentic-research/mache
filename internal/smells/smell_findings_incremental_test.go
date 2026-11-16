@@ -1,6 +1,7 @@
 package smells
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
@@ -202,9 +203,9 @@ func TestCyclomaticMemo_DuplicatedSubtrees(t *testing.T) {
 	})
 
 	db := buildASTFixture(t, funcs)
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 
-	want, err := RunSmellRule(qg, cyclomaticRule(t), "", oracleLimit)
+	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 	require.NoError(t, err)
 
 	memo := newSmellMemo()
@@ -286,9 +287,9 @@ func TestCyclomaticMemo_DifferentialOracle_RandomEdits(t *testing.T) {
 		}
 
 		db := buildASTFixture(t, funcs)
-		qg := &sqlDBQuerier{db: db}
+		qg := &dbQuerier{db: db}
 
-		want, err := RunSmellRule(qg, cyclomaticRule(t), "", oracleLimit)
+		want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 		require.NoErrorf(t, err, "full scan failed at step %d", step)
 
 		before := memo.hits
@@ -330,10 +331,10 @@ func TestCyclomaticMemo_LimitTruncation(t *testing.T) {
 	)
 
 	db := buildASTFixture(t, funcs)
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 
 	for _, limit := range []int{1, 3, 5} {
-		want, err := RunSmellRule(qg, cyclomaticRule(t), "", limit)
+		want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", limit)
 		require.NoError(t, err)
 		got, err := runCyclomaticComplexityMemo(qg, "", limit, newSmellMemo())
 		require.NoError(t, err)
@@ -355,8 +356,8 @@ func TestCyclomaticMemo_HashlessAndMixed(t *testing.T) {
 		{sourceID: "pkg/b.go", nodeID: "pkg/b.go/HashedDup", hash: hashFor("h1"), branches: []string{"if_statement", "for_statement"}, startByte: 3000, startRow: 150},
 	}
 	db := buildASTFixture(t, funcs)
-	qg := &sqlDBQuerier{db: db}
-	want, err := RunSmellRule(qg, cyclomaticRule(t), "", oracleLimit)
+	qg := &dbQuerier{db: db}
+	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 	require.NoError(t, err)
 
 	memo := newSmellMemo()
@@ -381,9 +382,9 @@ func TestCyclomaticMemo_SourceScoped(t *testing.T) {
 		{sourceID: "pkg/b.go", nodeID: "pkg/b.go/B1", hash: hashFor("b1"), branches: []string{"if_statement", "if_statement", "for_statement"}, startByte: 0, startRow: 0},
 	}
 	db := buildASTFixture(t, funcs)
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 
-	want, err := RunSmellRule(qg, cyclomaticRule(t), "pkg/a.go", oracleLimit)
+	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "pkg/a.go", oracleLimit)
 	require.NoError(t, err)
 	got, err := runCyclomaticComplexityMemo(qg, "pkg/a.go", oracleLimit, newSmellMemo())
 	require.NoError(t, err)
@@ -414,9 +415,9 @@ func TestCyclomaticMemo_NoHashColumn(t *testing.T) {
 		INSERT INTO _ast VALUES ('s.go/G', 's.go', 'method_declaration', 600, 900, 30, 0, 45, 0);
 	`)
 	require.NoError(t, err)
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 
-	want, err := RunSmellRule(qg, cyclomaticRule(t), "", oracleLimit)
+	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 	require.NoError(t, err)
 	memo := newSmellMemo()
 	got, err := runCyclomaticComplexityMemo(qg, "", oracleLimit, memo)

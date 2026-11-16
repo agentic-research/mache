@@ -23,23 +23,6 @@ import (
 // fidelity rows. When missing or pre-Step-1 schema, the views fall
 // back to mention-only — same shape as PR #341.
 
-// sqlDBQuerier wraps a *sql.DB as a graph.RefsQuerier. The testutil.SmellTestGraph
-// in serve_find_smells_test.go is heavier than these tests need
-// (full graph + AST plumbing); a thin wrapper is enough.
-type sqlDBQuerier struct {
-	db   *sql.DB
-	path string // optional: when set, exposed via DBPath() for capnp readthrough
-}
-
-func (q *sqlDBQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	return q.db.Query(query, args...)
-}
-
-// DBPath implements graph.DBPathProvider when path is set, opting this
-// querier into the capnp-readthrough path. Tests that don't set path
-// keep the legacy mention + SQL-binding view shape.
-func (q *sqlDBQuerier) DBPath() string { return q.path }
-
 // TestEnsureCanonicalViews_DefBindingFidelityFromLSPSQL pins the
 // def-side binding arm, which still reads from the SQL `_lsp_defs`
 // table (BindingRecord covers refs only — the def-side migration is
@@ -69,7 +52,7 @@ func TestEnsureCanonicalViews_DefBindingFidelityFromLSPSQL(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	type defRow struct {
@@ -107,7 +90,7 @@ func TestEnsureCanonicalViews_HandlesMissingLSPTables(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var defCount, refCount int
@@ -149,7 +132,7 @@ func TestEnsureCanonicalViews_ReferrerFromContainerNodeID(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	// Both calls resolve to the ONE enclosing def → caller aggregation sees a
@@ -189,7 +172,7 @@ func TestEnsureCanonicalViews_QualifierFromNodeRefs(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var q string
@@ -217,7 +200,7 @@ func TestEnsureCanonicalViews_QualifierAbsentDegradesToEmpty(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg), "missing qualifier column must not error")
 
 	var q string
@@ -241,7 +224,7 @@ func TestEnsureCanonicalViews_ReferrerFallsBackWithoutContainer(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var referrer string
@@ -280,7 +263,7 @@ func TestEnsureCanonicalViews_HandlesLegacyLSPTables(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	// v_defs surfaces only the mention row. The legacy _lsp_defs row
@@ -328,7 +311,7 @@ func TestEnsureCanonicalViews_SkipsEmptyDefTokenRows(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var bindingDefs int
@@ -396,7 +379,7 @@ func TestLoadCapnpBindings_PopulatesViewFromSiblingLog(t *testing.T) {
 	}
 	require.NoError(t, f.Close())
 
-	qg := &sqlDBQuerier{db: db, path: dbPath}
+	qg := &dbQuerier{db: db, path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
 	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
 
@@ -447,7 +430,7 @@ func TestLoadCapnpBindings_NoSiblingLogIsNoOp(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db, path: dbPath}
+	qg := &dbQuerier{db: db, path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
 	// Should not error even though no sibling .bindings.capnp exists.
 	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
@@ -477,7 +460,7 @@ func TestLoadCapnpBindings_EmptyDBPathIsNoOp(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 	require.NoError(t, lloschema.LoadCapnpBindings(qg, ""))
 

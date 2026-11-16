@@ -1,55 +1,32 @@
 package smells
 
 import (
-	"database/sql"
-	"strings"
 	"testing"
-
-	"github.com/agentic-research/mache/graph"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// countingQuerier wraps a graph.RefsQuerier and counts QueryRefs calls whose SQL
-// contains substr, so a test can assert setup work runs a fixed number of
-// times regardless of how many rules are evaluated against it.
-type countingQuerier struct {
-	graph.RefsQuerier
-	substr string
-	count  int
-}
-
-func (c *countingQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	if strings.Contains(query, c.substr) {
-		c.count++
-	}
-	return c.RefsQuerier.QueryRefs(query, args...)
-}
-
-// TestEnsureSmellQueryContext_MaterializesViewsOncePerInvocation guards the
-// perf fix: v_test_nodes (and v_doc_refs) are materialized as TEMP TABLEs,
-// not views, specifically so their cost is paid once per find-smells
-// invocation rather than once per rule (see ensureTestNodesView's doc
-// comment). That invariant only holds if a multi-rule caller invokes
-// ensureSmellQueryContext ONCE and then runSmellRuleQuery per rule.
-// Regressing to calling RunSmellRule (which redoes the setup) inside a
-// rule loop silently re-pays the materialization cost per rule — measured
-// on a real repo, that turned a ~14s find-smells --rule '*' --tags=gate run
-// into ~81s, tripled again by the find-smells composite action's three
-// invocations per PR.
-func TestEnsureSmellQueryContext_MaterializesViewsOncePerInvocation(t *testing.T) {
-	g := seedSmellAST(t)
-	spy := &countingQuerier{RefsQuerier: g, substr: "CREATE TEMP TABLE v_test_nodes"}
-
-	require.NoError(t, ensureSmellQueryContext(spy))
+// TestSmellScan_MaterializesViewsOncePerScan guards the perf fix:
+// v_test_nodes (and v_doc_refs) are materialized as TEMP TABLEs, not views,
+// specifically so their cost is paid once per scan rather than once per rule
+// (see ensureTestNodesView's doc comment). Re-materializing per rule turned a
+// ~14s find-smells --rule '*' --tags=gate run into ~81s on a real repo
+// (mache-808b0b). A marker row added after the scan opens survives every
+// rule the scan runs only if no rule rebuilds the table.
+func TestSmellScan_MaterializesViewsOncePerScan(t *testing.T) {
+	s := scanOf(t, seedSmellAST(t))
+	rows, err := s.QueryRefs(`INSERT INTO temp.v_test_nodes (node_id) VALUES ('marker')`)
+	require.NoError(t, err)
+	require.NoError(t, rows.Close())
 
 	for _, id := range []string{"magic_int_in_comparison", "sleep_in_test"} {
-		rule := findRegisteredRule(t, id)
-		_, err := runSmellRuleQuery(spy, rule, "", 100)
+		_, err := runSmellRuleQuery(s, findRegisteredRule(t, id), "", 100)
 		require.NoError(t, err)
 	}
 
-	assert.Equal(t, 1, spy.count,
-		"v_test_nodes must materialize once per invocation regardless of rule count")
+	var n int
+	require.NoError(t, s.conn.QueryRowContext(s.ctx,
+		`SELECT count(*) FROM temp.v_test_nodes WHERE node_id = 'marker'`).Scan(&n))
+	assert.Equal(t, 1, n, "a rule re-materialized v_test_nodes inside the scan")
 }

@@ -121,7 +121,7 @@ func TestStripSkippedCTE_RealRuleBody(t *testing.T) {
 	require.NoError(t, err)
 
 	// Need v_defs / v_refs for the rule to compile after PR A.
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	// LIMIT 0 — we just want the parser to walk through. Close each
@@ -260,7 +260,7 @@ func TestFalsifiabilityA_SyntheticHarness(t *testing.T) {
 		"pkg/functions/Caller",    // constructNodeId (referrer)
 		"file:///caller.go")       // refUri
 
-	qg := &sqlDBQuerier{db: db, path: dbPath}
+	qg := &dbQuerier{db: db, path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
 	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
 
@@ -331,7 +331,7 @@ func TestFalsifiabilityA_IntegrationOnLeylineParse(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(1) // pin connection so TEMP views from EnsureCanonicalViews persist
-	qg := &sqlDBQuerier{db: db}
+	qg := &dbQuerier{db: db}
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	withSkip, withoutSkip := runDeadCodeWithAndWithout(t, db)

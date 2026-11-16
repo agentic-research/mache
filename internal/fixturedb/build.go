@@ -1,6 +1,7 @@
 package fixturedb
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -45,6 +46,10 @@ func (f *FixtureDB) exec(stmt string, args ...any) {
 func (f *FixtureDB) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return f.db.Query(query, args...)
 }
+
+// RefsConn reserves the fixture's connection, as a smell scan does. The pool
+// holds one, so nothing else may query the fixture until it is closed.
+func (f *FixtureDB) RefsConn(ctx context.Context) (*sql.Conn, error) { return f.db.Conn(ctx) }
 
 // DBPath implements the dbPathProvider opt-in, which is what enables capnp
 // binding readthrough from the sibling .bindings.capnp log.

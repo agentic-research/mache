@@ -26,6 +26,6 @@ func TestEnsureCanonicalViews_ExportedEntry(t *testing.T) {
 		"the registered installer must have created the canonical views")
 	assert.Equal(t, 1, n)
 
-	require.NoError(t, EnsureCanonicalViews(&sqlDBQuerier{db: f.DB()}),
+	require.NoError(t, EnsureCanonicalViews(&dbQuerier{db: f.DB()}),
 		"re-install over an already-installed fixture must be idempotent")
 }

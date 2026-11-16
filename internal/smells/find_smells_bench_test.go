@@ -1,6 +1,7 @@
 package smells
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -51,13 +52,13 @@ func BenchmarkCyclomaticMemo(b *testing.B) {
 		distinct := n / 20
 		funcs := seedCyclomaticMemoFixture(b, n, distinct)
 		db := buildASTFixture(b, funcs)
-		qg := &sqlDBQuerier{db: db}
+		qg := &dbQuerier{db: db}
 		rule := cyclomaticRule(b)
 
 		b.Run(fmt.Sprintf("FullScan/n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				if _, err := RunSmellRule(qg, rule, "", oracleLimit); err != nil {
+				if _, err := RunSmellRule(context.Background(), qg, rule, "", oracleLimit); err != nil {
 					b.Fatal(err)
 				}
 			}

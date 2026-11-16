@@ -43,56 +43,40 @@ type smellFinding struct {
 }
 
 // ensureSmellQueryContext installs the canonical views/tables (v_defs,
-// v_refs, v_test_nodes, v_doc_refs) and loads the capnp binding sidecar for
-// qg's connection. v_test_nodes and v_doc_refs are materialized TEMP TABLEs,
-// not views, specifically so their cost is paid once per connection rather
-// than once per rule (see ensureTestNodesView's comment) — but that only
-// holds if the CALLER invokes this once and then runs every rule with
-// runSmellRuleQuery. A caller that runs N rules against the same qg in one
-// process (find-smells --rule '*', the MCP digest) MUST call this once
-// before the loop; calling RunSmellRule per rule instead silently
-// re-materializes both tables N times (measured: ~9s/rule on a mid-size
-// Rust repo's leyline .db, dominating the whole invocation — mache-808b0b).
-func ensureSmellQueryContext(qg graph.RefsQuerier) error {
-	if err := EnsureCanonicalViews(qg); err != nil {
+// v_refs, v_test_nodes, v_doc_refs) and loads the capnp binding sidecar on
+// the scan's connection. v_test_nodes and v_doc_refs are materialized TEMP
+// TABLEs, not views, specifically so their cost is paid once per scan rather
+// than once per rule (see ensureTestNodesView's comment): re-materializing
+// them per rule measured ~9s/rule on a mid-size Rust repo's leyline .db
+// (mache-808b0b). openSmellScan is its only caller, so a run pays it once
+// however many rules it executes.
+func ensureSmellQueryContext(s *smellScan) error {
+	if err := EnsureCanonicalViews(s); err != nil {
 		return err
 	}
-	// Capnp readthrough (mache-190508 step 3): if this querier knows
-	// its dbPath AND a sibling .bindings.capnp event log exists, load
-	// its records into the per-connection _capnp_binding_refs TEMP
-	// table. v_refs is already configured to UNION over that table
-	// (in EnsureCanonicalViews); empty table → no extra rows.
-	if dp, ok := qg.(graph.DBPathProvider); ok {
-		if err := lloschema.LoadCapnpBindings(qg, dp.DBPath()); err != nil {
-			return err
-		}
-	}
-	return nil
+	// Capnp readthrough (mache-190508 step 3): if this scan knows its
+	// dbPath AND a sibling .bindings.capnp event log exists, load its
+	// records into the per-connection _capnp_binding_refs TEMP table.
+	// v_refs is already configured to UNION over that table (in
+	// EnsureCanonicalViews); empty table -> no extra rows.
+	return lloschema.LoadCapnpBindings(s, s.DBPath())
 }
 
-// RunSmellRule executes the rule's SQL, optionally scoped to one source.
-// It reserves a connection when qg implements graph.RefsConnectionProvider.
-// Other queriers must already guarantee connection affinity. Callers doing
-// preflight or running multiple rules must reserve a connection first, call
-// ensureSmellQueryContext once, then use runSmellRuleQuery for each rule.
-func RunSmellRule(qg graph.RefsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
-	qg, release, err := pinSmellConnection(context.Background(), qg)
+// RunSmellRule executes one rule's SQL, optionally scoped to one source, on a
+// scan of its own. A caller running several rules opens one scan and calls
+// runSmellRuleQuery per rule, so the vocabulary is installed once.
+func RunSmellRule(ctx context.Context, qg graph.RefsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
+	s, err := openSmellScan(ctx, qg)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
-
-	if err := ensureSmellQueryContext(qg); err != nil {
-		return nil, err
-	}
-	return runSmellRuleQuery(qg, rule, sourceID, limit)
+	defer func() { _ = s.Close() }()
+	return runSmellRuleQuery(s, rule, sourceID, limit)
 }
 
-// runSmellRuleQuery executes rule's SQL assuming ensureSmellQueryContext has
-// already run on qg's connection. Extracted out of RunSmellRule so
-// multi-rule callers pay the view/table setup cost once instead of once per
-// rule.
-func runSmellRuleQuery(qg graph.RefsQuerier, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
+// runSmellRuleQuery executes rule's SQL on s, whose connection holds the
+// vocabulary the rule reads.
+func runSmellRuleQuery(qg *smellScan, rule *SmellRule, sourceID string, limit int) ([]smellFinding, error) {
 	if err := refuseOnOpaqueIDs(qg, rule); err != nil {
 		return nil, err
 	}

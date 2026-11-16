@@ -1,6 +1,7 @@
 package smells
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -29,8 +30,7 @@ func ruleFindings(t *testing.T, ruleID string, seed func(*fixturedb.Builder)) []
 	rule := RegisteredRule(ruleID)
 	require.NotNil(t, rule, "%s must be registered", ruleID)
 
-	require.NoError(t, ensureSmellQueryContext(g))
-	found, err := RunSmellRule(g, rule, "", 1000)
+	found, err := RunSmellRule(context.Background(), g, rule, "", 1000)
 	require.NoError(t, err)
 
 	ids := make([]string, 0, len(found))

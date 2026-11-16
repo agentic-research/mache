@@ -1,6 +1,7 @@
 package mcpserve
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -430,7 +431,7 @@ func TestFindSmells_DeadCode_PerfGate_MacheOnMache(t *testing.T) {
 	require.NotNil(t, rule, "dead_code must be a registered rule")
 
 	start := time.Now()
-	findings, err := smells.RunSmellRule(qg, rule, "" /*sourceID*/, 5000 /*limit*/)
+	findings, err := smells.RunSmellRule(context.Background(), qg, rule, "" /*sourceID*/, 5000 /*limit*/)
 	elapsed := time.Since(start)
 	require.NoError(t, err, "dead_code rule must execute without error on mache-on-mache")
 

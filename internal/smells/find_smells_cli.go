@@ -1,6 +1,7 @@
 package smells
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -17,10 +18,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// dbQuerier wraps a *sql.DB so it satisfies graph.RefsQuerier — the only
-// interface RunSmellRule / missingTables / populateSnippets need.
-// Lets the CLI run rules against any SQLite db (mache-built or
-// LLO-built) without touching the graph stack.
+// dbQuerier wraps a *sql.DB so it satisfies graph.RefsQuerier and
+// graph.RefsConnectionProvider, which is all openSmellScan needs. Lets the
+// CLI run rules against any SQLite db (mache-built or LLO-built) without
+// touching the graph stack.
 type dbQuerier struct {
 	db   *sql.DB
 	path string // mache-190508 step 3: source for sibling .bindings.capnp lookup
@@ -29,6 +30,9 @@ type dbQuerier struct {
 func (q *dbQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
 	return q.db.Query(query, args...)
 }
+
+// RefsConn reserves a connection of the db QueryRefs reads.
+func (q *dbQuerier) RefsConn(ctx context.Context) (*sql.Conn, error) { return q.db.Conn(ctx) }
 
 // DBPath implements the graph.DBPathProvider opt-in (cmd/serve_find_smells.go)
 // so canonical-view setup can find the sibling .bindings.capnp event
@@ -144,16 +148,13 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 		return printAndCode(4, err)
 	}
 	defer func() { _ = db.Close() }()
-	qg := &dbQuerier{db: db, path: findSmellsDBPath}
-
-	// ensureSmellQueryContext runs ONCE here rather than once per rule
-	// inside the loop: it materializes v_test_nodes/v_doc_refs as TEMP
-	// TABLEs specifically so their cost is paid once per invocation
-	// (see its doc comment) — looping RunSmellRule per rule defeated
-	// that and dominated the whole gate's runtime on large repos.
-	if err := ensureSmellQueryContext(qg); err != nil {
-		return printAndCode(4, fmt.Errorf("prepare smell query context: %w", err))
+	// One scan for the whole invocation: the vocabulary is installed once on
+	// its connection and every rule, preflight and snippet read uses it.
+	qg, err := openSmellScan(cmd.Context(), &dbQuerier{db: db, path: findSmellsDBPath})
+	if err != nil {
+		return printAndCode(4, err)
 	}
+	defer func() { _ = qg.Close() }()
 	results, skipped, code, err := runMatchedRules(cmd, qg, matched)
 	if results == nil {
 		return code, err
@@ -574,6 +575,10 @@ func RunFindSmells(opts FindSmellsOptions) (int, error) {
 	if opts.Err != nil {
 		findSmellsCmd.SetErr(opts.Err)
 	}
+	// cobra's Execute gives a command context.Background() when it has none;
+	// this entry calls the command directly, so it does the same. The scan
+	// reserves its connection with it.
+	findSmellsCmd.SetContext(context.Background())
 	return runFindSmells(findSmellsCmd, nil)
 }
 
