@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/leyline"
+	"github.com/agentic-research/mache/internal/procscan"
 )
 
 // WritableTree is a source tree set up the way a writable mount or serve has
@@ -36,6 +37,9 @@ func UseWritableTree(t *testing.T, dir string) *WritableTree {
 	if err != nil {
 		t.Fatalf("lltest: writable tree home: %v", err)
 	}
+	// Runs last, after the stop below and this removal: the daemon must not
+	// have outlived the test (mache-252d27).
+	t.Cleanup(func() { procscan.AssertNoneReferencing(t, home) })
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 	t.Setenv("LEYLINE_SOCKET", "")

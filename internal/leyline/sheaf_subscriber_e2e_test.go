@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentic-research/mache/internal/procscan"
 )
 
 // TestE2E_SheafSubscriber_AgainstLiveDaemon is the cross-runtime gate
@@ -196,7 +198,7 @@ func startDaemonForE2E(t *testing.T, leylineBin string) (string, func()) {
 	tdir, err := os.MkdirTemp("/tmp", "sheaf-sub-e2e-")
 	require.NoError(t, err)
 	// Runs after the cleanup func returned below has signalled the daemon.
-	t.Cleanup(func() { assertNoSurvivorsFor(t, tdir) })
+	t.Cleanup(func() { procscan.AssertNoneReferencing(t, tdir) })
 
 	arena := filepath.Join(tdir, "arena.bin")
 	ctrl := filepath.Join(tdir, "test.ctrl")
