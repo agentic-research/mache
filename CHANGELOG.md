@@ -26,6 +26,16 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Smell scans no longer stall the other tools on a served graph**
+  (`mache-574dd5`). A `find_smells` scan holds one connection for its whole
+  run, about a minute on a large repository, and it drew that connection from
+  the pool every navigation tool uses (four on a served db). A few agents
+  scanning at once held all of it, and `find_definition`, `list_directory`,
+  `read_file` and the rest waited behind them. Scans now reserve from a pool
+  of their own on the same file (two connections, opened on first use, closed
+  with the graph); a scan beyond that waits for another scan or its context,
+  and navigation never waits on a scan.
+
 - **`find_smells` runs every rule on the connection its views were installed on**
   (`mache-ee4375`). The canonical views and the materialized `v_test_nodes` /
   `v_doc_refs` tables are TEMP, so they exist only on the connection that

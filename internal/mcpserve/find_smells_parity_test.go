@@ -137,7 +137,7 @@ func TestFindSmells_SQLiteGraphPoolThroughLazyGraph(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = g.Close() }()
 	lg := newTestLazyGraph(g, "")
-	// Keep another graph connection busy while requests reserve their own.
+	// Keep another scan's connection busy while requests reserve their own.
 	other, err := g.RefsConn(context.Background())
 	require.NoError(t, err)
 	defer func() { _ = other.Close() }()
@@ -148,6 +148,8 @@ func TestFindSmells_SQLiteGraphPoolThroughLazyGraph(t *testing.T) {
 		require.False(t, result.IsError, "%s", testutil.ResultText(t, result))
 		require.Contains(t, testutil.ResultText(t, result), "pkg/Dead")
 	}
+	// Scans reserve from the graph's scan pool, never navigation's
+	// (mache-574dd5): with a scan held, navigation's pool is untouched.
 	require.Equal(t, 4, g.DB().Stats().MaxOpenConnections)
-	require.Equal(t, 1, g.DB().Stats().InUse)
+	require.Zero(t, g.DB().Stats().InUse)
 }

@@ -55,6 +55,11 @@ type SQLiteGraph struct {
 	refsDB *sql.DB
 	dbID   string // unique ID for vtab registry
 
+	// The database QueryRefs reads, in a pool of its own, from which the
+	// promoted RefsConn reserves: long scans never hold navigation's
+	// connections.
+	*scanPool
+
 	// Lazy scan: one pass per root node populates dirChildren + recordIDs.
 	// sync.Once ensures exactly one scan per root, even under concurrent FUSE access.
 	scanOnce sync.Map // root name → *sync.Once
@@ -182,13 +187,14 @@ func OpenSQLiteGraphWith(dbPath string, schema *api.Topology, render TemplateRen
 	// (token, node_id) pairs. No sidecar needed.
 	var count int
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&count); err == nil && count > 0 {
-		return openNodesTableGraph(db, dbPath, tableName, schema, render)
+		return openNodesTableGraph(db, lock.dsn(dbPath), dbPath, tableName, schema, render)
 	}
 	return openLegacyGraph(db, dbPath, tableName, schema, render)
 }
 
-// openNodesTableGraph serves a db that has a nodes table.
-func openNodesTableGraph(db *sql.DB, dbPath, tableName string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
+// openNodesTableGraph serves a db that has a nodes table. dsn is how db was
+// opened, which its scan pool reuses.
+func openNodesTableGraph(db *sql.DB, dsn, dbPath, tableName string, schema *api.Topology, render TemplateRenderer) (*SQLiteGraph, error) {
 	if err := RequireProps(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("open %s: %w", dbPath, err)
@@ -203,6 +209,7 @@ func openNodesTableGraph(db *sql.DB, dbPath, tableName string, schema *api.Topol
 		render:        render,
 		levels:        levels,
 		ntr:           ntr,
+		scanPool:      newScanPool(dsn),
 		useNodesTable: true,
 	}, nil
 }
@@ -223,6 +230,7 @@ func openLegacyGraph(db *sql.DB, dbPath, tableName string, schema *api.Topology,
 		render:        render,
 		levels:        compileLevels(schema),
 		refsDB:        refsDB,
+		scanPool:      newScanPool(refsSidecarPath(dbPath)),
 		dbID:          dbID,
 		pendingRefs:   make(map[string]*roaring.Bitmap),
 		fileIDMap:     make(map[string]uint32),
@@ -231,11 +239,14 @@ func openLegacyGraph(db *sql.DB, dbPath, tableName string, schema *api.Topology,
 	}, nil
 }
 
+// refsSidecarPath is where the cross-reference sidecar of dbPath lives.
+func refsSidecarPath(dbPath string) string { return dbPath + ".refs.db" }
+
 // openRefsSidecar creates the sidecar DB for the cross-reference index
 // (token→bitmap, path→fileID), kept separate so we never write to the source
 // database, and registers its mache_refs vtab under the returned id.
 func openRefsSidecar(dbPath string) (*sql.DB, string, error) {
-	refsPath := dbPath + ".refs.db"
+	refsPath := refsSidecarPath(dbPath)
 	// Wipe stale sidecar — refs are a derived index, rebuilt each run.
 	// The in-memory nextFileID counter starts at 0 on every open; if a
 	// previous .refs.db exists with IDs 0..N mapped to different paths,
@@ -539,6 +550,9 @@ func (g *SQLiteGraph) Close() error {
 		g.ntr.Close()
 	}
 	err := g.db.Close()
+	if err2 := g.closeScans(); err == nil {
+		err = err2
+	}
 	if g.refsDB != nil {
 		if err2 := g.refsDB.Close(); err == nil {
 			err = err2
