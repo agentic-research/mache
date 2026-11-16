@@ -18,7 +18,7 @@ import (
 // content addresses up by the key, so a shape-agnostic rule reports the same
 // findings from either projection.
 
-func smellSpec(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
+func smellSpec(t *testing.T, p fixturedb.Producer) *dbQuerier {
 	b := fixturedb.New(t, p)
 	b.Source("pkg/a.go", "go", "")
 	b.Source("pkg/b.go", "go", "")
@@ -31,7 +31,7 @@ func smellSpec(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
 	b.ASTNode("pkg/b.go/method_declaration", "method_declaration", "pkg/b.go",
 		fixturedb.Span{StartByte: 10, EndByte: 80, StartRow: 1, EndRow: 8})
 	_, f := b.Build()
-	return f
+	return fixtureQuerier(f)
 }
 
 func TestSmells_ShapeAgnosticRulesSameFindingsFromProjectionV4AndV6(t *testing.T) {
@@ -91,7 +91,7 @@ func TestSmells_PathShapedRuleIsRefusedOnV6Only(t *testing.T) {
 func TestRenderNodeIDs_ANidWithNoNode(t *testing.T) {
 	f := smellSpec(t, fixturedb.LeylineV6)
 	var fileID int64
-	require.NoError(t, f.DB().QueryRow(`SELECT file_id FROM _source WHERE id = 'pkg/a.go'`).Scan(&fileID))
+	require.NoError(t, f.DB.QueryRow(`SELECT file_id FROM _source WHERE id = 'pkg/a.go'`).Scan(&fileID))
 	injected := fileID<<lloschema.V6FileShift | 9999
 	findings := []smellFinding{{key: int64(1) << 40}, {key: "kept/as/is"}, {key: injected}}
 	require.NoError(t, renderNodeIDs(f, findings))

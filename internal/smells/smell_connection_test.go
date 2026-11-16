@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentic-research/mache/graph"
 	"github.com/agentic-research/mache/internal/fixturedb"
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/agentic-research/mache/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +24,13 @@ func scanOf(t testing.TB, qg graph.RefsQuerier) *smellScan {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// fixtureQuerier serves a fixture to a smell scan. FixtureDB itself cannot
+// reserve a connection: graph's and lloschema's own tests import fixturedb, so
+// it can import neither.
+func fixtureQuerier(f *fixturedb.FixtureDB) *dbQuerier {
+	return &dbQuerier{SQLDB: lloschema.DB(f.DB()), path: f.DBPath()}
 }
 
 func pooledSmellFixture(t *testing.T) *testutil.SmellTestGraph {

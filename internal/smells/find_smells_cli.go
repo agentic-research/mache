@@ -2,7 +2,6 @@ package smells
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,16 +22,9 @@ import (
 // CLI run rules against any SQLite db (mache-built or LLO-built) without
 // touching the graph stack.
 type dbQuerier struct {
-	db   *sql.DB
+	lloschema.SQLDB
 	path string // mache-190508 step 3: source for sibling .bindings.capnp lookup
 }
-
-func (q *dbQuerier) QueryRefs(query string, args ...any) (*sql.Rows, error) {
-	return q.db.Query(query, args...)
-}
-
-// RefsConn reserves a connection of the db QueryRefs reads.
-func (q *dbQuerier) RefsConn(ctx context.Context) (*sql.Conn, error) { return q.db.Conn(ctx) }
 
 // DBPath implements the graph.DBPathProvider opt-in (cmd/serve_find_smells.go)
 // so canonical-view setup can find the sibling .bindings.capnp event
@@ -150,7 +142,7 @@ func runFindSmells(cmd *cobra.Command, _ []string) (int, error) {
 	defer func() { _ = db.Close() }()
 	// One scan for the whole invocation: the vocabulary is installed once on
 	// its connection and every rule, preflight and snippet read uses it.
-	qg, err := openSmellScan(cmd.Context(), &dbQuerier{db: db, path: findSmellsDBPath})
+	qg, err := openSmellScan(cmd.Context(), &dbQuerier{SQLDB: lloschema.DB(db), path: findSmellsDBPath})
 	if err != nil {
 		return printAndCode(4, err)
 	}

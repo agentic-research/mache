@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // SmellTestGraph is a tiny graph backend that delegates QueryRefs to a
@@ -38,5 +39,8 @@ func (s *SmellTestGraph) QueryRefs(query string, args ...any) (*sql.Rows, error)
 // Tests that don't set Path keep the legacy mention-only view shape.
 func (s *SmellTestGraph) DBPath() string { return s.Path }
 
-// RefsConn reserves the database used by QueryRefs.
-func (s *SmellTestGraph) RefsConn(ctx context.Context) (*sql.Conn, error) { return s.DB.Conn(ctx) }
+// RefsConn reserves a connection of the database QueryRefs reads. Spelled
+// out because the embedded MemoryStore has its own, over its refs database.
+func (s *SmellTestGraph) RefsConn(ctx context.Context) (*sql.Conn, error) {
+	return lloschema.DB(s.DB).RefsConn(ctx)
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // mache-238673 phase-1 bench — quantifies the node_hash-memo win on
@@ -52,7 +54,7 @@ func BenchmarkCyclomaticMemo(b *testing.B) {
 		distinct := n / 20
 		funcs := seedCyclomaticMemoFixture(b, n, distinct)
 		db := buildASTFixture(b, funcs)
-		qg := &dbQuerier{db: db}
+		qg := lloschema.DB(db)
 		rule := cyclomaticRule(b)
 
 		b.Run(fmt.Sprintf("FullScan/n=%d", n), func(b *testing.B) {

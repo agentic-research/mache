@@ -20,7 +20,7 @@ import (
 // unreferenced exported function, a function with branches and a magic
 // number, two structurally identical functions, a token defined in two files,
 // and a test file that sleeps.
-func parityCorpus(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
+func parityCorpus(t *testing.T, p fixturedb.Producer) *dbQuerier {
 	b := fixturedb.New(t, p)
 	b.Source("pkg/a.go", "go", "")
 	b.Source("pkg/b.go", "go", "")
@@ -80,7 +80,7 @@ func parityCorpus(t *testing.T, p fixturedb.Producer) *fixturedb.FixtureDB {
 		b.Def(fmt.Sprintf("F%d", i), fixturedb.ConstructID(fn), fixturedb.Function)
 	}
 	_, f := b.Build()
-	return f
+	return fixtureQuerier(f)
 }
 
 // parityExempt are the rules this corpus cannot exercise, with why. Each is

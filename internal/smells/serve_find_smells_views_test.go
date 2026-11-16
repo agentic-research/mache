@@ -2,15 +2,12 @@ package smells
 
 import (
 	"database/sql"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/agentic-research/mache/internal/lloschema"
+	"github.com/agentic-research/mache/internal/testutil"
 
-	capnp "capnproto.org/go/capnp/v3"
-	"github.com/agentic-research/ley-line-open/clients/go/leyline-schema/binding"
-	"github.com/agentic-research/mache/internal/lsp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -52,7 +49,7 @@ func TestEnsureCanonicalViews_DefBindingFidelityFromLSPSQL(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	type defRow struct {
@@ -90,7 +87,7 @@ func TestEnsureCanonicalViews_HandlesMissingLSPTables(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var defCount, refCount int
@@ -132,7 +129,7 @@ func TestEnsureCanonicalViews_ReferrerFromContainerNodeID(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	// Both calls resolve to the ONE enclosing def → caller aggregation sees a
@@ -172,7 +169,7 @@ func TestEnsureCanonicalViews_QualifierFromNodeRefs(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var q string
@@ -200,7 +197,7 @@ func TestEnsureCanonicalViews_QualifierAbsentDegradesToEmpty(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg), "missing qualifier column must not error")
 
 	var q string
@@ -224,7 +221,7 @@ func TestEnsureCanonicalViews_ReferrerFallsBackWithoutContainer(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var referrer string
@@ -263,7 +260,7 @@ func TestEnsureCanonicalViews_HandlesLegacyLSPTables(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	// v_defs surfaces only the mention row. The legacy _lsp_defs row
@@ -311,7 +308,7 @@ func TestEnsureCanonicalViews_SkipsEmptyDefTokenRows(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 
 	var bindingDefs int
@@ -348,38 +345,12 @@ func TestLoadCapnpBindings_PopulatesViewFromSiblingLog(t *testing.T) {
 	// confirmation alongside the mention) and one for a totally new
 	// reference (so we know the capnp arm is genuinely contributing
 	// rows the SQL doesn't have).
-	logPath := lsp.SiblingBindingLogPath(dbPath)
-	f, err := os.Create(logPath)
-	require.NoError(t, err)
-	enc := capnp.NewEncoder(f)
-	for _, r := range []struct {
-		target, token, construct, refSite, uri string
-		startLine                              uint32
-	}{
-		{"auth/functions/Validate", "Validate", "billing/functions/Charge", "billing/.../field_identifier", "file:///billing.go", 42},
-		{"stdlib/io/Reader.Read", "Read", "pkg/functions/Loop", "pkg/.../field_identifier", "file:///pkg.go", 17},
-	} {
-		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
-		require.NoError(t, err)
-		rec, err := binding.NewRootBindingRecord(seg)
-		require.NoError(t, err)
-		require.NoError(t, rec.SetTargetNodeId(r.target))
-		require.NoError(t, rec.SetRefToken(r.token))
-		require.NoError(t, rec.SetConstructNodeId(r.construct))
-		require.NoError(t, rec.SetRefSiteNodeId(r.refSite))
-		require.NoError(t, rec.SetRefUri(r.uri))
-		rng, err := rec.NewRefRange()
-		require.NoError(t, err)
-		start, err := rng.NewStart()
-		require.NoError(t, err)
-		start.SetLine(r.startLine)
-		_, err = rng.NewEnd()
-		require.NoError(t, err)
-		require.NoError(t, enc.Encode(msg))
-	}
-	require.NoError(t, f.Close())
+	testutil.WriteMultiBindingLogForTest(t, dbPath, []testutil.BindingRec{
+		{Target: "auth/functions/Validate", Token: "Validate", Construct: "billing/functions/Charge"},
+		{Target: "stdlib/io/Reader.Read", Token: "Read", Construct: "pkg/functions/Loop"},
+	})
 
-	qg := &dbQuerier{db: db, path: dbPath}
+	qg := &dbQuerier{SQLDB: lloschema.DB(db), path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
 	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
 
@@ -430,7 +401,7 @@ func TestLoadCapnpBindings_NoSiblingLogIsNoOp(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db, path: dbPath}
+	qg := &dbQuerier{SQLDB: lloschema.DB(db), path: dbPath}
 	require.NoError(t, EnsureCanonicalViews(qg))
 	// Should not error even though no sibling .bindings.capnp exists.
 	require.NoError(t, lloschema.LoadCapnpBindings(qg, qg.DBPath()))
@@ -460,7 +431,7 @@ func TestLoadCapnpBindings_EmptyDBPathIsNoOp(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	require.NoError(t, EnsureCanonicalViews(qg))
 	require.NoError(t, lloschema.LoadCapnpBindings(qg, ""))
 

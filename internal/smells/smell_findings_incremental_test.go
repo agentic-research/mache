@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentic-research/mache/internal/lloschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -203,7 +204,7 @@ func TestCyclomaticMemo_DuplicatedSubtrees(t *testing.T) {
 	})
 
 	db := buildASTFixture(t, funcs)
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 
 	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 	require.NoError(t, err)
@@ -287,7 +288,7 @@ func TestCyclomaticMemo_DifferentialOracle_RandomEdits(t *testing.T) {
 		}
 
 		db := buildASTFixture(t, funcs)
-		qg := &dbQuerier{db: db}
+		qg := lloschema.DB(db)
 
 		want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 		require.NoErrorf(t, err, "full scan failed at step %d", step)
@@ -331,7 +332,7 @@ func TestCyclomaticMemo_LimitTruncation(t *testing.T) {
 	)
 
 	db := buildASTFixture(t, funcs)
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 
 	for _, limit := range []int{1, 3, 5} {
 		want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", limit)
@@ -356,7 +357,7 @@ func TestCyclomaticMemo_HashlessAndMixed(t *testing.T) {
 		{sourceID: "pkg/b.go", nodeID: "pkg/b.go/HashedDup", hash: hashFor("h1"), branches: []string{"if_statement", "for_statement"}, startByte: 3000, startRow: 150},
 	}
 	db := buildASTFixture(t, funcs)
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 	require.NoError(t, err)
 
@@ -382,7 +383,7 @@ func TestCyclomaticMemo_SourceScoped(t *testing.T) {
 		{sourceID: "pkg/b.go", nodeID: "pkg/b.go/B1", hash: hashFor("b1"), branches: []string{"if_statement", "if_statement", "for_statement"}, startByte: 0, startRow: 0},
 	}
 	db := buildASTFixture(t, funcs)
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 
 	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "pkg/a.go", oracleLimit)
 	require.NoError(t, err)
@@ -415,7 +416,7 @@ func TestCyclomaticMemo_NoHashColumn(t *testing.T) {
 		INSERT INTO _ast VALUES ('s.go/G', 's.go', 'method_declaration', 600, 900, 30, 0, 45, 0);
 	`)
 	require.NoError(t, err)
-	qg := &dbQuerier{db: db}
+	qg := lloschema.DB(db)
 
 	want, err := RunSmellRule(context.Background(), qg, cyclomaticRule(t), "", oracleLimit)
 	require.NoError(t, err)
