@@ -5,6 +5,10 @@ version: '3'
 
 vars:
   BINARY_NAME: bin/mache
+  # The one gofumpt version every formatting path runs (fmt, fmt:check, the
+  # pre-commit hook via `task gofumpt`), always through `go run`, never the
+  # gofumpt on PATH (mache-198250).
+  GOFUMPT_VERSION: v0.9.2
   # The mache home the gates that run the built binary use (MACHE_HOME), so
   # their projects, parse caches, arena and sockets stay out of the
   # developer's ~/.mache (mache-6d5e62). Per checkout and stable, so the smell
@@ -252,8 +256,16 @@ tasks:
   fmt:
     desc: Format code (gofumpt) + changed markdown (mdformat, matching the pre-commit hook)
     cmds:
-      - gofumpt -w -extra .
+      - go run mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}} -w -extra .
       - task: fmt:md
+
+  gofumpt:
+    desc: |
+      Run the pinned gofumpt with the given arguments, e.g.
+      `task gofumpt -- -l .`. The pre-commit hook runs this, so it formats
+      with the same version as CI instead of whatever gofumpt is on PATH.
+    cmds:
+      - go run mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}} {{.CLI_ARGS}}
 
   deps:surface:
     desc: |
@@ -291,13 +303,12 @@ tasks:
   fmt:check:
     desc: |
       Fail if any file isn't gofumpt-clean (CI-safe — diffs instead of
-      writing). Pins gofumpt so CI and local pre-commit agree; this is the
-      single source for the gofumpt invocation the lint workflow runs.
-    vars:
-      GOFUMPT_VERSION: v0.9.2
+      writing). Runs the pinned gofumpt (GOFUMPT_VERSION) through `go run`,
+      so CI, `task ci` and the pre-commit hook agree whatever gofumpt is on
+      PATH; this is the single source for the invocation the lint workflow
+      runs.
     cmds:
-      - go install mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}}
-      - gofumpt -d -extra . | tee /dev/stderr | (! grep .)
+      - go run mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}} -d -extra . | tee /dev/stderr | (! grep .)
 
   vet:
     desc: Run go vet
