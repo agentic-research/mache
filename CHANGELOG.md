@@ -8,6 +8,15 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **Formatting runs the pinned gofumpt, not the one on PATH** (`mache-198250`).
+  `task fmt:check` installed gofumpt v0.9.2 into GOPATH/bin, then ran
+  whichever `gofumpt` came first on PATH. After a Homebrew upgrade to 0.12.0
+  it failed on dozens of untouched files, and the local gate no longer matched
+  CI. `task fmt`, `task fmt:check` and the pre-commit hook (now
+  `task gofumpt -- -w -extra`) all run `go run mvdan.cc/gofumpt@$GOFUMPT_VERSION`
+  from a single Taskfile var. `TestGofumptRunsThePinnedVersion` fails on any
+  bare `gofumpt` in the Taskfile or the pre-commit config.
+
 - **The managed leyline daemon runs in its own state directory** (`mache-173446`).
   It used to inherit the working directory of whatever started mache. leyline
   before v0.31.0 can write an arena grow file at a path relative to that
