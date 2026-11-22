@@ -1269,6 +1269,20 @@ func (lg *lazyGraph) RefTokenCount() (int, error) {
 	return len(lg.RefsMap()), nil
 }
 
+// NodeCounts forwards graph.NodeCounter to the base graph, so get_overview's
+// totals come from one count rather than a walk (#820). A base that cannot
+// count says so and the caller walks.
+func (lg *lazyGraph) NodeCounts() (dirs, files int, err error) {
+	g, err := lg.get()
+	if err != nil || g == nil {
+		return 0, 0, graph.ErrNodeCountUnavailable
+	}
+	if c, ok := g.(graph.NodeCounter); ok {
+		return c.NodeCounts()
+	}
+	return 0, 0, graph.ErrNodeCountUnavailable
+}
+
 // LookupDefNodes forwards graph.DefsNodeLookuper to the base graph. A base
 // that is not one returns no nodes.
 func (lg *lazyGraph) LookupDefNodes(token string) ([]*graph.Node, error) {

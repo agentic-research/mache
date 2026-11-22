@@ -214,6 +214,11 @@ refs index as a token pointing at this directory. The token joins the same
 index the source path fills from call extraction, so `callers/<token>` and
 `find_callers` list the directory, and `{{diagram}}` clusters on it.
 
+A template that renders several lines adds one token per non-blank line,
+trimmed of surrounding whitespace, so a list-valued field takes one template:
+`"refs": ["{{range .imports}}{{.}}\n{{end}}"]`. A single-line result is one
+token, exactly as rendered.
+
 Applies to data (engine), including the `.db` streaming path. Ignored on data
 (direct). On the source path the engine renders `refs` too, but the index is
 already filled from the AST, so presets do not use it.

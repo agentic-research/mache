@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
 
 // The optional capability interfaces a backend may implement beyond [Graph].
@@ -72,6 +73,18 @@ type RefsMapper interface {
 type RefTokenCounter interface {
 	RefTokenCount() (int, error)
 }
+
+// NodeCounter counts every directory and file node in the graph without
+// walking it, for a caller that wants only the totals (get_overview). The
+// root is not a node and is not counted. A graph that cannot answer cheaply
+// returns ErrNodeCountUnavailable and the caller walks instead.
+type NodeCounter interface {
+	NodeCounts() (dirs, files int, err error)
+}
+
+// ErrNodeCountUnavailable is NodeCounts' answer from a graph whose backing
+// store holds no node index to count.
+var ErrNodeCountUnavailable = errors.New("node counts unavailable for this graph")
 
 // RefsQuerier runs SQL directly against the backing database — the escape
 // hatch for questions the typed accessors above do not cover, including the

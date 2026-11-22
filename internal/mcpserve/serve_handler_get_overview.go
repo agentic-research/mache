@@ -3,9 +3,11 @@ package mcpserve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/agentic-research/mache/graph"
@@ -59,8 +61,11 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 			TopLevel   []dirInfo `json:"top_level"`
 			TotalDirs  int       `json:"total_dirs"`
 			TotalFiles int       `json:"total_files"`
-			RefTokens  int       `json:"ref_tokens,omitempty"`
-			DefTokens  int       `json:"def_tokens,omitempty"`
+			// TotalsTruncated says the totals are a lower bound: the graph
+			// could not count itself and the walk stopped at its cap.
+			TotalsTruncated bool `json:"totals_truncated,omitempty"`
+			RefTokens       int  `json:"ref_tokens,omitempty"`
+			DefTokens       int  `json:"def_tokens,omitempty"`
 			// Index is the staleness report, present when the graph can
 			// answer. The default serve path serves a FROZEN snapshot — edits
 			// after session start are invisible to every tool — and until the
@@ -93,7 +98,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 				Children: len(subChildren),
 			})
 		}
-		ov.TotalDirs, ov.TotalFiles = overviewCounts(g, children)
+		ov.TotalDirs, ov.TotalFiles, ov.TotalsTruncated = overviewCounts(g, children)
 
 		// Count refs/defs if available
 		ov.RefTokens = refTokenCount(g)
@@ -113,17 +118,46 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
+// maxOverviewWalk bounds the walk overviewCounts falls back to, so a graph
+// that cannot count itself costs get_overview a bounded amount of work.
+const maxOverviewWalk = 100_000
+
 // overviewCounts is get_overview's directory and file totals. A projection
 // with `_tree` counts its whole source tree; there a source file is a
-// directory of syntax nodes, so counting the graph's file nodes two levels
-// down reported 0 files (mache-7fed6a). Other graphs count the graph's own
-// nodes in the top two levels.
-func overviewCounts(g graph.Graph, children []string) (dirs, files int) {
+// directory of syntax nodes, so counting the graph's file nodes reported 0
+// files (mache-7fed6a). Any other graph counts its own nodes, all of them:
+// asked of the graph when it can count, else by walking it. The walk used to
+// stop two levels down and report that as the total, which for a deep data
+// projection was 316 directories and 0 files out of 164k and 658k (#820). A
+// walk that hits maxOverviewWalk reports truncated, so a partial count is
+// never presented as a total.
+func overviewCounts(g graph.Graph, children []string) (dirs, files int, truncated bool) {
 	if treeFiles, treeDirs, ok := treeSummary(g); ok {
-		return treeDirs, len(treeFiles)
+		return treeDirs, len(treeFiles), false
 	}
-	for _, childID := range children {
-		node, _ := g.GetNode(childID)
+	if c, ok := g.(graph.NodeCounter); ok {
+		d, f, err := c.NodeCounts()
+		if err == nil {
+			return d, f, false
+		}
+		if !errors.Is(err, graph.ErrNodeCountUnavailable) {
+			log.Printf("get_overview: count nodes: %v", err)
+		}
+	}
+	return walkCounts(g, children, maxOverviewWalk)
+}
+
+// walkCounts counts the directories and files under children breadth-first,
+// visiting at most limit nodes; truncated says it stopped there.
+func walkCounts(g graph.Graph, children []string, limit int) (dirs, files int, truncated bool) {
+	queue := slices.Clone(children)
+	for visited := 0; len(queue) > 0; visited++ {
+		if visited == limit {
+			return dirs, files, true
+		}
+		id := queue[0]
+		queue = queue[1:]
+		node, _ := g.GetNode(id)
 		if node == nil {
 			continue
 		}
@@ -132,18 +166,10 @@ func overviewCounts(g graph.Graph, children []string) (dirs, files int) {
 			continue
 		}
 		dirs++
-		subChildren, _ := g.ListChildren(childID)
-		for _, subID := range subChildren {
-			if subNode, _ := g.GetNode(subID); subNode != nil {
-				if subNode.Mode.IsDir() {
-					dirs++
-				} else {
-					files++
-				}
-			}
-		}
+		sub, _ := g.ListChildren(id)
+		queue = append(queue, sub...)
 	}
-	return dirs, files
+	return dirs, files, false
 }
 
 // refTokenCount is how many tokens the graph's references name: counted by the

@@ -12,9 +12,9 @@ import (
 
 func makeFindCallersHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		token := request.GetString("token", "")
+		token := symbolArg(request, "token", "symbol")
 		if token == "" {
-			return mcp.NewToolResultError("token is required"), nil
+			return mcp.NewToolResultError(symbolRequired("token", "symbol")), nil
 		}
 		kind, errResult := validateKindParam(request)
 		if errResult != nil {

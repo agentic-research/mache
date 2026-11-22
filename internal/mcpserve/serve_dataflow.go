@@ -112,12 +112,12 @@ func makeGetDataflowHandler(g graph.Graph) server.ToolHandlerFunc {
 
 func parseDataflowRequest(request mcp.CallToolRequest) (dataflowRequest, *mcp.CallToolResult) {
 	params := dataflowRequest{
-		symbol:    request.GetString("symbol", ""),
+		symbol:    symbolArg(request, "symbol", "token"),
 		direction: request.GetString("direction", "both"),
 		maxDepth:  request.GetInt("depth", 2),
 	}
 	if params.symbol == "" {
-		return dataflowRequest{}, mcp.NewToolResultError("symbol is required")
+		return dataflowRequest{}, mcp.NewToolResultError(symbolRequired("symbol", "token"))
 	}
 	if params.direction != "callers" && params.direction != "callees" && params.direction != "both" {
 		return dataflowRequest{}, mcp.NewToolResultError("direction must be 'callers', 'callees', or 'both'")

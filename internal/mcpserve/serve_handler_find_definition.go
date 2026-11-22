@@ -25,9 +25,9 @@ const maxFuzzySuggestions = 8
 
 func makeFindDefinitionHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		symbol := request.GetString("symbol", "")
+		symbol := symbolArg(request, "symbol", "token")
 		if symbol == "" {
-			return mcp.NewToolResultError("symbol is required"), nil
+			return mcp.NewToolResultError(symbolRequired("symbol", "token")), nil
 		}
 		// Refuse to answer a question about the code when there is no code
 		// loaded. Every negative result below ("no definition found") is a

@@ -332,8 +332,8 @@ func collectNodes(result *recordResult, schema api.Node, walker Walker, ctx any,
 				result.err = fmt.Errorf("failed to render ref %s: %w", refTmpl, err) // coverage:ignore
 				return                                                               // coverage:ignore
 			} // coverage:ignore
-			if token != "" {
-				result.refLinks = append(result.refLinks, refLink{token: token, nodeID: id})
+			for _, tok := range refTokens(token) {
+				result.refLinks = append(result.refLinks, refLink{token: tok, nodeID: id})
 			}
 		}
 
@@ -541,9 +541,9 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 			if err != nil {                                       // coverage:ignore
 				return fmt.Errorf("failed to render ref %s: %w", refTmpl, err) // coverage:ignore
 			} // coverage:ignore
-			if token != "" { // coverage:ignore
-				if err := store.AddRef(token, id); err != nil { // coverage:ignore
-					return fmt.Errorf("add ref %s -> %s: %w", token, id, err) // coverage:ignore
+			for _, tok := range refTokens(token) { // coverage:ignore
+				if err := store.AddRef(tok, id); err != nil { // coverage:ignore
+					return fmt.Errorf("add ref %s -> %s: %w", tok, id, err) // coverage:ignore
 				} // coverage:ignore
 			}
 		}
