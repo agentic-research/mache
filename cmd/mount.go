@@ -137,6 +137,9 @@ var rootCmd = &cobra.Command{
 		if outPath != "" && controlPath != "" {
 			return fmt.Errorf("--out and --control cannot be used together")
 		}
+		if err := checkOutArgs(args); err != nil {
+			return err
+		}
 
 		// Agent mode: auto-generate mount point and configure
 		if agentMode {
@@ -536,4 +539,25 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// checkOutArgs rejects the one --out invocation that would silently export
+// the wrong thing. --out takes its source from --data and needs no
+// mountpoint, so a positional argument is never read. With --data it is the
+// placeholder mountpoint older docs told users to pass, and is ignored with a
+// warning. Without --data the operator almost certainly meant it as the
+// source (mache-09e85f), and exporting the default data path instead would
+// be the same silent substitution #818 fixed for serve.
+//
+// It runs before the default data path is filled in, so an empty dataPath
+// means --data was not given.
+func checkOutArgs(args []string) error {
+	if outPath == "" || len(args) == 0 {
+		return nil
+	}
+	if dataPath == "" {
+		return fmt.Errorf("--out reads its source from --data, not a positional argument: run `mache --data %s --out %s`", args[0], outPath)
+	}
+	log.Printf("Warning: --out needs no mountpoint; ignoring %q", args[0])
+	return nil
 }

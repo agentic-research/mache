@@ -143,3 +143,26 @@ func TestOutFlag_JSONSource(t *testing.T) {
 	}
 	t.Fatal("export does not contain the items directory")
 }
+
+// mache-09e85f: `mache --out x.db ./src` read ./src as a mountpoint and
+// exported the default data path. With no --data, a positional argument is
+// refused with the command to run; with --data it is the placeholder
+// mountpoint older docs required, and is tolerated.
+func TestOutFlag_PositionalArgument(t *testing.T) {
+	oldData, oldOut := dataPath, outPath
+	defer func() { dataPath, outPath = oldData, oldOut }()
+	outPath = "out.db"
+
+	dataPath = ""
+	err := checkOutArgs([]string{"./src"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mache --data ./src --out out.db")
+
+	dataPath = "data.json"
+	assert.NoError(t, checkOutArgs([]string{"/tmp/unused"}))
+	assert.NoError(t, checkOutArgs(nil))
+
+	outPath = ""
+	dataPath = ""
+	assert.NoError(t, checkOutArgs([]string{"/mnt"}), "a mount is not an export")
+}

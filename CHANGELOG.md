@@ -8,12 +8,24 @@ bumps may include breaking changes.
 
 ### Fixed
 
-- Rootless HTTP clients can use a positional source passed to `mache serve`
-  (#818). With a positional source, a relative `--schema` checks the working
-  directory first, then the session's project directory or the data file's
-  parent (#820). Relative schemas passed with `--mount` resolve inside each mount.
+- **`mache serve --http <source>` serves the positional source to clients
+  that declare no MCP roots** (`mache-c0bbfd`, #818). Since v0.21.1 only
+  `--stdio` honoured it; an HTTP daemon accepted the argument and then failed
+  every rootless tool call with `workspace root unavailable`. Startup now logs
+  what a rootless session will be served, and `--path`'s help no longer
+  claims a working-directory default it never had.
 
-- `mache --out` exports JSON data projections without a mountpoint (#820).
+- **A relative `serve --schema` resolves against the working directory**
+  (`mache-c0c865`, #820). With a positional data file it used to be joined
+  onto the file itself (`data.json/schema.json`). A relative path not found in
+  the working directory still resolves against the project directory, or the
+  data file's parent; with `--mount` it resolves inside each mount.
+
+- **`mache --out` exports JSON data instead of mounting it** (`mache-eb0278`,
+  #820). Every source now exports through one path, and `--out` needs no
+  mountpoint. A positional argument with `--out` but no `--data` is refused
+  with the `--data` command to run (`mache-09e85f`), rather than silently
+  exporting the default data path; with `--data` it is ignored with a warning.
 
 - **Formatting runs the pinned gofumpt, not the one on PATH** (`mache-198250`).
   `task fmt:check` installed gofumpt v0.9.2 into GOPATH/bin, then ran
