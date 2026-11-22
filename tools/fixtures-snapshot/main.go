@@ -53,13 +53,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*id, *source); err != nil {
+	if err := snapshotFixture(*id, *source); err != nil {
 		fmt.Fprintf(os.Stderr, "fixtures-snapshot: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(id, source string) error {
+func snapshotFixture(id, source string) error {
 	source = expandHome(source)
 	absSource, err := filepath.Abs(source)
 	if err != nil {

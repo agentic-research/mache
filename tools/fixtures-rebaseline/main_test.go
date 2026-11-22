@@ -93,7 +93,7 @@ last_intentional_bump = ""
 // TestRewriteEntry_UnknownFixtureReturnsError proves the rewriter
 // refuses to silently leave the file unchanged when given a fixture
 // that doesn't appear in any block for the key. Defense-in-depth on
-// top of the ParseBaselinesFile + LookupBaseline check in run().
+// top of the ParseBaselinesFile + LookupBaseline check in rebaselineFixture().
 func TestRewriteEntry_UnknownFixtureReturnsError(t *testing.T) {
 	in := `schema = "mache-baselines/v1"
 

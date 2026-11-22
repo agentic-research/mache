@@ -55,13 +55,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*key, *fixture, *wallMs, *justification); err != nil {
+	if err := rebaselineFixture(*key, *fixture, *wallMs, *justification); err != nil {
 		fmt.Fprintf(os.Stderr, "fixtures-rebaseline: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(key, fixture string, wallMs int, justification string) error {
+func rebaselineFixture(key, fixture string, wallMs int, justification string) error {
 	repoRoot, err := testfixtures.RepoRoot()
 	if err != nil {
 		return err
