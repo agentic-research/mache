@@ -50,34 +50,37 @@ func overviewIndexReport(g graph.Graph) (*graph.IndexStaleness, string) {
 		rep.BuiltAt.Format("2006-01-02 15:04:05"), strings.Join(drift, " and "))
 }
 
+// overviewDir is one top-level directory in get_overview's answer.
+type overviewDir struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Children int    `json:"children"`
+}
+
+// overviewResult is get_overview's answer.
+type overviewResult struct {
+	TopLevel   []overviewDir `json:"top_level"`
+	TotalDirs  int           `json:"total_dirs"`
+	TotalFiles int           `json:"total_files"`
+	// TotalsTruncated says the totals are a lower bound: the graph
+	// could not count itself and the walk stopped at its cap.
+	TotalsTruncated bool `json:"totals_truncated,omitempty"`
+	RefTokens       int  `json:"ref_tokens,omitempty"`
+	DefTokens       int  `json:"def_tokens,omitempty"`
+	// Index is the staleness report, present when the graph can
+	// answer. The default serve path serves a FROZEN snapshot — edits
+	// after session start are invisible to every tool — and until the
+	// live-reparse path exists (mache-6c9e1d), the floor is saying so
+	// where agents START: this tool's own description is "START HERE".
+	// Omission means unknown, never fresh.
+	Index        *graph.IndexStaleness `json:"index,omitempty"`
+	IndexWarning string                `json:"index_warning,omitempty"`
+	Usage        map[string]string     `json:"_usage,omitempty"`
+}
+
 func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		type dirInfo struct {
-			Name     string `json:"name"`
-			Path     string `json:"path"`
-			Children int    `json:"children"`
-		}
-		type overview struct {
-			TopLevel   []dirInfo `json:"top_level"`
-			TotalDirs  int       `json:"total_dirs"`
-			TotalFiles int       `json:"total_files"`
-			// TotalsTruncated says the totals are a lower bound: the graph
-			// could not count itself and the walk stopped at its cap.
-			TotalsTruncated bool `json:"totals_truncated,omitempty"`
-			RefTokens       int  `json:"ref_tokens,omitempty"`
-			DefTokens       int  `json:"def_tokens,omitempty"`
-			// Index is the staleness report, present when the graph can
-			// answer. The default serve path serves a FROZEN snapshot — edits
-			// after session start are invisible to every tool — and until the
-			// live-reparse path exists (mache-6c9e1d), the floor is saying so
-			// where agents START: this tool's own description is "START HERE".
-			// Omission means unknown, never fresh.
-			Index        *graph.IndexStaleness `json:"index,omitempty"`
-			IndexWarning string                `json:"index_warning,omitempty"`
-			Usage        map[string]string     `json:"_usage,omitempty"`
-		}
-
-		ov := overview{}
+		ov := overviewResult{}
 		ov.Index, ov.IndexWarning = overviewIndexReport(g)
 
 		// Top-level structure
@@ -92,7 +95,7 @@ func makeGetOverviewHandler(g graph.Graph) server.ToolHandlerFunc {
 				continue
 			}
 			subChildren, _ := g.ListChildren(childID)
-			ov.TopLevel = append(ov.TopLevel, dirInfo{
+			ov.TopLevel = append(ov.TopLevel, overviewDir{
 				Name:     filepath.Base(childID),
 				Path:     childID,
 				Children: len(subChildren),
