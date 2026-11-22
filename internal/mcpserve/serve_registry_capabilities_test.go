@@ -27,6 +27,7 @@ var capabilityInterfaces = map[string]reflect.Type{
 	"DefsSearcher":           reflect.TypeFor[graph.DefsSearcher](),
 	"DefsMapper":             reflect.TypeFor[graph.DefsMapper](),
 	"RefsMapper":             reflect.TypeFor[graph.RefsMapper](),
+	"NodeCounter":            reflect.TypeFor[graph.NodeCounter](),
 	"RefTokenCounter":        reflect.TypeFor[graph.RefTokenCounter](),
 	"RefsQuerier":            reflect.TypeFor[graph.RefsQuerier](),
 	"DBPathProvider":         reflect.TypeFor[graph.DBPathProvider](),
