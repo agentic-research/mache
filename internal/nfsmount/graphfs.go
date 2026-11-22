@@ -96,7 +96,7 @@ func (fs *GraphFS) Create(filename string) (billy.File, error) {
 
 	// Block AppleDouble / metadata files (silently succeed to avoid log spam)
 	if strings.HasPrefix(filepath.Base(filename), "._") {
-		return &bytesFile{name: filename, data: nil}, nil
+		return &bytesFile{name: filename, sliceFile: sliceFile{data: nil}}, nil
 	}
 
 	node, err := fs.graph.GetNode(filename)
@@ -109,7 +109,7 @@ func (fs *GraphFS) Create(filename string) (billy.File, error) {
 
 	// Return a no-op file — go-nfs will close this immediately.
 	// The real content writes come through OpenFile via WRITE RPCs.
-	return &bytesFile{name: filename, data: nil}, nil
+	return &bytesFile{name: filename, sliceFile: sliceFile{data: nil}}, nil
 }
 
 func (fs *GraphFS) Open(filename string) (billy.File, error) {
@@ -144,7 +144,7 @@ func (fs *GraphFS) OpenFile(filename string, flag int, perm os.FileMode) (billy.
 			return &graphFile{id: nodeID, size: refNode.ContentSize(), graph: fs.graph}, nil
 		default:
 			// KindFile: return content as bytesFile
-			return &bytesFile{name: filepath.Base(filename), data: entry.Content}, nil
+			return &bytesFile{name: filepath.Base(filename), sliceFile: sliceFile{data: entry.Content}}, nil
 		}
 	}
 
@@ -192,10 +192,10 @@ func (fs *GraphFS) openWritable(filename string, flag int) (billy.File, error) {
 	}
 
 	return &writeFile{
-		id:      filename,
-		origin:  *node.Origin,
-		buf:     buf,
-		onClose: fs.writeBack,
+		id:        filename,
+		origin:    *node.Origin,
+		sliceFile: sliceFile{data: buf},
+		onClose:   fs.writeBack,
 		// Agents and editors mean "replace" when they write a source file from
 		// the top, often without sending a truncate. So a write that STARTS at
 		// offset 0 replaces the whole buffer. Only then: a write at an offset

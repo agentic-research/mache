@@ -7,67 +7,72 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// bytesFile and writeFile read and seek through the same three helpers, so
-// the two types cannot drift apart on io.Reader, io.ReaderAt or io.Seeker.
+// bytesFile and writeFile both embed sliceFile, so the two types cannot
+// drift apart on io.Reader, io.ReaderAt or io.Seeker.
 
-func TestReadAdvancing(t *testing.T) {
-	data, pos := []byte("hello"), int64(0)
+func TestSliceFile_Read(t *testing.T) {
+	f := &sliceFile{data: []byte("hello")}
 	p := make([]byte, 3)
 
-	n, err := readAdvancing(data, &pos, p)
+	n, err := f.Read(p)
 	assert.Equal(t, 3, n)
 	assert.NoError(t, err)
-	assert.Equal(t, int64(3), pos)
+	assert.Equal(t, int64(3), f.pos)
 
-	n, err = readAdvancing(data, &pos, p)
-	assert.Equal(t, 2, n)
-	assert.ErrorIs(t, err, io.EOF, "the last bytes arrive with EOF")
+	n, err = f.Read(p)
 	assert.Equal(t, "lo", string(p[:n]))
+	assert.ErrorIs(t, err, io.EOF, "the last bytes arrive with EOF")
 
-	n, err = readAdvancing(data, &pos, p)
+	n, err = f.Read(p)
 	assert.Zero(t, n)
 	assert.ErrorIs(t, err, io.EOF)
 
-	pos = 99
-	n, err = readAdvancing(data, &pos, p)
+	f.pos = 99
+	n, err = f.Read(p)
 	assert.Zero(t, n)
 	assert.ErrorIs(t, err, io.EOF, "a position past the end reads nothing")
-	assert.Equal(t, int64(99), pos)
+	assert.Equal(t, int64(99), f.pos)
 }
 
-func TestReadAtOffset(t *testing.T) {
-	data := []byte("hello")
+func TestSliceFile_ReadAt(t *testing.T) {
+	f := &sliceFile{data: []byte("hello"), pos: 4}
 
 	p := make([]byte, 2)
-	n, err := readAtOffset(data, p, 1)
+	n, err := f.ReadAt(p, 1)
 	assert.Equal(t, "el", string(p[:n]))
 	assert.NoError(t, err, "a filled buffer is not EOF")
+	assert.Equal(t, int64(4), f.pos, "ReadAt does not move the position")
 
 	p = make([]byte, 8)
-	n, err = readAtOffset(data, p, 3)
+	n, err = f.ReadAt(p, 3)
 	assert.Equal(t, "lo", string(p[:n]))
 	assert.ErrorIs(t, err, io.EOF, "a short read reports EOF")
 
-	n, err = readAtOffset(data, p, 5)
+	n, err = f.ReadAt(p, 5)
 	assert.Zero(t, n)
 	assert.ErrorIs(t, err, io.EOF)
 }
 
-func TestSeekWithin(t *testing.T) {
-	pos := int64(2)
-	assert.Equal(t, int64(4), seekWithin(&pos, 10, 4, io.SeekStart))
-	assert.Equal(t, int64(7), seekWithin(&pos, 10, 3, io.SeekCurrent))
-	assert.Equal(t, int64(8), seekWithin(&pos, 10, -2, io.SeekEnd))
-	assert.Equal(t, int64(0), seekWithin(&pos, 10, -50, io.SeekCurrent), "a negative position clamps to 0")
-	assert.Equal(t, int64(0), pos)
-	assert.Equal(t, int64(15), seekWithin(&pos, 10, 5, io.SeekEnd), "seeking past the end is allowed")
-	assert.Equal(t, int64(0), seekWithin(&pos, 10, 5, 42), "an unknown whence seeks to 0")
+func TestSliceFile_Seek(t *testing.T) {
+	f := &sliceFile{data: make([]byte, 10), pos: 2}
+	seek := func(offset int64, whence int) int64 {
+		pos, err := f.Seek(offset, whence)
+		assert.NoError(t, err)
+		assert.Equal(t, pos, f.pos)
+		return pos
+	}
+	assert.Equal(t, int64(4), seek(4, io.SeekStart))
+	assert.Equal(t, int64(7), seek(3, io.SeekCurrent))
+	assert.Equal(t, int64(8), seek(-2, io.SeekEnd))
+	assert.Equal(t, int64(0), seek(-50, io.SeekCurrent), "a negative position clamps to 0")
+	assert.Equal(t, int64(15), seek(5, io.SeekEnd), "seeking past the end is allowed")
+	assert.Equal(t, int64(0), seek(5, 42), "an unknown whence seeks to 0")
 }
 
-// Both file types answer through the helpers.
+// Both file types answer through the one implementation.
 func TestByteFiles_ShareReadAndSeek(t *testing.T) {
-	b := &bytesFile{data: []byte("abcdef")}
-	w := &writeFile{buf: []byte("abcdef")}
+	b := &bytesFile{sliceFile: sliceFile{data: []byte("abcdef")}}
+	w := &writeFile{sliceFile: sliceFile{data: []byte("abcdef")}}
 	for _, f := range []interface {
 		io.Reader
 		io.ReaderAt
