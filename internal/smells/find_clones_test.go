@@ -356,21 +356,21 @@ func TestFindClones_SetsPartitionTheRulesFindings(t *testing.T) {
 	require.NotEmpty(t, rule.Findings)
 
 	_, resp := findCloneSets(t, g, cloneCorpus, map[string]any{"min_nodes": 0, "include_tests": true})
-	type site struct {
+	type cloneSite struct {
 		file string
 		line int
 	}
-	inSets := map[site]string{}
+	inSets := map[cloneSite]string{}
 	for _, s := range resp.Sets {
 		for _, m := range s.Members {
-			k := site{m.SourceID, m.Line}
+			k := cloneSite{m.SourceID, m.Line}
 			require.Empty(t, inSets[k], "%v is in two sets", k)
 			inSets[k] = s.ID
 		}
 	}
 	require.Len(t, inSets, len(rule.Findings), "every finding is in a set, and nothing else is")
 	for _, f := range rule.Findings {
-		assert.Equal(t, f.Group, inSets[site{f.SourceID, f.Line}], "%s:%d", f.SourceID, f.Line)
+		assert.Equal(t, f.Group, inSets[cloneSite{f.SourceID, f.Line}], "%s:%d", f.SourceID, f.Line)
 		assert.NotEmpty(t, f.Group, "find_smells reports the group too")
 	}
 }

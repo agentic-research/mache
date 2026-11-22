@@ -29,7 +29,7 @@ For the full first-run flow — source choice (directory vs `.db` vs live hot-sw
 
 ## Code intelligence: what it gives an agent
 
-The code projection is where the engine is deepest. **19 MCP tools** wrap the projected graph — 18 read-surface plus `write_file`.
+The code projection is where the engine is deepest. **20 MCP tools** wrap the projected graph — 19 read-surface plus `write_file`.
 
 | What you get                                | Tools                                                                     | Tier         | Status                                                |
 | ------------------------------------------- | ------------------------------------------------------------------------- | ------------ | ----------------------------------------------------- |

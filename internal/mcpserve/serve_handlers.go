@@ -15,6 +15,7 @@ func registerMCPTools(s *server.MCPServer, r *graphRegistry) {
 	registerBrowseTools(s, r)
 	registerReferenceTools(s, r)
 	registerAnalysisTools(s, r)
+	registerQualityTools(s, r)
 	registerWriteTools(s, r)
 }
 
@@ -222,7 +223,11 @@ func registerAnalysisTools(s *server.MCPServer, r *graphRegistry) {
 		),
 		r.wrapHandler(makeGetDiagramHandler),
 	)
+}
 
+// registerQualityTools registers the tools that judge structure: smell rules
+// and clone sets. Both run SQL over the parsed _ast.
+func registerQualityTools(s *server.MCPServer, r *graphRegistry) {
 	s.AddTool(
 		mcp.NewTool("find_smells",
 			readTool(),
