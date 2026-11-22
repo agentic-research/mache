@@ -103,6 +103,9 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+// mountGraph lets export tests detect an unexpected mount.
+var mountGraph = mountNFS
+
 var rootCmd = &cobra.Command{
 	Use:     "mache [mountpoint]",
 	Short:   "Mache: The Universal Semantic Overlay Engine",
@@ -131,6 +134,10 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("--out and --agent cannot be used together (--agent enables writable mode, --out requires read-only)")
 		}
 
+		if outPath != "" && controlPath != "" {
+			return fmt.Errorf("--out and --control cannot be used together")
+		}
+
 		// Agent mode: auto-generate mount point and configure
 		if agentMode {
 			if err := runAgentMode(cmd); err != nil {
@@ -143,7 +150,7 @@ var rootCmd = &cobra.Command{
 		var mountPoint string
 		if agentMode {
 			mountPoint = agentMetadata.MountPoint
-		} else {
+		} else if outPath == "" {
 			// Normal mode: require mountpoint argument
 			if len(args) == 0 {
 				return fmt.Errorf("mountpoint required (or use --agent for auto mode)")
@@ -152,8 +159,10 @@ var rootCmd = &cobra.Command{
 		}
 
 		// 0. Ensure mount point exists (create if needed)
-		if err := os.MkdirAll(mountPoint, 0o755); err != nil {
-			return fmt.Errorf("create mount point %s: %w", mountPoint, err)
+		if mountPoint != "" {
+			if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+				return fmt.Errorf("create mount point %s: %w", mountPoint, err)
+			}
 		}
 
 		// 1. Resolve Configuration Paths: mache's home holds only the
@@ -309,49 +318,12 @@ var rootCmd = &cobra.Command{
 			agentMetadata.Source = snapshotPath
 		}
 
+		if outPath != "" {
+			return materialize.ExportProjection(dataPath, outPath, outFormat, schema)
+		}
+
 		if _, err := os.Stat(dataPath); err == nil {
 			if filepath.Ext(dataPath) == ".db" {
-				// --out with .db source: ingest via SQLiteWriter, materialize, exit.
-				// Skip OpenSQLiteGraph/EagerScan entirely — no mount needed.
-				if outPath != "" {
-					indexFile, err := os.CreateTemp("", "mache-out-*.db")
-					if err != nil {
-						return fmt.Errorf("create temp index: %w", err)
-					}
-					indexPath := indexFile.Name()
-					_ = indexFile.Close() // SQLiteWriter opens it by path
-					defer func() { _ = os.Remove(indexPath) }()
-
-					writer, err := ingest.NewSQLiteWriter(indexPath)
-					if err != nil {
-						return fmt.Errorf("create sqlite writer: %w", err)
-					}
-					eng := ingest.NewEngine(schema, writer)
-					start := time.Now()
-					if err := eng.Ingest(dataPath); err != nil {
-						_ = writer.Close()
-						return fmt.Errorf("ingest for --out: %w", err)
-					}
-					if err := writer.Close(); err != nil {
-						return fmt.Errorf("close sqlite writer: %w", err)
-					}
-					log.Printf("Ingestion complete in %v", time.Since(start))
-
-					if err := leylinegraph.MaterializeVirtuals(indexPath, schema, agentMode); err != nil {
-						return fmt.Errorf("materialize virtuals: %w", err)
-					}
-
-					mat, mErr := materialize.ForFormat(outFormat)
-					if mErr != nil {
-						return mErr
-					}
-					if mErr = mat.Materialize(indexPath, outPath); mErr != nil {
-						return fmt.Errorf("materialize (%s): %w", outFormat, mErr)
-					}
-					log.Printf("Wrote %s (format: %s)", outPath, outFormat)
-					return nil
-				}
-
 				// SQLite source: eager scan before mount to avoid fuse-t NFS timeouts
 				log.Printf("Opening %s (direct SQL backend)...", dataPath)
 				sg, err := graph.OpenSQLiteGraph(dataPath, schema, machetmpl.Render)
@@ -440,26 +412,6 @@ var rootCmd = &cobra.Command{
 				log.Printf("Indexing complete in %v", time.Since(start))
 				eng.PrintRoutingSummary()
 
-				// --out: materialize virtuals, write to target format, exit (no mount)
-				if outPath != "" {
-					if err := leylinegraph.MaterializeVirtuals(indexPath, schema, agentMode); err != nil {
-						return fmt.Errorf("materialize virtuals: %w", err)
-					}
-					mat, err := materialize.ForFormat(outFormat)
-					if err != nil {
-						return err
-					}
-					if err := mat.Materialize(indexPath, outPath); err != nil {
-						return fmt.Errorf("materialize (%s): %w", outFormat, err)
-					}
-					_ = os.Remove(indexPath)
-					log.Printf("Wrote %s (format: %s)", outPath, outFormat)
-					if outFormat == "sqlite" {
-						log.Printf("Load into leyline: leyline load --db %s --control /tmp/ll.ctrl", outPath)
-					}
-					return nil
-				}
-
 				sg, err := graph.OpenSQLiteGraph(indexPath, schema, machetmpl.Render)
 				if err != nil {
 					return fmt.Errorf("open indexed graph: %w", err)
@@ -498,7 +450,7 @@ var rootCmd = &cobra.Command{
 					// Writes propose through the daemon mache starts on this
 					// tree (writeback.Propose, mache-3a0fb9); a file mount's
 					// tree is its directory, which is what was parsed.
-					leyline.SetDaemonSource(sourceTreeOf(dataPath))
+					leyline.SetDaemonSource(fsutil.DirectoryOrParent(dataPath))
 				}
 
 				if filepath.Ext(dataPath) == ".git" {
@@ -570,7 +522,7 @@ var rootCmd = &cobra.Command{
 		// Fire-and-forget: push content to ley-line for embedding
 		go leyline.TriggerEmbedding(g, 100)
 
-		return mountNFS(schema, g, engine, mountPoint, writable, promptContent)
+		return mountGraph(schema, g, engine, mountPoint, writable, promptContent)
 	},
 }
 
@@ -584,13 +536,4 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-// sourceTreeOf is the tree a source mount of dataPath writes into: the
-// directory itself, or a file's directory.
-func sourceTreeOf(dataPath string) string {
-	if info, err := os.Stat(dataPath); err == nil && !info.IsDir() {
-		return filepath.Dir(dataPath)
-	}
-	return dataPath
 }

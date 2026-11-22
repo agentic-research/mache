@@ -3,10 +3,14 @@ package cmd
 import (
 	"archive/zip"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/agentic-research/mache/api"
+	"github.com/agentic-research/mache/graph"
+	"github.com/agentic-research/mache/internal/ingest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -84,4 +88,58 @@ func TestOutFlag_DBSource(t *testing.T) {
 	}
 	assert.Contains(t, names, "items/foo/value")
 	assert.Contains(t, names, "items/baz/value")
+}
+
+// TestOutFlag_JSONSource — #820, mache-eb0278: --out with plain JSON data
+// was ignored and mache went on to NFS-mount. It must write the projection
+// and return without mounting.
+func TestOutFlag_JSONSource(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcJSON := filepath.Join(tmpDir, "data.json")
+	require.NoError(t, os.WriteFile(srcJSON,
+		[]byte(`[{"name":"foo","value":"bar"},{"name":"baz","value":"qux"}]`), 0o644))
+	schemaFile := filepath.Join(tmpDir, "schema.json")
+	require.NoError(t, os.WriteFile(schemaFile, []byte(`{
+		"version": "v1",
+		"nodes": [{
+			"name": "items",
+			"selector": "$",
+			"children": [{
+				"name": "{{.name}}",
+				"selector": "$[*]",
+				"files": [{"name": "value", "content_template": "{{.value}}"}]
+			}]
+		}]
+	}`), 0o644))
+	outJSON := filepath.Join(tmpDir, "out.json")
+
+	oldSchema, oldData, oldOut, oldFormat, oldMount := schemaPath, dataPath, outPath, outFormat, mountGraph
+	defer func() {
+		schemaPath, dataPath, outPath, outFormat, mountGraph = oldSchema, oldData, oldOut, oldFormat, oldMount
+	}()
+	mountGraph = func(*api.Topology, graph.Graph, *ingest.Engine, string, bool, []byte) error {
+		t.Fatal("--out must not mount")
+		return nil
+	}
+	schemaPath, dataPath, outPath, outFormat = schemaFile, srcJSON, outJSON, "json"
+
+	require.NoError(t, rootCmd.RunE(rootCmd, nil))
+
+	exported, err := os.ReadFile(outJSON)
+	require.NoError(t, err)
+	var entries []struct {
+		Name     string
+		Children json.RawMessage
+	}
+	require.NoError(t, json.Unmarshal(exported, &entries))
+	for _, entry := range entries {
+		if entry.Name == "items" {
+			assert.JSONEq(t, `[
+				{"name":"baz","type":"directory","children":[{"name":"value","type":"file","size":3,"content":"qux"}]},
+				{"name":"foo","type":"directory","children":[{"name":"value","type":"file","size":3,"content":"bar"}]}
+			]`, string(entry.Children))
+			return
+		}
+	}
+	t.Fatal("export does not contain the items directory")
 }

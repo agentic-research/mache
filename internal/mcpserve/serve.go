@@ -63,10 +63,10 @@ var (
 )
 
 func init() {
-	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Path to topology schema")
+	serveCmd.Flags().StringVarP(&serveSchema, "schema", "s", "", "Topology schema path or preset. With a positional source, relative paths check the working directory first, then the project directory (or the data file's parent for a file-based session). With --mount, relative paths are resolved inside each mount.")
 	serveCmd.Flags().StringVar(&serveHTTP, "http", "localhost:7532", "Listen address for Streamable HTTP transport")
 	serveCmd.Flags().BoolVar(&serveStdio, "stdio", false, "Escape-hatch stdio transport for CI/sandbox/headless use (HTTP is canonical; never registered by `mache init`)")
-	serveCmd.Flags().StringVar(&servePath, "path", "", "Base directory for project detection (defaults to current working directory)")
+	serveCmd.Flags().StringVar(&servePath, "path", "", "Project directory served to clients that declare no MCP roots. No default: without --path or a positional source, such sessions are refused rather than served the working directory")
 	serveCmd.Flags().StringVar(&serveRepo, "repo", "", "Git repo URL to clone and serve (ephemeral: cleaned up on exit)")
 	serveCmd.Flags().StringVar(&serveControl, "control", "", "Path to ley-line control block (reads from arena, enables hot-swap)")
 	serveCmd.Flags().BoolVar(&serveCDC, "cdc", false, "Enable CDC in Mache's managed Leyline daemon")
@@ -809,6 +809,8 @@ func wireSheafSubscriber(registry *graphRegistry) (cancel func()) {
 // configureServeRuntime resolves the per-serve settings that depend on what is
 // being served: the external smell-rules dir and the managed leyline runtime.
 func configureServeRuntime(cmd *cobra.Command, args []string, registry *graphRegistry) {
+	logRootlessFallback(registry)
+
 	// Resolve the external smell-rules dir ONCE at startup from
 	// $MACHE_SMELL_RULES_DIR or the served project's .mache.json
 	// (serve has no explicit flag for it). The find_smells handler
@@ -828,6 +830,22 @@ func configureServeRuntime(cmd *cobra.Command, args []string, registry *graphReg
 		baseIsSource = false
 	}
 	configureManagedLeylineRuntime(args, servePath, baseIsSource, serveControl != "", serveCDC)
+}
+
+// logRootlessFallback says at startup what a client that declares no MCP
+// roots will be served, so an operator finds a missing project here rather
+// than on the first tool call (#818).
+func logRootlessFallback(registry *graphRegistry) {
+	switch {
+	case serveControl != "" || len(serveMounts) > 0 || serveRepo != "":
+		return
+	case registry.basePath != "":
+		log.Printf("rootless clients: serving --path %s", registry.basePath)
+	case len(registry.args) == 1:
+		log.Printf("rootless clients: serving positional source %s", registry.args[0])
+	default:
+		log.Print("rootless clients: no --path or positional source; sessions without MCP roots or a ?project= token will be refused")
+	}
 }
 
 // crashLoopTripped records this start with the crash-loop breaker and reports

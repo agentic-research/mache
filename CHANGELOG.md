@@ -8,6 +8,13 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- Rootless HTTP clients can use a positional source passed to `mache serve`
+  (#818). With a positional source, a relative `--schema` checks the working
+  directory first, then the session's project directory or the data file's
+  parent (#820). Relative schemas passed with `--mount` resolve inside each mount.
+
+- `mache --out` exports JSON data projections without a mountpoint (#820).
+
 - **Formatting runs the pinned gofumpt, not the one on PATH** (`mache-198250`).
   `task fmt:check` installed gofumpt v0.9.2 into GOPATH/bin, then ran
   whichever `gofumpt` came first on PATH. After a Homebrew upgrade to 0.12.0
