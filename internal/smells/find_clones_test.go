@@ -2,11 +2,14 @@ package smells
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -241,7 +244,21 @@ func parsedCorpus(t *testing.T, files map[string]string) *testutil.SmellTestGrap
 	return &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db, Path: dbPath, ASTKinds: sg}
 }
 
-var funcNameRE = regexp.MustCompile(`^func (?:\([^)]*\) )?(\w+)`)
+// funcNameAt is the name of the function or method declared at line of a Go
+// source, or "" when no declaration starts there. Read from the syntax tree
+// the Go parser builds, which is independent of the parse under test.
+func funcNameAt(t *testing.T, src string, line int) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "corpus.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fset.Position(fn.Pos()).Line == line {
+			return fn.Name.Name
+		}
+	}
+	return ""
+}
 
 // findCloneSets calls find_clones and returns each set as the sorted names
 // of its functions, read from the corpus at the line the tool reported, with
@@ -259,11 +276,10 @@ func findCloneSets(t *testing.T, g graph.Graph, files map[string]string, args ma
 		for _, m := range s.Members {
 			body, ok := files[m.SourceID]
 			require.True(t, ok, "member in a file the corpus does not have: %s", m.SourceID)
-			line := strings.Split(body, "\n")[m.Line-1]
-			match := funcNameRE.FindStringSubmatch(line)
-			require.NotNil(t, match, "%s:%d is not a function declaration: %q", m.SourceID, m.Line, line)
-			assert.Contains(t, m.Snippet, match[1], "the snippet shows the copy")
-			names = append(names, match[1])
+			name := funcNameAt(t, body, m.Line)
+			require.NotEmpty(t, name, "%s:%d is not a function declaration", m.SourceID, m.Line)
+			assert.Contains(t, m.Snippet, name, "the snippet shows the copy")
+			names = append(names, name)
 		}
 		slices.Sort(names)
 		sets = append(sets, names)
@@ -402,17 +418,18 @@ func TestFindClones_KnownGap_SharedBlockIsNotReported(t *testing.T) {
 	}
 }
 
-// Without an _ast table there is nothing to compare, and the tool says what
-// is missing rather than reporting no clones.
-func TestFindClones_WithoutASTNamesWhatIsMissing(t *testing.T) {
-	tg := seedSmellAST(t)
-	defer func() { _ = tg.DB.Close() }()
-	_, err := tg.DB.Exec(`DROP TABLE _ast`)
+// A database with no parse in it has nothing to compare, and the tool says
+// so rather than reporting no clones.
+func TestFindClones_WithoutAParseIsAnErrorNotAnEmptyAnswer(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "empty.db"))
 	require.NoError(t, err)
-	res, err := MakeFindClonesHandler(tg)(context.Background(), testutil.MakeRequest(nil))
+	defer func() { _ = db.Close() }()
+	require.NoError(t, db.Ping())
+	g := &testutil.SmellTestGraph{MemoryStore: graph.NewMemoryStore(), DB: db}
+	res, err := MakeFindClonesHandler(g)(context.Background(), testutil.MakeRequest(nil))
 	require.NoError(t, err)
-	require.True(t, res.IsError)
-	assert.Contains(t, testutil.ResultText(t, res), "_ast")
+	require.True(t, res.IsError, testutil.ResultText(t, res))
+	assert.Contains(t, testutil.ResultText(t, res), "find_clones")
 }
 
 // Two planted sets are the same size with different shapes, so grouping by
