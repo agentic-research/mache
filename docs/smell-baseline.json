@@ -2099,12 +2099,6 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/mcpserve/serve_handler_get_overview.go",
-      "node_hash": "bb896f96e92c65754ca896f09c6233afa754bb3434299870ba2264c9f977723e",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_handler_read_file.go",
       "node_hash": "5cd43f11698d7bfb644e42088676236844d02b6e3484418b8e1183c85cb9d38e",
       "count": 1
@@ -2460,7 +2454,7 @@
     {
       "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "bc8c971084e94021d016718ab9b023e6aea714b9de57542af520c505cd874787",
+      "node_hash": "5a6ca2ba7997a02dd5157189728b449ffa08ecc6d6ca8d1ecc7acfb33fefa1a0",
       "count": 1
     },
     {
@@ -2852,13 +2846,13 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "07c7abc6aeabe4b460c3d10e7e8883d0203f2edda25231d1af0ce79d6819cd07",
+      "node_hash": "4a3d5b79934562e0f4b5760047a07f56e8b11bfa0596ebe5d7f8c5ecd543c6ca",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "bc8c971084e94021d016718ab9b023e6aea714b9de57542af520c505cd874787",
+      "node_hash": "5a6ca2ba7997a02dd5157189728b449ffa08ecc6d6ca8d1ecc7acfb33fefa1a0",
       "count": 1
     },
     {
@@ -2942,19 +2936,13 @@
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_find_definition.go",
-      "node_hash": "ba7ea7bf80005102e7d537e2d25b2b1993461bc5deffb2244b8cd5f4b3fadc57",
+      "node_hash": "29bdaf87d2c195e6e0882f102340f399a9c306469be98448a28dcf3877a41f48",
       "count": 1
     },
     {
       "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_get_communities.go",
       "node_hash": "a72a1ba254feeaddf352e8eb1b240b38c5035919e9e2e513dcdd999b6fa0081a",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/mcpserve/serve_handler_get_overview.go",
-      "node_hash": "2c8deca83b134ab327ff70453492dab1bf0afe239229797454ab1f3ed9c5793b",
       "count": 1
     },
     {

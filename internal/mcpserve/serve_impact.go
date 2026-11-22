@@ -30,9 +30,9 @@ var genericNames = map[string]bool{
 // through the refs graph to show the blast radius of a symbol change.
 func makeGetImpactHandler(g graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		symbol := request.GetString("symbol", "")
+		symbol := symbolArg(request, "symbol", "token")
 		if symbol == "" {
-			return mcp.NewToolResultError("symbol is required"), nil
+			return mcp.NewToolResultError(symbolRequired("symbol", "token")), nil
 		}
 		maxDepth := min(max(request.GetInt("depth", 2), 1), 5)
 		direction := request.GetString("direction", "both")

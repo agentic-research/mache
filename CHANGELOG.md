@@ -6,7 +6,26 @@ bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A `refs` template that renders several lines adds one token per line**
+  (`mache-de3518`, #820). A list-valued field now takes one template,
+  `"refs": ["{{range .imports}}{{.}}\n{{end}}"]`, where it used to need a
+  guarded template per possible index. A single-line ref is unchanged.
+
+- **`symbol` and `token` are interchangeable** on `find_callers`,
+  `find_definition`, `get_impact` and `get_dataflow` (`mache-de23b7`, #820).
+  Each tool keeps its documented name and accepts the other, so the spelling
+  learned from one tool works on the next.
+
 ### Fixed
+
+- **`get_overview` totals count the whole graph** (`mache-ddb631`, #820). For
+  a data projection, `total_dirs` and `total_files` counted only the top two
+  levels: 316 directories and 0 files for a graph of 164k and 658k. They are
+  now a single count where the graph can give one, else a full walk; a walk
+  that stops at its 100,000-node cap sets `totals_truncated`. Source-tree
+  projections, which count source files, are unchanged.
 
 - **`mache serve --http <source>` serves the positional source to clients
   that declare no MCP roots** (`mache-c0bbfd`, #818). Since v0.21.1 only

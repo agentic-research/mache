@@ -289,3 +289,19 @@ func (s *MemoryStore) resolveContent(id string, ref *ContentRef) ([]byte, error)
 	}
 	return data, nil
 }
+
+var _ NodeCounter = (*MemoryStore)(nil)
+
+// NodeCounts implements [NodeCounter] over the node map.
+func (s *MemoryStore) NodeCounts() (dirs, files int, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, n := range s.nodes {
+		if n.Mode.IsDir() {
+			dirs++
+		} else {
+			files++
+		}
+	}
+	return dirs, files, nil
+}

@@ -522,3 +522,31 @@ func (g *SQLiteGraph) refsMapFromBitmaps() map[string][]string {
 	}
 	return refs
 }
+
+var _ NodeCounter = (*SQLiteGraph)(nil)
+
+// NodeCounts implements [NodeCounter]: one grouped count on a nodes table.
+// The legacy scan path keeps directories only and resolves files on demand,
+// so it has nothing to count.
+func (g *SQLiteGraph) NodeCounts() (dirs, files int, err error) {
+	if !g.useNodesTable {
+		return 0, 0, ErrNodeCountUnavailable
+	}
+	rows, err := g.db.Query(`SELECT kind, COUNT(*) FROM nodes WHERE id != '' GROUP BY kind`)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var kind, n int
+		if err := rows.Scan(&kind, &n); err != nil {
+			return 0, 0, err
+		}
+		if kind == NodeKindDir {
+			dirs += n
+		} else {
+			files += n
+		}
+	}
+	return dirs, files, rows.Err()
+}
