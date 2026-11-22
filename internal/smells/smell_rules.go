@@ -62,6 +62,13 @@ type SmellRule struct {
 	// default and see everything; any non-zero min_metric also
 	// overrides.
 	DefaultMinMetric int64
+	// Grouped says the query returns an eighth column, group_key: findings
+	// that share a key are instances of the same thing (for duplicate_code,
+	// copies of one structure). The key reaches a finding as its Group. It
+	// comes from the same query that produces the findings, so a consumer
+	// that wants the groups (find_clones) cannot disagree with the rule
+	// about what is in them.
+	Grouped bool
 	// Severity controls whether a finding from this rule is fatal to
 	// the gate. Three tiers per ESLint precedent (off/warn/error) —
 	// see ADR-0018 and bead mache-ec1a06 for the prior-art rationale.

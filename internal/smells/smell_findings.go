@@ -2,7 +2,9 @@ package smells
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +37,10 @@ type smellFinding struct {
 	// grandfathered and a vacated path stops spending an allowance
 	// (mache-dd45a3).
 	NodeHash string `json:"node_hash,omitempty"`
+	// Group identifies the set this finding belongs to, for a Grouped rule:
+	// a short digest of the rule's group_key. Findings with the same Group
+	// are instances of one thing. Empty for every other rule.
+	Group string `json:"group,omitempty"`
 	// key is the node as the rule returned it, which is what the _ast
 	// lookups below join on: the same string as NodeID on projection-v4, and
 	// a nid on projection-v6, where NodeID is that nid's rendered path
@@ -105,8 +111,13 @@ func runSmellRuleQuery(qg *smellScan, rule *SmellRule, sourceID string, limit in
 			startRow  int
 			startCol  int
 			metric    int64
+			groupKey  sql.NullString
 		)
-		if err := rows.Scan(&src, &key, &startByte, &endByte, &startRow, &startCol, &metric); err != nil {
+		dest := []any{&src, &key, &startByte, &endByte, &startRow, &startCol, &metric}
+		if rule.Grouped {
+			dest = append(dest, &groupKey)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		out = append(out, smellFinding{
@@ -118,6 +129,7 @@ func runSmellRuleQuery(qg *smellScan, rule *SmellRule, sourceID string, limit in
 			Line:      startRow + 1, // tree-sitter is 0-indexed; agents expect 1-based
 			Column:    startCol + 1,
 			Metric:    metric,
+			Group:     groupDigest(groupKey),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -140,6 +152,18 @@ func runSmellRuleQuery(qg *smellScan, rule *SmellRule, sourceID string, limit in
 		return nil, err
 	}
 	return out, nil
+}
+
+// groupDigest is a finding's Group: the first 12 hex digits of the SHA-256 of
+// its rule's group_key, or empty when the rule returned none. The key itself
+// can run to thousands of characters (duplicate_code's is a whole function's
+// structure), which is no use as an identifier.
+func groupDigest(key sql.NullString) string {
+	if !key.Valid || key.String == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key.String))
+	return hex.EncodeToString(sum[:6])
 }
 
 // enrichLocChunk bounds the _ast IN(...) lookup batch size, kept well under

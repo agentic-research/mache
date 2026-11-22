@@ -237,6 +237,18 @@ func registerAnalysisTools(s *server.MCPServer, r *graphRegistry) {
 			return smells.MakeFindSmellsHandler(g, r.smellRulesDir)
 		}),
 	)
+
+	s.AddTool(
+		mcp.NewTool("find_clones",
+			readTool(),
+			mcp.WithDescription("Find duplicated logic: sets of functions that are structural copies of each other (same shape, possibly different names and constants), ranked by how much code one shared helper would remove. Use for 'what is duplicated?', 'what should be a helper?', 'is there already a copy of this function?'. Each set lists every copy with file, line and a snippet. Go only. Exact-structure clones of whole functions only: near-miss copies and repeated blocks inside otherwise different functions are not detected (the response says so). Requires a leyline-parsed .db (the _ast table)."),
+			mcp.WithNumber("min_nodes", mcp.Description("Smallest duplicated structure to report, in syntax nodes (default 24, which skips one-line accessors). 0 reports everything.")),
+			mcp.WithBoolean("include_tests", mcp.Description("Also report sets with fewer than two copies outside test files (default false).")),
+			mcp.WithString("source_id", mcp.Description("Only sets with a copy in this source file (e.g. 'internal/ingest/engine_walk.go'). The set still lists its copies elsewhere.")),
+			mcp.WithNumber("limit", mcp.Description("Max sets (default 50).")),
+		),
+		r.wrapHandler(smells.MakeFindClonesHandler),
+	)
 }
 
 // registerWriteTools registers the one mutating tool.
