@@ -77,7 +77,10 @@ func AvailablePresets() []string {
 	return slices.Sorted(maps.Keys(presetPaths))
 }
 
-func isPreset(ref string) bool {
+// IsPreset reports whether ref names a bundled schema rather than a path.
+// Resolve checks this first, so a preset name always wins over a same-named
+// file; callers that rewrite schema paths must leave preset names alone.
+func IsPreset(ref string) bool {
 	_, ok := presetPaths[ref]
 	return ok
 }
@@ -89,7 +92,7 @@ func Resolve(ref, baseDir string) (*Resolution, error) {
 	if ref == "" {
 		return &Resolution{}, nil
 	}
-	if isPreset(ref) {
+	if IsPreset(ref) {
 		return LoadPreset(ref)
 	}
 

@@ -112,7 +112,7 @@ carries, and ranges a per-decade `.beads` list the engine never builds.
 #### Other data schemas
 
 - [`notion-schema.json`](notion-schema.json) / [`notion-repos-schema.json`](notion-repos-schema.json) — Project Notion page exports ([`tools/notion-fetch`](../tools/notion-fetch)): a flat pages view, and a layered repo-catalog view (`/repos/:layer/:name` with `purpose`/`path` leaves). Samples: [`testdata/notion.json`](testdata/notion.json), [`testdata/notion-repos.json`](testdata/notion-repos.json).
-- [`trivy-ghsa-schema.json`](trivy-ghsa-schema.json) — Projects Venturi GitHub Advisory data into the trivy-db BoltDB layout. It reads `._parent` across records, so it runs through the engine, not the direct SQL backend: `mache --schema examples/trivy-ghsa-schema.json --data github.db --out trivy-index.db /tmp/unused` (the mountpoint is required but unused with `--out`), then convert `trivy-index.db` with [`ext/boltdb`](../ext/boltdb)'s `Materialize`. Sample: [`testdata/trivy-ghsa.json`](testdata/trivy-ghsa.json).
+- [`trivy-ghsa-schema.json`](trivy-ghsa-schema.json) — Projects Venturi GitHub Advisory data into the trivy-db BoltDB layout. It reads `._parent` across records, so it runs through the engine, not the direct SQL backend: `mache --schema examples/trivy-ghsa-schema.json --data github.db --out trivy-index.db`, then convert `trivy-index.db` with [`ext/boltdb`](../ext/boltdb)'s `Materialize`. Sample: [`testdata/trivy-ghsa.json`](testdata/trivy-ghsa.json).
 
 ### MCP (Model Context Protocol)
 

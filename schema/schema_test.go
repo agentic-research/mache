@@ -9,6 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsPreset(t *testing.T) {
+	require.True(t, schema.IsPreset("go"))
+	require.False(t, schema.IsPreset("go.json"))
+}
+
 func TestResolvePreset(t *testing.T) {
 	got, err := schema.Resolve("go", t.TempDir())
 	require.NoError(t, err)

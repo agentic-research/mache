@@ -211,21 +211,25 @@ func (r *graphRegistry) graphForSession(sessionID string) *lazyGraph {
 	return r.fallbackGraphForSession(sessionID, nil)
 }
 
-// fallbackGraphForSession uses an explicitly configured base path when one is
-// available. A shared HTTP daemon has no safe implicit working directory:
-// launchd commonly starts it at filesystem root, so treating "." as a project
-// after ListRoots fails can recursively scan the entire machine.
+// fallbackGraphForSession uses an explicitly configured source when one is
+// available: --path, else the single positional source. A shared HTTP daemon
+// has no safe IMPLICIT working directory (launchd commonly starts it at
+// filesystem root, so treating "." as a project after ListRoots fails can
+// recursively scan the entire machine), but a source the operator typed on
+// the command line is explicit in every transport. A roots-capable session
+// is already served the positional source (lazyGraph.resolveSource prefers
+// it), so refusing it to a rootless HTTP session protected nothing (#818).
 func (r *graphRegistry) fallbackGraphForSession(sessionID string, rootsErr error) *lazyGraph {
 	if r.basePath != "" {
 		r.registerSession(sessionID, r.basePath)
 		rememberResolvedRoot(r.basePath, "--path")
 		return r.getOrCreateGraph(r.basePath)
 	}
-	if serveStdio && len(r.args) == 1 {
+	if len(r.args) == 1 {
 		source, err := filepath.Abs(r.args[0])
 		if err == nil {
 			r.registerSession(sessionID, source)
-			rememberResolvedRoot(source, "stdio arg")
+			rememberResolvedRoot(source, "positional source")
 			return r.getOrCreateGraph(source)
 		}
 	}
@@ -388,8 +392,8 @@ func (r *graphRegistry) resolveSession(ctx context.Context, session server.Clien
 		return r.getOrCreateGraph(rootPath)
 	}
 
-	// Fall back only to an explicit --path. In shared-daemon mode, an empty
-	// base path must not inherit the supervisor's CWD (often filesystem root).
+	// Fall back only to an explicit CLI source. A shared daemon may have
+	// inherited the filesystem root as its working directory.
 	return r.fallbackGraphForSession(sid, rootsErr)
 }
 
@@ -922,34 +926,6 @@ func (lg *lazyGraph) resolveBaseSource() (dataSource string, schema *api.Topolog
 			schema = &api.Topology{Version: api.SchemaVersion}
 		}
 		log.Printf("Loaded config from %s (source: %s)", projcfg.ConfigFileName, dataSource)
-	}
-	return dataSource, schema, nil
-}
-
-// resolveArgSource serves the server's positional argument, with --schema,
-// else an inferred schema for a directory, else an empty one.
-func (lg *lazyGraph) resolveArgSource() (dataSource string, schema *api.Topology, err error) {
-	base := lg.resolvedBasePath()
-	dataSource = lg.args[0]
-
-	if serveSchema != "" {
-		resolved, err := projcfg.ResolveSchema(serveSchema, base)
-		if err != nil {
-			return "", nil, fmt.Errorf("resolve schema: %w", err)
-		}
-		schema = resolved
-	} else if filepath.Ext(dataSource) != ".db" {
-		info, err := os.Stat(dataSource)
-		if err == nil && info.IsDir() {
-			schema, err = schemainfer.InferDirSchema(dataSource)
-			if err != nil {
-				return "", nil, fmt.Errorf("auto-detect schema: %w", err)
-			}
-		} else {
-			schema = &api.Topology{Version: api.SchemaVersion}
-		}
-	} else {
-		schema = &api.Topology{Version: api.SchemaVersion}
 	}
 	return dataSource, schema, nil
 }
