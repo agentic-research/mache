@@ -8,6 +8,17 @@ bumps may include breaking changes.
 
 ### Added
 
+- **`find_clones`: which functions are copies of each other** (`mache-01833e`).
+  A new MCP tool that returns clone sets: functions with the same structure,
+  whatever their names and constants, ranked by how much code one shared
+  helper would remove, each copy with its file, line and a snippet. It is the
+  `duplicate_code` rule's own findings, grouped by a key that rule's query now
+  returns, so the tool and the gate cannot disagree about what a clone is;
+  `find_smells` reports the same key as `group`. Go only, whole functions,
+  exact structure: near-miss copies and repeated blocks inside otherwise
+  different functions are not detected, the response says so, and each gap is
+  pinned by a test that fails the day it closes.
+
 - **A `refs` template that renders several lines adds one token per line**
   (`mache-de3518`, #820). A list-valued field now takes one template,
   `"refs": ["{{range .imports}}{{.}}\n{{end}}"]`, where it used to need a

@@ -109,6 +109,7 @@ func ToolRegistry() []Tool {
 		{Name: "write_file"},
 		{Name: "resolve_ref"},
 		{Name: "find_smells"},
+		{Name: "find_clones"},
 	}
 }
 
@@ -139,7 +140,7 @@ type CloisterGroupDecl struct {
 // cloister backend groups. The split mirrors mache's own functional
 // surface: navigation (browse + summarize), callgraph (refs/defs/impact),
 // lsp (LSP-enriched tools needing ley-line-open), lifecycle (daemon
-// status), linter (find_smells), and mutate (write_file).
+// status), linter (find_smells, find_clones), and mutate (write_file).
 //
 // Every tool in ToolRegistry() must appear in exactly one group; the
 // generator (tools/server-json-gen) and the coverage unit test both
@@ -203,7 +204,7 @@ func CloisterGroups() []CloisterGroupDecl {
 		{
 			Name:             "linter",
 			AdvertisedPrefix: "mache_",
-			UpstreamNames:    []string{"find_smells"},
+			UpstreamNames:    []string{"find_smells", "find_clones"},
 		},
 		// Mutate — the write-back surface. Isolated so a policy can
 		// allow reads and deny writes by routing this group to a
