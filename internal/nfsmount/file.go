@@ -92,44 +92,12 @@ type bytesFile struct {
 
 func (f *bytesFile) Name() string { return f.name }
 
-func (f *bytesFile) Read(p []byte) (int, error) {
-	if f.pos >= int64(len(f.data)) {
-		return 0, io.EOF
-	}
-	n := copy(p, f.data[f.pos:])
-	f.pos += int64(n)
-	if f.pos >= int64(len(f.data)) {
-		return n, io.EOF
-	}
-	return n, nil
-}
+func (f *bytesFile) Read(p []byte) (int, error) { return readAdvancing(f.data, &f.pos, p) }
 
-func (f *bytesFile) ReadAt(p []byte, off int64) (int, error) {
-	if off >= int64(len(f.data)) {
-		return 0, io.EOF
-	}
-	n := copy(p, f.data[off:])
-	if n < len(p) {
-		return n, io.EOF
-	}
-	return n, nil
-}
+func (f *bytesFile) ReadAt(p []byte, off int64) (int, error) { return readAtOffset(f.data, p, off) }
 
 func (f *bytesFile) Seek(offset int64, whence int) (int64, error) {
-	var newPos int64
-	switch whence {
-	case io.SeekStart:
-		newPos = offset
-	case io.SeekCurrent:
-		newPos = f.pos + offset
-	case io.SeekEnd:
-		newPos = int64(len(f.data)) + offset
-	}
-	if newPos < 0 {
-		newPos = 0
-	}
-	f.pos = newPos
-	return f.pos, nil
+	return seekWithin(&f.pos, int64(len(f.data)), offset, whence), nil
 }
 
 func (f *bytesFile) Write([]byte) (int, error) { return 0, errReadOnly }
@@ -160,28 +128,9 @@ type writeFile struct {
 
 func (f *writeFile) Name() string { return f.id }
 
-func (f *writeFile) Read(p []byte) (int, error) {
-	if f.pos >= int64(len(f.buf)) {
-		return 0, io.EOF
-	}
-	n := copy(p, f.buf[f.pos:])
-	f.pos += int64(n)
-	if f.pos >= int64(len(f.buf)) {
-		return n, io.EOF
-	}
-	return n, nil
-}
+func (f *writeFile) Read(p []byte) (int, error) { return readAdvancing(f.buf, &f.pos, p) }
 
-func (f *writeFile) ReadAt(p []byte, off int64) (int, error) {
-	if off >= int64(len(f.buf)) {
-		return 0, io.EOF
-	}
-	n := copy(p, f.buf[off:])
-	if n < len(p) {
-		return n, io.EOF
-	}
-	return n, nil
-}
+func (f *writeFile) ReadAt(p []byte, off int64) (int, error) { return readAtOffset(f.buf, p, off) }
 
 func (f *writeFile) Write(p []byte) (int, error) {
 	if !f.written && !f.truncated && f.replaceAtZero && f.pos == 0 {
@@ -200,20 +149,7 @@ func (f *writeFile) Write(p []byte) (int, error) {
 }
 
 func (f *writeFile) Seek(offset int64, whence int) (int64, error) {
-	var newPos int64
-	switch whence {
-	case io.SeekStart:
-		newPos = offset
-	case io.SeekCurrent:
-		newPos = f.pos + offset
-	case io.SeekEnd:
-		newPos = int64(len(f.buf)) + offset
-	}
-	if newPos < 0 {
-		newPos = 0
-	}
-	f.pos = newPos
-	return f.pos, nil
+	return seekWithin(&f.pos, int64(len(f.buf)), offset, whence), nil
 }
 
 func (f *writeFile) Truncate(size int64) error {
@@ -257,3 +193,54 @@ func (f *writeFile) Lock() error   { return nil }
 func (f *writeFile) Unlock() error { return nil }
 
 var _ billy.File = (*writeFile)(nil)
+
+// The three functions below are the byte-slice file behaviour bytesFile and
+// writeFile share. Each type had its own copy of all three, differing only in
+// the field that holds the bytes.
+
+// readAdvancing copies data from *pos into p and advances *pos, returning
+// io.EOF with the last bytes as well as after them.
+func readAdvancing(data []byte, pos *int64, p []byte) (int, error) {
+	if *pos >= int64(len(data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, data[*pos:])
+	*pos += int64(n)
+	if *pos >= int64(len(data)) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// readAtOffset copies data from off into p, returning io.EOF when p was not
+// filled.
+func readAtOffset(data, p []byte, off int64) (int, error) {
+	if off >= int64(len(data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// seekWithin moves *pos as io.Seeker describes for a file of size bytes,
+// clamping a negative result to 0, and returns the new position. An unknown
+// whence seeks to 0.
+func seekWithin(pos *int64, size, offset int64, whence int) int64 {
+	var newPos int64
+	switch whence {
+	case io.SeekStart:
+		newPos = offset
+	case io.SeekCurrent:
+		newPos = *pos + offset
+	case io.SeekEnd:
+		newPos = size + offset
+	}
+	if newPos < 0 {
+		newPos = 0
+	}
+	*pos = newPos
+	return newPos
+}

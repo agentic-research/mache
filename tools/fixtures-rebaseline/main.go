@@ -33,10 +33,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -64,7 +62,7 @@ func main() {
 }
 
 func run(key, fixture string, wallMs int, justification string) error {
-	repoRoot, err := findMacheRoot()
+	repoRoot, err := testfixtures.RepoRoot()
 	if err != nil {
 		return err
 	}
@@ -87,7 +85,7 @@ func run(key, fixture string, wallMs int, justification string) error {
 			key, fixture)
 	}
 
-	sha := detectGitSHA(repoRoot) // current HEAD; the SHA the developer is committing AT
+	sha := testfixtures.GitShortSHA(repoRoot) // current HEAD; the SHA the developer is committing AT
 	if sha == "" {
 		fmt.Fprintln(os.Stderr,
 			"warning: could not detect git HEAD SHA; anchored_at will be left unchanged")
@@ -241,38 +239,4 @@ func escapeTOML(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	return s
-}
-
-// findMacheRoot walks up from this file's location until it finds a
-// go.mod. The tool is built and run via `go run`, so runtime.Caller(0)
-// points at this main.go regardless of cwd.
-func findMacheRoot() (string, error) {
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("runtime.Caller(0) failed")
-	}
-	dir := filepath.Dir(here)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("walked to filesystem root without finding go.mod (started at %s)", here)
-		}
-		dir = parent
-	}
-}
-
-// detectGitSHA returns the short HEAD SHA of source if it's a git
-// checkout. Returns "" if git is unavailable or source isn't a repo
-// (in which case the tool prints a warning and leaves anchored_at
-// untouched).
-func detectGitSHA(source string) string {
-	cmd := exec.Command("git", "-C", source, "rev-parse", "--short", "HEAD")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }

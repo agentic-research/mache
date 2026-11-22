@@ -480,17 +480,7 @@ func parseDiffWithRenames(r io.Reader, renameThreshold int) (diffSet, error) {
 // compatible AND prevents adversarial values (negative, >100) from
 // silently muting the gate. Range check: N must be in [0,100].
 func parseSimilarityPercent(line string) (int, bool) {
-	rest := strings.TrimPrefix(line, "similarity index ")
-	rest = strings.TrimSpace(rest)
-	rest = strings.TrimSuffix(rest, "%")
-	n, err := strconv.Atoi(rest)
-	if err != nil {
-		return 0, false
-	}
-	if n < 0 || n > 100 {
-		return 0, false
-	}
-	return n, true
+	return parseIndexPercent(line, "similarity index ")
 }
 
 // parseDissimilarityPercent extracts N from `dissimilarity index N%`.
@@ -507,7 +497,15 @@ func parseSimilarityPercent(line string) (int, bool) {
 // applying any rename threshold; this function intentionally does NOT
 // perform that translation so the parser layer stays purely lexical.
 func parseDissimilarityPercent(line string) (int, bool) {
-	rest := strings.TrimPrefix(line, "dissimilarity index ")
+	return parseIndexPercent(line, "dissimilarity index ")
+}
+
+// parseIndexPercent extracts N from a git diff header line `<prefix>N%`, the
+// shape of both `similarity index` and `dissimilarity index`. It returns
+// (0, false) when N is not an integer in [0,100]; the range check is what the
+// two callers' comments rely on.
+func parseIndexPercent(line, prefix string) (int, bool) {
+	rest := strings.TrimPrefix(line, prefix)
 	rest = strings.TrimSpace(rest)
 	rest = strings.TrimSuffix(rest, "%")
 	n, err := strconv.Atoi(rest)
