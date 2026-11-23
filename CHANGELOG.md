@@ -42,6 +42,15 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **`get_impact` no longer returns only the root for a node with two names**
+  (`mache-61faa0`). A node can define more than one token: a module its full
+  name and its short one, a method `Type.Method` and `Method`. The caller
+  lookup took one of them, by storage order, so a module whose short name
+  came first showed no callers in `get_impact` while `find_callers` listed
+  twenty. Callers are now the union over every token a node defines, derived
+  in one place for `get_impact`, `get_dataflow`, `list_directory` and the
+  mount's `callers/`, so those four cannot disagree.
+
 - **`get_overview` is fast again in `--mount` mode** (`mache-553d34`). Making
   its totals exact (`mache-ddb631`) sent every graph that cannot count itself
   down a 100,000-node walk with a lookup per node, and a `--mount` composite

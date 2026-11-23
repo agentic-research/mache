@@ -173,16 +173,14 @@ func (w *impactWalk) run() {
 	}
 }
 
-// callersOf is what calls step's node, by the symbol the node defines. Generic
+// callersOf is what calls step's node, by every symbol the node defines. Generic
 // names (Close, String, Error, ...) are not followed past the root: those
 // ubiquitous tokens would pull in most of the codebase and drown out the real
 // impact signal.
 func (w *impactWalk) callersOf(step impactStep) []*graph.Node {
-	token := graph.DefTokenFor(w.g, step.id)
-	if step.depth > 0 && genericNames[token] {
-		return nil
-	}
-	callers, err := w.g.GetCallers(token)
+	callers, err := graph.CallersOf(w.g, step.id, func(token string) bool {
+		return step.depth == 0 || !genericNames[token]
+	})
 	if err != nil {
 		return nil
 	}

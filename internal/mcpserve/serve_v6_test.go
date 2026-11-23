@@ -70,7 +70,7 @@ func TestListDirectory_OffersCallersOnALeylineConstruct(t *testing.T) {
 
 // withSchema is a served graph as the registry hands it to a handler: one that
 // knows the schema it was built with. It embeds the concrete graph so every
-// capability the registry's lazyGraph forwards (DefTokenOf among them) still
+// capability the registry's lazyGraph forwards (DefTokensOf among them) still
 // shows through.
 type withSchema struct {
 	*graph.SQLiteGraph

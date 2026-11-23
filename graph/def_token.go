@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// DefTokenFor returns the symbol a node defines.
+// DefTokensFor returns the symbols a node defines.
 //
 // Callers that need "what is this node called?" must NOT reach for
 // filepath.Base(nodeID). That works only on the standalone mache schema, where
@@ -24,27 +24,54 @@ import (
 // too — so get_impact answered with code spans from docs/ARCHITECTURE.md
 // presented as call sites. Wrong answers, not empty ones.
 //
-// node_defs is the authority: it maps a node to the token that node declares,
+// node_defs is the authority: it maps a node to the tokens that node declares,
 // asked through the graph's DefTokener so this file names none of the
 // producer's columns (projection-v6 renamed them, mache-90cb9f).
 //
-// Every surface that names a construct's callers asks this: MCP's
-// list_directory, get_impact and get_dataflow, and the mount's callers/.
 // The filepath.Base fallback is kept for the standalone mache schema (no
 // node_defs table, or a backend with no SQL handle at all), where it IS the
 // symbol — and only for that case.
-func DefTokenFor(g Graph, nodeID string) string {
+func DefTokensFor(g Graph, nodeID string) []string {
 	dt, ok := g.(DefTokener)
 	if !ok {
-		return filepath.Base(nodeID)
+		return []string{filepath.Base(nodeID)}
 	}
 	// A mount addresses nodes from the root ("/a.go/..."); ids do not.
-	token, ok, err := dt.DefTokenOf(strings.TrimPrefix(nodeID, "/"))
-	if err != nil || !ok {
+	tokens, err := dt.DefTokensOf(strings.TrimPrefix(nodeID, "/"))
+	if err != nil || len(tokens) == 0 {
 		// No node_defs table (standalone projection), a query failure, or a
 		// node that defines nothing (a directory, a file node, a virtual
 		// node): filepath.Base is as good an answer as exists.
-		return filepath.Base(nodeID)
+		return []string{filepath.Base(nodeID)}
 	}
-	return token
+	return tokens
+}
+
+// CallersOf is what references the node at nodeID: the callers of every
+// symbol it defines, each once, in token order then the graph's own. It is
+// the one way a caller list is derived from a node, for MCP's list_directory,
+// get_impact and get_dataflow and the mount's callers/, so they cannot
+// disagree about who calls a node.
+//
+// follow, when not nil, says whether a token is looked up at all; get_impact
+// uses it to leave ubiquitous names alone below the root.
+func CallersOf(g Graph, nodeID string, follow func(token string) bool) ([]*Node, error) {
+	var callers []*Node
+	seen := map[string]bool{}
+	for _, token := range DefTokensFor(g, nodeID) {
+		if follow != nil && !follow(token) {
+			continue
+		}
+		found, err := g.GetCallers(token)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range found {
+			if c != nil && !seen[c.ID] {
+				seen[c.ID] = true
+				callers = append(callers, c)
+			}
+		}
+	}
+	return callers, nil
 }

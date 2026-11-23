@@ -15,6 +15,7 @@ import (
 	"github.com/agentic-research/mache/internal/leylinegraph"
 	machetmpl "github.com/agentic-research/mache/internal/template"
 	"github.com/agentic-research/mache/internal/testutil"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,7 @@ func leylineShapedGraph(t *testing.T, p fixturedb.Producer) graph.Graph {
 	return sg
 }
 
-// TestDefTokenFor_ResolvesLeylineIDsToTheirSymbol is the regression. Before
+// TestDefTokensFor_ResolvesLeylineIDsToTheirSymbol is the regression. Before
 // the fix, both get_impact and get_dataflow derived the lookup token with
 // filepath.Base(nodeID), which on a leyline projection yields
 // "function_declaration" — a string that matches nothing real, and matches
@@ -44,31 +45,29 @@ func leylineShapedGraph(t *testing.T, p fixturedb.Producer) graph.Graph {
 // projection: 0 of 10,409 node_defs rows have an ID ending in their token.
 // It holds on projection-v6 too, where the id the caller holds is a path and
 // node_defs keys by nid.
-func TestDefTokenFor_ResolvesLeylineIDsToTheirSymbol(t *testing.T) {
+func TestDefTokensFor_ResolvesLeylineIDsToTheirSymbol(t *testing.T) {
 	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
-		got := graph.DefTokenFor(leylineShapedGraph(t, p), "a.go/function_declaration")
-		require.Equal(t, "Alpha", got,
+		got := graph.DefTokensFor(leylineShapedGraph(t, p), "a.go/function_declaration")
+		require.Equal(t, []string{"Alpha"}, got,
 			"%v: the token must come from node_defs; the node ID's last segment is a construct kind, never the symbol", p)
-		assert.NotContains(t, got, "function_declaration",
-			"leaking the construct kind is what made get_impact match markdown code spans as call sites")
 	}
 }
 
-// TestDefTokenFor_FallsBackForNodesThatDefineNothing covers directories, file
+// TestDefTokensFor_FallsBackForNodesThatDefineNothing covers directories, file
 // nodes and virtual nodes: they have no node_defs row, so there is no better
 // answer than the path segment.
-func TestDefTokenFor_FallsBackForNodesThatDefineNothing(t *testing.T) {
+func TestDefTokensFor_FallsBackForNodesThatDefineNothing(t *testing.T) {
 	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
-		assert.Equal(t, "a.go", graph.DefTokenFor(leylineShapedGraph(t, p), "a.go"), "%v", p)
+		assert.Equal(t, []string{"a.go"}, graph.DefTokensFor(leylineShapedGraph(t, p), "a.go"), "%v", p)
 	}
 }
 
-// TestDefTokenFor_FallsBackWithoutASQLHandle covers a backend that is not a
+// TestDefTokensFor_FallsBackWithoutASQLHandle covers a backend that is not a
 // RefsQuerier at all (a plain MemoryStore). On the standalone mache schema the
 // path segment IS the symbol, so the fallback is correct there — it is only
 // wrong on leyline, which is what the fix distinguishes.
-func TestDefTokenFor_FallsBackWithoutASQLHandle(t *testing.T) {
-	assert.Equal(t, "Alpha", graph.DefTokenFor(graph.NewMemoryStore(), "pkg/functions/Alpha"))
+func TestDefTokensFor_FallsBackWithoutASQLHandle(t *testing.T) {
+	assert.Equal(t, []string{"Alpha"}, graph.DefTokensFor(graph.NewMemoryStore(), "pkg/functions/Alpha"))
 }
 
 // TestLeylineProjection_CallersImpactAndDataflowAgree exercises the real
@@ -155,4 +154,114 @@ func Gamma() { Alpha() }
 		assert.False(t, strings.Contains(path, ".md/") || strings.Contains(path, "docs/"),
 			"construct-kind lookup must not drift into Markdown prose: %s", path)
 	}
+}
+
+// twoNameGraph is a module known by two tokens, its full name and its short
+// one, where every reference uses the full name: the shape of a module in a
+// data projection (mache-61faa0). The definitions are written in the given
+// order, because the bug was that the answer followed storage order.
+func twoNameGraph(t *testing.T, p fixturedb.Producer, defOrder ...string) graph.Graph {
+	t.Helper()
+	b := fixturedb.New(t, p).
+		Parsed("a.go/function_declaration_0").
+		Parsed("a.go/function_declaration_1").
+		Parsed("a.go/function_declaration_2")
+	b.ASTNode("a.go/function_declaration_1/block", "block", "a.go", fixturedb.Bytes(90, 160))
+	b.ASTNode("a.go/function_declaration_1/block/call_expression", "call_expression", "a.go", fixturedb.Bytes(100, 110))
+	b.ASTNode("a.go/function_declaration_2/block", "block", "a.go", fixturedb.Bytes(190, 260))
+	b.ASTNode("a.go/function_declaration_2/block/call_expression", "call_expression", "a.go", fixturedb.Bytes(200, 210))
+	for _, token := range defOrder {
+		b.Def(token, "a.go/function_declaration_0", fixturedb.Function)
+	}
+	b.Def("CallerOne", "a.go/function_declaration_1", fixturedb.Function)
+	b.Def("CallerTwo", "a.go/function_declaration_2", fixturedb.Function)
+	b.Ref("Theory.EulerSum", "a.go/function_declaration_1", "a.go/function_declaration_1/block/call_expression", "")
+	b.Ref("Theory.EulerSum", "a.go/function_declaration_2", "a.go/function_declaration_2/block/call_expression", "")
+	path, _ := b.Build()
+	sg, err := graph.OpenSQLiteGraph(path, &api.Topology{Version: api.SchemaVersion}, machetmpl.Render)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sg.Close() })
+	return sg
+}
+
+// A node known by two names is called by whoever references either. One
+// token used to be chosen, with LIMIT 1 and no order, so a module whose short
+// name came first in node_defs had no callers according to get_impact while
+// find_callers listed twenty (mache-61faa0). Whatever order the definitions
+// were written in, every surface that derives callers from a node agrees
+// with find_callers on the referenced name.
+func TestCallersOfANodeWithTwoNames_DoNotDependOnDefinitionOrder(t *testing.T) {
+	const node = "a.go/function_declaration_0"
+	for _, p := range []fixturedb.Producer{fixturedb.Leyline, fixturedb.LeylineV6} {
+		for name, order := range map[string][]string{
+			"full name first":  {"Theory.EulerSum", "EulerSum"},
+			"short name first": {"EulerSum", "Theory.EulerSum"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				g := twoNameGraph(t, p, order...)
+				assert.Equal(t, []string{"EulerSum", "Theory.EulerSum"}, graph.DefTokensFor(g, node), "every token, sorted")
+
+				want, err := g.GetCallers("Theory.EulerSum")
+				require.NoError(t, err)
+				require.Len(t, want, 2, "%v: the fixture must have callers under the full name", p)
+				wantIDs := nodeIDs(want)
+
+				got, err := graph.CallersOf(g, node, nil)
+				require.NoError(t, err)
+				assert.Equal(t, wantIDs, nodeIDs(got), "%v: CallersOf", p)
+
+				impact := callTool(t, makeGetImpactHandler(g), map[string]any{"symbol": "Theory.EulerSum", "direction": "callers", "depth": 1})
+				for _, id := range wantIDs {
+					assert.Contains(t, impact, id, "%v: get_impact", p)
+				}
+				flow := callTool(t, makeGetDataflowHandler(g), map[string]any{"symbol": "Theory.EulerSum", "direction": "callers", "depth": 1})
+				for _, id := range wantIDs {
+					assert.Contains(t, flow, id, "%v: get_dataflow", p)
+				}
+			})
+		}
+	}
+}
+
+// follow leaves a token out of the lookup, and a caller reached through two
+// tokens is listed once.
+func TestCallersOf_FollowAndDedup(t *testing.T) {
+	store := graph.NewMemoryStore()
+	g := twoTokens{store}
+	store.AddNode(&graph.Node{ID: "caller"})
+	require.NoError(t, store.AddRef("Long.Name", "caller"))
+	require.NoError(t, store.AddRef("Name", "caller"))
+
+	both, err := graph.CallersOf(g, "x", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"caller"}, nodeIDs(both), "one caller, reached by both tokens, listed once")
+
+	none, err := graph.CallersOf(g, "x", func(string) bool { return false })
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}
+
+// twoTokens is a graph whose every node defines the same two tokens.
+type twoTokens struct{ *graph.MemoryStore }
+
+func (twoTokens) DefTokensOf(string) ([]string, error) { return []string{"Long.Name", "Name"}, nil }
+
+// nodeIDs is the ids of nodes, sorted.
+func nodeIDs(nodes []*graph.Node) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		ids = append(ids, n.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// callTool runs a handler and returns its text, failing on a tool error.
+func callTool(t *testing.T, h server.ToolHandlerFunc, args map[string]any) string {
+	t.Helper()
+	res, err := h(context.Background(), testutil.MakeRequest(args))
+	require.NoError(t, err)
+	text := testutil.ResultText(t, res)
+	require.False(t, res.IsError, text)
+	return text
 }
