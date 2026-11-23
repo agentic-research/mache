@@ -17,9 +17,9 @@ func queryAgainst(t *testing.T, reply map[string]any) *SocketClient {
 	return client
 }
 
-func text(s string) map[string]any { return map[string]any{"text": s} }
+func cell(s string) map[string]any { return map[string]any{"text": s} }
 
-var null = map[string]any{"null": nil}
+var nullCell = map[string]any{"null": nil}
 
 // Wire major 3: a row is a list of cells in column order. Every non-NULL
 // value arrives as text; NULL is its own member, so it is not the empty
@@ -30,8 +30,8 @@ func TestQuery_ReadsCellRowsInColumnOrder(t *testing.T) {
 		"ok":      true,
 		"columns": []any{"node_id", "n", "note", "note"},
 		"rows": []any{
-			[]any{text("symbols/config"), text("42"), text(""), null},
-			[]any{text("symbols/auth"), text("2.5"), text("first"), text("second")},
+			[]any{cell("symbols/config"), cell("42"), cell(""), nullCell},
+			[]any{cell("symbols/auth"), cell("2.5"), cell("first"), cell("second")},
 		},
 	})
 	res, err := client.QueryResult("SELECT 1")
@@ -76,7 +76,7 @@ func TestQuery_RefusesShapesItDoesNotKnow(t *testing.T) {
 // position.
 func TestQuery_RefusesARowThatDoesNotMatchItsColumns(t *testing.T) {
 	_, err := queryAgainst(t, map[string]any{
-		"ok": true, "columns": []any{"a", "b"}, "rows": []any{[]any{text("only one")}},
+		"ok": true, "columns": []any{"a", "b"}, "rows": []any{[]any{cell("only one")}},
 	}).QueryResult("SELECT 1")
 	require.ErrorContains(t, err, "1 cells for 2 columns")
 }
@@ -87,7 +87,7 @@ func TestQuery_RefusesARowThatDoesNotMatchItsColumns(t *testing.T) {
 func TestQuery_ATruncatedReplyIsNotACompleteOne(t *testing.T) {
 	reply := map[string]any{
 		"ok": true, "columns": []any{"c"},
-		"rows":       []any{[]any{text("a")}, []any{text("b")}},
+		"rows":       []any{[]any{cell("a")}, []any{cell("b")}},
 		"truncation": map[string]any{"limit": 2},
 	}
 	res, err := queryAgainst(t, reply).QueryResult("SELECT 1")
@@ -103,7 +103,7 @@ func TestQuery_ATruncatedReplyIsNotACompleteOne(t *testing.T) {
 	assert.Nil(t, rows)
 
 	// The removed top-level keys of earlier wires mean nothing now.
-	old := map[string]any{"ok": true, "columns": []any{"c"}, "rows": []any{[]any{text("a")}}, "truncated": true, "limit": 1}
+	old := map[string]any{"ok": true, "columns": []any{"c"}, "rows": []any{[]any{cell("a")}}, "truncated": true, "limit": 1}
 	res, err = queryAgainst(t, old).QueryResult("SELECT 1")
 	require.NoError(t, err)
 	assert.Nil(t, res.TruncatedAt, "`truncated` and `limit` at the top level are not read")
