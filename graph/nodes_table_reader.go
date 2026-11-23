@@ -284,7 +284,10 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 		return nil, err
 	}
 
-	var content []byte
+	// A file row with neither inline content nor a record to render from is
+	// an empty file: the row is what says it exists. It used to read as not
+	// found, which hid every empty file the engine wrote (mache-b33274).
+	content := []byte{}
 	if record.Valid && record.String != "" {
 		content = []byte(record.String)
 	} else if recordID.Valid && recordID.String != "" {
@@ -292,8 +295,6 @@ func (r *NodesTableReader) resolveContent(id string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		return nil, ErrNotFound
 	}
 
 	r.cache.Put(id, content)

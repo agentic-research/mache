@@ -30,29 +30,9 @@ func dedupSuffix(sourceFile string) string {
 	return ".from_" + sanitized
 }
 
-// segmentEscape makes a rendered name usable as exactly ONE segment of a node
-// ID. A node ID is a '/'-joined path and every consumer splits it back on '/':
-// SQLiteWriter.AddNode derives parent_id and name from the LAST '/', GraphFS
-// walks it component by component, ListChildren is `WHERE parent_id = ?`. A
-// name template is free to render a '/' — every non-stdlib Go import path,
-// every relative JS import — and the ID then split in the wrong place:
-// `main/imports/"golden/store"` was written with parent_id `main/imports/"golden`,
-// which is not a node, so ListChildren never returned it and 1939 nodes were
-// unreachable on mache itself (mache-94f571).
-//
-// Percent-encoding, '%' FIRST so the mapping stays injective: escaping only
-// '/' would give the distinct names `a/b` and `a%2Fb` the same ID.
-//
-// Only the ID is escaped. The rendered name is still what AddDef registers as
-// the definition token, so `search` and the smell rules keep matching the
-// symbol as it is written in the source.
-func segmentEscape(name string) string {
-	if !strings.ContainsAny(name, "%/") {
-		return name
-	}
-	name = strings.ReplaceAll(name, "%", "%25")
-	return strings.ReplaceAll(name, "/", "%2F")
-}
+// segmentEscape makes a rendered name one segment of a node ID: see
+// graph.SegmentEscape, the one rule the engine and the direct scan share.
+func segmentEscape(name string) string { return graph.SegmentEscape(name) }
 
 // joinSegment appends a rendered name to a node path as ONE segment. Every
 // construct and leaf-file name reaches a node ID through here.
@@ -716,6 +696,14 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		var fileNodes []*graph.Node
 		var sourceFileID string
 		for _, fileSchema := range schema.Files {
+			// A leaf with a content source and no template is not rendered
+			// here: its content comes from that source's table, and it is
+			// written when there is some (MaterializeContentSources). Without
+			// data it has no file, which is what it had when every empty
+			// render was dropped.
+			if fileSchema.ContentSource != "" && fileSchema.ContentTemplate == "" {
+				continue
+			}
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
 				log.Printf("processNode: skip file name render %q: %v", fileSchema.Name, err) // coverage:ignore
@@ -736,10 +724,12 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				continue                                                                // coverage:ignore
 			}
 
-			// Skip empty optional files (e.g. "doc" when no doc comments exist)
-			if content == "" && fileSchema.Name != "source" {
-				continue // coverage:ignore
-			}
+			// An empty file is kept. An empty value is still a value: the
+			// field is there and holds nothing, which is not the same as no
+			// field. And a file that exists can be written to; one that was
+			// dropped cannot (mache-b33274). The drop this replaces was for
+			// `doc` leaves on source constructs, which no bundled preset
+			// declares any more.
 
 			fileNode := &graph.Node{
 				ID:      fileId,

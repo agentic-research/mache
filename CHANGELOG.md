@@ -52,6 +52,19 @@ bumps may include breaking changes.
 
 ### Fixed
 
+- **A data source served straight from its records agrees with `mache --out`
+  on three more things** (`mache-b33274`, `mache-299113`). Measured by a
+  committed matrix of twelve planted cases
+  (`internal/ingest/testdata/engine_direct_matrix.md`):
+  - two records that render the same directory are both served, the second
+    as `Name.2`, where the direct path served only one of them;
+  - a name containing `/` or `%` is escaped the same way on both paths, where
+    the direct path made the node unreachable;
+  - a file whose content renders empty is kept, as an empty file, on every
+    path. The engine and source projections used to drop it, so a field that
+    is present but empty looked the same as no field, and the file could not
+    be written to.
+
 - **`get_impact` no longer returns only the root for a node with two names**
   (`mache-61faa0`). A node can define more than one token: a module its full
   name and its short one, a method `Type.Method` and `Method`. The caller

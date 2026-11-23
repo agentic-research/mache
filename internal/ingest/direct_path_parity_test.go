@@ -94,7 +94,7 @@ func nodeIDsSorted(nodes []*graph.Node) []string {
 // until mache-1bf0d8, so find_callers returned nothing there.
 func TestDirectPath_AnswersWhatTheEnginePathAnswers(t *testing.T) {
 	schema := sharedParentSchema()
-	data := withoutLastRecord(t, sharedParentData(t, 300, 3, 4))
+	data := sharedParentData(t, 300, 3, 4)
 	engine, direct := engineGraph(t, schema, data), directGraph(t, schema, data)
 
 	tree := treeOf(t, engine, "by-area")
@@ -120,60 +120,56 @@ func TestDirectPath_AnswersWhatTheEnginePathAnswers(t *testing.T) {
 			continue
 		}
 		modules++
-		assert.Equal(t, graph.DefTokensFor(engine, id), graph.DefTokensFor(direct, id), "tokens of %s", id)
-		assert.Equal(t, engine.LookupDef(name), direct.LookupDef(name), "definition of %s", name)
+		tokens := graph.DefTokensFor(engine, id)
+		assert.Equal(t, tokens, graph.DefTokensFor(direct, id), "tokens of %s", id)
+		for _, token := range tokens {
+			assert.Equal(t, engine.LookupDef(token), direct.LookupDef(token), "definition of %s", token)
+			want, err := engine.GetCallers(token)
+			require.NoError(t, err)
+			got, err := direct.GetCallers(token)
+			require.NoError(t, err)
+			assert.Equal(t, nodeIDsSorted(want), nodeIDsSorted(got), "callers of %s", token)
+		}
 
-		want, err := engine.GetCallers(name)
+		// A node's callers, derived from every token it defines: for a
+		// renamed duplicate (Mod0.2) that is its symbol's, not its ID's.
+		want, err := graph.CallersOf(engine, id, nil)
 		require.NoError(t, err)
-		got, err := direct.GetCallers(name)
+		got, err := graph.CallersOf(direct, id, nil)
 		require.NoError(t, err)
-		assert.Equal(t, nodeIDsSorted(want), nodeIDsSorted(got), "callers of %s", name)
+		assert.Equal(t, nodeIDsSorted(want), nodeIDsSorted(got), "callers of the node %s", id)
 		if len(want) > 0 {
 			withCallers++
 		}
-
-		viaNode, err := graph.CallersOf(direct, id, nil)
-		require.NoError(t, err)
-		assert.Equal(t, nodeIDsSorted(want), nodeIDsSorted(viaNode), "callers of the node %s", id)
 	}
-	assert.Equal(t, 300, modules, "every module directory was compared")
+	assert.Equal(t, 301, modules, "every module directory was compared, including Mod0.2")
 	assert.Greater(t, withCallers, 100, "the corpus must have callers to compare")
 }
 
-// withoutLastRecord is the corpus at dataPath minus its final record, which
-// sharedParentData adds as a second record for an existing directory.
-func withoutLastRecord(t *testing.T, dataPath string) string {
-	t.Helper()
-	raw, err := os.ReadFile(dataPath)
-	require.NoError(t, err)
-	var records []json.RawMessage
-	require.NoError(t, json.Unmarshal(raw, &records))
-	out, err := json.Marshal(records[:len(records)-1])
-	require.NoError(t, err)
-	p := filepath.Join(t.TempDir(), "unique.json")
-	require.NoError(t, os.WriteFile(p, out, 0o644))
-	return p
-}
-
-// KNOWN GAP, mache-299113: two records that render the same directory. The
-// engine keeps both, the second as `Mod0.2`; the direct path merges them into
-// one directory, so one record's content is never served. That disagreement
-// predates the refs work and is the first entry in the list ADR-0028 asks
-// for. This pins it, so the day the direct path keeps both this test fails
-// and the colliding record goes back into the parity corpus above.
-func TestDirectPath_KnownGap_SameNameRecordsAreMerged(t *testing.T) {
+// Two records that render the same directory are both served, under the IDs
+// the engine gives them, each with its own content (mache-299113). The direct
+// path used to merge them, so one record was never read.
+func TestDirectPath_SameNameRecordsAreKeptApartAsTheEngineKeepsThem(t *testing.T) {
 	schema := sharedParentSchema()
 	data := sharedParentData(t, 20, 3, 4)
 	engine, direct := engineGraph(t, schema, data), directGraph(t, schema, data)
 
-	engineKids, err := engine.ListChildren("by-area/area0/sub0")
+	want, err := engine.ListChildren("by-area/area0/sub0")
 	require.NoError(t, err)
-	require.Contains(t, engineKids, "by-area/area0/sub0/Mod0.2", "the engine keeps the second record")
+	require.Contains(t, want, "by-area/area0/sub0/Mod0.2", "the engine keeps the second record")
+	got, err := direct.ListChildren("by-area/area0/sub0")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 
-	directKids, err := direct.ListChildren("by-area/area0/sub0")
-	require.NoError(t, err)
-	assert.NotContains(t, directKids, "by-area/area0/sub0/Mod0.2",
-		"the direct path now keeps same-named records apart: mache-299113 is fixed; add the collision to the parity corpus")
+	buf := make([]byte, 256)
+	for _, id := range []string{"by-area/area0/sub0/Mod0/doc", "by-area/area0/sub0/Mod0.2/doc"} {
+		n, err := engine.ReadContent(id, buf, 0)
+		require.NoError(t, err)
+		wantDoc := string(buf[:n])
+		n, err = direct.ReadContent(id, buf, 0)
+		require.NoError(t, err)
+		assert.Equal(t, wantDoc, string(buf[:n]), id)
+	}
 }
 
 // A record with no value for a field its refs template ranges over still
