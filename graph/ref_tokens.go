@@ -42,3 +42,32 @@ func DefTokensForName(name string) []string {
 	}
 	return []string{name}
 }
+
+// SegmentEscape makes a rendered name usable as exactly ONE segment of a node
+// ID. A node ID is a '/'-joined path and every consumer splits it back on '/':
+// SQLiteWriter.AddNode derives parent_id and name from the LAST '/', GraphFS
+// walks it component by component, ListChildren is `WHERE parent_id = ?`. A
+// name template is free to render a '/' — every non-stdlib Go import path,
+// every relative JS import — and the ID then split in the wrong place:
+// `main/imports/"golden/store"` was written with parent_id `main/imports/"golden`,
+// which is not a node, so ListChildren never returned it and 1939 nodes were
+// unreachable on mache itself (mache-94f571).
+//
+// Percent-encoding, '%' FIRST so the mapping stays injective: escaping only
+// '/' would give the distinct names `a/b` and `a%2Fb` the same ID.
+//
+// Only the ID is escaped. The rendered name is still what AddDef registers as
+// the definition token, so `search` and the smell rules keep matching the
+// symbol as it is written in the source.
+//
+// The engine (internal/ingest) and the direct scan both escape through this,
+// so a name holds the same ID on both paths. The direct scan used to join the
+// raw name, so `io/fs` became `mods/a/io/fs` under `mods/a`, a node nothing
+// could reach (mache-b33274).
+func SegmentEscape(name string) string {
+	if !strings.ContainsAny(name, "%/") {
+		return name
+	}
+	name = strings.ReplaceAll(name, "%", "%25")
+	return strings.ReplaceAll(name, "/", "%2F")
+}

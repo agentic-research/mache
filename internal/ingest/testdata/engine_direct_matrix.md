@@ -21,6 +21,6 @@ answer is specified. See `engine_direct_matrix_test.go` for each case.
 | empty content | a file whose template renders empty for one record | **differ**: `mods/a/Bare/extra` only on direct (node) | **differ**: `mods/a/Bare/extra` only on direct ("") | agree | agree |
 | absent content field | a file's template names a field one record does not have | agree | agree | agree | agree |
 | dotted names | a name with dots is also defined under its last segment | agree | agree | agree | agree |
-| slash in a name | a rendered name contains / and % | **differ** (7): `mods/a/50%` only on direct (node); … | **differ** (3): `mods/a/50%/doc` only on direct ("d"); … | **differ** (3): `mods/a/50%` only on direct ([50%]); … | **differ**: `io/fs`: engine [mods/a/50%25], direct [mods/a/50%] |
+| slash in a name | a rendered name contains / and % | agree | agree | agree | agree |
 | scalar and numeric refs | refs over a string field and a number | agree | agree | agree | agree |
 | missing ref field | a record has no value for the field its refs range over | agree | agree | agree | agree |

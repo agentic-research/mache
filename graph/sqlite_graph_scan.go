@@ -450,7 +450,7 @@ func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values, refValues m
 			continue
 		}
 
-		childPath := parentPath + "/" + name
+		childPath := parentPath + "/" + SegmentEscape(name)
 		result.entries = append(result.entries, pathEntry{parent: parentPath, child: childPath})
 
 		// Recurse into deeper directory levels
