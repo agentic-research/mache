@@ -243,7 +243,17 @@ tasks:
       - docs:lint
       - lint:actions
       - lint:yaml
+      - lint:invariants
       - smells
+
+  lint:invariants:
+    desc: "Repo invariants that are not behaviour: internal/lint (regexp ratchet, LLO boundary, decomposition, gate preflight) and the tool-surface tests. Seconds, and part of `lint`, so they fail before the test suite starts (mache-33d1d5)"
+    cmds:
+      # These also run under `task test`. Run here first because they are
+      # about the shape of the repository, cost seconds, and used to report
+      # only after several minutes of the -race suite.
+      - go test ./internal/lint/ -count=1
+      - go test ./internal/mcpserve/ -count=1 -run 'TestREADMEToolMatrix|TestCapabilityInterfaces|TestLazyGraph_Forwards'
 
   lint:go:
     desc: Run golangci-lint
@@ -946,6 +956,11 @@ tasks:
       # module, and a go.work/go.mod disagreement stops all of them
       # with an error that looks nothing like its cause (mache-49b87e).
       - task: gomod:workspace
+      # Instant, and what CI checks first: a red `changes` job skips test and
+      # lint, so a missing entry or a misplaced `Changelog: none` trailer
+      # cost a whole CI round. This is the pre-push gate, so origin/main is
+      # as fresh as the push needs (mache-33d1d5).
+      - task: changelog:check
       - task: fmt:check
       - task: vet
       - task: lint
