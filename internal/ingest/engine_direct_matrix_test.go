@@ -172,7 +172,6 @@ var matrixCases = []matrixCase{
 
 // observation is everything one path answers about a corpus.
 type observation struct {
-	err     string
 	tree    []string
 	content map[string]string
 	defs    map[string][]string // directory -> tokens it defines
@@ -314,7 +313,7 @@ func quote(s string) string {
 	return fmt.Sprintf("%q", s)
 }
 
-func joinIDs(ids []string) string { return "[" + strings.Join(ids, ", ") + "]" }
+func joinIDs(ids []string) string { return fmt.Sprint(ids) }
 
 // matrixRow compares the two paths on one case.
 func matrixRow(t *testing.T, c matrixCase) []string {
