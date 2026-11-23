@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -218,7 +219,12 @@ func treeLines(body string) (paths []string, contents map[string]string) {
 		if line == "" {
 			continue
 		}
+		// `path = content` states a file's content; `path =` states that
+		// the file is there and empty.
 		path, content, has := strings.Cut(line, " = ")
+		if p, empty := strings.CutSuffix(line, " ="); empty {
+			path, content, has = p, "", true
+		}
 		paths = append(paths, path)
 		if has {
 			contents[path] = content
@@ -257,11 +263,21 @@ func TestSchemaReferenceSnippetsProject(t *testing.T) {
 			topo.ResolveIncludes()
 
 			g := s.project(t, kind, topo)
-			dirs, leaves, problems := projtest.Walk(t, g, nil)
+			wantPaths, wantContent := treeLines(tree.body)
+			// A file the tree lists as empty (`path =`) may be: an empty
+			// value is kept as an empty file (mache-b33274). Any other empty
+			// file is still a problem, since it usually means a template
+			// that cannot render.
+			var expectedEmpty []string
+			for path, content := range wantContent {
+				if content == "" {
+					expectedEmpty = append(expectedEmpty, filepath.Base(path))
+				}
+			}
+			dirs, leaves, problems := projtest.Walk(t, g, expectedEmpty)
 			assert.Empty(t, problems)
 			require.NotEmpty(t, leaves, "the snippet projected no files")
 
-			wantPaths, wantContent := treeLines(tree.body)
 			got := slices.Concat(dirs, leaves)
 			sort.Strings(got)
 			assert.Equal(t, wantPaths, got, "the tree fence at line %d must list exactly the projected paths", tree.line)
@@ -338,11 +354,11 @@ var claims = map[string]func(t *testing.T, fx fixtures){
 		_, leaves, _ := projtest.Walk(t, projtest.VenturiDirect(t, topo, fx.dbPath), nil)
 		assert.Empty(t, leaves, "every record is null-skipped")
 	},
-	"engine drops empty leaves except source": func(t *testing.T, fx fixtures) {
+	"engine keeps empty leaves": func(t *testing.T, fx fixtures) {
 		topo := topology(t, `{"version":"v1","nodes":[{"name":"x","selector":"$","files":[{"name":"empty","content_template":"{{default .missing \"\"}}"},{"name":"source","content_template":""}]}]}`)
-		_, leaves, problems := projtest.Walk(t, projtest.JSONDocument(t, topo, fx.dataFile), []string{"source"})
+		_, leaves, problems := projtest.Walk(t, projtest.JSONDocument(t, topo, fx.dataFile), []string{"empty", "source"})
 		assert.Empty(t, problems)
-		assert.Equal(t, []string{"x/source"}, leaves)
+		assert.Equal(t, []string{"x/empty", "x/source"}, leaves)
 	},
 	"engine .db path keeps empty leaves and ignores the root selector": func(t *testing.T, fx fixtures) {
 		topo := topology(t, `{"version":"v1","nodes":[{"name":"vulns","selector":"$.nothing","children":[{"name":"{{.item.cveID}}","selector":"$[*]","files":[{"name":"empty","content_template":"{{default .item.missing \"\"}}"}]}]}]}`)

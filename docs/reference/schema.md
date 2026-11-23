@@ -537,7 +537,9 @@ demo/functions/Greet/doc = // Greet says hello.
 demo/functions/Greet/source
 demo/functions/init
 demo/functions/init.from_greet_go
+demo/functions/init.from_greet_go/doc =
 demo/functions/init.from_greet_go/source
+demo/functions/init/doc =
 demo/functions/init/source
 demo/types
 demo/types/Config
