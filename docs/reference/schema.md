@@ -219,9 +219,15 @@ trimmed of surrounding whitespace, so a list-valued field takes one template:
 `"refs": ["{{range .imports}}{{.}}\n{{end}}"]`. A single-line result is one
 token, exactly as rendered.
 
-Applies to data (engine), including the `.db` streaming path. Ignored on data
-(direct). On the source path the engine renders `refs` too, but the index is
-already filled from the AST, so presets do not use it.
+Applies to data (engine), including the `.db` streaming path, and to data
+(direct), where the scan renders `refs` for each record and a directory with
+files is defined under its name (and, for a dotted name, its last segment),
+so `find_callers`, `find_definition` and `get_impact` answer there too. A ref
+template on data (direct) sees the fields it mentions with their JSON types,
+so a list field can be ranged over; a record with no value for one has no
+references and is still projected. On the source path the engine renders
+`refs` too, but the index is already filled from the AST, so presets do not
+use it.
 
 ```json schema:data
 {

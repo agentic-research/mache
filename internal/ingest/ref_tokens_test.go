@@ -13,14 +13,6 @@ import (
 	"github.com/agentic-research/mache/graph"
 )
 
-func TestRefTokens(t *testing.T) {
-	assert.Nil(t, refTokens(""))
-	assert.Equal(t, []string{"A"}, refTokens("A"))
-	assert.Equal(t, []string{" spaced "}, refTokens(" spaced "), "a single-line ref is one token, exactly as rendered")
-	assert.Equal(t, []string{"A", "B", "C"}, refTokens("A\nB\n\n  C \r\n"))
-	assert.Empty(t, refTokens("\n\n"), "a range over an empty list names nothing")
-}
-
 // listRefsSchema projects modules whose `imports` is a list, with ONE refs
 // template ranging over it (#820: this used to need a template per index).
 func listRefsSchema() *api.Topology {

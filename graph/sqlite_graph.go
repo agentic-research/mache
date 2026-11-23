@@ -104,6 +104,7 @@ type SQLiteGraph struct {
 
 	extractor CallExtractor
 	defs      map[string][]string // symbol_name → []construct_dir_id (populated by AddDef)
+	defTokens map[string][]string // construct_dir_id → []symbol_name, the same facts by node
 
 	// scopedExtractor resolves calls for a single construct directly against
 	// a pre-parsed `_ast` table, keyed by the construct's real ast_source_id/
@@ -126,7 +127,9 @@ func (g *SQLiteGraph) EagerScan() error {
 			} // coverage:ignore
 		}
 	}
-	return nil
+	// The scan filled the refs index in memory; a reference can come from a
+	// record under any root, so it is written once every root is scanned.
+	return g.FlushRefs()
 }
 
 // ReadLock is how a SQLiteGraph's connections hold SQLite's shared file lock.
