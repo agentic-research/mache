@@ -30,8 +30,10 @@ func (g *SQLiteGraph) AddDef(token, dirID string) error {
 	defer g.pendingMu.Unlock()
 	if g.defs == nil {
 		g.defs = make(map[string][]string)
+		g.defTokens = make(map[string][]string)
 	}
 	g.defs[token] = append(g.defs[token], dirID)
+	g.defTokens[dirID] = append(g.defTokens[dirID], token)
 	return nil
 }
 
@@ -324,6 +326,10 @@ func (g *SQLiteGraph) getCallersFromMainDB(token string) ([]*Node, error) {
 
 // getCallersFromSidecar reads roaring bitmaps from the sidecar .refs.db.
 func (g *SQLiteGraph) getCallersFromSidecar(token string) ([]*Node, error) {
+	// Callers come from the whole graph: make sure all of it has been read.
+	if err := g.EagerScan(); err != nil {
+		return nil, err
+	}
 	var blob []byte
 	err := g.refsDB.QueryRow("SELECT bitmap FROM node_refs WHERE token = ?", token).Scan(&blob)
 	if err == sql.ErrNoRows {

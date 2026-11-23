@@ -8,6 +8,16 @@ bumps may include breaking changes.
 
 ### Added
 
+- **A data source served straight from its records answers `find_callers`,
+  `find_definition` and `get_impact`** (`mache-1bf0d8`). The direct path (a
+  `.db` whose `results(id, record)` table holds one JSON per row, projected on
+  demand with no ingestion) ignored a schema's `refs` and recorded no
+  definitions, so only the materialised projection could answer who
+  references what. Its scan now renders `refs` per record and defines each
+  leaf directory under its name. On a 164,464-record, 743,543-reference graph
+  that is about 4 s from records to answering, against 40 s and nine times the
+  disk for the materialised form, with the same answers.
+
 - **`find_clones` says what differs between the copies** (`mache-202b81`).
   A clone set is functions with the same structure, and structure does not
   record names, constants or operators: `if x > 0` and `if x < 0` are the same

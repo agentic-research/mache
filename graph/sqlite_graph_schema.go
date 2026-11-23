@@ -14,7 +14,9 @@ type schemaLevel struct {
 	staticName string
 	children   []*schemaLevel
 	files      []api.Leaf
-	depth      int
+	// refs are the node's cross-reference templates, rendered per record.
+	refs  []string
+	depth int
 }
 
 // compileLevels compiles a Topology into a tree of schemaLevel nodes.
@@ -33,6 +35,7 @@ func compileOneLevel(node api.Node, depth int) *schemaLevel {
 		nameRaw:  node.Name,
 		selector: node.Selector,
 		files:    node.Files,
+		refs:     node.Refs,
 		depth:    depth,
 	}
 	if !strings.Contains(node.Name, "{{") {

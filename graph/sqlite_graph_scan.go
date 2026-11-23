@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -26,6 +27,15 @@ import (
 type scanResult struct {
 	entries  []pathEntry
 	leafDirs []leafMapping
+	// defs and refs are the tokens the record's nodes define and reference.
+	defs []tokenAt
+	refs []tokenAt
+}
+
+// tokenAt is a token and the directory node it belongs to.
+type tokenAt struct {
+	token string
+	dir   string
 }
 
 type pathEntry struct {
@@ -110,6 +120,20 @@ func collectNameTemplates(level *schemaLevel) []string {
 	return tmpls
 }
 
+// collectRefTemplates gathers every refs template in the schema tree.
+func collectRefTemplates(level *schemaLevel) []string {
+	var tmpls []string
+	var walk func(*schemaLevel)
+	walk = func(l *schemaLevel) {
+		tmpls = append(tmpls, l.refs...)
+		for _, c := range l.children {
+			walk(c)
+		}
+	}
+	walk(level)
+	return tmpls
+}
+
 // extractFieldPaths pulls dotted field references from Go templates.
 // e.g. "{{slice .item.cve.id 4 8}}" → ["item.cve.id"]
 func extractFieldPaths(templates []string) []string {
@@ -135,11 +159,20 @@ func extractFieldPaths(templates []string) []string {
 
 // buildScanQuery builds a SELECT using json_extract for only the fields
 // needed by name templates. Avoids transferring and parsing full record JSON.
-func buildScanQuery(fieldPaths []string, tableName string) string {
-	cols := make([]string, 0, len(fieldPaths)+1)
+//
+// refFieldPaths are the fields refs templates need. They are selected as JSON
+// text (json_quote), after the name fields: a ref field is often a list, and
+// a list has to reach its template as one, not as a string. A missing ref
+// field is JSON null, so unlike a missing name field it does not drop the
+// record.
+func buildScanQuery(fieldPaths, refFieldPaths []string, tableName string) string {
+	cols := make([]string, 0, len(fieldPaths)+len(refFieldPaths)+1)
 	cols = append(cols, "id")
 	for _, fp := range fieldPaths {
 		cols = append(cols, fmt.Sprintf("json_extract(record, '$.%s')", fp))
+	}
+	for _, fp := range refFieldPaths {
+		cols = append(cols, fmt.Sprintf("json_quote(json_extract(record, '$.%s'))", fp))
 	}
 	return "SELECT " + strings.Join(cols, ", ") + " FROM " + tableName
 }
@@ -148,7 +181,7 @@ func buildScanQuery(fieldPaths []string, tableName string) string {
 // e.g. setNestedField(m, "item.cve.id", "CVE-2024-0001")
 //
 //	→ m["item"]["cve"]["id"] = "CVE-2024-0001"
-func setNestedField(m map[string]any, dottedPath, value string) {
+func setNestedField(m map[string]any, dottedPath string, value any) {
 	parts := strings.Split(dottedPath, ".")
 	current := m
 	for i, part := range parts {
@@ -224,7 +257,8 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 
 	// Analyze schema to find which fields the name templates need
 	fieldPaths := extractFieldPaths(collectNameTemplates(level))
-	query := buildScanQuery(fieldPaths, g.tableName)
+	refFieldPaths := extractFieldPaths(collectRefTemplates(level))
+	query := buildScanQuery(fieldPaths, refFieldPaths, g.tableName)
 
 	// Read-only transaction for snapshot consistency — if the source DB is
 	// being written to during scan, we get a consistent point-in-time view.
@@ -247,7 +281,7 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 	childSlices[rootName] = nil // ensure root exists even if DB is empty
 
 	// Reusable per-row scan buffers — allocated once, reused every iteration
-	nCols := len(fieldPaths) + 1
+	nCols := len(fieldPaths) + len(refFieldPaths) + 1
 	scanVals := make([]sql.NullString, nCols)
 	scanPtrs := make([]any, nCols)
 	for i := range scanVals {
@@ -287,9 +321,34 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 			setNestedField(values, path, fields[i])
 		}
 
+		// Refs render against the typed values of the fields they name;
+		// names keep rendering against the strings they always have.
+		refValues := values
+		if len(refFieldPaths) > 0 {
+			refValues = make(map[string]any, len(refFieldPaths))
+			for i, path := range refFieldPaths {
+				var decoded any
+				if raw := scanVals[1+len(fieldPaths)+i]; raw.Valid {
+					if err := json.Unmarshal([]byte(raw.String), &decoded); err != nil {
+						decoded = nil
+					}
+				}
+				setNestedField(refValues, path, decoded)
+			}
+		}
+
 		result.entries = result.entries[:0]
 		result.leafDirs = result.leafDirs[:0]
-		g.collectPathEntries(level, values, rootName, scanVals[0].String, &result)
+		result.defs = result.defs[:0]
+		result.refs = result.refs[:0]
+		g.collectPathEntries(level, values, refValues, rootName, scanVals[0].String, &result)
+
+		for _, d := range result.defs {
+			_ = g.AddDef(d.token, d.dir)
+		}
+		for _, r := range result.refs {
+			_ = g.AddRef(r.token, r.dir)
+		}
 
 		for _, e := range result.entries {
 			childSlices[e.parent] = append(childSlices[e.parent], e.child)
@@ -365,8 +424,12 @@ func flushChildSlices(slices map[string][]string, target *sync.Map) {
 }
 
 // collectPathEntries walks the schema children for one record, producing
-// parent→child entries and leaf directory→recordID mappings.
-func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values map[string]any, parentPath, recordID string, result *scanResult) {
+// parent→child entries, leaf directory→recordID mappings, and the tokens each
+// node defines and references. A directory with files defines its name, as
+// the ingest engine has it; any node with refs templates references what they
+// render to. refs used to be ignored here, so a data source served straight
+// from its records answered no find_callers (mache-1bf0d8).
+func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values, refValues map[string]any, parentPath, recordID string, result *scanResult) {
 	for _, child := range level.children {
 		name, err := g.render(child.nameRaw, values)
 		if err != nil || name == "" {
@@ -378,7 +441,7 @@ func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values map[string]a
 
 		// Recurse into deeper directory levels
 		if len(child.children) > 0 {
-			g.collectPathEntries(child, values, childPath, recordID, result)
+			g.collectPathEntries(child, values, refValues, childPath, recordID, result)
 		}
 
 		// Leaf directory: add file children and record mapping
@@ -386,6 +449,19 @@ func (g *SQLiteGraph) collectPathEntries(level *schemaLevel, values map[string]a
 			result.leafDirs = append(result.leafDirs, leafMapping{dirPath: childPath, recordID: recordID})
 			for _, f := range child.files {
 				result.entries = append(result.entries, pathEntry{parent: childPath, child: childPath + "/" + f.Name})
+			}
+			for _, token := range DefTokensForName(name) {
+				result.defs = append(result.defs, tokenAt{token: token, dir: childPath})
+			}
+		}
+
+		for _, refTmpl := range child.refs {
+			rendered, err := g.render(refTmpl, refValues)
+			if err != nil {
+				continue
+			}
+			for _, token := range RefTokens(rendered) {
+				result.refs = append(result.refs, tokenAt{token: token, dir: childPath})
 			}
 		}
 	}

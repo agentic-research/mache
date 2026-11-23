@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/agentic-research/mache/internal/lloschema"
 )
@@ -146,6 +147,18 @@ var _ DefTokener = (*SQLiteGraph)(nil)
 
 // DefTokensOf implements [DefTokener].
 func (g *SQLiteGraph) DefTokensOf(id string) ([]string, error) {
+	if !g.useNodesTable {
+		// The direct path has no node_defs table: its definitions are the
+		// ones the scan recorded.
+		if err := g.EagerScan(); err != nil {
+			return nil, err
+		}
+		g.pendingMu.Lock()
+		defer g.pendingMu.Unlock()
+		tokens := slices.Clone(g.defTokens[id])
+		slices.Sort(tokens)
+		return slices.Compact(tokens), nil
+	}
 	key, ok, err := g.key(id)
 	if err != nil || !ok {
 		return nil, err
