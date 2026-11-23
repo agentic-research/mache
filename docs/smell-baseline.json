@@ -11,12 +11,6 @@
     },
     {
       "rule_id": "dead_code",
-      "source_id": "internal/projcfg/config.go",
-      "node_hash": "cacb2a9068444964670527fdf320a39a761c585950fe7b3e615c1b18bc7f1e95",
-      "count": 1
-    },
-    {
-      "rule_id": "dead_code",
       "source_id": "mount/mount.go",
       "node_hash": "ec1960df2272f184c61e9c4ffe64865c2f43675a78695984703aebb3cb085743",
       "count": 1
@@ -1039,7 +1033,7 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/mcpserve/serve_lsp_step5_test.go",
       "node_hash": "45f9c2373ccef230539bb77016d0d8e82e7b90d88f35f7e58fe9361cc8ada524",
-      "count": 2
+      "count": 1
     },
     {
       "rule_id": "duplicate_code",
@@ -1507,12 +1501,6 @@
       "rule_id": "duplicate_code",
       "source_id": "internal/smells/find_smells_api_test.go",
       "node_hash": "f3c75d6b46badaf90ad891babd270ca26a2a7ec39d8706687c653825f8422c26",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_code",
-      "source_id": "internal/smells/find_smells_cli.go",
-      "node_hash": "8f60481e2202dfd9db41b00ca69a6509a5df20f100d01463814718983ab92719",
       "count": 1
     },
     {
@@ -2111,20 +2099,8 @@
     },
     {
       "rule_id": "duplicate_definitions",
-      "source_id": "internal/mcpserve/serve_lsp_step5_test.go",
-      "node_hash": "e813eb197b5b0849b5a08b153a3daa3f1d14ba0578a1ec08db7b1a5148883c12",
-      "count": 2
-    },
-    {
-      "rule_id": "duplicate_definitions",
       "source_id": "internal/mcpserve/serve_test.go",
       "node_hash": "b2403ced6d1e90ef01efbc19e3486c6757f25baafd0a4333b1acb4c01d5122f4",
-      "count": 1
-    },
-    {
-      "rule_id": "duplicate_definitions",
-      "source_id": "internal/mcpserve/serve_test.go",
-      "node_hash": "e7d7060b66cfa399ff4287de125cb4ddcd2dc27dd98c108a4a6c4a25733a6199",
       "count": 1
     },
     {
@@ -2351,66 +2327,6 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "cmd/mount_control.go",
-      "node_hash": "3d154759933b8f7ddac721ebe0bb0920aeec1676f4285370eadea5c3d51b3df8",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "cmd/pack.go",
-      "node_hash": "28f674e3c2a261bca2e8e552a422bc9e2a302cc641a4403b2cf0de876872eade",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "ext/boltdb/boltdb.go",
-      "node_hash": "1ccfa682418b68605cebb0fc38edb82e19ad7b4cf5a360d037c7a3439c95658b",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "graph/arena_writer.go",
-      "node_hash": "90e5c9f9ca3238ca15e1d11de6501c136a55f1d814bcd0b2d4616e7dd97d736d",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "graph/community.go",
-      "node_hash": "aa54c444b647e43375687f4ed707993782299b184be50e53d6f5063575da62f9",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "graph/memstore_callees.go",
-      "node_hash": "6774cecea25ce9abb210679f13e8d1cc0609f9c616b08e54723d104d50e066f2",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "graph/sqlite_graph.go",
-      "node_hash": "7664e3fa071aa3069627272a8aaf2c4d0198a2d8fc266b170968a528e86febc2",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "graph/sqlite_graph_refs.go",
-      "node_hash": "173e0767d4510b27f86a197cc280c54f37c40568098ea180520c3cecabdcfafb",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "graph/sqlite_graph_scan.go",
-      "node_hash": "97c487d5de1b078ba0be57a75516c42dfc6cd1415dca27c6f5c23074a58eb759",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/buildcache/cache.go",
-      "node_hash": "94e6e70906ff8e972bb802c322e785e34f15998cd484c484d7c1ba23613593e9",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/buildcache/cache.go",
       "node_hash": "b4b870342a25a3fe0afa4d07c278fcc5e31efc5ff2d4690bf1b7e230a8f5ca94",
       "count": 1
@@ -2429,56 +2345,8 @@
     },
     {
       "rule_id": "fan_out_skew",
-      "source_id": "internal/buildcache/cache_oci.go",
-      "node_hash": "ff74ba6e2bb49bb9f123a444d9c6fef99ee65dda0d43b815e46bcaa18d51da6a",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/engine_ingest.go",
-      "node_hash": "fce70dccb721d3dc7fa80635addc861ba36cca383843d4ff3d8b163ccc4ac43a",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/engine_sqlite.go",
-      "node_hash": "b01f9471a20cfa653d5a29ab71406b983cfec7324d363b0c86f9bbfd4506fd3a",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/engine_walk.go",
-      "node_hash": "07c7abc6aeabe4b460c3d10e7e8883d0203f2edda25231d1af0ce79d6819cd07",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
       "source_id": "internal/ingest/engine_walk.go",
       "node_hash": "5a6ca2ba7997a02dd5157189728b449ffa08ecc6d6ca8d1ecc7acfb33fefa1a0",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/ingest/git.go",
-      "node_hash": "3207b9a8ca51d95d9c08b0a75b510a592de4899cbbc4667f9813fcd4e775b52f",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/lattice/greedy.go",
-      "node_hash": "9f90b52e9f4d9de39a3b53aa38719f4b98b7b92423e43edcebadea6a06ff3cc9",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/lattice/project_ast.go",
-      "node_hash": "2ece77c5be6d7de3d9b2a579acdf7feeb8494015aa4ed59bc8848551958111fc",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/leylinegraph/leyline.go",
-      "node_hash": "568f3b02de9b65f23047b962bd81472e6cff9274a2ad11ecd963bd52e822d55b",
       "count": 1
     },
     {
@@ -2491,96 +2359,6 @@
       "rule_id": "fan_out_skew",
       "source_id": "internal/materialize/json.go",
       "node_hash": "229c022923c83a448f108deb5d733c18b3e7af103a6c16fdd2f157fc7e4c9440",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve.go",
-      "node_hash": "30bab27e16d5db724fa07c8b8990b01027e627661510b159537264605903056c",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve_handler_find_definition.go",
-      "node_hash": "ba7ea7bf80005102e7d537e2d25b2b1993461bc5deffb2244b8cd5f4b3fadc57",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve_handler_get_communities.go",
-      "node_hash": "a72a1ba254feeaddf352e8eb1b240b38c5035919e9e2e513dcdd999b6fa0081a",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve_handler_read_file.go",
-      "node_hash": "576a2f0689244f294c26c1cc38157324c130a01f35fe9d505e4faa71e04a1981",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/mcpserve/serve_registry.go",
-      "node_hash": "f3257f0215a07738caf9fd3c6ea6ae7161d98ca439a754f22cc02cbb30bb60c7",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/smells/find_smells_cli.go",
-      "node_hash": "a1d34ea1fe833ffaf2cce9ae85bb51d62b3e1576f1ca7d76d813ddd0b4537a58",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/smells/serve_find_smells.go",
-      "node_hash": "10d6115fd9e20d043472603c5caf9dac9231fc4d53a2befc674d77d6109ae977",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/smells/serve_find_smells_load.go",
-      "node_hash": "a04f9211b03a3112c8b9cbb7663e53ec3e0b30f22d2b2cbea21695274aca1218",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/testfixtures/registry.go",
-      "node_hash": "99fc68e1e067230582b028a8b208b3136a2f5b533cc80eea824e63604615fc22",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "internal/testutil/bindinglog.go",
-      "node_hash": "464ce3870cf01165ce1d9ef3e8a0992c21e436d1224650556867fa6093cea5e9",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/coverage-gate/main.go",
-      "node_hash": "f276b217bd96c3adc68d3debb79d9f5e5f867c62f8ece8ea46a459aebb215774",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/fixtures-rebaseline/main.go",
-      "node_hash": "8bffebd8c81ced03d4366df9b72771c7f2909c355d89ba24e582d74d6489ea1e",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/fixtures-rebaseline/main.go",
-      "node_hash": "b141779e693c9315dd5c3d5cb41ce9220e4bccf84dae13e2d871b70078bac983",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/fixtures-snapshot/main.go",
-      "node_hash": "bf889f1adc64dac3e0bcb7a4bc9d30009efabac9cef344323318c1c4440d73c0",
-      "count": 1
-    },
-    {
-      "rule_id": "fan_out_skew",
-      "source_id": "tools/mcp-fetch/main.go",
-      "node_hash": "c92440cbac719f57cbe8063c2fdfcf277c5c2afa77f5549dd255de5e277ca40b",
       "count": 1
     },
     {
@@ -2695,12 +2473,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "graph/community.go",
-      "node_hash": "aa54c444b647e43375687f4ed707993782299b184be50e53d6f5063575da62f9",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "graph/graph_suite_test.go",
       "node_hash": "b7dae16255eb47a5f202ec89d5e5ac8e102be7a5b528fbc81967bcd6b7f0f6ca",
       "count": 1
@@ -2739,12 +2511,6 @@
       "rule_id": "long_function",
       "source_id": "graph/sheaf_invalidate.go",
       "node_hash": "4188d17df4603dd092911fcd3fdee9a45036403a5a362fd683441168b2182597",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "graph/sqlite_graph.go",
-      "node_hash": "7664e3fa071aa3069627272a8aaf2c4d0198a2d8fc266b170968a528e86febc2",
       "count": 1
     },
     {
@@ -2857,12 +2623,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "internal/ingest/git.go",
-      "node_hash": "3207b9a8ca51d95d9c08b0a75b510a592de4899cbbc4667f9813fcd4e775b52f",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "internal/ingest/sqlite_writer.go",
       "node_hash": "e7cab250c63079fd1e092dd45b751cf43ee46bca167a29b5821e9c453c155800",
       "count": 1
@@ -2929,26 +2689,8 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "internal/mcpserve/serve.go",
-      "node_hash": "30bab27e16d5db724fa07c8b8990b01027e627661510b159537264605903056c",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "internal/mcpserve/serve_handler_find_definition.go",
       "node_hash": "29bdaf87d2c195e6e0882f102340f399a9c306469be98448a28dcf3877a41f48",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/mcpserve/serve_handler_get_communities.go",
-      "node_hash": "a72a1ba254feeaddf352e8eb1b240b38c5035919e9e2e513dcdd999b6fa0081a",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/mcpserve/serve_registry.go",
-      "node_hash": "1fc8cde301b17f482baf87f007bcfb6df701062d1b2395f080755e646ef19ca7",
       "count": 1
     },
     {
@@ -2977,24 +2719,6 @@
     },
     {
       "rule_id": "long_function",
-      "source_id": "internal/smells/falsifiability_skip_list_ablation_test.go",
-      "node_hash": "1308711af747ed921cc561cf507dc2d308f0882ece05f825203f23a772a2aae5",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/smells/find_smells_cli.go",
-      "node_hash": "a1d34ea1fe833ffaf2cce9ae85bb51d62b3e1576f1ca7d76d813ddd0b4537a58",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/smells/serve_find_smells.go",
-      "node_hash": "10d6115fd9e20d043472603c5caf9dac9231fc4d53a2befc674d77d6109ae977",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells_bench_test.go",
       "node_hash": "a10265faf60310c89901d1a6e883f66cb89b9f81885397628469563c0f58bc7a",
       "count": 1
@@ -3009,12 +2733,6 @@
       "rule_id": "long_function",
       "source_id": "internal/smells/serve_find_smells_test.go",
       "node_hash": "d1438890f8c98d832d5d8f692384580e423de02dce66fd96cd26f68d4a2f866e",
-      "count": 1
-    },
-    {
-      "rule_id": "long_function",
-      "source_id": "internal/smells/serve_find_smells_views_test.go",
-      "node_hash": "c0f9d9a297bb4de59807d0c76bc7c10de947e6336e7b3f533bf55146c867fa54",
       "count": 1
     },
     {
