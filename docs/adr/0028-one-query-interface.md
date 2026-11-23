@@ -183,7 +183,16 @@ debugging a projection.
 
 A tool that answers a question about the graph must not hold it. Several do today as a
 shortcut (`find_callers`, `find_definition`, the LSP readers); each becomes a typed
-operation as it migrates. The reason is the table above: a tool author who can reach for
+operation as it migrates.
+
+The LSP readers are the worked example. `get_type_info` and `get_diagnostics` send SQL
+text to the ley-line daemon's `query` op and read back rows of loose values, through a
+client method passed around as a bare function. When ley-line v0.31.0 changed that reply
+from rows keyed by column to rows of typed cells, mache's reader returned the cells as if
+they were the values and raised no error; only the wire-version handshake stood in the way
+(`mache-1f85ec`). And because nothing declares that those two tools depend on daemon SQL,
+a search for callers of the client found none and it was nearly deleted. Both failures are
+what a named surface prevents. The reason is the table above: a tool author who can reach for
 SQL will, and then that tool works on one backend and its answer is defined by a query
 nobody else can see. Keeping the handle separate makes "this reader depends on the SQL
 substrate" a visible fact about it, where a wide interface would hide it.
