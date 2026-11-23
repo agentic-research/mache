@@ -43,6 +43,7 @@ is no duplicate `#` heading.
 | [0024](0024-incremental-dataflow-taint-as-substrate-queries.md) | Proposed    | Incremental Dataflow & Taint as Substrate Queries                                 |
 | [0025](0025-resolver-body-native-ecosystem-tooling.md)          | Accepted    | Resolver bodies shell out to each ecosystem's own tool (go list, cargo metadata…) |
 | [0027](0027-one-startup-path-with-ablatable-capabilities.md)    | Proposed    | One startup path — Resolve → Plan → Open, with capabilities as ablatable axes     |
+| [0028](0028-one-query-interface.md)                             | Proposed    | One query interface — readers ask for operations, a profile says where each is answered |
 
 ## Notes on the non-obvious statuses
 
