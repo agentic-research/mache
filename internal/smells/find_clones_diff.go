@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/agentic-research/mache/graph"
-	"github.com/agentic-research/mache/internal/lloschema"
 )
 
 // What differs between the copies in a clone set.
@@ -79,7 +78,7 @@ type cloneCopy struct {
 // set whose copies cannot be read is marked rather than reported as
 // identical: no claim is made about code that was not compared.
 func describeDifferences(qg graph.RefsQuerier, sets []cloneSet) {
-	sources := map[string][]byte{}
+	sources := newSourceReader(qg)
 	for i := range sets {
 		copies, err := readCopies(qg, sets[i].Members, sources)
 		if err != nil {
@@ -92,10 +91,10 @@ func describeDifferences(qg graph.RefsQuerier, sets []cloneSet) {
 
 // readCopies reads every member's leaves, or fails if any cannot be read or
 // they do not line up.
-func readCopies(qg graph.RefsQuerier, members []cloneMember, sources map[string][]byte) ([]cloneCopy, error) {
+func readCopies(qg graph.RefsQuerier, members []cloneMember, sources *sourceReader) ([]cloneCopy, error) {
 	copies := make([]cloneCopy, 0, len(members))
 	for _, m := range members {
-		src, err := sourceBytes(qg, m.SourceID, sources)
+		src, err := sources.bytes(m.SourceID)
 		if err != nil {
 			return nil, err
 		}
@@ -109,35 +108,6 @@ func readCopies(qg graph.RefsQuerier, members []cloneMember, sources map[string]
 		copies = append(copies, c)
 	}
 	return copies, nil
-}
-
-// sourceBytes is the parsed bytes of a source file, read once per call.
-func sourceBytes(qg graph.RefsQuerier, sourceID string, cache map[string][]byte) ([]byte, error) {
-	if src, ok := cache[sourceID]; ok {
-		return src, nil
-	}
-	cols, err := lloschema.SourceColumns(qg)
-	if err != nil {
-		return nil, fmt.Errorf("read source of %s: %w", sourceID, err)
-	}
-	rows, err := qg.QueryRefs("SELECT "+cols+" FROM _source WHERE id = ?", sourceID)
-	if err != nil {
-		return nil, fmt.Errorf("read source of %s: %w", sourceID, err)
-	}
-	defer func() { _ = rows.Close() }()
-	if !rows.Next() {
-		return nil, fmt.Errorf("no source stored for %s", sourceID)
-	}
-	var s lloschema.SourceScan
-	if err := rows.Scan(s.Targets()...); err != nil {
-		return nil, fmt.Errorf("read source of %s: %w", sourceID, err)
-	}
-	src, err := s.Bytes()
-	if err != nil {
-		return nil, fmt.Errorf("read source of %s: %w", sourceID, err)
-	}
-	cache[sourceID] = src
-	return src, nil
 }
 
 // astSpan is one syntax node of a copy.

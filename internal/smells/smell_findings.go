@@ -443,37 +443,11 @@ func populateSnippets(qg graph.RefsQuerier, findings []smellFinding) {
 	if len(findings) == 0 {
 		return
 	}
-	// The parsed bytes, which the findings' offsets refer to. Reading only
-	// _source.content left every snippet empty on a real leyline db, where
-	// that column is NULL and the bytes live in source_blobs (mache-46c59d).
-	// Bytes that fail verification give no snippet (mache-c1eb7a).
-	cols, err := lloschema.SourceColumns(qg)
-	if err != nil {
-		return
-	}
-	sources := make(map[string][]byte)
+	sources := newSourceReader(qg)
 	for i := range findings {
-		src, hit := sources[findings[i].SourceID]
-		if !hit {
-			rows, err := qg.QueryRefs(
-				"SELECT "+cols+" FROM _source WHERE id = ?", findings[i].SourceID,
-			)
-			if err != nil {
-				sources[findings[i].SourceID] = nil
-				continue
-			}
-			if rows.Next() {
-				var s lloschema.SourceScan
-				if scanErr := rows.Scan(s.Targets()...); scanErr == nil {
-					if content, bErr := s.Bytes(); bErr == nil {
-						src = content
-					}
-				}
-			}
-			_ = rows.Close()
-			sources[findings[i].SourceID] = src
-		}
-		if src == nil {
+		// A source that cannot be read gives no snippet.
+		src, err := sources.bytes(findings[i].SourceID)
+		if err != nil {
 			continue
 		}
 		const padding = 30
@@ -485,6 +459,66 @@ func populateSnippets(qg graph.RefsQuerier, findings []smellFinding) {
 			findings[i].Snippet = strings.TrimSpace(snippet)
 		}
 	}
+}
+
+// sourceReader reads source files as they were parsed, which is what
+// findings' offsets refer to, each at most once. Reading only
+// _source.content left every snippet empty on a real leyline db, where that
+// column is NULL and the bytes live in source_blobs (mache-46c59d).
+type sourceReader struct {
+	qg graph.RefsQuerier
+	// cols is the _source column list for this database, resolved on first
+	// use; colsErr is why it could not be.
+	cols    string
+	colsErr error
+	probed  bool
+	// read holds every source asked for; nil marks one that could not be
+	// read, so it is not tried again.
+	read map[string][]byte
+}
+
+func newSourceReader(qg graph.RefsQuerier) *sourceReader {
+	return &sourceReader{qg: qg, read: map[string][]byte{}}
+}
+
+// bytes is the parsed bytes of sourceID. A source that is missing or fails
+// verification (mache-c1eb7a) is an error.
+func (r *sourceReader) bytes(sourceID string) ([]byte, error) {
+	if src, ok := r.read[sourceID]; ok {
+		if src == nil {
+			return nil, fmt.Errorf("no source for %s", sourceID)
+		}
+		return src, nil
+	}
+	r.read[sourceID] = nil
+	if !r.probed {
+		r.cols, r.colsErr = lloschema.SourceColumns(r.qg)
+		r.probed = true
+	}
+	if r.colsErr != nil {
+		return nil, fmt.Errorf("read source of %s: %w", sourceID, r.colsErr)
+	}
+	rows, err := r.qg.QueryRefs("SELECT "+r.cols+" FROM _source WHERE id = ?", sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("read source of %s: %w", sourceID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return nil, fmt.Errorf("no source stored for %s", sourceID)
+	}
+	var s lloschema.SourceScan
+	if err := rows.Scan(s.Targets()...); err != nil {
+		return nil, fmt.Errorf("read source of %s: %w", sourceID, err)
+	}
+	src, err := s.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("read source of %s: %w", sourceID, err)
+	}
+	if src == nil {
+		src = []byte{}
+	}
+	r.read[sourceID] = src
+	return src, nil
 }
 
 // smellResponse is the on-the-wire envelope for a single rule's run. Both
