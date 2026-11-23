@@ -455,6 +455,8 @@ func TestFindClones_CorpusHasEqualSizedSetsOfDifferentShape(t *testing.T) {
 //	capAbove / capBelow   one operator: > against <
 //	shout / hush          one called function: ToUpper against ToLower
 //	subLeft / subRight    the same two parameters, used in the other order
+//	across / upward       methods that call different methods on another value
+//	twiceWide / twiceTall methods that each call the method of their own name
 func diffCorpus() map[string]string {
 	files := map[string]string{}
 	for p, body := range cloneCorpus {
@@ -491,6 +493,24 @@ func shout(s string) string {
 
 func hush(t string) string {
 	return strings.ToLower(strings.TrimSpace(t)) /* quiet */
+}
+
+type span struct{ inner box }
+
+func (s span) across() int {
+	return s.inner.widthOf()
+}
+
+func (s span) upward() int {
+	return s.inner.heightOf()
+}
+
+func (b box) twiceWide() int {
+	return 2 * b.twiceWide()
+}
+
+func (b box) twiceTall() int {
+	return 2 * b.twiceTall()
 }
 
 func subLeft(x, y int) int {
@@ -580,6 +600,18 @@ func TestFindClones_DifferencesAreExactlyThePlantedOnes(t *testing.T) {
 		// Comments differ between these two and are not a difference.
 		"hush+shout": {Renamed: true, Diffs: []string{
 			"reference: hush=ToLower, shout=ToUpper",
+		}},
+		// Each forwards to a different method of another value. That the
+		// two methods are themselves differently named does not make the
+		// call a renaming.
+		"across+upward": {Renamed: true, Diffs: []string{
+			"reference: across=widthOf, upward=heightOf",
+		}},
+		// A selector is never a local, so a method calling the method of
+		// its own name is reported too: the tool cannot tell recursion from
+		// forwarding to another value's method, and says so by listing it.
+		"twiceTall+twiceWide": {Renamed: true, Diffs: []string{
+			"reference: twiceTall=twiceTall, twiceWide=twiceWide",
 		}},
 		// Both rename (x, y) to (p, q), and then use them the other way
 		// round: a consistent renaming cannot explain either position.

@@ -295,23 +295,29 @@ const diffRename = "rename"
 // else the kind of difference.
 func leafDifference(ref cloneCopy, copies []cloneCopy, renames []map[string]string, i int) string {
 	want := ref.tokens[i]
-	same, renamed := true, true
+	same, declared, renamed := true, true, want.kind == "identifier"
 	for ci, c := range copies {
-		got := c.tokens[i].text
-		if got != want.text {
+		got := c.tokens[i]
+		if got.text != want.text {
 			same = false
 		}
-		// A local of the reference must appear as the name this copy gave
-		// that local, and a local of this copy must stand for one.
+		// Where every copy introduces a name, each is free to choose it.
+		if !got.declares {
+			declared = false
+		}
+		// Elsewhere, a local of the reference must appear as the name this
+		// copy gave that local. Only a plain identifier can be a local: a
+		// selector such as fm.Lang names something on another value, even
+		// when the method declaring it is itself called Lang.
 		expected, isLocal := renames[ci][want.text]
-		if !isLocal || got != expected {
+		if !isLocal || got.text != expected {
 			renamed = false
 		}
 	}
 	switch {
 	case same:
 		return ""
-	case renamed:
+	case declared, renamed:
 		return diffRename
 	case isLiteralKind(want.kind):
 		return diffLiteral
@@ -329,7 +335,8 @@ func localRenames(ref, c cloneCopy) map[string]string {
 	forward, backward := map[string]string{}, map[string]string{}
 	conflicted := map[string]bool{}
 	for i, t := range ref.tokens {
-		if !t.declares || !c.tokens[i].declares {
+		// A method's own name is a selector, not a local: see leafDifference.
+		if !t.declares || !c.tokens[i].declares || t.kind != "identifier" {
 			continue
 		}
 		from, to := t.text, c.tokens[i].text
