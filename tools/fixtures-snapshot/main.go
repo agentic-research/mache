@@ -29,9 +29,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -55,13 +53,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*id, *source); err != nil {
+	if err := snapshotFixture(*id, *source); err != nil {
 		fmt.Fprintf(os.Stderr, "fixtures-snapshot: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(id, source string) error {
+func snapshotFixture(id, source string) error {
 	source = expandHome(source)
 	absSource, err := filepath.Abs(source)
 	if err != nil {
@@ -73,7 +71,7 @@ func run(id, source string) error {
 		return fmt.Errorf("source path %q is not a directory", absSource)
 	}
 
-	repoRoot, err := findMacheRoot()
+	repoRoot, err := testfixtures.RepoRoot()
 	if err != nil {
 		return err
 	}
@@ -117,7 +115,7 @@ func run(id, source string) error {
 		return fmt.Errorf("curate: %w", err)
 	}
 
-	sha := detectGitSHA(absSource)
+	sha := testfixtures.GitShortSHA(absSource)
 
 	fmt.Println("[fixtures-snapshot] done.")
 	fmt.Printf("  files copied : %d\n", res.FilesCopied)
@@ -149,39 +147,6 @@ func lookup(doc *manifestDoc, id string) (testfixtures.Fixture, bool) {
 		}
 	}
 	return testfixtures.Fixture{}, false
-}
-
-// findMacheRoot walks up from this file's location until it finds a
-// go.mod. The tool is built and run via `go run`, so runtime.Caller(0)
-// points at this main.go regardless of cwd.
-func findMacheRoot() (string, error) {
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("runtime.Caller(0) failed")
-	}
-	dir := filepath.Dir(here)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("walked to filesystem root without finding go.mod (started at %s)", here)
-		}
-		dir = parent
-	}
-}
-
-// detectGitSHA returns the short HEAD SHA of source if it's a git
-// checkout. Returns "" if not (or git unavailable) — caller decides
-// whether that's fatal.
-func detectGitSHA(source string) string {
-	cmd := exec.Command("git", "-C", source, "rev-parse", "--short", "HEAD")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // expandHome resolves a leading "~/" to the user's home dir. Mirrors

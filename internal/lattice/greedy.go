@@ -205,7 +205,7 @@ func makeLeafNode(name string, records []any, hints map[string]string) api.Node 
 
 	sort.Strings(leafFields)
 
-	leaves := greedyBuildLeafFiles(leafFields)
+	leaves := buildLeafFiles(leafFields)
 
 	leaves = append(leaves, api.Leaf{
 		Name: "raw.json",
@@ -474,38 +474,4 @@ func sanitizeName(s string) string {
 
 func escapeSelectorValue(s string) string {
 	return strings.ReplaceAll(s, "'", "\\'")
-}
-
-func greedyBuildLeafFiles(fields []string) []api.Leaf {
-	var leaves []api.Leaf
-	for _, f := range fields {
-		parts := strings.Split(f, ".")
-		name := parts[len(parts)-1]
-		name = greedyCamelToKebab(name)
-
-		leaves = append(leaves, api.Leaf{
-			Name:            name,
-			ContentTemplate: fmt.Sprintf("{{.%s}}", f),
-		})
-	}
-	return leaves
-}
-
-func greedyCamelToKebab(s string) string {
-	runes := []rune(s)
-	var result []rune
-	for i, r := range runes {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			prev := runes[i-1]
-			if prev >= 'a' && prev <= 'z' {
-				result = append(result, '-')
-			}
-		}
-		if r >= 'A' && r <= 'Z' {
-			result = append(result, r+32) // lowercase
-		} else {
-			result = append(result, r)
-		}
-	}
-	return string(result)
 }

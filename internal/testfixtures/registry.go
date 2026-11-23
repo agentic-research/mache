@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -87,6 +88,23 @@ func findRepoRoot() (string, error) {
 		}
 	})
 	return repoRootVal, repoRootErr
+}
+
+// RepoRoot is mache's own repo root, for the fixture tools (`go run
+// ./tools/fixtures-*`), which locate the manifest and the snapshot tree from
+// it whatever directory they are run in. Each tool used to carry its own
+// copy of this walk.
+func RepoRoot() (string, error) { return findRepoRoot() }
+
+// GitShortSHA is the short HEAD SHA of the git checkout at dir, or "" when
+// dir is not a checkout or git is unavailable; the caller decides whether
+// that is fatal.
+func GitShortSHA(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // manifest is the parsed manifest.toml, loaded once on first access.
