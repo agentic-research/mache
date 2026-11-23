@@ -179,7 +179,7 @@ type observation struct {
 	callers map[string][]string // token -> caller ids
 }
 
-func observe(t *testing.T, g *graph.SQLiteGraph, roots []string, tokens []string) observation {
+func observe(t *testing.T, g *graph.SQLiteGraph, roots, tokens []string) observation {
 	t.Helper()
 	o := observation{content: map[string]string{}, defs: map[string][]string{}, callers: map[string][]string{}}
 	buf := make([]byte, 1<<14)
