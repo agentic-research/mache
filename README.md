@@ -8,6 +8,61 @@ One engine, many projections. The schemas in [`examples/`](examples/README.md) p
 
 ![Mache Demo](demo.gif)
 
+## What it looks like
+
+Two real sessions, with the answers shortened where marked.
+
+### Code: who calls this function?
+
+Point mache at a source tree and an agent can ask structural questions where it would otherwise grep. On mache's own source, asking who calls `CallersOf`:
+
+```json
+{"tool": "find_callers", "arguments": {"token": "CallersOf"}}
+```
+
+```json
+[
+  "internal/mcpserve/serve_dataflow.go/method_declaration_2/…/call_expression",
+  "internal/mcpserve/serve_handler_list_directory.go/function_declaration_1/…/call_expression",
+  "internal/mcpserve/serve_impact.go/method_declaration_2/…/call_expression",
+  "internal/vfs/callers.go/method_declaration_1/…/call_expression",
+  "internal/vfs/callers.go/method_declaration_3/…/call_expression",
+  "internal/vfs/callers.go/method_declaration_4/…/call_expression",
+  "… and 3 in internal/mcpserve/node_token_test.go"
+]
+```
+
+Each entry is a call site, addressed by its position in the syntax tree (the middle of each path is elided here). These are calls to the function, not every line containing the word. The first question against a tree pays for the parse (4.5 s here); this answer then took 1 ms.
+
+### Data: a JSON file as a tree
+
+The same engine projects data. A schema says how records become directories and files. With the [MCP registry example](examples/README.md):
+
+```bash
+mache serve --stdio --schema examples/mcp-registry-schema.json examples/testdata/mcp-registry.json
+```
+
+```json
+{"tool": "list_directory", "arguments": {"path": "servers/io.github.example"}}
+```
+
+```json
+[
+  {"name": "weather", "path": "servers/io.github.example/weather", "type": "dir"},
+  {"name": "notes", "path": "servers/io.github.example/notes", "type": "dir"}
+]
+```
+
+```json
+{"tool": "read_file", "arguments": {"path": "servers/io.github.example/weather/description"}}
+```
+
+```text
+Weather forecasts as MCP tools
+```
+
+Each server in the JSON became a directory, and each field the schema names became a file under it.
+
 ## Quick start
 
 ```bash
@@ -18,36 +73,39 @@ mache init --global   # installs the keepalive HTTP daemon (:7532) + registers d
 
 That's the 30-second path for the flagship application — code intelligence on a **Go** codebase. `mache init --global` installs a per-user supervisor (launchd on macOS, systemd `--user` on Linux) that keeps the shared mache HTTP daemon alive on `localhost:7532` and registers it with Claude Code and any detected editors — no terminal to babysit. Then `mache init` (no flag) inside a project records what that project serves.
 
-Two things new users hit:
+To project non-code data instead, hand `mache serve` (or the root mount form, `mache <mountpoint>`) a schema with `--schema` and point it at your JSON or SQLite source — the [example schemas](examples/README.md) cover NVD, KEV, Notion, Trivy, Terraform, and more.
+
+For the full first-run flow — source choice (directory vs `.db` vs live hot-swap), the `--stdio` escape hatch, `--scope`, Claude Desktop, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
+
+<details>
+<summary>Two things new users hit: the transport, and the ley-line requirement</summary>
 
 - **HTTP is the canonical transport.** One shared daemon serves every project. Each session finds its project from the `?project=<token>` that `mache init` writes into the client's MCP URL, or from the MCP roots protocol for clients that answer it. `--stdio` exists only as an escape hatch for CI / sandboxes / headless agents and is never registered for editor use (see [ADR-0022](docs/adr/0022-mcp-transport-canonical.md)).
 - **[ley-line-open](https://github.com/agentic-research/ley-line-open) is a hard requirement, not an add-on.** Since v0.18.0 mache has no in-process parser: `leyline parse` produces the `_ast` database that every source projection reads. `task install` provisions the pinned binary from a checkout; `mache install` does the same from a release asset or package-manager install, where there is no Taskfile. Point mache at a directory *or* a pre-built `.db`: a directory goes through `leyline parse`; a pre-built `.db` (from `mache build` or leyline) is read directly by mache's pure-Go SQLite backend and can carry LSP enrichment.
 
-To project non-code data instead, hand `mache serve` (or the root mount form, `mache <mountpoint>`) a schema with `--schema` and point it at your JSON or SQLite source — the [example schemas](examples/README.md) cover NVD, KEV, Notion, Trivy, Terraform, and more.
-
-For the full first-run flow — source choice (directory vs `.db` vs live hot-swap), the `--stdio` escape hatch, `--scope`, Claude Desktop, mount as filesystem, write-back, schema inference, troubleshooting — see [GETTING-STARTED.md](GETTING-STARTED.md).
+</details>
 
 ## Code intelligence: what it gives an agent
 
 The code projection is where the engine is deepest. **20 MCP tools** wrap the projected graph — 19 read-surface plus `write_file`.
 
-| What you get                                | Tools                                                                     | Tier         | Status                                                |
-| ------------------------------------------- | ------------------------------------------------------------------------- | ------------ | ----------------------------------------------------- |
-| **Parse** source into a graph               | —                                                                         | required     | Stable — 27 of 28 languages (all but cue: no grammar) |
-| **Orient** in an unfamiliar repo            | `get_overview`, `get_architecture`, `get_diagram`                         | base         | Stable                                                |
-| **Cluster** related code                    | `get_communities`                                                         | base         | *Beta* — Louvain                                      |
-| **Navigate** by structure, not string match | `find_definition`, `list_directory`, `read_file`, `resolve_ref`, `search` | base         | Stable                                                |
-| **Trace** reference flow, both directions   | `find_callers`, `find_callees`, `get_impact`, `get_dataflow`              | base         | Stable — edges are explicitly `node_ref` evidence     |
-| **Judge** structural quality                | `find_smells` — 14 rules                                                  | base         | Stable — `fan_out_skew` is qualifier-aware            |
-| **Find duplicated logic**                   | `find_clones` — sets of functions that are structural copies, ranked by what one helper would remove | base         | *Beta* — Go, whole functions, exact structure         |
-| **Edit** without breaking the file          | `write_file` — validate → format → propose through leyline; a refused write returns the reason (drafts are NFS write-back only) | base         | Stable                                                |
-| **Types + diagnostics** from a real LSP     | `get_type_info`, `get_diagnostics`                                        | + LSP pass   | Stable, optional tier                                 |
-| **Search by meaning**, not tokens           | `semantic_search`                                                         | + embeddings | *Unavailable* with the pinned leyline — its daemon serves no embeddings; the tool says so and points to `search` |
-| **Check enrichment freshness**              | `get_sheaf_status`                                                        | any²         | Stable                                                |
-| **Serve across repos**                      | *(`--mount NAME=PATH`)*                                                   | base         | Stable — `find_callers` federates; callees per-mount  |
-| **Mount as a filesystem** + write back      | *(NFS)*                                                                   | base         | Stable                                                |
-| **Move a built graph** between machines/CI  | *(`mache cache` push/pull/verify)*                                        | —            | Stable — content-addressed, local dir or OCI          |
-| **Infer a schema** from data                | *(`--infer`)*                                                             | —            | *Beta* — FCA + greedy entropy                         |
+| What you get                                | Tools                                                                                                                           | Tier         | Status                                                                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| **Parse** source into a graph               | —                                                                                                                               | required     | Stable — 27 of 28 languages (all but cue: no grammar)                                                            |
+| **Orient** in an unfamiliar repo            | `get_overview`, `get_architecture`, `get_diagram`                                                                               | base         | Stable                                                                                                           |
+| **Cluster** related code                    | `get_communities`                                                                                                               | base         | *Beta* — Louvain                                                                                                 |
+| **Navigate** by structure, not string match | `find_definition`, `list_directory`, `read_file`, `resolve_ref`, `search`                                                       | base         | Stable                                                                                                           |
+| **Trace** reference flow, both directions   | `find_callers`, `find_callees`, `get_impact`, `get_dataflow`                                                                    | base         | Stable — edges are explicitly `node_ref` evidence                                                                |
+| **Judge** structural quality                | `find_smells` — 14 rules                                                                                                        | base         | Stable — `fan_out_skew` is qualifier-aware                                                                       |
+| **Find duplicated logic**                   | `find_clones` — sets of functions that are structural copies, ranked by what one helper would remove                            | base         | *Beta* — Go, whole functions, exact structure                                                                    |
+| **Edit** without breaking the file          | `write_file` — validate → format → propose through leyline; a refused write returns the reason (drafts are NFS write-back only) | base         | Stable                                                                                                           |
+| **Types + diagnostics** from a real LSP     | `get_type_info`, `get_diagnostics`                                                                                              | + LSP pass   | Stable, optional tier                                                                                            |
+| **Search by meaning**, not tokens           | `semantic_search`                                                                                                               | + embeddings | *Unavailable* with the pinned leyline — its daemon serves no embeddings; the tool says so and points to `search` |
+| **Check enrichment freshness**              | `get_sheaf_status`                                                                                                              | any²         | Stable                                                                                                           |
+| **Serve across repos**                      | *(`--mount NAME=PATH`)*                                                                                                         | base         | Stable — `find_callers` federates; callees per-mount                                                             |
+| **Mount as a filesystem** + write back      | *(NFS)*                                                                                                                         | base         | Stable                                                                                                           |
+| **Move a built graph** between machines/CI  | *(`mache cache` push/pull/verify)*                                                                                              | —            | Stable — content-addressed, local dir or OCI                                                                     |
+| **Infer a schema** from data                | *(`--infer`)*                                                                                                                   | —            | *Beta* — FCA + greedy entropy                                                                                    |
 
 **Tiers.** There is no "works without ley-line-open" tier — `leyline parse` *is* the parser.
 
@@ -116,7 +174,25 @@ See [Architecture](docs/ARCHITECTURE.md) for the full picture.
 
 </details>
 
-## Public Go API
+## Docs
+
+- [Getting started](GETTING-STARTED.md) — install + first run
+- [Architecture](docs/ARCHITECTURE.md) — graph backends, write pipeline, virtual directories, ley-line-open interplay
+- [Roadmap](docs/ROADMAP.md) — what's landed, near-term, long-term
+- [ADRs](docs/adr/) — Architectural Decision Records
+- [Competitive landscape & prior art](docs/reference/competitive-landscape.md) — what mache builds on, how it compares
+- [Example schemas](examples/README.md) — NVD, KEV, Notion, Trivy, Terraform, Markdown, LLM conversations, Go/Python/Rust/SQL source, MCP registry
+- [Schema reference](docs/reference/schema.md) — every field of a topology schema, selectors and template context per source kind, naming and dedup, file sets
+- [Contributing](CONTRIBUTING.md)
+
+## Reference
+
+Detail for people already using mache. Each section is folded.
+
+### Public Go API
+
+<details>
+<summary>Produce a raw or schema-projected database from Go, without the CLI</summary>
 
 Library callers can produce either a raw leyline database or a Mache
 schema-projected database without invoking the `mache` CLI:
@@ -149,7 +225,11 @@ extractors. All paths invoke the pinned leyline executable and keep Mache
 CGO-free. Address-reference extraction uses leyline's root-relative source IDs,
 so files below the source root participate in the same graph as root files.
 
-## Running the pinned leyline (mache-19326d)
+</details>
+
+### Running the pinned leyline
+
+Tracked as bead `mache-19326d`.
 
 <details>
 <summary><code>mache leyline path</code> / <code>mache leyline exec</code> — reach the exact pinned binary without touching PATH</summary>
@@ -178,7 +258,9 @@ Both resolve through mache's pin-checked chokepoint, so a non-pinned `leyline` e
 
 </details>
 
-## Portable cache (mache-aeb262)
+### Portable cache
+
+Tracked as bead `mache-aeb262`.
 
 <details>
 <summary>Content-addressed <code>.db</code> bundles — push/pull/verify, OCI transport</summary>
@@ -211,7 +293,7 @@ See [`docs/cache/phase-4-chunk-shape.md`](docs/cache/phase-4-chunk-shape.md) for
 
 </details>
 
-## Deployment modes
+### Deployment modes
 
 <details>
 <summary>Bundle / OCI image (production) vs local dev</summary>
@@ -275,49 +357,38 @@ the orchestrator).
 
 </details>
 
-## Commands and environment
+### Commands and environment
 
 <details>
 <summary>Subcommands and environment variables</summary>
 
-| Command | What it does |
-| --- | --- |
-| `mache serve` | Serve a project (or every project, as the shared daemon) over MCP: HTTP on `localhost:7532` by default, `--stdio` for CI and sandboxes. Also `--path DIR`, `--repo URL`, `--mount NAME=PATH`, `--schema`, `--control`, `--cdc`. |
-| `mache init` / `init --global` | Register a project and write its `?project=` token into the client's MCP config / install the per-user supervised daemon and register editors. |
-| `mache daemon status\|start\|stop\|restart` | Operate the supervised daemon. |
-| `mache doctor` | Diagnose the daemon, arena, project registration, pinned leyline, version skew and crash loops. |
-| `mache install` / `uninstall` | Install the binary and its pinned leyline (`--bin-dir`, `--dry-run`, `--no-leyline`, `--update-rc`). Restarts the supervised daemon only when it replaced the binary that daemon runs. |
-| `mache build SRC OUT.db` | Parse a tree into a `.db` (and project it with `--schema`) without serving it. |
-| `mache find-smells` | Run the structural smell rules from the command line (a GitHub Action is in `.github/actions/find-smells`). |
-| `mache pack` | Produce a markdown context bundle for agent pre-injection. |
-| `mache cache push\|pull\|verify` | Move a built `.db` between machines (see Portable cache). |
-| `mache leyline path\|exec` | Reach the exact pinned leyline. |
-| `mache <mountpoint>` | Mount a projection over NFS (`-w` for write-back, `--infer`, `--schema`, `-d`). |
+| Command                                     | What it does                                                                                                                                                                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mache serve`                               | Serve a project (or every project, as the shared daemon) over MCP: HTTP on `localhost:7532` by default, `--stdio` for CI and sandboxes. Also `--path DIR`, `--repo URL`, `--mount NAME=PATH`, `--schema`, `--control`, `--cdc`. |
+| `mache init` / `init --global`              | Register a project and write its `?project=` token into the client's MCP config / install the per-user supervised daemon and register editors.                                                                                  |
+| `mache daemon status\|start\|stop\|restart` | Operate the supervised daemon.                                                                                                                                                                                                  |
+| `mache doctor`                              | Diagnose the daemon, arena, project registration, pinned leyline, version skew and crash loops.                                                                                                                                 |
+| `mache install` / `uninstall`               | Install the binary and its pinned leyline (`--bin-dir`, `--dry-run`, `--no-leyline`, `--update-rc`). Restarts the supervised daemon only when it replaced the binary that daemon runs.                                          |
+| `mache build SRC OUT.db`                    | Parse a tree into a `.db` (and project it with `--schema`) without serving it.                                                                                                                                                  |
+| `mache find-smells`                         | Run the structural smell rules from the command line (a GitHub Action is in `.github/actions/find-smells`).                                                                                                                     |
+| `mache pack`                                | Produce a markdown context bundle for agent pre-injection.                                                                                                                                                                      |
+| `mache cache push\|pull\|verify`            | Move a built `.db` between machines (see Portable cache).                                                                                                                                                                       |
+| `mache leyline path\|exec`                  | Reach the exact pinned leyline.                                                                                                                                                                                                 |
+| `mache <mountpoint>`                        | Mount a projection over NFS (`-w` for write-back, `--infer`, `--schema`, `-d`).                                                                                                                                                 |
 
-| Variable | Effect |
-| --- | --- |
-| `MACHE_HOME` | Directory used instead of `~/.mache` for all state and the pinned-binary cache. |
-| `MACHE_DAEMON_LISTEN` | Address the HTTP daemon listens on (default `localhost:7532`). |
-| `MACHE_NO_LEYLINE` | `1` disables downloading leyline. |
-| `MACHE_LEYLINE_BINARY` | Use this leyline instead of the pin (logged on every use; for ley-line-open development). |
-| `MACHE_LEYLINE_START_TIMEOUT` | How long to wait for the managed leyline daemon to come up (default 15s). |
-| `MACHE_PARSE_CACHE_DIR` | Where persistent parse dbs live (default `$MACHE_HOME/parse`). |
-| `MACHE_PARSE_CACHE_MAX_BYTES` | Parse cache size budget before eviction (default 10 GiB). |
-| `MACHE_SMELL_RULES_DIR` | Directory of extra `find_smells` rule files. |
-| `MACHE_CACHE_TOKEN` | Bearer token for `mache cache` remotes when `--token` is not given. |
+| Variable                      | Effect                                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------------------------- |
+| `MACHE_HOME`                  | Directory used instead of `~/.mache` for all state and the pinned-binary cache.           |
+| `MACHE_DAEMON_LISTEN`         | Address the HTTP daemon listens on (default `localhost:7532`).                            |
+| `MACHE_NO_LEYLINE`            | `1` disables downloading leyline.                                                         |
+| `MACHE_LEYLINE_BINARY`        | Use this leyline instead of the pin (logged on every use; for ley-line-open development). |
+| `MACHE_LEYLINE_START_TIMEOUT` | How long to wait for the managed leyline daemon to come up (default 15s).                 |
+| `MACHE_PARSE_CACHE_DIR`       | Where persistent parse dbs live (default `$MACHE_HOME/parse`).                            |
+| `MACHE_PARSE_CACHE_MAX_BYTES` | Parse cache size budget before eviction (default 10 GiB).                                 |
+| `MACHE_SMELL_RULES_DIR`       | Directory of extra `find_smells` rule files.                                              |
+| `MACHE_CACHE_TOKEN`           | Bearer token for `mache cache` remotes when `--token` is not given.                       |
 
 </details>
-
-## Docs
-
-- [Getting started](GETTING-STARTED.md) — install + first run
-- [Architecture](docs/ARCHITECTURE.md) — graph backends, write pipeline, virtual directories, ley-line-open interplay
-- [Roadmap](docs/ROADMAP.md) — what's landed, near-term, long-term
-- [ADRs](docs/adr/) — Architectural Decision Records
-- [Competitive landscape & prior art](docs/reference/competitive-landscape.md) — what mache builds on, how it compares
-- [Example schemas](examples/README.md) — NVD, KEV, Notion, Trivy, Terraform, Markdown, LLM conversations, Go/Python/Rust/SQL source, MCP registry
-- [Schema reference](docs/reference/schema.md) — every field of a topology schema, selectors and template context per source kind, naming and dedup, file sets
-- [Contributing](CONTRIBUTING.md)
 
 ## License
 
