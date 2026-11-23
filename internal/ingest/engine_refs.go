@@ -112,6 +112,14 @@ func appendUnderKey(m map[string][]string, key, value string) map[string][]strin
 	return m
 }
 
+// IgnoresNodeChildren implements childrenIgnorer as the wrapped target
+// answers it: directories pass straight through to that target, and a
+// buffered file is linked to its parent by its ID.
+func (b *bufferingTarget) IgnoresNodeChildren() bool {
+	ig, ok := b.IngestionTarget.(childrenIgnorer)
+	return ok && ig.IgnoresNodeChildren()
+}
+
 func (b *bufferingTarget) AddNode(n *graph.Node) {
 	if n.Mode.IsDir() {
 		b.IngestionTarget.AddNode(n)
