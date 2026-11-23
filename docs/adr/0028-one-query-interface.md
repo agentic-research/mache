@@ -307,6 +307,19 @@ Each step is independently shippable and leaves `main` working.
   options are: keep re-ingesting; or key the artifact by a path convention in ley-line's
   store, which is mache keeping the mapping after all. This ADR does not choose the second
   without that being said out loud.
-- **Size of what is cached matters more now.** Because a load is O(size), the small form
-  (records plus a refs index, nodes projected on demand) is what makes any cache cheap. It
-  is still unmeasured.
+- **The small form may make the cache unnecessary at this size.** Measured 2026-11-22 on a
+  synthetic graph shaped like the Lean one (164,464 records, 743,543 refs; prototype on
+  branch `proto/small-projection`, bead `mache-1bf0d8`):
+
+  | | Records plus a refs index | Every node a row (today) |
+  | --- | --- | --- |
+  | Build, once | 0.5 s, 60 MB | 40 s, 549 MB |
+  | Every start | 0.7 s scan + 3.0 s refs index | 1 ms |
+  | Cold, from raw JSON | about 4 s, 136 MB | 40 s |
+  | Callers of a 3,356-caller hub | 5.2 ms | 0.9 ms |
+
+  Both forms returned the same children, file bytes and callers. At four seconds from raw
+  JSON there is little left for a cache to save. Not yet built on the small form:
+  definitions (so `find_definition` and `get_impact`), the schema features the direct path
+  ignores, and parity under the conformance suite. The cache question remains for much
+  larger inputs and for source trees.
