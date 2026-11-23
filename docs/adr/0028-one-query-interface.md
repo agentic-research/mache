@@ -289,9 +289,24 @@ Each step is independently shippable and leaves `main` working.
 
 - **Where the size line sits** for "small enough to stay in memory", and whether it is a
   fixed number of records or a setting.
-- **Which ley-line release carries the manifest mache needs.** LLO ADR-0021 is Proposed in
-  the checkout this was written against (2026-08-28, older than the pinned v0.30.0). What
-  the pin actually ships (`leyline load`, `cdc`, `rebuild`, parserId-keyed build reuse) has
-  to be read from the pinned binary and its docs before decision 7 is scheduled.
-- **Whether ley-line can hold a data projection at all today**, or only a parsed source
-  tree. `leyline parse` targets source code; nothing found yet ingests JSON records.
+- **Ley-line has no keyed artifact cache yet.** Checked with the ley-line-open release
+  session against `origin/integration` 8907b793 on 2026-11-22:
+  - LLO ADR-0021 (the manifest) is Proposed, implemented in neither v0.30.0 nor v0.31.0, and
+    not scheduled. No CLI, daemon op or library call maps (input, processor, schema) to a
+    stored artifact.
+  - LLO caches only its own derivations. Foreign bytes can be held by `leyline load` or as a
+    blob in the git-shaped store (LLO ADR-0045), addressed by path or content hash. Neither
+    is looked up by the consumer's keys.
+  - `leyline load` copies the whole file into the arena and hashes it: an unchanged file is
+    cheap to *detect* (same root) and not cheap to *load* (O(size); a 2.4 GB database needs
+    an arena sized above that). Content-defined chunking covers `source_blobs`, not arena
+    images, so a loaded database is not deduplicated.
+
+  So decision 7's "the cache is ley-line's" is a request to ley-line, not something mache can
+  adopt today. It needs a ley-line bead and an ADR-0021 decision. Until then the honest
+  options are: keep re-ingesting; or key the artifact by a path convention in ley-line's
+  store, which is mache keeping the mapping after all. This ADR does not choose the second
+  without that being said out loud.
+- **Size of what is cached matters more now.** Because a load is O(size), the small form
+  (records plus a refs index, nodes projected on demand) is what makes any cache cheap. It
+  is still unmeasured.
