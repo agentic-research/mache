@@ -696,6 +696,14 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 		var fileNodes []*graph.Node
 		var sourceFileID string
 		for _, fileSchema := range schema.Files {
+			// A leaf with a content source and no template is not rendered
+			// here: its content comes from that source's table, and it is
+			// written when there is some (MaterializeContentSources). Without
+			// data it has no file, which is what it had when every empty
+			// render was dropped.
+			if fileSchema.ContentSource != "" && fileSchema.ContentTemplate == "" {
+				continue
+			}
 			fileName, err := RenderTemplate(fileSchema.Name, match.Values())
 			if err != nil {
 				log.Printf("processNode: skip file name render %q: %v", fileSchema.Name, err) // coverage:ignore
@@ -716,10 +724,12 @@ func (e *Engine) processNode(schema api.Node, walker Walker, ctx any, parentPath
 				continue                                                                // coverage:ignore
 			}
 
-			// Skip empty optional files (e.g. "doc" when no doc comments exist)
-			if content == "" && fileSchema.Name != "source" {
-				continue // coverage:ignore
-			}
+			// An empty file is kept. An empty value is still a value: the
+			// field is there and holds nothing, which is not the same as no
+			// field. And a file that exists can be written to; one that was
+			// dropped cannot (mache-b33274). The drop this replaces was for
+			// `doc` leaves on source constructs, which no bundled preset
+			// declares any more.
 
 			fileNode := &graph.Node{
 				ID:      fileId,

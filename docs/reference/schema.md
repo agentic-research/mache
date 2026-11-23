@@ -320,13 +320,14 @@ the conventional home of `{{.doc}}`.
 
 A template for the file's content, rendered against the match.
 
-- data (engine), source: a leaf that renders empty is dropped unless it is
-  named `source`, so an optional field produces no file rather than an empty
-  one.
-- data (engine) over a `.db`: empty leaves are kept. Content over 4096 bytes
-  is not stored; it is re-rendered from the record on read.
-- data (direct): content is rendered on first read and cached. Empty leaves
-  are kept.
+- Every path keeps a leaf that renders empty, as an empty file. An empty
+  value is still a value, and a file that exists can be written to. (Data
+  (engine) and source used to drop it.) A leaf with a `content_source` and
+  no template is the exception: it is written only when its source table
+  has content for it.
+- data (engine) over a `.db`: content over 4096 bytes is not stored; it is
+  re-rendered from the record on read.
+- data (direct): content is rendered on first read and cached.
 
 ### `content_source`
 

@@ -18,7 +18,7 @@ answer is specified. See `engine_direct_matrix_test.go` for each case.
 | nested selector | a child selects an array inside each record ($.tools[*]) | **differ** (8): `servers/notes` only on engine (node); … | **differ** (3): `servers/notes/read/desc` only on engine ("r"); … | **differ** (3): `servers/notes/read` only on engine ([read]); … | agree |
 | templated root | the root node's name is a template | **differ** (4): `x` only on engine (node); … | **differ** (2): `x/doc` only on engine ("dx"); … | agree | agree |
 | templated file name | a file's name is a template | **differ** (2): `mods/a/One/note.txt` only on engine (node); … | **differ**: `mods/a/One/note.txt` only on engine ("d1") | agree | agree |
-| empty content | a file whose template renders empty for one record | **differ**: `mods/a/Bare/extra` only on direct (node) | **differ**: `mods/a/Bare/extra` only on direct ("") | agree | agree |
+| empty content | a file whose template renders empty for one record | agree | agree | agree | agree |
 | absent content field | a file's template names a field one record does not have | agree | agree | agree | agree |
 | dotted names | a name with dots is also defined under its last segment | agree | agree | agree | agree |
 | slash in a name | a rendered name contains / and % | agree | agree | agree | agree |
