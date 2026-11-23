@@ -32,6 +32,11 @@ type scanResult struct {
 	refs []tokenAt
 }
 
+// reset empties the result for the next record, keeping its buffers.
+func (r *scanResult) reset() {
+	r.entries, r.leafDirs, r.defs, r.refs = r.entries[:0], r.leafDirs[:0], r.defs[:0], r.refs[:0]
+}
+
 // tokenAt is a token and the directory node it belongs to.
 type tokenAt struct {
 	token string
@@ -321,34 +326,11 @@ func (g *SQLiteGraph) scanRoot(rootName string) error {
 			setNestedField(values, path, fields[i])
 		}
 
-		// Refs render against the typed values of the fields they name;
-		// names keep rendering against the strings they always have.
-		refValues := values
-		if len(refFieldPaths) > 0 {
-			refValues = make(map[string]any, len(refFieldPaths))
-			for i, path := range refFieldPaths {
-				var decoded any
-				if raw := scanVals[1+len(fieldPaths)+i]; raw.Valid {
-					if err := json.Unmarshal([]byte(raw.String), &decoded); err != nil {
-						decoded = nil
-					}
-				}
-				setNestedField(refValues, path, decoded)
-			}
-		}
+		refValues := typedRefValues(values, refFieldPaths, scanVals[1+len(fieldPaths):])
 
-		result.entries = result.entries[:0]
-		result.leafDirs = result.leafDirs[:0]
-		result.defs = result.defs[:0]
-		result.refs = result.refs[:0]
+		result.reset()
 		g.collectPathEntries(level, values, refValues, rootName, scanVals[0].String, &result)
-
-		for _, d := range result.defs {
-			_ = g.AddDef(d.token, d.dir)
-		}
-		for _, r := range result.refs {
-			_ = g.AddRef(r.token, r.dir)
-		}
+		g.recordTokens(&result)
 
 		for _, e := range result.entries {
 			childSlices[e.parent] = append(childSlices[e.parent], e.child)
@@ -420,6 +402,38 @@ func flushChildSlices(slices map[string][]string, target *sync.Map) {
 		}
 
 		target.Store(parent, deduped)
+	}
+}
+
+// typedRefValues is the values refs templates render against: the fields
+// they name, decoded from the JSON text the scan selected them as, so a list
+// is a list and a number a number. Names keep rendering against the strings
+// they always have. With no ref fields it is the name values.
+func typedRefValues(nameValues map[string]any, refFieldPaths []string, cols []sql.NullString) map[string]any {
+	if len(refFieldPaths) == 0 {
+		return nameValues
+	}
+	values := make(map[string]any, len(refFieldPaths))
+	for i, path := range refFieldPaths {
+		var decoded any
+		if cols[i].Valid {
+			if err := json.Unmarshal([]byte(cols[i].String), &decoded); err != nil {
+				decoded = nil
+			}
+		}
+		setNestedField(values, path, decoded)
+	}
+	return values
+}
+
+// recordTokens adds a record's definitions and references to the graph's
+// indexes.
+func (g *SQLiteGraph) recordTokens(result *scanResult) {
+	for _, d := range result.defs {
+		_ = g.AddDef(d.token, d.dir)
+	}
+	for _, r := range result.refs {
+		_ = g.AddRef(r.token, r.dir)
 	}
 }
 

@@ -79,7 +79,7 @@ func treeOf(t *testing.T, g graph.Graph, root string) []string {
 	return out
 }
 
-func sortedIDs(nodes []*graph.Node) []string {
+func nodeIDsSorted(nodes []*graph.Node) []string {
 	ids := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		ids = append(ids, n.ID)
@@ -127,14 +127,14 @@ func TestDirectPath_AnswersWhatTheEnginePathAnswers(t *testing.T) {
 		require.NoError(t, err)
 		got, err := direct.GetCallers(name)
 		require.NoError(t, err)
-		assert.Equal(t, sortedIDs(want), sortedIDs(got), "callers of %s", name)
+		assert.Equal(t, nodeIDsSorted(want), nodeIDsSorted(got), "callers of %s", name)
 		if len(want) > 0 {
 			withCallers++
 		}
 
 		viaNode, err := graph.CallersOf(direct, id, nil)
 		require.NoError(t, err)
-		assert.Equal(t, sortedIDs(want), sortedIDs(viaNode), "callers of the node %s", id)
+		assert.Equal(t, nodeIDsSorted(want), nodeIDsSorted(viaNode), "callers of the node %s", id)
 	}
 	assert.Equal(t, 300, modules, "every module directory was compared")
 	assert.Greater(t, withCallers, 100, "the corpus must have callers to compare")
@@ -192,7 +192,7 @@ func TestDirectPath_ARecordWithoutItsRefFieldIsKept(t *testing.T) {
 	assert.Equal(t, []string{"by-area/a/s/HasImports", "by-area/a/s/NoImports"}, kids)
 	callers, err := direct.GetCallers("NoImports")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"by-area/a/s/HasImports"}, sortedIDs(callers))
+	assert.Equal(t, []string{"by-area/a/s/HasImports"}, nodeIDsSorted(callers))
 }
 
 // A dotted name is defined under its last segment too, on both paths, so a
@@ -215,7 +215,7 @@ func TestDirectPath_DottedNamesDefineTheirShortNameAsTheEngineDoes(t *testing.T)
 	}
 	callers, err := graph.CallersOf(direct, node, nil)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"by-area/a/s/Theory.Uses"}, sortedIDs(callers))
+	assert.Equal(t, []string{"by-area/a/s/Theory.Uses"}, nodeIDsSorted(callers))
 }
 
 // A refs template over a plain string field (the common `"refs":
@@ -245,9 +245,9 @@ func TestDirectPath_ScalarRefFieldsMatchTheEngine(t *testing.T) {
 	} {
 		fromEngine, err := engine.GetCallers(token)
 		require.NoError(t, err)
-		require.Equal(t, want, sortedIDs(fromEngine), "engine: callers of %s", token)
+		require.Equal(t, want, nodeIDsSorted(fromEngine), "engine: callers of %s", token)
 		fromDirect, err := direct.GetCallers(token)
 		require.NoError(t, err)
-		assert.Equal(t, want, sortedIDs(fromDirect), "direct: callers of %s", token)
+		assert.Equal(t, want, nodeIDsSorted(fromDirect), "direct: callers of %s", token)
 	}
 }
